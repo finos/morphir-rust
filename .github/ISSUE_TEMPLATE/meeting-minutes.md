@@ -1,7 +1,7 @@
 ---
-name: "\U0001F91D {project name} Meeting Minutes"
-about: To track {project name} meeting agenda and attendance
-title: DD MMM YYYY - {project name} Meeting Minutes
+name: "\U0001F91D Morphir Rust Meeting Minutes"
+about: To track Morphir Rust meeting agenda and attendance
+title: DD MMM YYYY - Morphir Rust Meeting Minutes
 labels: meeting
 assignees: 
 

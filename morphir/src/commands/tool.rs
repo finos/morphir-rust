@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Default version to use when no version is specified
+const DEFAULT_VERSION: &str = "latest";
+
 /// Tool registry configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolRegistry {
@@ -23,7 +26,7 @@ struct ToolInfo {
     /// Tool name
     name: String,
     /// Tool version
-    version: String,
+    version: Option<String>,
     /// Tool description
     description: Option<String>,
     /// Installation path
@@ -108,14 +111,16 @@ pub fn run_tool_install(name: String, version: Option<String>) -> AppResult {
 
     // Check if tool is already installed
     if let Some(existing_tool) = registry.get_tool(&name) {
+        let version_str = existing_tool.version.as_deref().unwrap_or(DEFAULT_VERSION);
         println!("Tool '{}' is already installed (version: {})", 
-                 name, existing_tool.version);
+                 name, version_str);
         println!("Use 'morphir tool update' to update to a newer version");
         return Ok(None);
     }
 
     // Create tool info
-    let tool_version = version.unwrap_or_else(|| "latest".to_string());
+    let tool_version = version.or_else(|| Some(DEFAULT_VERSION.to_string()));
+    let display_version = tool_version.as_deref().unwrap_or(DEFAULT_VERSION);
     let tool = ToolInfo {
         name: name.clone(),
         version: tool_version.clone(),
@@ -130,7 +135,7 @@ pub fn run_tool_install(name: String, version: Option<String>) -> AppResult {
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully installed tool '{}' (version: {})", name, tool_version);
+    println!("✓ Successfully installed tool '{}' (version: {})", name, display_version);
     println!("  Run 'morphir tool list' to see all installed tools");
 
     Ok(None)
@@ -158,7 +163,8 @@ pub fn run_tool_list() -> AppResult {
         println!("{}", "-".repeat(70));
         for tool in &tools {
             let description = tool.description.as_deref().unwrap_or("No description");
-            println!("{:<20} {:<15} {}", tool.name, tool.version, description);
+            let version_str = tool.version.as_deref().unwrap_or(DEFAULT_VERSION);
+            println!("{:<20} {:<15} {}", tool.name, version_str, description);
         }
         println!("\nTotal: {} tool(s) installed", tools.len());
     }
@@ -187,11 +193,12 @@ pub fn run_tool_update(name: String, version: Option<String>) -> AppResult {
         }
     };
 
-    let old_version = existing_tool.version.clone();
-    let new_version = version.unwrap_or_else(|| "latest".to_string());
+    let old_version = existing_tool.version.as_deref().unwrap_or(DEFAULT_VERSION).to_string();
+    let new_version = version.or_else(|| Some(DEFAULT_VERSION.to_string()));
+    let new_version_str = new_version.as_deref().unwrap_or(DEFAULT_VERSION);
 
-    if old_version == new_version {
-        println!("Tool '{}' is already at version {}", name, new_version);
+    if old_version == new_version_str {
+        println!("Tool '{}' is already at version {}", name, new_version_str);
         return Ok(None);
     }
 
@@ -209,7 +216,7 @@ pub fn run_tool_update(name: String, version: Option<String>) -> AppResult {
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully updated tool '{}' from {} to {}", name, old_version, new_version);
+    println!("✓ Successfully updated tool '{}' from {} to {}", name, old_version, new_version_str);
 
     Ok(None)
 }
@@ -240,8 +247,9 @@ pub fn run_tool_uninstall(name: String) -> AppResult {
         return Ok(Some(1));
     }
 
+    let version_str = removed_tool.version.as_deref().unwrap_or(DEFAULT_VERSION);
     println!("✓ Successfully uninstalled tool '{}' (version: {})", 
-             removed_tool.name, removed_tool.version);
+             removed_tool.name, version_str);
 
     Ok(None)
 }

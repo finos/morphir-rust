@@ -1,0 +1,26 @@
+[package]
+name = "morphir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Morphir CLI tool for Rust"
+
+[[bin]]
+name = "morphir"
+path = "src/main.rs"
+
+[dependencies]
+starbase = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+morphir-models = { path = "../morphir-models" }
+

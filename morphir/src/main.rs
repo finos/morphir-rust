@@ -3,7 +3,12 @@ use starbase::{App, AppResult, AppSession};
 
 mod commands;
 
-use commands::{run_generate, run_transform, run_validate};
+use commands::{
+    run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update,
+    run_extension_install, run_extension_list, run_extension_uninstall, run_extension_update,
+    run_generate, run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update,
+    run_transform, run_validate,
+};
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
 #[derive(Parser)]
@@ -44,6 +49,102 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Manage Morphir tools, distributions, and extensions
+    Tool {
+        #[command(subcommand)]
+        action: ToolAction,
+    },
+    /// Manage Morphir distributions
+    Dist {
+        #[command(subcommand)]
+        action: DistAction,
+    },
+    /// Manage Morphir extensions
+    Extension {
+        #[command(subcommand)]
+        action: ExtensionAction,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum ToolAction {
+    /// Install a Morphir tool or extension
+    Install {
+        /// Name of the tool to install
+        name: String,
+        /// Version to install (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// List installed Morphir tools
+    List,
+    /// Update an installed Morphir tool
+    Update {
+        /// Name of the tool to update
+        name: String,
+        /// Version to update to (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// Uninstall a Morphir tool
+    Uninstall {
+        /// Name of the tool to uninstall
+        name: String,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum DistAction {
+    /// Install a Morphir distribution
+    Install {
+        /// Name of the distribution to install
+        name: String,
+        /// Version to install (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// List installed Morphir distributions
+    List,
+    /// Update an installed Morphir distribution
+    Update {
+        /// Name of the distribution to update
+        name: String,
+        /// Version to update to (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// Uninstall a Morphir distribution
+    Uninstall {
+        /// Name of the distribution to uninstall
+        name: String,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum ExtensionAction {
+    /// Install a Morphir extension
+    Install {
+        /// Name of the extension to install
+        name: String,
+        /// Version to install (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// List installed Morphir extensions
+    List,
+    /// Update an installed Morphir extension
+    Update {
+        /// Name of the extension to update
+        name: String,
+        /// Version to update to (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// Uninstall a Morphir extension
+    Uninstall {
+        /// Name of the extension to uninstall
+        name: String,
+    },
 }
 
 /// Application session for Morphir CLI
@@ -64,6 +165,54 @@ impl AppSession for MorphirSession {
             }
             Commands::Transform { input, output } => {
                 run_transform(input.clone(), output.clone())
+            }
+            Commands::Tool { action } => {
+                match action {
+                    ToolAction::Install { name, version } => {
+                        run_tool_install(name.clone(), version.clone())
+                    }
+                    ToolAction::List => {
+                        run_tool_list()
+                    }
+                    ToolAction::Update { name, version } => {
+                        run_tool_update(name.clone(), version.clone())
+                    }
+                    ToolAction::Uninstall { name } => {
+                        run_tool_uninstall(name.clone())
+                    }
+                }
+            }
+            Commands::Dist { action } => {
+                match action {
+                    DistAction::Install { name, version } => {
+                        run_dist_install(name.clone(), version.clone())
+                    }
+                    DistAction::List => {
+                        run_dist_list()
+                    }
+                    DistAction::Update { name, version } => {
+                        run_dist_update(name.clone(), version.clone())
+                    }
+                    DistAction::Uninstall { name } => {
+                        run_dist_uninstall(name.clone())
+                    }
+                }
+            }
+            Commands::Extension { action } => {
+                match action {
+                    ExtensionAction::Install { name, version } => {
+                        run_extension_install(name.clone(), version.clone())
+                    }
+                    ExtensionAction::List => {
+                        run_extension_list()
+                    }
+                    ExtensionAction::Update { name, version } => {
+                        run_extension_update(name.clone(), version.clone())
+                    }
+                    ExtensionAction::Uninstall { name } => {
+                        run_extension_uninstall(name.clone())
+                    }
+                }
             }
         }
     }

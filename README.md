@@ -55,7 +55,83 @@ morphir generate --target rust --input path/to/ir --output path/to/output
 
 # Transform Morphir IR
 morphir transform --input path/to/ir --output path/to/output
+
+# Manage Morphir tools
+morphir tool install <tool-name> [--version <version>]
+morphir tool list
+morphir tool update <tool-name> [--version <version>]
+morphir tool uninstall <tool-name>
+
+# Manage Morphir distributions
+morphir dist install <dist-name> [--version <version>]
+morphir dist list
+morphir dist update <dist-name> [--version <version>]
+morphir dist uninstall <dist-name>
+
+# Manage Morphir extensions
+morphir extension install <extension-name> [--version <version>]
+morphir extension list
+morphir extension update <extension-name> [--version <version>]
+morphir extension uninstall <extension-name>
 ```
+
+### Tool Management
+
+The Morphir CLI provides built-in support for managing Morphir tools, distributions, and extensions:
+
+#### Tools
+
+```sh
+# Install a Morphir tool
+morphir tool install morphir-scala --version 1.0.0
+
+# List all installed tools
+morphir tool list
+
+# Update a tool to a specific version or latest
+morphir tool update morphir-scala --version 2.0.0
+
+# Uninstall a tool
+morphir tool uninstall morphir-scala
+```
+
+Tools are stored in `~/.morphir/tools.json` and can be managed independently of the main CLI installation.
+
+#### Distributions
+
+```sh
+# Install a Morphir distribution
+morphir dist install morphir-jvm-dist --version 2.0.0
+
+# List all installed distributions
+morphir dist list
+
+# Update a distribution
+morphir dist update morphir-jvm-dist --version 3.0.0
+
+# Uninstall a distribution
+morphir dist uninstall morphir-jvm-dist
+```
+
+Distributions are stored in `~/.morphir/distributions.json`.
+
+#### Extensions
+
+```sh
+# Install a Morphir extension
+morphir extension install scala-backend --version 1.5.0
+
+# List all installed extensions
+morphir extension list
+
+# Update an extension
+morphir extension update scala-backend --version 2.0.0
+
+# Uninstall an extension
+morphir extension uninstall scala-backend
+```
+
+Extensions are stored in `~/.morphir/extensions.json`.
 
 ### Using the Library
 

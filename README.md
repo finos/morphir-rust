@@ -2,36 +2,104 @@
 
 # Morphir Rust
 
-Short blurb about what your project does.
+Rust-based tooling for the Morphir ecosystem. This project provides a multi-crate workspace including a CLI tool and core model definitions for working with Morphir IR (Intermediate Representation).
+
+## Overview
+
+Morphir Rust is part of the Morphir ecosystem, which includes:
+- [finos/morphir](https://github.com/finos/morphir) - Core Morphir specification
+- [finos/morphir-elm](https://github.com/finos/morphir-elm) - Reference implementation (Elm)
+- [finos/morphir-jvm](https://github.com/finos/morphir-jvm) - JVM implementation
+- [finos/morphir-scala](https://github.com/finos/morphir-scala) - Scala implementation
+- [finos/morphir-dotnet](https://github.com/finos/morphir-dotnet) - .NET implementation
+- [finos/morphir-go](https://github.com/finos/morphir-go) - Go implementation (coming soon)
+
+## Project Structure
+
+This is a Rust workspace containing multiple crates:
+
+- **`morphir`** - CLI tool for working with Morphir IR
+- **`morphir-models`** - Core IR model definitions and utilities
+
+## Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install) (latest stable version recommended)
+- Cargo (comes with Rust)
 
 ## Installation
 
-OS X & Linux:
+### Building from Source
 
 ```sh
-npm install my-crazy-module --save
+# Clone the repository
+git clone https://github.com/finos/morphir-rust.git
+cd morphir-rust
+
+# Build the project
+cargo build --release
+
+# Install the CLI tool
+cargo install --path morphir
 ```
 
-Windows:
+## Usage
+
+### CLI Commands
 
 ```sh
-edit autoexec.bat
+# Validate Morphir IR
+morphir validate --input path/to/ir
+
+# Generate code from Morphir IR
+morphir generate --target rust --input path/to/ir --output path/to/output
+
+# Transform Morphir IR
+morphir transform --input path/to/ir --output path/to/output
 ```
 
-## Usage example
+### Using the Library
 
-A few motivating and useful examples of how your project can be used. Spice this up with code blocks and potentially screenshots / videos ([LiceCap](https://www.cockos.com/licecap/) is great for this kind of thing).
+Add to your `Cargo.toml`:
 
-_For more examples and usage, please refer to the [Wiki][wiki]._
+```toml
+[dependencies]
+morphir-models = { path = "../morphir-models" }
+```
 
-## Development setup
-
-Describe how to install all development dependencies and how to run an automated test-suite of some kind. Potentially do this for multiple platforms.
+## Development Setup
 
 ```sh
-make install
-npm test
+# Install Rust toolchain (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Clone and navigate to the project
+git clone https://github.com/finos/morphir-rust.git
+cd morphir-rust
+
+# Build the project
+cargo build
+
+# Run tests
+cargo test
+
+# Run the CLI
+cargo run --bin morphir -- --help
+
+# Format code
+cargo fmt
+
+# Check for linting issues
+cargo clippy
 ```
+
+## Design Principles
+
+This project follows **Functional Domain Modeling** principles:
+
+- **Immutability**: Data structures are immutable by default
+- **Type Safety**: Strong typing throughout the codebase
+- **Composability**: Functions and data structures are designed to compose
+- **Purity**: Functions are pure where possible, with clear separation of side effects
 
 ## Roadmap
 

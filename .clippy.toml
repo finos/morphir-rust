@@ -1,0 +1,10 @@
+# Clippy configuration for Morphir Rust
+# Following functional programming principles
+
+# Allow some patterns common in functional programming
+avoid-breaking-exported-api = false
+
+# Prefer functional style
+disallowed-types = []
+disallowed-methods = []
+

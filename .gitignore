@@ -1,5 +1,10 @@
 .DS_Store
 
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
 # Docusaurus generated folders
 website/translated_docs/
 website/build/

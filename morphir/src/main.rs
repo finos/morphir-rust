@@ -3,7 +3,7 @@ use starbase::{App, AppResult, AppSession};
 
 mod commands;
 
-use commands::{run_generate, run_transform, run_validate};
+use commands::{run_generate, run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform, run_validate};
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
 #[derive(Parser)]
@@ -44,6 +44,38 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Manage Morphir tools, distributions, and extensions
+    Tool {
+        #[command(subcommand)]
+        action: ToolAction,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum ToolAction {
+    /// Install a Morphir tool or extension
+    Install {
+        /// Name of the tool to install
+        name: String,
+        /// Version to install (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// List installed Morphir tools
+    List,
+    /// Update an installed Morphir tool
+    Update {
+        /// Name of the tool to update
+        name: String,
+        /// Version to update to (defaults to latest)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// Uninstall a Morphir tool
+    Uninstall {
+        /// Name of the tool to uninstall
+        name: String,
+    },
 }
 
 /// Application session for Morphir CLI
@@ -64,6 +96,22 @@ impl AppSession for MorphirSession {
             }
             Commands::Transform { input, output } => {
                 run_transform(input.clone(), output.clone())
+            }
+            Commands::Tool { action } => {
+                match action {
+                    ToolAction::Install { name, version } => {
+                        run_tool_install(name.clone(), version.clone())
+                    }
+                    ToolAction::List => {
+                        run_tool_list()
+                    }
+                    ToolAction::Update { name, version } => {
+                        run_tool_update(name.clone(), version.clone())
+                    }
+                    ToolAction::Uninstall { name } => {
+                        run_tool_uninstall(name.clone())
+                    }
+                }
             }
         }
     }

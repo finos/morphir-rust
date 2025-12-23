@@ -55,7 +55,33 @@ morphir generate --target rust --input path/to/ir --output path/to/output
 
 # Transform Morphir IR
 morphir transform --input path/to/ir --output path/to/output
+
+# Manage Morphir tools, distributions, and extensions
+morphir tool install <tool-name> [--version <version>]
+morphir tool list
+morphir tool update <tool-name> [--version <version>]
+morphir tool uninstall <tool-name>
 ```
+
+### Tool Management
+
+The Morphir CLI provides built-in support for managing Morphir tools, distributions, and extensions:
+
+```sh
+# Install a Morphir tool or extension
+morphir tool install morphir-scala --version 1.0.0
+
+# List all installed tools
+morphir tool list
+
+# Update a tool to a specific version or latest
+morphir tool update morphir-scala --version 2.0.0
+
+# Uninstall a tool
+morphir tool uninstall morphir-scala
+```
+
+Tools are stored in `~/.morphir/tools.json` and can be managed independently of the main CLI installation.
 
 ### Using the Library
 

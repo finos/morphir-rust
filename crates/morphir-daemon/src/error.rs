@@ -26,7 +26,7 @@ pub enum DaemonError {
 
     /// Extension errors
     #[error("Extension error: {0}")]
-    Extension(#[from] morphir_wit_extension::ExtensionError),
+    Extension(String),
 
     /// IO errors
     #[error("IO error: {0}")]

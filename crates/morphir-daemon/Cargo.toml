@@ -36,6 +36,15 @@ toml = "0.8"
 # Logging
 tracing = "0.1"
 
+# WASM plugin runtime (Extism)
+extism = "1.7"
+
+# HTTP client (for downloading extensions)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Directory utilities
+dirs = "5"
+
 # Internal crates
 morphir-models = { path = "../morphir-models" }
-morphir-wit-extension = { path = "../morphir-wit-extension" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", features = ["host"] }

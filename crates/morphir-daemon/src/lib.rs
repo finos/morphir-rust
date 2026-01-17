@@ -6,10 +6,12 @@
 //! - Dependency resolution and caching
 //! - Incremental builds with file watching
 //! - JSON-RPC protocol for CLI and IDE integration
-//! - Extension loading and management
+//! - Extension loading and management via Extism
 
 pub mod config;
 pub mod error;
+pub mod extensions;
 pub mod workspace;
 
 pub use error::{DaemonError, Result};
+pub use extensions::{ExtensionContainer, ExtensionLoader, ExtensionRegistry};

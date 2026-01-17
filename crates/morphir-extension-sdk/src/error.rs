@@ -1,4 +1,4 @@
-//! Error types for the Morphir extension system
+//! Error types for the Morphir extension SDK
 
 use thiserror::Error;
 
@@ -31,13 +31,9 @@ pub enum ExtensionError {
     #[error("Extension execution failed: {0}")]
     ExecutionFailed(String),
 
-    /// Invalid extension manifest
-    #[error("Invalid extension manifest: {0}")]
-    InvalidManifest(String),
-
-    /// WASM runtime error
-    #[error("WASM runtime error: {0}")]
-    WasmRuntime(String),
+    /// Invalid response from extension
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
 
     /// IO error
     #[error("IO error: {0}")]
@@ -46,8 +42,16 @@ pub enum ExtensionError {
     /// JSON serialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+}
 
-    /// Generic error
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
+impl ExtensionError {
+    /// Create a new execution error
+    pub fn execution(msg: impl Into<String>) -> Self {
+        ExtensionError::ExecutionFailed(msg.into())
+    }
+
+    /// Create a new invalid response error
+    pub fn invalid_response(msg: impl Into<String>) -> Self {
+        ExtensionError::InvalidResponse(msg.into())
+    }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "morphir-wit-extension"
+name = "morphir-extension-sdk"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,27 +9,23 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "WASM Component Model runtime and WIT interface support for Morphir extensions"
+description = "SDK for building Morphir extensions as WASM plugins"
+
+[lib]
+crate-type = ["rlib"]
 
 [dependencies]
 # Workspace dependencies
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 
-# WASM runtime
-wasmtime = "28"
-wasmtime-wasi = "28"
-
-# Async
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
-async-trait = "0.1"
+# Plugin development kit (for WASM guests)
+extism-pdk = "1.2"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Logging
-tracing = "0.1"
-
-# Internal crates
-morphir-models = { path = "../morphir-models" }
+[features]
+default = []
+# Enable host-side types (for morphir-daemon)
+host = []

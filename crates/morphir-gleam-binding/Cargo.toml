@@ -1,0 +1,26 @@
+[package]
+name = "morphir-gleam-binding"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Gleam language binding for Morphir - frontend and backend extension"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Extension SDK
+morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+
+# WASM plugin development
+extism-pdk = "1.2"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

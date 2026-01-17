@@ -1,0 +1,50 @@
+[package]
+name = "morphir-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Morphir daemon service for workspace management, builds, and IDE integration"
+
+[dependencies]
+# Workspace dependencies
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "net", "signal"] }
+async-trait = "0.1"
+
+# JSON-RPC
+jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# File watching
+notify = "7"
+
+# Configuration
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+
+# WASM plugin runtime (Extism)
+extism = "1.7"
+
+# HTTP client (for downloading extensions)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Directory utilities
+dirs = "5"
+
+# Internal crates
+morphir-models = { path = "../morphir-models" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", features = ["host"] }

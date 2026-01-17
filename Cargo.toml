@@ -1,7 +1,6 @@
 [workspace]
 members = [
-    "morphir",
-    "morphir-models",
+    "crates/*",
 ]
 resolver = "2"
 

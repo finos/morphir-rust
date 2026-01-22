@@ -64,7 +64,9 @@ impl Name {
     }
 
     pub fn is_lowercase(&self) -> bool {
-         self.to_snake_case().chars().all(|c| c.is_lowercase() || c == '_')
+        self.to_snake_case()
+            .chars()
+            .all(|c| c.is_lowercase() || c == '_')
     }
 }
 

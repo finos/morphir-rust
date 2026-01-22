@@ -10,10 +10,7 @@ pub struct Path {
 
 impl Path {
     pub fn new(source: &str) -> Self {
-        let segments = source
-            .split('/')
-            .map(Name::from)
-            .collect();
+        let segments = source.split('/').map(Name::from).collect();
         Path { segments }
     }
 
@@ -24,7 +21,11 @@ impl Path {
 
 impl fmt::Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let parts: Vec<String> = self.segments.iter().map(|n: &super::Name| n.to_kebab_case()).collect();
+        let parts: Vec<String> = self
+            .segments
+            .iter()
+            .map(|n: &super::Name| n.to_kebab_case())
+            .collect();
         write!(f, "{}", parts.join("/"))
     }
 }

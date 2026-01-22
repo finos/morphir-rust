@@ -70,9 +70,7 @@ impl Vfs for OsVfs {
 
     fn glob(&self, pattern: &str) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
-        for entry in
-            glob::glob(pattern).map_err(std::io::Error::other)?
-        {
+        for entry in glob::glob(pattern).map_err(std::io::Error::other)? {
             paths.push(entry.map_err(std::io::Error::other)?);
         }
         Ok(paths)

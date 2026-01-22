@@ -1,0 +1,12 @@
+{
+    "formatVersion": 1,
+    "distribution": [
+        "Library",
+        "PackageV1",
+        [],
+        {
+            "name": "PackageV1",
+            "modules": []
+        }
+    ]
+}

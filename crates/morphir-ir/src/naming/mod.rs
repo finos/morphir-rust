@@ -1,0 +1,34 @@
+pub mod name;
+pub mod path;
+pub mod qname;
+pub mod fqname;
+
+// Re-export common types
+pub use name::Name;
+pub use path::Path;
+pub use qname::QName;
+pub use fqname::FQName;
+
+/// Namespace for serialization codecs
+pub mod codecs {
+    /// Classic (Legacy/V3) serialization logic
+    pub mod classic {
+        use crate::naming::{Name, Path};
+        use serde::Serializer;
+
+        pub fn serialize_name<S>(name: &Name, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer {
+            // Legacy Name: ["word", "word"]
+            serializer.collect_seq(&name.words)
+        }
+
+        pub fn serialize_path<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer {
+            // Legacy Path: [Name, Name] where Name is ["word", "word"]
+            let parts: Vec<&Vec<String>> = path.segments.iter()
+                .map(|n| &n.words)
+                .collect();
+            serializer.collect_seq(parts)
+        }
+    }
+}

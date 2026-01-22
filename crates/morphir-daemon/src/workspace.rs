@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::config::MorphirConfig;
+use morphir_common::config::MorphirConfig;
 use crate::Result;
 
 /// Workspace state

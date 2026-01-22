@@ -8,7 +8,7 @@
 //! - JSON-RPC protocol for CLI and IDE integration
 //! - Extension loading and management via Extism
 
-pub mod config;
+
 pub mod error;
 pub mod extensions;
 pub mod workspace;

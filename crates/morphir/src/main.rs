@@ -7,7 +7,7 @@ use commands::{
     run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update,
     run_extension_install, run_extension_list, run_extension_uninstall, run_extension_update,
     run_generate, run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update,
-    run_transform, run_validate,
+    run_transform, run_validate, run_migrate,
 };
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
@@ -63,6 +63,17 @@ enum Commands {
     Extension {
         #[command(subcommand)]
         action: ExtensionAction,
+    },
+    /// Manage Morphir IR
+    Ir {
+        #[command(subcommand)]
+        action: IrAction,
+    },
+    /// Generate JSON Schema for Morphir IR
+    Schema {
+        /// Output file path (optional)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
     },
 }
 
@@ -147,6 +158,22 @@ enum ExtensionAction {
     },
 }
 
+#[derive(Clone, Subcommand)]
+enum IrAction {
+    /// Migrate IR between versions
+    Migrate {
+        /// Input file or directory
+        #[arg(short, long)]
+        input: std::path::PathBuf,
+        /// Output file or directory
+        #[arg(short, long)]
+        output: std::path::PathBuf,
+        /// Target version (v4 or classic)
+        #[arg(long)]
+        target_version: Option<String>,
+    },
+}
+
 /// Application session for Morphir CLI
 #[derive(Clone)]
 struct MorphirSession {
@@ -213,6 +240,16 @@ impl AppSession for MorphirSession {
                         run_extension_uninstall(name.clone())
                     }
                 }
+            }
+            Commands::Ir { action } => {
+                match action {
+                    IrAction::Migrate { input, output, target_version } => {
+                        run_migrate(input.clone(), output.clone(), target_version.clone())
+                    }
+                }
+            }
+            Commands::Schema { output } => {
+                commands::schema::run_schema(output.clone())
             }
         }
     }

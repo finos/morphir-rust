@@ -46,5 +46,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 dirs = "5"
 
 # Internal crates
-morphir-models = { path = "../morphir-models" }
+morphir-ir = { path = "../morphir-ir" }
+morphir-common = { path = "../morphir-common" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk", features = ["host"] }

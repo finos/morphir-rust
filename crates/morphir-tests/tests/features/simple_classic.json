@@ -1,24 +1,31 @@
 {
-    "formatVersion": 2024,
-    "distribution": [
-        "Library",
-        "TestPackage",
-        [],
-        {
-            "name": "TestPackage",
-            "modules": [
-                [
-                    "TestModule",
-                    {
-                        "access": "Public",
-                        "value": {
-                            "types": [],
-                            "values": [],
-                            "doc": null
-                        }
-                    }
-                ]
+  "formatVersion": 3,
+  "distribution": [
+    "Library",
+    [
+      [
+        "test-package"
+      ]
+    ],
+    [],
+    {
+      "modules": [
+        [
+          [
+            [
+              "TestModule"
             ]
-        }
-    ]
+          ],
+          {
+            "access": "Public",
+            "value": {
+              "types": [],
+              "values": [],
+              "doc": null
+            }
+          }
+        ]
+      ]
+    }
+  ]
 }

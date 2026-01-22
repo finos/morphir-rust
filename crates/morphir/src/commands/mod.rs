@@ -11,7 +11,6 @@ pub use dist::*;
 pub use extension::*;
 pub use generate::*;
 pub use migrate::*;
-pub use schema::*;
 pub use tool::*;
 pub use transform::*;
 pub use validate::*;

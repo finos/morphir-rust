@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_str_replace)]
 //! Gleam parser - converts Gleam source code to Morphir IR
 
 use serde::{Deserialize, Serialize};

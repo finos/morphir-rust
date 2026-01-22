@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_match, clippy::single_match)]
 //! WASM code generation from Morphir IR
 
 use base64::{engine::general_purpose::STANDARD, Engine};

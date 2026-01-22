@@ -70,7 +70,7 @@ impl Backend for WasmExtension {
                 diagnostics: vec![Diagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: Some("W001".into()),
-                    message: e.to_string(),
+                    message: e.to_string() as String,
                     location: None,
                     related: vec![],
                 }],

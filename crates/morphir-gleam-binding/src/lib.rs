@@ -55,7 +55,7 @@ impl Frontend for GleamExtension {
                     diagnostics.push(Diagnostic {
                         severity: DiagnosticSeverity::Error,
                         code: Some("E001".into()),
-                        message: e.to_string(),
+                        message: e.to_string() as String,
                         location: Some(SourceLocation {
                             file: source.path.clone(),
                             start_line: 1,
@@ -109,7 +109,7 @@ impl Backend for GleamExtension {
                 diagnostics: vec![Diagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: Some("G001".into()),
-                    message: e.to_string(),
+                    message: e.to_string() as String,
                     location: None,
                     related: vec![],
                 }],

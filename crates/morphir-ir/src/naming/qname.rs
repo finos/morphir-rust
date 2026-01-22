@@ -25,7 +25,7 @@ impl QName {
         }
         let path_str = parts[0];
         let name_str = parts[1];
-        Some(Self::new(Path::new(path_str), Name::new(name_str)))
+        Some(Self::new(Path::new(path_str), Name::from(name_str)))
     }
 }
 

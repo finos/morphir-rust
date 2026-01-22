@@ -1,3 +1,4 @@
+#![allow(clippy::derivable_impls)]
 //! Virtual path mappings for sandboxed filesystem access
 //!
 //! Extensions access files through virtual paths that map to real paths.

@@ -1,3 +1,4 @@
+#![allow(clippy::get_first)]
 use anyhow::Result;
 use cucumber::{given, then, when, World};
 use morphir_common::config::MorphirConfig;
@@ -5,7 +6,6 @@ use morphir_common::loader::{self, LoadedDistribution};
 use morphir_common::vfs::{MemoryVfs, OsVfs, Vfs};
 use morphir_ir::converter;
 use std::path::{Path, PathBuf};
-use tokio;
 
 #[derive(Debug, World)]
 pub struct TestWorld {

@@ -32,7 +32,7 @@ impl FQName {
         Some(Self::new(
             Path::new(pkg_params),
             Path::new(mod_params),
-            Name::new(local_name),
+            Name::from(local_name),
         ))
     }
 }

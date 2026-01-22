@@ -90,28 +90,46 @@ impl MemoryVfs {
     pub fn new() -> Self {
         Self::default()
     }
+    
+    fn normalize_path(path: &Path) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            if let std::path::Component::CurDir = component {
+                continue;
+            }
+            normalized.push(component);
+        }
+        if normalized.as_os_str().is_empty() {
+             return PathBuf::from(".");
+        }
+        normalized
+    }
 }
 
 impl Vfs for MemoryVfs {
     fn read_to_string(&self, path: &Path) -> Result<String> {
+        let path = MemoryVfs::normalize_path(path);
         let files = self.files.lock().unwrap();
-        files.get(path)
+        files.get(&path)
             .cloned()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "File not found"))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("File not found: {:?}", path)))
     }
     
     fn write_from_string(&self, path: &Path, content: &str) -> Result<()> {
+        let path = MemoryVfs::normalize_path(path);
         let mut files = self.files.lock().unwrap();
-        files.insert(path.to_path_buf(), content.to_string());
+        files.insert(path, content.to_string());
         Ok(())
     }
     
     fn exists(&self, path: &Path) -> bool {
+        let path = MemoryVfs::normalize_path(path);
         let files = self.files.lock().unwrap();
-        files.contains_key(path)
+        files.contains_key(&path)
     }
     
     fn is_dir(&self, path: &Path) -> bool {
+        let path = MemoryVfs::normalize_path(path);
         let files = self.files.lock().unwrap();
         // Check if any file starts with this path (and is longer, indicating a child)
         // Or if path is "." or root.
@@ -120,7 +138,7 @@ impl Vfs for MemoryVfs {
         }
         
         for k in files.keys() {
-            if k.starts_with(path) && k != path {
+            if k.starts_with(&path) && k != &path {
                 return true;
             }
         }
@@ -128,10 +146,11 @@ impl Vfs for MemoryVfs {
     }
     
     fn list_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        let path = MemoryVfs::normalize_path(path);
         let files = self.files.lock().unwrap();
         let mut entries = Vec::new();
         for k in files.keys() {
-            if k.starts_with(path) && k != path {
+            if k.starts_with(&path) && k != &path {
                 entries.push(k.clone());
             }
         }

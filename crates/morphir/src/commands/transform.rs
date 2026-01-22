@@ -14,4 +14,3 @@ pub fn run_transform(input: Option<String>, output: Option<String>) -> AppResult
     // TODO: Implement transformation logic
     Ok(None)
 }
-

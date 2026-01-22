@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_str_replace)]
 //! Gleam parser - converts Gleam source code to Morphir IR
 
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,10 @@ pub enum TypeExpr {
     /// Unit type
     Unit,
     /// Function type (e.g., `Int -> String`)
-    Function { from: Box<TypeExpr>, to: Box<TypeExpr> },
+    Function {
+        from: Box<TypeExpr>,
+        to: Box<TypeExpr>,
+    },
     /// Record type (e.g., `{ name: String, age: Int }`)
     Record { fields: Vec<(String, TypeExpr)> },
     /// Tuple type (e.g., `#(Int, String)`)
@@ -81,13 +85,24 @@ pub enum Expr {
     /// Variable reference
     Variable { name: String },
     /// Function application
-    Apply { function: Box<Expr>, argument: Box<Expr> },
+    Apply {
+        function: Box<Expr>,
+        argument: Box<Expr>,
+    },
     /// Lambda expression
     Lambda { param: String, body: Box<Expr> },
     /// Let binding
-    Let { name: String, value: Box<Expr>, body: Box<Expr> },
+    Let {
+        name: String,
+        value: Box<Expr>,
+        body: Box<Expr>,
+    },
     /// If expression
-    If { condition: Box<Expr>, then_branch: Box<Expr>, else_branch: Box<Expr> },
+    If {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+    },
     /// Record construction
     Record { fields: Vec<(String, Expr)> },
     /// Record field access
@@ -95,7 +110,10 @@ pub enum Expr {
     /// Tuple construction
     Tuple { elements: Vec<Expr> },
     /// Pattern match / case expression
-    Case { subject: Box<Expr>, branches: Vec<CaseBranch> },
+    Case {
+        subject: Box<Expr>,
+        branches: Vec<CaseBranch>,
+    },
     /// Constructor reference
     Constructor { name: String },
 }
@@ -222,7 +240,9 @@ fn parse_function_name(line: &str) -> Option<&str> {
 /// Extract type name from a line like "pub type Person {"
 fn parse_type_name(line: &str) -> Option<&str> {
     let line = line.strip_prefix("pub type ")?;
-    let end = line.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(line.len());
+    let end = line
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(line.len());
     Some(&line[..end])
 }
 

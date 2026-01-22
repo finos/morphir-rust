@@ -1,0 +1,3 @@
+#!/bin/sh
+#MISE description="Check for linting errors"
+cargo clippy --all-targets --all-features -- -D warnings

@@ -1,10 +1,11 @@
+#![allow(clippy::ptr_arg)]
 //! Workspace management for multi-project Morphir development
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::config::MorphirConfig;
 use crate::Result;
+use morphir_common::config::MorphirConfig;
 
 /// Workspace state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

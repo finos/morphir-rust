@@ -44,13 +44,6 @@
 //!
 //! morphir_extension_sdk::export_extension!(MyExtension);
 //! ```
-//!
-//! # Extension Types
-//!
-//! - **Frontend**: Compiles source code to Morphir IR
-//! - **Backend**: Generates code from Morphir IR
-//! - **Validator**: Validates IR and produces diagnostics
-//! - **Transform**: Transforms IR to IR
 
 pub mod error;
 pub mod host;
@@ -69,21 +62,6 @@ pub use types::*;
 /// This macro generates the necessary WASM exports for your extension:
 /// - `morphir_extension_info`: Returns extension metadata
 /// - `handle`: Main JSON-RPC request handler
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use morphir_extension_sdk::prelude::*;
-///
-/// #[derive(Default)]
-/// struct MyExtension;
-///
-/// impl Extension for MyExtension {
-///     fn info() -> ExtensionInfo { /* ... */ }
-/// }
-///
-/// morphir_extension_sdk::export_extension!(MyExtension);
-/// ```
 #[macro_export]
 macro_rules! export_extension {
     ($impl:ty) => {
@@ -124,21 +102,13 @@ pub fn __dispatch_request<E: Extension + Default>(
 
         methods::CAPABILITIES => serde_json::to_value(E::capabilities()),
 
-        methods::COMPILE => {
-            dispatch_compile::<E>(request)
-        }
+        methods::COMPILE => dispatch_compile(request),
 
-        methods::GENERATE => {
-            dispatch_generate::<E>(request)
-        }
+        methods::GENERATE => dispatch_generate(request),
 
-        methods::VALIDATE => {
-            dispatch_validate::<E>(request)
-        }
+        methods::VALIDATE => dispatch_validate(request),
 
-        methods::TRANSFORM => {
-            dispatch_transform::<E>(request)
-        }
+        methods::TRANSFORM => dispatch_transform(request),
 
         method => {
             return protocol::ExtensionResponse::error(
@@ -165,19 +135,11 @@ pub fn __dispatch_request<E: Extension + Default>(
 }
 
 #[doc(hidden)]
-fn dispatch_compile<E: Extension + Default>(
+fn dispatch_compile(
     request: &protocol::ExtensionRequest,
 ) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    // This uses trait bounds, so we need to handle the case where E doesn't implement Frontend
-    // We'll do this by trying to deserialize and call, but the actual implementation
-    // will be handled by the concrete type
-
-    // For now, return method not found if the extension doesn't implement the trait
-    // The actual dispatching will be done by the extension's concrete implementation
     let _params: types::CompileRequest = serde_json::from_value(request.params.clone())?;
 
-    // This is a placeholder - the actual implementation should be provided
-    // by extensions that implement Frontend
     let result = types::CompileResult {
         success: false,
         ir: None,
@@ -194,7 +156,7 @@ fn dispatch_compile<E: Extension + Default>(
 }
 
 #[doc(hidden)]
-fn dispatch_generate<E: Extension + Default>(
+fn dispatch_generate(
     request: &protocol::ExtensionRequest,
 ) -> std::result::Result<serde_json::Value, serde_json::Error> {
     let _params: types::GenerateRequest = serde_json::from_value(request.params.clone())?;
@@ -215,7 +177,7 @@ fn dispatch_generate<E: Extension + Default>(
 }
 
 #[doc(hidden)]
-fn dispatch_validate<E: Extension + Default>(
+fn dispatch_validate(
     request: &protocol::ExtensionRequest,
 ) -> std::result::Result<serde_json::Value, serde_json::Error> {
     let _params: types::ValidateRequest = serde_json::from_value(request.params.clone())?;
@@ -235,7 +197,7 @@ fn dispatch_validate<E: Extension + Default>(
 }
 
 #[doc(hidden)]
-fn dispatch_transform<E: Extension + Default>(
+fn dispatch_transform(
     request: &protocol::ExtensionRequest,
 ) -> std::result::Result<serde_json::Value, serde_json::Error> {
     let _params: types::TransformRequest = serde_json::from_value(request.params.clone())?;

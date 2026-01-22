@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_match, clippy::single_match)]
 //! WASM code generation from Morphir IR
 
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -42,17 +43,16 @@ pub fn generate_wasm(
     let mut artifacts = Vec::new();
 
     // Try to parse as distribution or module list
-    let (name, modules): (String, Vec<ModuleIR>) = if let Ok(dist) =
-        serde_json::from_value::<Distribution>(ir.clone())
-    {
-        (dist.name, dist.modules)
-    } else if let Ok(modules) = serde_json::from_value::<Vec<ModuleIR>>(ir.clone()) {
-        ("morphir".to_string(), modules)
-    } else {
-        // Try single module
-        let module = serde_json::from_value::<ModuleIR>(ir.clone())?;
-        (module.name.clone(), vec![module])
-    };
+    let (name, modules): (String, Vec<ModuleIR>) =
+        if let Ok(dist) = serde_json::from_value::<Distribution>(ir.clone()) {
+            (dist.name, dist.modules)
+        } else if let Ok(modules) = serde_json::from_value::<Vec<ModuleIR>>(ir.clone()) {
+            ("morphir".to_string(), modules)
+        } else {
+            // Try single module
+            let module = serde_json::from_value::<ModuleIR>(ir.clone())?;
+            (module.name.clone(), vec![module])
+        };
 
     // Generate a single WASM module containing all Morphir modules
     let wasm_bytes = compile_to_wasm(&modules)?;
@@ -144,9 +144,11 @@ fn generate_function_body(func: &mut Function, body: &serde_json::Value) -> Resu
                                         if let Some(b) =
                                             lit_obj.get("value").and_then(|v| v.as_bool())
                                         {
-                                            func.instruction(&Instruction::I32Const(
-                                                if b { 1 } else { 0 },
-                                            ));
+                                            func.instruction(&Instruction::I32Const(if b {
+                                                1
+                                            } else {
+                                                0
+                                            }));
                                             func.instruction(&Instruction::End);
                                             return Ok(());
                                         }

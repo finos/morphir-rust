@@ -3,12 +3,12 @@
 //! This module provides functionality for installing, updating, listing, and
 //! uninstalling Morphir tools and extensions, similar to npm or dotnet tool.
 
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use starbase::AppResult;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 
 /// Default version to use when no version is specified
 const DEFAULT_VERSION: &str = "latest";
@@ -59,20 +59,17 @@ impl ToolRegistry {
     fn save(&self) -> Result<()> {
         let config_path = Self::config_path()?;
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create config directory")?;
+            fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize tool registry")?;
-        fs::write(&config_path, content)
-            .context("Failed to write tool registry configuration")?;
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize tool registry")?;
+        fs::write(&config_path, content).context("Failed to write tool registry configuration")?;
         Ok(())
     }
 
     /// Get the path to the tool registry configuration file
     fn config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow!("Could not determine home directory"))?;
+        let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
         Ok(home.join(".morphir").join("tools.json"))
     }
 
@@ -100,7 +97,7 @@ impl ToolRegistry {
 /// Run the tool install command
 pub fn run_tool_install(name: String, version: Option<String>) -> AppResult {
     println!("Installing Morphir tool: {}", name);
-    
+
     let mut registry = match ToolRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -112,8 +109,10 @@ pub fn run_tool_install(name: String, version: Option<String>) -> AppResult {
     // Check if tool is already installed
     if let Some(existing_tool) = registry.get_tool(&name) {
         let version_str = existing_tool.version.as_deref().unwrap_or(DEFAULT_VERSION);
-        println!("Tool '{}' is already installed (version: {})", 
-                 name, version_str);
+        println!(
+            "Tool '{}' is already installed (version: {})",
+            name, version_str
+        );
         println!("Use 'morphir tool update' to update to a newer version");
         return Ok(None);
     }
@@ -135,7 +134,10 @@ pub fn run_tool_install(name: String, version: Option<String>) -> AppResult {
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully installed tool '{}' (version: {})", name, display_version);
+    println!(
+        "✓ Successfully installed tool '{}' (version: {})",
+        name, display_version
+    );
     println!("  Run 'morphir tool list' to see all installed tools");
 
     Ok(None)
@@ -144,7 +146,7 @@ pub fn run_tool_install(name: String, version: Option<String>) -> AppResult {
 /// Run the tool list command
 pub fn run_tool_list() -> AppResult {
     println!("Listing installed Morphir tools...\n");
-    
+
     let registry = match ToolRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -154,7 +156,7 @@ pub fn run_tool_list() -> AppResult {
     };
 
     let tools = registry.list_tools();
-    
+
     if tools.is_empty() {
         println!("No tools installed.");
         println!("Use 'morphir tool install <name>' to install a tool");
@@ -175,7 +177,7 @@ pub fn run_tool_list() -> AppResult {
 /// Run the tool update command
 pub fn run_tool_update(name: String, version: Option<String>) -> AppResult {
     println!("Updating Morphir tool: {}", name);
-    
+
     let mut registry = match ToolRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -188,12 +190,19 @@ pub fn run_tool_update(name: String, version: Option<String>) -> AppResult {
     let existing_tool = match registry.get_tool(&name) {
         Some(tool) => tool.clone(),
         None => {
-            eprintln!("Error: Tool '{}' is not installed. Use 'morphir tool install' first", name);
+            eprintln!(
+                "Error: Tool '{}' is not installed. Use 'morphir tool install' first",
+                name
+            );
             return Ok(Some(1));
         }
     };
 
-    let old_version = existing_tool.version.as_deref().unwrap_or(DEFAULT_VERSION).to_string();
+    let old_version = existing_tool
+        .version
+        .as_deref()
+        .unwrap_or(DEFAULT_VERSION)
+        .to_string();
     let new_version = version.or_else(|| Some(DEFAULT_VERSION.to_string()));
     let new_version_str = new_version.as_deref().unwrap_or(DEFAULT_VERSION);
 
@@ -216,7 +225,10 @@ pub fn run_tool_update(name: String, version: Option<String>) -> AppResult {
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully updated tool '{}' from {} to {}", name, old_version, new_version_str);
+    println!(
+        "✓ Successfully updated tool '{}' from {} to {}",
+        name, old_version, new_version_str
+    );
 
     Ok(None)
 }
@@ -224,7 +236,7 @@ pub fn run_tool_update(name: String, version: Option<String>) -> AppResult {
 /// Run the tool uninstall command
 pub fn run_tool_uninstall(name: String) -> AppResult {
     println!("Uninstalling Morphir tool: {}", name);
-    
+
     let mut registry = match ToolRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -248,8 +260,10 @@ pub fn run_tool_uninstall(name: String) -> AppResult {
     }
 
     let version_str = removed_tool.version.as_deref().unwrap_or(DEFAULT_VERSION);
-    println!("✓ Successfully uninstalled tool '{}' (version: {})", 
-             removed_tool.name, version_str);
+    println!(
+        "✓ Successfully uninstalled tool '{}' (version: {})",
+        removed_tool.name, version_str
+    );
 
     Ok(None)
 }

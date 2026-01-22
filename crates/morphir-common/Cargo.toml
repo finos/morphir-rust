@@ -1,0 +1,24 @@
+[package]
+name = "morphir-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+dirs = "6.0"
+morphir-ir = { path = "../morphir-ir" }
+glob = "0.3"
+
+[dev-dependencies]
+tempfile = "3.24.0"

@@ -22,8 +22,10 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-morphir-models = { path = "../morphir-models" }
+morphir-ir = { path = "../morphir-ir" }
+morphir-common = { path = "../morphir-common" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "6.0"
+schemars = "0.8"
 

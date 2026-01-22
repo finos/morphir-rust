@@ -1,0 +1,9 @@
+{
+    "name": "ExamplePackage",
+    "modules": [
+        {
+            "name": "ExampleModule",
+            "declarations": []
+        }
+    ]
+}

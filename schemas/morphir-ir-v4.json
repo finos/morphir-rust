@@ -1,0 +1,330 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Distribution",
+  "type": "object",
+  "required": [
+    "distribution",
+    "formatVersion"
+  ],
+  "properties": {
+    "distribution": {
+      "$ref": "#/definitions/DistributionBody"
+    },
+    "formatVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "definitions": {
+    "Access": {
+      "type": "string",
+      "enum": [
+        "Public",
+        "Private"
+      ]
+    },
+    "AccessControlledConstructors": {
+      "type": "object",
+      "required": [
+        "access",
+        "value"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/Access"
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConstructorDefinition"
+          }
+        }
+      }
+    },
+    "AccessControlledModuleDefinition": {
+      "type": "object",
+      "required": [
+        "access",
+        "value"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/Access"
+        },
+        "value": {
+          "$ref": "#/definitions/ModuleDefinition"
+        }
+      }
+    },
+    "AccessControlledTypeDefinition": {
+      "type": "object",
+      "required": [
+        "access",
+        "value"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/Access"
+        },
+        "value": {
+          "$ref": "#/definitions/TypeDefinition"
+        }
+      }
+    },
+    "AccessControlledValueDefinition": {
+      "type": "object",
+      "required": [
+        "access",
+        "value"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/Access"
+        },
+        "value": {
+          "$ref": "#/definitions/ValueDefinition"
+        }
+      }
+    },
+    "ConstructorDefinition": {
+      "type": "array",
+      "items": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "type": "string"
+              },
+              true
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      ],
+      "maxItems": 2,
+      "minItems": 2
+    },
+    "CustomTypeDefinition": {
+      "type": "object",
+      "required": [
+        "constructors",
+        "type_params"
+      ],
+      "properties": {
+        "constructors": {
+          "$ref": "#/definitions/AccessControlledConstructors"
+        },
+        "type_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DistributionBody": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LibraryDistribution"
+        }
+      ]
+    },
+    "LibraryDistribution": {
+      "type": "array",
+      "items": [
+        {
+          "$ref": "#/definitions/LibraryTag"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        {
+          "$ref": "#/definitions/PackageDefinition"
+        }
+      ],
+      "maxItems": 4,
+      "minItems": 4
+    },
+    "LibraryTag": {
+      "type": "string",
+      "enum": [
+        "Library"
+      ]
+    },
+    "ModuleDefinition": {
+      "type": "object",
+      "required": [
+        "types",
+        "values"
+      ],
+      "properties": {
+        "doc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TypeDefinitionEntry"
+          }
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ValueDefinitionEntry"
+          }
+        }
+      }
+    },
+    "ModuleDefinitionEntry": {
+      "type": "array",
+      "items": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/AccessControlledModuleDefinition"
+        }
+      ],
+      "maxItems": 2,
+      "minItems": 2
+    },
+    "PackageDefinition": {
+      "type": "object",
+      "required": [
+        "modules"
+      ],
+      "properties": {
+        "modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModuleDefinitionEntry"
+          }
+        }
+      }
+    },
+    "TypeAliasDefinition": {
+      "type": "object",
+      "required": [
+        "type_exp",
+        "type_params"
+      ],
+      "properties": {
+        "type_exp": true,
+        "type_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "TypeDefinition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "TypeAlias"
+          ],
+          "properties": {
+            "TypeAlias": {
+              "$ref": "#/definitions/TypeAliasDefinition"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "CustomType"
+          ],
+          "properties": {
+            "CustomType": {
+              "$ref": "#/definitions/CustomTypeDefinition"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TypeDefinitionEntry": {
+      "type": "array",
+      "items": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/AccessControlledTypeDefinition"
+        }
+      ],
+      "maxItems": 2,
+      "minItems": 2
+    },
+    "ValueDefinition": {
+      "type": "object",
+      "required": [
+        "body",
+        "input_types",
+        "output_type"
+      ],
+      "properties": {
+        "body": true,
+        "input_types": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "type": "string"
+              },
+              true,
+              true
+            ],
+            "maxItems": 3,
+            "minItems": 3
+          }
+        },
+        "output_type": true
+      }
+    },
+    "ValueDefinitionEntry": {
+      "type": "array",
+      "items": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/AccessControlledValueDefinition"
+        }
+      ],
+      "maxItems": 2,
+      "minItems": 2
+    }
+  }
+}

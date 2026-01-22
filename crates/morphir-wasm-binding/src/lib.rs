@@ -52,7 +52,8 @@ impl Backend for WasmExtension {
             Ok(mut artifacts) => {
                 // Optionally generate WAT as well
                 if emit_wat {
-                    if let Ok(wat_artifacts) = backend::generate_wat(&request.ir, &request.options) {
+                    if let Ok(wat_artifacts) = backend::generate_wat(&request.ir, &request.options)
+                    {
                         artifacts.extend(wat_artifacts);
                     }
                 }
@@ -69,7 +70,7 @@ impl Backend for WasmExtension {
                 diagnostics: vec![Diagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: Some("W001".into()),
-                    message: e.to_string(),
+                    message: e.to_string() as String,
                     location: None,
                     related: vec![],
                 }],

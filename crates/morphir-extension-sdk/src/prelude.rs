@@ -8,8 +8,8 @@
 pub use crate::types::{
     Artifact, CompileRequest, CompileResult, Diagnostic, DiagnosticSeverity, ExtensionCapabilities,
     ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult, RelatedInformation,
-    ResourceLimits, SourceFile, SourceLocation, TransformRequest, TransformResult,
-    ValidateRequest, ValidateResult, WorkspaceInfo,
+    ResourceLimits, SourceFile, SourceLocation, TransformRequest, TransformResult, ValidateRequest,
+    ValidateResult, WorkspaceInfo,
 };
 
 // Re-export traits

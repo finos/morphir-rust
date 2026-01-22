@@ -4,10 +4,10 @@ use starbase::{App, AppResult, AppSession};
 mod commands;
 
 use commands::{
-    run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update,
-    run_extension_install, run_extension_list, run_extension_uninstall, run_extension_update,
-    run_generate, run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update,
-    run_transform, run_validate,
+    run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update, run_extension_install,
+    run_extension_list, run_extension_uninstall, run_extension_update, run_generate, run_migrate,
+    run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform,
+    run_validate,
 };
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
@@ -63,6 +63,17 @@ enum Commands {
     Extension {
         #[command(subcommand)]
         action: ExtensionAction,
+    },
+    /// Manage Morphir IR
+    Ir {
+        #[command(subcommand)]
+        action: IrAction,
+    },
+    /// Generate JSON Schema for Morphir IR
+    Schema {
+        /// Output file path (optional)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
     },
 }
 
@@ -147,6 +158,22 @@ enum ExtensionAction {
     },
 }
 
+#[derive(Clone, Subcommand)]
+enum IrAction {
+    /// Migrate IR between versions
+    Migrate {
+        /// Input file or directory
+        #[arg(short, long)]
+        input: std::path::PathBuf,
+        /// Output file or directory
+        #[arg(short, long)]
+        output: std::path::PathBuf,
+        /// Target version (v4 or classic)
+        #[arg(long)]
+        target_version: Option<String>,
+    },
+}
+
 /// Application session for Morphir CLI
 #[derive(Clone)]
 struct MorphirSession {
@@ -157,63 +184,51 @@ struct MorphirSession {
 impl AppSession for MorphirSession {
     async fn execute(&mut self) -> AppResult {
         match &self.command {
-            Commands::Validate { input } => {
-                run_validate(input.clone())
-            }
-            Commands::Generate { target, input, output } => {
-                run_generate(target.clone(), input.clone(), output.clone())
-            }
-            Commands::Transform { input, output } => {
-                run_transform(input.clone(), output.clone())
-            }
-            Commands::Tool { action } => {
-                match action {
-                    ToolAction::Install { name, version } => {
-                        run_tool_install(name.clone(), version.clone())
-                    }
-                    ToolAction::List => {
-                        run_tool_list()
-                    }
-                    ToolAction::Update { name, version } => {
-                        run_tool_update(name.clone(), version.clone())
-                    }
-                    ToolAction::Uninstall { name } => {
-                        run_tool_uninstall(name.clone())
-                    }
+            Commands::Validate { input } => run_validate(input.clone()),
+            Commands::Generate {
+                target,
+                input,
+                output,
+            } => run_generate(target.clone(), input.clone(), output.clone()),
+            Commands::Transform { input, output } => run_transform(input.clone(), output.clone()),
+            Commands::Tool { action } => match action {
+                ToolAction::Install { name, version } => {
+                    run_tool_install(name.clone(), version.clone())
                 }
-            }
-            Commands::Dist { action } => {
-                match action {
-                    DistAction::Install { name, version } => {
-                        run_dist_install(name.clone(), version.clone())
-                    }
-                    DistAction::List => {
-                        run_dist_list()
-                    }
-                    DistAction::Update { name, version } => {
-                        run_dist_update(name.clone(), version.clone())
-                    }
-                    DistAction::Uninstall { name } => {
-                        run_dist_uninstall(name.clone())
-                    }
+                ToolAction::List => run_tool_list(),
+                ToolAction::Update { name, version } => {
+                    run_tool_update(name.clone(), version.clone())
                 }
-            }
-            Commands::Extension { action } => {
-                match action {
-                    ExtensionAction::Install { name, version } => {
-                        run_extension_install(name.clone(), version.clone())
-                    }
-                    ExtensionAction::List => {
-                        run_extension_list()
-                    }
-                    ExtensionAction::Update { name, version } => {
-                        run_extension_update(name.clone(), version.clone())
-                    }
-                    ExtensionAction::Uninstall { name } => {
-                        run_extension_uninstall(name.clone())
-                    }
+                ToolAction::Uninstall { name } => run_tool_uninstall(name.clone()),
+            },
+            Commands::Dist { action } => match action {
+                DistAction::Install { name, version } => {
+                    run_dist_install(name.clone(), version.clone())
                 }
-            }
+                DistAction::List => run_dist_list(),
+                DistAction::Update { name, version } => {
+                    run_dist_update(name.clone(), version.clone())
+                }
+                DistAction::Uninstall { name } => run_dist_uninstall(name.clone()),
+            },
+            Commands::Extension { action } => match action {
+                ExtensionAction::Install { name, version } => {
+                    run_extension_install(name.clone(), version.clone())
+                }
+                ExtensionAction::List => run_extension_list(),
+                ExtensionAction::Update { name, version } => {
+                    run_extension_update(name.clone(), version.clone())
+                }
+                ExtensionAction::Uninstall { name } => run_extension_uninstall(name.clone()),
+            },
+            Commands::Ir { action } => match action {
+                IrAction::Migrate {
+                    input,
+                    output,
+                    target_version,
+                } => run_migrate(input.clone(), output.clone(), target_version.clone()),
+            },
+            Commands::Schema { output } => commands::schema::run_schema(output.clone()),
         }
     }
 }
@@ -229,10 +244,11 @@ async fn main() -> starbase::MainResult {
 
     // Initialize and run starbase App
     let exit_code = App::default()
-        .run(session, |mut session| async move {
-            session.execute().await
-        })
+        .run(
+            session,
+            |mut session| async move { session.execute().await },
+        )
         .await?;
-    
+
     Ok(std::process::ExitCode::from(exit_code))
 }

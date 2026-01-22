@@ -76,19 +76,19 @@ impl ExtensionContainer {
         host_funcs: MorphirHostFunctions,
     ) -> Result<Self> {
         // Create manifest with memory limits
-        let manifest = Manifest::new([Wasm::data(wasm_bytes)])
-            .with_memory_max(256 * 1024 * 1024); // 256 MB max
+        let manifest = Manifest::new([Wasm::data(wasm_bytes)]).with_memory_max(256 * 1024 * 1024); // 256 MB max
 
         // Create plugin with host functions
-        let mut plugin = Plugin::new(&manifest, host_funcs.into_functions(), true).map_err(|e| {
-            DaemonError::Extension(format!("Failed to create plugin: {}", e))
-        })?;
+        let mut plugin = Plugin::new(&manifest, host_funcs.into_functions(), true)
+            .map_err(|e| DaemonError::Extension(format!("Failed to create plugin: {}", e)))?;
 
         // Query extension info
         let info: ExtensionInfo = {
-            let output = plugin.call::<&[u8], Vec<u8>>("morphir_extension_info", &[]).map_err(|e| {
-                DaemonError::Extension(format!("Failed to get extension info: {}", e))
-            })?;
+            let output = plugin
+                .call::<&[u8], Vec<u8>>("morphir_extension_info", &[])
+                .map_err(|e| {
+                    DaemonError::Extension(format!("Failed to get extension info: {}", e))
+                })?;
             serde_json::from_slice(&output)?
         };
 

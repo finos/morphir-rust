@@ -1,5 +1,3 @@
-//! Configuration types for morphir.toml parsing
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,6 +46,18 @@ pub struct MorphirConfig {
     pub tasks: HashMap<String, TaskSpec>,
 }
 
+impl MorphirConfig {
+    /// Check if this is a workspace configuration
+    pub fn is_workspace(&self) -> bool {
+        self.workspace.is_some()
+    }
+
+    /// Check if this is a project configuration
+    pub fn is_project(&self) -> bool {
+        self.project.is_some()
+    }
+}
+
 /// [morphir] section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MorphirSection {
@@ -84,11 +94,11 @@ pub struct ProjectSection {
     pub output_directory: String,
 }
 
-fn default_source_dir() -> String {
+pub(crate) fn default_source_dir() -> String {
     "src".to_string()
 }
 
-fn default_output_dir() -> String {
+pub(crate) fn default_output_dir() -> String {
     ".morphir-dist".to_string()
 }
 
@@ -240,23 +250,4 @@ pub struct DetailedTask {
     /// Environment variables
     #[serde(default)]
     pub env: HashMap<String, String>,
-}
-
-impl MorphirConfig {
-    /// Load configuration from a file path
-    pub fn load(path: &PathBuf) -> crate::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config: MorphirConfig = toml::from_str(&content)?;
-        Ok(config)
-    }
-
-    /// Check if this is a workspace configuration
-    pub fn is_workspace(&self) -> bool {
-        self.workspace.is_some()
-    }
-
-    /// Check if this is a project configuration
-    pub fn is_project(&self) -> bool {
-        self.project.is_some()
-    }
 }

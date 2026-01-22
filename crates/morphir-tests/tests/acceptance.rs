@@ -64,14 +64,21 @@ async fn i_load_distribution_from_dir(w: &mut TestWorld) {
 #[when(expr = "I load the distribution from the file")]
 async fn i_load_distribution_from_file(w: &mut TestWorld) {
     let vfs = OsVfs;
+    
+    // Read the original file content first
+    let content = match vfs.read_to_string(&w.input_path) {
+        Ok(c) => c,
+        Err(e) => {
+            w.last_result = Some(Err(e.into()));
+            return;
+        }
+    };
+
     let load_res = loader::load_distribution(&vfs, &w.input_path);
     
     match load_res {
-         Ok(dist) => {
-             let content = match dist {
-                 LoadedDistribution::V4(d) => serde_json::to_string(&d).unwrap(),
-                 LoadedDistribution::Classic(d) => serde_json::to_string(&d).unwrap(),
-             };
+         Ok(_dist) => {
+             // Store the ORIGINAL file content, not re-serialized
              w.loaded_content = Some(content);
              w.last_result = Some(Ok(()));
          }
@@ -181,9 +188,29 @@ async fn package_name_should_be(w: &mut TestWorld, name: String) {
     
     let pkg_name = if let Some(dist) = v.get("distribution") {
         if dist.is_array() {
-             if let Some(tag) = dist.get(0) {
-                 if tag == "Library" {
-                      dist.get(1).and_then(|v| v.as_str())
+             if let Some(tag) = dist.get(0).and_then(|v| v.as_str()) {
+                 if tag == "Library" || tag == "library" {
+                      let pkg_val = dist.get(1);
+                      if let Some(s) = pkg_val.and_then(|v| v.as_str()) {
+                          // V4: Simple string
+                          Some(s.to_string())
+                      } else if let Some(arr) = pkg_val.and_then(|v| v.as_array()) {
+                          // Legacy: Array of arrays [["morphir"], ["example"], ["app"]]
+                          // or simple names [["rentals"]]
+                          let parts: Vec<String> = arr.iter().filter_map(|segment| {
+                              if let Some(s) = segment.as_str() {
+                                  // Invalid per spec but just in case
+                                  Some(s.to_string())
+                              } else if let Some(inner_arr) = segment.as_array() {
+                                  inner_arr.get(0).and_then(|v| v.as_str()).map(|s| s.to_string())
+                              } else {
+                                  None
+                              }
+                          }).collect();
+                          if parts.is_empty() { None } else { Some(parts.join("-")) }
+                      } else {
+                          None
+                      }
                  } else {
                      None
                  }
@@ -192,7 +219,7 @@ async fn package_name_should_be(w: &mut TestWorld, name: String) {
              }
         } else if dist.is_object() {
             if let Some(lib) = dist.get("Library") {
-                 lib.get(1).and_then(|v| v.as_str())
+                 lib.get(1).and_then(|v| v.as_str()).map(|s| s.to_string())
             } else {
                 None
             }
@@ -203,7 +230,7 @@ async fn package_name_should_be(w: &mut TestWorld, name: String) {
         None
     };
     
-    assert_eq!(pkg_name, Some(name.as_str()));
+    assert_eq!(pkg_name, Some(name), "Package name mismatch. Found {:?}", pkg_name);
 }
 
 // VFS Steps

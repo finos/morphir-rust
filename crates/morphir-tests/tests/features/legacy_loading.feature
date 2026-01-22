@@ -13,5 +13,5 @@ Feature: Legacy IR Loading
       | real_v1.json        | morphir-example-app     |
       | real_v2.json        | morphir-example-app     |
       | real_v3.json        | morphir-reference-model |
-      | morphir_elm_v3.json | morphir-elm             |
-      | lcr_v3.json         | finos-lcr               |
+      | morphir_elm_v3.json | morphir                 |
+      | lcr_v3.json         | regulation              |

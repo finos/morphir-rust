@@ -3,12 +3,12 @@
 //! This module provides functionality for installing, updating, listing, and
 //! uninstalling Morphir extensions.
 
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use starbase::AppResult;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 
 /// Default version to use when no version is specified
 const DEFAULT_VERSION: &str = "latest";
@@ -59,11 +59,10 @@ impl ExtensionRegistry {
     fn save(&self) -> Result<()> {
         let config_path = Self::config_path()?;
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create config directory")?;
+            fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize extension registry")?;
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize extension registry")?;
         fs::write(&config_path, content)
             .context("Failed to write extension registry configuration")?;
         Ok(())
@@ -71,8 +70,7 @@ impl ExtensionRegistry {
 
     /// Get the path to the extension registry configuration file
     fn config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow!("Could not determine home directory"))?;
+        let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
         Ok(home.join(".morphir").join("extensions.json"))
     }
 
@@ -100,7 +98,7 @@ impl ExtensionRegistry {
 /// Run the extension install command
 pub fn run_extension_install(name: String, version: Option<String>) -> AppResult {
     println!("Installing Morphir extension: {}", name);
-    
+
     let mut registry = match ExtensionRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -112,8 +110,10 @@ pub fn run_extension_install(name: String, version: Option<String>) -> AppResult
     // Check if extension is already installed
     if let Some(existing_ext) = registry.get_extension(&name) {
         let version_str = existing_ext.version.as_deref().unwrap_or(DEFAULT_VERSION);
-        println!("Extension '{}' is already installed (version: {})", 
-                 name, version_str);
+        println!(
+            "Extension '{}' is already installed (version: {})",
+            name, version_str
+        );
         println!("Use 'morphir extension update' to update to a newer version");
         return Ok(None);
     }
@@ -135,7 +135,10 @@ pub fn run_extension_install(name: String, version: Option<String>) -> AppResult
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully installed extension '{}' (version: {})", name, display_version);
+    println!(
+        "✓ Successfully installed extension '{}' (version: {})",
+        name, display_version
+    );
     println!("  Run 'morphir extension list' to see all installed extensions");
 
     Ok(None)
@@ -144,7 +147,7 @@ pub fn run_extension_install(name: String, version: Option<String>) -> AppResult
 /// Run the extension list command
 pub fn run_extension_list() -> AppResult {
     println!("Listing installed Morphir extensions...\n");
-    
+
     let registry = match ExtensionRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -154,7 +157,7 @@ pub fn run_extension_list() -> AppResult {
     };
 
     let extensions = registry.list_extensions();
-    
+
     if extensions.is_empty() {
         println!("No extensions installed.");
         println!("Use 'morphir extension install <name>' to install an extension");
@@ -175,7 +178,7 @@ pub fn run_extension_list() -> AppResult {
 /// Run the extension update command
 pub fn run_extension_update(name: String, version: Option<String>) -> AppResult {
     println!("Updating Morphir extension: {}", name);
-    
+
     let mut registry = match ExtensionRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -188,17 +191,27 @@ pub fn run_extension_update(name: String, version: Option<String>) -> AppResult 
     let existing_ext = match registry.get_extension(&name) {
         Some(ext) => ext.clone(),
         None => {
-            eprintln!("Error: Extension '{}' is not installed. Use 'morphir extension install' first", name);
+            eprintln!(
+                "Error: Extension '{}' is not installed. Use 'morphir extension install' first",
+                name
+            );
             return Ok(Some(1));
         }
     };
 
-    let old_version = existing_ext.version.as_deref().unwrap_or(DEFAULT_VERSION).to_string();
+    let old_version = existing_ext
+        .version
+        .as_deref()
+        .unwrap_or(DEFAULT_VERSION)
+        .to_string();
     let new_version = version.or_else(|| Some(DEFAULT_VERSION.to_string()));
     let new_version_str = new_version.as_deref().unwrap_or(DEFAULT_VERSION);
 
     if old_version == new_version_str {
-        println!("Extension '{}' is already at version {}", name, new_version_str);
+        println!(
+            "Extension '{}' is already at version {}",
+            name, new_version_str
+        );
         return Ok(None);
     }
 
@@ -216,7 +229,10 @@ pub fn run_extension_update(name: String, version: Option<String>) -> AppResult 
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully updated extension '{}' from {} to {}", name, old_version, new_version_str);
+    println!(
+        "✓ Successfully updated extension '{}' from {} to {}",
+        name, old_version, new_version_str
+    );
 
     Ok(None)
 }
@@ -224,7 +240,7 @@ pub fn run_extension_update(name: String, version: Option<String>) -> AppResult 
 /// Run the extension uninstall command
 pub fn run_extension_uninstall(name: String) -> AppResult {
     println!("Uninstalling Morphir extension: {}", name);
-    
+
     let mut registry = match ExtensionRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -248,8 +264,10 @@ pub fn run_extension_uninstall(name: String) -> AppResult {
     }
 
     let version_str = removed_ext.version.as_deref().unwrap_or(DEFAULT_VERSION);
-    println!("✓ Successfully uninstalled extension '{}' (version: {})", 
-             removed_ext.name, version_str);
+    println!(
+        "✓ Successfully uninstalled extension '{}' (version: {})",
+        removed_ext.name, version_str
+    );
 
     Ok(None)
 }

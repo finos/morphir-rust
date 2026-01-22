@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use morphir_common::config::MorphirConfig;
 use crate::Result;
+use morphir_common::config::MorphirConfig;
 
 /// Workspace state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

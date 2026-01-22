@@ -2,10 +2,12 @@
 //!
 //! Command to migrate Morphir IR between versions and formats.
 
-use starbase::AppResult;
-use morphir_common::vfs::OsVfs;
 use morphir_common::loader::{load_distribution, LoadedDistribution};
+use morphir_common::vfs::OsVfs;
 use morphir_ir::converter;
+use morphir_ir::ir::{classic, v4};
+use morphir_ir::naming::Path;
+use starbase::AppResult;
 use std::path::PathBuf;
 
 pub fn run_migrate(input: PathBuf, output: PathBuf, target_version: Option<String>) -> AppResult {
@@ -23,33 +25,61 @@ pub fn run_migrate(input: PathBuf, output: PathBuf, target_version: Option<Strin
 
     // Convert
     let target_v4 = target_version.as_deref() == Some("v4") || target_version.is_none();
-    
+
     match dist {
-        LoadedDistribution::Classic(pkg) => {
+        LoadedDistribution::Classic(dist) => {
             if target_v4 {
                 println!("Converting Classic -> V4");
-                let v4_dist = converter::classic_to_v4(pkg);
+                let classic::DistributionBody::Library(_, package_path, _, pkg) = dist.distribution;
+                let v4_pkg = converter::classic_to_v4(pkg);
+
+                // Wrap in V4 Distribution
+                let v4_dist = v4::Distribution {
+                    format_version: 4,
+                    distribution: v4::DistributionBody::Library(v4::LibraryDistribution(
+                        v4::LibraryTag::Library,
+                        v4::Path::new(&package_path.to_string()),
+                        vec![],
+                        v4_pkg,
+                    )),
+                };
+
                 // Save v4_dist
                 let content = serde_json::to_string_pretty(&v4_dist).expect("Failed to serialize");
-                // TODO: Write to output using VFS or std::fs
                 std::fs::write(&output, content).expect("Failed to write output");
             } else {
                 println!("Input is Classic, Target is Classic. Copying...");
-                let content = serde_json::to_string_pretty(&pkg).expect("Failed to serialize");
+                let content = serde_json::to_string_pretty(&dist).expect("Failed to serialize");
                 std::fs::write(&output, content).expect("Failed to write output");
             }
         }
         LoadedDistribution::V4(dist) => {
-             if !target_v4 {
+            if !target_v4 {
                 println!("Converting V4 -> Classic");
-                let classic_pkg = converter::v4_to_classic(dist);
-                let content = serde_json::to_string_pretty(&classic_pkg).expect("Failed to serialize");
-                 std::fs::write(&output, content).expect("Failed to write output");
-             } else {
-                 println!("Input is V4, Target is V4. Copying...");
-                 let content = serde_json::to_string_pretty(&dist).expect("Failed to serialize");
-                 std::fs::write(&output, content).expect("Failed to write output");
-             }
+                let v4::DistributionBody::Library(lib_dist) = dist.distribution;
+                let v4::LibraryDistribution(_, package_name, _, pkg_def) = lib_dist;
+
+                let classic_pkg = converter::v4_to_classic(pkg_def);
+
+                // Wrap in Classic Distribution
+                let classic_dist = classic::Distribution {
+                    format_version: 1,
+                    distribution: classic::DistributionBody::Library(
+                        classic::LibraryTag::Library,
+                        Path::new(&package_name.to_string()),
+                        vec![],
+                        classic_pkg,
+                    ),
+                };
+
+                let content =
+                    serde_json::to_string_pretty(&classic_dist).expect("Failed to serialize");
+                std::fs::write(&output, content).expect("Failed to write output");
+            } else {
+                println!("Input is V4, Target is V4. Copying...");
+                let content = serde_json::to_string_pretty(&dist).expect("Failed to serialize");
+                std::fs::write(&output, content).expect("Failed to write output");
+            }
         }
     }
 

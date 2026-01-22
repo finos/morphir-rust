@@ -188,12 +188,16 @@ impl RpcError {
         use crate::ExtensionError;
 
         let (code, message) = match err {
-            ExtensionError::NotFound(id) => {
-                (error_codes::METHOD_NOT_FOUND, format!("Extension not found: {}", id))
-            }
+            ExtensionError::NotFound(id) => (
+                error_codes::METHOD_NOT_FOUND,
+                format!("Extension not found: {}", id),
+            ),
             ExtensionError::LoadFailed(msg) => (error_codes::EXTENSION_ERROR, msg.clone()),
             ExtensionError::InitFailed(msg) => (error_codes::EXTENSION_ERROR, msg.clone()),
-            ExtensionError::UnsupportedCapability { extension, capability } => (
+            ExtensionError::UnsupportedCapability {
+                extension,
+                capability,
+            } => (
                 error_codes::EXTENSION_ERROR,
                 format!("Extension '{}' does not support: {}", extension, capability),
             ),

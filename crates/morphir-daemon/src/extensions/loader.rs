@@ -26,7 +26,10 @@ impl ExtensionLoader {
 
         info!("Extension loader initialized with cache at {:?}", cache_dir);
 
-        Ok(Self { cache_dir, temp_dir })
+        Ok(Self {
+            cache_dir,
+            temp_dir,
+        })
     }
 
     /// Create a loader with default cache directory
@@ -74,9 +77,9 @@ impl ExtensionLoader {
         info!("Downloading extension from: {}", url);
 
         // Download the file
-        let response = reqwest::get(url).await.map_err(|e| {
-            DaemonError::Extension(format!("Failed to download extension: {}", e))
-        })?;
+        let response = reqwest::get(url)
+            .await
+            .map_err(|e| DaemonError::Extension(format!("Failed to download extension: {}", e)))?;
 
         if !response.status().is_success() {
             return Err(DaemonError::Extension(format!(

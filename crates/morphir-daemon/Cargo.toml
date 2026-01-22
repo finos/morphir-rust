@@ -49,3 +49,6 @@ dirs = "5"
 morphir-ir = { path = "../morphir-ir" }
 morphir-common = { path = "../morphir-common" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk", features = ["host"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"

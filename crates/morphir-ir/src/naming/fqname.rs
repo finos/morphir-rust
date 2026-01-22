@@ -1,6 +1,6 @@
 use crate::naming::{name::Name, path::Path};
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// FQName represents a Fully Qualified Name (PackagePath + ModulePath + LocalName).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

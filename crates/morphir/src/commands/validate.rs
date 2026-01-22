@@ -11,4 +11,3 @@ pub fn run_validate(input: Option<String>) -> AppResult {
     // TODO: Implement validation logic
     Ok(None)
 }
-

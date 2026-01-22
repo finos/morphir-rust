@@ -1,6 +1,6 @@
-use starbase::AppResult;
-use schemars::schema_for;
 use morphir_ir::ir::v4::Distribution;
+use schemars::schema_for;
+use starbase::AppResult;
 use std::path::PathBuf;
 
 pub fn run_schema(output: Option<PathBuf>) -> AppResult {
@@ -12,7 +12,7 @@ pub fn run_schema(output: Option<PathBuf>) -> AppResult {
             return Ok(Some(1));
         }
     };
-    
+
     if let Some(path) = output {
         if let Err(e) = std::fs::write(&path, schema_json) {
             eprintln!("Failed to write schema to {:?}: {}", path, e);
@@ -21,6 +21,6 @@ pub fn run_schema(output: Option<PathBuf>) -> AppResult {
     } else {
         println!("{}", schema_json);
     }
-    
+
     Ok(None)
 }

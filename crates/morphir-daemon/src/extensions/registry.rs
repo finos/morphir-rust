@@ -124,10 +124,9 @@ impl ExtensionRegistry {
         // Get config
         let config = {
             let configs = self.configs.read().await;
-            configs
-                .get(id)
-                .cloned()
-                .ok_or_else(|| DaemonError::Extension(format!("Extension not registered: {}", id)))?
+            configs.get(id).cloned().ok_or_else(|| {
+                DaemonError::Extension(format!("Extension not registered: {}", id))
+            })?
         };
 
         if !config.enabled {
@@ -149,8 +148,10 @@ impl ExtensionRegistry {
         };
 
         // Create host functions
-        let host_funcs =
-            MorphirHostFunctions::for_workspace(self.workspace_root.clone(), self.output_dir.clone());
+        let host_funcs = MorphirHostFunctions::for_workspace(
+            self.workspace_root.clone(),
+            self.output_dir.clone(),
+        );
 
         // Create container
         let container = ExtensionContainer::new(id, &wasm_path, host_funcs)?;
@@ -162,7 +163,11 @@ impl ExtensionRegistry {
             extensions.insert(id.to_string(), container.clone());
         }
 
-        info!("Extension loaded: {} v{}", container.info().name, container.info().version);
+        info!(
+            "Extension loaded: {} v{}",
+            container.info().name,
+            container.info().version
+        );
 
         Ok(container)
     }
@@ -230,7 +235,10 @@ impl ExtensionRegistry {
     }
 
     /// Discover extensions from configuration
-    pub async fn discover_from_config(&self, extensions_config: &HashMap<String, ExtensionConfig>) -> Result<()> {
+    pub async fn discover_from_config(
+        &self,
+        extensions_config: &HashMap<String, ExtensionConfig>,
+    ) -> Result<()> {
         for (id, config) in extensions_config {
             let mut config = config.clone();
             config.id = id.clone();
@@ -262,11 +270,8 @@ mod tests {
     #[tokio::test]
     async fn test_registry_creation() {
         let temp = tempdir().unwrap();
-        let registry = ExtensionRegistry::new(
-            temp.path().to_path_buf(),
-            temp.path().join("output"),
-        )
-        .unwrap();
+        let registry =
+            ExtensionRegistry::new(temp.path().to_path_buf(), temp.path().join("output")).unwrap();
 
         let list = registry.list().await;
         assert!(list.is_empty());

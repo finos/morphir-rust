@@ -1,10 +1,10 @@
 //! Morphir IR V4
-//! 
+//!
 //! This module defines the structure for Morphir IR Version 4.
 //! It supports the Document Tree structure and Canonical Strings.
 
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -25,12 +25,12 @@ pub struct LibraryDistribution(
     pub LibraryTag,
     pub PackageName,
     pub Dependencies,
-    pub PackageDefinition
+    pub PackageDefinition,
 );
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum LibraryTag {
-    Library
+    Library,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -39,10 +39,7 @@ pub struct PackageDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ModuleDefinitionEntry(
-    pub ModuleName,
-    pub AccessControlledModuleDefinition
-);
+pub struct ModuleDefinitionEntry(pub ModuleName, pub AccessControlledModuleDefinition);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccessControlledModuleDefinition {
@@ -58,10 +55,7 @@ pub struct ModuleDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct TypeDefinitionEntry(
-    pub Name,
-    pub AccessControlledTypeDefinition
-);
+pub struct TypeDefinitionEntry(pub Name, pub AccessControlledTypeDefinition);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccessControlledTypeDefinition {
@@ -96,16 +90,10 @@ pub struct AccessControlledConstructors {
 pub type Constructors = Vec<ConstructorDefinition>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ConstructorDefinition(
-    pub Name,
-    pub Vec<(Name, Type)>
-);
+pub struct ConstructorDefinition(pub Name, pub Vec<(Name, Type)>);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ValueDefinitionEntry(
-    pub Name,
-    pub AccessControlledValueDefinition
-);
+pub struct ValueDefinitionEntry(pub Name, pub AccessControlledValueDefinition);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccessControlledValueDefinition {
@@ -129,7 +117,7 @@ pub enum Access {
 // Placeholder types for logic that requires deep implementation
 pub type PackageName = crate::naming::Path;
 pub type ModuleName = crate::naming::Path;
-pub type Name = crate::naming::Name; 
+pub type Name = crate::naming::Name;
 pub type Path = crate::naming::Path;
 pub type Dependencies = Vec<(PackageName, PackageSpecification)>;
 pub type PackageSpecification = HashMap<String, serde_json::Value>; // Placeholder

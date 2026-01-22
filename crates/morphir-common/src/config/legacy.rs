@@ -1,7 +1,7 @@
+use super::model::default_output_dir;
+use super::model::{DependencySpec, MorphirConfig, ProjectSection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use super::model::{MorphirConfig, ProjectSection, DependencySpec};
-use super::model::{default_output_dir}; 
 
 /// Legacy `morphir.json` configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

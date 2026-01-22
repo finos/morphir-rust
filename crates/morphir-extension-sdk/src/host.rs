@@ -111,9 +111,10 @@ pub fn get_config(key: &str) -> Option<String> {
 
 /// Get a variable from the host
 pub fn get_var(key: &str) -> Option<String> {
-    extism_pdk::var::get(key).ok().flatten().map(|b| {
-        String::from_utf8(b).unwrap_or_default()
-    })
+    extism_pdk::var::get(key)
+        .ok()
+        .flatten()
+        .map(|b| String::from_utf8(b).unwrap_or_default())
 }
 
 /// Set a variable in the host

@@ -1,6 +1,6 @@
 use crate::naming::{name::Name, path::Path};
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// QName represents a Qualified Name (Path + Name).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

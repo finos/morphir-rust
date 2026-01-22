@@ -2,11 +2,11 @@
 //!
 //! Handles loading and parsing of Morphir configuration files (morphir.toml, morphir.json).
 
-pub mod model;
 pub mod legacy;
+pub mod model;
 
-use std::path::PathBuf;
 use self::legacy::LegacyProjectConfig;
+use std::path::PathBuf;
 
 pub use self::model::*;
 
@@ -14,7 +14,7 @@ impl MorphirConfig {
     /// Load configuration from a file path
     pub fn load(path: &PathBuf) -> crate::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        
+
         // Detect format based on extension
         if let Some(ext) = path.extension() {
             if ext == "json" {
@@ -22,7 +22,7 @@ impl MorphirConfig {
                 return Ok(legacy.into());
             }
         }
-        
+
         // Default to TOML
         let config: MorphirConfig = toml::from_str(&content)?;
         Ok(config)
@@ -46,7 +46,7 @@ exposed_modules = ["Foo", "Bar"]
 "#;
         let mut file = NamedTempFile::new()?;
         write!(file, "{}", toml_content)?;
-        
+
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("morphir.toml");
         std::fs::write(&file_path, toml_content)?;
@@ -56,7 +56,7 @@ exposed_modules = ["Foo", "Bar"]
         let project = config.project.unwrap();
         assert_eq!(project.name, "My.Project");
         assert_eq!(project.version, "1.0.0");
-        
+
         Ok(())
     }
 
@@ -80,10 +80,10 @@ exposed_modules = ["Foo", "Bar"]
         assert_eq!(project.name, "Legacy.Project");
         assert_eq!(project.source_directory, "source");
         assert_eq!(project.exposed_modules, vec!["A", "B"]);
-        
+
         // Check dependencies
         assert!(config.dependencies.contains_key("finos/morphir-dapr"));
-        
+
         Ok(())
     }
 }

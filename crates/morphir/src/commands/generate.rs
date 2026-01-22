@@ -21,4 +21,3 @@ pub fn run_generate(
     // TODO: Implement code generation logic
     Ok(None)
 }
-

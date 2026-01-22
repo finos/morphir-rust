@@ -10,7 +10,6 @@ use std::fmt::Write;
 pub struct Distribution {
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
     pub modules: Vec<ModuleIR>,
 }
 
@@ -49,14 +48,15 @@ pub fn generate_gleam(
     let mut artifacts = Vec::new();
 
     // Try to parse as distribution or module list
-    let modules: Vec<ModuleIR> = if let Ok(dist) = serde_json::from_value::<Distribution>(ir.clone()) {
-        dist.modules
-    } else if let Ok(modules) = serde_json::from_value::<Vec<ModuleIR>>(ir.clone()) {
-        modules
-    } else {
-        // Try single module
-        vec![serde_json::from_value::<ModuleIR>(ir.clone())?]
-    };
+    let modules: Vec<ModuleIR> =
+        if let Ok(dist) = serde_json::from_value::<Distribution>(ir.clone()) {
+            dist.modules
+        } else if let Ok(modules) = serde_json::from_value::<Vec<ModuleIR>>(ir.clone()) {
+            modules
+        } else {
+            // Try single module
+            vec![serde_json::from_value::<ModuleIR>(ir.clone())?]
+        };
 
     let pretty = options
         .get("format")
@@ -167,22 +167,37 @@ fn generate_value(output: &mut String, value_def: &ValueDef, indent: &str) {
                             if let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str()) {
                                 match lit_type {
                                     "string" => {
-                                        if let Some(s) = lit_obj.get("value").and_then(|v| v.as_str()) {
+                                        if let Some(s) =
+                                            lit_obj.get("value").and_then(|v| v.as_str())
+                                        {
                                             let _ = writeln!(output, "{}\"{}\"", indent, s);
                                         }
                                     }
                                     "int" => {
-                                        if let Some(n) = lit_obj.get("value").and_then(|v| v.as_i64()) {
+                                        if let Some(n) =
+                                            lit_obj.get("value").and_then(|v| v.as_i64())
+                                        {
                                             let _ = writeln!(output, "{}{}", indent, n);
                                         }
                                     }
                                     "bool" => {
-                                        if let Some(b) = lit_obj.get("value").and_then(|v| v.as_bool()) {
-                                            let _ = writeln!(output, "{}{}", indent, if b { "True" } else { "False" });
+                                        if let Some(b) =
+                                            lit_obj.get("value").and_then(|v| v.as_bool())
+                                        {
+                                            let _ = writeln!(
+                                                output,
+                                                "{}{}",
+                                                indent,
+                                                if b { "True" } else { "False" }
+                                            );
                                         }
                                     }
                                     _ => {
-                                        let _ = writeln!(output, "{}// Unknown literal type: {}", indent, lit_type);
+                                        let _ = writeln!(
+                                            output,
+                                            "{}// Unknown literal type: {}",
+                                            indent, lit_type
+                                        );
                                     }
                                 }
                             }

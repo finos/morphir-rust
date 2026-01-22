@@ -3,12 +3,12 @@
 //! This module provides functionality for installing, updating, listing, and
 //! uninstalling Morphir distributions.
 
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use starbase::AppResult;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 
 /// Default version to use when no version is specified
 const DEFAULT_VERSION: &str = "latest";
@@ -59,8 +59,7 @@ impl DistRegistry {
     fn save(&self) -> Result<()> {
         let config_path = Self::config_path()?;
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create config directory")?;
+            fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize distribution registry")?;
@@ -71,8 +70,7 @@ impl DistRegistry {
 
     /// Get the path to the distribution registry configuration file
     fn config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow!("Could not determine home directory"))?;
+        let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
         Ok(home.join(".morphir").join("distributions.json"))
     }
 
@@ -100,7 +98,7 @@ impl DistRegistry {
 /// Run the dist install command
 pub fn run_dist_install(name: String, version: Option<String>) -> AppResult {
     println!("Installing Morphir distribution: {}", name);
-    
+
     let mut registry = match DistRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -112,8 +110,10 @@ pub fn run_dist_install(name: String, version: Option<String>) -> AppResult {
     // Check if distribution is already installed
     if let Some(existing_dist) = registry.get_distribution(&name) {
         let version_str = existing_dist.version.as_deref().unwrap_or(DEFAULT_VERSION);
-        println!("Distribution '{}' is already installed (version: {})", 
-                 name, version_str);
+        println!(
+            "Distribution '{}' is already installed (version: {})",
+            name, version_str
+        );
         println!("Use 'morphir dist update' to update to a newer version");
         return Ok(None);
     }
@@ -135,7 +135,10 @@ pub fn run_dist_install(name: String, version: Option<String>) -> AppResult {
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully installed distribution '{}' (version: {})", name, display_version);
+    println!(
+        "✓ Successfully installed distribution '{}' (version: {})",
+        name, display_version
+    );
     println!("  Run 'morphir dist list' to see all installed distributions");
 
     Ok(None)
@@ -144,7 +147,7 @@ pub fn run_dist_install(name: String, version: Option<String>) -> AppResult {
 /// Run the dist list command
 pub fn run_dist_list() -> AppResult {
     println!("Listing installed Morphir distributions...\n");
-    
+
     let registry = match DistRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -154,7 +157,7 @@ pub fn run_dist_list() -> AppResult {
     };
 
     let distributions = registry.list_distributions();
-    
+
     if distributions.is_empty() {
         println!("No distributions installed.");
         println!("Use 'morphir dist install <name>' to install a distribution");
@@ -175,7 +178,7 @@ pub fn run_dist_list() -> AppResult {
 /// Run the dist update command
 pub fn run_dist_update(name: String, version: Option<String>) -> AppResult {
     println!("Updating Morphir distribution: {}", name);
-    
+
     let mut registry = match DistRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -188,17 +191,27 @@ pub fn run_dist_update(name: String, version: Option<String>) -> AppResult {
     let existing_dist = match registry.get_distribution(&name) {
         Some(dist) => dist.clone(),
         None => {
-            eprintln!("Error: Distribution '{}' is not installed. Use 'morphir dist install' first", name);
+            eprintln!(
+                "Error: Distribution '{}' is not installed. Use 'morphir dist install' first",
+                name
+            );
             return Ok(Some(1));
         }
     };
 
-    let old_version = existing_dist.version.as_deref().unwrap_or(DEFAULT_VERSION).to_string();
+    let old_version = existing_dist
+        .version
+        .as_deref()
+        .unwrap_or(DEFAULT_VERSION)
+        .to_string();
     let new_version = version.or_else(|| Some(DEFAULT_VERSION.to_string()));
     let new_version_str = new_version.as_deref().unwrap_or(DEFAULT_VERSION);
 
     if old_version == new_version_str {
-        println!("Distribution '{}' is already at version {}", name, new_version_str);
+        println!(
+            "Distribution '{}' is already at version {}",
+            name, new_version_str
+        );
         return Ok(None);
     }
 
@@ -216,7 +229,10 @@ pub fn run_dist_update(name: String, version: Option<String>) -> AppResult {
         return Ok(Some(1));
     }
 
-    println!("✓ Successfully updated distribution '{}' from {} to {}", name, old_version, new_version_str);
+    println!(
+        "✓ Successfully updated distribution '{}' from {} to {}",
+        name, old_version, new_version_str
+    );
 
     Ok(None)
 }
@@ -224,7 +240,7 @@ pub fn run_dist_update(name: String, version: Option<String>) -> AppResult {
 /// Run the dist uninstall command
 pub fn run_dist_uninstall(name: String) -> AppResult {
     println!("Uninstalling Morphir distribution: {}", name);
-    
+
     let mut registry = match DistRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -248,8 +264,10 @@ pub fn run_dist_uninstall(name: String) -> AppResult {
     }
 
     let version_str = removed_dist.version.as_deref().unwrap_or(DEFAULT_VERSION);
-    println!("✓ Successfully uninstalled distribution '{}' (version: {})", 
-             removed_dist.name, version_str);
+    println!(
+        "✓ Successfully uninstalled distribution '{}' (version: {})",
+        removed_dist.name, version_str
+    );
 
     Ok(None)
 }

@@ -38,17 +38,16 @@ pub fn generate_wat(
     let mut artifacts = Vec::new();
 
     // Try to parse as distribution or module list
-    let (name, modules): (String, Vec<ModuleIR>) = if let Ok(dist) =
-        serde_json::from_value::<Distribution>(ir.clone())
-    {
-        (dist.name, dist.modules)
-    } else if let Ok(modules) = serde_json::from_value::<Vec<ModuleIR>>(ir.clone()) {
-        ("morphir".to_string(), modules)
-    } else {
-        // Try single module
-        let module = serde_json::from_value::<ModuleIR>(ir.clone())?;
-        (module.name.clone(), vec![module])
-    };
+    let (name, modules): (String, Vec<ModuleIR>) =
+        if let Ok(dist) = serde_json::from_value::<Distribution>(ir.clone()) {
+            (dist.name, dist.modules)
+        } else if let Ok(modules) = serde_json::from_value::<Vec<ModuleIR>>(ir.clone()) {
+            ("morphir".to_string(), modules)
+        } else {
+            // Try single module
+            let module = serde_json::from_value::<ModuleIR>(ir.clone())?;
+            (module.name.clone(), vec![module])
+        };
 
     let pretty = options
         .get("format")
@@ -87,7 +86,11 @@ fn compile_to_wat(name: &str, modules: &[ModuleIR], pretty: bool) -> String {
             let _ = writeln!(output, " (export \"{}\") (result i32)", func_name);
 
             // Generate function body
-            generate_wat_body(&mut output, &value_def.body, &format!("{}{}", indent, indent));
+            generate_wat_body(
+                &mut output,
+                &value_def.body,
+                &format!("{}{}", indent, indent),
+            );
 
             let _ = writeln!(output, "{})", indent);
             let _ = writeln!(output);

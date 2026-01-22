@@ -32,7 +32,9 @@ impl Cursor {
     /// Get the current traversal path as a Morphir Path.
     pub fn path(&self) -> Path {
         // Simple conversion: treating stack segments as path words
-        let segments: Vec<crate::naming::Name> = self.path_stack.iter()
+        let segments: Vec<crate::naming::Name> = self
+            .path_stack
+            .iter()
             .map(|s| crate::naming::Name::from(s.as_str()))
             .collect();
         Path { segments }

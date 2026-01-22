@@ -47,7 +47,8 @@ impl VirtualPathConfig {
     /// Add a virtual path mapping
     pub fn add_mapping(&mut self, virtual_prefix: &str, real_path: impl AsRef<Path>) {
         let prefix = virtual_prefix.trim_end_matches('/').to_string();
-        self.mappings.insert(prefix, real_path.as_ref().to_path_buf());
+        self.mappings
+            .insert(prefix, real_path.as_ref().to_path_buf());
     }
 
     /// Remove a virtual path mapping

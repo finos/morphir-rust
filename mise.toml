@@ -1,0 +1,27 @@
+[tasks."check:fmt"]
+run = "cargo fmt --all -- --check"
+description = "Check code formatting"
+
+[tasks."check:lint"]
+run = "cargo clippy --all-targets --all-features -- -D warnings"
+description = "Check for linting errors"
+
+[tasks."check:pre-push"]
+depends = ["check:fmt", "check:lint"]
+description = "Run all checks required before pushing"
+
+[tasks."git:install-hooks"]
+run = """
+#!/bin/sh
+HOOK_DIR=$(git rev-parse --git-path hooks)
+echo "Installing pre-push hook to $HOOK_DIR/pre-push"
+cat <<EOF > "$HOOK_DIR/pre-push"
+#!/bin/sh
+mise run check:pre-push
+EOF
+chmod +x "$HOOK_DIR/pre-push"
+echo "Hook installed successfully!"
+"""
+description = "Install git hooks"
+[tools]
+rust = "latest"

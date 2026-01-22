@@ -31,7 +31,7 @@ pub struct Package {
     pub modules: Vec<Module>,
 }
 
-/// Module supports both V1 object format and V2+ tuple format
+/// Module - V1: {"name":..., "def":...}, V2+: [[path], {access, value}]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Module {
     pub name: Path,
@@ -51,6 +51,7 @@ impl<'de> Deserialize<'de> for Module {
     }
 }
 
+/// ModuleDetail - V1: ["access", {...}], V2+: {access, value}
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModuleDetail { pub access: String, pub value: ModuleValue }
 
@@ -67,6 +68,7 @@ impl<'de> Deserialize<'de> for ModuleDetail {
     }
 }
 
+/// Module content (flexible serde_json::Value for types/values)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleValue {
     #[serde(default)]
@@ -77,6 +79,7 @@ pub struct ModuleValue {
     pub doc: Option<String>,
 }
 
+// Type/Value definition placeholders for visitor.rs
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeDefinition { pub name: String, pub typ: TypeExpression }
 
@@ -94,21 +97,16 @@ pub enum TypeExpression {
     Tuple { elements: Vec<TypeExpression> },
 }
 
-/// Value (expression) in Morphir IR.  V1: snake_case, V2/V3: TitleCase
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Expression {
-    Literal(Literal),
-    Variable { name: String },
-    Apply { function: Box<Expression>, argument: Box<Expression> },
+    Literal(Literal), Variable { name: String }, Apply { function: Box<Expression>, argument: Box<Expression> },
     Lambda { parameter: String, body: Box<Expression>, in_expr: Box<Expression> },
     Let { bindings: Vec<Binding>, in_expr: Box<Expression> },
     IfThenElse { condition: Box<Expression>, then_expr: Box<Expression>, else_expr: Box<Expression> },
     PatternMatch { input: Box<Expression>, cases: Vec<PatternCase> },
-    Record { fields: Vec<RecordField> },
-    FieldAccess { record: Box<Expression>, field: String },
-    Tuple { elements: Vec<Expression> },
-    Unit,
+    Record { fields: Vec<RecordField> }, FieldAccess { record: Box<Expression>, field: String },
+    Tuple { elements: Vec<Expression> }, Unit,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,5 +150,20 @@ mod tests {
         let json = r#"{"formatVersion": 1, "distribution": ["library", [["morphir"]], [], {"modules": [{"name": [["rentals"]], "def": ["public", {"types":[], "values":[]}]}]}]}"#;
         let dist: Result<Distribution, _> = serde_json::from_str(json);
         assert!(dist.is_ok(), "Parse error: {:?}", dist.err());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_load_real_v1() {
+        let content = std::fs::read_to_string("../morphir-tests/tests/features/real_v1.json")
+            .expect("Failed to read real_v1.json");
+        let result: Result<Distribution, _> = serde_json::from_str(&content);
+        if let Err(e) = &result {
+            panic!("Parse error at line {} column {}: {}", e.line(), e.column(), e);
+        }
+        let dist = result.unwrap();
+        if let DistributionBody::Library(_, _, _, pkg) = &dist.distribution {
+            assert!(!pkg.modules.is_empty(), "Should have at least one module");
+        }
     }
 }

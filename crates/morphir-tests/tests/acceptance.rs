@@ -256,10 +256,16 @@ async fn package_name_should_be(w: &mut TestWorld, name: String) {
                                 if let Some(s) = segment.as_str() {
                                     Some(s.to_string())
                                 } else if let Some(inner_arr) = segment.as_array() {
-                                    inner_arr
-                                        .get(0)
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string())
+                                    // Join all words in the Name segment with "-"
+                                    let words: Vec<String> = inner_arr
+                                        .iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect();
+                                    if words.is_empty() {
+                                        None
+                                    } else {
+                                        Some(words.join("-"))
+                                    }
                                 } else {
                                     None
                                 }

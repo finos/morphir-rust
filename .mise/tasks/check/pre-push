@@ -1,0 +1,4 @@
+#!/bin/sh
+#MISE description="Run all checks required before pushing"
+#MISE depends=["check:fmt", "check:lint"]
+echo "All pre-push checks passed!"

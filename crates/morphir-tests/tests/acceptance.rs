@@ -3,18 +3,20 @@ use std::path::{Path, PathBuf};
 use tokio;
 use morphir_common::vfs::{Vfs, OsVfs, MemoryVfs};
 use morphir_common::loader::{self, LoadedDistribution};
+use morphir_common::config::MorphirConfig;
 use morphir_ir::converter;
 use anyhow::Result;
 
 #[derive(Debug, World)]
 pub struct TestWorld {
     input_path: PathBuf,
-    // Eliminated output_path dependency for validation
     loaded_content: Option<String>, 
     last_result: Option<Result<()>>,
     memory_vfs: Option<MemoryVfs>,
     glob_results: Vec<PathBuf>,
     visitor_count: usize,
+    temp_dir: Option<tempfile::TempDir>,
+    loaded_config: Option<MorphirConfig>,
 }
 
 impl Default for TestWorld {
@@ -26,15 +28,76 @@ impl Default for TestWorld {
             memory_vfs: None,
             glob_results: Vec::new(),
             visitor_count: 0,
+            temp_dir: None,
+            loaded_config: None,
         }
     }
 }
+
+// Configuration Steps
+
+#[given(expr = "I have a {string} file with:")]
+async fn i_have_a_config_file_with(w: &mut TestWorld, filename: String, step: &cucumber::gherkin::Step) {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let file_path = dir.path().join(&filename);
+    let content = step.docstring.as_ref().expect("Docstring required").clone();
+    std::fs::write(&file_path, content).expect("Failed to write config file");
+    w.input_path = file_path;
+    w.temp_dir = Some(dir); 
+}
+
+#[when(expr = "I load the configuration")]
+async fn i_load_configuration(w: &mut TestWorld) {
+    match MorphirConfig::load(&w.input_path) {
+        Ok(c) => {
+            w.loaded_config = Some(c);
+            w.last_result = Some(Ok(()));
+        }
+        Err(e) => {
+            w.last_result = Some(Err(e));
+        }
+    }
+}
+
+#[then(expr = "it should be a workspace configuration")]
+async fn it_should_be_workspace(w: &mut TestWorld) {
+    let config = w.loaded_config.as_ref().expect("Config not loaded");
+    assert!(config.is_workspace(), "Expected workspace configuration");
+}
+
+#[then(expr = "it should be a project configuration")]
+async fn it_should_be_project(w: &mut TestWorld) {
+    let config = w.loaded_config.as_ref().expect("Config not loaded");
+    assert!(config.is_project(), "Expected project configuration");
+}
+
+#[then(expr = "the workspace should have {int} members")]
+async fn workspace_should_have_members(w: &mut TestWorld, count: usize) {
+    let config = w.loaded_config.as_ref().expect("Config not loaded");
+    let actual = config.workspace.as_ref().unwrap().members.len();
+    assert_eq!(actual, count);
+}
+
+#[then(expr = "the project name should be {string}")]
+async fn project_name_should_be(w: &mut TestWorld, name: String) {
+    let config = w.loaded_config.as_ref().expect("Config not loaded");
+    let actual = &config.project.as_ref().unwrap().name;
+    assert_eq!(actual, &name);
+}
+
+#[then(expr = "the source directory should be {string}")]
+async fn source_directory_should_be(w: &mut TestWorld, dir: String) {
+    let config = w.loaded_config.as_ref().expect("Config not loaded");
+    let actual = &config.project.as_ref().unwrap().source_directory;
+    assert_eq!(actual, &dir);
+}
+
+// Existing Steps
 
 #[given(expr = "I have a {string} IR file named {string}")]
 async fn i_have_an_ir_file(w: &mut TestWorld, _version: String, filename: String) {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     w.input_path = PathBuf::from(manifest_dir).join("tests/features").join(filename);
-    
     if !w.input_path.exists() {
         panic!("Fixture file not found: {:?}", w.input_path);
     }
@@ -44,9 +107,7 @@ async fn i_have_an_ir_file(w: &mut TestWorld, _version: String, filename: String
 async fn i_load_distribution_from_dir(w: &mut TestWorld) {
     let vfs = w.memory_vfs.as_ref().expect("MemoryVfs not initialized");
     let path = Path::new(".");
-    let load_res = loader::load_distribution(vfs, path);
-    
-    match load_res {
+    match loader::load_distribution(vfs, path) {
          Ok(dist) => {
              let content = match dist {
                  LoadedDistribution::V4(d) => serde_json::to_string(&d).unwrap(),
@@ -64,8 +125,6 @@ async fn i_load_distribution_from_dir(w: &mut TestWorld) {
 #[when(expr = "I load the distribution from the file")]
 async fn i_load_distribution_from_file(w: &mut TestWorld) {
     let vfs = OsVfs;
-    
-    // Read the original file content first
     let content = match vfs.read_to_string(&w.input_path) {
         Ok(c) => c,
         Err(e) => {
@@ -73,12 +132,8 @@ async fn i_load_distribution_from_file(w: &mut TestWorld) {
             return;
         }
     };
-
-    let load_res = loader::load_distribution(&vfs, &w.input_path);
-    
-    match load_res {
+    match loader::load_distribution(&vfs, &w.input_path) {
          Ok(_dist) => {
-             // Store the ORIGINAL file content, not re-serialized
              w.loaded_content = Some(content);
              w.last_result = Some(Ok(()));
          }
@@ -92,9 +147,7 @@ async fn i_load_distribution_from_file(w: &mut TestWorld) {
 #[when(expr = "I run \"morphir ir migrate\" to version {string}")]
 async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
     let vfs = OsVfs;
-    let load_res = loader::load_distribution(&vfs, &w.input_path);
-    
-    match load_res {
+    match loader::load_distribution(&vfs, &w.input_path) {
         Ok(dist) => {
             let target_v4 = target_version == "v4";
             let result_content = match dist {
@@ -102,7 +155,6 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
                     if target_v4 {
                         let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_name, _, pkg) = classic_dist.distribution;
                         let v4_pkg = converter::classic_to_v4(pkg);
-                        
                         let v4_dist = morphir_ir::ir::v4::Distribution {
                             format_version: 4,
                             distribution: morphir_ir::ir::v4::DistributionBody::Library(
@@ -124,9 +176,7 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
                         let morphir_ir::ir::v4::DistributionBody::Library(lib) = v4_dist.distribution;
                         let pkg_name = lib.1;
                         let pkg_def = lib.3;
-                        
                         let classic_pkg = converter::v4_to_classic(pkg_def);
-                        
                         let classic_dist = morphir_ir::ir::classic::Distribution {
                             format_version: 2024,
                             distribution: morphir_ir::ir::classic::DistributionBody::Library(
@@ -142,7 +192,6 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
                     }
                 }
             };
-            
             match result_content {
                 Ok(content) => {
                     w.loaded_content = Some(content);
@@ -166,9 +215,7 @@ async fn i_should_get_valid_ir(w: &mut TestWorld, version: String) {
     } else {
          panic!("Last command did not populate last_result");
     }
-    
     let content = w.loaded_content.as_ref().expect("No loaded content found");
-    
     if version == "v4" {
         let _dist: morphir_ir::ir::v4::Distribution = serde_json::from_str(content).expect("Failed to parse as V4 Distribution");
     } else {
@@ -185,21 +232,16 @@ async fn output_should_be_valid(w: &mut TestWorld, version: String) {
 async fn package_name_should_be(w: &mut TestWorld, name: String) {
     let content = w.loaded_content.as_ref().expect("No loaded content found");
     let v: serde_json::Value = serde_json::from_str(content).unwrap();
-    
     let pkg_name = if let Some(dist) = v.get("distribution") {
         if dist.is_array() {
              if let Some(tag) = dist.get(0).and_then(|v| v.as_str()) {
                  if tag == "Library" || tag == "library" {
                       let pkg_val = dist.get(1);
                       if let Some(s) = pkg_val.and_then(|v| v.as_str()) {
-                          // V4: Simple string
                           Some(s.to_string())
                       } else if let Some(arr) = pkg_val.and_then(|v| v.as_array()) {
-                          // Legacy: Array of arrays [["morphir"], ["example"], ["app"]]
-                          // or simple names [["rentals"]]
                           let parts: Vec<String> = arr.iter().filter_map(|segment| {
                               if let Some(s) = segment.as_str() {
-                                  // Invalid per spec but just in case
                                   Some(s.to_string())
                               } else if let Some(inner_arr) = segment.as_array() {
                                   inner_arr.get(0).and_then(|v| v.as_str()).map(|s| s.to_string())
@@ -211,25 +253,14 @@ async fn package_name_should_be(w: &mut TestWorld, name: String) {
                       } else {
                           None
                       }
-                 } else {
-                     None
-                 }
-             } else {
-                 None
-             }
+                 } else { None }
+             } else { None }
         } else if dist.is_object() {
             if let Some(lib) = dist.get("Library") {
                  lib.get(1).and_then(|v| v.as_str()).map(|s| s.to_string())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    
+            } else { None }
+        } else { None }
+    } else { None };
     assert_eq!(pkg_name, Some(name), "Package name mismatch. Found {:?}", pkg_name);
 }
 
@@ -277,9 +308,7 @@ async fn i_should_not_find(w: &mut TestWorld, name: String) {
 
 // Visitor Steps
 
-struct ModuleCountingVisitor {
-    count: usize,
-}
+struct ModuleCountingVisitor { count: usize }
 
 impl morphir_ir::visitor::Visitor for ModuleCountingVisitor {
     fn visit_module(&mut self, _module: &morphir_ir::ir::classic::Module) {
@@ -288,9 +317,7 @@ impl morphir_ir::visitor::Visitor for ModuleCountingVisitor {
     }
 }
 
-struct VariableCountingVisitor {
-    count: usize,
-}
+struct VariableCountingVisitor { count: usize }
 
 impl morphir_ir::visitor::Visitor for VariableCountingVisitor {
     fn visit_expression(&mut self, expr: &morphir_ir::ir::classic::Expression) {
@@ -305,7 +332,6 @@ impl morphir_ir::visitor::Visitor for VariableCountingVisitor {
 async fn i_visit_distribution(w: &mut TestWorld) {
     let vfs = OsVfs;
     let load_res = loader::load_distribution(&vfs, &w.input_path).expect("Failed to load distribution");
-    
     match load_res {
         LoadedDistribution::Classic(dist) => {
             let mut visitor = ModuleCountingVisitor { count: 0 };
@@ -327,7 +353,6 @@ async fn i_have_simple_expression(w: &mut TestWorld) {
 async fn i_visit_expression(w: &mut TestWorld) {
     let vfs = OsVfs;
     let load_res = loader::load_distribution(&vfs, &w.input_path).expect("Failed to load distribution");
-    
     match load_res {
         LoadedDistribution::Classic(dist) => {
             let mut visitor = VariableCountingVisitor { count: 0 };

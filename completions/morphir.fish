@@ -11,7 +11,7 @@ end
 set _usage_spec_morphir 'name morphir
 bin morphir
 version "0.1.0"
-about "Morphir CLI tool for Rust"
+about "CLI for working with Morphir IR - functional domain modeling and business logic"
 usage "Usage: morphir [OPTIONS] [COMMAND]"
 flag "-h --help" help="Print help (use --help-all to include experimental commands)"
 flag --help-all help="Print help including experimental commands"

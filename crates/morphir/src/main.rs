@@ -11,10 +11,10 @@ use commands::{
     run_validate,
 };
 
-/// Morphir CLI - Rust tooling for the Morphir ecosystem
+/// Morphir CLI - Tools for functional domain modeling and business logic
 #[derive(Parser)]
 #[command(name = "morphir")]
-#[command(about = "Morphir CLI tool for Rust", long_about = None)]
+#[command(about = "CLI for working with Morphir IR - functional domain modeling and business logic", long_about = None)]
 #[command(version)]
 #[command(disable_help_flag = true, disable_version_flag = true)]
 struct Cli {

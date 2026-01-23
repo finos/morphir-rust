@@ -9,7 +9,7 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Morphir CLI tool for Rust"
+description = "CLI for working with Morphir IR - functional domain modeling and business logic"
 
 [[bin]]
 name = "morphir"

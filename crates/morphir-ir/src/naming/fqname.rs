@@ -20,6 +20,7 @@ impl FQName {
         }
     }
 
+    /// Parse FQName from classic format: `pkg:mod:local`
     pub fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 3 {
@@ -33,6 +34,36 @@ impl FQName {
             Path::new(pkg_params),
             Path::new(mod_params),
             Name::from(local_name),
+        ))
+    }
+
+    /// Convert to V4 canonical string format: `package/path:module/path#local-name`
+    pub fn to_canonical_string(&self) -> String {
+        format!(
+            "{}:{}#{}",
+            self.package_path, self.module_path, self.local_name
+        )
+    }
+
+    /// Parse from V4 canonical string format: `package/path:module/path#local-name`
+    pub fn from_canonical_string(s: &str) -> Result<Self, String> {
+        // Split on ':' first, then '#' for the local name
+        let colon_pos = s
+            .find(':')
+            .ok_or_else(|| format!("missing ':' in FQName: {}", s))?;
+        let package_str = &s[..colon_pos];
+        let rest = &s[colon_pos + 1..];
+
+        let hash_pos = rest
+            .find('#')
+            .ok_or_else(|| format!("missing '#' in FQName: {}", s))?;
+        let module_str = &rest[..hash_pos];
+        let local_str = &rest[hash_pos + 1..];
+
+        Ok(Self::new(
+            Path::new(package_str),
+            Path::new(module_str),
+            Name::from(local_str),
         ))
     }
 }

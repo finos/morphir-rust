@@ -1,12 +1,63 @@
-use crate::vfs::Vfs;
+use crate::remote::{RemoteSource, RemoteSourceResolver, ResolveOptions};
+use crate::vfs::{OsVfs, Vfs};
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use morphir_ir::ir::{classic, v4};
+use morphir_ir::naming::PackageName;
 use std::path::Path;
 
 #[derive(Debug)]
 pub enum LoadedDistribution {
-    V4(v4::Distribution),
+    V4(v4::IRFile),
     Classic(classic::Distribution),
+}
+
+/// Load distribution from a source string (local path or remote source).
+///
+/// This is a convenience function that:
+/// 1. Parses the source string into a RemoteSource
+/// 2. Resolves it to a local path (downloading if necessary)
+/// 3. Loads the distribution from the local path
+///
+/// # Arguments
+/// * `source` - A source string (local path, URL, or shorthand like `github:owner/repo`)
+///
+/// # Examples
+/// ```ignore
+/// // Local file
+/// let dist = load_distribution_from_source("./morphir-ir.json")?;
+///
+/// // Remote URL
+/// let dist = load_distribution_from_source("https://example.com/morphir-ir.json")?;
+///
+/// // GitHub shorthand
+/// let dist = load_distribution_from_source("github:finos/morphir-examples/examples/basic")?;
+/// ```
+pub fn load_distribution_from_source(source: &str) -> Result<LoadedDistribution> {
+    load_distribution_from_source_with_options(source, &ResolveOptions::new())
+}
+
+/// Load distribution from a source string with custom resolve options.
+pub fn load_distribution_from_source_with_options(
+    source: &str,
+    options: &ResolveOptions,
+) -> Result<LoadedDistribution> {
+    let remote_source =
+        RemoteSource::parse(source).map_err(|e| anyhow::anyhow!("Invalid source: {}", e))?;
+
+    let local_path = if remote_source.is_local() {
+        std::path::PathBuf::from(source)
+    } else {
+        let mut resolver = RemoteSourceResolver::with_defaults()
+            .map_err(|e| anyhow::anyhow!("Failed to create source resolver: {}", e))?;
+
+        resolver
+            .resolve(&remote_source, options)
+            .map_err(|e| anyhow::anyhow!("Failed to resolve source: {}", e))?
+    };
+
+    let vfs = OsVfs;
+    load_distribution(&vfs, &local_path)
 }
 
 pub fn load_distribution(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
@@ -16,9 +67,15 @@ pub fn load_distribution(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistributi
 
     let content = vfs.read_to_string(path)?;
 
-    if let Ok(dist) = serde_json::from_str::<v4::Distribution>(&content) {
-        if dist.format_version == 4 {
-            return Ok(LoadedDistribution::V4(dist));
+    if let Ok(ir_file) = serde_json::from_str::<v4::IRFile>(&content) {
+        // Check if it's a V4 format based on format_version
+        let is_v4 = match &ir_file.format_version {
+            v4::FormatVersion::Integer(n) => *n >= 4,
+            v4::FormatVersion::String(s) => s.starts_with("4"),
+        };
+
+        if is_v4 {
+            return Ok(LoadedDistribution::V4(ir_file));
         }
     }
 
@@ -46,7 +103,7 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
 
     // Scan for module JSON files in src/ directory
     let src_path = path.join("src");
-    let mut modules = Vec::new();
+    let mut modules: IndexMap<String, v4::AccessControlledModuleDefinition> = IndexMap::new();
 
     if vfs.is_dir(&src_path) {
         // Use glob to find all JSON files under src/
@@ -70,30 +127,26 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
                 .to_string_lossy()
                 .replace('/', ".");
 
-            let module_entry = v4::ModuleDefinitionEntry(
-                v4::Path::new(&module_name),
-                v4::AccessControlledModuleDefinition {
-                    access: v4::Access::Public,
-                    value: v4::ModuleDefinition {
-                        types: vec![],
-                        values: vec![],
-                        doc: None,
-                    },
+            let module_def = v4::AccessControlledModuleDefinition {
+                access: v4::Access::Public,
+                value: v4::ModuleDefinition {
+                    types: IndexMap::new(),
+                    values: IndexMap::new(),
+                    doc: None,
                 },
-            );
-            modules.push(module_entry);
+            };
+            modules.insert(module_name, module_def);
         }
     }
 
-    let dist = v4::Distribution {
-        format_version: 4,
-        distribution: v4::DistributionBody::Library(v4::LibraryDistribution(
-            v4::LibraryTag::Library,
-            v4::Path::new(&package_name),
-            vec![],
-            v4::PackageDefinition { modules },
-        )),
+    let ir_file = v4::IRFile {
+        format_version: v4::FormatVersion::default(),
+        distribution: v4::Distribution::Library(v4::LibraryContent {
+            package_name: PackageName::parse(&package_name),
+            dependencies: IndexMap::new(),
+            def: v4::PackageDefinition { modules },
+        }),
     };
 
-    Ok(LoadedDistribution::V4(dist))
+    Ok(LoadedDistribution::V4(ir_file))
 }

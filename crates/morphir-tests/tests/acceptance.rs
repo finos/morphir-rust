@@ -1,10 +1,12 @@
 #![allow(clippy::get_first)]
 use anyhow::Result;
 use cucumber::{given, then, when, World};
+use indexmap::IndexMap;
 use morphir_common::config::MorphirConfig;
 use morphir_common::loader::{self, LoadedDistribution};
 use morphir_common::vfs::{MemoryVfs, OsVfs, Vfs};
 use morphir_ir::converter;
+use morphir_ir::ir::v4;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, World)]
@@ -159,44 +161,40 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
             let result_content = match dist {
                 LoadedDistribution::Classic(classic_dist) => {
                     if target_v4 {
-                        let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_name, _, pkg) =
+                        let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_path, _, pkg) =
                             classic_dist.distribution;
                         let v4_pkg = converter::classic_to_v4(pkg);
-                        let v4_dist = morphir_ir::ir::v4::Distribution {
-                            format_version: 4,
-                            distribution: morphir_ir::ir::v4::DistributionBody::Library(
-                                morphir_ir::ir::v4::LibraryDistribution(
-                                    morphir_ir::ir::v4::LibraryTag::Library,
-                                    pkg_name,
-                                    vec![],
-                                    v4_pkg,
-                                ),
-                            ),
+                        let v4_ir = v4::IRFile {
+                            format_version: v4::FormatVersion::default(),
+                            distribution: v4::Distribution::Library(v4::LibraryContent {
+                                package_name: morphir_ir::naming::PackageName::from(pkg_path),
+                                dependencies: IndexMap::new(),
+                                def: v4_pkg,
+                            }),
                         };
-                        serde_json::to_string(&v4_dist)
+                        serde_json::to_string(&v4_ir)
                     } else {
                         serde_json::to_string(&classic_dist)
                     }
                 }
-                LoadedDistribution::V4(v4_dist) => {
+                LoadedDistribution::V4(ir_file) => {
                     if !target_v4 {
-                        let morphir_ir::ir::v4::DistributionBody::Library(lib) =
-                            v4_dist.distribution;
-                        let pkg_name = lib.1;
-                        let pkg_def = lib.3;
-                        let classic_pkg = converter::v4_to_classic(pkg_def);
+                        let v4::Distribution::Library(lib_content) = ir_file.distribution else {
+                            return;
+                        };
+                        let classic_pkg = converter::v4_to_classic(lib_content.def);
                         let classic_dist = morphir_ir::ir::classic::Distribution {
                             format_version: 2024,
                             distribution: morphir_ir::ir::classic::DistributionBody::Library(
                                 morphir_ir::ir::classic::LibraryTag::Library,
-                                pkg_name,
+                                lib_content.package_name.into_path(),
                                 vec![],
                                 classic_pkg,
                             ),
                         };
                         serde_json::to_string(&classic_dist)
                     } else {
-                        serde_json::to_string(&v4_dist)
+                        serde_json::to_string(&ir_file)
                     }
                 }
             };
@@ -225,8 +223,8 @@ async fn i_should_get_valid_ir(w: &mut TestWorld, version: String) {
     }
     let content = w.loaded_content.as_ref().expect("No loaded content found");
     if version == "v4" {
-        let _dist: morphir_ir::ir::v4::Distribution =
-            serde_json::from_str(content).expect("Failed to parse as V4 Distribution");
+        let _ir_file: v4::IRFile =
+            serde_json::from_str(content).expect("Failed to parse as V4 IR file");
     } else {
         let _dist: morphir_ir::ir::classic::Distribution =
             serde_json::from_str(content).expect("Failed to parse as Classic Distribution");
@@ -287,7 +285,10 @@ async fn package_name_should_be(w: &mut TestWorld, name: String) {
             }
         } else if dist.is_object() {
             if let Some(lib) = dist.get("Library") {
-                lib.get(1).and_then(|v| v.as_str()).map(|s| s.to_string())
+                // New V4 format: { "Library": { "packageName": "name", ... } }
+                lib.get("packageName")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
             } else {
                 None
             }

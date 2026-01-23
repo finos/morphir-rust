@@ -1,31 +1,21 @@
 {
-  "formatVersion": 4,
-  "distribution": [
-    "Library",
-    [
-      [
-        "test-package"
-      ]
-    ],
-    [],
-    {
-      "modules": [
-        [
-          [
-            [
-              "TestModule"
-            ]
-          ],
-          {
+  "formatVersion": "4.0.0",
+  "distribution": {
+    "Library": {
+      "packageName": "test-package",
+      "dependencies": {},
+      "def": {
+        "modules": {
+          "TestModule": {
             "access": "Public",
             "value": {
-              "types": [],
-              "values": [],
+              "types": {},
+              "values": {},
               "doc": null
             }
           }
-        ]
-      ]
+        }
+      }
     }
-  ]
+  }
 }

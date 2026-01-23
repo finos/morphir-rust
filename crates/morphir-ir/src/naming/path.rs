@@ -44,7 +44,24 @@ impl<'de> Deserialize<'de> for Path {
     where
         D: serde::Deserializer<'de>,
     {
-        let segments = Vec::<Name>::deserialize(deserializer)?;
-        Ok(Path { segments })
+        use serde::de;
+
+        // Accept both array format (Classic) and string format (V4)
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            // V4 canonical string format: "my-org/my-lib" or "test-package"
+            serde_json::Value::String(s) => Ok(Path::new(&s)),
+            // Classic array format: [["my"], ["org"], ["my"], ["lib"]]
+            serde_json::Value::Array(arr) => {
+                let segments: Result<Vec<Name>, _> = arr
+                    .into_iter()
+                    .map(|v| serde_json::from_value(v).map_err(de::Error::custom))
+                    .collect();
+                Ok(Path {
+                    segments: segments?,
+                })
+            }
+            _ => Err(de::Error::custom("expected string or array for Path")),
+        }
     }
 }

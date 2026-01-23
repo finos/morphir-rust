@@ -1,3 +1,4 @@
+use crate::remote::config::RemoteSourceConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,6 +29,10 @@ pub struct MorphirConfig {
     /// Code generation settings
     #[serde(default)]
     pub codegen: Option<CodegenSection>,
+
+    /// Remote source configuration
+    #[serde(default)]
+    pub sources: Option<RemoteSourceConfig>,
 
     /// Dependencies
     #[serde(default)]

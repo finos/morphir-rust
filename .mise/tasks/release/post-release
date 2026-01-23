@@ -1,0 +1,79 @@
+#!/bin/sh
+#MISE description="Validate release artifacts and post-release checks"
+
+VERSION="${1:-}"
+
+if [ -z "$VERSION" ]; then
+    # Try to get latest tag
+    VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+fi
+
+if [ -z "$VERSION" ]; then
+    echo "Usage: mise run release:post-release <version>"
+    echo ""
+    echo "Example: mise run release:post-release 0.1.0"
+    exit 1
+fi
+
+TAG="v$VERSION"
+
+echo "=========================================="
+echo "  Post-release validation for $TAG"
+echo "=========================================="
+echo ""
+
+echo "[1/4] Checking tag exists..."
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+    echo "      Local tag: EXISTS"
+else
+    echo "      ERROR: Local tag does not exist"
+fi
+
+if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+    echo "      Remote tag: EXISTS"
+else
+    echo "      ERROR: Remote tag does not exist"
+fi
+echo ""
+
+echo "[2/4] Expected release artifacts..."
+echo ""
+echo "      Platform                          Archive"
+echo "      --------------------------------  -------"
+echo "      x86_64-unknown-linux-gnu          .tgz"
+echo "      x86_64-unknown-linux-musl         .tgz"
+echo "      aarch64-unknown-linux-gnu         .tgz"
+echo "      x86_64-apple-darwin               .tgz"
+echo "      aarch64-apple-darwin              .tgz"
+echo "      x86_64-pc-windows-msvc            .zip"
+echo "      aarch64-pc-windows-msvc           .zip"
+echo ""
+
+echo "[3/4] GitHub Release status..."
+if command -v gh >/dev/null 2>&1; then
+    echo ""
+    echo "      Checking via GitHub CLI..."
+    RELEASE_STATUS=$(gh release view "$TAG" --json isDraft,isPrerelease,assets -q '"\(.isDraft | if . then "DRAFT" else "PUBLISHED" end) | Assets: \(.assets | length)"' 2>/dev/null || echo "NOT FOUND")
+    echo "      Status: $RELEASE_STATUS"
+    echo ""
+
+    if [ "$RELEASE_STATUS" != "NOT FOUND" ]; then
+        echo "      Assets:"
+        gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | sed 's/^/        - /'
+    fi
+else
+    echo "      GitHub CLI (gh) not installed"
+    echo "      Check manually: https://github.com/finos/morphir-rust/releases/tag/$TAG"
+fi
+echo ""
+
+echo "[4/4] Post-release checklist"
+echo ""
+echo "      [ ] All 7 artifacts uploaded"
+echo "      [ ] Release published (not draft)"
+echo "      [ ] Release notes accurate"
+echo "      [ ] Documentation updated"
+echo "      [ ] Announcements posted"
+echo ""
+echo "For AI-assisted retrospective:"
+echo "  /release-manager retrospective $VERSION"

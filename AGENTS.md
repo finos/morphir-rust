@@ -129,6 +129,55 @@ Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
 - **Redirect Output**: When running commands that generate output files, explicitly redirect them to the gitignored locations above rather than letting them write to the working directory.
 - **Clean Working Directory**: Keep the git working directory clean to avoid accidental commits of temporary files.
 
+## Release Management
+
+### Overview
+morphir-rust uses a comprehensive release management system:
+- **CHANGELOG.md**: Follows [keepachangelog](https://keepachangelog.com) format
+- **Mise tasks**: `mise run release:*` for release workflow automation
+- **Claude skill**: `/release-manager` for AI-assisted release operations
+
+### Changelog Guidelines
+- All notable changes must be documented in `CHANGELOG.md`
+- Add entries to `[Unreleased]` as changes are made
+- Use categories: Added, Changed, Deprecated, Removed, Fixed, Security
+- Reference PRs/issues where applicable
+
+### Release Tasks
+| Task | Description |
+|------|-------------|
+| `mise run release:check` | Run all pre-release quality checks |
+| `mise run release:version-bump <v>` | Bump workspace version |
+| `mise run release:changelog-validate` | Validate CHANGELOG.md format |
+| `mise run release:changelog-entry <cat> <msg>` | Add changelog entry |
+| `mise run release:pre-release <v>` | Full pre-release workflow |
+| `mise run release:tag-create <v> [--push]` | Create release tag |
+| `mise run release:post-release <v>` | Post-release validation |
+
+### Release Process Quick Reference
+```bash
+# 1. Run pre-release checks
+mise run release:pre-release 0.2.0
+
+# 2. Bump version and update changelog
+mise run release:version-bump 0.2.0
+# Edit CHANGELOG.md manually
+
+# 3. Commit and tag
+git add Cargo.toml Cargo.lock CHANGELOG.md
+git commit -m "chore: prepare release v0.2.0"
+mise run release:tag-create 0.2.0 --push
+
+# 4. Monitor CI and publish release on GitHub
+```
+
+### AI-Assisted Releases
+Use the `/release-manager` skill for guided release workflows:
+- `/release-manager prepare <version>` - Pre-release preparation
+- `/release-manager analyze` - Analyze commits for changelog
+- `/release-manager retrospective <version>` - Post-release review
+- `/release-manager whats-new <version>` - Generate release summaries
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.

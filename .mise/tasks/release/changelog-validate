@@ -1,0 +1,71 @@
+#!/bin/sh
+#MISE description="Validate CHANGELOG.md format and content"
+
+set -e
+
+CHANGELOG="CHANGELOG.md"
+ERRORS=0
+WARNINGS=0
+
+if [ ! -f "$CHANGELOG" ]; then
+    echo "ERROR: $CHANGELOG not found"
+    exit 1
+fi
+
+echo "Validating $CHANGELOG..."
+echo ""
+
+# Check for keepachangelog header
+if grep -q "Keep a Changelog" "$CHANGELOG"; then
+    echo "[OK] keepachangelog reference found"
+else
+    echo "[WARN] Missing keepachangelog reference"
+    WARNINGS=$((WARNINGS + 1))
+fi
+
+# Check for semantic versioning reference
+if grep -q "Semantic Versioning" "$CHANGELOG"; then
+    echo "[OK] Semantic versioning reference found"
+else
+    echo "[WARN] Missing semantic versioning reference"
+    WARNINGS=$((WARNINGS + 1))
+fi
+
+# Check for Unreleased section
+if grep -q "## \[Unreleased\]" "$CHANGELOG"; then
+    echo "[OK] [Unreleased] section found"
+else
+    echo "[ERROR] Missing [Unreleased] section"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Check for at least one version entry
+if grep -qE "## \[[0-9]+\.[0-9]+\.[0-9]+\]" "$CHANGELOG"; then
+    echo "[OK] Version entries found"
+else
+    echo "[WARN] No version entries found"
+    WARNINGS=$((WARNINGS + 1))
+fi
+
+# Check for comparison links at bottom
+if grep -qE "^\[Unreleased\]:" "$CHANGELOG"; then
+    echo "[OK] Comparison links found"
+else
+    echo "[WARN] Missing comparison links at bottom of file"
+    WARNINGS=$((WARNINGS + 1))
+fi
+
+# Check for valid changelog categories
+CATEGORIES="Added Changed Deprecated Removed Fixed Security"
+for cat in $CATEGORIES; do
+    if grep -q "### $cat" "$CHANGELOG"; then
+        echo "[OK] Category '$cat' found"
+    fi
+done
+
+echo ""
+echo "Validation complete: $ERRORS error(s), $WARNINGS warning(s)"
+
+if [ $ERRORS -gt 0 ]; then
+    exit 1
+fi

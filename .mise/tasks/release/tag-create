@@ -1,0 +1,74 @@
+#!/bin/sh
+#MISE description="Create a release tag"
+
+VERSION="${1:-}"
+PUSH="${2:-}"
+
+if [ -z "$VERSION" ]; then
+    # Try to get version from Cargo.toml
+    VERSION=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+fi
+
+if [ -z "$VERSION" ]; then
+    echo "Usage: mise run release:tag-create <version> [--push]"
+    echo ""
+    echo "Options:"
+    echo "  --push    Push the tag to origin after creation"
+    echo ""
+    echo "Example:"
+    echo "  mise run release:tag-create 0.2.0"
+    echo "  mise run release:tag-create 0.2.0 --push"
+    exit 1
+fi
+
+TAG="v$VERSION"
+
+echo "Creating tag: $TAG"
+echo ""
+
+# Check for uncommitted changes
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "ERROR: You have uncommitted changes"
+    echo "Commit or stash changes before creating a release tag"
+    git status --short
+    exit 1
+fi
+
+# Check if tag already exists locally
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+    echo "ERROR: Tag $TAG already exists locally"
+    echo ""
+    echo "To delete and recreate:"
+    echo "  git tag -d $TAG"
+    exit 1
+fi
+
+# Check if tag exists on remote
+if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+    echo "ERROR: Tag $TAG already exists on remote"
+    exit 1
+fi
+
+# Verify version in Cargo.toml matches
+CARGO_VERSION=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+if [ "$CARGO_VERSION" != "$VERSION" ]; then
+    echo "WARNING: Cargo.toml version ($CARGO_VERSION) doesn't match tag version ($VERSION)"
+    echo "Consider running: mise run release:version-bump $VERSION"
+    echo ""
+fi
+
+# Create annotated tag
+git tag -a "$TAG" -m "Release $VERSION"
+echo "Tag $TAG created locally"
+echo ""
+
+if [ "$PUSH" = "--push" ]; then
+    echo "Pushing tag to origin..."
+    git push origin "$TAG"
+    echo ""
+    echo "Tag pushed! GitHub Actions will now build the release."
+    echo "Monitor at: https://github.com/finos/morphir-rust/actions"
+else
+    echo "To push the tag and trigger the release build:"
+    echo "  git push origin $TAG"
+fi

@@ -63,14 +63,30 @@ Use `morphir --help-all` to see experimental commands:
 
 ### Installation
 
+#### Pre-built Binaries (Recommended)
+
+Pre-built binaries are available for Linux (x86_64, aarch64, musl), macOS (x86_64, aarch64), and Windows (x86_64, aarch64).
+
+**Using [mise](https://mise.jdx.dev/):**
+
 ```bash
-# Using cargo-binstall (recommended)
-cargo binstall morphir
+mise install github:finos/morphir-rust@v0.1.0
+mise use github:finos/morphir-rust@v0.1.0
+```
 
-# Using mise
-mise install morphir
+**Using [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):**
 
-# Or build from source
+```bash
+cargo binstall --git https://github.com/finos/morphir-rust morphir
+```
+
+**Manual Download:**
+
+Download the appropriate binary from the [GitHub Releases](https://github.com/finos/morphir-rust/releases) page.
+
+#### Build from Source
+
+```bash
 git clone https://github.com/finos/morphir-rust.git
 cd morphir-rust
 cargo install --path crates/morphir

@@ -17,7 +17,6 @@ Thumbs.db
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # Docusaurus generated folders
 website/translated_docs/

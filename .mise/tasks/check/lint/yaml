@@ -5,11 +5,14 @@ set -e
 
 echo "Checking YAML files..."
 
-# Find all YAML files, excluding node_modules and target directories
+# Find all YAML files, excluding generated/vendor directories
 YAML_FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \) \
     -not -path "./node_modules/*" \
     -not -path "./target/*" \
     -not -path "./.git/*" \
+    -not -path "./.gems/*" \
+    -not -path "./docs/_site/*" \
+    -not -path "./website/*" \
     2>/dev/null || true)
 
 if [ -z "$YAML_FILES" ]; then

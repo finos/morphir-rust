@@ -53,3 +53,4 @@ Print version
 - [`morphir ir <SUBCOMMAND>`](/ir.md)
 - [`morphir ir migrate <FLAGS>`](/ir/migrate.md)
 - [`morphir schema [-o --output <OUTPUT>]`](/schema.md)
+- [`morphir version [--json]`](/version.md)

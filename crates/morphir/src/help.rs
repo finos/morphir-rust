@@ -5,7 +5,7 @@ use owo_colors::{OwoColorize, XtermColors};
 /// Print the Morphir ASCII art banner with branded colors.
 pub fn print_banner() {
     // Morphir brand colors: blue (#00A3E0) and orange (#F26522)
-    let blue = XtermColors::from(33);    // Bright blue (xterm 33)
+    let blue = XtermColors::from(33); // Bright blue (xterm 33)
     let orange = XtermColors::from(208); // Orange (xterm 208)
 
     // ASCII art "morphir" with "morph" in blue and "ir" in orange
@@ -69,5 +69,7 @@ pub fn should_show_banner(args: &[String]) -> bool {
 pub fn should_show_full_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "--help-all")
         || (args.iter().any(|a| a == "help")
-            && args.iter().any(|a| a == "--all" || a == "--full" || a == "--experimental"))
+            && args
+                .iter()
+                .any(|a| a == "--all" || a == "--full" || a == "--experimental"))
 }

@@ -120,6 +120,9 @@ cmd schema help="Generate JSON Schema for Morphir IR" {
         arg <OUTPUT>
     }
 }
+cmd version help="Print version information" {
+    flag --json help="Output version info as JSON"
+}
 cmd usage hide=#true help="Output usage spec for documentation generation"
 __USAGE_EOF__
     # shellcheck disable=SC2207

@@ -8,7 +8,7 @@ use commands::{
     run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update, run_extension_install,
     run_extension_list, run_extension_uninstall, run_extension_update, run_generate, run_migrate,
     run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform,
-    run_validate,
+    run_validate, run_version,
 };
 
 /// Morphir CLI - Tools for functional domain modeling and business logic
@@ -94,6 +94,12 @@ enum Commands {
         /// Output file path (optional)
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
+    },
+    /// Print version information
+    Version {
+        /// Output version info as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     // ===== Internal/Hidden Commands =====
@@ -268,6 +274,7 @@ impl AppSession for MorphirSession {
                 ),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
+            Commands::Version { json } => run_version(*json),
             Commands::Usage => {
                 use clap::CommandFactory;
                 let cli = Cli::command();
@@ -293,6 +300,15 @@ async fn main() -> starbase::MainResult {
     // Handle full help variants
     if help::should_show_full_help(&args) {
         help::print_full_help::<Cli>();
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+
+    // Handle version subcommand early (before starbase) to avoid double execution
+    if args.len() >= 2 && args[1] == "version" {
+        let json = args.iter().any(|a| a == "--json");
+        if let Some(code) = run_version(json)? {
+            return Ok(std::process::ExitCode::from(code));
+        }
         return Ok(std::process::ExitCode::SUCCESS);
     }
 

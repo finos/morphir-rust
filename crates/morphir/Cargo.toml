@@ -32,6 +32,9 @@ schemars = "0.9"
 indexmap = { version = "2", features = ["serde"] }
 usage-lib = { version = "2", features = ["clap", "docs"] }
 
+[build-dependencies]
+chrono = "0.4"
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }.{ archive-format }"
 pkg-fmt = "tgz"

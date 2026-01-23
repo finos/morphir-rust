@@ -17,7 +17,8 @@ path = "src/main.rs"
 
 [dependencies]
 starbase = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["color"] }
+owo-colors = "4"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = "0.1"

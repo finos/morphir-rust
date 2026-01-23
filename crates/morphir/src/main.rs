@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
+use owo_colors::OwoColorize;
 use starbase::{App, AppResult, AppSession};
-use std::sync::LazyLock;
 
 mod commands;
 
@@ -11,25 +11,42 @@ use commands::{
     run_validate,
 };
 
-const LOGO: &str = r#"
-  __  __                  _     _
- |  \/  | ___  _ __ _ __ | |__ (_)_ __
- | |\/| |/ _ \| '__| '_ \| '_ \| | '__|
- | |  | | (_) | |  | |_) | | | | | |
- |_|  |_|\___/|_|  | .__/|_| |_|_|_|
-                   |_|"#;
+fn print_banner() {
+    use owo_colors::{OwoColorize, XtermColors};
 
-static BANNER: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{}\n  v{} (built {})\n",
-        LOGO,
+    // Morphir brand colors: blue (#00A3E0) and orange (#F26522)
+    let blue = XtermColors::from(33);    // Bright blue (xterm 33)
+    let orange = XtermColors::from(208); // Orange (xterm 208)
+
+    // ASCII art "morphir" with "morph" in blue and "ir" in orange
+    println!();
+    println!(
+        "  {}{}",
+        "_ __ ___   ___  _ __ _ __ | |__".color(blue),
+        "(_)_ __".color(orange)
+    );
+    println!(
+        " {}{}",
+        "| '_ ` _ \\ / _ \\| '__| '_ \\| '_ \\".color(blue),
+        "| | '__|".color(orange)
+    );
+    println!(
+        " {}{}",
+        "| | | | | | (_) | |  | |_) | | | ".color(blue),
+        "| | |".color(orange)
+    );
+    println!(
+        " {}{}",
+        "|_| |_| |_|\\___/|_|  | .__/|_| |_".color(blue),
+        "|_|_|".color(orange)
+    );
+    println!("                     {}", "|_|".color(blue));
+    println!(
+        "  v{} (built {})",
         env!("CARGO_PKG_VERSION"),
         env!("BUILD_DATE")
-    )
-});
-
-fn get_banner() -> &'static str {
-    &BANNER
+    );
+    println!();
 }
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
@@ -37,8 +54,15 @@ fn get_banner() -> &'static str {
 #[command(name = "morphir")]
 #[command(about = "Morphir CLI tool for Rust", long_about = None)]
 #[command(version)]
-#[command(before_help = get_banner())]
+#[command(disable_help_flag = true, disable_version_flag = true)]
 struct Cli {
+    /// Print help
+    #[arg(short, long, action = clap::ArgAction::Help)]
+    help: Option<bool>,
+
+    /// Print version
+    #[arg(short = 'V', long, action = clap::ArgAction::Version)]
+    version: Option<bool>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -272,6 +296,15 @@ impl AppSession for MorphirSession {
 
 #[tokio::main]
 async fn main() -> starbase::MainResult {
+    // Check for help/version flags first to print our custom banner
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 1
+        || args.iter().any(|a| a == "--help" || a == "-h")
+        || args.iter().any(|a| a == "--version" || a == "-V")
+    {
+        print_banner();
+    }
+
     let cli = Cli::parse();
 
     // Create session with command

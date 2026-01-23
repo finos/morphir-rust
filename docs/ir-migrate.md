@@ -16,16 +16,30 @@ The migrate command handles bidirectional conversion between these formats while
 ## Usage
 
 ```bash
-morphir ir migrate --input <INPUT> --output <OUTPUT> [--target-version <VERSION>]
+morphir ir migrate --input <INPUT> --output <OUTPUT> [OPTIONS]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `-i, --input <INPUT>` | Input file path (morphir-ir.json) |
+| `-i, --input <INPUT>` | Input source: local file path, URL, or remote source shorthand |
 | `-o, --output <OUTPUT>` | Output file path for migrated IR |
 | `--target-version <VERSION>` | Target format version: `v4` or `classic` (default: `v4`) |
+| `--force-refresh` | Force refresh cached remote sources |
+| `--no-cache` | Skip cache entirely for remote sources |
+
+### Supported Input Sources
+
+The `--input` argument accepts multiple source types:
+
+| Source Type | Format | Example |
+|-------------|--------|---------|
+| **Local file** | File path | `./morphir-ir.json` |
+| **HTTP/HTTPS** | URL | `https://example.com/morphir-ir.json` |
+| **GitHub shorthand** | `github:owner/repo[@ref][/path]` | `github:finos/morphir-examples@main/examples/basic` |
+| **Git URL** | `https://*.git` | `https://github.com/org/repo.git` |
+| **Gist** | `gist:id[#filename]` | `gist:abc123#morphir-ir.json` |
 
 ## Examples
 
@@ -84,6 +98,77 @@ morphir ir migrate \
     --input ./morphir-ir.json \
     --output ./morphir-ir.json \
     --target-version v4
+```
+
+## Remote Sources
+
+The migrate command supports fetching IR from remote sources, making it easy to work with published Morphir models without downloading them manually.
+
+### HTTP/HTTPS URLs
+
+Fetch and migrate IR directly from a URL:
+
+```bash
+# Migrate the LCR (Liquidity Coverage Ratio) IR - a comprehensive regulatory model
+morphir ir migrate \
+    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
+    --output ./lcr-v4.json \
+    --target-version v4
+```
+
+The LCR IR is a large, comprehensive example of Morphir in production use, implementing the Basel III Liquidity Coverage Ratio regulation.
+
+### GitHub Shorthand
+
+Use the `github:` shorthand for GitHub repositories:
+
+```bash
+# Fetch from a specific branch
+morphir ir migrate \
+    --input github:finos/morphir-examples@main/examples/basic/morphir-ir.json \
+    --output ./example-v4.json
+
+# Fetch from a tag
+morphir ir migrate \
+    --input github:finos/morphir-examples@v1.0.0/examples/basic/morphir-ir.json \
+    --output ./example-v4.json
+```
+
+### Caching
+
+Remote sources are cached locally to avoid repeated downloads:
+
+```bash
+# Force refresh - re-download even if cached
+morphir ir migrate \
+    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
+    --output ./lcr-v4.json \
+    --force-refresh
+
+# Skip cache entirely
+morphir ir migrate \
+    --input github:finos/morphir-examples/examples/basic/morphir-ir.json \
+    --output ./example-v4.json \
+    --no-cache
+```
+
+Cache is stored in `~/.cache/morphir/sources/` by default.
+
+### Configuration
+
+Remote source access can be configured in `morphir.toml`:
+
+```toml
+[sources]
+enabled = true
+allow = ["github:finos/*", "https://lcr-interactive.finos.org/*"]
+deny = ["*://untrusted.com/*"]
+trusted_github_orgs = ["finos", "morphir-org"]
+
+[sources.cache]
+directory = "~/.cache/morphir/sources"
+max_size_mb = 500
+ttl_secs = 86400  # 24 hours
 ```
 
 ## Format Differences
@@ -222,6 +307,22 @@ Ensure the input file:
 The IR contains V4-specific features. Either:
 1. Remove the unsupported constructs from the source
 2. Keep the IR in V4 format
+
+### "Source URL not allowed by configuration"
+
+The remote source is blocked by your `morphir.toml` configuration:
+1. Check the `[sources.allow]` and `[sources.deny]` lists
+2. Add the source URL to your allow list
+3. Or use `--no-cache` to bypass configuration checks
+
+### "Failed to fetch source"
+
+For remote source errors:
+1. Check your network connection
+2. Verify the URL is correct and accessible
+3. For GitHub sources, ensure the repository is public or you have access
+4. Try `--force-refresh` to bypass potentially corrupted cache
+5. Check if git is installed (required for `github:` sources)
 
 ### Version Detection
 

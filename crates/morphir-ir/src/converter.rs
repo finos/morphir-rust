@@ -490,6 +490,209 @@ fn convert_value_definition_to_classic(value_def: &v4::ValueDefinition) -> serde
     })
 }
 
+// =============================================================================
+// Visitor-Based Converters (Phase 5)
+// =============================================================================
+//
+// The converters above work at the JSON level for backward compatibility.
+// These visitor-based converters work with strongly-typed IR structures.
+
+use crate::ir::attributes::{ClassicAttrs, TypeAttributes, ValueAttributes};
+use crate::ir::type_expr::Type;
+use crate::ir::value_expr::{HoleReason, NativeInfo, Value};
+use crate::naming::FQName;
+use crate::traversal::transform::{TypeTransformVisitor, ValueTransformVisitor};
+use std::fmt;
+
+/// Error type for visitor-based conversion failures.
+#[derive(Debug, Clone)]
+pub enum ConversionError {
+    /// V4-only construct cannot be downgraded to Classic format
+    CannotDowngrade(&'static str),
+    /// Generic conversion error with message
+    Message(String),
+}
+
+impl fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionError::CannotDowngrade(name) => {
+                write!(f, "Cannot downgrade V4-only construct '{}' to Classic format", name)
+            }
+            ConversionError::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ConversionError {}
+
+/// Visitor-based converter from Classic (serde_json::Value attrs) to V4 (TypeAttributes).
+///
+/// This converter transforms IR structures from Classic format (V1-V3) to V4 format.
+/// Classic uses empty `{}` for attributes, while V4 uses explicit TypeAttributes/ValueAttributes.
+///
+/// # Example
+/// ```ignore
+/// use morphir_ir::converter::ClassicToV4Converter;
+/// use morphir_ir::traversal::transform::TypeTransformVisitor;
+///
+/// let converter = ClassicToV4Converter;
+/// let v4_type = converter.transform_type(&classic_type)?;
+/// ```
+pub struct ClassicToV4Converter;
+
+impl TypeTransformVisitor<ClassicAttrs, TypeAttributes> for ClassicToV4Converter {
+    type Error = ConversionError;
+
+    fn transform_type_attrs(&self, attrs: &ClassicAttrs) -> Result<TypeAttributes, Self::Error> {
+        // Classic uses {} - convert to V4 TypeAttributes with empty fields
+        // Preserve any existing data in extensions
+        Ok(TypeAttributes {
+            source: None,
+            constraints: serde_json::Value::Null,
+            extensions: attrs.clone(),
+        })
+    }
+}
+
+impl ValueTransformVisitor<ClassicAttrs, TypeAttributes, ClassicAttrs, ValueAttributes>
+    for ClassicToV4Converter
+{
+    type Error = ConversionError;
+
+    fn transform_type_attrs(&self, attrs: &ClassicAttrs) -> Result<TypeAttributes, Self::Error> {
+        <Self as TypeTransformVisitor<ClassicAttrs, TypeAttributes>>::transform_type_attrs(
+            self, attrs,
+        )
+    }
+
+    fn transform_value_attrs(&self, attrs: &ClassicAttrs) -> Result<ValueAttributes, Self::Error> {
+        // Classic uses {} - convert to V4 ValueAttributes with empty fields
+        Ok(ValueAttributes {
+            source: None,
+            inferred_type: serde_json::Value::Null,
+            extensions: attrs.clone(),
+        })
+    }
+
+    // Classic never has Hole/Native/External, so default implementations work.
+    // If we encounter them, it means the input is already V4 (error case).
+    fn transform_hole(
+        &self,
+        _attrs: &ClassicAttrs,
+        _reason: &HoleReason,
+        _expected_type: &Option<Box<Type<ClassicAttrs>>>,
+    ) -> Result<Value<TypeAttributes, ValueAttributes>, Self::Error> {
+        Err(ConversionError::Message(
+            "Unexpected Hole in Classic IR".to_string(),
+        ))
+    }
+
+    fn transform_native(
+        &self,
+        _attrs: &ClassicAttrs,
+        _fqname: &FQName,
+        _info: &NativeInfo,
+    ) -> Result<Value<TypeAttributes, ValueAttributes>, Self::Error> {
+        Err(ConversionError::Message(
+            "Unexpected Native in Classic IR".to_string(),
+        ))
+    }
+
+    fn transform_external(
+        &self,
+        _attrs: &ClassicAttrs,
+        _external_name: &str,
+        _target_platform: &str,
+    ) -> Result<Value<TypeAttributes, ValueAttributes>, Self::Error> {
+        Err(ConversionError::Message(
+            "Unexpected External in Classic IR".to_string(),
+        ))
+    }
+}
+
+/// Visitor-based converter from V4 (TypeAttributes) to Classic (serde_json::Value).
+///
+/// This converter transforms IR structures from V4 format to Classic format (V1-V3).
+/// V4 structures are richer, so some information is lost (source locations, constraints).
+///
+/// # Note
+/// V4-only constructs (Hole, Native, External) cannot be downgraded and will return errors.
+///
+/// # Example
+/// ```ignore
+/// use morphir_ir::converter::V4ToClassicConverter;
+/// use morphir_ir::traversal::transform::TypeTransformVisitor;
+///
+/// let converter = V4ToClassicConverter;
+/// let classic_type = converter.transform_type(&v4_type)?;
+/// ```
+pub struct V4ToClassicConverter;
+
+impl TypeTransformVisitor<TypeAttributes, ClassicAttrs> for V4ToClassicConverter {
+    type Error = ConversionError;
+
+    fn transform_type_attrs(&self, attrs: &TypeAttributes) -> Result<ClassicAttrs, Self::Error> {
+        // V4 -> Classic loses source, constraints, inferred types
+        // Preserve extensions if any (otherwise empty object)
+        if attrs.extensions.is_null() {
+            Ok(serde_json::json!({}))
+        } else {
+            Ok(attrs.extensions.clone())
+        }
+    }
+}
+
+impl ValueTransformVisitor<TypeAttributes, ClassicAttrs, ValueAttributes, ClassicAttrs>
+    for V4ToClassicConverter
+{
+    type Error = ConversionError;
+
+    fn transform_type_attrs(&self, attrs: &TypeAttributes) -> Result<ClassicAttrs, Self::Error> {
+        <Self as TypeTransformVisitor<TypeAttributes, ClassicAttrs>>::transform_type_attrs(
+            self, attrs,
+        )
+    }
+
+    fn transform_value_attrs(&self, attrs: &ValueAttributes) -> Result<ClassicAttrs, Self::Error> {
+        // V4 -> Classic loses source, inferred_type
+        // Preserve extensions if any (otherwise empty object)
+        if attrs.extensions.is_null() {
+            Ok(serde_json::json!({}))
+        } else {
+            Ok(attrs.extensions.clone())
+        }
+    }
+
+    // V4-only variants cannot be downgraded
+    fn transform_hole(
+        &self,
+        _attrs: &ValueAttributes,
+        _reason: &HoleReason,
+        _expected_type: &Option<Box<Type<TypeAttributes>>>,
+    ) -> Result<Value<ClassicAttrs, ClassicAttrs>, Self::Error> {
+        Err(ConversionError::CannotDowngrade("Hole"))
+    }
+
+    fn transform_native(
+        &self,
+        _attrs: &ValueAttributes,
+        _fqname: &FQName,
+        _info: &NativeInfo,
+    ) -> Result<Value<ClassicAttrs, ClassicAttrs>, Self::Error> {
+        Err(ConversionError::CannotDowngrade("Native"))
+    }
+
+    fn transform_external(
+        &self,
+        _attrs: &ValueAttributes,
+        _external_name: &str,
+        _target_platform: &str,
+    ) -> Result<Value<ClassicAttrs, ClassicAttrs>, Self::Error> {
+        Err(ConversionError::CannotDowngrade("External"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,5 +751,148 @@ mod tests {
         assert_eq!(roundtrip.name.to_string(), classic_module.name.to_string());
         assert_eq!(roundtrip.detail.access, classic_module.detail.access);
         assert_eq!(roundtrip.detail.value.doc, classic_module.detail.value.doc);
+    }
+
+    // ==========================================================================
+    // Visitor-based converter tests
+    // ==========================================================================
+
+    use crate::ir::attributes::{SourceLocation, TypeAttributes, ValueAttributes};
+    use crate::ir::type_expr::Type;
+    use crate::ir::value_expr::Value;
+    use crate::traversal::transform::TypeTransformVisitor;
+
+    #[test]
+    fn test_classic_to_v4_type_attrs() {
+        let converter = ClassicToV4Converter;
+        let classic_attrs = serde_json::json!({});
+
+        let v4_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &classic_attrs).unwrap();
+
+        assert!(v4_attrs.source.is_none());
+        assert!(v4_attrs.constraints.is_null());
+        assert_eq!(v4_attrs.extensions, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_classic_to_v4_preserves_extensions() {
+        let converter = ClassicToV4Converter;
+        let classic_attrs = serde_json::json!({"custom": "data"});
+
+        let v4_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &classic_attrs).unwrap();
+
+        assert_eq!(v4_attrs.extensions, serde_json::json!({"custom": "data"}));
+    }
+
+    #[test]
+    fn test_classic_to_v4_type_variable() {
+        let converter = ClassicToV4Converter;
+        let classic_type: Type<serde_json::Value> =
+            Type::Variable(serde_json::json!({}), Name::from("a"));
+
+        let v4_type = TypeTransformVisitor::transform_type(&converter, &classic_type).unwrap();
+
+        if let Type::Variable(attrs, name) = v4_type {
+            assert!(attrs.source.is_none());
+            assert_eq!(name.to_string(), "a");
+        } else {
+            panic!("Expected Variable type");
+        }
+    }
+
+    #[test]
+    fn test_v4_to_classic_type_attrs() {
+        let converter = V4ToClassicConverter;
+        let v4_attrs = TypeAttributes {
+            source: Some(SourceLocation {
+                start_line: 1,
+                start_column: 0,
+                end_line: 1,
+                end_column: 10,
+            }),
+            constraints: serde_json::json!({"kind": "type"}),
+            extensions: serde_json::json!({}),
+        };
+
+        let classic_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &v4_attrs).unwrap();
+
+        // Source and constraints are lost, empty object returned
+        assert_eq!(classic_attrs, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_v4_to_classic_preserves_extensions() {
+        let converter = V4ToClassicConverter;
+        let v4_attrs = TypeAttributes {
+            source: None,
+            constraints: serde_json::Value::Null,
+            extensions: serde_json::json!({"custom": "data"}),
+        };
+
+        let classic_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &v4_attrs).unwrap();
+
+        assert_eq!(classic_attrs, serde_json::json!({"custom": "data"}));
+    }
+
+    #[test]
+    fn test_v4_to_classic_type_unit() {
+        let converter = V4ToClassicConverter;
+        let v4_type: Type<TypeAttributes> = Type::Unit(TypeAttributes::default());
+
+        let classic_type = TypeTransformVisitor::transform_type(&converter, &v4_type).unwrap();
+
+        if let Type::Unit(attrs) = classic_type {
+            assert_eq!(attrs, serde_json::json!({}));
+        } else {
+            panic!("Expected Unit type");
+        }
+    }
+
+    #[test]
+    fn test_v4_to_classic_value_unit() {
+        use crate::traversal::transform::ValueTransformVisitor;
+
+        let converter = V4ToClassicConverter;
+        let v4_value: Value<TypeAttributes, ValueAttributes> =
+            Value::Unit(ValueAttributes::default());
+
+        let classic_value = ValueTransformVisitor::transform_value(&converter, &v4_value).unwrap();
+
+        if let Value::Unit(attrs) = classic_value {
+            assert_eq!(attrs, serde_json::json!({}));
+        } else {
+            panic!("Expected Unit value");
+        }
+    }
+
+    #[test]
+    fn test_v4_to_classic_hole_error() {
+        use crate::ir::value_expr::HoleReason;
+        use crate::traversal::transform::ValueTransformVisitor;
+
+        let converter = V4ToClassicConverter;
+        let v4_value: Value<TypeAttributes, ValueAttributes> =
+            Value::Hole(ValueAttributes::default(), HoleReason::Draft, None);
+
+        let result = ValueTransformVisitor::transform_value(&converter, &v4_value);
+
+        assert!(result.is_err());
+        if let Err(ConversionError::CannotDowngrade(name)) = result {
+            assert_eq!(name, "Hole");
+        } else {
+            panic!("Expected CannotDowngrade error");
+        }
+    }
+
+    #[test]
+    fn test_conversion_error_display() {
+        let err = ConversionError::CannotDowngrade("Hole");
+        assert_eq!(
+            err.to_string(),
+            "Cannot downgrade V4-only construct 'Hole' to Classic format"
+        );
+
+        let err = ConversionError::Message("Test error".to_string());
+        assert_eq!(err.to_string(), "Test error");
     }
 }

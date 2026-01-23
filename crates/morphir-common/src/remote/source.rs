@@ -430,12 +430,12 @@ mod tests {
     fn test_parse_local_path() {
         let source = RemoteSource::parse("./morphir-ir.json").unwrap();
         assert!(
-            matches!(source, RemoteSource::Local { path } if path == PathBuf::from("./morphir-ir.json"))
+            matches!(source, RemoteSource::Local { ref path } if path.as_os_str() == "./morphir-ir.json")
         );
 
         let source = RemoteSource::parse("/absolute/path/to/file.json").unwrap();
         assert!(
-            matches!(source, RemoteSource::Local { path } if path == PathBuf::from("/absolute/path/to/file.json"))
+            matches!(source, RemoteSource::Local { ref path } if path.as_os_str() == "/absolute/path/to/file.json")
         );
     }
 

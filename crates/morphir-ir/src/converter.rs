@@ -333,11 +333,7 @@ fn convert_type_alias_to_v4(arr: &[serde_json::Value]) -> v4::TypeDefinition {
 /// Extract type parameters from JSON array
 fn extract_type_params(json: &serde_json::Value) -> Vec<Name> {
     json.as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(extract_name_from_json)
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(extract_name_from_json).collect())
         .unwrap_or_default()
 }
 
@@ -353,11 +349,7 @@ fn convert_constructors_to_v4(json: &serde_json::Value) -> v4::AccessControlledC
         let constructors = obj
             .get("value")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(convert_constructor_to_v4)
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(convert_constructor_to_v4).collect())
             .unwrap_or_default();
 
         v4::AccessControlledConstructors {

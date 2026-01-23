@@ -17,8 +17,7 @@ fi
 
 # Validate category
 case "$CATEGORY" in
-    Added|Changed|Deprecated|Removed|Fixed|Security)
-        ;;
+    Added | Changed | Deprecated | Removed | Fixed | Security) ;;
     *)
         echo "ERROR: Invalid category '$CATEGORY'"
         echo "Valid categories: Added, Changed, Deprecated, Removed, Fixed, Security"

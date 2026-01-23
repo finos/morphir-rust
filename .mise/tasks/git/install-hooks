@@ -2,7 +2,7 @@
 #MISE description="Install git hooks"
 HOOK_DIR=$(git rev-parse --git-path hooks)
 echo "Installing pre-push hook to $HOOK_DIR/pre-push"
-cat <<EOF > "$HOOK_DIR/pre-push"
+cat <<EOF >"$HOOK_DIR/pre-push"
 #!/bin/sh
 mise run check:pre-push
 EOF

@@ -1,0 +1,22 @@
+#!/bin/sh
+#MISE description="Lint shell scripts with shellcheck and shfmt"
+
+set -e
+
+echo "Checking shell scripts..."
+
+# Find all shell scripts
+SCRIPTS=$(find .mise/tasks -type f -executable 2>/dev/null || true)
+
+if [ -z "$SCRIPTS" ]; then
+    echo "No shell scripts found to lint"
+    exit 0
+fi
+
+echo "Running shellcheck..."
+echo "$SCRIPTS" | xargs shellcheck
+
+echo "Checking shell formatting with shfmt..."
+echo "$SCRIPTS" | xargs shfmt -d -i 4 -ci
+
+echo "Shell scripts OK"

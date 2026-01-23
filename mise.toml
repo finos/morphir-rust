@@ -1,4 +1,12 @@
 [tools]
 rust = "1.93.0"
 usage = "latest"
+shellcheck = "latest"
+shfmt = "latest"
+yamllint = "latest"
+
+[tasks."check:lint"]
+description = "Run all linters (Rust, shell, YAML)"
+depends = ["check:lint:rust", "check:lint:shell", "check:lint:yaml"]
+run = "echo 'All lint checks passed!'"
 

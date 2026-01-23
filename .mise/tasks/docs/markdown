@@ -10,7 +10,7 @@ echo "Generating usage spec..."
 cargo build -p morphir --quiet
 
 # Generate usage spec
-./target/debug/morphir usage > docs/morphir.usage.kdl
+./target/debug/morphir usage >docs/morphir.usage.kdl
 
 # Generate markdown using usage CLI
 if command -v usage >/dev/null 2>&1; then

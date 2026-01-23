@@ -4,8 +4,17 @@
 //! in the Morphir IR. The type parameters represent:
 //! - `TA`: Type attributes (attached to type nodes)
 //! - `VA`: Value attributes (attached to value nodes)
+//!
+//! # Default Type Parameters
+//!
+//! V4 is the default format - `Value` without type parameters uses V4 attributes:
+//! ```rust,ignore
+//! let v: Value = Value::Unit(ValueAttributes::default());  // V4 value
+//! let v: Value<ClassicAttrs, ClassicAttrs> = Value::Unit(json!({}));  // Classic
+//! ```
 
 use crate::naming::{FQName, Name};
+use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::type_expr::Type;
@@ -17,10 +26,22 @@ use super::type_expr::Type;
 /// carry type attributes of type `TA`.
 ///
 /// # Type Parameters
-/// - `TA`: The type of attributes attached to type nodes
-/// - `VA`: The type of attributes attached to value nodes
+/// - `TA`: The type of attributes attached to type nodes.
+///         Defaults to `TypeAttributes` (V4 format).
+/// - `VA`: The type of attributes attached to value nodes.
+///         Defaults to `ValueAttributes` (V4 format).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // V4 format (default)
+/// let v: Value = Value::Unit(ValueAttributes::default());
+///
+/// // Classic format - explicit attributes
+/// let v: Value<serde_json::Value, serde_json::Value> = Value::Unit(serde_json::json!({}));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value<TA, VA> {
+pub enum Value<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     // === Core expressions (all versions) ===
 
     /// Literal constant value
@@ -46,7 +67,7 @@ pub enum Value<TA, VA> {
     /// Record construction
     ///
     /// Example: `{ name = "Alice", age = 30 }`
-    Record(VA, Vec<(Name, Value<TA, VA>)>),
+    Record(VA, Vec<RecordFieldEntry<TA, VA>>),
 
     /// Variable reference
     ///
@@ -86,7 +107,7 @@ pub enum Value<TA, VA> {
     /// Recursive let bindings
     ///
     /// Example: `let rec f = ... and g = ... in ...`
-    LetRecursion(VA, Vec<(Name, ValueDefinition<TA, VA>)>, Box<Value<TA, VA>>),
+    LetRecursion(VA, Vec<LetBinding<TA, VA>>, Box<Value<TA, VA>>),
 
     /// Pattern destructuring in let
     ///
@@ -101,12 +122,12 @@ pub enum Value<TA, VA> {
     /// Pattern matching
     ///
     /// Example: `case x of Just v -> v; Nothing -> 0`
-    PatternMatch(VA, Box<Value<TA, VA>>, Vec<(Pattern<VA>, Value<TA, VA>)>),
+    PatternMatch(VA, Box<Value<TA, VA>>, Vec<PatternCase<TA, VA>>),
 
     /// Record update
     ///
     /// Example: `{ person | name = "Bob" }`
-    UpdateRecord(VA, Box<Value<TA, VA>>, Vec<(Name, Value<TA, VA>)>),
+    UpdateRecord(VA, Box<Value<TA, VA>>, Vec<RecordFieldEntry<TA, VA>>),
 
     /// Unit value
     ///
@@ -167,22 +188,63 @@ pub struct NativeInfo {
 ///
 /// Classic format always has an expression body.
 /// V4 format supports additional body types (Native, External, Incomplete).
+///
+/// # Type Parameters
+/// - `TA`: Type attributes. Defaults to `TypeAttributes` (V4).
+/// - `VA`: Value attributes. Defaults to `ValueAttributes` (V4).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValueDefinition<TA, VA> {
+pub struct ValueDefinition<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     /// Input parameters with their names, attributes, and types
-    pub input_types: Vec<(Name, VA, Type<TA>)>,
+    pub input_types: Vec<InputType<TA, VA>>,
     /// Output/return type
     pub output_type: Type<TA>,
     /// The body of the definition
     pub body: ValueBody<TA, VA>,
 }
 
+/// Input parameter tuple struct: (name, attributes, type)
+///
+/// More ergonomic than `(Name, VA, Type<TA>)` - provides named fields via pattern matching.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputType<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
+    pub Name,
+    pub VA,
+    pub Type<TA>,
+);
+
+/// Record field entry tuple struct: (name, value)
+///
+/// Used in Record and UpdateRecord value variants.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordFieldEntry<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
+    pub Name,
+    pub Value<TA, VA>,
+);
+
+/// Pattern match case tuple struct: (pattern, body)
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternCase<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
+    pub Pattern<VA>,
+    pub Value<TA, VA>,
+);
+
+/// Let-recursion binding tuple struct: (name, definition)
+#[derive(Debug, Clone, PartialEq)]
+pub struct LetBinding<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
+    pub Name,
+    pub ValueDefinition<TA, VA>,
+);
+
 /// The body of a value definition
 ///
 /// Classic format only supports Expression bodies.
 /// V4 format adds Native, External, and Incomplete body types.
+///
+/// # Type Parameters
+/// - `TA`: Type attributes. Defaults to `TypeAttributes` (V4).
+/// - `VA`: Value attributes. Defaults to `ValueAttributes` (V4).
 #[derive(Debug, Clone, PartialEq)]
-pub enum ValueBody<TA, VA> {
+pub enum ValueBody<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     /// Normal expression body (all versions)
     Expression(Value<TA, VA>),
 
@@ -199,7 +261,7 @@ pub enum ValueBody<TA, VA> {
     Incomplete(HoleReason),
 }
 
-impl<TA, VA> Value<TA, VA> {
+impl<TA: Clone, VA: Clone> Value<TA, VA> {
     /// Get the attributes of this value
     pub fn attributes(&self) -> &VA {
         match self {
@@ -253,7 +315,7 @@ impl<TA, VA> Value<TA, VA> {
     }
 
     /// Create a record
-    pub fn record(attrs: VA, fields: Vec<(Name, Value<TA, VA>)>) -> Self {
+    pub fn record(attrs: VA, fields: Vec<RecordFieldEntry<TA, VA>>) -> Self {
         Value::Record(attrs, fields)
     }
 
@@ -288,10 +350,10 @@ impl<TA, VA> Value<TA, VA> {
     }
 }
 
-impl<TA, VA> ValueDefinition<TA, VA> {
+impl<TA: Clone, VA: Clone> ValueDefinition<TA, VA> {
     /// Create a new value definition with an expression body
     pub fn new(
-        input_types: Vec<(Name, VA, Type<TA>)>,
+        input_types: Vec<InputType<TA, VA>>,
         output_type: Type<TA>,
         body: Value<TA, VA>,
     ) -> Self {
@@ -304,7 +366,7 @@ impl<TA, VA> ValueDefinition<TA, VA> {
 
     /// Create a value definition with a native body (V4 only)
     pub fn native(
-        input_types: Vec<(Name, VA, Type<TA>)>,
+        input_types: Vec<InputType<TA, VA>>,
         output_type: Type<TA>,
         info: NativeInfo,
     ) -> Self {
@@ -313,6 +375,80 @@ impl<TA, VA> ValueDefinition<TA, VA> {
             output_type,
             body: ValueBody::Native(info),
         }
+    }
+}
+
+// Convenience constructors for tuple structs
+impl<TA: Clone, VA: Clone> InputType<TA, VA> {
+    /// Create a new input type
+    pub fn new(name: Name, attrs: VA, tpe: Type<TA>) -> Self {
+        InputType(name, attrs, tpe)
+    }
+
+    /// Get the name
+    pub fn name(&self) -> &Name {
+        &self.0
+    }
+
+    /// Get the attributes
+    pub fn attrs(&self) -> &VA {
+        &self.1
+    }
+
+    /// Get the type
+    pub fn tpe(&self) -> &Type<TA> {
+        &self.2
+    }
+}
+
+impl<TA: Clone, VA: Clone> RecordFieldEntry<TA, VA> {
+    /// Create a new record field entry
+    pub fn new(name: Name, value: Value<TA, VA>) -> Self {
+        RecordFieldEntry(name, value)
+    }
+
+    /// Get the name
+    pub fn name(&self) -> &Name {
+        &self.0
+    }
+
+    /// Get the value
+    pub fn value(&self) -> &Value<TA, VA> {
+        &self.1
+    }
+}
+
+impl<TA: Clone, VA: Clone> PatternCase<TA, VA> {
+    /// Create a new pattern case
+    pub fn new(pattern: Pattern<VA>, body: Value<TA, VA>) -> Self {
+        PatternCase(pattern, body)
+    }
+
+    /// Get the pattern
+    pub fn pattern(&self) -> &Pattern<VA> {
+        &self.0
+    }
+
+    /// Get the body
+    pub fn body(&self) -> &Value<TA, VA> {
+        &self.1
+    }
+}
+
+impl<TA: Clone, VA: Clone> LetBinding<TA, VA> {
+    /// Create a new let binding
+    pub fn new(name: Name, definition: ValueDefinition<TA, VA>) -> Self {
+        LetBinding(name, definition)
+    }
+
+    /// Get the name
+    pub fn name(&self) -> &Name {
+        &self.0
+    }
+
+    /// Get the definition
+    pub fn definition(&self) -> &ValueDefinition<TA, VA> {
+        &self.1
     }
 }
 

@@ -10,9 +10,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::pattern::Pattern;
-use super::type_def::{AccessControlled, Constructor, TypeDefinition};
+use super::type_def::TypeDefinition;
 use super::type_expr::{Field, Type};
-use super::value_expr::{Value, ValueBody, ValueDefinition};
+use super::value_expr::{Value, ValueDefinition};
 
 /// Source location information for error messages and tooling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,35 +76,22 @@ pub struct ValueAttributes {
 }
 
 // =============================================================================
-// V4 Type Aliases - Ergonomic defaults using V4 attributes
+// Convenient Type Aliases
 // =============================================================================
+//
+// With default type parameters, you can use `Type` directly for V4 format.
+// These aliases are provided for additional clarity when you want to be explicit.
 
-/// V4 Type expression with TypeAttributes
-pub type V4Type = Type<TypeAttributes>;
+/// Type expression with V4 attributes (same as `Type` with defaults)
+///
+/// This is a convenience alias - you can also just use `Type` directly.
+pub type TypeExpr = Type;
 
-/// V4 Field in a record type with TypeAttributes
-pub type V4Field = Field<TypeAttributes>;
+/// Value expression with V4 attributes (same as `Value` with defaults)
+///
+/// This is a convenience alias - you can also just use `Value` directly.
+pub type ValueExpr = Value;
 
-/// V4 Pattern with ValueAttributes
-pub type V4Pattern = Pattern<ValueAttributes>;
-
-/// V4 Value expression with TypeAttributes and ValueAttributes
-pub type V4Value = Value<TypeAttributes, ValueAttributes>;
-
-/// V4 Value definition with TypeAttributes and ValueAttributes
-pub type V4ValueDefinition = ValueDefinition<TypeAttributes, ValueAttributes>;
-
-/// V4 Value body with TypeAttributes and ValueAttributes
-pub type V4ValueBody = ValueBody<TypeAttributes, ValueAttributes>;
-
-/// V4 Type definition with TypeAttributes
-pub type V4TypeDefinition = TypeDefinition<TypeAttributes>;
-
-/// V4 Constructor with TypeAttributes
-pub type V4Constructor = Constructor<TypeAttributes>;
-
-/// V4 Access-controlled type definition
-pub type V4AccessControlledTypeDef = AccessControlled<V4TypeDefinition>;
 
 // =============================================================================
 // Classic Type Aliases - For backward compatibility with V1-V3
@@ -227,15 +214,24 @@ mod tests {
     }
 
     #[test]
-    fn test_v4_type_alias() {
-        let var: V4Type = Type::variable(TypeAttributes::empty(), Name::from("a"));
+    fn test_type_expr_alias() {
+        // TypeExpr is an alias for Type (with default TypeAttributes)
+        let var: TypeExpr = Type::variable(TypeAttributes::empty(), Name::from("a"));
         assert!(matches!(var, Type::Variable(_, _)));
     }
 
     #[test]
-    fn test_v4_value_alias() {
-        let val: V4Value = Value::unit(ValueAttributes::empty());
+    fn test_value_expr_alias() {
+        // ValueExpr is an alias for Value (with default attributes)
+        let val: ValueExpr = Value::unit(ValueAttributes::empty());
         assert!(matches!(val, Value::Unit(_)));
+    }
+
+    #[test]
+    fn test_type_with_defaults() {
+        // Type without explicit type params uses defaults (V4)
+        let var: Type = Type::variable(TypeAttributes::empty(), Name::from("a"));
+        assert!(matches!(var, Type::Variable(_, _)));
     }
 
     #[test]

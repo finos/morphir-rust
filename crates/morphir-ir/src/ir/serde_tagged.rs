@@ -24,7 +24,7 @@ use super::type_expr::{Field, Type};
 // Type<A> Serialization
 // =============================================================================
 
-impl<A: Serialize> Serialize for Type<A> {
+impl<A: Clone + Serialize> Serialize for Type<A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -85,7 +85,7 @@ impl<A: Serialize> Serialize for Type<A> {
     }
 }
 
-impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
+impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Type<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -96,7 +96,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
 
 struct TypeVisitor<A>(PhantomData<A>);
 
-impl<'de, A: Deserialize<'de>> Visitor<'de> for TypeVisitor<A> {
+impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for TypeVisitor<A> {
     type Value = Type<A>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -201,7 +201,7 @@ impl<'de, A: Deserialize<'de>> Visitor<'de> for TypeVisitor<A> {
 // Field<A> Serialization
 // =============================================================================
 
-impl<A: Serialize> Serialize for Field<A> {
+impl<A: Clone + Serialize> Serialize for Field<A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -214,7 +214,7 @@ impl<A: Serialize> Serialize for Field<A> {
     }
 }
 
-impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
+impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Field<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -228,7 +228,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
 
         struct FieldVisitor<A>(PhantomData<A>);
 
-        impl<'de, A: Deserialize<'de>> Visitor<'de> for FieldVisitor<A> {
+        impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for FieldVisitor<A> {
             type Value = Field<A>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -273,7 +273,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
 // Pattern<A> Serialization
 // =============================================================================
 
-impl<A: Serialize> Serialize for Pattern<A> {
+impl<A: Clone + Serialize> Serialize for Pattern<A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -339,7 +339,7 @@ impl<A: Serialize> Serialize for Pattern<A> {
     }
 }
 
-impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
+impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Pattern<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -350,7 +350,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
 
 struct PatternVisitor<A>(PhantomData<A>);
 
-impl<'de, A: Deserialize<'de>> Visitor<'de> for PatternVisitor<A> {
+impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for PatternVisitor<A> {
     type Value = Pattern<A>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -463,9 +463,13 @@ impl<'de, A: Deserialize<'de>> Visitor<'de> for PatternVisitor<A> {
 // Value<TA, VA> Serialization
 // =============================================================================
 
-use super::value_expr::{Value, ValueDefinition, ValueBody, HoleReason, NativeInfo, NativeHint};
+use super::value_expr::{
+    Value, ValueDefinition, ValueBody, HoleReason, NativeInfo, NativeHint,
+    InputType, RecordFieldEntry, PatternCase, LetBinding,
+};
+use super::type_def::ConstructorArg;
 
-impl<TA: Serialize, VA: Serialize> Serialize for Value<TA, VA> {
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for Value<TA, VA> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -773,7 +777,7 @@ impl<'de> Deserialize<'de> for NativeInfo {
 }
 
 // Serialize ValueDefinition
-impl<TA: Serialize, VA: Serialize> Serialize for ValueDefinition<TA, VA> {
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for ValueDefinition<TA, VA> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -788,7 +792,7 @@ impl<TA: Serialize, VA: Serialize> Serialize for ValueDefinition<TA, VA> {
 }
 
 // Serialize ValueBody
-impl<TA: Serialize, VA: Serialize> Serialize for ValueBody<TA, VA> {
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for ValueBody<TA, VA> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -826,6 +830,755 @@ impl<TA: Serialize, VA: Serialize> Serialize for ValueBody<TA, VA> {
                 state.serialize_field("reason", reason)?;
                 state.end()
             }
+        }
+    }
+}
+
+// =============================================================================
+// Tuple Struct Serialization (InputType, RecordFieldEntry, PatternCase, LetBinding, ConstructorArg)
+// =============================================================================
+
+// InputType<TA, VA>(Name, VA, Type<TA>) - serialize as [name, attrs, type]
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for InputType<TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(3))?;
+        seq.serialize_element(&self.0)?;
+        seq.serialize_element(&self.1)?;
+        seq.serialize_element(&self.2)?;
+        seq.end()
+    }
+}
+
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for InputType<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct InputTypeVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+            for InputTypeVisitor<TA, VA>
+        {
+            type Value = InputType<TA, VA>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple [name, attrs, type]")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<InputType<TA, VA>, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let attrs = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let tpe = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(InputType(name, attrs, tpe))
+            }
+        }
+
+        deserializer.deserialize_seq(InputTypeVisitor(PhantomData))
+    }
+}
+
+// RecordFieldEntry<TA, VA>(Name, Value<TA, VA>) - serialize as [name, value]
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for RecordFieldEntry<TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.0)?;
+        seq.serialize_element(&self.1)?;
+        seq.end()
+    }
+}
+
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for RecordFieldEntry<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RecordFieldEntryVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+            for RecordFieldEntryVisitor<TA, VA>
+        {
+            type Value = RecordFieldEntry<TA, VA>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple [name, value]")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<RecordFieldEntry<TA, VA>, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let value = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Ok(RecordFieldEntry(name, value))
+            }
+        }
+
+        deserializer.deserialize_seq(RecordFieldEntryVisitor(PhantomData))
+    }
+}
+
+// PatternCase<TA, VA>(Pattern<VA>, Value<TA, VA>) - serialize as [pattern, body]
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for PatternCase<TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.0)?;
+        seq.serialize_element(&self.1)?;
+        seq.end()
+    }
+}
+
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for PatternCase<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PatternCaseVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+            for PatternCaseVisitor<TA, VA>
+        {
+            type Value = PatternCase<TA, VA>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple [pattern, body]")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<PatternCase<TA, VA>, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let pattern = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let body = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Ok(PatternCase(pattern, body))
+            }
+        }
+
+        deserializer.deserialize_seq(PatternCaseVisitor(PhantomData))
+    }
+}
+
+// LetBinding<TA, VA>(Name, ValueDefinition<TA, VA>) - serialize as [name, definition]
+impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for LetBinding<TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.0)?;
+        seq.serialize_element(&self.1)?;
+        seq.end()
+    }
+}
+
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for LetBinding<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct LetBindingVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+            for LetBindingVisitor<TA, VA>
+        {
+            type Value = LetBinding<TA, VA>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple [name, definition]")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<LetBinding<TA, VA>, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let definition = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Ok(LetBinding(name, definition))
+            }
+        }
+
+        deserializer.deserialize_seq(LetBindingVisitor(PhantomData))
+    }
+}
+
+// ConstructorArg<A>(Name, Type<A>) - serialize as [name, type]
+impl<A: Clone + Serialize> Serialize for ConstructorArg<A> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.0)?;
+        seq.serialize_element(&self.1)?;
+        seq.end()
+    }
+}
+
+impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for ConstructorArg<A> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ConstructorArgVisitor<A>(PhantomData<A>);
+
+        impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for ConstructorArgVisitor<A> {
+            type Value = ConstructorArg<A>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple [name, type]")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<ConstructorArg<A>, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let tpe = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Ok(ConstructorArg(name, tpe))
+            }
+        }
+
+        deserializer.deserialize_seq(ConstructorArgVisitor(PhantomData))
+    }
+}
+
+// Deserialize for ValueDefinition
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for ValueDefinition<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum FieldName {
+            InputTypes,
+            OutputType,
+            Body,
+        }
+
+        struct ValueDefinitionVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+            for ValueDefinitionVisitor<TA, VA>
+        {
+            type Value = ValueDefinition<TA, VA>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a value definition with inputTypes, outputType, and body")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<ValueDefinition<TA, VA>, V::Error>
+            where
+                V: de::MapAccess<'de>,
+            {
+                let mut input_types = None;
+                let mut output_type = None;
+                let mut body = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        FieldName::InputTypes => {
+                            if input_types.is_some() {
+                                return Err(de::Error::duplicate_field("inputTypes"));
+                            }
+                            input_types = Some(map.next_value()?);
+                        }
+                        FieldName::OutputType => {
+                            if output_type.is_some() {
+                                return Err(de::Error::duplicate_field("outputType"));
+                            }
+                            output_type = Some(map.next_value()?);
+                        }
+                        FieldName::Body => {
+                            if body.is_some() {
+                                return Err(de::Error::duplicate_field("body"));
+                            }
+                            body = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let input_types =
+                    input_types.ok_or_else(|| de::Error::missing_field("inputTypes"))?;
+                let output_type =
+                    output_type.ok_or_else(|| de::Error::missing_field("outputType"))?;
+                let body = body.ok_or_else(|| de::Error::missing_field("body"))?;
+                Ok(ValueDefinition {
+                    input_types,
+                    output_type,
+                    body,
+                })
+            }
+        }
+
+        deserializer.deserialize_struct(
+            "ValueDefinition",
+            &["inputTypes", "outputType", "body"],
+            ValueDefinitionVisitor(PhantomData),
+        )
+    }
+}
+
+// Deserialize for ValueBody
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for ValueBody<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum FieldName {
+            Kind,
+            Value,
+            Info,
+            ExternalName,
+            TargetPlatform,
+            Reason,
+        }
+
+        struct ValueBodyVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+            for ValueBodyVisitor<TA, VA>
+        {
+            type Value = ValueBody<TA, VA>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a value body with kind field")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<ValueBody<TA, VA>, V::Error>
+            where
+                V: de::MapAccess<'de>,
+            {
+                let mut kind: Option<String> = None;
+                let mut value: Option<Value<TA, VA>> = None;
+                let mut info: Option<NativeInfo> = None;
+                let mut external_name: Option<String> = None;
+                let mut target_platform: Option<String> = None;
+                let mut reason: Option<HoleReason> = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        FieldName::Kind => {
+                            if kind.is_some() {
+                                return Err(de::Error::duplicate_field("kind"));
+                            }
+                            kind = Some(map.next_value()?);
+                        }
+                        FieldName::Value => {
+                            if value.is_some() {
+                                return Err(de::Error::duplicate_field("value"));
+                            }
+                            value = Some(map.next_value()?);
+                        }
+                        FieldName::Info => {
+                            if info.is_some() {
+                                return Err(de::Error::duplicate_field("info"));
+                            }
+                            info = Some(map.next_value()?);
+                        }
+                        FieldName::ExternalName => {
+                            if external_name.is_some() {
+                                return Err(de::Error::duplicate_field("externalName"));
+                            }
+                            external_name = Some(map.next_value()?);
+                        }
+                        FieldName::TargetPlatform => {
+                            if target_platform.is_some() {
+                                return Err(de::Error::duplicate_field("targetPlatform"));
+                            }
+                            target_platform = Some(map.next_value()?);
+                        }
+                        FieldName::Reason => {
+                            if reason.is_some() {
+                                return Err(de::Error::duplicate_field("reason"));
+                            }
+                            reason = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let kind = kind.ok_or_else(|| de::Error::missing_field("kind"))?;
+                match kind.as_str() {
+                    "Expression" => {
+                        let val = value.ok_or_else(|| de::Error::missing_field("value"))?;
+                        Ok(ValueBody::Expression(val))
+                    }
+                    "Native" => {
+                        let info = info.ok_or_else(|| de::Error::missing_field("info"))?;
+                        Ok(ValueBody::Native(info))
+                    }
+                    "External" => {
+                        let external_name =
+                            external_name.ok_or_else(|| de::Error::missing_field("externalName"))?;
+                        let target_platform = target_platform
+                            .ok_or_else(|| de::Error::missing_field("targetPlatform"))?;
+                        Ok(ValueBody::External {
+                            external_name,
+                            target_platform,
+                        })
+                    }
+                    "Incomplete" => {
+                        let reason = reason.ok_or_else(|| de::Error::missing_field("reason"))?;
+                        Ok(ValueBody::Incomplete(reason))
+                    }
+                    _ => Err(de::Error::unknown_variant(
+                        &kind,
+                        &["Expression", "Native", "External", "Incomplete"],
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_struct(
+            "ValueBody",
+            &["kind", "value", "info", "externalName", "targetPlatform", "reason"],
+            ValueBodyVisitor(PhantomData),
+        )
+    }
+}
+
+// Deserialize for Value (complex, needs visitor)
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+    for Value<TA, VA>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(ValueVisitor(PhantomData))
+    }
+}
+
+struct ValueVisitor<TA, VA>(PhantomData<(TA, VA)>);
+
+impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+    for ValueVisitor<TA, VA>
+{
+    type Value = Value<TA, VA>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a tagged array like [\"Literal\", attrs, literal]")
+    }
+
+    fn visit_seq<V>(self, mut seq: V) -> Result<Value<TA, VA>, V::Error>
+    where
+        V: SeqAccess<'de>,
+    {
+        let tag: String = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+        match tag.as_str() {
+            "Literal" | "literal" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let lit: Literal = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::Literal(attrs, lit))
+            }
+            "Constructor" | "constructor" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let name: FQName = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::Constructor(attrs, name))
+            }
+            "Tuple" | "tuple" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let elements: Vec<Value<TA, VA>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::Tuple(attrs, elements))
+            }
+            "List" | "list" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let elements: Vec<Value<TA, VA>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::List(attrs, elements))
+            }
+            "Record" | "record" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let fields: Vec<RecordFieldEntry<TA, VA>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::Record(attrs, fields))
+            }
+            "Variable" | "variable" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let name: Name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::Variable(attrs, name))
+            }
+            "Reference" | "reference" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let fqname: FQName = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::Reference(attrs, fqname))
+            }
+            "Field" | "field" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let record: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let field_name: Name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::Field(attrs, Box::new(record), field_name))
+            }
+            "FieldFunction" | "fieldFunction" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let name: Name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(Value::FieldFunction(attrs, name))
+            }
+            "Apply" | "apply" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let func: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let arg: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::Apply(attrs, Box::new(func), Box::new(arg)))
+            }
+            "Lambda" | "lambda" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let pattern: Pattern<VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let body: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::Lambda(attrs, pattern, Box::new(body)))
+            }
+            "LetDefinition" | "letDefinition" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let name: Name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let def: ValueDefinition<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                let body: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                Ok(Value::LetDefinition(attrs, name, Box::new(def), Box::new(body)))
+            }
+            "LetRecursion" | "letRecursion" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let defs: Vec<LetBinding<TA, VA>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let body: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::LetRecursion(attrs, defs, Box::new(body)))
+            }
+            "Destructure" | "destructure" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let pattern: Pattern<VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let val: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                let body: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                Ok(Value::Destructure(attrs, pattern, Box::new(val), Box::new(body)))
+            }
+            "IfThenElse" | "ifThenElse" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let cond: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let then_branch: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                let else_branch: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                Ok(Value::IfThenElse(
+                    attrs,
+                    Box::new(cond),
+                    Box::new(then_branch),
+                    Box::new(else_branch),
+                ))
+            }
+            "PatternMatch" | "patternMatch" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let input: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let cases: Vec<PatternCase<TA, VA>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::PatternMatch(attrs, Box::new(input), cases))
+            }
+            "UpdateRecord" | "updateRecord" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let record: Value<TA, VA> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let updates: Vec<RecordFieldEntry<TA, VA>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::UpdateRecord(attrs, Box::new(record), updates))
+            }
+            "Unit" | "unit" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Ok(Value::Unit(attrs))
+            }
+            // V4-only variants
+            "Hole" | "hole" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let reason: HoleReason = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let expected_type: Option<Box<Type<TA>>> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::Hole(attrs, reason, expected_type))
+            }
+            "Native" | "native" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let fqname: FQName = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let info: NativeInfo = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::Native(attrs, fqname, info))
+            }
+            "External" | "external" => {
+                let attrs: VA = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let external_name: String = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let target_platform: String = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                Ok(Value::External(attrs, external_name, target_platform))
+            }
+            _ => Err(de::Error::unknown_variant(
+                &tag,
+                &[
+                    "Literal",
+                    "Constructor",
+                    "Tuple",
+                    "List",
+                    "Record",
+                    "Variable",
+                    "Reference",
+                    "Field",
+                    "FieldFunction",
+                    "Apply",
+                    "Lambda",
+                    "LetDefinition",
+                    "LetRecursion",
+                    "Destructure",
+                    "IfThenElse",
+                    "PatternMatch",
+                    "UpdateRecord",
+                    "Unit",
+                    "Hole",
+                    "Native",
+                    "External",
+                ],
+            )),
         }
     }
 }

@@ -2,8 +2,17 @@
 //!
 //! This module defines type definitions including type aliases and custom types
 //! (algebraic data types). V4 adds IncompleteTypeDefinition for error recovery.
+//!
+//! # Default Type Parameter
+//!
+//! V4 is the default format - `TypeDefinition` without type parameters uses `TypeAttributes`:
+//! ```rust,ignore
+//! let def: TypeDefinition = TypeDefinition::type_alias(...);  // V4
+//! let def: TypeDefinition<serde_json::Value> = ...;  // Classic
+//! ```
 
 use crate::naming::Name;
+use super::attributes::TypeAttributes;
 use super::type_expr::Type;
 use super::value_expr::HoleReason;
 
@@ -13,9 +22,10 @@ use super::value_expr::HoleReason;
 /// V4 adds IncompleteTypeDefinition for incremental compilation.
 ///
 /// # Type Parameters
-/// - `A`: The type of attributes attached to type nodes
+/// - `A`: The type of attributes attached to type nodes.
+///        Defaults to `TypeAttributes` (V4 format).
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeDefinition<A> {
+pub enum TypeDefinition<A: Clone = TypeAttributes> {
     /// Type alias definition
     ///
     /// Example: `type alias Person = { name : String, age : Int }`
@@ -63,12 +73,18 @@ pub enum AccessControlled<T> {
 ///
 /// Example: `Just` in `type Maybe a = Just a | Nothing`
 #[derive(Debug, Clone, PartialEq)]
-pub struct Constructor<A> {
+pub struct Constructor<A: Clone = TypeAttributes> {
     /// The name of the constructor (e.g., `Just`)
     pub name: Name,
     /// The arguments to the constructor with their names and types
-    pub args: Vec<(Name, Type<A>)>,
+    pub args: Vec<ConstructorArg<A>>,
 }
+
+/// Constructor argument tuple struct: (name, type)
+///
+/// More ergonomic than `(Name, Type<A>)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructorArg<A: Clone = TypeAttributes>(pub Name, pub Type<A>);
 
 /// Reason for an incomplete type (V4 only)
 #[derive(Debug, Clone, PartialEq)]
@@ -79,7 +95,7 @@ pub enum Incompleteness {
     Draft,
 }
 
-impl<A> TypeDefinition<A> {
+impl<A: Clone> TypeDefinition<A> {
     /// Create a type alias definition
     pub fn type_alias(type_params: Vec<Name>, type_expr: Type<A>) -> Self {
         TypeDefinition::TypeAliasDefinition {
@@ -160,9 +176,9 @@ impl<T> AccessControlled<T> {
     }
 }
 
-impl<A> Constructor<A> {
+impl<A: Clone> Constructor<A> {
     /// Create a new constructor
-    pub fn new(name: Name, args: Vec<(Name, Type<A>)>) -> Self {
+    pub fn new(name: Name, args: Vec<ConstructorArg<A>>) -> Self {
         Constructor { name, args }
     }
 
@@ -172,6 +188,23 @@ impl<A> Constructor<A> {
             name,
             args: vec![],
         }
+    }
+}
+
+impl<A: Clone> ConstructorArg<A> {
+    /// Create a new constructor argument
+    pub fn new(name: Name, tpe: Type<A>) -> Self {
+        ConstructorArg(name, tpe)
+    }
+
+    /// Get the name
+    pub fn name(&self) -> &Name {
+        &self.0
+    }
+
+    /// Get the type
+    pub fn tpe(&self) -> &Type<A> {
+        &self.1
     }
 }
 
@@ -198,7 +231,7 @@ mod tests {
         let nothing = Constructor::constant(Name::from("Nothing"));
         let just = Constructor::new(
             Name::from("Just"),
-            vec![(Name::from("value"), Type::variable(test_attrs(), Name::from("a")))],
+            vec![ConstructorArg::new(Name::from("value"), Type::variable(test_attrs(), Name::from("a")))],
         );
 
         let def: TypeDefinition<()> = TypeDefinition::custom_type_public(

@@ -3,8 +3,17 @@
 //! This module defines the `Type<A>` enum which represents type expressions
 //! in the Morphir IR. The type parameter `A` represents the attributes
 //! associated with each type node.
+//!
+//! # Default Type Parameter
+//!
+//! V4 is the default format - `Type` without type parameters uses `TypeAttributes`:
+//! ```rust,ignore
+//! let t: Type = Type::Unit(TypeAttributes::default());  // V4 type
+//! let t: Type<serde_json::Value> = Type::Unit(json!({}));  // Classic type
+//! ```
 
 use crate::naming::{FQName, Name};
+use super::attributes::TypeAttributes;
 
 /// A type expression with generic attributes.
 ///
@@ -13,9 +22,20 @@ use crate::naming::{FQName, Name};
 /// source locations, type constraints, or extensions.
 ///
 /// # Type Parameters
-/// - `A`: The type of attributes attached to each type node
+/// - `A`: The type of attributes attached to each type node.
+///        Defaults to `TypeAttributes` (V4 format).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // V4 format (default) - uses TypeAttributes
+/// let t: Type = Type::Unit(TypeAttributes::default());
+///
+/// // Classic format - explicit serde_json::Value
+/// let t: Type<serde_json::Value> = Type::Unit(serde_json::json!({}));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type<A> {
+pub enum Type<A: Clone = TypeAttributes> {
     /// Type variable (generic type parameter)
     ///
     /// Example: `a` in `List a`
@@ -55,15 +75,19 @@ pub enum Type<A> {
 /// A field in a record type.
 ///
 /// Fields have a name and a type.
+///
+/// # Type Parameters
+/// - `A`: The type of attributes attached to the field's type.
+///        Defaults to `TypeAttributes` (V4 format).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Field<A> {
+pub struct Field<A: Clone = TypeAttributes> {
     /// The name of the field
     pub name: Name,
     /// The type of the field
     pub tpe: Type<A>,
 }
 
-impl<A> Type<A> {
+impl<A: Clone> Type<A> {
     /// Get the attributes of this type
     pub fn attributes(&self) -> &A {
         match self {
@@ -113,12 +137,9 @@ impl<A> Type<A> {
     }
 }
 
-impl<A> Type<A>
-where
-    A: Clone,
-{
+impl<A: Clone> Type<A> {
     /// Map a function over the attributes of this type and all nested types
-    pub fn map_attributes<B, F>(&self, f: &F) -> Type<B>
+    pub fn map_attributes<B: Clone, F>(&self, f: &F) -> Type<B>
     where
         F: Fn(&A) -> B,
     {
@@ -163,7 +184,7 @@ where
     }
 }
 
-impl<A> Field<A> {
+impl<A: Clone> Field<A> {
     /// Create a new field
     pub fn new(name: Name, tpe: Type<A>) -> Self {
         Field { name, tpe }

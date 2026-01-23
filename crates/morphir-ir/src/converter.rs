@@ -4,7 +4,8 @@
 //! and V4 Morphir IR formats.
 
 use crate::ir::{classic, v4};
-use crate::naming::{ModuleName, Name};
+use crate::naming::Name;
+use indexmap::IndexMap;
 
 /// Convert a Classic package to V4 format.
 ///
@@ -13,8 +14,8 @@ use crate::naming::{ModuleName, Name};
 ///
 /// # Returns
 /// A V4 PackageDefinition with converted modules
-pub fn classic_to_v4(pkg: classic::Package) -> v4::Package {
-    let modules = pkg
+pub fn classic_to_v4(pkg: classic::Package) -> v4::PackageDefinition {
+    let modules: IndexMap<String, v4::AccessControlledModuleDefinition> = pkg
         .modules
         .into_iter()
         .map(convert_module_to_v4)
@@ -30,11 +31,11 @@ pub fn classic_to_v4(pkg: classic::Package) -> v4::Package {
 ///
 /// # Returns
 /// A Classic Package with converted modules
-pub fn v4_to_classic(pkg: v4::Package) -> classic::Package {
+pub fn v4_to_classic(pkg: v4::PackageDefinition) -> classic::Package {
     let modules = pkg
         .modules
         .into_iter()
-        .map(convert_module_to_classic)
+        .map(|(name, module)| convert_module_to_classic(name, module))
         .collect();
 
     classic::Package {
@@ -43,14 +44,14 @@ pub fn v4_to_classic(pkg: v4::Package) -> classic::Package {
     }
 }
 
-/// Convert a Classic module to V4 ModuleDefinitionEntry
-fn convert_module_to_v4(module: classic::Module) -> v4::ModuleDefinitionEntry {
+/// Convert a Classic module to V4 format (returns tuple for IndexMap collection)
+fn convert_module_to_v4(module: classic::Module) -> (String, v4::AccessControlledModuleDefinition) {
     let access = convert_access_to_v4(&module.detail.access);
     let types = convert_types_to_v4(&module.detail.value.types);
     let values = convert_values_to_v4(&module.detail.value.values);
 
-    v4::ModuleDefinitionEntry(
-        ModuleName::from(module.name),
+    (
+        module.name.to_string(),
         v4::AccessControlledModuleDefinition {
             access,
             value: v4::ModuleDefinition {
@@ -62,12 +63,13 @@ fn convert_module_to_v4(module: classic::Module) -> v4::ModuleDefinitionEntry {
     )
 }
 
-/// Convert a V4 ModuleDefinitionEntry to Classic Module
-fn convert_module_to_classic(entry: v4::ModuleDefinitionEntry) -> classic::Module {
-    let v4::ModuleDefinitionEntry(name, access_controlled) = entry;
-
+/// Convert a V4 module to Classic Module
+fn convert_module_to_classic(
+    name: String,
+    access_controlled: v4::AccessControlledModuleDefinition,
+) -> classic::Module {
     classic::Module {
-        name: name.into_path(),
+        name: crate::naming::Path::new(&name),
         detail: classic::ModuleDetail {
             access: convert_access_to_classic(&access_controlled.access),
             value: classic::ModuleValue {
@@ -95,11 +97,13 @@ fn convert_access_to_classic(access: &v4::Access) -> String {
     }
 }
 
-/// Convert Classic types array to V4 TypeDefinitionEntry list.
+/// Convert Classic types array to V4 type definitions.
 ///
 /// Classic format: `[[[name_parts], {access, value}], ...]`
-/// V4 format: `[TypeDefinitionEntry(Name, AccessControlledTypeDefinition), ...]`
-fn convert_types_to_v4(types: &[serde_json::Value]) -> Vec<v4::TypeDefinitionEntry> {
+/// V4 format: `IndexMap<String, AccessControlledTypeDefinition>`
+fn convert_types_to_v4(
+    types: &[serde_json::Value],
+) -> IndexMap<String, v4::AccessControlledTypeDefinition> {
     types
         .iter()
         .filter_map(|type_val| {
@@ -117,8 +121,8 @@ fn convert_types_to_v4(types: &[serde_json::Value]) -> Vec<v4::TypeDefinitionEnt
             let access_str = def_obj.get("access")?.as_str()?;
             let value = def_obj.get("value")?.clone();
 
-            Some(v4::TypeDefinitionEntry(
-                name,
+            Some((
+                name.to_string(),
                 v4::AccessControlledTypeDefinition {
                     access: convert_access_to_v4(access_str),
                     value: convert_type_definition_to_v4(&value),
@@ -128,14 +132,15 @@ fn convert_types_to_v4(types: &[serde_json::Value]) -> Vec<v4::TypeDefinitionEnt
         .collect()
 }
 
-/// Convert V4 TypeDefinitionEntry list to Classic types array
-fn convert_types_to_classic(types: &[v4::TypeDefinitionEntry]) -> Vec<serde_json::Value> {
+/// Convert V4 type definitions to Classic types array
+fn convert_types_to_classic(
+    types: &IndexMap<String, v4::AccessControlledTypeDefinition>,
+) -> Vec<serde_json::Value> {
     types
         .iter()
-        .map(|entry| {
-            let v4::TypeDefinitionEntry(name, access_controlled) = entry;
-
-            let name_json = serde_json::to_value(name).unwrap_or(serde_json::Value::Null);
+        .map(|(name, access_controlled)| {
+            let name_obj = Name::from(name.as_str());
+            let name_json = serde_json::to_value(&name_obj).unwrap_or(serde_json::Value::Null);
             let def_json = serde_json::json!({
                 "access": convert_access_to_classic(&access_controlled.access),
                 "value": convert_type_definition_to_classic(&access_controlled.value)
@@ -146,11 +151,13 @@ fn convert_types_to_classic(types: &[v4::TypeDefinitionEntry]) -> Vec<serde_json
         .collect()
 }
 
-/// Convert Classic values array to V4 ValueDefinitionEntry list.
+/// Convert Classic values array to V4 value definitions.
 ///
 /// Classic format: `[[[name_parts], {access, value}], ...]`
-/// V4 format: `[ValueDefinitionEntry(Name, AccessControlledValueDefinition), ...]`
-fn convert_values_to_v4(values: &[serde_json::Value]) -> Vec<v4::ValueDefinitionEntry> {
+/// V4 format: `IndexMap<String, AccessControlledValueDefinition>`
+fn convert_values_to_v4(
+    values: &[serde_json::Value],
+) -> IndexMap<String, v4::AccessControlledValueDefinition> {
     values
         .iter()
         .filter_map(|value_val| {
@@ -168,8 +175,8 @@ fn convert_values_to_v4(values: &[serde_json::Value]) -> Vec<v4::ValueDefinition
             let access_str = def_obj.get("access")?.as_str()?;
             let value = def_obj.get("value")?.clone();
 
-            Some(v4::ValueDefinitionEntry(
-                name,
+            Some((
+                name.to_string(),
                 v4::AccessControlledValueDefinition {
                     access: convert_access_to_v4(access_str),
                     value: convert_value_definition_to_v4(&value),
@@ -179,14 +186,15 @@ fn convert_values_to_v4(values: &[serde_json::Value]) -> Vec<v4::ValueDefinition
         .collect()
 }
 
-/// Convert V4 ValueDefinitionEntry list to Classic values array
-fn convert_values_to_classic(values: &[v4::ValueDefinitionEntry]) -> Vec<serde_json::Value> {
+/// Convert V4 value definitions to Classic values array
+fn convert_values_to_classic(
+    values: &IndexMap<String, v4::AccessControlledValueDefinition>,
+) -> Vec<serde_json::Value> {
     values
         .iter()
-        .map(|entry| {
-            let v4::ValueDefinitionEntry(name, access_controlled) = entry;
-
-            let name_json = serde_json::to_value(name).unwrap_or(serde_json::Value::Null);
+        .map(|(name, access_controlled)| {
+            let name_obj = Name::from(name.as_str());
+            let name_json = serde_json::to_value(&name_obj).unwrap_or(serde_json::Value::Null);
             let def_json = serde_json::json!({
                 "access": convert_access_to_classic(&access_controlled.access),
                 "value": convert_value_definition_to_classic(&access_controlled.value)
@@ -240,37 +248,41 @@ fn convert_type_definition_to_v4(value: &serde_json::Value) -> v4::TypeDefinitio
     }
 
     // Fallback: create empty type alias
-    v4::TypeDefinition::TypeAlias(v4::TypeAliasDefinition {
+    v4::TypeDefinition::TypeAliasDefinition {
         type_params: vec![],
-        type_exp: serde_json::Value::Null,
-    })
+        type_expr: serde_json::Value::Null,
+    }
 }
 
-/// Convert Classic TypeDefinition to Classic JSON value
+/// Convert V4 TypeDefinition to Classic JSON value
 fn convert_type_definition_to_classic(type_def: &v4::TypeDefinition) -> serde_json::Value {
     match type_def {
-        v4::TypeDefinition::TypeAlias(alias) => {
-            let type_params: Vec<serde_json::Value> = alias
-                .type_params
+        v4::TypeDefinition::TypeAliasDefinition {
+            type_params,
+            type_expr,
+        } => {
+            let type_params_json: Vec<serde_json::Value> = type_params
                 .iter()
                 .map(|n| serde_json::to_value(n).unwrap_or(serde_json::Value::Null))
                 .collect();
 
             serde_json::json!({
-                "value": ["TypeAliasDefinition", type_params, alias.type_exp]
+                "value": ["TypeAliasDefinition", type_params_json, type_expr]
             })
         }
-        v4::TypeDefinition::CustomType(custom) => {
-            let type_params: Vec<serde_json::Value> = custom
-                .type_params
+        v4::TypeDefinition::CustomTypeDefinition {
+            type_params,
+            constructors,
+        } => {
+            let type_params_json: Vec<serde_json::Value> = type_params
                 .iter()
                 .map(|n| serde_json::to_value(n).unwrap_or(serde_json::Value::Null))
                 .collect();
 
-            let constructors = convert_constructors_to_classic(&custom.constructors);
+            let constructors_json = convert_constructors_to_classic(constructors);
 
             serde_json::json!({
-                "value": ["CustomTypeDefinition", type_params, constructors]
+                "value": ["CustomTypeDefinition", type_params_json, constructors_json]
             })
         }
     }
@@ -294,10 +306,10 @@ fn convert_custom_type_to_v4(arr: &[serde_json::Value]) -> v4::TypeDefinition {
         }
     };
 
-    v4::TypeDefinition::CustomType(v4::CustomTypeDefinition {
+    v4::TypeDefinition::CustomTypeDefinition {
         type_params,
         constructors,
-    })
+    }
 }
 
 /// Convert Classic TypeAliasDefinition array to V4
@@ -309,16 +321,16 @@ fn convert_type_alias_to_v4(arr: &[serde_json::Value]) -> v4::TypeDefinition {
         vec![]
     };
 
-    let type_exp = if arr.len() > 2 {
+    let type_expr = if arr.len() > 2 {
         arr[2].clone()
     } else {
         serde_json::Value::Null
     };
 
-    v4::TypeDefinition::TypeAlias(v4::TypeAliasDefinition {
+    v4::TypeDefinition::TypeAliasDefinition {
         type_params,
-        type_exp,
-    })
+        type_expr,
+    }
 }
 
 /// Extract type parameters from JSON array
@@ -364,19 +376,21 @@ fn convert_constructors_to_v4(json: &serde_json::Value) -> v4::AccessControlledC
 }
 
 /// Convert V4 AccessControlledConstructors to Classic JSON
-fn convert_constructors_to_classic(constructors: &v4::AccessControlledConstructors) -> serde_json::Value {
+fn convert_constructors_to_classic(
+    constructors: &v4::AccessControlledConstructors,
+) -> serde_json::Value {
     let ctors: Vec<serde_json::Value> = constructors
         .value
         .iter()
         .map(|ctor| {
-            let name_json = serde_json::to_value(&ctor.0).unwrap_or(serde_json::Value::Null);
+            let name_json = serde_json::to_value(&ctor.name).unwrap_or(serde_json::Value::Null);
             let args: Vec<serde_json::Value> = ctor
-                .1
+                .args
                 .iter()
-                .map(|(arg_name, arg_type)| {
+                .map(|arg| {
                     serde_json::json!([
-                        serde_json::to_value(arg_name).unwrap_or(serde_json::Value::Null),
-                        arg_type
+                        serde_json::to_value(&arg.name).unwrap_or(serde_json::Value::Null),
+                        arg.arg_type
                     ])
                 })
                 .collect();
@@ -401,7 +415,7 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
 
     let name = extract_name_from_json(&arr[0])?;
 
-    let args: Vec<(Name, v4::Type)> = arr[1]
+    let args: Vec<v4::ConstructorArg> = arr[1]
         .as_array()
         .map(|args_arr| {
             args_arr
@@ -413,20 +427,23 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
                     }
                     let arg_name = extract_name_from_json(&arg_arr[0])?;
                     let arg_type = arg_arr[1].clone();
-                    Some((arg_name, arg_type))
+                    Some(v4::ConstructorArg {
+                        name: arg_name,
+                        arg_type,
+                    })
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    Some(v4::ConstructorDefinition(name, args))
+    Some(v4::ConstructorDefinition { name, args })
 }
 
 /// Convert a Classic value definition to V4 ValueDefinition.
 fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinition {
     // Classic format: {inputTypes: [...], outputType: ..., body: ...}
     if let Some(obj) = value.as_object() {
-        let input_types = obj
+        let input_types: IndexMap<String, v4::InputTypeEntry> = obj
             .get("inputTypes")
             .and_then(|v| v.as_array())
             .map(|arr| {
@@ -439,7 +456,20 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
                         let name = extract_name_from_json(&input_arr[0])?;
                         let attrs = input_arr[1].clone();
                         let typ = input_arr[2].clone();
-                        Some((name, attrs, typ))
+                        Some((
+                            name.to_string(),
+                            v4::InputTypeEntry {
+                                type_attributes: if attrs.is_null()
+                                    || (attrs.is_object()
+                                        && attrs.as_object().map_or(true, |o| o.is_empty()))
+                                {
+                                    None
+                                } else {
+                                    Some(attrs)
+                                },
+                                input_type: typ,
+                            },
+                        ))
                     })
                     .collect()
             })
@@ -450,10 +480,8 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
-        let body = obj
-            .get("body")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let body_json = obj.get("body").cloned().unwrap_or(serde_json::Value::Null);
+        let body = v4::ValueBody::ExpressionBody { body: body_json };
 
         v4::ValueDefinition {
             input_types,
@@ -462,9 +490,11 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
         }
     } else {
         v4::ValueDefinition {
-            input_types: vec![],
+            input_types: IndexMap::new(),
             output_type: serde_json::Value::Null,
-            body: serde_json::Value::Null,
+            body: v4::ValueBody::ExpressionBody {
+                body: serde_json::Value::Null,
+            },
         }
     }
 }
@@ -474,19 +504,29 @@ fn convert_value_definition_to_classic(value_def: &v4::ValueDefinition) -> serde
     let input_types: Vec<serde_json::Value> = value_def
         .input_types
         .iter()
-        .map(|(name, attrs, typ)| {
+        .map(|(name, entry)| {
+            let name_obj = Name::from(name.as_str());
+            let attrs = entry.type_attributes.clone().unwrap_or(serde_json::json!({}));
             serde_json::json!([
-                serde_json::to_value(name).unwrap_or(serde_json::Value::Null),
+                serde_json::to_value(&name_obj).unwrap_or(serde_json::Value::Null),
                 attrs,
-                typ
+                entry.input_type
             ])
         })
         .collect();
 
+    // Extract body from ValueBody wrapper
+    let body = match &value_def.body {
+        v4::ValueBody::ExpressionBody { body } => body.clone(),
+        v4::ValueBody::NativeBody { .. } => serde_json::Value::Null,
+        v4::ValueBody::ExternalBody { .. } => serde_json::Value::Null,
+        v4::ValueBody::IncompleteBody { .. } => serde_json::Value::Null,
+    };
+
     serde_json::json!({
         "inputTypes": input_types,
         "outputType": value_def.output_type,
-        "body": value_def.body
+        "body": body
     })
 }
 
@@ -745,8 +785,8 @@ mod tests {
             },
         };
 
-        let v4_entry = convert_module_to_v4(classic_module.clone());
-        let roundtrip = convert_module_to_classic(v4_entry);
+        let (name, v4_module) = convert_module_to_v4(classic_module.clone());
+        let roundtrip = convert_module_to_classic(name, v4_module);
 
         assert_eq!(roundtrip.name.to_string(), classic_module.name.to_string());
         assert_eq!(roundtrip.detail.access, classic_module.detail.access);

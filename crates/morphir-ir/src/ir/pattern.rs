@@ -2,8 +2,17 @@
 //!
 //! This module defines the `Pattern<A>` enum which represents patterns
 //! used in pattern matching expressions.
+//!
+//! # Default Type Parameter
+//!
+//! V4 is the default format - `Pattern` without type parameters uses `ValueAttributes`:
+//! ```rust,ignore
+//! let p: Pattern = Pattern::WildcardPattern(ValueAttributes::default());  // V4
+//! let p: Pattern<serde_json::Value> = Pattern::WildcardPattern(json!({}));  // Classic
+//! ```
 
 use crate::naming::{FQName, Name};
+use super::attributes::ValueAttributes;
 use super::literal::Literal;
 
 /// A pattern with generic attributes.
@@ -12,9 +21,21 @@ use super::literal::Literal;
 /// values and bind variables. Each variant carries attributes of type `A`.
 ///
 /// # Type Parameters
-/// - `A`: The type of attributes attached to each pattern node
+/// - `A`: The type of attributes attached to each pattern node.
+///        Defaults to `ValueAttributes` (V4 format) since patterns
+///        appear in value contexts.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // V4 format (default) - uses ValueAttributes
+/// let p: Pattern = Pattern::WildcardPattern(ValueAttributes::default());
+///
+/// // Classic format - explicit serde_json::Value
+/// let p: Pattern<serde_json::Value> = Pattern::WildcardPattern(serde_json::json!({}));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
-pub enum Pattern<A> {
+pub enum Pattern<A: Clone = ValueAttributes> {
     /// Wildcard pattern that matches anything
     ///
     /// Example: `_` in `case x of _ -> ...`
@@ -56,7 +77,7 @@ pub enum Pattern<A> {
     UnitPattern(A),
 }
 
-impl<A> Pattern<A> {
+impl<A: Clone> Pattern<A> {
     /// Get the attributes of this pattern
     pub fn attributes(&self) -> &A {
         match self {
@@ -112,12 +133,9 @@ impl<A> Pattern<A> {
     }
 }
 
-impl<A> Pattern<A>
-where
-    A: Clone,
-{
+impl<A: Clone> Pattern<A> {
     /// Map a function over the attributes of this pattern and all nested patterns
-    pub fn map_attributes<B, F>(&self, f: &F) -> Pattern<B>
+    pub fn map_attributes<B: Clone, F>(&self, f: &F) -> Pattern<B>
     where
         F: Fn(&A) -> B,
     {

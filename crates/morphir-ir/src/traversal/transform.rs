@@ -20,9 +20,12 @@
 //! ```
 
 use crate::ir::pattern::Pattern;
-use crate::ir::type_def::{AccessControlled, Constructor, TypeDefinition};
+use crate::ir::type_def::{AccessControlled, Constructor, ConstructorArg, TypeDefinition};
 use crate::ir::type_expr::{Field, Type};
-use crate::ir::value_expr::{HoleReason, NativeInfo, Value, ValueBody, ValueDefinition};
+use crate::ir::value_expr::{
+    HoleReason, InputType, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value,
+    ValueBody, ValueDefinition,
+};
 use crate::naming::FQName;
 
 // =============================================================================
@@ -33,7 +36,7 @@ use crate::naming::FQName;
 ///
 /// Implementors define how to transform attributes, and the walker
 /// handles recursive transformation of nested types.
-pub trait TypeTransformVisitor<AI, AO> {
+pub trait TypeTransformVisitor<AI: Clone, AO: Clone> {
     /// Error type for transformation failures
     type Error;
 
@@ -42,18 +45,12 @@ pub trait TypeTransformVisitor<AI, AO> {
     fn transform_type_attrs(&self, attrs: &AI) -> Result<AO, Self::Error>;
 
     /// Transform a complete type. Uses the default walker implementation.
-    fn transform_type(&self, tpe: &Type<AI>) -> Result<Type<AO>, Self::Error>
-    where
-        AI: Clone,
-    {
+    fn transform_type(&self, tpe: &Type<AI>) -> Result<Type<AO>, Self::Error> {
         walk_transform_type(self, tpe)
     }
 
     /// Transform a field in a record type.
-    fn transform_field(&self, field: &Field<AI>) -> Result<Field<AO>, Self::Error>
-    where
-        AI: Clone,
-    {
+    fn transform_field(&self, field: &Field<AI>) -> Result<Field<AO>, Self::Error> {
         Ok(Field {
             name: field.name.clone(),
             tpe: self.transform_type(&field.tpe)?,
@@ -62,10 +59,9 @@ pub trait TypeTransformVisitor<AI, AO> {
 }
 
 /// Walk and transform a type, recursively transforming nested types.
-pub fn walk_transform_type<AI, AO, V>(visitor: &V, tpe: &Type<AI>) -> Result<Type<AO>, V::Error>
+pub fn walk_transform_type<AI: Clone, AO: Clone, V>(visitor: &V, tpe: &Type<AI>) -> Result<Type<AO>, V::Error>
 where
     V: TypeTransformVisitor<AI, AO> + ?Sized,
-    AI: Clone,
 {
     match tpe {
         Type::Variable(attrs, name) => {
@@ -113,7 +109,7 @@ where
 // =============================================================================
 
 /// Trait for transforming Pattern<AI> to Pattern<AO>.
-pub trait PatternTransformVisitor<AI, AO> {
+pub trait PatternTransformVisitor<AI: Clone, AO: Clone> {
     /// Error type for transformation failures
     type Error;
 
@@ -121,22 +117,18 @@ pub trait PatternTransformVisitor<AI, AO> {
     fn transform_pattern_attrs(&self, attrs: &AI) -> Result<AO, Self::Error>;
 
     /// Transform a complete pattern. Uses the default walker implementation.
-    fn transform_pattern(&self, pattern: &Pattern<AI>) -> Result<Pattern<AO>, Self::Error>
-    where
-        AI: Clone,
-    {
+    fn transform_pattern(&self, pattern: &Pattern<AI>) -> Result<Pattern<AO>, Self::Error> {
         walk_transform_pattern(self, pattern)
     }
 }
 
 /// Walk and transform a pattern, recursively transforming nested patterns.
-pub fn walk_transform_pattern<AI, AO, V>(
+pub fn walk_transform_pattern<AI: Clone, AO: Clone, V>(
     visitor: &V,
     pattern: &Pattern<AI>,
 ) -> Result<Pattern<AO>, V::Error>
 where
     V: PatternTransformVisitor<AI, AO> + ?Sized,
-    AI: Clone,
 {
     match pattern {
         Pattern::WildcardPattern(attrs) => {
@@ -192,7 +184,7 @@ where
 ///
 /// This is the most complex transform visitor as Values contain both
 /// type attributes and value attributes.
-pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
+pub trait ValueTransformVisitor<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone> {
     /// Error type for transformation failures
     type Error;
 
@@ -208,10 +200,7 @@ pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
     }
 
     /// Transform a type.
-    fn transform_type(&self, tpe: &Type<TAI>) -> Result<Type<TAO>, Self::Error>
-    where
-        TAI: Clone,
-    {
+    fn transform_type(&self, tpe: &Type<TAI>) -> Result<Type<TAO>, Self::Error> {
         // Inline the type transformation logic
         match tpe {
             Type::Variable(attrs, name) => {
@@ -269,10 +258,7 @@ pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
     }
 
     /// Transform a pattern.
-    fn transform_pattern(&self, pattern: &Pattern<VAI>) -> Result<Pattern<VAO>, Self::Error>
-    where
-        VAI: Clone,
-    {
+    fn transform_pattern(&self, pattern: &Pattern<VAI>) -> Result<Pattern<VAO>, Self::Error> {
         match pattern {
             Pattern::WildcardPattern(attrs) => {
                 Ok(Pattern::WildcardPattern(self.transform_pattern_attrs(attrs)?))
@@ -320,11 +306,7 @@ pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
     }
 
     /// Transform a complete value. Uses the default walker implementation.
-    fn transform_value(&self, value: &Value<TAI, VAI>) -> Result<Value<TAO, VAO>, Self::Error>
-    where
-        TAI: Clone,
-        VAI: Clone,
-    {
+    fn transform_value(&self, value: &Value<TAI, VAI>) -> Result<Value<TAO, VAO>, Self::Error> {
         walk_transform_value(self, value)
     }
 
@@ -332,11 +314,7 @@ pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
     fn transform_value_definition(
         &self,
         def: &ValueDefinition<TAI, VAI>,
-    ) -> Result<ValueDefinition<TAO, VAO>, Self::Error>
-    where
-        TAI: Clone,
-        VAI: Clone,
-    {
+    ) -> Result<ValueDefinition<TAO, VAO>, Self::Error> {
         walk_transform_value_definition(self, def)
     }
 
@@ -347,10 +325,7 @@ pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
         attrs: &VAI,
         reason: &HoleReason,
         expected_type: &Option<Box<Type<TAI>>>,
-    ) -> Result<Value<TAO, VAO>, Self::Error>
-    where
-        TAI: Clone,
-    {
+    ) -> Result<Value<TAO, VAO>, Self::Error> {
         let new_expected = match expected_type {
             Some(t) => Some(Box::new(self.transform_type(t)?)),
             None => None,
@@ -394,14 +369,12 @@ pub trait ValueTransformVisitor<TAI, TAO, VAI, VAO> {
 }
 
 /// Walk and transform a value, recursively transforming nested values.
-pub fn walk_transform_value<TAI, TAO, VAI, VAO, V>(
+pub fn walk_transform_value<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone, V>(
     visitor: &V,
     value: &Value<TAI, VAI>,
 ) -> Result<Value<TAO, VAO>, V::Error>
 where
     V: ValueTransformVisitor<TAI, TAO, VAI, VAO> + ?Sized,
-    TAI: Clone,
-    VAI: Clone,
 {
     match value {
         Value::Literal(attrs, lit) => {
@@ -423,7 +396,12 @@ where
         Value::Record(attrs, fields) => {
             let new_fields: Result<Vec<_>, _> = fields
                 .iter()
-                .map(|(name, val)| Ok((name.clone(), visitor.transform_value(val)?)))
+                .map(|entry| {
+                    Ok(RecordFieldEntry::new(
+                        entry.name().clone(),
+                        visitor.transform_value(entry.value())?,
+                    ))
+                })
                 .collect();
             Ok(Value::Record(visitor.transform_value_attrs(attrs)?, new_fields?))
         }
@@ -460,7 +438,12 @@ where
         Value::LetRecursion(attrs, defs, body) => {
             let new_defs: Result<Vec<_>, _> = defs
                 .iter()
-                .map(|(name, def)| Ok((name.clone(), visitor.transform_value_definition(def)?)))
+                .map(|binding| {
+                    Ok(LetBinding::new(
+                        binding.name().clone(),
+                        visitor.transform_value_definition(binding.definition())?,
+                    ))
+                })
                 .collect();
             Ok(Value::LetRecursion(
                 visitor.transform_value_attrs(attrs)?,
@@ -483,8 +466,11 @@ where
         Value::PatternMatch(attrs, input, cases) => {
             let new_cases: Result<Vec<_>, _> = cases
                 .iter()
-                .map(|(pat, val)| {
-                    Ok((visitor.transform_pattern(pat)?, visitor.transform_value(val)?))
+                .map(|case| {
+                    Ok(PatternCase::new(
+                        visitor.transform_pattern(case.pattern())?,
+                        visitor.transform_value(case.body())?,
+                    ))
                 })
                 .collect();
             Ok(Value::PatternMatch(
@@ -496,7 +482,12 @@ where
         Value::UpdateRecord(attrs, record, updates) => {
             let new_updates: Result<Vec<_>, _> = updates
                 .iter()
-                .map(|(name, val)| Ok((name.clone(), visitor.transform_value(val)?)))
+                .map(|entry| {
+                    Ok(RecordFieldEntry::new(
+                        entry.name().clone(),
+                        visitor.transform_value(entry.value())?,
+                    ))
+                })
                 .collect();
             Ok(Value::UpdateRecord(
                 visitor.transform_value_attrs(attrs)?,
@@ -517,23 +508,21 @@ where
 }
 
 /// Walk and transform a value definition.
-pub fn walk_transform_value_definition<TAI, TAO, VAI, VAO, V>(
+pub fn walk_transform_value_definition<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone, V>(
     visitor: &V,
     def: &ValueDefinition<TAI, VAI>,
 ) -> Result<ValueDefinition<TAO, VAO>, V::Error>
 where
     V: ValueTransformVisitor<TAI, TAO, VAI, VAO> + ?Sized,
-    TAI: Clone,
-    VAI: Clone,
 {
     let new_input_types: Result<Vec<_>, _> = def
         .input_types
         .iter()
-        .map(|(name, attrs, tpe)| {
-            Ok((
-                name.clone(),
-                visitor.transform_value_attrs(attrs)?,
-                visitor.transform_type(tpe)?,
+        .map(|input| {
+            Ok(InputType::new(
+                input.name().clone(),
+                visitor.transform_value_attrs(input.attrs())?,
+                visitor.transform_type(input.tpe())?,
             ))
         })
         .collect();
@@ -563,13 +552,12 @@ where
 // =============================================================================
 
 /// Transform a type definition using a TypeTransformVisitor.
-pub fn transform_type_definition<AI, AO, V>(
+pub fn transform_type_definition<AI: Clone, AO: Clone, V>(
     visitor: &V,
     def: &TypeDefinition<AI>,
 ) -> Result<TypeDefinition<AO>, V::Error>
 where
     V: TypeTransformVisitor<AI, AO> + ?Sized,
-    AI: Clone,
 {
     match def {
         TypeDefinition::TypeAliasDefinition { type_params, type_expr } => {
@@ -589,7 +577,12 @@ where
                         let new_args: Result<Vec<_>, _> = ctor
                             .args
                             .iter()
-                            .map(|(name, tpe)| Ok((name.clone(), visitor.transform_type(tpe)?)))
+                            .map(|arg| {
+                                Ok(ConstructorArg::new(
+                                    arg.name().clone(),
+                                    visitor.transform_type(arg.tpe())?,
+                                ))
+                            })
                             .collect();
                         Ok(Constructor {
                             name: ctor.name.clone(),

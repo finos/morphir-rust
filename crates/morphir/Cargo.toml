@@ -30,6 +30,7 @@ serde_json = "1.0"
 dirs = "6.0"
 schemars = "0.9"
 indexmap = { version = "2", features = ["serde"] }
+usage-lib = { version = "2", features = ["clap", "docs"] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }.{ archive-format }"

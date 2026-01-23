@@ -2,7 +2,7 @@
 
 # Morphir Rust
 
-Rust-based tooling for the Morphir ecosystem. This project provides a multi-crate workspace including a CLI tool and core model definitions for working with Morphir IR (Intermediate Representation).
+Rust-based tooling for the Morphir ecosystem. This project provides a multi-crate workspace including a CLI tool and core libraries for working with Morphir IR (Intermediate Representation).
 
 ## Overview
 
@@ -12,14 +12,14 @@ Morphir Rust is part of the Morphir ecosystem, which includes:
 - [finos/morphir-jvm](https://github.com/finos/morphir-jvm) - JVM implementation
 - [finos/morphir-scala](https://github.com/finos/morphir-scala) - Scala implementation
 - [finos/morphir-dotnet](https://github.com/finos/morphir-dotnet) - .NET implementation
-- [finos/morphir-go](https://github.com/finos/morphir-go) - Go implementation (coming soon)
 
 ## Project Structure
 
 This is a Rust workspace containing multiple crates:
 
 - **`morphir`** - CLI tool for working with Morphir IR
-- **`morphir-models`** - Core IR model definitions and utilities
+- **`morphir-ir`** - Core IR model definitions and utilities
+- **`morphir-common`** - Shared utilities (remote sources, caching)
 
 ## Prerequisites
 
@@ -27,6 +27,24 @@ This is a Rust workspace containing multiple crates:
 - Cargo (comes with Rust)
 
 ## Installation
+
+### Using cargo-binstall (Recommended)
+
+The fastest way to install pre-built binaries:
+
+```sh
+# Install cargo-binstall if you don't have it
+cargo install cargo-binstall
+
+# Install morphir
+cargo binstall morphir
+```
+
+### Using mise
+
+```sh
+mise install morphir
+```
 
 ### Building from Source
 
@@ -39,107 +57,119 @@ cd morphir-rust
 cargo build --release
 
 # Install the CLI tool
-cargo install --path morphir
+cargo install --path crates/morphir
 ```
 
 ## Usage
 
-### CLI Commands
+### Getting Help
 
 ```sh
-# Validate Morphir IR
-morphir validate --input path/to/ir
+# Show help
+morphir --help
 
-# Generate code from Morphir IR
-morphir generate --target rust --input path/to/ir --output path/to/output
+# Show help including experimental commands
+morphir --help-all
+morphir help --full
+morphir help --experimental
 
-# Transform Morphir IR
-morphir transform --input path/to/ir --output path/to/output
+# Show version
+morphir --version
+```
 
-# Manage Morphir tools
+### IR Migration
+
+Convert Morphir IR between format versions (Classic V1-V3 ↔ V4):
+
+```sh
+# Migrate local file to V4 format
+morphir ir migrate --input ./morphir-ir.json --output ./morphir-ir-v4.json
+
+# Migrate from remote URL
+morphir ir migrate \
+    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
+    --output ./lcr-v4.json
+
+# Migrate from GitHub
+morphir ir migrate \
+    --input github:finos/morphir-examples@main/examples/basic/morphir-ir.json \
+    --output ./example-v4.json
+
+# Migrate to Classic format
+morphir ir migrate \
+    --input ./morphir-ir-v4.json \
+    --output ./morphir-ir-classic.json \
+    --target-version classic
+```
+
+See [IR Migrate Documentation](docs/ir-migrate.md) for full details.
+
+### JSON Schema Generation
+
+Generate JSON Schema for Morphir IR validation:
+
+```sh
+# Output to stdout
+morphir schema
+
+# Output to file
+morphir schema --output ./morphir-ir-schema.json
+```
+
+### Tool Management
+
+Manage Morphir tools, distributions, and extensions:
+
+```sh
+# Tools
 morphir tool install <tool-name> [--version <version>]
 morphir tool list
 morphir tool update <tool-name> [--version <version>]
 morphir tool uninstall <tool-name>
 
-# Manage Morphir distributions
+# Distributions
 morphir dist install <dist-name> [--version <version>]
 morphir dist list
-morphir dist update <dist-name> [--version <version>]
+morphir dist update <dist-name>
 morphir dist uninstall <dist-name>
 
-# Manage Morphir extensions
+# Extensions
 morphir extension install <extension-name> [--version <version>]
 morphir extension list
-morphir extension update <extension-name> [--version <version>]
+morphir extension update <extension-name>
 morphir extension uninstall <extension-name>
 ```
 
-### Tool Management
+### Experimental Commands
 
-The Morphir CLI provides built-in support for managing Morphir tools, distributions, and extensions:
-
-#### Tools
+The following commands are experimental and hidden by default. Use `--help-all` to see them:
 
 ```sh
-# Install a Morphir tool
-morphir tool install morphir-scala --version 1.0.0
+# Validate Morphir IR (experimental)
+morphir validate --input ./morphir-ir.json
 
-# List all installed tools
-morphir tool list
+# Generate code (experimental)
+morphir generate --target rust --input ./morphir-ir.json --output ./output
 
-# Update a tool to a specific version or latest
-morphir tool update morphir-scala --version 2.0.0
-
-# Uninstall a tool
-morphir tool uninstall morphir-scala
+# Transform IR (experimental)
+morphir transform --input ./morphir-ir.json --output ./transformed.json
 ```
 
-Tools are stored in `~/.morphir/tools.json` and can be managed independently of the main CLI installation.
+## Documentation Generation
 
-#### Distributions
+Generate man pages, markdown documentation, and shell completions:
 
 ```sh
-# Install a Morphir distribution
-morphir dist install morphir-jvm-dist --version 2.0.0
+# Install usage CLI (required for doc generation)
+mise install usage
 
-# List all installed distributions
-morphir dist list
+# Generate all documentation
+mise run docs:generate
 
-# Update a distribution
-morphir dist update morphir-jvm-dist --version 3.0.0
-
-# Uninstall a distribution
-morphir dist uninstall morphir-jvm-dist
-```
-
-Distributions are stored in `~/.morphir/distributions.json`.
-
-#### Extensions
-
-```sh
-# Install a Morphir extension
-morphir extension install scala-backend --version 1.5.0
-
-# List all installed extensions
-morphir extension list
-
-# Update an extension
-morphir extension update scala-backend --version 2.0.0
-
-# Uninstall an extension
-morphir extension uninstall scala-backend
-```
-
-Extensions are stored in `~/.morphir/extensions.json`.
-
-### Using the Library
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-morphir-models = { path = "../morphir-models" }
+# Generate specific types
+mise run docs:man          # Man pages
+mise run docs:markdown     # Markdown docs
+mise run docs:completions  # Shell completions
 ```
 
 ## Development Setup
@@ -168,6 +198,30 @@ cargo fmt
 cargo clippy
 ```
 
+### Mise Tasks
+
+This project uses [mise](https://mise.jdx.dev/) for task automation:
+
+```sh
+# List available tasks
+mise tasks
+
+# Run checks
+mise run check:fmt    # Format check
+mise run check:lint   # Lint check
+
+# Documentation
+mise run docs:generate     # Generate all docs
+mise run docs:man          # Man pages only
+mise run docs:markdown     # Markdown only
+mise run docs:completions  # Shell completions
+
+# Release management
+mise run release:check     # Pre-release checks
+mise run release:version-bump <version>
+mise run release:changelog-validate
+```
+
 ## Design Principles
 
 This project follows **Functional Domain Modeling** principles:
@@ -176,14 +230,6 @@ This project follows **Functional Domain Modeling** principles:
 - **Type Safety**: Strong typing throughout the codebase
 - **Composability**: Functions and data structures are designed to compose
 - **Purity**: Functions are pure where possible, with clear separation of side effects
-
-## Roadmap
-
-List the roadmap steps; alternatively link the Confluence Wiki page where the project roadmap is published.
-
-1. Item 1
-2. Item 2
-3. ....
 
 ## Contributing
 

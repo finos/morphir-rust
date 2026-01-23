@@ -1,0 +1,24 @@
+#!/bin/sh
+#MISE description="Generate man pages from CLI spec"
+
+set -e
+
+# Ensure output directory exists
+mkdir -p docs/man/man1
+
+echo "Generating usage spec..."
+cargo build -p morphir --quiet
+
+# Generate usage spec
+./target/debug/morphir usage > docs/morphir.usage.kdl
+
+# Generate man pages using usage CLI
+if command -v usage >/dev/null 2>&1; then
+    echo "Generating man pages..."
+    usage generate manpages docs/morphir.usage.kdl --out-dir docs/man/man1
+    echo "Man pages generated in docs/man/man1/"
+else
+    echo "Warning: 'usage' CLI not found. Install with: mise install usage"
+    echo "Usage spec saved to docs/morphir.usage.kdl"
+    exit 1
+fi

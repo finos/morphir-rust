@@ -95,6 +95,11 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    // ===== Internal/Hidden Commands =====
+    /// Output usage spec for documentation generation
+    #[command(hide = true)]
+    Usage,
 }
 
 #[derive(Clone, Subcommand)]
@@ -263,6 +268,13 @@ impl AppSession for MorphirSession {
                 ),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
+            Commands::Usage => {
+                use clap::CommandFactory;
+                let cli = Cli::command();
+                let spec: usage::Spec = cli.into();
+                println!("{}", spec);
+                Ok(None)
+            }
         }
     }
 }

@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use starbase::{App, AppResult, AppSession};
 
 mod commands;
+mod help;
 
 use commands::{
     run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update, run_extension_install,
@@ -9,44 +10,6 @@ use commands::{
     run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform,
     run_validate,
 };
-
-fn print_banner() {
-    use owo_colors::{OwoColorize, XtermColors};
-
-    // Morphir brand colors: blue (#00A3E0) and orange (#F26522)
-    let blue = XtermColors::from(33);    // Bright blue (xterm 33)
-    let orange = XtermColors::from(208); // Orange (xterm 208)
-
-    // ASCII art "morphir" with "morph" in blue and "ir" in orange
-    println!();
-    println!(
-        "  {}{}",
-        "_ __ ___   ___  _ __ _ __ | |__".color(blue),
-        "(_)_ __".color(orange)
-    );
-    println!(
-        " {}{}",
-        "| '_ ` _ \\ / _ \\| '__| '_ \\| '_ \\".color(blue),
-        "| | '__|".color(orange)
-    );
-    println!(
-        " {}{}",
-        "| | | | | | (_) | |  | |_) | | | ".color(blue),
-        "| | |".color(orange)
-    );
-    println!(
-        " {}{}",
-        "|_| |_| |_|\\___/|_|  | .__/|_| |_".color(blue),
-        "|_|_|".color(orange)
-    );
-    println!("                     {}", "|_|".color(blue));
-    println!(
-        "  v{} (built {})",
-        env!("CARGO_PKG_VERSION"),
-        env!("BUILD_DATE")
-    );
-    println!();
-}
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
 #[derive(Parser)]
@@ -310,29 +273,14 @@ async fn main() -> starbase::MainResult {
 
     // Check for help/version flags first to print our custom banner
     let args: Vec<String> = std::env::args().collect();
-    let show_banner = args.len() == 1
-        || args.iter().any(|a| a == "--help" || a == "-h")
-        || args.iter().any(|a| a == "--help-all")
-        || args.iter().any(|a| a == "--version" || a == "-V");
 
-    if show_banner {
-        print_banner();
+    if help::should_show_banner(&args) {
+        help::print_banner();
     }
 
-    // Handle --help-all specially to show hidden commands
-    if args.iter().any(|a| a == "--help-all") {
-        let mut cmd = Cli::command();
-        // Unhide the experimental commands for --help-all
-        for subcommand in cmd.get_subcommands_mut() {
-            if subcommand.get_name() == "validate"
-                || subcommand.get_name() == "generate"
-                || subcommand.get_name() == "transform"
-            {
-                *subcommand = subcommand.clone().hide(false);
-            }
-        }
-        println!("Note: Commands marked [Experimental] are not yet fully implemented.\n");
-        cmd.print_help().ok();
+    // Handle full help variants
+    if help::should_show_full_help(&args) {
+        help::print_full_help::<Cli>();
         return Ok(std::process::ExitCode::SUCCESS);
     }
 

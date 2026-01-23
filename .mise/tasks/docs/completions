@@ -15,12 +15,12 @@ cargo build -p morphir --quiet
 # Generate completions using usage CLI
 if command -v usage >/dev/null 2>&1; then
     echo "Generating shell completions..."
-    usage generate completion bash docs/morphir.usage.kdl > completions/morphir.bash
-    usage generate completion zsh docs/morphir.usage.kdl > completions/_morphir
-    usage generate completion fish docs/morphir.usage.kdl > completions/morphir.fish
+    usage generate completion bash morphir --file docs/morphir.usage.kdl > completions/morphir.bash
+    usage generate completion zsh morphir --file docs/morphir.usage.kdl > completions/_morphir
+    usage generate completion fish morphir --file docs/morphir.usage.kdl > completions/morphir.fish
     echo "Shell completions generated in completions/"
 else
-    echo "Warning: 'usage' CLI not found. Install with: mise install usage"
+    echo "Warning: 'usage' CLI not found. Install with: mise install"
     echo "Usage spec saved to docs/morphir.usage.kdl"
     exit 1
 fi

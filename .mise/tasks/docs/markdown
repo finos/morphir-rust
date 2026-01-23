@@ -15,10 +15,10 @@ cargo build -p morphir --quiet
 # Generate markdown using usage CLI
 if command -v usage >/dev/null 2>&1; then
     echo "Generating markdown documentation..."
-    usage generate markdown docs/morphir.usage.kdl --out-dir docs/cli --multi
+    usage generate markdown --file docs/morphir.usage.kdl --out-dir docs/cli --multi
     echo "Markdown docs generated in docs/cli/"
 else
-    echo "Warning: 'usage' CLI not found. Install with: mise install usage"
+    echo "Warning: 'usage' CLI not found. Install with: mise install"
     echo "Usage spec saved to docs/morphir.usage.kdl"
     exit 1
 fi

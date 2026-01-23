@@ -1,0 +1,234 @@
+.TH MORPHIR 1
+.SH NAME
+morphir \- Morphir CLI tool for Rust
+.SH SYNOPSIS
+\fBmorphir\fR [OPTIONS] [COMMAND]
+.SH DESCRIPTION
+Morphir CLI tool for Rust
+.PP
+.SH OPTIONS
+.TP
+\fB\-h, \-\-help\fR
+Print help (use \-\-help\-all to include experimental commands)
+.TP
+\fB\-\-help\-all\fR
+Print help including experimental commands
+.TP
+\fB\-V, \-\-version\fR
+Print version
+.TP
+\fB\-h, \-\-help\fR
+Print help (use \-\-help\-all to include experimental commands)
+.TP
+\fB\-\-help\-all\fR
+Print help including experimental commands
+.TP
+\fB\-V, \-\-version\fR
+Print version
+.SH COMMANDS
+.TP
+\fBtool\fR
+Manage Morphir tools, distributions, and extensions
+.TP
+\fBtool install\fR
+Install a Morphir tool or extension
+.TP
+\fBtool list\fR
+List installed Morphir tools
+.TP
+\fBtool update\fR
+Update an installed Morphir tool
+.TP
+\fBtool uninstall\fR
+Uninstall a Morphir tool
+.TP
+\fBdist\fR
+Manage Morphir distributions
+.TP
+\fBdist install\fR
+Install a Morphir distribution
+.TP
+\fBdist list\fR
+List installed Morphir distributions
+.TP
+\fBdist update\fR
+Update an installed Morphir distribution
+.TP
+\fBdist uninstall\fR
+Uninstall a Morphir distribution
+.TP
+\fBextension\fR
+Manage Morphir extensions
+.TP
+\fBextension install\fR
+Install a Morphir extension
+.TP
+\fBextension list\fR
+List installed Morphir extensions
+.TP
+\fBextension update\fR
+Update an installed Morphir extension
+.TP
+\fBextension uninstall\fR
+Uninstall a Morphir extension
+.TP
+\fBir\fR
+Manage Morphir IR
+.TP
+\fBir migrate\fR
+Migrate IR between versions
+.TP
+\fBschema\fR
+Generate JSON Schema for Morphir IR
+.SH "MORPHIR TOOL INSTALL"
+Install a Morphir tool or extension
+.PP
+\fBUsage:\fR morphir tool install [OPTIONS] <NAME>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-v, \-\-version\fR \fI<VERSION>\fR
+Version to install (defaults to latest)
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the tool to install
+.SH "MORPHIR TOOL UPDATE"
+Update an installed Morphir tool
+.PP
+\fBUsage:\fR morphir tool update [OPTIONS] <NAME>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-v, \-\-version\fR \fI<VERSION>\fR
+Version to update to (defaults to latest)
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the tool to update
+.SH "MORPHIR TOOL UNINSTALL"
+Uninstall a Morphir tool
+.PP
+\fBUsage:\fR morphir tool uninstall <NAME>
+.PP
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the tool to uninstall
+.SH "MORPHIR DIST INSTALL"
+Install a Morphir distribution
+.PP
+\fBUsage:\fR morphir dist install [OPTIONS] <NAME>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-v, \-\-version\fR \fI<VERSION>\fR
+Version to install (defaults to latest)
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the distribution to install
+.SH "MORPHIR DIST UPDATE"
+Update an installed Morphir distribution
+.PP
+\fBUsage:\fR morphir dist update [OPTIONS] <NAME>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-v, \-\-version\fR \fI<VERSION>\fR
+Version to update to (defaults to latest)
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the distribution to update
+.SH "MORPHIR DIST UNINSTALL"
+Uninstall a Morphir distribution
+.PP
+\fBUsage:\fR morphir dist uninstall <NAME>
+.PP
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the distribution to uninstall
+.SH "MORPHIR EXTENSION INSTALL"
+Install a Morphir extension
+.PP
+\fBUsage:\fR morphir extension install [OPTIONS] <NAME>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-v, \-\-version\fR \fI<VERSION>\fR
+Version to install (defaults to latest)
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the extension to install
+.SH "MORPHIR EXTENSION UPDATE"
+Update an installed Morphir extension
+.PP
+\fBUsage:\fR morphir extension update [OPTIONS] <NAME>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-v, \-\-version\fR \fI<VERSION>\fR
+Version to update to (defaults to latest)
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the extension to update
+.SH "MORPHIR EXTENSION UNINSTALL"
+Uninstall a Morphir extension
+.PP
+\fBUsage:\fR morphir extension uninstall <NAME>
+.PP
+\fBArguments:\fR
+.PP
+.TP
+\fB<NAME>\fR
+Name of the extension to uninstall
+.SH "MORPHIR IR MIGRATE"
+Migrate IR between versions
+.PP
+\fBUsage:\fR morphir ir migrate [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-i, \-\-input\fR \fI<INPUT>\fR
+Input file, directory, or remote source (e.g., github:owner/repo)
+.TP
+\fB\-o, \-\-output\fR \fI<OUTPUT>\fR
+Output file or directory
+.TP
+\fB\-\-target\-version\fR \fI<TARGET_VERSION>\fR
+Target version (v4 or classic)
+.TP
+\fB\-\-force\-refresh\fR
+Force refresh cached remote sources
+.TP
+\fB\-\-no\-cache\fR
+Skip cache entirely for remote sources
+.SH "MORPHIR SCHEMA"
+Generate JSON Schema for Morphir IR
+.PP
+\fBUsage:\fR morphir schema [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-o, \-\-output\fR \fI<OUTPUT>\fR
+Output file path (optional)

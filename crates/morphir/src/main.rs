@@ -10,11 +10,21 @@ use commands::{
     run_validate,
 };
 
+const BANNER: &str = r#"
+  __  __                  _     _
+ |  \/  | ___  _ __ _ __ | |__ (_)_ __
+ | |\/| |/ _ \| '__| '_ \| '_ \| | '__|
+ | |  | | (_) | |  | |_) | | | | | |
+ |_|  |_|\___/|_|  | .__/|_| |_|_|_|
+                   |_|
+"#;
+
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
 #[derive(Parser)]
 #[command(name = "morphir")]
 #[command(about = "Morphir CLI tool for Rust", long_about = None)]
 #[command(version)]
+#[command(before_help = BANNER)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

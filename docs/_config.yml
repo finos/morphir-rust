@@ -6,13 +6,17 @@ description: >-
 url: https://finos.github.io
 baseurl: /morphir-rust
 
+# Logo - from morphir.finos.org
+logo: "/assets/images/logo.png"
+favicon_ico: "/assets/images/favicon.ico"
+
 # Theme - just-the-docs has sidebar navigation with nesting
 remote_theme: just-the-docs/just-the-docs@v0.10.0
 plugins:
   - jekyll-remote-theme
 
-# Color scheme - nil enables the dark/light toggle
-color_scheme: nil
+# Color scheme - morphir_light with dark toggle
+color_scheme: morphir_light
 
 # Enable search
 search_enabled: true
@@ -29,15 +33,23 @@ search:
 aux_links:
   "GitHub":
     - "https://github.com/finos/morphir-rust"
+  "Morphir":
+    - "https://morphir.finos.org"
 
 aux_links_new_tab: true
 
 # Footer content
-footer_content: "Copyright &copy; 2022-2025 FINOS. Distributed under the <a href=\"https://github.com/finos/morphir-rust/blob/main/LICENSE\">Apache License 2.0</a>."
+footer_content: >-
+  Copyright &copy; 2022-2025 <a href="https://www.finos.org">FINOS</a>.
+  Distributed under the <a href="https://github.com/finos/morphir-rust/blob/main/LICENSE">Apache License 2.0</a>.
+  <br>Part of the <a href="https://morphir.finos.org">Morphir</a> ecosystem.
 
 # Back to top link
 back_to_top: true
 back_to_top_text: "Back to top"
+
+# Heading anchor links
+heading_anchors: true
 
 # Build settings
 markdown: kramdown

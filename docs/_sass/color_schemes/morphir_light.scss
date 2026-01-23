@@ -1,0 +1,25 @@
+// Morphir Light Color Scheme
+// Based on https://morphir.finos.org color palette
+
+// Primary green from morphir.finos.org
+$green-000: #e6f4ea;
+$green-100: #ceead6;
+$green-200: #a8dab5;
+$green-300: #81c995;
+$green-400: #5bb974;
+$green-500: #2e8555;  // Primary color from morphir
+$green-600: #29784c;
+$green-700: #277148;
+$green-800: #205d3b;
+$green-900: #1a4d31;
+
+// Override just-the-docs variables
+$link-color: $green-500;
+$btn-primary-color: $green-500;
+$base-button-color: #f5f6fa;
+$sidebar-color: #f5f6fa;
+$search-result-preview-color: $green-500;
+$border-color: #e8e8e8;
+
+// Code highlighting
+$code-background-color: #f5f6fa;

@@ -32,10 +32,24 @@ pub struct Package {
 }
 
 /// Module - V1: {"name":..., "def":...}, V2+: [[path], {access, value}]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub name: Path,
     pub detail: ModuleDetail,
+}
+
+impl Serialize for Module {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize as tuple [path, detail] for V2+ format
+        use serde::ser::SerializeTuple;
+        let mut tuple = serializer.serialize_tuple(2)?;
+        tuple.serialize_element(&self.name)?;
+        tuple.serialize_element(&self.detail)?;
+        tuple.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for Module {

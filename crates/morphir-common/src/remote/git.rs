@@ -46,12 +46,7 @@ impl GitFetcher {
     }
 
     /// Clone a git repository.
-    pub fn clone_repo(
-        &self,
-        url: &str,
-        reference: Option<&GitRef>,
-        dest: &PathBuf,
-    ) -> Result<()> {
+    pub fn clone_repo(&self, url: &str, reference: Option<&GitRef>, dest: &PathBuf) -> Result<()> {
         if !self.is_available() {
             return Err(RemoteSourceError::GitError(
                 "git command not found. Please install git.".to_string(),
@@ -118,7 +113,9 @@ impl GitFetcher {
             .current_dir(repo_path)
             .args(["checkout", "--quiet", reference])
             .output()
-            .map_err(|e| RemoteSourceError::GitError(format!("Failed to run git checkout: {}", e)))?;
+            .map_err(|e| {
+                RemoteSourceError::GitError(format!("Failed to run git checkout: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -220,7 +217,9 @@ impl GitFetcher {
             .current_dir(repo_path)
             .args(["rev-parse", "HEAD"])
             .output()
-            .map_err(|e| RemoteSourceError::GitError(format!("Failed to run git rev-parse: {}", e)))?;
+            .map_err(|e| {
+                RemoteSourceError::GitError(format!("Failed to run git rev-parse: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

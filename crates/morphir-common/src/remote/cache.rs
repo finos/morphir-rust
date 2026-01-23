@@ -60,9 +60,8 @@ impl SourceCache {
                 .join("sources")
         });
 
-        fs::create_dir_all(&root).map_err(|_| RemoteSourceError::CacheDirectoryError {
-            path: root.clone(),
-        })?;
+        fs::create_dir_all(&root)
+            .map_err(|_| RemoteSourceError::CacheDirectoryError { path: root.clone() })?;
 
         Ok(Self {
             root,

@@ -15,11 +15,8 @@ use indexmap::IndexMap;
 /// # Returns
 /// A V4 PackageDefinition with converted modules
 pub fn classic_to_v4(pkg: classic::Package) -> v4::PackageDefinition {
-    let modules: IndexMap<String, v4::AccessControlledModuleDefinition> = pkg
-        .modules
-        .into_iter()
-        .map(convert_module_to_v4)
-        .collect();
+    let modules: IndexMap<String, v4::AccessControlledModuleDefinition> =
+        pkg.modules.into_iter().map(convert_module_to_v4).collect();
 
     v4::PackageDefinition { modules }
 }
@@ -506,7 +503,10 @@ fn convert_value_definition_to_classic(value_def: &v4::ValueDefinition) -> serde
         .iter()
         .map(|(name, entry)| {
             let name_obj = Name::from(name.as_str());
-            let attrs = entry.type_attributes.clone().unwrap_or(serde_json::json!({}));
+            let attrs = entry
+                .type_attributes
+                .clone()
+                .unwrap_or(serde_json::json!({}));
             serde_json::json!([
                 serde_json::to_value(&name_obj).unwrap_or(serde_json::Value::Null),
                 attrs,
@@ -557,7 +557,11 @@ impl fmt::Display for ConversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConversionError::CannotDowngrade(name) => {
-                write!(f, "Cannot downgrade V4-only construct '{}' to Classic format", name)
+                write!(
+                    f,
+                    "Cannot downgrade V4-only construct '{}' to Classic format",
+                    name
+                )
             }
             ConversionError::Message(msg) => write!(f, "{}", msg),
         }
@@ -807,7 +811,8 @@ mod tests {
         let converter = ClassicToV4Converter;
         let classic_attrs = serde_json::json!({});
 
-        let v4_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &classic_attrs).unwrap();
+        let v4_attrs =
+            TypeTransformVisitor::transform_type_attrs(&converter, &classic_attrs).unwrap();
 
         assert!(v4_attrs.source.is_none());
         assert!(v4_attrs.constraints.is_null());
@@ -819,7 +824,8 @@ mod tests {
         let converter = ClassicToV4Converter;
         let classic_attrs = serde_json::json!({"custom": "data"});
 
-        let v4_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &classic_attrs).unwrap();
+        let v4_attrs =
+            TypeTransformVisitor::transform_type_attrs(&converter, &classic_attrs).unwrap();
 
         assert_eq!(v4_attrs.extensions, serde_json::json!({"custom": "data"}));
     }
@@ -854,7 +860,8 @@ mod tests {
             extensions: serde_json::json!({}),
         };
 
-        let classic_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &v4_attrs).unwrap();
+        let classic_attrs =
+            TypeTransformVisitor::transform_type_attrs(&converter, &v4_attrs).unwrap();
 
         // Source and constraints are lost, empty object returned
         assert_eq!(classic_attrs, serde_json::json!({}));
@@ -869,7 +876,8 @@ mod tests {
             extensions: serde_json::json!({"custom": "data"}),
         };
 
-        let classic_attrs = TypeTransformVisitor::transform_type_attrs(&converter, &v4_attrs).unwrap();
+        let classic_attrs =
+            TypeTransformVisitor::transform_type_attrs(&converter, &v4_attrs).unwrap();
 
         assert_eq!(classic_attrs, serde_json::json!({"custom": "data"}));
     }

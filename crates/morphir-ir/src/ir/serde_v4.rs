@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::naming::{FQName, Name};
 use super::literal::Literal;
 use super::type_expr::{Field, Type};
+use crate::naming::{FQName, Name};
 
 // =============================================================================
 // Type<A> V4 Serialization
@@ -54,27 +54,36 @@ where
     match tpe {
         Type::Variable(attrs, name) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Variable", &VariableContent {
-                name: name.to_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Variable",
+                &VariableContent {
+                    name: name.to_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Type::Reference(attrs, fqname, args) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Reference", &ReferenceContent {
-                fqname: fqname.to_canonical_string(),
-                args,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Reference",
+                &ReferenceContent {
+                    fqname: fqname.to_canonical_string(),
+                    args,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Type::Tuple(attrs, elements) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Tuple", &TupleContent {
-                elements,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Tuple",
+                &TupleContent {
+                    elements,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Type::Record(attrs, fields) => {
@@ -84,10 +93,13 @@ where
                 .iter()
                 .map(|f| (f.name.to_string(), &f.tpe))
                 .collect();
-            map.serialize_entry("Record", &RecordContent {
-                fields: fields_map,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Record",
+                &RecordContent {
+                    fields: fields_map,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Type::ExtensibleRecord(attrs, var, fields) => {
@@ -96,27 +108,31 @@ where
                 .iter()
                 .map(|f| (f.name.to_string(), &f.tpe))
                 .collect();
-            map.serialize_entry("ExtensibleRecord", &ExtensibleRecordContent {
-                variable: var.to_string(),
-                fields: fields_map,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "ExtensibleRecord",
+                &ExtensibleRecordContent {
+                    variable: var.to_string(),
+                    fields: fields_map,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Type::Function(attrs, arg, result) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Function", &FunctionContent {
-                arg: arg.as_ref(),
-                result: result.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Function",
+                &FunctionContent {
+                    arg: arg.as_ref(),
+                    result: result.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Type::Unit(attrs) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Unit", &UnitContent {
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry("Unit", &UnitContent { attrs: Some(attrs) })?;
             map.end()
         }
     }
@@ -227,26 +243,20 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for TypeV4Visitor<
                     serde_json::from_value(value).map_err(de::Error::custom)?;
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
-                let attrs = content.attrs.unwrap_or_else(|| {
-                    A::default()
-                });
+                let attrs = content.attrs.unwrap_or_else(|| A::default());
                 let args = content.args.unwrap_or_default();
                 Ok(Type::Reference(attrs, fqname, args))
             }
             "Tuple" => {
                 let content: TupleDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(|| {
-                    A::default()
-                });
+                let attrs = content.attrs.unwrap_or_else(|| A::default());
                 Ok(Type::Tuple(attrs, content.elements))
             }
             "Record" => {
                 let content: RecordDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(|| {
-                    A::default()
-                });
+                let attrs = content.attrs.unwrap_or_else(|| A::default());
                 let fields = content
                     .fields
                     .into_iter()
@@ -260,9 +270,7 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for TypeV4Visitor<
             "ExtensibleRecord" => {
                 let content: ExtensibleRecordDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(|| {
-                    A::default()
-                });
+                let attrs = content.attrs.unwrap_or_else(|| A::default());
                 let variable = Name::from(content.variable.as_str());
                 let fields = content
                     .fields
@@ -277,9 +285,7 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for TypeV4Visitor<
             "Function" => {
                 let content: FunctionDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(|| {
-                    A::default()
-                });
+                let attrs = content.attrs.unwrap_or_else(|| A::default());
                 Ok(Type::Function(
                     attrs,
                     Box::new(content.arg),
@@ -289,9 +295,7 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for TypeV4Visitor<
             "Unit" => {
                 let content: UnitDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(|| {
-                    A::default()
-                });
+                let attrs = content.attrs.unwrap_or_else(|| A::default());
                 Ok(Type::Unit(attrs))
             }
             _ => Err(de::Error::unknown_variant(
@@ -492,7 +496,12 @@ where
         }
         Literal::Char(v) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("CharLiteral", &LiteralValue { value: v.to_string() })?;
+            map.serialize_entry(
+                "CharLiteral",
+                &LiteralValue {
+                    value: v.to_string(),
+                },
+            )?;
             map.end()
         }
         Literal::String(v) => {
@@ -711,66 +720,81 @@ where
     match pat {
         Pattern::WildcardPattern(attrs) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("WildcardPattern", &PatternAttrsContent {
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "WildcardPattern",
+                &PatternAttrsContent { attrs: Some(attrs) },
+            )?;
             map.end()
         }
         Pattern::AsPattern(attrs, pattern, name) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("AsPattern", &AsPatternContent {
-                pattern,
-                name: name.to_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "AsPattern",
+                &AsPatternContent {
+                    pattern,
+                    name: name.to_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Pattern::TuplePattern(attrs, elements) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("TuplePattern", &TuplePatternContent {
-                elements,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "TuplePattern",
+                &TuplePatternContent {
+                    elements,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Pattern::ConstructorPattern(attrs, fqname, args) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("ConstructorPattern", &ConstructorPatternContent {
-                fqname: fqname.to_canonical_string(),
-                args,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "ConstructorPattern",
+                &ConstructorPatternContent {
+                    fqname: fqname.to_canonical_string(),
+                    args,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Pattern::EmptyListPattern(attrs) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("EmptyListPattern", &PatternAttrsContent {
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "EmptyListPattern",
+                &PatternAttrsContent { attrs: Some(attrs) },
+            )?;
             map.end()
         }
         Pattern::HeadTailPattern(attrs, head, tail) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("HeadTailPattern", &HeadTailPatternContent {
-                head: head.as_ref(),
-                tail: tail.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "HeadTailPattern",
+                &HeadTailPatternContent {
+                    head: head.as_ref(),
+                    tail: tail.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Pattern::LiteralPattern(attrs, lit) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("LiteralPattern", &LiteralPatternContent {
-                literal: lit,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "LiteralPattern",
+                &LiteralPatternContent {
+                    literal: lit,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Pattern::UnitPattern(attrs) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("UnitPattern", &PatternAttrsContent {
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry("UnitPattern", &PatternAttrsContent { attrs: Some(attrs) })?;
             map.end()
         }
     }
@@ -848,7 +872,9 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for PatternV4Visit
     type Value = Pattern<A>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a V4 object wrapper like { \"WildcardPattern\": {} } or Classic tagged array")
+        formatter.write_str(
+            "a V4 object wrapper like { \"WildcardPattern\": {} } or Classic tagged array",
+        )
     }
 
     fn visit_map<M>(self, mut map: M) -> Result<Pattern<A>, M::Error>
@@ -996,7 +1022,11 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for PatternV4Visit
                 let tail: Pattern<A> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                Ok(Pattern::HeadTailPattern(attrs, Box::new(head), Box::new(tail)))
+                Ok(Pattern::HeadTailPattern(
+                    attrs,
+                    Box::new(head),
+                    Box::new(tail),
+                ))
             }
             "LiteralPattern" | "literalPattern" => {
                 let attrs: A = seq
@@ -1150,13 +1180,18 @@ where
                             .get("target")
                             .and_then(|t| t.as_str())
                             .ok_or_else(|| de::Error::missing_field("target"))?;
-                        let target = FQName::from_canonical_string(target_str)
-                            .map_err(de::Error::custom)?;
+                        let target =
+                            FQName::from_canonical_string(target_str).map_err(de::Error::custom)?;
                         Ok(HoleReason::UnresolvedReference { target })
                     }
                     _ => Err(de::Error::unknown_variant(
                         key,
-                        &["Draft", "TypeMismatch", "DeletedDuringRefactor", "UnresolvedReference"],
+                        &[
+                            "Draft",
+                            "TypeMismatch",
+                            "DeletedDuringRefactor",
+                            "UnresolvedReference",
+                        ],
                     )),
                 }
             } else {
@@ -1173,7 +1208,9 @@ where
                 &["Draft", "TypeMismatch", "DeletedDuringRefactor"],
             )),
         },
-        _ => Err(de::Error::custom("expected object or string for HoleReason")),
+        _ => Err(de::Error::custom(
+            "expected object or string for HoleReason",
+        )),
     }
 }
 
@@ -1213,7 +1250,13 @@ where
                     "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
                     _ => Err(de::Error::unknown_variant(
                         key,
-                        &["Arithmetic", "Comparison", "StringOp", "CollectionOp", "PlatformSpecific"],
+                        &[
+                            "Arithmetic",
+                            "Comparison",
+                            "StringOp",
+                            "CollectionOp",
+                            "PlatformSpecific",
+                        ],
                     )),
                 }
             } else {
@@ -1229,10 +1272,18 @@ where
             "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
             _ => Err(de::Error::unknown_variant(
                 s,
-                &["Arithmetic", "Comparison", "StringOp", "CollectionOp", "PlatformSpecific"],
+                &[
+                    "Arithmetic",
+                    "Comparison",
+                    "StringOp",
+                    "CollectionOp",
+                    "PlatformSpecific",
+                ],
             )),
         },
-        _ => Err(de::Error::custom("expected object or string for NativeHint")),
+        _ => Err(de::Error::custom(
+            "expected object or string for NativeHint",
+        )),
     }
 }
 
@@ -1261,7 +1312,10 @@ impl<'a> Serialize for NativeHintWrapper<'a> {
 }
 
 /// Serialize ValueBody in V4 object wrapper format
-pub fn serialize_value_body<TA, VA, S>(body: &ValueBody<TA, VA>, serializer: S) -> Result<S::Ok, S::Error>
+pub fn serialize_value_body<TA, VA, S>(
+    body: &ValueBody<TA, VA>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     TA: Clone + Serialize,
     VA: Clone + Serialize,
@@ -1329,7 +1383,9 @@ struct IncompleteBodyContent<'a> {
 }
 
 /// Deserialize ValueBody from V4 object wrapper format
-pub fn deserialize_value_body<'de, TA, VA, D>(deserializer: D) -> Result<ValueBody<TA, VA>, D::Error>
+pub fn deserialize_value_body<'de, TA, VA, D>(
+    deserializer: D,
+) -> Result<ValueBody<TA, VA>, D::Error>
 where
     TA: Clone + Default + DeserializeOwned,
     VA: Clone + Default + DeserializeOwned,
@@ -1373,8 +1429,8 @@ where
                         let reason_val = content
                             .get("reason")
                             .ok_or_else(|| de::Error::missing_field("reason"))?;
-                        let reason: HoleReason =
-                            serde_json::from_value(reason_val.clone()).map_err(de::Error::custom)?;
+                        let reason: HoleReason = serde_json::from_value(reason_val.clone())
+                            .map_err(de::Error::custom)?;
                         Ok(ValueBody::Incomplete(reason))
                     }
                     // Also accept Classic format with "kind" field
@@ -1388,16 +1444,16 @@ where
                                 let body_val = map
                                     .get("value")
                                     .ok_or_else(|| de::Error::missing_field("value"))?;
-                                let body: Value<TA, VA> =
-                                    serde_json::from_value(body_val.clone()).map_err(de::Error::custom)?;
+                                let body: Value<TA, VA> = serde_json::from_value(body_val.clone())
+                                    .map_err(de::Error::custom)?;
                                 Ok(ValueBody::Expression(body))
                             }
                             "Native" => {
                                 let info_val = map
                                     .get("info")
                                     .ok_or_else(|| de::Error::missing_field("info"))?;
-                                let info: NativeInfo =
-                                    serde_json::from_value(info_val.clone()).map_err(de::Error::custom)?;
+                                let info: NativeInfo = serde_json::from_value(info_val.clone())
+                                    .map_err(de::Error::custom)?;
                                 Ok(ValueBody::Native(info))
                             }
                             "External" => {
@@ -1420,8 +1476,8 @@ where
                                 let reason_val = map
                                     .get("reason")
                                     .ok_or_else(|| de::Error::missing_field("reason"))?;
-                                let reason: HoleReason =
-                                    serde_json::from_value(reason_val.clone()).map_err(de::Error::custom)?;
+                                let reason: HoleReason = serde_json::from_value(reason_val.clone())
+                                    .map_err(de::Error::custom)?;
                                 Ok(ValueBody::Incomplete(reason))
                             }
                             _ => Err(de::Error::unknown_variant(
@@ -1432,7 +1488,12 @@ where
                     }
                     _ => Err(de::Error::unknown_variant(
                         key,
-                        &["ExpressionBody", "NativeBody", "ExternalBody", "IncompleteBody"],
+                        &[
+                            "ExpressionBody",
+                            "NativeBody",
+                            "ExternalBody",
+                            "IncompleteBody",
+                        ],
                     )),
                 }
             } else {
@@ -1482,197 +1543,249 @@ where
     match val {
         Value::Literal(attrs, lit) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Literal", &LiteralValueContent {
-                literal: lit,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Literal",
+                &LiteralValueContent {
+                    literal: lit,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Constructor(attrs, fqname) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Constructor", &ConstructorValueContent {
-                fqname: fqname.to_canonical_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Constructor",
+                &ConstructorValueContent {
+                    fqname: fqname.to_canonical_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Tuple(attrs, elements) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Tuple", &TupleValueContent {
-                elements,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Tuple",
+                &TupleValueContent {
+                    elements,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::List(attrs, items) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("List", &ListValueContent {
-                items,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "List",
+                &ListValueContent {
+                    items,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Record(attrs, fields) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            let fields_map: IndexMap<String, &Value<TA, VA>> = fields
-                .iter()
-                .map(|f| (f.0.to_string(), &f.1))
-                .collect();
-            map.serialize_entry("Record", &RecordValueContent {
-                fields: fields_map,
-                attrs: Some(attrs),
-            })?;
+            let fields_map: IndexMap<String, &Value<TA, VA>> =
+                fields.iter().map(|f| (f.0.to_string(), &f.1)).collect();
+            map.serialize_entry(
+                "Record",
+                &RecordValueContent {
+                    fields: fields_map,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Variable(attrs, name) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Variable", &VariableValueContent {
-                name: name.to_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Variable",
+                &VariableValueContent {
+                    name: name.to_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Reference(attrs, fqname) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Reference", &ReferenceValueContent {
-                fqname: fqname.to_canonical_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Reference",
+                &ReferenceValueContent {
+                    fqname: fqname.to_canonical_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Field(attrs, value, name) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Field", &FieldValueContent {
-                value: value.as_ref(),
-                name: name.to_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Field",
+                &FieldValueContent {
+                    value: value.as_ref(),
+                    name: name.to_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::FieldFunction(attrs, name) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("FieldFunction", &FieldFunctionValueContent {
-                name: name.to_string(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "FieldFunction",
+                &FieldFunctionValueContent {
+                    name: name.to_string(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Apply(attrs, function, argument) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Apply", &ApplyValueContent {
-                function: function.as_ref(),
-                argument: argument.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Apply",
+                &ApplyValueContent {
+                    function: function.as_ref(),
+                    argument: argument.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Lambda(attrs, pattern, body) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Lambda", &LambdaValueContent {
-                argument_pattern: pattern,
-                body: body.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Lambda",
+                &LambdaValueContent {
+                    argument_pattern: pattern,
+                    body: body.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::LetDefinition(attrs, name, definition, body) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("LetDefinition", &LetDefinitionValueContent {
-                name: name.to_string(),
-                definition: definition.as_ref(),
-                body: body.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "LetDefinition",
+                &LetDefinitionValueContent {
+                    name: name.to_string(),
+                    definition: definition.as_ref(),
+                    body: body.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::LetRecursion(attrs, bindings, body) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            let bindings_map: IndexMap<String, &ValueDefinition<TA, VA>> = bindings
-                .iter()
-                .map(|b| (b.0.to_string(), &b.1))
-                .collect();
-            map.serialize_entry("LetRecursion", &LetRecursionValueContent {
-                bindings: bindings_map,
-                body: body.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            let bindings_map: IndexMap<String, &ValueDefinition<TA, VA>> =
+                bindings.iter().map(|b| (b.0.to_string(), &b.1)).collect();
+            map.serialize_entry(
+                "LetRecursion",
+                &LetRecursionValueContent {
+                    bindings: bindings_map,
+                    body: body.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Destructure(attrs, pattern, value, body) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Destructure", &DestructureValueContent {
-                pattern,
-                value: value.as_ref(),
-                body: body.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Destructure",
+                &DestructureValueContent {
+                    pattern,
+                    value: value.as_ref(),
+                    body: body.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::IfThenElse(attrs, condition, then_branch, else_branch) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("IfThenElse", &IfThenElseValueContent {
-                condition: condition.as_ref(),
-                then_branch: then_branch.as_ref(),
-                else_branch: else_branch.as_ref(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "IfThenElse",
+                &IfThenElseValueContent {
+                    condition: condition.as_ref(),
+                    then_branch: then_branch.as_ref(),
+                    else_branch: else_branch.as_ref(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::PatternMatch(attrs, value, cases) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("PatternMatch", &PatternMatchValueContent {
-                value: value.as_ref(),
-                cases,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "PatternMatch",
+                &PatternMatchValueContent {
+                    value: value.as_ref(),
+                    cases,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::UpdateRecord(attrs, value, fields) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            let fields_map: IndexMap<String, &Value<TA, VA>> = fields
-                .iter()
-                .map(|f| (f.0.to_string(), &f.1))
-                .collect();
-            map.serialize_entry("UpdateRecord", &UpdateRecordValueContent {
-                value: value.as_ref(),
-                fields: fields_map,
-                attrs: Some(attrs),
-            })?;
+            let fields_map: IndexMap<String, &Value<TA, VA>> =
+                fields.iter().map(|f| (f.0.to_string(), &f.1)).collect();
+            map.serialize_entry(
+                "UpdateRecord",
+                &UpdateRecordValueContent {
+                    value: value.as_ref(),
+                    fields: fields_map,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Unit(attrs) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Unit", &ValueAttrsContent {
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry("Unit", &ValueAttrsContent { attrs: Some(attrs) })?;
             map.end()
         }
         // V4-only variants
         Value::Hole(attrs, reason, expected_type) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Hole", &HoleValueContent {
-                reason,
-                expected_type: expected_type.as_ref().map(|t| t.as_ref()),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Hole",
+                &HoleValueContent {
+                    reason,
+                    expected_type: expected_type.as_ref().map(|t| t.as_ref()),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::Native(attrs, fqname, info) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Native", &NativeValueContent {
-                fqname: fqname.to_canonical_string(),
-                info,
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "Native",
+                &NativeValueContent {
+                    fqname: fqname.to_canonical_string(),
+                    info,
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
         Value::External(attrs, external_name, target_platform) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("External", &ExternalValueContent {
-                external_name: external_name.clone(),
-                target_platform: target_platform.clone(),
-                attrs: Some(attrs),
-            })?;
+            map.serialize_entry(
+                "External",
+                &ExternalValueContent {
+                    external_name: external_name.clone(),
+                    target_platform: target_platform.clone(),
+                    attrs: Some(attrs),
+                },
+            )?;
             map.end()
         }
     }
@@ -2100,10 +2213,27 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             _ => Err(de::Error::unknown_variant(
                 &tag,
                 &[
-                    "Literal", "Constructor", "Tuple", "List", "Record", "Variable",
-                    "Reference", "Field", "FieldFunction", "Apply", "Lambda",
-                    "LetDefinition", "LetRecursion", "Destructure", "IfThenElse",
-                    "PatternMatch", "UpdateRecord", "Unit", "Hole", "Native", "External",
+                    "Literal",
+                    "Constructor",
+                    "Tuple",
+                    "List",
+                    "Record",
+                    "Variable",
+                    "Reference",
+                    "Field",
+                    "FieldFunction",
+                    "Apply",
+                    "Lambda",
+                    "LetDefinition",
+                    "LetRecursion",
+                    "Destructure",
+                    "IfThenElse",
+                    "PatternMatch",
+                    "UpdateRecord",
+                    "Unit",
+                    "Hole",
+                    "Native",
+                    "External",
                 ],
             )),
         }
@@ -2138,7 +2268,9 @@ struct ConstructorValueDeContent<VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct TupleValueDeContent<TA: Clone, VA: Clone> {
     elements: Vec<Value<TA, VA>>,
     attrs: Option<VA>,
@@ -2146,7 +2278,9 @@ struct TupleValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct ListValueDeContent<TA: Clone, VA: Clone> {
     items: Vec<Value<TA, VA>>,
     attrs: Option<VA>,
@@ -2154,7 +2288,9 @@ struct ListValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct RecordValueDeContent<TA: Clone, VA: Clone> {
     fields: IndexMap<String, Value<TA, VA>>,
     attrs: Option<VA>,
@@ -2178,7 +2314,9 @@ struct ReferenceValueDeContent<VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct FieldValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_value")]
     value: Value<TA, VA>,
@@ -2196,7 +2334,9 @@ struct FieldFunctionValueDeContent<VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct ApplyValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_value")]
     function: Value<TA, VA>,
@@ -2207,7 +2347,9 @@ struct ApplyValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct LambdaValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_pattern")]
     argument_pattern: Pattern<VA>,
@@ -2218,7 +2360,9 @@ struct LambdaValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct LetDefinitionValueDeContent<TA: Clone, VA: Clone> {
     name: String,
     definition: ValueDefinition<TA, VA>,
@@ -2229,7 +2373,9 @@ struct LetDefinitionValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct LetRecursionValueDeContent<TA: Clone, VA: Clone> {
     bindings: IndexMap<String, ValueDefinition<TA, VA>>,
     #[serde(deserialize_with = "deserialize_value")]
@@ -2239,7 +2385,9 @@ struct LetRecursionValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct DestructureValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_pattern")]
     pattern: Pattern<VA>,
@@ -2252,7 +2400,9 @@ struct DestructureValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct IfThenElseValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_value")]
     condition: Value<TA, VA>,
@@ -2265,7 +2415,9 @@ struct IfThenElseValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct PatternMatchValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_value")]
     value: Value<TA, VA>,
@@ -2275,7 +2427,9 @@ struct PatternMatchValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct UpdateRecordValueDeContent<TA: Clone, VA: Clone> {
     #[serde(deserialize_with = "deserialize_value")]
     value: Value<TA, VA>,
@@ -2285,7 +2439,9 @@ struct UpdateRecordValueDeContent<TA: Clone, VA: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+#[serde(bound(
+    deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"
+))]
 struct HoleValueDeContent<TA: Clone, VA: Clone> {
     reason: HoleReason,
     expected_type: Option<Type<TA>>,
@@ -2317,8 +2473,7 @@ mod tests {
 
     #[test]
     fn test_type_variable_v4_serialization() {
-        let var: Type<TypeAttributes> =
-            Type::Variable(TypeAttributes::default(), Name::from("a"));
+        let var: Type<TypeAttributes> = Type::Variable(TypeAttributes::default(), Name::from("a"));
 
         let json = serde_json::to_string(&TypeWrapper(&var)).unwrap();
         assert!(json.contains("Variable"));

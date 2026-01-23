@@ -78,10 +78,16 @@ mod tests {
     fn test_literal_constructors() {
         assert_eq!(Literal::bool(true), Literal::Bool(true));
         assert_eq!(Literal::char('a'), Literal::Char('a'));
-        assert_eq!(Literal::string("hello"), Literal::String("hello".to_string()));
+        assert_eq!(
+            Literal::string("hello"),
+            Literal::String("hello".to_string())
+        );
         assert_eq!(Literal::integer(42), Literal::Integer(42));
         assert_eq!(Literal::float(3.14), Literal::Float(3.14));
-        assert_eq!(Literal::decimal("123.456"), Literal::Decimal("123.456".to_string()));
+        assert_eq!(
+            Literal::decimal("123.456"),
+            Literal::Decimal("123.456".to_string())
+        );
     }
 
     #[test]

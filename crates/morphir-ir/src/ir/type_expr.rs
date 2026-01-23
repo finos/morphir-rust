@@ -12,8 +12,8 @@
 //! let t: Type<serde_json::Value> = Type::Unit(json!({}));  // Classic type
 //! ```
 
-use crate::naming::{FQName, Name};
 use super::attributes::TypeAttributes;
+use crate::naming::{FQName, Name};
 
 /// A type expression with generic attributes.
 ///

@@ -251,7 +251,12 @@ impl RemoteSource {
         // Check if it looks like a commit SHA (40 hex chars)
         if ref_str.len() == 40 && ref_str.chars().all(|c| c.is_ascii_hexdigit()) {
             GitRef::Commit(ref_str.to_string())
-        } else if ref_str.starts_with('v') && ref_str[1..].chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        } else if ref_str.starts_with('v')
+            && ref_str[1..]
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_ascii_digit())
+        {
             // Looks like a version tag (v1.0.0, v2, etc.)
             GitRef::Tag(ref_str.to_string())
         } else {
@@ -302,7 +307,11 @@ impl RemoteSource {
                     url.clone()
                 }
             }
-            RemoteSource::Git { url, reference, subpath } => {
+            RemoteSource::Git {
+                url,
+                reference,
+                subpath,
+            } => {
                 let mut result = url.clone();
                 if let Some(ref_) = reference {
                     result = format!("{}@{}", result, ref_);
@@ -312,7 +321,12 @@ impl RemoteSource {
                 }
                 result
             }
-            RemoteSource::GitHub { owner, repo, reference, subpath } => {
+            RemoteSource::GitHub {
+                owner,
+                repo,
+                reference,
+                subpath,
+            } => {
                 let mut result = format!("https://github.com/{}/{}", owner, repo);
                 if let Some(sub) = subpath {
                     result = format!("{}/{}", result, sub);
@@ -322,7 +336,11 @@ impl RemoteSource {
                 }
                 result
             }
-            RemoteSource::Gist { id, revision, filename } => {
+            RemoteSource::Gist {
+                id,
+                revision,
+                filename,
+            } => {
                 let mut result = format!("https://gist.github.com/{}", id);
                 if let Some(rev) = revision {
                     result = format!("{}/{}", result, rev);
@@ -347,7 +365,11 @@ impl fmt::Display for RemoteSource {
                     write!(f, "{}", url)
                 }
             }
-            RemoteSource::Git { url, reference, subpath } => {
+            RemoteSource::Git {
+                url,
+                reference,
+                subpath,
+            } => {
                 write!(f, "{}", url)?;
                 if let Some(ref_) = reference {
                     write!(f, "@{}", ref_)?;
@@ -357,7 +379,12 @@ impl fmt::Display for RemoteSource {
                 }
                 Ok(())
             }
-            RemoteSource::GitHub { owner, repo, reference, subpath } => {
+            RemoteSource::GitHub {
+                owner,
+                repo,
+                reference,
+                subpath,
+            } => {
                 write!(f, "github:{}/{}", owner, repo)?;
                 if let Some(sub) = subpath {
                     write!(f, "/{}", sub)?;
@@ -367,7 +394,11 @@ impl fmt::Display for RemoteSource {
                 }
                 Ok(())
             }
-            RemoteSource::Gist { id, revision, filename } => {
+            RemoteSource::Gist {
+                id,
+                revision,
+                filename,
+            } => {
                 write!(f, "gist:{}", id)?;
                 if let Some(rev) = revision {
                     write!(f, "@{}", rev)?;
@@ -398,67 +429,97 @@ mod tests {
     #[test]
     fn test_parse_local_path() {
         let source = RemoteSource::parse("./morphir-ir.json").unwrap();
-        assert!(matches!(source, RemoteSource::Local { path } if path == PathBuf::from("./morphir-ir.json")));
+        assert!(
+            matches!(source, RemoteSource::Local { path } if path == PathBuf::from("./morphir-ir.json"))
+        );
 
         let source = RemoteSource::parse("/absolute/path/to/file.json").unwrap();
-        assert!(matches!(source, RemoteSource::Local { path } if path == PathBuf::from("/absolute/path/to/file.json")));
+        assert!(
+            matches!(source, RemoteSource::Local { path } if path == PathBuf::from("/absolute/path/to/file.json"))
+        );
     }
 
     #[test]
     fn test_parse_http_url() {
         let source = RemoteSource::parse("https://example.com/morphir-ir.json").unwrap();
-        assert!(matches!(source, RemoteSource::Http { url, subpath: None } if url == "https://example.com/morphir-ir.json"));
+        assert!(
+            matches!(source, RemoteSource::Http { url, subpath: None } if url == "https://example.com/morphir-ir.json")
+        );
 
-        let source = RemoteSource::parse("https://example.com/archive.zip#path/to/ir.json").unwrap();
-        assert!(matches!(source, RemoteSource::Http { url, subpath: Some(sub) }
-            if url == "https://example.com/archive.zip" && sub == "path/to/ir.json"));
+        let source =
+            RemoteSource::parse("https://example.com/archive.zip#path/to/ir.json").unwrap();
+        assert!(
+            matches!(source, RemoteSource::Http { url, subpath: Some(sub) }
+            if url == "https://example.com/archive.zip" && sub == "path/to/ir.json")
+        );
     }
 
     #[test]
     fn test_parse_github_shorthand() {
         let source = RemoteSource::parse("github:finos/morphir-examples").unwrap();
-        assert!(matches!(source, RemoteSource::GitHub { owner, repo, reference: None, subpath: None }
-            if owner == "finos" && repo == "morphir-examples"));
+        assert!(
+            matches!(source, RemoteSource::GitHub { owner, repo, reference: None, subpath: None }
+            if owner == "finos" && repo == "morphir-examples")
+        );
 
         let source = RemoteSource::parse("github:finos/morphir-examples@v1.0").unwrap();
-        assert!(matches!(source, RemoteSource::GitHub { owner, repo, reference: Some(GitRef::Tag(t)), subpath: None }
-            if owner == "finos" && repo == "morphir-examples" && t == "v1.0"));
+        assert!(
+            matches!(source, RemoteSource::GitHub { owner, repo, reference: Some(GitRef::Tag(t)), subpath: None }
+            if owner == "finos" && repo == "morphir-examples" && t == "v1.0")
+        );
 
         let source = RemoteSource::parse("github:finos/morphir-examples/examples/basic").unwrap();
-        assert!(matches!(source, RemoteSource::GitHub { owner, repo, reference: None, subpath: Some(sub) }
-            if owner == "finos" && repo == "morphir-examples" && sub == "examples/basic"));
+        assert!(
+            matches!(source, RemoteSource::GitHub { owner, repo, reference: None, subpath: Some(sub) }
+            if owner == "finos" && repo == "morphir-examples" && sub == "examples/basic")
+        );
 
-        let source = RemoteSource::parse("github:finos/morphir-examples/examples/basic@main").unwrap();
-        assert!(matches!(source, RemoteSource::GitHub { owner, repo, reference: Some(GitRef::Branch(b)), subpath: Some(sub) }
-            if owner == "finos" && repo == "morphir-examples" && sub == "examples/basic" && b == "main"));
+        let source =
+            RemoteSource::parse("github:finos/morphir-examples/examples/basic@main").unwrap();
+        assert!(
+            matches!(source, RemoteSource::GitHub { owner, repo, reference: Some(GitRef::Branch(b)), subpath: Some(sub) }
+            if owner == "finos" && repo == "morphir-examples" && sub == "examples/basic" && b == "main")
+        );
     }
 
     #[test]
     fn test_parse_gist() {
         let source = RemoteSource::parse("gist:abc123").unwrap();
-        assert!(matches!(source, RemoteSource::Gist { id, revision: None, filename: None } if id == "abc123"));
+        assert!(
+            matches!(source, RemoteSource::Gist { id, revision: None, filename: None } if id == "abc123")
+        );
 
         let source = RemoteSource::parse("gist:user/abc123").unwrap();
-        assert!(matches!(source, RemoteSource::Gist { id, revision: None, filename: None } if id == "abc123"));
+        assert!(
+            matches!(source, RemoteSource::Gist { id, revision: None, filename: None } if id == "abc123")
+        );
 
         let source = RemoteSource::parse("gist:abc123#morphir-ir.json").unwrap();
-        assert!(matches!(source, RemoteSource::Gist { id, revision: None, filename: Some(f) }
-            if id == "abc123" && f == "morphir-ir.json"));
+        assert!(
+            matches!(source, RemoteSource::Gist { id, revision: None, filename: Some(f) }
+            if id == "abc123" && f == "morphir-ir.json")
+        );
 
         let source = RemoteSource::parse("gist:abc123@rev456#file.json").unwrap();
-        assert!(matches!(source, RemoteSource::Gist { id, revision: Some(r), filename: Some(f) }
-            if id == "abc123" && r == "rev456" && f == "file.json"));
+        assert!(
+            matches!(source, RemoteSource::Gist { id, revision: Some(r), filename: Some(f) }
+            if id == "abc123" && r == "rev456" && f == "file.json")
+        );
     }
 
     #[test]
     fn test_parse_git_url() {
         let source = RemoteSource::parse("https://github.com/finos/morphir.git").unwrap();
-        assert!(matches!(source, RemoteSource::Git { url, reference: None, subpath: None }
-            if url == "https://github.com/finos/morphir.git"));
+        assert!(
+            matches!(source, RemoteSource::Git { url, reference: None, subpath: None }
+            if url == "https://github.com/finos/morphir.git")
+        );
 
         let source = RemoteSource::parse("git@github.com:finos/morphir.git").unwrap();
-        assert!(matches!(source, RemoteSource::Git { url, reference: None, subpath: None }
-            if url == "git@github.com:finos/morphir.git"));
+        assert!(
+            matches!(source, RemoteSource::Git { url, reference: None, subpath: None }
+            if url == "git@github.com:finos/morphir.git")
+        );
     }
 
     #[test]
@@ -472,15 +533,34 @@ mod tests {
 
     #[test]
     fn test_source_type() {
-        assert_eq!(RemoteSource::parse("./file.json").unwrap().source_type(), "local");
-        assert_eq!(RemoteSource::parse("https://example.com/file.json").unwrap().source_type(), "http");
-        assert_eq!(RemoteSource::parse("github:user/repo").unwrap().source_type(), "github");
-        assert_eq!(RemoteSource::parse("gist:abc123").unwrap().source_type(), "gist");
+        assert_eq!(
+            RemoteSource::parse("./file.json").unwrap().source_type(),
+            "local"
+        );
+        assert_eq!(
+            RemoteSource::parse("https://example.com/file.json")
+                .unwrap()
+                .source_type(),
+            "http"
+        );
+        assert_eq!(
+            RemoteSource::parse("github:user/repo")
+                .unwrap()
+                .source_type(),
+            "github"
+        );
+        assert_eq!(
+            RemoteSource::parse("gist:abc123").unwrap().source_type(),
+            "gist"
+        );
     }
 
     #[test]
     fn test_display() {
         let source = RemoteSource::parse("github:finos/morphir-examples/path@v1.0").unwrap();
-        assert_eq!(source.to_string(), "github:finos/morphir-examples/path@v1.0");
+        assert_eq!(
+            source.to_string(),
+            "github:finos/morphir-examples/path@v1.0"
+        );
     }
 }

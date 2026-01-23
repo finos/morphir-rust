@@ -114,7 +114,11 @@ impl RemoteSourceResolver {
     /// Resolve a source string to a local path.
     ///
     /// This is a convenience method that parses the source and resolves it.
-    pub fn resolve_string(&mut self, source_str: &str, options: &ResolveOptions) -> Result<PathBuf> {
+    pub fn resolve_string(
+        &mut self,
+        source_str: &str,
+        options: &ResolveOptions,
+    ) -> Result<PathBuf> {
         let source = RemoteSource::parse(source_str)?;
         self.resolve(&source, options)
     }
@@ -152,40 +156,48 @@ impl RemoteSourceResolver {
             }
 
             RemoteSource::Http { url, subpath } => {
-                self.http.fetch_to_cache(url, subpath.as_deref(), &mut self.cache, source)
+                self.http
+                    .fetch_to_cache(url, subpath.as_deref(), &mut self.cache, source)
             }
 
-            RemoteSource::Git { url, reference, subpath } => {
-                self.git.clone_to_cache(
-                    url,
-                    reference.as_ref(),
-                    subpath.as_deref(),
-                    &mut self.cache,
-                    source,
-                )
-            }
+            RemoteSource::Git {
+                url,
+                reference,
+                subpath,
+            } => self.git.clone_to_cache(
+                url,
+                reference.as_ref(),
+                subpath.as_deref(),
+                &mut self.cache,
+                source,
+            ),
 
-            RemoteSource::GitHub { owner, repo, reference, subpath } => {
-                self.git.clone_github(
-                    owner,
-                    repo,
-                    reference.as_ref(),
-                    subpath.as_deref(),
-                    &mut self.cache,
-                    source,
-                )
-            }
+            RemoteSource::GitHub {
+                owner,
+                repo,
+                reference,
+                subpath,
+            } => self.git.clone_github(
+                owner,
+                repo,
+                reference.as_ref(),
+                subpath.as_deref(),
+                &mut self.cache,
+                source,
+            ),
 
-            RemoteSource::Gist { id, revision, filename } => {
-                fetch_gist(
-                    &self.http,
-                    id,
-                    revision.as_deref(),
-                    filename.as_deref(),
-                    &mut self.cache,
-                    source,
-                )
-            }
+            RemoteSource::Gist {
+                id,
+                revision,
+                filename,
+            } => fetch_gist(
+                &self.http,
+                id,
+                revision.as_deref(),
+                filename.as_deref(),
+                &mut self.cache,
+                source,
+            ),
         }
     }
 

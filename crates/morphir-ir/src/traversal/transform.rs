@@ -23,8 +23,8 @@ use crate::ir::pattern::Pattern;
 use crate::ir::type_def::{AccessControlled, Constructor, ConstructorArg, TypeDefinition};
 use crate::ir::type_expr::{Field, Type};
 use crate::ir::value_expr::{
-    HoleReason, InputType, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value,
-    ValueBody, ValueDefinition,
+    HoleReason, InputType, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value, ValueBody,
+    ValueDefinition,
 };
 use crate::naming::FQName;
 
@@ -59,14 +59,18 @@ pub trait TypeTransformVisitor<AI: Clone, AO: Clone> {
 }
 
 /// Walk and transform a type, recursively transforming nested types.
-pub fn walk_transform_type<AI: Clone, AO: Clone, V>(visitor: &V, tpe: &Type<AI>) -> Result<Type<AO>, V::Error>
+pub fn walk_transform_type<AI: Clone, AO: Clone, V>(
+    visitor: &V,
+    tpe: &Type<AI>,
+) -> Result<Type<AO>, V::Error>
 where
     V: TypeTransformVisitor<AI, AO> + ?Sized,
 {
     match tpe {
-        Type::Variable(attrs, name) => {
-            Ok(Type::Variable(visitor.transform_type_attrs(attrs)?, name.clone()))
-        }
+        Type::Variable(attrs, name) => Ok(Type::Variable(
+            visitor.transform_type_attrs(attrs)?,
+            name.clone(),
+        )),
         Type::Reference(attrs, fqname, params) => {
             let new_params: Result<Vec<_>, _> =
                 params.iter().map(|p| visitor.transform_type(p)).collect();
@@ -79,12 +83,18 @@ where
         Type::Tuple(attrs, elements) => {
             let new_elements: Result<Vec<_>, _> =
                 elements.iter().map(|e| visitor.transform_type(e)).collect();
-            Ok(Type::Tuple(visitor.transform_type_attrs(attrs)?, new_elements?))
+            Ok(Type::Tuple(
+                visitor.transform_type_attrs(attrs)?,
+                new_elements?,
+            ))
         }
         Type::Record(attrs, fields) => {
             let new_fields: Result<Vec<_>, _> =
                 fields.iter().map(|f| visitor.transform_field(f)).collect();
-            Ok(Type::Record(visitor.transform_type_attrs(attrs)?, new_fields?))
+            Ok(Type::Record(
+                visitor.transform_type_attrs(attrs)?,
+                new_fields?,
+            ))
         }
         Type::ExtensibleRecord(attrs, var, fields) => {
             let new_fields: Result<Vec<_>, _> =
@@ -131,9 +141,9 @@ where
     V: PatternTransformVisitor<AI, AO> + ?Sized,
 {
     match pattern {
-        Pattern::WildcardPattern(attrs) => {
-            Ok(Pattern::WildcardPattern(visitor.transform_pattern_attrs(attrs)?))
-        }
+        Pattern::WildcardPattern(attrs) => Ok(Pattern::WildcardPattern(
+            visitor.transform_pattern_attrs(attrs)?,
+        )),
         Pattern::AsPattern(attrs, inner, name) => Ok(Pattern::AsPattern(
             visitor.transform_pattern_attrs(attrs)?,
             Box::new(visitor.transform_pattern(inner)?),
@@ -158,9 +168,9 @@ where
                 new_args?,
             ))
         }
-        Pattern::EmptyListPattern(attrs) => {
-            Ok(Pattern::EmptyListPattern(visitor.transform_pattern_attrs(attrs)?))
-        }
+        Pattern::EmptyListPattern(attrs) => Ok(Pattern::EmptyListPattern(
+            visitor.transform_pattern_attrs(attrs)?,
+        )),
         Pattern::HeadTailPattern(attrs, head, tail) => Ok(Pattern::HeadTailPattern(
             visitor.transform_pattern_attrs(attrs)?,
             Box::new(visitor.transform_pattern(head)?),
@@ -170,9 +180,9 @@ where
             visitor.transform_pattern_attrs(attrs)?,
             lit.clone(),
         )),
-        Pattern::UnitPattern(attrs) => {
-            Ok(Pattern::UnitPattern(visitor.transform_pattern_attrs(attrs)?))
-        }
+        Pattern::UnitPattern(attrs) => Ok(Pattern::UnitPattern(
+            visitor.transform_pattern_attrs(attrs)?,
+        )),
     }
 }
 
@@ -203,9 +213,10 @@ pub trait ValueTransformVisitor<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone> 
     fn transform_type(&self, tpe: &Type<TAI>) -> Result<Type<TAO>, Self::Error> {
         // Inline the type transformation logic
         match tpe {
-            Type::Variable(attrs, name) => {
-                Ok(Type::Variable(self.transform_type_attrs(attrs)?, name.clone()))
-            }
+            Type::Variable(attrs, name) => Ok(Type::Variable(
+                self.transform_type_attrs(attrs)?,
+                name.clone(),
+            )),
             Type::Reference(attrs, fqname, params) => {
                 let new_params: Result<Vec<_>, _> =
                     params.iter().map(|p| self.transform_type(p)).collect();
@@ -218,7 +229,10 @@ pub trait ValueTransformVisitor<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone> 
             Type::Tuple(attrs, elements) => {
                 let new_elements: Result<Vec<_>, _> =
                     elements.iter().map(|e| self.transform_type(e)).collect();
-                Ok(Type::Tuple(self.transform_type_attrs(attrs)?, new_elements?))
+                Ok(Type::Tuple(
+                    self.transform_type_attrs(attrs)?,
+                    new_elements?,
+                ))
             }
             Type::Record(attrs, fields) => {
                 let new_fields: Result<Vec<_>, _> = fields
@@ -260,19 +274,17 @@ pub trait ValueTransformVisitor<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone> 
     /// Transform a pattern.
     fn transform_pattern(&self, pattern: &Pattern<VAI>) -> Result<Pattern<VAO>, Self::Error> {
         match pattern {
-            Pattern::WildcardPattern(attrs) => {
-                Ok(Pattern::WildcardPattern(self.transform_pattern_attrs(attrs)?))
-            }
+            Pattern::WildcardPattern(attrs) => Ok(Pattern::WildcardPattern(
+                self.transform_pattern_attrs(attrs)?,
+            )),
             Pattern::AsPattern(attrs, inner, name) => Ok(Pattern::AsPattern(
                 self.transform_pattern_attrs(attrs)?,
                 Box::new(self.transform_pattern(inner)?),
                 name.clone(),
             )),
             Pattern::TuplePattern(attrs, elements) => {
-                let new_elements: Result<Vec<_>, _> = elements
-                    .iter()
-                    .map(|e| self.transform_pattern(e))
-                    .collect();
+                let new_elements: Result<Vec<_>, _> =
+                    elements.iter().map(|e| self.transform_pattern(e)).collect();
                 Ok(Pattern::TuplePattern(
                     self.transform_pattern_attrs(attrs)?,
                     new_elements?,
@@ -287,9 +299,9 @@ pub trait ValueTransformVisitor<TAI: Clone, TAO: Clone, VAI: Clone, VAO: Clone> 
                     new_args?,
                 ))
             }
-            Pattern::EmptyListPattern(attrs) => {
-                Ok(Pattern::EmptyListPattern(self.transform_pattern_attrs(attrs)?))
-            }
+            Pattern::EmptyListPattern(attrs) => Ok(Pattern::EmptyListPattern(
+                self.transform_pattern_attrs(attrs)?,
+            )),
             Pattern::HeadTailPattern(attrs, head, tail) => Ok(Pattern::HeadTailPattern(
                 self.transform_pattern_attrs(attrs)?,
                 Box::new(self.transform_pattern(head)?),
@@ -377,21 +389,33 @@ where
     V: ValueTransformVisitor<TAI, TAO, VAI, VAO> + ?Sized,
 {
     match value {
-        Value::Literal(attrs, lit) => {
-            Ok(Value::Literal(visitor.transform_value_attrs(attrs)?, lit.clone()))
-        }
-        Value::Constructor(attrs, name) => {
-            Ok(Value::Constructor(visitor.transform_value_attrs(attrs)?, name.clone()))
-        }
+        Value::Literal(attrs, lit) => Ok(Value::Literal(
+            visitor.transform_value_attrs(attrs)?,
+            lit.clone(),
+        )),
+        Value::Constructor(attrs, name) => Ok(Value::Constructor(
+            visitor.transform_value_attrs(attrs)?,
+            name.clone(),
+        )),
         Value::Tuple(attrs, elements) => {
-            let new_elements: Result<Vec<_>, _> =
-                elements.iter().map(|e| visitor.transform_value(e)).collect();
-            Ok(Value::Tuple(visitor.transform_value_attrs(attrs)?, new_elements?))
+            let new_elements: Result<Vec<_>, _> = elements
+                .iter()
+                .map(|e| visitor.transform_value(e))
+                .collect();
+            Ok(Value::Tuple(
+                visitor.transform_value_attrs(attrs)?,
+                new_elements?,
+            ))
         }
         Value::List(attrs, elements) => {
-            let new_elements: Result<Vec<_>, _> =
-                elements.iter().map(|e| visitor.transform_value(e)).collect();
-            Ok(Value::List(visitor.transform_value_attrs(attrs)?, new_elements?))
+            let new_elements: Result<Vec<_>, _> = elements
+                .iter()
+                .map(|e| visitor.transform_value(e))
+                .collect();
+            Ok(Value::List(
+                visitor.transform_value_attrs(attrs)?,
+                new_elements?,
+            ))
         }
         Value::Record(attrs, fields) => {
             let new_fields: Result<Vec<_>, _> = fields
@@ -403,22 +427,28 @@ where
                     ))
                 })
                 .collect();
-            Ok(Value::Record(visitor.transform_value_attrs(attrs)?, new_fields?))
+            Ok(Value::Record(
+                visitor.transform_value_attrs(attrs)?,
+                new_fields?,
+            ))
         }
-        Value::Variable(attrs, name) => {
-            Ok(Value::Variable(visitor.transform_value_attrs(attrs)?, name.clone()))
-        }
-        Value::Reference(attrs, fqname) => {
-            Ok(Value::Reference(visitor.transform_value_attrs(attrs)?, fqname.clone()))
-        }
+        Value::Variable(attrs, name) => Ok(Value::Variable(
+            visitor.transform_value_attrs(attrs)?,
+            name.clone(),
+        )),
+        Value::Reference(attrs, fqname) => Ok(Value::Reference(
+            visitor.transform_value_attrs(attrs)?,
+            fqname.clone(),
+        )),
         Value::Field(attrs, record, field_name) => Ok(Value::Field(
             visitor.transform_value_attrs(attrs)?,
             Box::new(visitor.transform_value(record)?),
             field_name.clone(),
         )),
-        Value::FieldFunction(attrs, name) => {
-            Ok(Value::FieldFunction(visitor.transform_value_attrs(attrs)?, name.clone()))
-        }
+        Value::FieldFunction(attrs, name) => Ok(Value::FieldFunction(
+            visitor.transform_value_attrs(attrs)?,
+            name.clone(),
+        )),
         Value::Apply(attrs, func, arg) => Ok(Value::Apply(
             visitor.transform_value_attrs(attrs)?,
             Box::new(visitor.transform_value(func)?),
@@ -560,37 +590,39 @@ where
     V: TypeTransformVisitor<AI, AO> + ?Sized,
 {
     match def {
-        TypeDefinition::TypeAliasDefinition { type_params, type_expr } => {
-            Ok(TypeDefinition::TypeAliasDefinition {
-                type_params: type_params.clone(),
-                type_expr: visitor.transform_type(type_expr)?,
-            })
-        }
+        TypeDefinition::TypeAliasDefinition {
+            type_params,
+            type_expr,
+        } => Ok(TypeDefinition::TypeAliasDefinition {
+            type_params: type_params.clone(),
+            type_expr: visitor.transform_type(type_expr)?,
+        }),
         TypeDefinition::CustomTypeDefinition {
             type_params,
             access_controlled_ctors,
         } => {
-            let transform_ctors = |ctors: &Vec<Constructor<AI>>| -> Result<Vec<Constructor<AO>>, V::Error> {
-                ctors
-                    .iter()
-                    .map(|ctor| {
-                        let new_args: Result<Vec<_>, _> = ctor
-                            .args
-                            .iter()
-                            .map(|arg| {
-                                Ok(ConstructorArg::new(
-                                    arg.name().clone(),
-                                    visitor.transform_type(arg.tpe())?,
-                                ))
+            let transform_ctors =
+                |ctors: &Vec<Constructor<AI>>| -> Result<Vec<Constructor<AO>>, V::Error> {
+                    ctors
+                        .iter()
+                        .map(|ctor| {
+                            let new_args: Result<Vec<_>, _> = ctor
+                                .args
+                                .iter()
+                                .map(|arg| {
+                                    Ok(ConstructorArg::new(
+                                        arg.name().clone(),
+                                        visitor.transform_type(arg.tpe())?,
+                                    ))
+                                })
+                                .collect();
+                            Ok(Constructor {
+                                name: ctor.name.clone(),
+                                args: new_args?,
                             })
-                            .collect();
-                        Ok(Constructor {
-                            name: ctor.name.clone(),
-                            args: new_args?,
                         })
-                    })
-                    .collect()
-            };
+                        .collect()
+                };
 
             let new_ctors = match access_controlled_ctors {
                 AccessControlled::Public(ctors) => {

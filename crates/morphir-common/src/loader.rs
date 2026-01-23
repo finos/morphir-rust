@@ -42,8 +42,8 @@ pub fn load_distribution_from_source_with_options(
     source: &str,
     options: &ResolveOptions,
 ) -> Result<LoadedDistribution> {
-    let remote_source = RemoteSource::parse(source)
-        .map_err(|e| anyhow::anyhow!("Invalid source: {}", e))?;
+    let remote_source =
+        RemoteSource::parse(source).map_err(|e| anyhow::anyhow!("Invalid source: {}", e))?;
 
     let local_path = if remote_source.is_local() {
         std::path::PathBuf::from(source)
@@ -51,7 +51,8 @@ pub fn load_distribution_from_source_with_options(
         let mut resolver = RemoteSourceResolver::with_defaults()
             .map_err(|e| anyhow::anyhow!("Failed to create source resolver: {}", e))?;
 
-        resolver.resolve(&remote_source, options)
+        resolver
+            .resolve(&remote_source, options)
             .map_err(|e| anyhow::anyhow!("Failed to resolve source: {}", e))?
     };
 

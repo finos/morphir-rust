@@ -20,16 +20,15 @@ impl HttpFetcher {
     pub fn new(config: NetworkConfig) -> Result<Self> {
         let mut builder = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
-            .redirect(reqwest::redirect::Policy::limited(config.max_redirects as usize));
+            .redirect(reqwest::redirect::Policy::limited(
+                config.max_redirects as usize,
+            ));
 
         // Set user agent
         if let Some(ref ua) = config.user_agent {
             builder = builder.user_agent(ua);
         } else {
-            builder = builder.user_agent(format!(
-                "morphir-cli/{}",
-                env!("CARGO_PKG_VERSION")
-            ));
+            builder = builder.user_agent(format!("morphir-cli/{}", env!("CARGO_PKG_VERSION")));
         }
 
         // Set proxies
@@ -240,7 +239,8 @@ pub fn fetch_gist(
     };
 
     // Fetch gist metadata
-    let response = http.client
+    let response = http
+        .client
         .get(&api_url)
         .header("Accept", "application/vnd.github.v3+json")
         .send()
@@ -253,9 +253,9 @@ pub fn fetch_gist(
         });
     }
 
-    let gist: serde_json::Value = response
-        .json()
-        .map_err(|e| RemoteSourceError::NetworkError(format!("Failed to parse gist response: {}", e)))?;
+    let gist: serde_json::Value = response.json().map_err(|e| {
+        RemoteSourceError::NetworkError(format!("Failed to parse gist response: {}", e))
+    })?;
 
     // Get the files
     let files = gist
@@ -265,12 +265,13 @@ pub fn fetch_gist(
 
     if let Some(target_filename) = filename {
         // Fetch a specific file
-        let file_info = files
-            .get(target_filename)
-            .ok_or_else(|| RemoteSourceError::PathNotFound {
-                path: target_filename.to_string(),
-                location: format!("gist:{}", id),
-            })?;
+        let file_info =
+            files
+                .get(target_filename)
+                .ok_or_else(|| RemoteSourceError::PathNotFound {
+                    path: target_filename.to_string(),
+                    location: format!("gist:{}", id),
+                })?;
 
         let raw_url = file_info
             .get("raw_url")
@@ -284,7 +285,10 @@ pub fn fetch_gist(
         let temp_dir = tempfile::tempdir()?;
 
         for (name, file_info) in files {
-            if let Some(raw_url) = file_info.get("raw_url").and_then(|u: &serde_json::Value| u.as_str()) {
+            if let Some(raw_url) = file_info
+                .get("raw_url")
+                .and_then(|u: &serde_json::Value| u.as_str())
+            {
                 let bytes = http.fetch_bytes(raw_url)?;
                 let file_path = temp_dir.path().join(name);
                 std::fs::write(&file_path, bytes)?;

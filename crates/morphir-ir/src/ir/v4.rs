@@ -58,10 +58,14 @@ impl<'de> Deserialize<'de> for FormatVersion {
                 if let Some(i) = n.as_u64() {
                     Ok(FormatVersion::Integer(i as u32))
                 } else {
-                    Err(de::Error::custom("format version must be a positive integer"))
+                    Err(de::Error::custom(
+                        "format version must be a positive integer",
+                    ))
                 }
             }
-            _ => Err(de::Error::custom("format version must be a string or integer")),
+            _ => Err(de::Error::custom(
+                "format version must be a string or integer",
+            )),
         }
     }
 }
@@ -211,9 +215,7 @@ pub enum TypeSpecification {
         type_expr: serde_json::Value, // TODO: Use TypeExpr when serde is complete
     },
     /// Opaque type (constructors hidden)
-    OpaqueTypeSpecification {
-        type_params: Vec<Name>,
-    },
+    OpaqueTypeSpecification { type_params: Vec<Name> },
     /// Custom type with public constructors
     CustomTypeSpecification {
         type_params: Vec<Name>,
@@ -243,7 +245,7 @@ pub struct ConstructorArgSpec {
 #[serde(rename_all = "camelCase")]
 pub struct ValueSpecification {
     pub inputs: IndexMap<String, serde_json::Value>, // TODO: Use TypeExpr when serde is complete
-    pub output: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    pub output: serde_json::Value,                   // TODO: Use TypeExpr when serde is complete
 }
 
 /// Package definition
@@ -429,10 +431,20 @@ pub struct InputTypeEntry {
 /// Value body - uses wrapper object format
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum ValueBody {
-    ExpressionBody { body: serde_json::Value }, // TODO: Use ValueExpr when serde is complete
-    NativeBody { hint: NativeHint, description: Option<String> },
-    ExternalBody { external_name: String, target_platform: String },
-    IncompleteBody { reason: HoleReason },
+    ExpressionBody {
+        body: serde_json::Value,
+    }, // TODO: Use ValueExpr when serde is complete
+    NativeBody {
+        hint: NativeHint,
+        description: Option<String>,
+    },
+    ExternalBody {
+        external_name: String,
+        target_platform: String,
+    },
+    IncompleteBody {
+        reason: HoleReason,
+    },
 }
 
 impl Serialize for ValueBody {
@@ -624,7 +636,9 @@ impl<'de> Deserialize<'de> for NativeHint {
                     ],
                 )),
             },
-            _ => Err(de::Error::custom("expected object or string for NativeHint")),
+            _ => Err(de::Error::custom(
+                "expected object or string for NativeHint",
+            )),
         }
     }
 }
@@ -652,9 +666,10 @@ impl Serialize for HoleReason {
             HoleReason::DeletedDuringRefactor => {
                 map.serialize_entry("DeletedDuringRefactor", &serde_json::json!({}))?
             }
-            HoleReason::UnresolvedReference { target } => {
-                map.serialize_entry("UnresolvedReference", &serde_json::json!({ "target": target }))?
-            }
+            HoleReason::UnresolvedReference { target } => map.serialize_entry(
+                "UnresolvedReference",
+                &serde_json::json!({ "target": target }),
+            )?,
         }
         map.end()
     }
@@ -705,7 +720,9 @@ impl<'de> Deserialize<'de> for HoleReason {
                     &["Draft", "TypeMismatch", "DeletedDuringRefactor"],
                 )),
             },
-            _ => Err(de::Error::custom("expected object or string for HoleReason")),
+            _ => Err(de::Error::custom(
+                "expected object or string for HoleReason",
+            )),
         }
     }
 }

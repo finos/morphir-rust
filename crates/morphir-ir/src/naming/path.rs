@@ -57,7 +57,9 @@ impl<'de> Deserialize<'de> for Path {
                     .into_iter()
                     .map(|v| serde_json::from_value(v).map_err(de::Error::custom))
                     .collect();
-                Ok(Path { segments: segments? })
+                Ok(Path {
+                    segments: segments?,
+                })
             }
             _ => Err(de::Error::custom("expected string or array for Path")),
         }

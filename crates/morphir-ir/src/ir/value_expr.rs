@@ -13,11 +13,11 @@
 //! let v: Value<ClassicAttrs, ClassicAttrs> = Value::Unit(json!({}));  // Classic
 //! ```
 
-use crate::naming::{FQName, Name};
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::type_expr::Type;
+use crate::naming::{FQName, Name};
 
 /// A value expression with generic type and value attributes.
 ///
@@ -43,7 +43,6 @@ use super::type_expr::Type;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     // === Core expressions (all versions) ===
-
     /// Literal constant value
     ///
     /// Example: `42`, `"hello"`, `true`
@@ -117,7 +116,12 @@ pub enum Value<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     /// Conditional expression
     ///
     /// Example: `if cond then a else b`
-    IfThenElse(VA, Box<Value<TA, VA>>, Box<Value<TA, VA>>, Box<Value<TA, VA>>),
+    IfThenElse(
+        VA,
+        Box<Value<TA, VA>>,
+        Box<Value<TA, VA>>,
+        Box<Value<TA, VA>>,
+    ),
 
     /// Pattern matching
     ///
@@ -135,7 +139,6 @@ pub enum Value<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     Unit(VA),
 
     // === V4-only constructs ===
-
     /// Incomplete/broken value placeholder (V4 only)
     ///
     /// Represents values that couldn't be fully resolved or compiled.
@@ -506,21 +509,14 @@ mod tests {
 
     #[test]
     fn test_value_definition() {
-        let def: ValueDefinition<(), ()> = ValueDefinition::new(
-            vec![],
-            Type::unit(test_attrs()),
-            Value::unit(test_attrs()),
-        );
+        let def: ValueDefinition<(), ()> =
+            ValueDefinition::new(vec![], Type::unit(test_attrs()), Value::unit(test_attrs()));
         assert!(matches!(def.body, ValueBody::Expression(_)));
     }
 
     #[test]
     fn test_hole_value() {
-        let val: Value<(), ()> = Value::Hole(
-            test_attrs(),
-            HoleReason::Draft,
-            None,
-        );
+        let val: Value<(), ()> = Value::Hole(test_attrs(), HoleReason::Draft, None);
         assert!(matches!(val, Value::Hole(_, HoleReason::Draft, None)));
     }
 

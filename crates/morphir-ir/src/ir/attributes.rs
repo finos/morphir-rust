@@ -92,7 +92,6 @@ pub type TypeExpr = Type;
 /// This is a convenience alias - you can also just use `Value` directly.
 pub type ValueExpr = Value;
 
-
 // =============================================================================
 // Classic Type Aliases - For backward compatibility with V1-V3
 // =============================================================================

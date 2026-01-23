@@ -48,11 +48,15 @@ impl FQName {
     /// Parse from V4 canonical string format: `package/path:module/path#local-name`
     pub fn from_canonical_string(s: &str) -> Result<Self, String> {
         // Split on ':' first, then '#' for the local name
-        let colon_pos = s.find(':').ok_or_else(|| format!("missing ':' in FQName: {}", s))?;
+        let colon_pos = s
+            .find(':')
+            .ok_or_else(|| format!("missing ':' in FQName: {}", s))?;
         let package_str = &s[..colon_pos];
         let rest = &s[colon_pos + 1..];
 
-        let hash_pos = rest.find('#').ok_or_else(|| format!("missing '#' in FQName: {}", s))?;
+        let hash_pos = rest
+            .find('#')
+            .ok_or_else(|| format!("missing '#' in FQName: {}", s))?;
         let module_str = &rest[..hash_pos];
         let local_str = &rest[hash_pos + 1..];
 

@@ -15,10 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::naming::{FQName, Name};
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::type_expr::{Field, Type};
+use crate::naming::{FQName, Name};
 
 // =============================================================================
 // Type<A> Serialization
@@ -463,11 +463,11 @@ impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for PatternVisitor<A> {
 // Value<TA, VA> Serialization
 // =============================================================================
 
-use super::value_expr::{
-    Value, ValueDefinition, ValueBody, HoleReason, NativeInfo, NativeHint,
-    InputType, RecordFieldEntry, PatternCase, LetBinding,
-};
 use super::type_def::ConstructorArg;
+use super::value_expr::{
+    HoleReason, InputType, LetBinding, NativeHint, NativeInfo, PatternCase, RecordFieldEntry,
+    Value, ValueBody, ValueDefinition,
+};
 
 impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for Value<TA, VA> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -697,7 +697,9 @@ impl<'de> Deserialize<'de> for HoleReason {
                     _ => Err(de::Error::unknown_variant(kind, &["UnresolvedReference"])),
                 }
             }
-            _ => Err(de::Error::custom("expected string or object for HoleReason")),
+            _ => Err(de::Error::custom(
+                "expected string or object for HoleReason",
+            )),
         }
     }
 }
@@ -1255,8 +1257,8 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
                         Ok(ValueBody::Native(info))
                     }
                     "External" => {
-                        let external_name =
-                            external_name.ok_or_else(|| de::Error::missing_field("externalName"))?;
+                        let external_name = external_name
+                            .ok_or_else(|| de::Error::missing_field("externalName"))?;
                         let target_platform = target_platform
                             .ok_or_else(|| de::Error::missing_field("targetPlatform"))?;
                         Ok(ValueBody::External {
@@ -1278,7 +1280,14 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
 
         deserializer.deserialize_struct(
             "ValueBody",
-            &["kind", "value", "info", "externalName", "targetPlatform", "reason"],
+            &[
+                "kind",
+                "value",
+                "info",
+                "externalName",
+                "targetPlatform",
+                "reason",
+            ],
             ValueBodyVisitor(PhantomData),
         )
     }
@@ -1437,7 +1446,12 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'d
                 let body: Value<TA, VA> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                Ok(Value::LetDefinition(attrs, name, Box::new(def), Box::new(body)))
+                Ok(Value::LetDefinition(
+                    attrs,
+                    name,
+                    Box::new(def),
+                    Box::new(body),
+                ))
             }
             "LetRecursion" | "letRecursion" => {
                 let attrs: VA = seq
@@ -1464,7 +1478,12 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'d
                 let body: Value<TA, VA> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                Ok(Value::Destructure(attrs, pattern, Box::new(val), Box::new(body)))
+                Ok(Value::Destructure(
+                    attrs,
+                    pattern,
+                    Box::new(val),
+                    Box::new(body),
+                ))
             }
             "IfThenElse" | "ifThenElse" => {
                 let attrs: VA = seq
@@ -1589,8 +1608,10 @@ mod tests {
 
     #[test]
     fn test_type_variable_roundtrip() {
-        let var: Type<serde_json::Value> =
-            Type::Variable(serde_json::Value::Object(Default::default()), Name::from("a"));
+        let var: Type<serde_json::Value> = Type::Variable(
+            serde_json::Value::Object(Default::default()),
+            Name::from("a"),
+        );
         let json = serde_json::to_string(&var).unwrap();
         assert!(json.contains("Variable"));
 

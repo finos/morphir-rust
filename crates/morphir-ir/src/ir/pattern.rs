@@ -11,9 +11,9 @@
 //! let p: Pattern<serde_json::Value> = Pattern::WildcardPattern(json!({}));  // Classic
 //! ```
 
-use crate::naming::{FQName, Name};
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
+use crate::naming::{FQName, Name};
 
 /// A pattern with generic attributes.
 ///
@@ -144,10 +144,9 @@ impl<A: Clone> Pattern<A> {
             Pattern::AsPattern(a, pattern, name) => {
                 Pattern::AsPattern(f(a), Box::new(pattern.map_attributes(f)), name.clone())
             }
-            Pattern::TuplePattern(a, elements) => Pattern::TuplePattern(
-                f(a),
-                elements.iter().map(|p| p.map_attributes(f)).collect(),
-            ),
+            Pattern::TuplePattern(a, elements) => {
+                Pattern::TuplePattern(f(a), elements.iter().map(|p| p.map_attributes(f)).collect())
+            }
             Pattern::ConstructorPattern(a, name, args) => Pattern::ConstructorPattern(
                 f(a),
                 name.clone(),
@@ -183,7 +182,10 @@ mod tests {
     fn test_tuple_pattern() {
         let p = Pattern::tuple(
             test_attrs(),
-            vec![Pattern::wildcard(test_attrs()), Pattern::wildcard(test_attrs())],
+            vec![
+                Pattern::wildcard(test_attrs()),
+                Pattern::wildcard(test_attrs()),
+            ],
         );
         assert!(matches!(p, Pattern::TuplePattern(_, elements) if elements.len() == 2));
     }
@@ -191,7 +193,10 @@ mod tests {
     #[test]
     fn test_literal_pattern() {
         let p = Pattern::literal(test_attrs(), Literal::Integer(42));
-        assert!(matches!(p, Pattern::LiteralPattern(_, Literal::Integer(42))));
+        assert!(matches!(
+            p,
+            Pattern::LiteralPattern(_, Literal::Integer(42))
+        ));
     }
 
     #[test]

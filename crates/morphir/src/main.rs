@@ -234,7 +234,13 @@ impl AppSession for MorphirSession {
                     target_version,
                     force_refresh,
                     no_cache,
-                } => run_migrate(input.clone(), output.clone(), target_version.clone(), *force_refresh, *no_cache),
+                } => run_migrate(
+                    input.clone(),
+                    output.clone(),
+                    target_version.clone(),
+                    *force_refresh,
+                    *no_cache,
+                ),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
         }

@@ -11,10 +11,10 @@
 //! let def: TypeDefinition<serde_json::Value> = ...;  // Classic
 //! ```
 
-use crate::naming::Name;
 use super::attributes::TypeAttributes;
 use super::type_expr::Type;
 use super::value_expr::HoleReason;
+use crate::naming::Name;
 
 /// A type definition with generic attributes.
 ///
@@ -184,10 +184,7 @@ impl<A: Clone> Constructor<A> {
 
     /// Create a constructor with no arguments (constant)
     pub fn constant(name: Name) -> Self {
-        Constructor {
-            name,
-            args: vec![],
-        }
+        Constructor { name, args: vec![] }
     }
 }
 
@@ -219,10 +216,7 @@ mod tests {
 
     #[test]
     fn test_type_alias_definition() {
-        let def: TypeDefinition<()> = TypeDefinition::type_alias(
-            vec![],
-            Type::unit(test_attrs()),
-        );
+        let def: TypeDefinition<()> = TypeDefinition::type_alias(vec![], Type::unit(test_attrs()));
         assert!(matches!(def, TypeDefinition::TypeAliasDefinition { .. }));
     }
 
@@ -231,15 +225,20 @@ mod tests {
         let nothing = Constructor::constant(Name::from("Nothing"));
         let just = Constructor::new(
             Name::from("Just"),
-            vec![ConstructorArg::new(Name::from("value"), Type::variable(test_attrs(), Name::from("a")))],
+            vec![ConstructorArg::new(
+                Name::from("value"),
+                Type::variable(test_attrs(), Name::from("a")),
+            )],
         );
 
-        let def: TypeDefinition<()> = TypeDefinition::custom_type_public(
-            vec![Name::from("a")],
-            vec![just, nothing],
-        );
+        let def: TypeDefinition<()> =
+            TypeDefinition::custom_type_public(vec![Name::from("a")], vec![just, nothing]);
 
-        if let TypeDefinition::CustomTypeDefinition { type_params, access_controlled_ctors } = def {
+        if let TypeDefinition::CustomTypeDefinition {
+            type_params,
+            access_controlled_ctors,
+        } = def
+        {
             assert_eq!(type_params.len(), 1);
             assert!(access_controlled_ctors.is_public());
             assert_eq!(access_controlled_ctors.value().len(), 2);
@@ -255,7 +254,11 @@ mod tests {
             vec![Constructor::constant(Name::from("Internal"))],
         );
 
-        if let TypeDefinition::CustomTypeDefinition { access_controlled_ctors, .. } = def {
+        if let TypeDefinition::CustomTypeDefinition {
+            access_controlled_ctors,
+            ..
+        } = def
+        {
             assert!(access_controlled_ctors.is_private());
         } else {
             panic!("Expected CustomTypeDefinition");
@@ -264,10 +267,8 @@ mod tests {
 
     #[test]
     fn test_incomplete_type_definition() {
-        let def: TypeDefinition<()> = TypeDefinition::incomplete(
-            vec![Name::from("a")],
-            Incompleteness::Draft,
-        );
+        let def: TypeDefinition<()> =
+            TypeDefinition::incomplete(vec![Name::from("a")], Incompleteness::Draft);
 
         assert!(matches!(
             def,

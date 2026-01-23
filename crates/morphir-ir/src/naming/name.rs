@@ -111,7 +111,25 @@ impl<'de> Deserialize<'de> for Name {
     where
         D: serde::Deserializer<'de>,
     {
-        let words = Vec::<String>::deserialize(deserializer)?;
-        Ok(Name { words })
+        use serde::de;
+
+        // Accept both array format (Classic) and string format (V4)
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            // V4 canonical string format: "testModule" or "my-function"
+            serde_json::Value::String(s) => Ok(Name::from(&s)),
+            // Classic array format: ["test", "module"]
+            serde_json::Value::Array(arr) => {
+                let words: Result<Vec<String>, _> = arr
+                    .into_iter()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => Ok(s),
+                        _ => Err(de::Error::custom("expected string in Name array")),
+                    })
+                    .collect();
+                Ok(Name { words: words? })
+            }
+            _ => Err(de::Error::custom("expected string or array for Name")),
+        }
     }
 }

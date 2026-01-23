@@ -5,9 +5,32 @@ use std::fmt;
 
 /// PackageName is a newtype wrapper around Path for type safety.
 /// It distinguishes package paths from module paths at the type level.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
+///
+/// Serializes as a canonical string (e.g., "my-org/my-lib") for V4 format.
+/// Deserializes from both string (V4) and array (Classic) formats.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 pub struct PackageName(pub Path);
+
+impl Serialize for PackageName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize as canonical string for V4 format
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PackageName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Delegate to Path which handles both string and array formats
+        let path = Path::deserialize(deserializer)?;
+        Ok(PackageName(path))
+    }
+}
 
 impl PackageName {
     /// Create a new PackageName from a Path

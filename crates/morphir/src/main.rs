@@ -162,15 +162,21 @@ enum ExtensionAction {
 enum IrAction {
     /// Migrate IR between versions
     Migrate {
-        /// Input file or directory
+        /// Input file, directory, or remote source (e.g., github:owner/repo)
         #[arg(short, long)]
-        input: std::path::PathBuf,
+        input: String,
         /// Output file or directory
         #[arg(short, long)]
         output: std::path::PathBuf,
         /// Target version (v4 or classic)
         #[arg(long)]
         target_version: Option<String>,
+        /// Force refresh cached remote sources
+        #[arg(long)]
+        force_refresh: bool,
+        /// Skip cache entirely for remote sources
+        #[arg(long)]
+        no_cache: bool,
     },
 }
 
@@ -226,7 +232,9 @@ impl AppSession for MorphirSession {
                     input,
                     output,
                     target_version,
-                } => run_migrate(input.clone(), output.clone(), target_version.clone()),
+                    force_refresh,
+                    no_cache,
+                } => run_migrate(input.clone(), output.clone(), target_version.clone(), *force_refresh, *no_cache),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
         }

@@ -1,0 +1,8 @@
+#!/bin/sh
+#MISE description="Serve Jekyll documentation site locally"
+#MISE depends=["docs:setup"]
+
+set -e
+
+cd docs
+bundle exec jekyll serve --livereload --baseurl ""

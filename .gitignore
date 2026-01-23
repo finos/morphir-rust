@@ -23,3 +23,9 @@ website/package-lock.json
 # Agent temporary outputs
 .agents/out/
 .morphir/out/
+
+# Ruby/Jekyll
+.gems/
+docs/Gemfile.lock
+docs/_site/
+docs/.jekyll-cache/

@@ -1,18 +1,26 @@
 # GitHub Pages configuration for Morphir Rust documentation
 title: Morphir Rust
-description: Rust tooling for the Morphir ecosystem
-remote_theme: pages-themes/minimal@v0.2.0
+tagline: Rust tooling for the Morphir ecosystem
+description: >-
+  CLI tools and libraries for working with Morphir IR -
+  functional domain modeling and business logic
+url: https://finos.github.io
+baseurl: /morphir-rust
+
+# Theme
+remote_theme: poole/poole@v2.1.0
 plugins:
   - jekyll-remote-theme
-
-# Navigation
-header_pages:
-  - index.md
-  - ir-migrate.md
 
 # Build settings
 markdown: kramdown
 highlighter: rouge
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# Permalink style
+permalink: pretty
 
 # Collections for organizing docs
 collections:
@@ -26,3 +34,8 @@ defaults:
       path: ""
     values:
       layout: default
+
+# Exclude from build
+exclude:
+  - morphir.usage.kdl
+  - man/

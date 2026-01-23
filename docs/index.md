@@ -63,9 +63,50 @@ Use `morphir --help-all` to see experimental commands:
 
 ### Installation
 
-#### Pre-built Binaries (Recommended)
+#### Quick Install (Recommended)
 
-Pre-built binaries are available for Linux (x86_64, aarch64, musl), macOS (x86_64, aarch64), and Windows (x86_64, aarch64).
+The easiest way to install morphir is using the installer script, which sets up automatic version management:
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.ps1 | iex
+```
+
+The installer downloads a launcher script that automatically manages morphir versions. The first time you run a command, it downloads the latest version.
+
+#### Version Management
+
+```bash
+# Use a specific version (downloads if needed)
+morphir +0.1.0 ir migrate --input ./ir.json --output ./v4.json
+
+# Pin version for a project (either method works)
+echo "0.1.0" > .morphir-version
+# Or in morphir.toml:
+#   version = "0.1.0"
+
+# Upgrade to latest
+morphir self upgrade
+
+# List installed versions
+morphir self list
+```
+
+Version is resolved in this order:
+1. `+0.1.0` command line override
+2. `MORPHIR_VERSION` environment variable
+3. `.morphir-version` file (walks up directory tree)
+4. `morphir.toml` file (looks for `version = "..."`)
+5. Latest release from GitHub
+
+#### Alternative Installation Methods
 
 **Using [mise](https://mise.jdx.dev/):**
 

@@ -1,0 +1,13 @@
+#!/bin/sh
+#MISE description="Install Jekyll dependencies for documentation"
+
+set -e
+
+cd docs
+
+if [ ! -f "Gemfile.lock" ] || [ "Gemfile" -nt "Gemfile.lock" ]; then
+    echo "Installing Jekyll dependencies..."
+    bundle install
+else
+    echo "Dependencies already installed"
+fi

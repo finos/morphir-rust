@@ -28,36 +28,60 @@ This is a Rust workspace containing multiple crates:
 
 ## Installation
 
-### Using cargo-binstall (Recommended)
+### Quick Install (Recommended)
 
-The fastest way to install pre-built binaries:
+The easiest way to install morphir with automatic version management:
 
+**Linux / macOS:**
 ```sh
-# Install cargo-binstall if you don't have it
-cargo install cargo-binstall
-
-# Install morphir
-cargo binstall morphir
+curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
 ```
 
-### Using mise
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.ps1 | iex
+```
 
+The installer sets up a launcher that automatically downloads the correct version when needed.
+
+### Alternative Methods
+
+**Using [mise](https://mise.jdx.dev/):**
 ```sh
-mise install morphir
+mise install github:finos/morphir-rust@v0.1.0
+mise use github:finos/morphir-rust@v0.1.0
+```
+
+**Using [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):**
+```sh
+cargo binstall --git https://github.com/finos/morphir-rust morphir
 ```
 
 ### Building from Source
 
 ```sh
-# Clone the repository
 git clone https://github.com/finos/morphir-rust.git
 cd morphir-rust
-
-# Build the project
-cargo build --release
-
-# Install the CLI tool
 cargo install --path crates/morphir
+```
+
+### Version Management
+
+```sh
+# Use a specific version
+morphir +0.1.0 ir migrate --input ./ir.json --output ./v4.json
+
+# Pin version for a project
+echo "0.1.0" > .morphir-version
+
+# Or in morphir.toml
+# version = "0.1.0"
+
+# Upgrade to latest
+morphir self upgrade
+
+# List installed versions
+morphir self list
 ```
 
 ## Usage
@@ -203,6 +227,9 @@ cargo clippy
 This project uses [mise](https://mise.jdx.dev/) for task automation:
 
 ```sh
+# Install all dev tools (Rust, Ruby, etc.)
+mise install
+
 # List available tasks
 mise tasks
 
@@ -210,17 +237,34 @@ mise tasks
 mise run check:fmt    # Format check
 mise run check:lint   # Lint check
 
-# Documentation
+# CLI Documentation
 mise run docs:generate     # Generate all docs
 mise run docs:man          # Man pages only
 mise run docs:markdown     # Markdown only
 mise run docs:completions  # Shell completions
+
+# Jekyll Site (test locally)
+mise run docs:serve        # Serve at http://localhost:4000
 
 # Release management
 mise run release:check     # Pre-release checks
 mise run release:version-bump <version>
 mise run release:changelog-validate
 ```
+
+### Testing Documentation Site Locally
+
+The documentation site uses Jekyll with the Poole theme. To test locally:
+
+```sh
+# Install dependencies (Ruby via mise)
+mise install
+
+# Serve the site with live reload
+mise run docs:serve
+```
+
+This starts a local server at http://localhost:4000 with live reload enabled.
 
 ## Design Principles
 

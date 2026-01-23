@@ -4,6 +4,12 @@ usage = "latest"
 shellcheck = "latest"
 shfmt = "latest"
 yamllint = "latest"
+ruby = "3.3"
+
+[env]
+# For Jekyll gems
+GEM_HOME = "{{config_root}}/.gems"
+PATH = "{{config_root}}/.gems/bin:{{env.PATH}}"
 
 [tasks."check:lint"]
 description = "Run all linters (Rust, shell, YAML)"

@@ -170,31 +170,21 @@ impl<A: Clone> Pattern<A> {
 mod tests {
     use super::*;
 
-    fn test_attrs() -> () {
-        ()
-    }
-
     #[test]
     fn test_wildcard_pattern() {
-        let p = Pattern::wildcard(test_attrs());
+        let p: Pattern<()> = Pattern::wildcard(());
         assert!(matches!(p, Pattern::WildcardPattern(_)));
     }
 
     #[test]
     fn test_tuple_pattern() {
-        let p = Pattern::tuple(
-            test_attrs(),
-            vec![
-                Pattern::wildcard(test_attrs()),
-                Pattern::wildcard(test_attrs()),
-            ],
-        );
+        let p: Pattern<()> = Pattern::tuple((), vec![Pattern::wildcard(()), Pattern::wildcard(())]);
         assert!(matches!(p, Pattern::TuplePattern(_, elements) if elements.len() == 2));
     }
 
     #[test]
     fn test_literal_pattern() {
-        let p = Pattern::literal(test_attrs(), Literal::Integer(42));
+        let p: Pattern<()> = Pattern::literal((), Literal::Integer(42));
         assert!(matches!(
             p,
             Pattern::LiteralPattern(_, Literal::Integer(42))

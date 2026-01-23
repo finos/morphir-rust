@@ -83,7 +83,7 @@ mod tests {
             Literal::String("hello".to_string())
         );
         assert_eq!(Literal::integer(42), Literal::Integer(42));
-        assert_eq!(Literal::float(3.14), Literal::Float(3.14));
+        assert_eq!(Literal::float(2.5), Literal::Float(2.5));
         assert_eq!(
             Literal::decimal("123.456"),
             Literal::Decimal("123.456".to_string())

@@ -195,29 +195,21 @@ impl<A: Clone> Field<A> {
 mod tests {
     use super::*;
 
-    fn test_attrs() -> () {
-        ()
-    }
-
     #[test]
     fn test_variable_type() {
-        let var = Type::variable(test_attrs(), Name::from("a"));
+        let var: Type<()> = Type::variable((), Name::from("a"));
         assert!(matches!(var, Type::Variable(_, _)));
     }
 
     #[test]
     fn test_unit_type() {
-        let unit = Type::unit(test_attrs());
+        let unit: Type<()> = Type::unit(());
         assert!(matches!(unit, Type::Unit(_)));
     }
 
     #[test]
     fn test_function_type() {
-        let func = Type::function(
-            test_attrs(),
-            Type::unit(test_attrs()),
-            Type::unit(test_attrs()),
-        );
+        let func: Type<()> = Type::function((), Type::unit(()), Type::unit(()));
         assert!(matches!(func, Type::Function(_, _, _)));
     }
 

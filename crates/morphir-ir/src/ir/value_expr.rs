@@ -466,57 +466,46 @@ impl NativeInfo {
 mod tests {
     use super::*;
 
-    fn test_attrs() -> () {
-        ()
-    }
-
     #[test]
     fn test_literal_value() {
-        let val: Value<(), ()> = Value::literal(test_attrs(), Literal::Integer(42));
+        let val: Value<(), ()> = Value::literal((), Literal::Integer(42));
         assert!(matches!(val, Value::Literal(_, Literal::Integer(42))));
     }
 
     #[test]
     fn test_variable_value() {
-        let val: Value<(), ()> = Value::variable(test_attrs(), Name::from("x"));
+        let val: Value<(), ()> = Value::variable((), Name::from("x"));
         assert!(matches!(val, Value::Variable(_, _)));
     }
 
     #[test]
     fn test_unit_value() {
-        let val: Value<(), ()> = Value::unit(test_attrs());
+        let val: Value<(), ()> = Value::unit(());
         assert!(matches!(val, Value::Unit(_)));
     }
 
     #[test]
     fn test_tuple_value() {
-        let val: Value<(), ()> = Value::tuple(
-            test_attrs(),
-            vec![Value::unit(test_attrs()), Value::unit(test_attrs())],
-        );
+        let val: Value<(), ()> = Value::tuple((), vec![Value::unit(()), Value::unit(())]);
         assert!(matches!(val, Value::Tuple(_, elements) if elements.len() == 2));
     }
 
     #[test]
     fn test_lambda_value() {
-        let val: Value<(), ()> = Value::lambda(
-            test_attrs(),
-            Pattern::wildcard(test_attrs()),
-            Value::unit(test_attrs()),
-        );
+        let val: Value<(), ()> = Value::lambda((), Pattern::wildcard(()), Value::unit(()));
         assert!(matches!(val, Value::Lambda(_, _, _)));
     }
 
     #[test]
     fn test_value_definition() {
         let def: ValueDefinition<(), ()> =
-            ValueDefinition::new(vec![], Type::unit(test_attrs()), Value::unit(test_attrs()));
+            ValueDefinition::new(vec![], Type::unit(()), Value::unit(()));
         assert!(matches!(def.body, ValueBody::Expression(_)));
     }
 
     #[test]
     fn test_hole_value() {
-        let val: Value<(), ()> = Value::Hole(test_attrs(), HoleReason::Draft, None);
+        let val: Value<(), ()> = Value::Hole((), HoleReason::Draft, None);
         assert!(matches!(val, Value::Hole(_, HoleReason::Draft, None)));
     }
 
@@ -524,7 +513,7 @@ mod tests {
     fn test_native_value_definition() {
         let def: ValueDefinition<(), ()> = ValueDefinition::native(
             vec![],
-            Type::unit(test_attrs()),
+            Type::unit(()),
             NativeInfo::new(NativeHint::Arithmetic, Some("add operation".to_string())),
         );
         assert!(matches!(def.body, ValueBody::Native(_)));

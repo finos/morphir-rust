@@ -212,13 +212,9 @@ mod tests {
     use super::*;
     use crate::ir::type_expr::Type;
 
-    fn test_attrs() -> () {
-        ()
-    }
-
     #[test]
     fn test_type_alias_definition() {
-        let def: TypeDefinition<()> = TypeDefinition::type_alias(vec![], Type::unit(test_attrs()));
+        let def: TypeDefinition<()> = TypeDefinition::type_alias(vec![], Type::unit(()));
         assert!(matches!(def, TypeDefinition::TypeAliasDefinition { .. }));
     }
 
@@ -229,7 +225,7 @@ mod tests {
             Name::from("Just"),
             vec![ConstructorArg::new(
                 Name::from("value"),
-                Type::variable(test_attrs(), Name::from("a")),
+                Type::variable((), Name::from("a")),
             )],
         );
 

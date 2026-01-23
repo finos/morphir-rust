@@ -6,7 +6,7 @@ use morphir_common::loader::{load_distribution, LoadedDistribution};
 use morphir_common::vfs::OsVfs;
 use morphir_ir::converter;
 use morphir_ir::ir::{classic, v4};
-use morphir_ir::naming::Path;
+use morphir_ir::naming::PackageName;
 use starbase::AppResult;
 use std::path::PathBuf;
 
@@ -38,7 +38,7 @@ pub fn run_migrate(input: PathBuf, output: PathBuf, target_version: Option<Strin
                     format_version: 4,
                     distribution: v4::DistributionBody::Library(v4::LibraryDistribution(
                         v4::LibraryTag::Library,
-                        v4::Path::new(&package_path.to_string()),
+                        PackageName::from(package_path),
                         vec![],
                         v4_pkg,
                     )),
@@ -66,7 +66,7 @@ pub fn run_migrate(input: PathBuf, output: PathBuf, target_version: Option<Strin
                     format_version: 1,
                     distribution: classic::DistributionBody::Library(
                         classic::LibraryTag::Library,
-                        Path::new(&package_name.to_string()),
+                        package_name.into_path(),
                         vec![],
                         classic_pkg,
                     ),

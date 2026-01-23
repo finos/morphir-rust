@@ -4,7 +4,7 @@
 //! and V4 Morphir IR formats.
 
 use crate::ir::{classic, v4};
-use crate::naming::Name;
+use crate::naming::{ModuleName, Name};
 
 /// Convert a Classic package to V4 format.
 ///
@@ -50,7 +50,7 @@ fn convert_module_to_v4(module: classic::Module) -> v4::ModuleDefinitionEntry {
     let values = convert_values_to_v4(&module.detail.value.values);
 
     v4::ModuleDefinitionEntry(
-        module.name,
+        ModuleName::from(module.name),
         v4::AccessControlledModuleDefinition {
             access,
             value: v4::ModuleDefinition {
@@ -67,7 +67,7 @@ fn convert_module_to_classic(entry: v4::ModuleDefinitionEntry) -> classic::Modul
     let v4::ModuleDefinitionEntry(name, access_controlled) = entry;
 
     classic::Module {
-        name,
+        name: name.into_path(),
         detail: classic::ModuleDetail {
             access: convert_access_to_classic(&access_controlled.access),
             value: classic::ModuleValue {

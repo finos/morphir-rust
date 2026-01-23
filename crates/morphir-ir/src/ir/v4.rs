@@ -114,15 +114,21 @@ pub enum Access {
     Private,
 }
 
-// Placeholder types for logic that requires deep implementation
-pub type PackageName = crate::naming::Path;
-pub type ModuleName = crate::naming::Path;
-pub type Name = crate::naming::Name;
-pub type Path = crate::naming::Path;
-pub type Dependencies = Vec<(PackageName, PackageSpecification)>;
-pub type PackageSpecification = HashMap<String, serde_json::Value>; // Placeholder
+// Naming types - now using proper newtypes for type safety
+pub use crate::naming::PackageName;
+pub use crate::naming::ModuleName;
+pub use crate::naming::Name;
+pub use crate::naming::Path;
 
-pub type Type = serde_json::Value; // Placeholder
-pub type Value = serde_json::Value; // Placeholder
-pub type TypeAttributes = serde_json::Value; // Placeholder
+// Dependencies specification
+pub type Dependencies = Vec<(PackageName, PackageSpecification)>;
+pub type PackageSpecification = HashMap<String, serde_json::Value>;
+
+// Type/Value expressions - using serde_json::Value for now
+// TODO: Replace with strongly-typed versions from ir::type_expr, ir::value_expr
+// when serde integration for tagged arrays is complete
+pub type Type = serde_json::Value;
+pub type Value = serde_json::Value;
+pub type TypeAttributes = serde_json::Value;
+
 pub type Package = PackageDefinition;

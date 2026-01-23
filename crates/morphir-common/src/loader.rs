@@ -1,6 +1,7 @@
 use crate::vfs::Vfs;
 use anyhow::{Context, Result};
 use morphir_ir::ir::{classic, v4};
+use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::Path;
 
 #[derive(Debug)]
@@ -71,7 +72,7 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
                 .replace('/', ".");
 
             let module_entry = v4::ModuleDefinitionEntry(
-                v4::Path::new(&module_name),
+                ModuleName::from_str(&module_name),
                 v4::AccessControlledModuleDefinition {
                     access: v4::Access::Public,
                     value: v4::ModuleDefinition {
@@ -89,7 +90,7 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
         format_version: 4,
         distribution: v4::DistributionBody::Library(v4::LibraryDistribution(
             v4::LibraryTag::Library,
-            v4::Path::new(&package_name),
+            PackageName::from_str(&package_name),
             vec![],
             v4::PackageDefinition { modules },
         )),

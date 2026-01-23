@@ -1,12 +1,16 @@
 #![allow(clippy::duplicate_mod)]
 pub mod fqname;
+pub mod module_name;
 pub mod name;
+pub mod package_name;
 pub mod path;
 pub mod qname;
 
 // Re-export common types
 pub use fqname::FQName;
+pub use module_name::ModuleName;
 pub use name::Name;
+pub use package_name::PackageName;
 pub use path::Path;
 pub use qname::QName;
 

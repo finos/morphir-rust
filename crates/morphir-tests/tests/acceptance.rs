@@ -159,7 +159,7 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
             let result_content = match dist {
                 LoadedDistribution::Classic(classic_dist) => {
                     if target_v4 {
-                        let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_name, _, pkg) =
+                        let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_path, _, pkg) =
                             classic_dist.distribution;
                         let v4_pkg = converter::classic_to_v4(pkg);
                         let v4_dist = morphir_ir::ir::v4::Distribution {
@@ -167,7 +167,7 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
                             distribution: morphir_ir::ir::v4::DistributionBody::Library(
                                 morphir_ir::ir::v4::LibraryDistribution(
                                     morphir_ir::ir::v4::LibraryTag::Library,
-                                    pkg_name,
+                                    morphir_ir::naming::PackageName::from(pkg_path),
                                     vec![],
                                     v4_pkg,
                                 ),
@@ -189,7 +189,7 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
                             format_version: 2024,
                             distribution: morphir_ir::ir::classic::DistributionBody::Library(
                                 morphir_ir::ir::classic::LibraryTag::Library,
-                                pkg_name,
+                                pkg_name.into_path(),
                                 vec![],
                                 classic_pkg,
                             ),

@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use starbase::{App, AppResult, AppSession};
+use std::sync::LazyLock;
 
 mod commands;
 
@@ -10,21 +11,33 @@ use commands::{
     run_validate,
 };
 
-const BANNER: &str = r#"
+const LOGO: &str = r#"
   __  __                  _     _
  |  \/  | ___  _ __ _ __ | |__ (_)_ __
  | |\/| |/ _ \| '__| '_ \| '_ \| | '__|
  | |  | | (_) | |  | |_) | | | | | |
  |_|  |_|\___/|_|  | .__/|_| |_|_|_|
-                   |_|
-"#;
+                   |_|"#;
+
+static BANNER: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}\n  v{} (built {})\n",
+        LOGO,
+        env!("CARGO_PKG_VERSION"),
+        env!("BUILD_DATE")
+    )
+});
+
+fn get_banner() -> &'static str {
+    &BANNER
+}
 
 /// Morphir CLI - Rust tooling for the Morphir ecosystem
 #[derive(Parser)]
 #[command(name = "morphir")]
 #[command(about = "Morphir CLI tool for Rust", long_about = None)]
 #[command(version)]
-#[command(before_help = BANNER)]
+#[command(before_help = get_banner())]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

@@ -3,3 +3,8 @@ source "https://rubygems.org"
 gem "jekyll", "~> 4.3"
 gem "jekyll-remote-theme"
 gem "webrick" # Required for Ruby 3+
+
+# just-the-docs theme dependencies
+gem "jekyll-seo-tag"
+gem "jekyll-include-cache"
+gem "rake"

@@ -1,16 +1,43 @@
 # GitHub Pages configuration for Morphir Rust documentation
 title: Morphir Rust
-tagline: Rust tooling for the Morphir ecosystem
 description: >-
   CLI tools and libraries for working with Morphir IR -
   functional domain modeling and business logic
 url: https://finos.github.io
 baseurl: /morphir-rust
 
-# Theme
-remote_theme: poole/poole@v2.1.0
+# Theme - just-the-docs has sidebar navigation with nesting
+remote_theme: just-the-docs/just-the-docs@v0.10.0
 plugins:
   - jekyll-remote-theme
+
+# Color scheme - nil enables the dark/light toggle
+color_scheme: nil
+
+# Enable search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Aux links (top right)
+aux_links:
+  "GitHub":
+    - "https://github.com/finos/morphir-rust"
+
+aux_links_new_tab: true
+
+# Footer content
+footer_content: "Copyright &copy; 2022-2025 FINOS. Distributed under the <a href=\"https://github.com/finos/morphir-rust/blob/main/LICENSE\">Apache License 2.0</a>."
+
+# Back to top link
+back_to_top: true
+back_to_top_text: "Back to top"
 
 # Build settings
 markdown: kramdown
@@ -22,20 +49,9 @@ kramdown:
 # Permalink style
 permalink: pretty
 
-# Collections for organizing docs
-collections:
-  docs:
-    output: true
-    permalink: /:collection/:name
-
-# Default front matter
-defaults:
-  - scope:
-      path: ""
-    values:
-      layout: default
-
 # Exclude from build
 exclude:
   - morphir.usage.kdl
   - man/
+  - Gemfile
+  - Gemfile.lock

@@ -1,11 +1,19 @@
 ---
 layout: default
 title: Home
+nav_order: 1
+permalink: /
 ---
 
-# Morphir Rust Documentation
+# Morphir Rust
 
-Welcome to the documentation for **Morphir Rust** - Rust tooling for the Morphir ecosystem.
+Rust-based tooling for the [Morphir](https://github.com/finos/morphir) ecosystem.
+{: .fs-6 .fw-300 }
+
+[Get Started](getting-started){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
+[View on GitHub](https://github.com/finos/morphir-rust){: .btn .fs-5 .mb-4 .mb-md-0 }
+
+---
 
 ## What is Morphir?
 
@@ -17,146 +25,23 @@ Welcome to the documentation for **Morphir Rust** - Rust tooling for the Morphir
 - Optimization
 - Execution
 
-## CLI Commands
-
-### Stable Commands
-
-| Command | Description |
-|---------|-------------|
-| [`ir migrate`](ir-migrate.md) | Convert Morphir IR between format versions |
-| `schema` | Generate JSON Schema for Morphir IR |
-| `tool` | Manage Morphir tools |
-| `dist` | Manage Morphir distributions |
-| `extension` | Manage Morphir extensions |
-
-### [IR Migrate](ir-migrate.md)
-
-Convert Morphir IR between format versions (Classic V1-V3 ↔ V4). Supports local files and remote sources.
+## Quick Start
 
 ```bash
-# Migrate local file to V4
+# Install morphir
+curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
+
+# Migrate a Morphir IR file to V4 format
 morphir ir migrate --input ./morphir-ir.json --output ./v4.json
 
-# Migrate from remote URL (e.g., the LCR regulatory model)
-morphir ir migrate \
-    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
-    --output ./lcr-v4.json
+# Generate JSON Schema
+morphir schema --output ./morphir-ir-schema.json
 ```
-
-### Experimental Commands
-
-Use `morphir --help-all` to see experimental commands:
-
-| Command | Description |
-|---------|-------------|
-| `validate` | Validate Morphir IR models |
-| `generate` | Generate code from Morphir IR |
-| `transform` | Transform Morphir IR |
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/finos/morphir-rust)
 - [FINOS Morphir Project](https://github.com/finos/morphir)
-- [LCR Interactive Demo](https://lcr-interactive.finos.org/) - See Morphir in action with the Basel III Liquidity Coverage Ratio regulation
-
-## Getting Started
-
-### Installation
-
-#### Quick Install (Recommended)
-
-The easiest way to install morphir is using the installer script, which sets up automatic version management:
-
-**Linux / macOS:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
-```
-
-**Windows (PowerShell):**
-
-```powershell
-irm https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.ps1 | iex
-```
-
-The installer downloads a launcher script that automatically manages morphir versions. The first time you run a command, it downloads the latest version.
-
-#### Version Management
-
-```bash
-# Use a specific version (downloads if needed)
-morphir +0.1.0 ir migrate --input ./ir.json --output ./v4.json
-
-# Pin version for a project (either method works)
-echo "0.1.0" > .morphir-version
-# Or in morphir.toml:
-#   version = "0.1.0"
-
-# Upgrade to latest
-morphir self upgrade
-
-# List installed versions
-morphir self list
-```
-
-Version is resolved in this order:
-1. `+0.1.0` command line override
-2. `MORPHIR_VERSION` environment variable
-3. `.morphir-version` file (walks up directory tree)
-4. `morphir.toml` file (looks for `version = "..."`)
-5. Latest release from GitHub
-
-#### Alternative Installation Methods
-
-**Using [mise](https://mise.jdx.dev/):**
-
-```bash
-mise install github:finos/morphir-rust@v0.1.0
-mise use github:finos/morphir-rust@v0.1.0
-```
-
-**Using [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):**
-
-```bash
-cargo binstall --git https://github.com/finos/morphir-rust morphir
-```
-
-**Manual Download:**
-
-Download the appropriate binary from the [GitHub Releases](https://github.com/finos/morphir-rust/releases) page.
-
-#### Build from Source
-
-```bash
-git clone https://github.com/finos/morphir-rust.git
-cd morphir-rust
-cargo install --path crates/morphir
-```
-
-### Getting Help
-
-```bash
-# Show help
-morphir --help
-
-# Show help including experimental commands
-morphir --help-all
-morphir help --full
-morphir help --experimental
-```
-
-### Basic Usage
-
-```bash
-# Migrate IR to V4 format
-morphir ir migrate --input ./morphir-ir.json --output ./v4.json
-
-# Generate JSON Schema for Morphir IR
-morphir schema --output ./morphir-ir-schema.json
-
-# Validate a Morphir IR file (experimental)
-morphir validate --input ./morphir-ir.json
-```
+- [LCR Interactive Demo](https://lcr-interactive.finos.org/) - See Morphir in action
 
 ## Contributing
 

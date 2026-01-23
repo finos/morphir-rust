@@ -1,6 +1,7 @@
 ---
 layout: default
-title: IR Migrate Command
+title: IR Migration Guide
+nav_order: 5
 ---
 
 # IR Migrate Command

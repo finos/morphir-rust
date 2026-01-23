@@ -5,4 +5,9 @@
 set -e
 
 cd docs
+
+echo "Starting Jekyll server..."
+echo "Note: Sass deprecation warnings are from the just-the-docs theme and can be ignored."
+echo ""
+
 bundle exec jekyll serve --livereload --baseurl ""

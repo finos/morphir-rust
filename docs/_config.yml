@@ -46,6 +46,10 @@ kramdown:
   input: GFM
   hard_wrap: false
 
+# Sass settings - suppress deprecation warnings from theme dependencies
+sass:
+  quiet_deps: true
+
 # Permalink style
 permalink: pretty
 

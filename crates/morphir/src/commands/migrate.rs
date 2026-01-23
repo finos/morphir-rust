@@ -93,7 +93,18 @@ pub fn run_migrate(
         LoadedDistribution::Classic(dist) => {
             if target_v4 {
                 println!("Converting Classic -> V4");
-                let classic::DistributionBody::Library(_, package_path, _, pkg) = dist.distribution;
+                let classic::DistributionBody::Library(_, package_path, classic_deps, pkg) =
+                    dist.distribution;
+
+                // Warn if dependencies will be lost (Classic deps format differs from V4)
+                if !classic_deps.is_empty() {
+                    eprintln!(
+                        "Warning: {} dependencies found in Classic format. \
+                         Dependency conversion is not yet supported and will be omitted.",
+                        classic_deps.len()
+                    );
+                }
+
                 let v4_pkg = converter::classic_to_v4(pkg);
 
                 // Wrap in V4 IRFile
@@ -101,7 +112,7 @@ pub fn run_migrate(
                     format_version: v4::FormatVersion::default(),
                     distribution: v4::Distribution::Library(v4::LibraryContent {
                         package_name: PackageName::from(package_path),
-                        dependencies: IndexMap::new(),
+                        dependencies: IndexMap::new(), // TODO: Convert classic deps when format is understood
                         def: v4_pkg,
                     }),
                 };
@@ -123,6 +134,15 @@ pub fn run_migrate(
                     return Ok(Some(1));
                 };
 
+                // Warn if dependencies will be lost
+                if !lib_content.dependencies.is_empty() {
+                    eprintln!(
+                        "Warning: {} dependencies found in V4 format. \
+                         Dependency conversion is not yet supported and will be omitted.",
+                        lib_content.dependencies.len()
+                    );
+                }
+
                 let classic_pkg = converter::v4_to_classic(lib_content.def);
 
                 // Wrap in Classic Distribution
@@ -131,7 +151,7 @@ pub fn run_migrate(
                     distribution: classic::DistributionBody::Library(
                         classic::LibraryTag::Library,
                         lib_content.package_name.into_path(),
-                        vec![],
+                        vec![], // TODO: Convert V4 deps to classic format
                         classic_pkg,
                     ),
                 };

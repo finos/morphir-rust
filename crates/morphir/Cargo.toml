@@ -27,6 +27,6 @@ morphir-common = { path = "../morphir-common" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "6.0"
-schemars = "0.8"
+schemars = "0.9"
 indexmap = { version = "2", features = ["serde"] }
 

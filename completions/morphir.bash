@@ -19,9 +19,6 @@ usage "Usage: morphir [OPTIONS] [COMMAND]"
 flag "-h --help" help="Print help (use --help-all to include experimental commands)"
 flag --help-all help="Print help including experimental commands"
 flag "-V --version" help="Print version"
-flag "-h --help" help="Print help (use --help-all to include experimental commands)"
-flag --help-all help="Print help including experimental commands"
-flag "-V --version" help="Print version"
 cmd validate hide=#true help="[Experimental] Validate Morphir IR models" {
     flag "-i --input" help="Path to the Morphir IR file or directory" {
         arg <INPUT>

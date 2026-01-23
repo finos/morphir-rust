@@ -312,6 +312,15 @@ async fn main() -> starbase::MainResult {
         return Ok(std::process::ExitCode::SUCCESS);
     }
 
+    // Handle usage subcommand early (before starbase) to avoid double execution
+    if args.len() >= 2 && args[1] == "usage" {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let spec: usage::Spec = cli.into();
+        println!("{}", spec);
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+
     let cli = Cli::parse();
 
     // Handle case where no command is provided

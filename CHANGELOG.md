@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-01-23
 
 ### Added
 
@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `morphir extension` - Manage Morphir extensions
   - `morphir ir migrate` - Migrate IR between versions
   - `morphir schema` - Generate JSON Schema for Morphir IR
+  - `morphir version` - Print version info (supports `--json` for machine-readable output)
 - **Multi-platform Binaries**: Pre-built releases for Linux (x86_64, aarch64, musl), macOS (x86_64, aarch64), and Windows (x86_64, aarch64)
 - **cargo-binstall Support**: Install pre-built binaries via `cargo binstall morphir`
 - **WASM Bindings**: WebAssembly backend for browser and edge deployments

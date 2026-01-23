@@ -21,18 +21,6 @@ Print help including experimental commands
 
 Print version
 
-### `-h --help`
-
-Print help (use --help-all to include experimental commands)
-
-### `--help-all`
-
-Print help including experimental commands
-
-### `-V --version`
-
-Print version
-
 ## Subcommands
 
 - [`morphir tool <SUBCOMMAND>`](/tool.md)

@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use owo_colors::OwoColorize;
 use starbase::{App, AppResult, AppSession};
 
 mod commands;
@@ -56,26 +55,34 @@ fn print_banner() {
 #[command(version)]
 #[command(disable_help_flag = true, disable_version_flag = true)]
 struct Cli {
-    /// Print help
+    /// Print help (use --help-all to include experimental commands)
     #[arg(short, long, action = clap::ArgAction::Help)]
     help: Option<bool>,
+
+    /// Print help including experimental commands
+    #[arg(long)]
+    help_all: bool,
 
     /// Print version
     #[arg(short = 'V', long, action = clap::ArgAction::Version)]
     version: Option<bool>,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Clone, Subcommand)]
 enum Commands {
-    /// Validate Morphir IR models
+    // ===== Experimental Commands (hidden by default) =====
+    /// [Experimental] Validate Morphir IR models
+    #[command(hide = true)]
     Validate {
         /// Path to the Morphir IR file or directory
         #[arg(short, long)]
         input: Option<String>,
     },
-    /// Generate code from Morphir IR
+    /// [Experimental] Generate code from Morphir IR
+    #[command(hide = true)]
     Generate {
         /// Target language or format
         #[arg(short, long)]
@@ -87,7 +94,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
-    /// Transform Morphir IR
+    /// [Experimental] Transform Morphir IR
+    #[command(hide = true)]
     Transform {
         /// Path to the Morphir IR file or directory
         #[arg(short, long)]
@@ -96,6 +104,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+
+    // ===== Stable Commands =====
     /// Manage Morphir tools, distributions, and extensions
     Tool {
         #[command(subcommand)]
@@ -296,21 +306,49 @@ impl AppSession for MorphirSession {
 
 #[tokio::main]
 async fn main() -> starbase::MainResult {
+    use clap::CommandFactory;
+
     // Check for help/version flags first to print our custom banner
     let args: Vec<String> = std::env::args().collect();
-    if args.len() == 1
+    let show_banner = args.len() == 1
         || args.iter().any(|a| a == "--help" || a == "-h")
-        || args.iter().any(|a| a == "--version" || a == "-V")
-    {
+        || args.iter().any(|a| a == "--help-all")
+        || args.iter().any(|a| a == "--version" || a == "-V");
+
+    if show_banner {
         print_banner();
+    }
+
+    // Handle --help-all specially to show hidden commands
+    if args.iter().any(|a| a == "--help-all") {
+        let mut cmd = Cli::command();
+        // Unhide the experimental commands for --help-all
+        for subcommand in cmd.get_subcommands_mut() {
+            if subcommand.get_name() == "validate"
+                || subcommand.get_name() == "generate"
+                || subcommand.get_name() == "transform"
+            {
+                *subcommand = subcommand.clone().hide(false);
+            }
+        }
+        println!("Note: Commands marked [Experimental] are not yet fully implemented.\n");
+        cmd.print_help().ok();
+        return Ok(std::process::ExitCode::SUCCESS);
     }
 
     let cli = Cli::parse();
 
-    // Create session with command
-    let session = MorphirSession {
-        command: cli.command,
+    // Handle case where no command is provided
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            Cli::command().print_help().ok();
+            return Ok(std::process::ExitCode::SUCCESS);
+        }
     };
+
+    // Create session with command
+    let session = MorphirSession { command };
 
     // Initialize and run starbase App
     let exit_code = App::default()

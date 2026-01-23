@@ -1,0 +1,24 @@
+#!/bin/sh
+#MISE description="Generate markdown documentation from CLI spec"
+
+set -e
+
+# Ensure output directory exists
+mkdir -p docs/cli
+
+echo "Generating usage spec..."
+cargo build -p morphir --quiet
+
+# Generate usage spec
+./target/debug/morphir usage >docs/morphir.usage.kdl
+
+# Generate markdown using usage CLI
+if command -v usage >/dev/null 2>&1; then
+    echo "Generating markdown documentation..."
+    usage generate markdown --file docs/morphir.usage.kdl --out-dir docs/cli --multi
+    echo "Markdown docs generated in docs/cli/"
+else
+    echo "Warning: 'usage' CLI not found. Install with: mise install"
+    echo "Usage spec saved to docs/morphir.usage.kdl"
+    exit 1
+fi

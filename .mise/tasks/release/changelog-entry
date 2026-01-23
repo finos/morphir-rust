@@ -1,0 +1,48 @@
+#!/bin/sh
+#MISE description="Add an entry to the Unreleased section of CHANGELOG.md"
+
+CATEGORY="${1:-}"
+ENTRY="${2:-}"
+
+if [ -z "$CATEGORY" ] || [ -z "$ENTRY" ]; then
+    echo "Usage: mise run release:changelog-entry <category> <entry>"
+    echo ""
+    echo "Categories: Added, Changed, Deprecated, Removed, Fixed, Security"
+    echo ""
+    echo "Example:"
+    echo "  mise run release:changelog-entry Added 'New feature for X (#123)'"
+    echo "  mise run release:changelog-entry Fixed 'Bug in Y component (#456)'"
+    exit 1
+fi
+
+# Validate category
+case "$CATEGORY" in
+    Added | Changed | Deprecated | Removed | Fixed | Security) ;;
+    *)
+        echo "ERROR: Invalid category '$CATEGORY'"
+        echo "Valid categories: Added, Changed, Deprecated, Removed, Fixed, Security"
+        exit 1
+        ;;
+esac
+
+CHANGELOG="CHANGELOG.md"
+
+if [ ! -f "$CHANGELOG" ]; then
+    echo "ERROR: $CHANGELOG not found"
+    exit 1
+fi
+
+# Find the line number of the category under Unreleased
+LINE=$(grep -n "### $CATEGORY" "$CHANGELOG" | head -1 | cut -d: -f1)
+
+if [ -z "$LINE" ]; then
+    echo "ERROR: Category '### $CATEGORY' not found in $CHANGELOG"
+    exit 1
+fi
+
+# Insert the entry after the category header
+sed -i "$((LINE))a\\
+- $ENTRY" "$CHANGELOG"
+
+echo "Added entry to $CATEGORY section:"
+echo "  - $ENTRY"

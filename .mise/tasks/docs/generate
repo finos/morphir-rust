@@ -1,0 +1,12 @@
+#!/bin/sh
+#MISE description="Generate all CLI documentation (man pages, markdown, completions)"
+#MISE depends=["docs:man", "docs:markdown", "docs:completions"]
+
+echo ""
+echo "Documentation generated successfully!"
+echo ""
+echo "Output locations:"
+echo "  - Man pages:    docs/man/man1/"
+echo "  - Markdown:     docs/cli/"
+echo "  - Completions:  completions/"
+echo "  - Usage spec:   docs/morphir.usage.kdl"

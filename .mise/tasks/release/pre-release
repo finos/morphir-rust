@@ -1,0 +1,79 @@
+#!/bin/sh
+#MISE description="Complete pre-release checklist and preparation"
+#MISE depends=["release:check", "release:changelog-validate"]
+
+VERSION="${1:-}"
+
+if [ -z "$VERSION" ]; then
+    echo "Usage: mise run release:pre-release <version>"
+    echo ""
+    echo "Example: mise run release:pre-release 0.2.0"
+    exit 1
+fi
+
+echo "=========================================="
+echo "  Pre-release checklist for v$VERSION"
+echo "=========================================="
+echo ""
+
+# Get current version
+CURRENT_VERSION=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+echo "Current version: $CURRENT_VERSION"
+echo "Target version:  $VERSION"
+echo ""
+
+echo "[1/5] Quality checks: PASSED (via dependencies)"
+echo ""
+
+echo "[2/5] Git status check..."
+if git diff --quiet && git diff --cached --quiet; then
+    echo "      Working directory is clean"
+else
+    echo "      WARNING: You have uncommitted changes:"
+    git status --short
+fi
+echo ""
+
+echo "[3/5] Checking for unreleased changes..."
+UNRELEASED_ENTRIES=$(sed -n '/## \[Unreleased\]/,/## \[/p' CHANGELOG.md | grep -c "^- " || echo "0")
+if [ "$UNRELEASED_ENTRIES" -gt 0 ]; then
+    echo "      Found $UNRELEASED_ENTRIES unreleased changelog entries"
+else
+    echo "      WARNING: No unreleased changes found in CHANGELOG.md"
+fi
+echo ""
+
+echo "[4/5] Checking for existing tag..."
+if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+    echo "      ERROR: Tag v$VERSION already exists!"
+else
+    echo "      Tag v$VERSION does not exist (good)"
+fi
+echo ""
+
+echo "[5/5] Pre-release summary"
+echo ""
+echo "=========================================="
+echo "  Next steps to release v$VERSION"
+echo "=========================================="
+echo ""
+echo "1. Bump version:"
+echo "   mise run release:version-bump $VERSION"
+echo ""
+echo "2. Update changelog:"
+echo "   mise run release:changelog-release $VERSION"
+echo "   (Then manually move entries from Unreleased)"
+echo ""
+echo "3. Commit release preparation:"
+echo "   git add Cargo.toml Cargo.lock CHANGELOG.md"
+echo "   git commit -m 'chore: prepare release v$VERSION'"
+echo ""
+echo "4. Create and push tag:"
+echo "   mise run release:tag-create $VERSION --push"
+echo ""
+echo "5. Monitor release:"
+echo "   https://github.com/finos/morphir-rust/actions"
+echo ""
+echo "Or use: /release-manager prepare $VERSION"
+echo "for AI-assisted release preparation."

@@ -2,33 +2,50 @@ use clap::{Parser, Subcommand};
 use starbase::{App, AppResult, AppSession};
 
 mod commands;
+mod help;
 
 use commands::{
     run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update, run_extension_install,
     run_extension_list, run_extension_uninstall, run_extension_update, run_generate, run_migrate,
     run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform,
-    run_validate,
+    run_validate, run_version,
 };
 
-/// Morphir CLI - Rust tooling for the Morphir ecosystem
+/// Morphir CLI - Tools for functional domain modeling and business logic
 #[derive(Parser)]
 #[command(name = "morphir")]
-#[command(about = "Morphir CLI tool for Rust", long_about = None)]
+#[command(about = "CLI for working with Morphir IR - functional domain modeling and business logic", long_about = None)]
 #[command(version)]
+#[command(disable_help_flag = true, disable_version_flag = true)]
 struct Cli {
+    /// Print help (use --help-all to include experimental commands)
+    #[arg(short, long, action = clap::ArgAction::Help)]
+    help: Option<bool>,
+
+    /// Print help including experimental commands
+    #[arg(long)]
+    help_all: bool,
+
+    /// Print version
+    #[arg(short = 'V', long, action = clap::ArgAction::Version)]
+    version: Option<bool>,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Clone, Subcommand)]
 enum Commands {
-    /// Validate Morphir IR models
+    // ===== Experimental Commands (hidden by default) =====
+    /// [Experimental] Validate Morphir IR models
+    #[command(hide = true)]
     Validate {
         /// Path to the Morphir IR file or directory
         #[arg(short, long)]
         input: Option<String>,
     },
-    /// Generate code from Morphir IR
+    /// [Experimental] Generate code from Morphir IR
+    #[command(hide = true)]
     Generate {
         /// Target language or format
         #[arg(short, long)]
@@ -40,7 +57,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
-    /// Transform Morphir IR
+    /// [Experimental] Transform Morphir IR
+    #[command(hide = true)]
     Transform {
         /// Path to the Morphir IR file or directory
         #[arg(short, long)]
@@ -49,6 +67,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+
+    // ===== Stable Commands =====
     /// Manage Morphir tools, distributions, and extensions
     Tool {
         #[command(subcommand)]
@@ -75,6 +95,17 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+    /// Print version information
+    Version {
+        /// Output version info as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    // ===== Internal/Hidden Commands =====
+    /// Output usage spec for documentation generation
+    #[command(hide = true)]
+    Usage,
 }
 
 #[derive(Clone, Subcommand)]
@@ -243,18 +274,66 @@ impl AppSession for MorphirSession {
                 ),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
+            Commands::Version { json } => run_version(*json),
+            Commands::Usage => {
+                use clap::CommandFactory;
+                let cli = Cli::command();
+                let spec: usage::Spec = cli.into();
+                println!("{}", spec);
+                Ok(None)
+            }
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> starbase::MainResult {
+    use clap::CommandFactory;
+
+    // Check for help/version flags first to print our custom banner
+    let args: Vec<String> = std::env::args().collect();
+
+    if help::should_show_banner(&args) {
+        help::print_banner();
+    }
+
+    // Handle full help variants
+    if help::should_show_full_help(&args) {
+        help::print_full_help::<Cli>();
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+
+    // Handle version subcommand early (before starbase) to avoid double execution
+    if args.len() >= 2 && args[1] == "version" {
+        let json = args.iter().any(|a| a == "--json");
+        if let Some(code) = run_version(json)? {
+            return Ok(std::process::ExitCode::from(code));
+        }
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+
+    // Handle usage subcommand early (before starbase) to avoid double execution
+    if args.len() >= 2 && args[1] == "usage" {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let spec: usage::Spec = cli.into();
+        println!("{}", spec);
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+
     let cli = Cli::parse();
 
-    // Create session with command
-    let session = MorphirSession {
-        command: cli.command,
+    // Handle case where no command is provided
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            Cli::command().print_help().ok();
+            return Ok(std::process::ExitCode::SUCCESS);
+        }
     };
+
+    // Create session with command
+    let session = MorphirSession { command };
 
     // Initialize and run starbase App
     let exit_code = App::default()

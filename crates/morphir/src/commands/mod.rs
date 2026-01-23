@@ -6,6 +6,7 @@ pub mod schema;
 pub mod tool;
 pub mod transform;
 pub mod validate;
+pub mod version;
 
 pub use dist::*;
 pub use extension::*;
@@ -14,3 +15,4 @@ pub use migrate::*;
 pub use tool::*;
 pub use transform::*;
 pub use validate::*;
+pub use version::*;

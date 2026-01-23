@@ -1,0 +1,23 @@
+#!/bin/sh
+#MISE description="Lint YAML files with yamllint"
+
+set -e
+
+echo "Checking YAML files..."
+
+# Find all YAML files, excluding node_modules and target directories
+YAML_FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \) \
+    -not -path "./node_modules/*" \
+    -not -path "./target/*" \
+    -not -path "./.git/*" \
+    2>/dev/null || true)
+
+if [ -z "$YAML_FILES" ]; then
+    echo "No YAML files found to lint"
+    exit 0
+fi
+
+echo "Running yamllint..."
+echo "$YAML_FILES" | xargs yamllint -d relaxed
+
+echo "YAML files OK"

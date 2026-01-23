@@ -1,4 +1,32 @@
 #!/bin/sh
 #MISE description="Run all checks required before pushing"
 #MISE depends=["check:fmt", "check:lint"]
+
+set -e
+
+# Check for skip flag
+if [ "$SKIP_DOCS" = "1" ] || [ "$MORPHIR_SKIP_DOCS" = "1" ]; then
+    echo "Skipping documentation generation (SKIP_DOCS=1)"
+else
+    echo "Generating documentation..."
+    mise run docs:generate || {
+        echo ""
+        echo "Documentation generation failed!"
+        echo "To skip in emergency: SKIP_DOCS=1 git push"
+        exit 1
+    }
+
+    # Check if docs changed and warn user to commit them
+    if ! git diff --quiet docs/ completions/ 2>/dev/null; then
+        echo ""
+        echo "WARNING: Documentation files have changed!"
+        echo "Please commit the updated docs before pushing:"
+        echo "  git add docs/ completions/"
+        echo "  git commit -m 'docs: Update generated documentation'"
+        echo ""
+        echo "Or skip docs generation in emergency: SKIP_DOCS=1 git push"
+        exit 1
+    fi
+fi
+
 echo "All pre-push checks passed!"

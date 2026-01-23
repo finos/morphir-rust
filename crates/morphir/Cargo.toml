@@ -9,7 +9,7 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Morphir CLI tool for Rust"
+description = "CLI for working with Morphir IR - functional domain modeling and business logic"
 
 [[bin]]
 name = "morphir"
@@ -17,7 +17,8 @@ path = "src/main.rs"
 
 [dependencies]
 starbase = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["color"] }
+owo-colors = "4"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = "0.1"
@@ -29,4 +30,18 @@ serde_json = "1.0"
 dirs = "6.0"
 schemars = "0.9"
 indexmap = { version = "2", features = ["serde"] }
+usage-lib = { version = "2", features = ["clap", "docs"] }
+
+[build-dependencies]
+chrono = "0.4"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-fmt = "zip"
 

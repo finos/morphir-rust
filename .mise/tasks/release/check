@@ -1,0 +1,22 @@
+#!/bin/sh
+#MISE description="Run all pre-release quality checks"
+#MISE depends=["check:fmt", "check:lint"]
+
+set -e
+
+echo "Running pre-release checks..."
+echo ""
+
+echo "[1/3] Running tests..."
+cargo test --all-features --verbose
+echo ""
+
+echo "[2/3] Building release binaries..."
+cargo build --release -p morphir
+echo ""
+
+echo "[3/3] Building documentation..."
+cargo doc --no-deps
+echo ""
+
+echo "All pre-release checks passed!"

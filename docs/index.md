@@ -19,6 +19,16 @@ Welcome to the documentation for **Morphir Rust** - Rust tooling for the Morphir
 
 ## CLI Commands
 
+### Stable Commands
+
+| Command | Description |
+|---------|-------------|
+| [`ir migrate`](ir-migrate.md) | Convert Morphir IR between format versions |
+| `schema` | Generate JSON Schema for Morphir IR |
+| `tool` | Manage Morphir tools |
+| `dist` | Manage Morphir distributions |
+| `extension` | Manage Morphir extensions |
+
 ### [IR Migrate](ir-migrate.md)
 
 Convert Morphir IR between format versions (Classic V1-V3 ↔ V4). Supports local files and remote sources.
@@ -33,6 +43,16 @@ morphir ir migrate \
     --output ./lcr-v4.json
 ```
 
+### Experimental Commands
+
+Use `morphir --help-all` to see experimental commands:
+
+| Command | Description |
+|---------|-------------|
+| `validate` | Validate Morphir IR models |
+| `generate` | Generate code from Morphir IR |
+| `transform` | Transform Morphir IR |
+
 ## Quick Links
 
 - [GitHub Repository](https://github.com/finos/morphir-rust)
@@ -44,26 +64,41 @@ morphir ir migrate \
 ### Installation
 
 ```bash
-# Clone and build
+# Using cargo-binstall (recommended)
+cargo binstall morphir
+
+# Using mise
+mise install morphir
+
+# Or build from source
 git clone https://github.com/finos/morphir-rust.git
 cd morphir-rust
-cargo build --release
-
-# Or install directly
 cargo install --path crates/morphir
+```
+
+### Getting Help
+
+```bash
+# Show help
+morphir --help
+
+# Show help including experimental commands
+morphir --help-all
+morphir help --full
+morphir help --experimental
 ```
 
 ### Basic Usage
 
 ```bash
-# Validate a Morphir IR file
-morphir validate --input ./morphir-ir.json
-
 # Migrate IR to V4 format
 morphir ir migrate --input ./morphir-ir.json --output ./v4.json
 
 # Generate JSON Schema for Morphir IR
 morphir schema --output ./morphir-ir-schema.json
+
+# Validate a Morphir IR file (experimental)
+morphir validate --input ./morphir-ir.json
 ```
 
 ## Contributing

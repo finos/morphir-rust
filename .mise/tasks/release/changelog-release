@@ -1,0 +1,56 @@
+#!/bin/sh
+#MISE description="Prepare CHANGELOG.md for a new release version"
+
+VERSION="${1:-}"
+DATE="${2:-$(date +%Y-%m-%d)}"
+
+if [ -z "$VERSION" ]; then
+    echo "Usage: mise run release:changelog-release <version> [date]"
+    echo ""
+    echo "Example:"
+    echo "  mise run release:changelog-release 0.2.0"
+    echo "  mise run release:changelog-release 0.2.0 2025-01-20"
+    exit 1
+fi
+
+CHANGELOG="CHANGELOG.md"
+
+if [ ! -f "$CHANGELOG" ]; then
+    echo "ERROR: $CHANGELOG not found"
+    exit 1
+fi
+
+echo "Preparing CHANGELOG.md for v$VERSION (date: $DATE)"
+echo ""
+
+# Check if version already exists
+if grep -q "## \[$VERSION\]" "$CHANGELOG"; then
+    echo "ERROR: Version $VERSION already exists in $CHANGELOG"
+    exit 1
+fi
+
+# Get previous version for comparison link
+PREV_VERSION=$(grep -oE "## \[[0-9]+\.[0-9]+\.[0-9]+\]" "$CHANGELOG" | head -1 | sed 's/## \[\(.*\)\]/\1/')
+
+# Add new version header after Unreleased section
+# This is a manual process hint since sed manipulation of sections is fragile
+echo "To complete the changelog release:"
+echo ""
+echo "1. In CHANGELOG.md, after the empty '## [Unreleased]' categories, add:"
+echo ""
+echo "   ## [$VERSION] - $DATE"
+echo ""
+echo "2. Move all entries from [Unreleased] to the new [$VERSION] section"
+echo ""
+echo "3. Clear the [Unreleased] section (keep empty category headers)"
+echo ""
+echo "4. Update the comparison links at the bottom:"
+echo ""
+echo "   [Unreleased]: https://github.com/finos/morphir-rust/compare/v$VERSION...HEAD"
+if [ -n "$PREV_VERSION" ]; then
+    echo "   [$VERSION]: https://github.com/finos/morphir-rust/compare/v$PREV_VERSION...v$VERSION"
+else
+    echo "   [$VERSION]: https://github.com/finos/morphir-rust/releases/tag/v$VERSION"
+fi
+echo ""
+echo "Or use the /release-manager skill for AI-assisted changelog updates."

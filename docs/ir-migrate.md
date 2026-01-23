@@ -1,3 +1,8 @@
+---
+layout: default
+title: IR Migrate Command
+---
+
 # IR Migrate Command
 
 The `morphir ir migrate` command converts Morphir IR between format versions. This is useful when upgrading projects from Classic format (V1-V3) to V4 format, or for backward compatibility when working with older tooling.

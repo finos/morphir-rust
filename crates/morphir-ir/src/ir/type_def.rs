@@ -23,7 +23,9 @@ use crate::naming::Name;
 ///
 /// # Type Parameters
 /// - `A`: The type of attributes attached to type nodes.
-///        Defaults to `TypeAttributes` (V4 format).
+///   Defaults to `TypeAttributes` (V4 format).
+// The variant names include "Definition" suffix as per the Morphir specification
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDefinition<A: Clone = TypeAttributes> {
     /// Type alias definition

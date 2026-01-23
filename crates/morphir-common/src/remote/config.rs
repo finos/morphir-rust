@@ -47,7 +47,7 @@ impl Default for RemoteSourceConfig {
 }
 
 /// Cache configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheConfig {
     /// Cache directory (defaults to ~/.cache/morphir/sources).
@@ -60,16 +60,6 @@ pub struct CacheConfig {
     /// TTL for cached sources in seconds (0 = never expire).
     #[serde(default)]
     pub ttl_secs: u64,
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self {
-            directory: None,
-            max_size_mb: 0,
-            ttl_secs: 0,
-        }
-    }
 }
 
 /// Network configuration.
@@ -175,10 +165,10 @@ impl RemoteSourceConfig {
             if pattern.starts_with('*') && pattern.ends_with('*') {
                 let middle = &pattern[1..pattern.len() - 1];
                 url.contains(middle)
-            } else if pattern.starts_with('*') {
-                url.ends_with(&pattern[1..])
-            } else if pattern.ends_with('*') {
-                url.starts_with(&pattern[..pattern.len() - 1])
+            } else if let Some(suffix) = pattern.strip_prefix('*') {
+                url.ends_with(suffix)
+            } else if let Some(prefix) = pattern.strip_suffix('*') {
+                url.starts_with(prefix)
             } else {
                 url == pattern
             }

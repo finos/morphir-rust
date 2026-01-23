@@ -23,7 +23,7 @@ use crate::naming::{FQName, Name};
 ///
 /// # Type Parameters
 /// - `A`: The type of attributes attached to each type node.
-///        Defaults to `TypeAttributes` (V4 format).
+///   Defaults to `TypeAttributes` (V4 format).
 ///
 /// # Examples
 ///
@@ -78,7 +78,7 @@ pub enum Type<A: Clone = TypeAttributes> {
 ///
 /// # Type Parameters
 /// - `A`: The type of attributes attached to the field's type.
-///        Defaults to `TypeAttributes` (V4 format).
+///   Defaults to `TypeAttributes` (V4 format).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field<A: Clone = TypeAttributes> {
     /// The name of the field

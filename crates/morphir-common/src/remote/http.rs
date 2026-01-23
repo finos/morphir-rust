@@ -3,12 +3,13 @@
 use crate::remote::cache::SourceCache;
 use crate::remote::config::NetworkConfig;
 use crate::remote::error::{RemoteSourceError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// HTTP client for fetching remote sources.
 pub struct HttpFetcher {
     /// Network configuration.
+    #[allow(dead_code)]
     config: NetworkConfig,
 
     /// reqwest client.
@@ -155,7 +156,7 @@ impl HttpFetcher {
     }
 
     /// Extract a zip archive.
-    fn extract_zip(&self, archive_path: &PathBuf, dest: &PathBuf) -> Result<()> {
+    fn extract_zip(&self, archive_path: &Path, dest: &Path) -> Result<()> {
         let file = std::fs::File::open(archive_path)?;
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| RemoteSourceError::ArchiveError(format!("Failed to open zip: {}", e)))?;

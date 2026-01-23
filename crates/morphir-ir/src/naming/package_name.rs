@@ -1,7 +1,9 @@
 use super::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::fmt;
+use std::str::FromStr;
 
 /// PackageName is a newtype wrapper around Path for type safety.
 /// It distinguishes package paths from module paths at the type level.
@@ -39,7 +41,9 @@ impl PackageName {
     }
 
     /// Create a PackageName from a string (e.g., "org/package")
-    pub fn from_str(s: &str) -> Self {
+    ///
+    /// This is a convenience wrapper around `FromStr::from_str`.
+    pub fn parse(s: &str) -> Self {
         Self(Path::new(s))
     }
 
@@ -77,21 +81,35 @@ impl From<PackageName> for Path {
     }
 }
 
+impl FromStr for PackageName {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Path::new(s)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_package_name_from_str() {
-        let pkg = PackageName::from_str("org/morphir/sdk");
+        let pkg = PackageName::parse("org/morphir/sdk");
         assert_eq!(pkg.to_string(), "org/morphir/sdk");
     }
 
     #[test]
     fn test_package_name_equality() {
-        let pkg1 = PackageName::from_str("my/package");
-        let pkg2 = PackageName::from_str("my/package");
+        let pkg1 = PackageName::parse("my/package");
+        let pkg2 = PackageName::parse("my/package");
         assert_eq!(pkg1, pkg2);
+    }
+
+    #[test]
+    fn test_package_name_from_str_trait() {
+        let pkg: PackageName = "my/package".parse().unwrap();
+        assert_eq!(pkg.to_string(), "my/package");
     }
 
     #[test]

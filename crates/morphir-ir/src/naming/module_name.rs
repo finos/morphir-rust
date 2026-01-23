@@ -1,7 +1,9 @@
 use super::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::fmt;
+use std::str::FromStr;
 
 /// ModuleName is a newtype wrapper around Path for type safety.
 /// It distinguishes module paths from package paths at the type level.
@@ -16,7 +18,9 @@ impl ModuleName {
     }
 
     /// Create a ModuleName from a string (e.g., "Module/SubModule")
-    pub fn from_str(s: &str) -> Self {
+    ///
+    /// This is a convenience wrapper around `FromStr::from_str`.
+    pub fn parse(s: &str) -> Self {
         Self(Path::new(s))
     }
 
@@ -54,21 +58,35 @@ impl From<ModuleName> for Path {
     }
 }
 
+impl FromStr for ModuleName {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Path::new(s)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_module_name_from_str() {
-        let module = ModuleName::from_str("Test/Module");
+        let module = ModuleName::parse("Test/Module");
         assert_eq!(module.to_string(), "test/module");
     }
 
     #[test]
     fn test_module_name_equality() {
-        let m1 = ModuleName::from_str("my/module");
-        let m2 = ModuleName::from_str("my/module");
+        let m1 = ModuleName::parse("my/module");
+        let m2 = ModuleName::parse("my/module");
         assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn test_module_name_from_str_trait() {
+        let module: ModuleName = "Test/Module".parse().unwrap();
+        assert_eq!(module.to_string(), "test/module");
     }
 
     #[test]

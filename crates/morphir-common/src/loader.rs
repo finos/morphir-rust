@@ -142,7 +142,7 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
     let ir_file = v4::IRFile {
         format_version: v4::FormatVersion::default(),
         distribution: v4::Distribution::Library(v4::LibraryContent {
-            package_name: PackageName::from_str(&package_name),
+            package_name: PackageName::parse(&package_name),
             dependencies: IndexMap::new(),
             def: v4::PackageDefinition { modules },
         }),

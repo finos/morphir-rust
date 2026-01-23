@@ -22,8 +22,8 @@ use crate::naming::{FQName, Name};
 ///
 /// # Type Parameters
 /// - `A`: The type of attributes attached to each pattern node.
-///        Defaults to `ValueAttributes` (V4 format) since patterns
-///        appear in value contexts.
+///   Defaults to `ValueAttributes` (V4 format) since patterns
+///   appear in value contexts.
 ///
 /// # Examples
 ///
@@ -34,6 +34,8 @@ use crate::naming::{FQName, Name};
 /// // Classic format - explicit serde_json::Value
 /// let p: Pattern<serde_json::Value> = Pattern::WildcardPattern(serde_json::json!({}));
 /// ```
+// The variant names include "Pattern" suffix as per the Morphir specification
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern<A: Clone = ValueAttributes> {
     /// Wildcard pattern that matches anything

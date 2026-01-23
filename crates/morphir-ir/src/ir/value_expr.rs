@@ -27,9 +27,9 @@ use crate::naming::{FQName, Name};
 ///
 /// # Type Parameters
 /// - `TA`: The type of attributes attached to type nodes.
-///         Defaults to `TypeAttributes` (V4 format).
+///   Defaults to `TypeAttributes` (V4 format).
 /// - `VA`: The type of attributes attached to value nodes.
-///         Defaults to `ValueAttributes` (V4 format).
+///   Defaults to `ValueAttributes` (V4 format).
 ///
 /// # Examples
 ///

@@ -889,26 +889,26 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for PatternV4Visit
             "WildcardPattern" => {
                 let content: PatternAttrsDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::WildcardPattern(attrs))
             }
             "AsPattern" => {
                 let content: AsPatternDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Pattern::AsPattern(attrs, Box::new(content.pattern), name))
             }
             "TuplePattern" => {
                 let content: TuplePatternDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::TuplePattern(attrs, content.elements))
             }
             "ConstructorPattern" => {
                 let content: ConstructorPatternDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
                 Ok(Pattern::ConstructorPattern(attrs, fqname, content.args))
@@ -916,13 +916,13 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for PatternV4Visit
             "EmptyListPattern" => {
                 let content: PatternAttrsDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::EmptyListPattern(attrs))
             }
             "HeadTailPattern" => {
                 let content: HeadTailPatternDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::HeadTailPattern(
                     attrs,
                     Box::new(content.head),
@@ -932,13 +932,13 @@ impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for PatternV4Visit
             "LiteralPattern" => {
                 let content: LiteralPatternDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::LiteralPattern(attrs, content.literal))
             }
             "UnitPattern" => {
                 let content: PatternAttrsDeContent<A> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(A::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::UnitPattern(attrs))
             }
             _ => Err(de::Error::unknown_variant(
@@ -2026,13 +2026,13 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Literal" => {
                 let content: LiteralValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Literal(attrs, content.literal))
             }
             "Constructor" => {
                 let content: ConstructorValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
                 Ok(Value::Constructor(attrs, fqname))
@@ -2040,19 +2040,19 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Tuple" => {
                 let content: TupleValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Tuple(attrs, content.elements))
             }
             "List" => {
                 let content: ListValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::List(attrs, content.items))
             }
             "Record" => {
                 let content: RecordValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let fields = content
                     .fields
                     .into_iter()
@@ -2063,14 +2063,14 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Variable" => {
                 let content: VariableValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::Variable(attrs, name))
             }
             "Reference" => {
                 let content: ReferenceValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
                 Ok(Value::Reference(attrs, fqname))
@@ -2078,21 +2078,21 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Field" => {
                 let content: FieldValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::Field(attrs, Box::new(content.value), name))
             }
             "FieldFunction" => {
                 let content: FieldFunctionValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::FieldFunction(attrs, name))
             }
             "Apply" => {
                 let content: ApplyValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Apply(
                     attrs,
                     Box::new(content.function),
@@ -2102,7 +2102,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Lambda" => {
                 let content: LambdaValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Lambda(
                     attrs,
                     content.argument_pattern,
@@ -2112,7 +2112,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "LetDefinition" => {
                 let content: LetDefinitionValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::LetDefinition(
                     attrs,
@@ -2124,7 +2124,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "LetRecursion" => {
                 let content: LetRecursionValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let bindings = content
                     .bindings
                     .into_iter()
@@ -2135,7 +2135,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Destructure" => {
                 let content: DestructureValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Destructure(
                     attrs,
                     content.pattern,
@@ -2146,7 +2146,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "IfThenElse" => {
                 let content: IfThenElseValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::IfThenElse(
                     attrs,
                     Box::new(content.condition),
@@ -2157,7 +2157,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "PatternMatch" => {
                 let content: PatternMatchValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::PatternMatch(
                     attrs,
                     Box::new(content.value),
@@ -2167,7 +2167,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "UpdateRecord" => {
                 let content: UpdateRecordValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let fields = content
                     .fields
                     .into_iter()
@@ -2178,14 +2178,14 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Unit" => {
                 let content: ValueAttrsDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Unit(attrs))
             }
             // V4-only variants
             "Hole" => {
                 let content: HoleValueDeContent<TA, VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Hole(
                     attrs,
                     content.reason,
@@ -2195,7 +2195,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "Native" => {
                 let content: NativeValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
                 Ok(Value::Native(attrs, fqname, content.info))
@@ -2203,7 +2203,7 @@ impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + Deserial
             "External" => {
                 let content: ExternalValueDeContent<VA> =
                     serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_else(VA::default);
+                let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::External(
                     attrs,
                     content.external_name,

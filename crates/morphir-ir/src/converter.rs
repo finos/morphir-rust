@@ -335,7 +335,7 @@ fn extract_type_params(json: &serde_json::Value) -> Vec<Name> {
     json.as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| extract_name_from_json(v))
+                .filter_map(extract_name_from_json)
                 .collect()
         })
         .unwrap_or_default()
@@ -355,7 +355,7 @@ fn convert_constructors_to_v4(json: &serde_json::Value) -> v4::AccessControlledC
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|ctor| convert_constructor_to_v4(ctor))
+                    .filter_map(convert_constructor_to_v4)
                     .collect()
             })
             .unwrap_or_default();
@@ -458,7 +458,7 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
                             v4::InputTypeEntry {
                                 type_attributes: if attrs.is_null()
                                     || (attrs.is_object()
-                                        && attrs.as_object().map_or(true, |o| o.is_empty()))
+                                        && attrs.as_object().is_none_or(|o| o.is_empty()))
                                 {
                                     None
                                 } else {

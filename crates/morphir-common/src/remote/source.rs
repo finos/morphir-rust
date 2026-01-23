@@ -234,7 +234,7 @@ impl RemoteSource {
         // Gist ID can be just the ID or user/id format
         let id = if parts.contains('/') {
             // user/id format - extract just the id
-            parts.split('/').last().unwrap_or(&parts).to_string()
+            parts.split('/').next_back().unwrap_or(&parts).to_string()
         } else {
             parts
         };
@@ -255,7 +255,7 @@ impl RemoteSource {
             && ref_str[1..]
                 .chars()
                 .next()
-                .map_or(false, |c| c.is_ascii_digit())
+                .is_some_and(|c| c.is_ascii_digit())
         {
             // Looks like a version tag (v1.0.0, v2, etc.)
             GitRef::Tag(ref_str.to_string())

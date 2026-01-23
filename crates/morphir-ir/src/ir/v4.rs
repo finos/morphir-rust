@@ -205,6 +205,8 @@ pub struct ModuleSpecification {
 }
 
 /// Type specification (public API view of a type)
+// The variant names include "Specification" suffix as per the Morphir specification
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum TypeSpecification {
@@ -429,6 +431,8 @@ pub struct InputTypeEntry {
 }
 
 /// Value body - uses wrapper object format
+// The variant names include "Body" suffix as per the Morphir specification
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum ValueBody {
     ExpressionBody {

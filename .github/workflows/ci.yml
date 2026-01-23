@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install mise
         uses: jdx/mise-action@v2
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install mise
         uses: jdx/mise-action@v2
@@ -71,7 +71,7 @@ jobs:
     needs: [lint-rust]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
     needs: [lint-rust]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

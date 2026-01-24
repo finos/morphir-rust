@@ -29,6 +29,7 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
     match tag {
         "Variable" => {
             // Classic: ["Variable", {attrs}, ["name", "parts"]]
+            // Most compact format: bare name string (distinguishable from FQName by lack of : and #)
             let name = if arr.len() > 2 {
                 extract_name_from_json(&arr[2])
                     .map(|n| n.to_string())
@@ -36,7 +37,7 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 String::new()
             };
-            serde_json::json!({ "Variable": { "name": name } })
+            serde_json::json!(name)
         }
         "Reference" => {
             // Classic: ["Reference", {attrs}, [pkg_path, mod_path, local_name], [type_args]]
@@ -53,7 +54,14 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 vec![]
             };
-            serde_json::json!({ "Reference": { "fqname": fqname, "args": args } })
+            // Use most compact format: bare fqname string when no args, otherwise array [fqname, arg1, arg2, ...]
+            if args.is_empty() {
+                serde_json::json!(fqname)
+            } else {
+                let mut ref_arr = vec![serde_json::json!(fqname)];
+                ref_arr.extend(args);
+                serde_json::json!({ "Reference": ref_arr })
+            }
         }
         "Tuple" => {
             // Classic: ["Tuple", {attrs}, [elements...]]
@@ -68,7 +76,9 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({ "Tuple": { "elements": elements } })
         }
         "Record" => {
-            // Classic: ["Record", {attrs}, [[["field", "name"], type_expr], ...]]
+            // Classic format can be either:
+            // 1. Array format: ["Record", {attrs}, [[["field", "name"], type_expr], ...]]
+            // 2. Object format: ["Record", {attrs}, [{"name": ["field"], "tpe": type_expr}, ...]]
             let fields: IndexMap<String, serde_json::Value> = if arr.len() > 2 {
                 arr[2]
                     .as_array()
@@ -76,6 +86,16 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
                         fields_arr
                             .iter()
                             .filter_map(|field| {
+                                // Try object format first: {"name": [...], "tpe": ...}
+                                if let Some(obj) = field.as_object() {
+                                    let name = obj.get("name").and_then(extract_name_from_json)?;
+                                    let tpe = obj
+                                        .get("tpe")
+                                        .map(convert_type_expr_to_v4)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    return Some((name.to_string(), tpe));
+                                }
+                                // Fall back to array format: [["name"], type_expr]
                                 let field_arr = field.as_array()?;
                                 if field_arr.len() < 2 {
                                     return None;
@@ -90,10 +110,13 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 IndexMap::new()
             };
-            serde_json::json!({ "Record": { "fields": fields } })
+            // Compact format: fields directly under Record
+            serde_json::json!({ "Record": fields })
         }
         "ExtensibleRecord" => {
-            // Classic: ["ExtensibleRecord", {attrs}, ["var", "name"], [[field_name, type], ...]]
+            // Classic format can be either:
+            // 1. Array format: ["ExtensibleRecord", {attrs}, ["var", "name"], [[field_name, type], ...]]
+            // 2. Object format: ["ExtensibleRecord", {attrs}, ["var"], [{"name": [...], "tpe": ...}, ...]]
             let variable = if arr.len() > 2 {
                 extract_name_from_json(&arr[2])
                     .map(|n| n.to_string())
@@ -108,6 +131,16 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
                         fields_arr
                             .iter()
                             .filter_map(|field| {
+                                // Try object format first: {"name": [...], "tpe": ...}
+                                if let Some(obj) = field.as_object() {
+                                    let name = obj.get("name").and_then(extract_name_from_json)?;
+                                    let tpe = obj
+                                        .get("tpe")
+                                        .map(convert_type_expr_to_v4)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    return Some((name.to_string(), tpe));
+                                }
+                                // Fall back to array format: [["name"], type_expr]
                                 let field_arr = field.as_array()?;
                                 if field_arr.len() < 2 {
                                     return None;
@@ -230,16 +263,18 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 String::new()
             };
-            serde_json::json!({ "Variable": { "name": name } })
+            // Compact format: name directly under Variable
+            serde_json::json!({ "Variable": name })
         }
         "Reference" => {
             // Classic: ["Reference", {attrs}, fqname]
+            // Value references use compact format: just the fqname string
             let fqname = if arr.len() > 2 {
                 extract_fqname_from_classic(&arr[2])
             } else {
                 String::new()
             };
-            serde_json::json!({ "Reference": { "fqname": fqname } })
+            serde_json::json!({ "Reference": fqname })
         }
         "Tuple" => {
             // Classic: ["Tuple", {attrs}, [elements...]]
@@ -266,7 +301,9 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({ "List": { "items": items } })
         }
         "Record" => {
-            // Classic: ["Record", {attrs}, [[["field", "name"], value], ...]]
+            // Classic format can be either:
+            // 1. Array format: ["Record", {attrs}, [[["field", "name"], value], ...]]
+            // 2. Object format: ["Record", {attrs}, [{"name": ["field"], "value": ...}, ...]]
             let fields: IndexMap<String, serde_json::Value> = if arr.len() > 2 {
                 arr[2]
                     .as_array()
@@ -274,6 +311,16 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
                         fields_arr
                             .iter()
                             .filter_map(|field| {
+                                // Try object format first: {"name": [...], "value": ...}
+                                if let Some(obj) = field.as_object() {
+                                    let name = obj.get("name").and_then(extract_name_from_json)?;
+                                    let val = obj
+                                        .get("value")
+                                        .map(convert_value_expr_to_v4)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    return Some((name.to_string(), val));
+                                }
+                                // Fall back to array format: [["name"], value_expr]
                                 let field_arr = field.as_array()?;
                                 if field_arr.len() < 2 {
                                     return None;
@@ -288,7 +335,8 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 IndexMap::new()
             };
-            serde_json::json!({ "Record": { "fields": fields } })
+            // Compact format: fields directly under Record
+            serde_json::json!({ "Record": fields })
         }
         "Field" => {
             // Classic: ["Field", {attrs}, target_expr, ["field", "name"]]
@@ -367,13 +415,25 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({ "LetDefinition": { "name": name, "definition": definition, "in": in_expr } })
         }
         "LetRecursion" => {
-            // Classic: ["LetRecursion", {attrs}, [[name, def], ...], in_expr]
+            // Classic format can be either:
+            // 1. Array format: ["LetRecursion", {attrs}, [[name, def], ...], in_expr]
+            // 2. Object format: ["LetRecursion", {attrs}, [{"name": [...], "def": ...}, ...], in_expr]
             let definitions: IndexMap<String, serde_json::Value> = if arr.len() > 2 {
                 arr[2]
                     .as_array()
                     .map(|defs| {
                         defs.iter()
                             .filter_map(|def_entry| {
+                                // Try object format first: {"name": [...], "def": ...}
+                                if let Some(obj) = def_entry.as_object() {
+                                    let name = obj.get("name").and_then(extract_name_from_json)?;
+                                    let def = obj
+                                        .get("def")
+                                        .map(convert_value_def_inline_to_v4)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    return Some((name.to_string(), def));
+                                }
+                                // Fall back to array format: [["name"], def]
                                 let entry_arr = def_entry.as_array()?;
                                 if entry_arr.len() < 2 {
                                     return None;
@@ -464,7 +524,9 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({ "PatternMatch": { "value": value, "cases": cases } })
         }
         "UpdateRecord" => {
-            // Classic: ["UpdateRecord", {attrs}, target, [[field_name, value], ...]]
+            // Classic format can be either:
+            // 1. Array format: ["UpdateRecord", {attrs}, target, [[field_name, value], ...]]
+            // 2. Object format: ["UpdateRecord", {attrs}, target, [{"name": [...], "value": ...}, ...]]
             let target = if arr.len() > 2 {
                 convert_value_expr_to_v4(&arr[2])
             } else {
@@ -477,6 +539,16 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
                         fields_arr
                             .iter()
                             .filter_map(|field| {
+                                // Try object format first: {"name": [...], "value": ...}
+                                if let Some(obj) = field.as_object() {
+                                    let name = obj.get("name").and_then(extract_name_from_json)?;
+                                    let val = obj
+                                        .get("value")
+                                        .map(convert_value_expr_to_v4)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    return Some((name.to_string(), val));
+                                }
+                                // Fall back to array format: [["name"], value_expr]
                                 let field_arr = field.as_array()?;
                                 if field_arr.len() < 2 {
                                     return None;
@@ -832,7 +904,7 @@ fn convert_types_to_classic(
 
 /// Convert Classic values array to V4 value definitions.
 ///
-/// Classic format: `[[[name_parts], {access, value}], ...]`
+/// Classic format: `[[[name_parts], {access, value: {doc, value: {inputTypes, outputType, body}}}], ...]`
 /// V4 format: `IndexMap<String, AccessControlledValueDefinition>`
 fn convert_values_to_v4(
     values: &[serde_json::Value],
@@ -840,7 +912,7 @@ fn convert_values_to_v4(
     values
         .iter()
         .filter_map(|value_val| {
-            // Classic format: [[name_parts], {access, value}]
+            // Classic format: [[name_parts], {access, value: {doc, value: {...}}}]
             let arr = value_val.as_array()?;
             if arr.len() < 2 {
                 return None;
@@ -852,13 +924,17 @@ fn convert_values_to_v4(
             // Extract access-controlled definition from second element
             let def_obj = arr[1].as_object()?;
             let access_str = def_obj.get("access")?.as_str()?;
-            let value = def_obj.get("value")?.clone();
+
+            // The value contains {doc, value: {inputTypes, outputType, body}}
+            // We need to extract the inner 'value' field
+            let outer_value = def_obj.get("value")?.as_object()?;
+            let inner_value = outer_value.get("value")?.clone();
 
             Some((
                 name.to_string(),
                 v4::AccessControlledValueDefinition {
                     access: convert_access_to_v4(access_str),
-                    value: convert_value_definition_to_v4(&value),
+                    value: convert_value_definition_to_v4(&inner_value),
                 },
             ))
         })
@@ -1112,7 +1188,8 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
 
 /// Convert a Classic value definition to V4 ValueDefinition.
 fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinition {
-    // Classic format: {inputTypes: [...], outputType: ..., body: ...}
+    // Classic format: {inputTypes: [[name, annotation_type, actual_type], ...], outputType: ..., body: ...}
+    // The annotation_type is the type annotation from source, actual_type is the inferred type
     if let Some(obj) = value.as_object() {
         let input_types: IndexMap<String, v4::InputTypeEntry> = obj
             .get("inputTypes")
@@ -1125,18 +1202,21 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
                             return None;
                         }
                         let name = extract_name_from_json(&input_arr[0])?;
-                        let attrs = input_arr[1].clone();
+                        // Element 1 is the type annotation - convert it to V4 format
+                        let annotation = convert_type_expr_to_v4(&input_arr[1]);
+                        // Element 2 is the actual/inferred input type
                         let typ = convert_type_expr_to_v4(&input_arr[2]);
                         Some((
                             name.to_string(),
                             v4::InputTypeEntry {
-                                type_attributes: if attrs.is_null()
-                                    || (attrs.is_object()
-                                        && attrs.as_object().is_none_or(|o| o.is_empty()))
+                                // Store the converted type annotation if it's not empty
+                                type_attributes: if annotation.is_null()
+                                    || (annotation.is_object()
+                                        && annotation.as_object().is_none_or(|o| o.is_empty()))
                                 {
                                     None
                                 } else {
-                                    Some(attrs)
+                                    Some(annotation)
                                 },
                                 input_type: typ,
                             },

@@ -434,7 +434,7 @@ V4 (compact): `"morphir/s-d-k:string#string"` — bare FQName string
 
 Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["list"]], ["list"]], [["Variable", {}, ["a"]]]]`
 
-V4: `{"Reference": {"fqname": "morphir/s-d-k:list#list", "args": ["a"]}}`
+V4: `{"Reference": ["morphir/s-d-k:list#list", "a"]}` — array with FQName first, followed by type args
 
 **Record**
 

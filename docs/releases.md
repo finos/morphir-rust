@@ -12,6 +12,32 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
 
 ---
 
+## v0.1.1 (January 24, 2026)
+
+
+### Added
+
+- **TUI Pager**: Interactive JSON viewer with syntax highlighting and vim-like navigation
+  - Visual mode (`v`, `V`) for selecting text
+  - Yank to clipboard (`y`) with WSL, X11, Wayland, and macOS support
+  - Word motions (`w`, `b`), line jumps (`g`, `G`), and scroll controls
+- **Expanded Format**: `--expanded` flag for `morphir ir migrate` produces verbose V4 output
+  - Variables: `{"Variable": {"name": "a"}}` instead of `"a"`
+  - References: `{"Reference": {"fqname": "...", "args": [...]}}` instead of array format
+- **Launcher Script**: Self-updating launcher with version management (`scripts/morphir.sh`)
+  - Supports `.morphir-version` file for per-project version pinning
+  - Auto-downloads correct version on first run
+  - `morphir self upgrade` to fetch latest version
+
+### Changed
+
+- **V4 Compact Format Improvements**:
+  - Reference with args now uses array format: `{"Reference": ["fqname", arg1, ...]}`
+  - Type variables are bare name strings in compact mode: `"a"`
+  - References without args are bare FQName strings: `"morphir/sdk:int#int"`
+- **V4 Canonical Naming**: `Name` type now uses kebab-case by default (e.g., `my-function`)
+- **Documentation Site**: Restructured with just-the-docs theme and morphir.finos.org branding
+
 ## v0.1.0 (January 23, 2026)
 
 

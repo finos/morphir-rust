@@ -160,6 +160,14 @@ pub async fn run_compile(options: CompileOptions) -> AppResult {
         .map(|f| f.emit_parse_stage)
         .unwrap_or(true);
 
+    // Get emit_parse_stage_fatal setting from config (default: false)
+    let emit_parse_stage_fatal = ctx
+        .config
+        .frontend
+        .as_ref()
+        .map(|f| f.emit_parse_stage_fatal)
+        .unwrap_or(false);
+
     // Call extension's compile method
     let compile_params = serde_json::json!({
         "input": input_path.to_string_lossy(),
@@ -167,6 +175,7 @@ pub async fn run_compile(options: CompileOptions) -> AppResult {
         "package_name": proj_name,
         "files": source_files,
         "emitParseStage": emit_parse_stage,
+        "emitParseStageFatal": emit_parse_stage_fatal,
     });
 
     let result: serde_json::Value = extension

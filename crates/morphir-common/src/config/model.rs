@@ -139,6 +139,11 @@ pub struct FrontendSection {
     /// When enabled, writes parsed AST to .morphir/out/<project>/parse/<module>.json
     #[serde(default = "default_true")]
     pub emit_parse_stage: bool,
+    /// Treat parse stage emission failures as fatal errors (default: false)
+    /// When true, compilation fails if parse stage output cannot be written
+    /// When false, failures are logged as warnings but compilation continues
+    #[serde(default)]
+    pub emit_parse_stage_fatal: bool,
     /// Language-specific settings
     #[serde(flatten)]
     pub settings: HashMap<String, toml::Value>,

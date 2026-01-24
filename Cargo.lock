@@ -2897,6 +2897,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "toml 0.9.11+spec-1.1.0",
+ "uuid",
  "zip",
 ]
 

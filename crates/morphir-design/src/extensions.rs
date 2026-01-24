@@ -18,7 +18,7 @@ pub struct BuiltinExtension {
 /// Discover builtin extensions from CLI resources
 pub fn discover_builtin_extensions() -> Vec<BuiltinExtension> {
     let mut extensions = Vec::new();
-    
+
     // Gleam binding is a builtin extension
     extensions.push(BuiltinExtension {
         id: "gleam".to_string(),
@@ -27,7 +27,7 @@ pub fn discover_builtin_extensions() -> Vec<BuiltinExtension> {
         languages: vec!["gleam".to_string()],
         targets: vec!["gleam".to_string()],
     });
-    
+
     extensions
 }
 
@@ -36,18 +36,22 @@ pub fn get_builtin_extension_path(extension_id: &str) -> Option<PathBuf> {
     // Check for bundled resources in multiple locations
     let possible_paths = vec![
         // Bundled in CLI binary resources (relative to executable)
-        get_executable_dir()
-            .map(|dir| dir.join("extensions").join(format!("{}.wasm", extension_id))),
+        get_executable_dir().map(|dir| {
+            dir.join("extensions")
+                .join(format!("{}.wasm", extension_id))
+        }),
         // In resources directory (relative to executable)
-        get_executable_dir()
-            .map(|dir| dir.join("resources").join("extensions").join(format!("{}.wasm", extension_id))),
+        get_executable_dir().map(|dir| {
+            dir.join("resources")
+                .join("extensions")
+                .join(format!("{}.wasm", extension_id))
+        }),
         // In the same directory as the binary
-        get_executable_dir()
-            .map(|dir| dir.join(format!("{}.wasm", extension_id))),
+        get_executable_dir().map(|dir| dir.join(format!("{}.wasm", extension_id))),
         // Embedded in binary (using include_bytes! in build.rs)
         // This would require build-time code generation
     ];
-    
+
     for path_opt in possible_paths {
         if let Some(path) = path_opt {
             if path.exists() {
@@ -55,7 +59,7 @@ pub fn get_builtin_extension_path(extension_id: &str) -> Option<PathBuf> {
             }
         }
     }
-    
+
     None
 }
 
@@ -98,13 +102,13 @@ pub fn resolve_extension_source(
     builtin_path: Option<PathBuf>,
 ) -> ExtensionSource {
     if let Some(builtin) = builtin_path {
-        ExtensionSource::Builtin { path: Some(builtin) }
+        ExtensionSource::Builtin {
+            path: Some(builtin),
+        }
     } else if let Some(ext_config) = config {
         // Check if config specifies a path
         if let Some(path) = &ext_config.path {
-            ExtensionSource::Config {
-                path: path.clone(),
-            }
+            ExtensionSource::Config { path: path.clone() }
         } else {
             // Default to registry
             ExtensionSource::Registry {

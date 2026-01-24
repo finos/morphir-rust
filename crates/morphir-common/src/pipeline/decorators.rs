@@ -3,7 +3,7 @@
 //! Decorators are sidecar files (.deco.json) that provide metadata and
 //! transformation hints for IR nodes.
 
-use crate::pipeline::{Pipeline, Step};
+use crate::pipeline::Step;
 use crate::Result;
 use morphir_ir::naming::FQName;
 use serde_json::Value;
@@ -55,7 +55,7 @@ impl DecoratorLoader {
     }
 
     fn load_decorators(&self) -> Result<DecoratorRegistry> {
-        use crate::vfs::OsVfs;
+        use crate::vfs::{OsVfs, Vfs};
         use std::fs;
 
         let vfs = OsVfs;
@@ -66,7 +66,9 @@ impl DecoratorLoader {
             if let Ok(entries) = fs::read_dir(&self.deco_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("deco.json") {
+                    if path.is_file()
+                        && path.extension().and_then(|s| s.to_str()) == Some("deco.json")
+                    {
                         if let Ok(content) = vfs.read_to_string(&path) {
                             if let Ok(deco) = serde_json::from_str::<Value>(&content) {
                                 // Extract target FQName from decorator

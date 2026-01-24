@@ -4,8 +4,8 @@
 
 use crate::Result;
 
-pub mod ir;
 pub mod decorators;
+pub mod ir;
 
 /// A step in a transformation pipeline.
 ///

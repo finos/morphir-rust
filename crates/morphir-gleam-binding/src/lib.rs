@@ -72,10 +72,7 @@ impl Frontend for GleamExtension {
                 Ok(module_ir) => {
                     // Extract module name from path
                     let module_name = ModuleName::parse(
-                        &source
-                            .path
-                            .trim_end_matches(".gleam")
-                            .replace('\\', "/"),
+                        &source.path.trim_end_matches(".gleam").replace('\\', "/"),
                     );
 
                     // Convert to Morphir IR V4 Document Tree format
@@ -90,12 +87,13 @@ impl Frontend for GleamExtension {
                         Ok(_) => {
                             // Read format.json as IR representation
                             // output_dir is already .morphir/out/<project>/compile/<language>/
-                            let format_json_path = output_dir
-                                .join("format.json");
+                            let format_json_path = output_dir.join("format.json");
                             if vfs.exists(&format_json_path) {
                                 match vfs.read_to_string(&format_json_path) {
                                     Ok(format_content) => {
-                                        match serde_json::from_str::<serde_json::Value>(&format_content) {
+                                        match serde_json::from_str::<serde_json::Value>(
+                                            &format_content,
+                                        ) {
                                             Ok(ir_json) => {
                                                 ir_modules.push(ir_json);
                                             }
@@ -103,7 +101,10 @@ impl Frontend for GleamExtension {
                                                 diagnostics.push(Diagnostic {
                                                     severity: DiagnosticSeverity::Error,
                                                     code: Some("E002".into()),
-                                                    message: format!("Failed to parse format.json: {}", e),
+                                                    message: format!(
+                                                        "Failed to parse format.json: {}",
+                                                        e
+                                                    ),
                                                     location: None,
                                                     related: vec![],
                                                 });

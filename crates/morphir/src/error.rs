@@ -13,31 +13,25 @@ pub enum CliError {
         #[source]
         error: anyhow::Error,
     },
-    
+
     #[error("Extension error: {message}")]
     #[diagnostic(code(cli::extension_error))]
-    Extension {
-        message: String,
-    },
-    
+    Extension { message: String },
+
     #[error("Compilation error: {message}")]
     #[diagnostic(code(cli::compilation_error))]
-    Compilation {
-        message: String,
-    },
-    
+    Compilation { message: String },
+
     #[error("File system error")]
     #[diagnostic(code(cli::filesystem_error))]
     FileSystem {
         #[source]
         error: std::io::Error,
     },
-    
+
     #[error("Validation error: {message}")]
     #[diagnostic(code(cli::validation_error))]
-    Validation {
-        message: String,
-    },
+    Validation { message: String },
 }
 
 impl CliError {
@@ -51,13 +45,13 @@ impl CliError {
             column: None,
         }
     }
-    
+
     /// Report error using miette (for human-readable output)
     pub fn report(&self) {
         use miette::Report;
         eprintln!("{}", Report::new(self));
     }
-    
+
     /// Report error based on output format
     pub fn report_with_format(&self, format: OutputFormat) {
         match format {
@@ -111,8 +105,14 @@ pub fn convert_extension_diagnostics(
             .to_string(),
             message: d.message.clone(),
             file: d.location.as_ref().map(|l| l.path.clone()),
-            line: d.location.as_ref().and_then(|l| l.range.as_ref().map(|r| r.start.line)),
-            column: d.location.as_ref().and_then(|l| l.range.as_ref().map(|r| r.start.character)),
+            line: d
+                .location
+                .as_ref()
+                .and_then(|l| l.range.as_ref().map(|r| r.start.line)),
+            column: d
+                .location
+                .as_ref()
+                .and_then(|l| l.range.as_ref().map(|r| r.start.character)),
         })
         .collect()
 }

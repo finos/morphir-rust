@@ -62,7 +62,7 @@ pub async fn run_gleam_roundtrip(
         // Use default compile output path
         Some(".morphir/out/default/compile/gleam".to_string())
     });
-    
+
     run_gleam_compile(
         input.clone(),
         compile_output.clone(),
@@ -73,7 +73,7 @@ pub async fn run_gleam_roundtrip(
         json_lines,
     )
     .await?;
-    
+
     // Then generate from the compile output
     run_gleam_generate(
         compile_output,

@@ -364,16 +364,19 @@ impl AppSession for MorphirSession {
                 project,
                 json,
                 json_lines,
-            } => run_compile(
-                language.clone(),
-                input.clone(),
-                output.clone(),
-                package_name.clone(),
-                config.clone(),
-                project.clone(),
-                *json,
-                *json_lines,
-            ).await,
+            } => {
+                run_compile(
+                    language.clone(),
+                    input.clone(),
+                    output.clone(),
+                    package_name.clone(),
+                    config.clone(),
+                    project.clone(),
+                    *json,
+                    *json_lines,
+                )
+                .await
+            }
             Commands::Generate {
                 target,
                 input,
@@ -382,15 +385,18 @@ impl AppSession for MorphirSession {
                 project,
                 json,
                 json_lines,
-            } => run_generate(
-                target.clone(),
-                input.clone(),
-                output.clone(),
-                config.clone(),
-                project.clone(),
-                *json,
-                *json_lines,
-            ).await,
+            } => {
+                run_generate(
+                    target.clone(),
+                    input.clone(),
+                    output.clone(),
+                    config.clone(),
+                    project.clone(),
+                    *json,
+                    *json_lines,
+                )
+                .await
+            }
             Commands::Transform { input, output } => run_transform(input.clone(), output.clone()),
             Commands::Tool { action } => match action {
                 ToolAction::Install { name, version } => {
@@ -441,53 +447,63 @@ impl AppSession for MorphirSession {
                     *expanded,
                 ),
             },
-            Commands::Gleam { action, json, json_lines } => match action {
+            Commands::Gleam {
+                action,
+                json,
+                json_lines,
+            } => match action {
                 GleamAction::Compile {
                     input,
                     output,
                     package_name,
                     config,
                     project,
-                } => run_gleam_compile(
-                    input.clone(),
-                    output.clone(),
-                    package_name.clone(),
-                    config.clone(),
-                    project.clone(),
-                    *json,
-                    *json_lines,
-                )
-                .await,
+                } => {
+                    run_gleam_compile(
+                        input.clone(),
+                        output.clone(),
+                        package_name.clone(),
+                        config.clone(),
+                        project.clone(),
+                        *json,
+                        *json_lines,
+                    )
+                    .await
+                }
                 GleamAction::Generate {
                     input,
                     output,
                     config,
                     project,
-                } => run_gleam_generate(
-                    input.clone(),
-                    output.clone(),
-                    config.clone(),
-                    project.clone(),
-                    *json,
-                    *json_lines,
-                )
-                .await,
+                } => {
+                    run_gleam_generate(
+                        input.clone(),
+                        output.clone(),
+                        config.clone(),
+                        project.clone(),
+                        *json,
+                        *json_lines,
+                    )
+                    .await
+                }
                 GleamAction::Roundtrip {
                     input,
                     output,
                     package_name,
                     config,
                     project,
-                } => run_gleam_roundtrip(
-                    input.clone(),
-                    output.clone(),
-                    package_name.clone(),
-                    config.clone(),
-                    project.clone(),
-                    *json,
-                    *json_lines,
-                )
-                .await,
+                } => {
+                    run_gleam_roundtrip(
+                        input.clone(),
+                        output.clone(),
+                        package_name.clone(),
+                        config.clone(),
+                        project.clone(),
+                        *json,
+                        *json_lines,
+                    )
+                    .await
+                }
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
             Commands::Version { json } => run_version(*json),

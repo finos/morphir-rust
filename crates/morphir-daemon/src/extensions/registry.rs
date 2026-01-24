@@ -273,7 +273,10 @@ impl ExtensionRegistry {
     }
 
     /// Find a frontend extension by language name
-    pub async fn find_extension_by_language(&self, language: &str) -> Option<Arc<ExtensionContainer>> {
+    pub async fn find_extension_by_language(
+        &self,
+        language: &str,
+    ) -> Option<Arc<ExtensionContainer>> {
         // First check builtin extensions (by ID matching language)
         if let Ok(ext) = self.load(language).await {
             if ext.supports(ExtensionType::Frontend) {

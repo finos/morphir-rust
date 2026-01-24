@@ -4,6 +4,6 @@ pub mod loader;
 pub mod pipeline;
 pub mod remote;
 pub mod vfs;
-pub use vfs::{Vfs, OsVfs, MemoryVfs, NotebookVfs, FileMetadata};
+pub use vfs::{FileMetadata, MemoryVfs, NotebookVfs, OsVfs, Vfs};
 
 pub type Result<T> = anyhow::Result<T>;

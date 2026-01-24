@@ -1,9 +1,9 @@
 //! CLI testing helpers for BDD acceptance tests
 
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
-use anyhow::Result;
 
 /// CLI test context for managing test environments
 pub struct CliTestContext {
@@ -18,7 +18,7 @@ impl CliTestContext {
         let temp_dir = tempfile::tempdir()?;
         let project_root = temp_dir.path().to_path_buf();
         let morphir_dir = project_root.join(".morphir");
-        
+
         Ok(Self {
             temp_dir,
             project_root,
@@ -63,56 +63,56 @@ impl CliTestContext {
         let possible_paths = vec![
             // Built binary in target directory
             {
-                let target_dir = std::env::var("CARGO_TARGET_DIR")
-                    .unwrap_or_else(|_| "target".to_string());
-                PathBuf::from(target_dir)
-                    .join("debug")
-                    .join("morphir")
+                let target_dir =
+                    std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+                PathBuf::from(target_dir).join("debug").join("morphir")
             },
             // Release binary
             {
-                let target_dir = std::env::var("CARGO_TARGET_DIR")
-                    .unwrap_or_else(|_| "target".to_string());
-                PathBuf::from(target_dir)
-                    .join("release")
-                    .join("morphir")
+                let target_dir =
+                    std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+                PathBuf::from(target_dir).join("release").join("morphir")
             },
             // In workspace root target
             PathBuf::from("../../target/debug/morphir"),
             PathBuf::from("../../target/release/morphir"),
         ];
-        
+
         for path in possible_paths {
             if path.exists() {
                 return Some(path);
             }
         }
-        
+
         None
     }
 
     /// Execute a morphir CLI command
-    pub fn execute_cli_command(
-        &self,
-        args: &[&str],
-    ) -> Result<CommandResult> {
+    pub fn execute_cli_command(&self, args: &[&str]) -> Result<CommandResult> {
         let mut cmd = if let Some(binary) = Self::get_morphir_binary() {
             // Use built binary
             Command::new(&binary)
         } else {
             // Fall back to cargo run
             let mut cargo_cmd = Command::new("cargo");
-            cargo_cmd.args(&["run", "--bin", "morphir", "--manifest-path", "../../Cargo.toml", "--"]);
+            cargo_cmd.args(&[
+                "run",
+                "--bin",
+                "morphir",
+                "--manifest-path",
+                "../../Cargo.toml",
+                "--",
+            ]);
             cargo_cmd
         };
-        
+
         cmd.args(args);
         cmd.current_dir(&self.project_root);
         cmd.env("RUST_BACKTRACE", "1");
         cmd.env("RUST_LOG", "error"); // Reduce noise in test output
-        
+
         let output = cmd.output()?;
-        
+
         Ok(CommandResult {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
@@ -123,23 +123,21 @@ impl CliTestContext {
 
     /// Load a test fixture from .morphir/test/fixtures/
     pub fn load_test_fixture(&self, name: &str) -> Result<PathBuf> {
-        let fixture_path = self.morphir_dir
-            .join("test")
-            .join("fixtures")
-            .join(name);
-        
+        let fixture_path = self.morphir_dir.join("test").join("fixtures").join(name);
+
         if fixture_path.exists() {
             Ok(fixture_path)
         } else {
             // Try in workspace root
-            let workspace_fixture = self.project_root
+            let workspace_fixture = self
+                .project_root
                 .parent()
                 .unwrap_or(&self.project_root)
                 .join(".morphir")
                 .join("test")
                 .join("fixtures")
                 .join(name);
-            
+
             if workspace_fixture.exists() {
                 Ok(workspace_fixture)
             } else {
@@ -150,23 +148,21 @@ impl CliTestContext {
 
     /// Load a test scenario from .morphir/test/scenarios/
     pub fn load_test_scenario(&self, name: &str) -> Result<PathBuf> {
-        let scenario_path = self.morphir_dir
-            .join("test")
-            .join("scenarios")
-            .join(name);
-        
+        let scenario_path = self.morphir_dir.join("test").join("scenarios").join(name);
+
         if scenario_path.exists() {
             Ok(scenario_path)
         } else {
             // Try in workspace root
-            let workspace_scenario = self.project_root
+            let workspace_scenario = self
+                .project_root
                 .parent()
                 .unwrap_or(&self.project_root)
                 .join(".morphir")
                 .join("test")
                 .join("scenarios")
                 .join(name);
-            
+
             if workspace_scenario.exists() {
                 Ok(workspace_scenario)
             } else {
@@ -191,9 +187,7 @@ impl CommandResult {
         assert!(
             self.success,
             "Command failed with exit code {}\nSTDOUT:\n{}\nSTDERR:\n{}",
-            self.exit_code,
-            self.stdout,
-            self.stderr
+            self.exit_code, self.stdout, self.stderr
         );
     }
 
@@ -202,8 +196,7 @@ impl CommandResult {
         assert!(
             !self.success,
             "Command unexpectedly succeeded\nSTDOUT:\n{}\nSTDERR:\n{}",
-            self.stdout,
-            self.stderr
+            self.stdout, self.stderr
         );
     }
 
@@ -229,11 +222,7 @@ impl CommandResult {
 pub fn assert_files_exist(root: &Path, files: &[&str]) {
     for file in files {
         let path = root.join(file);
-        assert!(
-            path.exists(),
-            "File does not exist: {:?}",
-            path
-        );
+        assert!(path.exists(), "File does not exist: {:?}", path);
     }
 }
 
@@ -244,7 +233,7 @@ pub fn assert_morphir_structure(morphir_dir: &Path, project: &str) {
         ".morphir/ directory does not exist: {:?}",
         morphir_dir
     );
-    
+
     let out_dir = morphir_dir.join("out").join(project);
     assert!(
         out_dir.exists(),

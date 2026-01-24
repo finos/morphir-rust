@@ -118,7 +118,7 @@ fn generate_from_package_definition(
     // Generate each module
     for (module_path_str, module_def) in &package_def.modules {
         let module_path = ModuleName::parse(module_path_str);
-        
+
         match visitor.visit_module(&module_path, module_def) {
             Ok(_) => {
                 // Read generated file
@@ -139,7 +139,11 @@ fn generate_from_package_definition(
                 }
             }
             Err(e) => {
-                return Err(anyhow::anyhow!("Failed to generate module {}: {}", module_path_str, e));
+                return Err(anyhow::anyhow!(
+                    "Failed to generate module {}: {}",
+                    module_path_str,
+                    e
+                ));
             }
         }
     }

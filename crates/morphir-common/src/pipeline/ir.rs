@@ -7,7 +7,6 @@ use crate::Result;
 use anyhow;
 use morphir_ir::converter;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// IR format version
@@ -23,14 +22,17 @@ pub fn detect_ir_version(ir: &Value) -> Option<IrVersion> {
     if ir.get("formatVersion").is_some() {
         return Some(IrVersion::V4);
     }
-    
+
     // Check for V4 wrapper object format
     if let Some(obj) = ir.as_object() {
-        if obj.contains_key("Library") || obj.contains_key("Specs") || obj.contains_key("Application") {
+        if obj.contains_key("Library")
+            || obj.contains_key("Specs")
+            || obj.contains_key("Application")
+        {
             return Some(IrVersion::V4);
         }
     }
-    
+
     // Check for V3 tagged array format
     if let Some(arr) = ir.as_array() {
         if !arr.is_empty() {
@@ -44,7 +46,7 @@ pub fn detect_ir_version(ir: &Value) -> Option<IrVersion> {
             }
         }
     }
-    
+
     None
 }
 
@@ -60,10 +62,10 @@ impl Step for V3ToV4Converter {
         // Deserialize to Classic Package
         let classic_pkg: morphir_ir::ir::classic::Package = serde_json::from_value(input)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize Classic IR: {}", e))?;
-        
+
         // Convert to V4
         let v4_pkg = converter::classic_to_v4(classic_pkg);
-        
+
         // Serialize back to JSON
         serde_json::to_value(v4_pkg)
             .map_err(|e| anyhow::anyhow!("Failed to serialize V4 IR: {}", e))
@@ -82,10 +84,10 @@ impl Step for V4ToV3Converter {
         // Deserialize to V4 PackageDefinition
         let v4_pkg: morphir_ir::ir::v4::PackageDefinition = serde_json::from_value(input)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize V4 IR: {}", e))?;
-        
+
         // Convert to Classic
         let classic_pkg = converter::v4_to_classic(v4_pkg);
-        
+
         // Serialize back to JSON
         serde_json::to_value(classic_pkg)
             .map_err(|e| anyhow::anyhow!("Failed to serialize Classic IR: {}", e))
@@ -124,16 +126,18 @@ impl Default for PipelineConfig {
 }
 
 /// Build a pipeline from configuration
-pub fn build_pipeline(config: &PipelineConfig) -> Pipeline<impl Step<Input = Value, Output = Value>> {
+pub fn build_pipeline(
+    config: &PipelineConfig,
+) -> Pipeline<impl Step<Input = Value, Output = Value>> {
     // Start with format detection
-    let pipeline = Pipeline::new(FormatDetector);
-    
+    let _pipeline = Pipeline::new(FormatDetector);
+
     // Add V3 to V4 conversion if needed
     if config.transforms.contains(&"v3-to-v4".to_string()) {
         // Chain format detection -> V3 to V4
         // For now, simplified - would need proper chaining
     }
-    
+
     // For now, return a simple identity pipeline
     Pipeline::new(IdentityStep)
 }

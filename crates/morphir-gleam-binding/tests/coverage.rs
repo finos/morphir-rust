@@ -71,7 +71,10 @@ impl FeatureRegistry {
             return 0.0;
         }
 
-        let implemented = counts.get(&FeatureStatus::Implemented).copied().unwrap_or(0);
+        let implemented = counts
+            .get(&FeatureStatus::Implemented)
+            .copied()
+            .unwrap_or(0);
         let partial = counts.get(&FeatureStatus::Partial).copied().unwrap_or(0);
 
         // Count partial as 50% coverage
@@ -103,11 +106,22 @@ impl CoverageTracker {
 
         CoverageReport {
             total_features: self.registry.all_features().len(),
-            implemented: counts.get(&FeatureStatus::Implemented).copied().unwrap_or(0),
+            implemented: counts
+                .get(&FeatureStatus::Implemented)
+                .copied()
+                .unwrap_or(0),
             partial: counts.get(&FeatureStatus::Partial).copied().unwrap_or(0),
-            unimplemented: counts.get(&FeatureStatus::Unimplemented).copied().unwrap_or(0),
+            unimplemented: counts
+                .get(&FeatureStatus::Unimplemented)
+                .copied()
+                .unwrap_or(0),
             coverage_percentage: coverage,
-            features: self.registry.all_features().iter().map(|f| (*f).clone()).collect(),
+            features: self
+                .registry
+                .all_features()
+                .iter()
+                .map(|f| (*f).clone())
+                .collect(),
         }
     }
 }
@@ -131,8 +145,11 @@ impl CoverageReport {
         md.push_str(&format!("**Implemented**: {}\n", self.implemented));
         md.push_str(&format!("**Partial**: {}\n", self.partial));
         md.push_str(&format!("**Unimplemented**: {}\n", self.unimplemented));
-        md.push_str(&format!("**Coverage**: {:.1}%\n\n", self.coverage_percentage));
-        
+        md.push_str(&format!(
+            "**Coverage**: {:.1}%\n\n",
+            self.coverage_percentage
+        ));
+
         md.push_str("## Features by Status\n\n");
         md.push_str("### Implemented\n");
         for feature in &self.features {
@@ -140,21 +157,21 @@ impl CoverageReport {
                 md.push_str(&format!("- {}: {}\n", feature.id, feature.name));
             }
         }
-        
+
         md.push_str("\n### Partial\n");
         for feature in &self.features {
             if matches!(feature.status, FeatureStatus::Partial) {
                 md.push_str(&format!("- {}: {}\n", feature.id, feature.name));
             }
         }
-        
+
         md.push_str("\n### Unimplemented\n");
         for feature in &self.features {
             if matches!(feature.status, FeatureStatus::Unimplemented) {
                 md.push_str(&format!("- {}: {}\n", feature.id, feature.name));
             }
         }
-        
+
         md
     }
 }

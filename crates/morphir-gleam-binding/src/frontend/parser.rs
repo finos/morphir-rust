@@ -53,7 +53,7 @@ pub enum Token {
     True,
     #[token("False")]
     False,
-    
+
     // Literals
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let slice = lex.slice();
@@ -61,20 +61,20 @@ pub enum Token {
         slice[1..slice.len()-1].to_string()
     })]
     String(String),
-    
+
     #[regex(r"\d+", |lex| lex.slice().parse().ok())]
     Int(i64),
-    
+
     #[regex(r"\d+\.\d+", |lex| lex.slice().parse().ok())]
     Float(f64),
-    
+
     // Identifiers
     #[regex(r"[a-z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Ident(String),
-    
+
     #[regex(r"[A-Z][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     TypeIdent(String),
-    
+
     // Operators
     #[token("->")]
     Arrow,
@@ -118,7 +118,7 @@ pub enum Token {
     Not,
     #[token("?")]
     Question,
-    
+
     // Punctuation
     #[token("(")]
     LParen,
@@ -142,7 +142,7 @@ pub enum Token {
     Dot,
     #[token(";")]
     Semicolon,
-    
+
     // Comments and whitespace (filtered out)
     #[regex(r"//[^\n]*", logos::skip)]
     #[regex(r"\s+", logos::skip)]
@@ -160,14 +160,14 @@ pub type SpannedToken = (Token, Span);
 pub fn tokenize(source: &str) -> Vec<SpannedToken> {
     let mut lexer = Token::lexer(source);
     let mut tokens = Vec::new();
-    
+
     while let Some(token) = lexer.next() {
         if token != Token::Error {
             let span = lexer.span();
             tokens.push((token, span));
         }
     }
-    
+
     tokens
 }
 
@@ -198,13 +198,17 @@ impl std::error::Error for ParseError {}
 
 /// Convert ParseError to extension SDK Diagnostic
 impl ParseError {
-    pub fn to_diagnostic(&self, file_path: &str, source: &str) -> morphir_extension_sdk::types::Diagnostic {
+    pub fn to_diagnostic(
+        &self,
+        file_path: &str,
+        source: &str,
+    ) -> morphir_extension_sdk::types::Diagnostic {
         use morphir_extension_sdk::types::{Diagnostic, DiagnosticSeverity, SourceLocation};
-        
+
         // Convert span to line/column
         let (start_line, start_col) = span_to_line_column(source, self.span.start);
         let (end_line, end_col) = span_to_line_column(source, self.span.end);
-        
+
         let location = SourceLocation {
             file: file_path.to_string(),
             start_line,
@@ -212,7 +216,7 @@ impl ParseError {
             end_line,
             end_col,
         };
-        
+
         // Build error message with hint
         let mut message = self.message.clone();
         if let Some(hint) = &self.hint {
@@ -223,7 +227,7 @@ impl ParseError {
             message.push_str("\n");
             message.push_str(&format!("Found: {}", snippet));
         }
-        
+
         Diagnostic {
             severity: DiagnosticSeverity::Error,
             code: Some("PARSE_ERROR".to_string()),
@@ -238,7 +242,7 @@ impl ParseError {
 fn span_to_line_column(source: &str, offset: usize) -> (u32, u32) {
     let mut line = 1;
     let mut col = 1;
-    
+
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
@@ -250,7 +254,7 @@ fn span_to_line_column(source: &str, offset: usize) -> (u32, u32) {
             col += 1;
         }
     }
-    
+
     (line, col)
 }
 
@@ -262,21 +266,21 @@ fn to_parse_error(err: chumsky::error::Simple<Token>, source: &str) -> ParseErro
         .filter_map(|e| e.map(|t| format!("{:?}", t)))
         .collect();
     let found = err.found().map(|t| format!("{:?}", t));
-    
+
     // Extract source snippet for context
     let snippet = if span.start < source.len() && span.end <= source.len() {
         Some(source[span.clone()].to_string())
     } else {
         None
     };
-    
+
     // Generate hint based on expected tokens
     let hint = if !expected.is_empty() {
         Some(format!("Expected one of: {}", expected.join(", ")))
     } else {
         None
     };
-    
+
     ParseError {
         message: format!("Parse error: {}", err.reason()),
         span,
@@ -291,7 +295,7 @@ fn to_parse_error(err: chumsky::error::Simple<Token>, source: &str) -> ParseErro
 pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
     // Tokenize
     let tokens = tokenize(source);
-    
+
     if tokens.is_empty() {
         return Ok(ModuleIR {
             name: extract_module_name(path),
@@ -300,7 +304,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
             values: vec![],
         });
     }
-    
+
     // Parse
     let parser = module_parser();
     let input = chumsky::input::SpannedInput::new(
@@ -308,7 +312,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
         source.as_bytes().len(),
         |(token, span): &(Token, Span)| span.clone(),
     );
-    
+
     match parser.parse(input) {
         Ok(mut module) => {
             // Set module name from path
@@ -517,28 +521,25 @@ pub enum Pattern {
 fn module_parser() -> impl Parser<Token, ModuleIR, Error = chumsky::error::Simple<Token>> {
     // Parse module-level statements
     let stmt = statement_parser().then_ignore(just(Token::Semicolon).or_not());
-    
-    stmt
-        .repeated()
-        .collect::<Vec<_>>()
-        .map(|stmts| {
-            let mut types = Vec::new();
-            let mut values = Vec::new();
-            
-            for stmt in stmts {
-                match stmt {
-                    Statement::TypeDef(td) => types.push(td),
-                    Statement::ValueDef(vd) => values.push(vd),
-                }
+
+    stmt.repeated().collect::<Vec<_>>().map(|stmts| {
+        let mut types = Vec::new();
+        let mut values = Vec::new();
+
+        for stmt in stmts {
+            match stmt {
+                Statement::TypeDef(td) => types.push(td),
+                Statement::ValueDef(vd) => values.push(vd),
             }
-            
-            ModuleIR {
-                name: String::new(), // Will be set from path
-                doc: None,
-                types,
-                values,
-            }
-        })
+        }
+
+        ModuleIR {
+            name: String::new(), // Will be set from path
+            doc: None,
+            types,
+            values,
+        }
+    })
 }
 
 /// Statement parser
@@ -561,7 +562,7 @@ fn type_def_parser() -> impl Parser<Token, TypeDef, Error = chumsky::error::Simp
         .map(|_| Access::Public)
         .or_not()
         .map(|opt| opt.unwrap_or(Access::Private));
-    
+
     access
         .then_ignore(just(Token::Type))
         .then(identifier_parser())
@@ -588,7 +589,8 @@ fn type_def_parser() -> impl Parser<Token, TypeDef, Error = chumsky::error::Simp
 }
 
 /// Custom type body parser (variants)
-fn custom_type_body_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Simple<Token>> {
+fn custom_type_body_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Simple<Token>>
+{
     variant_parser()
         .separated_by(just(Token::Pipe))
         .allow_trailing()
@@ -616,7 +618,7 @@ fn value_def_parser() -> impl Parser<Token, ValueDef, Error = chumsky::error::Si
         .map(|_| Access::Public)
         .or_not()
         .map(|opt| opt.unwrap_or(Access::Private));
-    
+
     access
         .then_ignore(just(Token::Fn))
         .then(identifier_parser())
@@ -634,9 +636,7 @@ fn value_def_parser() -> impl Parser<Token, ValueDef, Error = chumsky::error::Si
         )
         .then(
             // Type annotation (optional)
-            just(Token::Colon)
-                .ignore_then(type_expr_parser())
-                .or_not(),
+            just(Token::Colon).ignore_then(type_expr_parser()).or_not(),
         )
         .then_ignore(just(Token::LBrace))
         .then(expr_parser())
@@ -654,10 +654,10 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
     recursive(|expr| {
         // Literals
         let literal = literal_parser().map(|lit| Expr::Literal { value: lit });
-        
+
         // Variables
         let variable = identifier_parser().map(|name| Expr::Variable { name });
-        
+
         // Tuples: #(expr, expr, ...)
         let tuple = just(Token::Hash)
             .ignore_then(
@@ -667,7 +667,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map(|elements| Expr::Tuple { elements });
-        
+
         // Records: { field: expr, ... }
         let record = just(Token::LBrace)
             .ignore_then(
@@ -680,7 +680,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
             )
             .then_ignore(just(Token::RBrace))
             .map(|fields| Expr::Record { fields });
-        
+
         // Field access: expr.field
         let field_access = expr
             .clone()
@@ -690,7 +690,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                 record: Box::new(record),
                 field,
             });
-        
+
         // Function application: expr(expr)
         let application = expr
             .clone()
@@ -702,13 +702,10 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                 function: Box::new(function),
                 argument: Box::new(argument),
             });
-        
+
         // Lambda: fn(param) { expr }
         let lambda = just(Token::Fn)
-            .ignore_then(
-                identifier_parser()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
+            .ignore_then(identifier_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then_ignore(just(Token::LBrace))
             .then(expr.clone())
             .then_ignore(just(Token::RBrace))
@@ -716,7 +713,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                 param,
                 body: Box::new(body),
             });
-        
+
         // Let binding: let name = expr in expr
         let let_binding = just(Token::Let)
             .ignore_then(identifier_parser())
@@ -730,7 +727,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                 value: Box::new(value),
                 body: Box::new(body),
             });
-        
+
         // If expression: if expr { expr } else { expr }
         let if_expr = just(Token::If)
             .ignore_then(expr.clone())
@@ -749,7 +746,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                 then_branch: Box::new(then_branch),
                 else_branch: Box::new(else_branch),
             });
-        
+
         // Case expression: case expr { pattern -> expr, ... }
         let case_expr = just(Token::Case)
             .ignore_then(expr.clone())
@@ -773,37 +770,29 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
                     branches,
                 }
             });
-        
+
         // Primary expressions (highest precedence)
-        let primary = literal
-            .or(variable)
-            .or(tuple)
-            .or(record)
-            .or(
-                expr.clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            );
-        
+        let primary = literal.or(variable).or(tuple).or(record).or(expr
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen)));
+
         // Apply operators (left-associative)
         // Chain field access and applications
         primary
-            .then(
-                (field_access
-                    .or(application))
-                    .repeated(),
-            )
-            .foldl(|lhs, rhs| {
-                match rhs {
-                    Expr::Field { record: _, field } => Expr::Field {
-                        record: Box::new(lhs),
-                        field,
-                    },
-                    Expr::Apply { function: _, argument } => Expr::Apply {
-                        function: Box::new(lhs),
-                        argument,
-                    },
-                    _ => lhs,
-                }
+            .then((field_access.or(application)).repeated())
+            .foldl(|lhs, rhs| match rhs {
+                Expr::Field { record: _, field } => Expr::Field {
+                    record: Box::new(lhs),
+                    field,
+                },
+                Expr::Apply {
+                    function: _,
+                    argument,
+                } => Expr::Apply {
+                    function: Box::new(lhs),
+                    argument,
+                },
+                _ => lhs,
             })
             .or(lambda)
             .or(let_binding)
@@ -817,12 +806,12 @@ fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Si
     recursive(|type_expr| {
         // Type variable
         let type_var = identifier_parser().map(|name| TypeExpr::Variable { name });
-        
+
         // Unit type
         let unit = just(Token::LParen)
             .then(just(Token::RParen))
             .map(|_| TypeExpr::Unit);
-        
+
         // Tuple type: #(Type, Type, ...)
         let tuple_type = just(Token::Hash)
             .ignore_then(
@@ -833,7 +822,7 @@ fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Si
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map(|elements| TypeExpr::Tuple { elements });
-        
+
         // Record type: { field: Type, ... }
         let record_type = just(Token::LBrace)
             .ignore_then(
@@ -846,7 +835,7 @@ fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Si
             )
             .then_ignore(just(Token::RBrace))
             .map(|fields| TypeExpr::Record { fields });
-        
+
         // Reference type: TypeName(Type, ...)
         let ref_type = type_identifier_parser()
             .then(
@@ -859,7 +848,7 @@ fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Si
                     .map(|opt| opt.unwrap_or_default()),
             )
             .map(|(name, args)| TypeExpr::Reference { name, args });
-        
+
         // Function type: Type -> Type
         let func_type = type_expr
             .clone()
@@ -869,26 +858,20 @@ fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Si
                 from: Box::new(from),
                 to: Box::new(to),
             });
-        
+
         // Primary types
         let primary = type_var
             .or(unit)
             .or(tuple_type)
             .or(record_type)
-            .or(
-                type_expr
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
+            .or(type_expr
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)))
             .or(ref_type);
-        
+
         // Function types (right-associative)
         primary
-            .then(
-                just(Token::Arrow)
-                    .ignore_then(type_expr.clone())
-                    .repeated(),
-            )
+            .then(just(Token::Arrow).ignore_then(type_expr.clone()).repeated())
             .foldr(|lhs, rhs| TypeExpr::Function {
                 from: Box::new(lhs),
                 to: Box::new(rhs),
@@ -901,13 +884,13 @@ fn pattern_parser() -> impl Parser<Token, Pattern, Error = chumsky::error::Simpl
     recursive(|pattern| {
         // Wildcard
         let wildcard = just(Token::Underscore).map(|_| Pattern::Wildcard);
-        
+
         // Variable pattern
         let var_pattern = identifier_parser().map(|name| Pattern::Variable { name });
-        
+
         // Literal pattern
         let lit_pattern = literal_parser().map(|lit| Pattern::Literal { value: lit });
-        
+
         // Tuple pattern: #(pattern, ...)
         let tuple_pattern = just(Token::Hash)
             .ignore_then(
@@ -918,7 +901,7 @@ fn pattern_parser() -> impl Parser<Token, Pattern, Error = chumsky::error::Simpl
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map(|elements| Pattern::Tuple { elements });
-        
+
         // Constructor pattern: ConstructorName(pattern, ...)
         let constructor_pattern = type_identifier_parser()
             .then(
@@ -931,16 +914,14 @@ fn pattern_parser() -> impl Parser<Token, Pattern, Error = chumsky::error::Simpl
                     .map(|opt| opt.unwrap_or_default()),
             )
             .map(|(name, args)| Pattern::Constructor { name, args });
-        
+
         wildcard
             .or(var_pattern)
             .or(lit_pattern)
             .or(tuple_pattern)
-            .or(
-                pattern
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
+            .or(pattern
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)))
             .or(constructor_pattern)
     })
 }
@@ -984,7 +965,7 @@ mod tests {
     fn test_tokenize_simple() {
         let source = "pub fn hello() { \"world\" }";
         let tokens = tokenize(source);
-        
+
         assert!(tokens.len() > 0);
         assert_eq!(tokens[0].0, Token::Pub);
         assert_eq!(tokens[1].0, Token::Fn);
@@ -994,7 +975,7 @@ mod tests {
     fn test_tokenize_literals() {
         let source = "42 True False \"hello\" 3.14";
         let tokens = tokenize(source);
-        
+
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Int(_))));
         assert!(tokens.iter().any(|(t, _)| t == &Token::True));
         assert!(tokens.iter().any(|(t, _)| t == &Token::False));
@@ -1006,7 +987,7 @@ mod tests {
     fn test_tokenize_identifiers() {
         let source = "hello world MyType";
         let tokens = tokenize(source);
-        
+
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Ident(_))));
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::TypeIdent(_))));
     }

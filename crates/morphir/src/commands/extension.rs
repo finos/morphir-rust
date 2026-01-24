@@ -150,7 +150,7 @@ pub fn run_extension_list() -> AppResult {
 
     // Discover builtin extensions
     let builtins = morphir_design::discover_builtin_extensions();
-    
+
     // Load registry extensions
     let registry = match ExtensionRegistry::load() {
         Ok(reg) => reg,
@@ -165,7 +165,10 @@ pub fn run_extension_list() -> AppResult {
     // Display builtin extensions
     if !builtins.is_empty() {
         println!("Builtin Extensions:");
-        println!("{:<20} {:<15} {:<30} Description", "Extension", "Version", "Capabilities");
+        println!(
+            "{:<20} {:<15} {:<30} Description",
+            "Extension", "Version", "Capabilities"
+        );
         println!("{}", "-".repeat(85));
         for builtin in &builtins {
             let languages = builtin.languages.join(", ");
@@ -181,10 +184,7 @@ pub fn run_extension_list() -> AppResult {
             };
             println!(
                 "{:<20} {:<15} {:<30} {}",
-                builtin.id,
-                "builtin",
-                capabilities,
-                builtin.name
+                builtin.id, "builtin", capabilities, builtin.name
             );
         }
         println!();
@@ -208,8 +208,12 @@ pub fn run_extension_list() -> AppResult {
 
     let total = builtins.len() + registry_extensions.len();
     if total > 0 {
-        println!("Total: {} extension(s) available ({} builtin, {} installed)", 
-                 total, builtins.len(), registry_extensions.len());
+        println!(
+            "Total: {} extension(s) available ({} builtin, {} installed)",
+            total,
+            builtins.len(),
+            registry_extensions.len()
+        );
     }
 
     Ok(None)

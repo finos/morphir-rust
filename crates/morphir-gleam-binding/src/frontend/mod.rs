@@ -4,4 +4,4 @@ mod parser;
 mod visitor;
 
 pub use parser::parse_gleam;
-pub use visitor::{GleamToMorphirVisitor, DistributionLayout};
+pub use visitor::{DistributionLayout, GleamToMorphirVisitor};

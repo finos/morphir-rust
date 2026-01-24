@@ -57,8 +57,8 @@ pub struct FileMetadata {
 }
 
 // Re-export implementations
-pub use os::OsVfs;
 pub use memory::MemoryVfs;
+pub use os::OsVfs;
 
-mod os;
 mod memory;
+mod os;

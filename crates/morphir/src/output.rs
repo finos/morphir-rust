@@ -51,12 +51,12 @@ pub fn write_output<T: Serialize>(format: OutputFormat, value: &T) -> anyhow::Re
 pub fn write_json_lines<T: Serialize>(items: impl Iterator<Item = T>) -> anyhow::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    
+
     for item in items {
         let json = serde_json::to_string(&item)?;
         writeln!(handle, "{}", json)?;
     }
-    
+
     Ok(())
 }
 

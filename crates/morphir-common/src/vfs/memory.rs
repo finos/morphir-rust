@@ -112,7 +112,7 @@ impl Vfs for MemoryVfs {
         // Remove all files that are children of this path (if it's a directory)
         let keys_to_remove: Vec<PathBuf> = files
             .keys()
-            .filter(|k| k.starts_with(&path) && k != &path)
+            .filter(|k| k.starts_with(&path) && *k != &path)
             .cloned()
             .collect();
 
@@ -126,18 +126,21 @@ impl Vfs for MemoryVfs {
     fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let from = MemoryVfs::normalize_path(from);
         let to = MemoryVfs::normalize_path(to);
-        let files = self.files.lock().unwrap();
 
-        let content = files.get(&from).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("File not found: {:?}", from),
-            )
-        })?;
+        // Clone the content while holding the lock briefly
+        let content = {
+            let files = self.files.lock().unwrap();
+            files.get(&from).cloned().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("File not found: {:?}", from),
+                )
+            })?
+        };
 
-        drop(files);
+        // Now insert with a new lock
         let mut files = self.files.lock().unwrap();
-        files.insert(to, content.clone());
+        files.insert(to, content);
         Ok(())
     }
 

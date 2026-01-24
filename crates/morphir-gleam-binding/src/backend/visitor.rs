@@ -8,11 +8,11 @@ use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
 use morphir_ir::ir::literal::Literal as MorphirLiteral;
 use morphir_ir::ir::pattern::Pattern as MorphirPattern;
 use morphir_ir::ir::type_expr::Type;
-use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueDefinition};
 use morphir_ir::ir::v4::{
     Access as MorphirAccess, AccessControlledModuleDefinition, AccessControlledTypeDefinition,
     AccessControlledValueDefinition, ModuleDefinition,
 };
+use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueDefinition};
 use morphir_ir::naming::{FQName, ModuleName, Name};
 use std::io::Result;
 use std::path::PathBuf;
@@ -41,9 +41,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         module: &AccessControlledModuleDefinition,
     ) -> Result<()> {
         // Convert module path to file path: "my/module" -> "my/module.gleam"
-        let file_path = self
-            .output_dir
-            .join(format!("{}.gleam", module_path.to_string().replace("/", "/")));
+        let file_path = self.output_dir.join(format!(
+            "{}.gleam",
+            module_path.to_string().replace("/", "/")
+        ));
 
         // Generate module content
         let content = self.generate_module_content(module_path, &module.value)?;
@@ -387,11 +388,11 @@ impl ValueBodyExt for morphir_ir::ir::value_expr::ValueBody<TypeAttributes, Valu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use morphir_common::vfs::MemoryVfs;
-    use morphir_ir::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
-    use morphir_ir::ir::v4::Access as MorphirAccess;
-    use morphir_ir::naming::ModuleName;
     use indexmap::IndexMap;
+    use morphir_common::vfs::MemoryVfs;
+    use morphir_ir::ir::v4::Access as MorphirAccess;
+    use morphir_ir::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
+    use morphir_ir::naming::ModuleName;
     use std::path::PathBuf;
 
     #[test]
@@ -419,11 +420,7 @@ mod tests {
     #[test]
     fn test_generate_literal() {
         let vfs = MemoryVfs::new();
-        let visitor = MorphirToGleamVisitor::new(
-            vfs,
-            PathBuf::from("/test"),
-            "test".to_string(),
-        );
+        let visitor = MorphirToGleamVisitor::new(vfs, PathBuf::from("/test"), "test".to_string());
 
         let mut output = String::new();
         let lit = MorphirLiteral::Bool(true);

@@ -23,6 +23,28 @@ cmd validate hide=#true help="[Experimental] Validate Morphir IR models" {
         arg <INPUT>
     }
 }
+cmd compile hide=#true help="[Experimental] Compile source code to Morphir IR" {
+    flag "-l --language" help="Source language (e.g., gleam, elm)" {
+        arg <LANGUAGE>
+    }
+    flag "-i --input" help="Input source directory or file" {
+        arg <INPUT>
+    }
+    flag "-o --output" help="Output directory" {
+        arg <OUTPUT>
+    }
+    flag --package-name help="Package name override" {
+        arg <PACKAGE_NAME>
+    }
+    flag --config help="Explicit config file path" {
+        arg <CONFIG>
+    }
+    flag --project help="Project name (for workspaces)" {
+        arg <PROJECT>
+    }
+    flag --json help="Output as JSON"
+    flag --json-lines help="Output as JSON Lines (streaming)"
+}
 cmd generate hide=#true help="[Experimental] Generate code from Morphir IR" {
     flag "-t --target" help="Target language or format" {
         arg <TARGET>
@@ -33,6 +55,14 @@ cmd generate hide=#true help="[Experimental] Generate code from Morphir IR" {
     flag "-o --output" help="Output directory" {
         arg <OUTPUT>
     }
+    flag --config help="Explicit config file path" {
+        arg <CONFIG>
+    }
+    flag --project help="Project name (for workspaces)" {
+        arg <PROJECT>
+    }
+    flag --json help="Output as JSON"
+    flag --json-lines help="Output as JSON Lines (streaming)"
 }
 cmd transform hide=#true help="[Experimental] Transform Morphir IR" {
     flag "-i --input" help="Path to the Morphir IR file or directory" {
@@ -110,6 +140,58 @@ cmd ir subcommand_required=#true help="Manage Morphir IR" {
         flag --json help="Output result as JSON (for scripting)"
         flag --expanded help="Use expanded (non-compact) format for V4 output"
         arg <INPUT> help="Input file, directory, or remote source (e.g., github:owner/repo, URL)"
+    }
+}
+cmd gleam subcommand_required=#true help="Gleam language binding commands" {
+    flag --json help="Output as JSON"
+    flag --json-lines help="Output as JSON Lines (streaming)"
+    cmd compile help="Compile Gleam source to Morphir IR" {
+        flag "-i --input" help="Input source directory or file" {
+            arg <INPUT>
+        }
+        flag "-o --output" help="Output directory" {
+            arg <OUTPUT>
+        }
+        flag --package-name help="Package name override" {
+            arg <PACKAGE_NAME>
+        }
+        flag --config help="Explicit config file path" {
+            arg <CONFIG>
+        }
+        flag --project help="Project name (for workspaces)" {
+            arg <PROJECT>
+        }
+    }
+    cmd generate help="Generate Gleam code from Morphir IR" {
+        flag "-i --input" help="Path to the Morphir IR file or directory" {
+            arg <INPUT>
+        }
+        flag "-o --output" help="Output directory" {
+            arg <OUTPUT>
+        }
+        flag --config help="Explicit config file path" {
+            arg <CONFIG>
+        }
+        flag --project help="Project name (for workspaces)" {
+            arg <PROJECT>
+        }
+    }
+    cmd roundtrip help="Roundtrip: compile then generate (for testing)" {
+        flag "-i --input" help="Input source directory or file" {
+            arg <INPUT>
+        }
+        flag "-o --output" help="Output directory" {
+            arg <OUTPUT>
+        }
+        flag --package-name help="Package name override" {
+            arg <PACKAGE_NAME>
+        }
+        flag --config help="Explicit config file path" {
+            arg <CONFIG>
+        }
+        flag --project help="Project name (for workspaces)" {
+            arg <PROJECT>
+        }
     }
 }
 cmd schema help="Generate JSON Schema for Morphir IR" {

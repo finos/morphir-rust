@@ -30,7 +30,7 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
   - `morphir self upgrade` to fetch latest version
 - **Dev Mode**: Run morphir from local source for development and testing
   - Enable via `--dev` flag, `MORPHIR_DEV=1`, `local-dev` in `.morphir-version`, or `dev_mode=true` in `morphir.toml`
-  - `morphir self dev` to check dev mode status and configuration
+  - `morphir self dev` command to check dev mode status and configuration
   - Auto-detects source directory from CI environments and common locations
 - **Gleam Binding**: Roundtrip testing infrastructure for Gleam code
   - Compile Gleam to IR V4, generate back to Gleam, verify equivalence

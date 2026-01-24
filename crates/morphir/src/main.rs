@@ -37,16 +37,8 @@ struct Cli {
 
 #[derive(Clone, Subcommand)]
 enum Commands {
-    // ===== Experimental Commands (hidden by default) =====
-    /// [Experimental] Validate Morphir IR models
-    #[command(hide = true)]
-    Validate {
-        /// Path to the Morphir IR file or directory
-        #[arg(short, long)]
-        input: Option<String>,
-    },
-    /// [Experimental] Compile source code to Morphir IR
-    #[command(hide = true)]
+    // ===== Core Commands =====
+    /// Compile source code to Morphir IR
     Compile {
         /// Source language (e.g., gleam, elm)
         #[arg(short, long)]
@@ -73,8 +65,7 @@ enum Commands {
         #[arg(long)]
         json_lines: bool,
     },
-    /// [Experimental] Generate code from Morphir IR
-    #[command(hide = true)]
+    /// Generate code from Morphir IR
     Generate {
         /// Target language or format
         #[arg(short, long)]
@@ -98,6 +89,13 @@ enum Commands {
         #[arg(long)]
         json_lines: bool,
     },
+    /// [Experimental] Validate Morphir IR models
+    #[command(hide = true)]
+    Validate {
+        /// Path to the Morphir IR file or directory
+        #[arg(short, long)]
+        input: Option<String>,
+    },
     /// [Experimental] Transform Morphir IR
     #[command(hide = true)]
     Transform {
@@ -109,7 +107,7 @@ enum Commands {
         output: Option<String>,
     },
 
-    // ===== Stable Commands =====
+    // ===== Management Commands =====
     /// Manage Morphir tools, distributions, and extensions
     Tool {
         #[command(subcommand)]

@@ -97,7 +97,7 @@ jobs:
         run: mise run build:release
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: morphir-binary-${{ runner.os }}
           path: .morphir/build/bin/morphir
@@ -151,7 +151,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Download morphir binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: morphir-binary-${{ runner.os }}
           path: .morphir/build/bin/
@@ -227,7 +227,7 @@ jobs:
         run: mise run check:coverage --force
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report
           path: target/llvm-cov/html/

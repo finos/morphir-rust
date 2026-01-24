@@ -342,7 +342,11 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 // Convert multi-param function to curried form
                 let mut result = self.convert_type_expr(return_type);
                 for param in parameters.iter().rev() {
-                    result = Type::Function(attrs.clone(), Box::new(self.convert_type_expr(param)), Box::new(result));
+                    result = Type::Function(
+                        attrs.clone(),
+                        Box::new(self.convert_type_expr(param)),
+                        Box::new(result),
+                    );
                 }
                 result
             }
@@ -374,8 +378,10 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     local_name: Name::from(name.as_str()),
                 };
 
-                let morphir_args: Vec<Type<TypeAttributes>> =
-                    parameters.iter().map(|a| self.convert_type_expr(a)).collect();
+                let morphir_args: Vec<Type<TypeAttributes>> = parameters
+                    .iter()
+                    .map(|a| self.convert_type_expr(a))
+                    .collect();
 
                 Type::Reference(attrs, fqname, morphir_args)
             }
@@ -601,7 +607,10 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let _ = message;
                 Value::Unit(attrs) // Placeholder
             }
-            Expr::Echo { expression, body: _ } => {
+            Expr::Echo {
+                expression,
+                body: _,
+            } => {
                 // Echo just returns its expression
                 self.convert_expr(expression)
             }

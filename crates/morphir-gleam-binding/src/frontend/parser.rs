@@ -419,51 +419,117 @@ where
             )
             .boxed(); // Box to enable Clone
 
-        // Binary operators - parse as: left op right (single binary op for now)
-        // A full implementation would use pratt parsing for proper precedence
-        let binary_op = choice((
-            // Comparison operators
-            just(Token::LtEq).to(BinaryOperator::LtEqInt),
-            just(Token::GtEq).to(BinaryOperator::GtEqInt),
-            just(Token::Lt).to(BinaryOperator::LtInt),
-            just(Token::Gt).to(BinaryOperator::GtInt),
-            just(Token::LtEqDot).to(BinaryOperator::LtEqFloat),
-            just(Token::GtEqDot).to(BinaryOperator::GtEqFloat),
-            just(Token::LtDot).to(BinaryOperator::LtFloat),
-            just(Token::GtDot).to(BinaryOperator::GtFloat),
-            just(Token::EqEq).to(BinaryOperator::Eq),
-            just(Token::NotEq).to(BinaryOperator::NotEq),
-            // Arithmetic operators
-            just(Token::Plus).to(BinaryOperator::AddInt),
-            just(Token::PlusDot).to(BinaryOperator::AddFloat),
-            just(Token::Minus).to(BinaryOperator::SubInt),
-            just(Token::MinusDot).to(BinaryOperator::SubFloat),
+        // Binary operators with proper precedence (lowest to highest):
+        // 1. Pipe: |>
+        // 2. Or: ||
+        // 3. And: &&
+        // 4. Comparison: == != < > <= >= (and float variants)
+        // 5. Concatenate: <>
+        // 6. Addition: + - (and float variants)
+        // 7. Multiplication: * / % (and float variants)
+
+        // Helper to create binary expression
+        fn make_binop(left: Expr, op: BinaryOperator, right: Expr) -> Expr {
+            Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        }
+
+        // Level 7 (highest): Multiplication, division, remainder
+        let mult_op = choice((
             just(Token::Star).to(BinaryOperator::MultInt),
             just(Token::StarDot).to(BinaryOperator::MultFloat),
             just(Token::Slash).to(BinaryOperator::DivInt),
             just(Token::SlashDot).to(BinaryOperator::DivFloat),
             just(Token::Percent).to(BinaryOperator::RemainderInt),
-            // Logical operators
-            just(Token::AndAnd).to(BinaryOperator::And),
-            just(Token::OrOr).to(BinaryOperator::Or),
-            // Pipe and concatenate
-            just(Token::PipeRight).to(BinaryOperator::Pipe),
-            just(Token::Concatenate).to(BinaryOperator::Concatenate),
         ));
 
-        // Binary expression: left op right (handles single binary ops)
-        let binary_expr =
-            postfix
-                .clone()
-                .then(binary_op.then(postfix).or_not())
-                .map(|(left, rhs)| match rhs {
-                    Some((op, right)) => Expr::BinaryOp {
-                        op,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    },
-                    None => left,
-                });
+        let multiplicative = postfix
+            .clone()
+            .foldl(mult_op.then(postfix.clone()).repeated(), |l, (op, r)| {
+                make_binop(l, op, r)
+            })
+            .boxed();
+
+        // Level 6: Addition, subtraction
+        let add_op = choice((
+            just(Token::Plus).to(BinaryOperator::AddInt),
+            just(Token::PlusDot).to(BinaryOperator::AddFloat),
+            just(Token::Minus).to(BinaryOperator::SubInt),
+            just(Token::MinusDot).to(BinaryOperator::SubFloat),
+        ));
+
+        let additive = multiplicative
+            .clone()
+            .foldl(
+                add_op.then(multiplicative.clone()).repeated(),
+                |l, (op, r)| make_binop(l, op, r),
+            )
+            .boxed();
+
+        // Level 5: Concatenate
+        let concat_op = just(Token::Concatenate).to(BinaryOperator::Concatenate);
+
+        let concatenative = additive
+            .clone()
+            .foldl(concat_op.then(additive.clone()).repeated(), |l, (op, r)| {
+                make_binop(l, op, r)
+            })
+            .boxed();
+
+        // Level 4: Comparison operators
+        let cmp_op = choice((
+            just(Token::LtEq).to(BinaryOperator::LtEqInt),
+            just(Token::GtEq).to(BinaryOperator::GtEqInt),
+            just(Token::LtEqDot).to(BinaryOperator::LtEqFloat),
+            just(Token::GtEqDot).to(BinaryOperator::GtEqFloat),
+            just(Token::Lt).to(BinaryOperator::LtInt),
+            just(Token::Gt).to(BinaryOperator::GtInt),
+            just(Token::LtDot).to(BinaryOperator::LtFloat),
+            just(Token::GtDot).to(BinaryOperator::GtFloat),
+            just(Token::EqEq).to(BinaryOperator::Eq),
+            just(Token::NotEq).to(BinaryOperator::NotEq),
+        ));
+
+        let comparison = concatenative
+            .clone()
+            .foldl(
+                cmp_op.then(concatenative.clone()).repeated(),
+                |l, (op, r)| make_binop(l, op, r),
+            )
+            .boxed();
+
+        // Level 3: Logical and
+        let and_op = just(Token::AndAnd).to(BinaryOperator::And);
+
+        let logical_and = comparison
+            .clone()
+            .foldl(and_op.then(comparison.clone()).repeated(), |l, (op, r)| {
+                make_binop(l, op, r)
+            })
+            .boxed();
+
+        // Level 2: Logical or
+        let or_op = just(Token::OrOr).to(BinaryOperator::Or);
+
+        let logical_or = logical_and
+            .clone()
+            .foldl(or_op.then(logical_and.clone()).repeated(), |l, (op, r)| {
+                make_binop(l, op, r)
+            })
+            .boxed();
+
+        // Level 1 (lowest): Pipe operator
+        let pipe_op = just(Token::PipeRight).to(BinaryOperator::Pipe);
+
+        let binary_expr = logical_or
+            .clone()
+            .foldl(pipe_op.then(logical_or).repeated(), |l, (op, r)| {
+                make_binop(l, op, r)
+            })
+            .boxed();
 
         // All expression forms
         binary_expr

@@ -341,9 +341,16 @@ fn field_expr_list_equivalent(a: &[Field<Expr>], b: &[Field<Expr>]) -> bool {
         return false;
     }
     a.iter().zip(b.iter()).all(|(fa, fb)| match (fa, fb) {
-        (Field::Labelled { label: la, item: ia }, Field::Labelled { label: lb, item: ib }) => {
-            la == lb && expr_equivalent(ia, ib)
-        }
+        (
+            Field::Labelled {
+                label: la,
+                item: ia,
+            },
+            Field::Labelled {
+                label: lb,
+                item: ib,
+            },
+        ) => la == lb && expr_equivalent(ia, ib),
         (Field::Shorthand { name: na }, Field::Shorthand { name: nb }) => na == nb,
         (Field::Unlabelled { item: ia }, Field::Unlabelled { item: ib }) => expr_equivalent(ia, ib),
         _ => false,
@@ -539,8 +546,14 @@ fn field_pattern_list_equivalent(a: &[Field<Pattern>], b: &[Field<Pattern>]) -> 
     }
     a.iter().zip(b.iter()).all(|(fa, fb)| match (fa, fb) {
         (
-            Field::Labelled { label: la, item: ia },
-            Field::Labelled { label: lb, item: ib },
+            Field::Labelled {
+                label: la,
+                item: ia,
+            },
+            Field::Labelled {
+                label: lb,
+                item: ib,
+            },
         ) => la == lb && pattern_equivalent(ia, ib),
         (Field::Shorthand { name: na }, Field::Shorthand { name: nb }) => na == nb,
         (Field::Unlabelled { item: ia }, Field::Unlabelled { item: ib }) => {

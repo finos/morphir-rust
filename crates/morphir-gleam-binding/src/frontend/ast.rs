@@ -266,10 +266,7 @@ pub enum Expr {
     /// Record construction
     Record { fields: Vec<(String, Expr)> },
     /// Record field access
-    FieldAccess {
-        container: Box<Expr>,
-        label: String,
-    },
+    FieldAccess { container: Box<Expr>, label: String },
     /// Tuple construction
     Tuple { elements: Vec<Expr> },
     /// Tuple index access (e.g., `tuple.0`)
@@ -376,10 +373,7 @@ pub enum Pattern {
         tail: Option<Box<Pattern>>,
     },
     /// Pattern assignment (pattern as name)
-    Assignment {
-        pattern: Box<Pattern>,
-        name: String,
-    },
+    Assignment { pattern: Box<Pattern>, name: String },
     /// String concatenation pattern (prefix matching)
     Concatenate {
         prefix: String,

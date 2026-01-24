@@ -10,8 +10,6 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 
-mod visitor;
-
 /// Morphir distribution IR (simplified)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Distribution {

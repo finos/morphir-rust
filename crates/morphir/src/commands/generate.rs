@@ -1,7 +1,7 @@
 //! Generate command for code generation from Morphir IR
 
-use crate::error::{convert_extension_diagnostics, CliError};
-use crate::output::{write_output, Diagnostic, GenerateOutput, OutputFormat};
+use crate::error::{CliError, convert_extension_diagnostics};
+use crate::output::{Diagnostic, GenerateOutput, OutputFormat, write_output};
 use anyhow::Context;
 use morphir_common::loader::load_ir;
 use morphir_daemon::extensions::container::ExtensionType;
@@ -22,23 +22,23 @@ pub async fn run_generate(
     json: bool,
     json_lines: bool,
 ) -> AppResult {
-    use crate::output::{write_output, GenerateOutput, OutputFormat};
+    use crate::output::{GenerateOutput, OutputFormat, write_output};
     // Discover config if not provided
-    let start_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let start_dir = std::env::current_dir().map_err(|e| CliError::FileSystem { error: e })?;
 
     let config_file = if let Some(cfg) = config_path {
         PathBuf::from(cfg)
     } else {
-        discover_config(&start_dir)
-            .ok_or_else(|| anyhow::anyhow!("No morphir.toml or morphir.json found"))?
+        discover_config(&start_dir).ok_or_else(|| CliError::Config {
+            error: anyhow::anyhow!("No morphir.toml or morphir.json found"),
+        })?
     };
 
     // Load config context
-    let ctx = load_config_context(&config_file).context("Failed to load configuration")?;
+    let ctx = load_config_context(&config_file).map_err(|e| CliError::Config { error: e })?;
 
     // Ensure .morphir/ structure exists
-    ensure_morphir_structure(&ctx.morphir_dir)
-        .context("Failed to create .morphir/ directory structure")?;
+    ensure_morphir_structure(&ctx.morphir_dir).map_err(|e| CliError::FileSystem { error: e })?;
 
     // Determine target (from CLI or config)
     let target_lang = target
@@ -48,7 +48,9 @@ pub async fn run_generate(
                 .as_ref()
                 .and_then(|c| c.targets.first().cloned())
         })
-        .ok_or_else(|| anyhow::anyhow!("Target not specified and not found in config"))?;
+        .ok_or_else(|| CliError::Config {
+            error: anyhow::anyhow!("Target not specified and not found in config"),
+        })?;
 
     // Determine project name
     let proj_name = ctx
@@ -67,7 +69,13 @@ pub async fn run_generate(
     };
 
     if !input_path.exists() {
-        return Err(anyhow::anyhow!("IR input path does not exist: {:?}", input_path).into());
+        return Err(CliError::FileSystem {
+            error: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("IR input path does not exist: {:?}", input_path),
+            ),
+        }
+        .into());
     }
 
     // Determine output path
@@ -83,7 +91,9 @@ pub async fn run_generate(
             .unwrap_or_else(|| ctx.config_path.parent().unwrap().to_path_buf()),
         output_path.clone(),
     )
-    .context("Failed to create extension registry")?;
+    .map_err(|e| CliError::Extension {
+        message: format!("Failed to create extension registry: {}", e),
+    })?;
 
     // Register builtin extensions
     let builtins = morphir_design::discover_builtin_extensions();
@@ -92,10 +102,9 @@ pub async fn run_generate(
             registry
                 .register_builtin(&builtin.id, path)
                 .await
-                .context(format!(
-                    "Failed to register builtin extension: {}",
-                    builtin.id
-                ))?;
+                .map_err(|e| CliError::Extension {
+                    message: format!("Failed to register builtin extension {}: {}", builtin.id, e),
+                })?;
         }
     }
 
@@ -103,10 +112,14 @@ pub async fn run_generate(
     let extension = registry
         .find_extension_by_target(&target_lang)
         .await
-        .ok_or_else(|| anyhow::anyhow!("No extension found for target: {}", target_lang))?;
+        .ok_or_else(|| CliError::Extension {
+            message: format!("No extension found for target: {}", target_lang),
+        })?;
 
     // Load IR (detect format)
-    let ir_data = load_ir(&input_path).context("Failed to load Morphir IR")?;
+    let ir_data = load_ir(&input_path).map_err(|e| CliError::FileSystem {
+        error: std::io::Error::new(std::io::ErrorKind::Other, e),
+    })?;
 
     // Call extension's generate method
     let generate_params = serde_json::json!({
@@ -118,7 +131,9 @@ pub async fn run_generate(
     let result: serde_json::Value = extension
         .call("morphir.backend.generate", generate_params)
         .await
-        .context("Extension generate call failed")?;
+        .map_err(|e| CliError::Extension {
+            message: format!("Extension generate call failed: {}", e),
+        })?;
 
     let format = OutputFormat::from_flags(json, json_lines);
 
@@ -158,7 +173,10 @@ pub async fn run_generate(
             };
             err.report();
         }
-        return Err(anyhow::anyhow!("Code generation failed").into());
+        return Err(CliError::Compilation {
+            message: error_msg.to_string(),
+        }
+        .into());
     }
 
     if format != OutputFormat::Human {

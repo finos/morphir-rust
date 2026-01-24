@@ -8,7 +8,7 @@ use crate::remote::cache::SourceCache;
 use crate::remote::config::RemoteSourceConfig;
 use crate::remote::error::{RemoteSourceError, Result};
 use crate::remote::git::GitFetcher;
-use crate::remote::http::{fetch_gist, HttpFetcher};
+use crate::remote::http::{HttpFetcher, fetch_gist};
 use crate::remote::source::RemoteSource;
 use std::path::PathBuf;
 

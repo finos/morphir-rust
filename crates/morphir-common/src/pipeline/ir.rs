@@ -2,8 +2,8 @@
 //!
 //! Extensions to the pipeline framework for Morphir IR transformations.
 
-use crate::pipeline::{Pipeline, Step};
 use crate::Result;
+use crate::pipeline::{Pipeline, Step};
 use anyhow;
 use morphir_ir::converter;
 use serde_json::Value;

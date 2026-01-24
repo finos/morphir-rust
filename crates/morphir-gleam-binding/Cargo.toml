@@ -19,7 +19,7 @@ crate-type = ["cdylib"]
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 
 # WASM plugin development
-extism-pdk = "1.2"
+extism-pdk = "1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -27,7 +27,7 @@ serde_json = "1.0"
 
 # Parser dependencies
 logos = "0.14"
-chumsky = "0.3"
+chumsky = "1.0.0-alpha.8"
 
 # Morphir IR (for visitors)
 morphir-ir = { path = "../morphir-ir" }
@@ -38,7 +38,7 @@ anyhow = "1.0"
 [dev-dependencies]
 cucumber = { version = "0.22", features = ["output-json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tempfile = "3.24.0"
+tempfile = "3"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"

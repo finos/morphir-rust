@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_match, clippy::single_match)]
 //! WASM code generation from Morphir IR
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use morphir_extension_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

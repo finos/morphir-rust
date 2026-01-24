@@ -104,15 +104,9 @@ pub fn convert_extension_diagnostics(
             }
             .to_string(),
             message: d.message.clone(),
-            file: d.location.as_ref().map(|l| l.path.clone()),
-            line: d
-                .location
-                .as_ref()
-                .and_then(|l| l.range.as_ref().map(|r| r.start.line)),
-            column: d
-                .location
-                .as_ref()
-                .and_then(|l| l.range.as_ref().map(|r| r.start.character)),
+            file: d.location.as_ref().map(|l| l.file.clone()),
+            line: d.location.as_ref().map(|l| l.start_line),
+            column: d.location.as_ref().map(|l| l.start_col),
         })
         .collect()
 }

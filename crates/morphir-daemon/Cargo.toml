@@ -37,13 +37,13 @@ toml = "0.9"
 tracing = "0.1"
 
 # WASM plugin runtime (Extism)
-extism = "1.7"
+extism = "1"
 
 # HTTP client (for downloading extensions)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Directory utilities
-dirs = "5"
+dirs = "6"
 
 # Internal crates
 morphir-ir = { path = "../morphir-ir" }
@@ -51,4 +51,4 @@ morphir-common = { path = "../morphir-common" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk", features = ["host"] }
 
 [dev-dependencies]
-tempfile = "3.24.0"
+tempfile = "3"

@@ -11,15 +11,15 @@
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame, Terminal,
 };
 use std::io::{self, Stdout};
 use syntect::easy::HighlightLines;
@@ -522,8 +522,8 @@ impl JsonPager {
                 if let Some(mut stdin) = child.stdin.take() {
                     if stdin.write_all(text.as_bytes()).is_ok() {
                         drop(stdin); // Close stdin before waiting
-                                     // Use wait_with_output with a timeout approach
-                                     // For simplicity, just wait - the command should complete quickly
+                        // Use wait_with_output with a timeout approach
+                        // For simplicity, just wait - the command should complete quickly
                         return child.wait().is_ok_and(|s| s.success());
                     }
                 }

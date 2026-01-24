@@ -68,8 +68,8 @@ pub enum Token {
     #[regex(r"\d+\.\d+", |lex| lex.slice().parse().ok())]
     Float(f64),
 
-    // Identifiers
-    #[regex(r"[a-z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
+    // Identifiers (with priority to avoid conflict with Underscore)
+    #[regex(r"[a-z][a-zA-Z0-9_]*", priority = 2, |lex| lex.slice().to_string())]
     Ident(String),
 
     #[regex(r"[A-Z][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
@@ -82,7 +82,7 @@ pub enum Token {
     Equals,
     #[token("|")]
     Pipe,
-    #[token("_")]
+    #[token("_", priority = 1)]
     Underscore,
     #[token("::")]
     Cons,
@@ -146,7 +146,6 @@ pub enum Token {
     // Comments and whitespace (filtered out)
     #[regex(r"//[^\n]*", logos::skip)]
     #[regex(r"\s+", logos::skip)]
-    #[error]
     Error,
 }
 

@@ -4,7 +4,7 @@
 
 use crate::tui::JsonPager;
 use indexmap::IndexMap;
-use morphir_common::loader::{load_distribution, LoadedDistribution};
+use morphir_common::loader::{LoadedDistribution, load_distribution};
 use morphir_common::remote::{RemoteSource, RemoteSourceResolver, ResolveOptions};
 use morphir_common::vfs::OsVfs;
 use morphir_ir::converter;

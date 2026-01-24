@@ -7,10 +7,10 @@ mod cli_helpers;
 mod coverage;
 
 use anyhow::Result;
-use cucumber::{given, then, when, World};
+use cucumber::{World, given, then, when};
 use morphir_common::vfs::{MemoryVfs, Vfs};
 use morphir_gleam_binding::frontend::parser::ModuleIR;
-use morphir_gleam_binding::frontend::{parse_gleam, GleamToMorphirVisitor};
+use morphir_gleam_binding::frontend::{GleamToMorphirVisitor, parse_gleam};
 use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
 use tempfile::TempDir;

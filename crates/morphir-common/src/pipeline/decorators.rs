@@ -3,8 +3,8 @@
 //! Decorators are sidecar files (.deco.json) that provide metadata and
 //! transformation hints for IR nodes.
 
-use crate::pipeline::Step;
 use crate::Result;
+use crate::pipeline::Step;
 use morphir_ir::naming::FQName;
 use serde_json::Value;
 use std::collections::HashMap;

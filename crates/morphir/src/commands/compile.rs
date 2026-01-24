@@ -1,7 +1,7 @@
 //! Compile command for compiling source code to Morphir IR
 
-use crate::error::{convert_extension_diagnostics, handle_error, CliError};
-use crate::output::{write_output, CompileOutput, Diagnostic, OutputFormat};
+use crate::error::{CliError, convert_extension_diagnostics, handle_error};
+use crate::output::{CompileOutput, Diagnostic, OutputFormat, write_output};
 use anyhow::Context;
 use morphir_daemon::extensions::container::ExtensionType;
 use morphir_daemon::extensions::registry::ExtensionRegistry;
@@ -22,23 +22,23 @@ pub async fn run_compile(
     json: bool,
     json_lines: bool,
 ) -> AppResult {
-    use crate::output::{write_output, CompileOutput, OutputFormat};
+    use crate::output::{CompileOutput, OutputFormat, write_output};
     // Discover config if not provided
-    let start_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let start_dir = std::env::current_dir().map_err(|e| CliError::FileSystem { error: e })?;
 
     let config_file = if let Some(cfg) = config_path {
         PathBuf::from(cfg)
     } else {
-        discover_config(&start_dir)
-            .ok_or_else(|| anyhow::anyhow!("No morphir.toml or morphir.json found"))?
+        discover_config(&start_dir).ok_or_else(|| CliError::Config {
+            error: anyhow::anyhow!("No morphir.toml or morphir.json found"),
+        })?
     };
 
     // Load config context
-    let ctx = load_config_context(&config_file).context("Failed to load configuration")?;
+    let ctx = load_config_context(&config_file).map_err(|e| CliError::Config { error: e })?;
 
     // Ensure .morphir/ structure exists
-    ensure_morphir_structure(&ctx.morphir_dir)
-        .context("Failed to create .morphir/ directory structure")?;
+    ensure_morphir_structure(&ctx.morphir_dir).map_err(|e| CliError::FileSystem { error: e })?;
 
     // Determine language (from CLI or config)
     let lang = language
@@ -48,7 +48,9 @@ pub async fn run_compile(
                 .as_ref()
                 .and_then(|f| f.language.clone())
         })
-        .ok_or_else(|| anyhow::anyhow!("Language not specified and not found in config"))?;
+        .ok_or_else(|| CliError::Config {
+            error: anyhow::anyhow!("Language not specified and not found in config"),
+        })?;
 
     // Determine project name
     let proj_name = package_name
@@ -88,7 +90,9 @@ pub async fn run_compile(
             .unwrap_or_else(|| ctx.config_path.parent().unwrap().to_path_buf()),
         output_path.clone(),
     )
-    .context("Failed to create extension registry")?;
+    .map_err(|e| CliError::Extension {
+        message: format!("Failed to create extension registry: {}", e),
+    })?;
 
     // Register builtin extensions
     let builtins = morphir_design::discover_builtin_extensions();
@@ -97,10 +101,9 @@ pub async fn run_compile(
             registry
                 .register_builtin(&builtin.id, path)
                 .await
-                .context(format!(
-                    "Failed to register builtin extension: {}",
-                    builtin.id
-                ))?;
+                .map_err(|e| CliError::Extension {
+                    message: format!("Failed to register builtin extension {}: {}", builtin.id, e),
+                })?;
         }
     }
 
@@ -108,11 +111,15 @@ pub async fn run_compile(
     let extension = registry
         .find_extension_by_language(&lang)
         .await
-        .ok_or_else(|| anyhow::anyhow!("No extension found for language: {}", lang))?;
+        .ok_or_else(|| CliError::Extension {
+            message: format!("No extension found for language: {}", lang),
+        })?;
 
     // Collect source files
     let source_files =
-        collect_source_files(&input_path, &lang).context("Failed to collect source files")?;
+        collect_source_files(&input_path, &lang).map_err(|e| CliError::FileSystem {
+            error: std::io::Error::new(std::io::ErrorKind::Other, e),
+        })?;
 
     // Call extension's compile method
     let compile_params = serde_json::json!({
@@ -125,7 +132,9 @@ pub async fn run_compile(
     let result: serde_json::Value = extension
         .call("morphir.frontend.compile", compile_params)
         .await
-        .context("Extension compile call failed")?;
+        .map_err(|e| CliError::Extension {
+            message: format!("Extension compile call failed: {}", e),
+        })?;
 
     let format = OutputFormat::from_flags(json, json_lines);
 
@@ -166,7 +175,10 @@ pub async fn run_compile(
             };
             err.report();
         }
-        return Err(anyhow::anyhow!("Compilation failed").into());
+        return Err(CliError::Compilation {
+            message: error_msg.to_string(),
+        }
+        .into());
     }
 
     if format != OutputFormat::Human {
@@ -210,7 +222,12 @@ fn collect_source_files(input_path: &Path, language: &str) -> anyhow::Result<Vec
         "gleam" => "gleam",
         "elm" => "elm",
         "python" => "py",
-        _ => return Err(anyhow::anyhow!("Unknown language: {}", language)),
+        _ => {
+            return Err(CliError::Validation {
+                message: format!("Unknown language: {}", language),
+            }
+            .into());
+        }
     };
 
     // Walk directory and collect files

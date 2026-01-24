@@ -1,5 +1,5 @@
 use super::{FileMetadata, Vfs};
-use nbformat::{v4, Notebook};
+use nbformat::{Notebook, v4};
 use std::collections::HashMap;
 use std::io::Result;
 use std::path::{Path, PathBuf};

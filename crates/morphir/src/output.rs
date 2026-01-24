@@ -1,6 +1,6 @@
 //! Output formatting utilities for programmatic interactions
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
 /// Output format options
@@ -80,7 +80,7 @@ pub struct GenerateOutput {
 }
 
 /// Diagnostic information
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub level: String, // "error", "warning", "info"
     pub message: String,

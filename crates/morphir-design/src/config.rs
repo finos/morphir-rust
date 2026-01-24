@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use morphir_common::config::model::{MorphirConfig, ProjectSection, WorkspaceSection};
+use morphir_common::config::model::{MorphirConfig, ProjectSection};
 use std::path::{Path, PathBuf};
 
 /// Configuration context containing loaded config and resolved paths

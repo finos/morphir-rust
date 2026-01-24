@@ -150,3 +150,19 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
 
     Ok(LoadedDistribution::V4(ir_file))
 }
+
+/// Load IR from a path and return as JSON value
+/// This is a convenience function for commands that need IR as JSON
+pub fn load_ir(path: &Path) -> Result<serde_json::Value> {
+    let vfs = OsVfs;
+    let distribution = load_distribution(&vfs, path)?;
+
+    match distribution {
+        LoadedDistribution::V4(ir_file) => {
+            serde_json::to_value(&ir_file).context("Failed to serialize V4 IR to JSON")
+        }
+        LoadedDistribution::Classic(classic_dist) => {
+            serde_json::to_value(&classic_dist).context("Failed to serialize Classic IR to JSON")
+        }
+    }
+}

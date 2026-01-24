@@ -11,7 +11,7 @@ permalink: /cli/
 
 **Usage**: `morphir [--help-all] [-V --version] <SUBCOMMAND>`
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 
 - **Usage**: `morphir [--help-all] [-V --version] <SUBCOMMAND>`
 
@@ -27,6 +27,8 @@ Print version
 
 ## Subcommands
 
+- [`morphir compile [FLAGS]`](/compile.md)
+- [`morphir generate [FLAGS]`](/generate.md)
 - [`morphir tool <SUBCOMMAND>`](/tool.md)
 - [`morphir tool install [-v --version <VERSION>] <NAME>`](/tool/install.md)
 - [`morphir tool list`](/tool/list.md)
@@ -44,5 +46,9 @@ Print version
 - [`morphir extension uninstall <NAME>`](/extension/uninstall.md)
 - [`morphir ir <SUBCOMMAND>`](/ir.md)
 - [`morphir ir migrate [FLAGS] <INPUT>`](/ir/migrate.md)
+- [`morphir gleam [--json] [--json-lines] <SUBCOMMAND>`](/gleam.md)
+- [`morphir gleam compile [FLAGS]`](/gleam/compile.md)
+- [`morphir gleam generate [FLAGS]`](/gleam/generate.md)
+- [`morphir gleam roundtrip [FLAGS]`](/gleam/roundtrip.md)
 - [`morphir schema [-o --output <OUTPUT>]`](/schema.md)
 - [`morphir version [--json]`](/version.md)

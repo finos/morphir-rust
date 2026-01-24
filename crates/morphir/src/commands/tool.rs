@@ -3,7 +3,7 @@
 //! This module provides functionality for installing, updating, listing, and
 //! uninstalling Morphir tools and extensions, similar to npm or dotnet tool.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use starbase::AppResult;
 use std::collections::HashMap;

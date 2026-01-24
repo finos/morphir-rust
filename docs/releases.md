@@ -12,11 +12,14 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
 
 ---
 
-## v0.1.1 (January 24, 2026)
+## v0.2.0 (January 24, 2026)
 
 
 ### Added
 
+- **Core CLI Commands**: Promoted `compile` and `generate` from experimental to stable
+  - `morphir compile` - Compile source code to Morphir IR using language extensions
+  - `morphir generate` - Generate code from Morphir IR using target extensions
 - **TUI Pager**: Interactive JSON viewer with syntax highlighting and vim-like navigation
   - Visual mode (`v`, `V`) for selecting text
   - Yank to clipboard (`y`) with WSL, X11, Wayland, and macOS support
@@ -28,6 +31,18 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
   - Supports `.morphir-version` file for per-project version pinning
   - Auto-downloads correct version on first run
   - `morphir self upgrade` to fetch latest version
+- **Dev Mode**: Run morphir from local source for development and testing
+  - Enable via `--dev` flag, `MORPHIR_DEV=1`, `local-dev` in `.morphir-version`, or `dev_mode=true` in `morphir.toml`
+  - `morphir self dev` command to check dev mode status and configuration
+  - Auto-detects source directory from CI environments and common locations
+- **Gleam Binding**: Roundtrip testing infrastructure for Gleam code
+  - Compile Gleam to IR V4, generate back to Gleam, verify equivalence
+  - Support for todo/panic expressions in parser
+
+### Fixed
+
+- **VFS Consistency**: `MemoryVfs::exists()` now returns `true` for directories, matching `OsVfs` behavior
+- **Compile Path Resolution**: `source_directory` from config is now resolved relative to the config file location, not the current working directory
 
 ### Changed
 

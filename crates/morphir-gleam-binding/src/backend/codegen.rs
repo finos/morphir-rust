@@ -1,9 +1,13 @@
 //! Gleam code generation from Morphir IR
 
+use morphir_common::vfs::{OsVfs, Vfs};
 use morphir_extension_sdk::prelude::*;
+use morphir_ir::ir::v4::PackageDefinition;
+use morphir_ir::naming::ModuleName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::path::PathBuf;
 
 /// Morphir distribution IR (simplified)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +49,12 @@ pub fn generate_gleam(
     ir: &serde_json::Value,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
+    // Try to parse as V4 PackageDefinition first
+    if let Ok(package_def) = serde_json::from_value::<PackageDefinition>(ir.clone()) {
+        return generate_from_package_definition(package_def, options);
+    }
+
+    // Fallback to legacy format
     let mut artifacts = Vec::new();
 
     // Try to parse as distribution or module list
@@ -73,6 +83,68 @@ pub fn generate_gleam(
             content: code,
             binary: false,
         });
+    }
+
+    Ok(artifacts)
+}
+
+/// Generate from V4 PackageDefinition using visitor
+fn generate_from_package_definition(
+    package_def: PackageDefinition,
+    options: &HashMap<String, serde_json::Value>,
+) -> Result<Vec<Artifact>> {
+    use super::visitor::MorphirToGleamVisitor;
+
+    let output_dir = options
+        .get("outputDir")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let package_name = options
+        .get("packageName")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| "default-package".to_string());
+
+    let visitor = MorphirToGleamVisitor::new(OsVfs, output_dir.clone(), package_name);
+
+    let mut artifacts = Vec::new();
+
+    // Generate each module
+    for (module_path_str, module_def) in &package_def.modules {
+        let module_path = ModuleName::parse(module_path_str);
+
+        match visitor.visit_module(&module_path, module_def) {
+            Ok(_) => {
+                // Read generated file using a new OsVfs instance
+                let file_path = output_dir.join(format!("{}.gleam", module_path_str));
+                let read_vfs = OsVfs;
+                if read_vfs.exists(&file_path) {
+                    match read_vfs.read_to_string(&file_path) {
+                        Ok(content) => {
+                            artifacts.push(Artifact {
+                                path: format!("{}.gleam", module_path_str),
+                                content,
+                                binary: false,
+                            });
+                        }
+                        Err(e) => {
+                            return Err(ExtensionError::execution(format!(
+                                "Failed to read generated file: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(ExtensionError::execution(format!(
+                    "Failed to generate module {}: {}",
+                    module_path_str, e
+                )));
+            }
+        }
     }
 
     Ok(artifacts)
@@ -129,14 +201,12 @@ fn generate_type(output: &mut String, type_def: &TypeDef, indent: &str) {
                 "record" => {
                     if let Some(fields) = obj.get("fields").and_then(|v| v.as_array()) {
                         for field in fields {
-                            if let Some(arr) = field.as_array() {
-                                if arr.len() >= 2 {
-                                    if let (Some(name), Some(_type_expr)) =
-                                        (arr[0].as_str(), arr.get(1))
-                                    {
-                                        let _ = writeln!(output, "{}{}: Unknown,", indent, name);
-                                    }
-                                }
+                            if let Some(arr) = field.as_array()
+                                && arr.len() >= 2
+                                && let (Some(name), Some(_type_expr)) =
+                                    (arr[0].as_str(), arr.get(1))
+                            {
+                                let _ = writeln!(output, "{}{}: Unknown,", indent, name);
                             }
                         }
                     }
@@ -162,44 +232,37 @@ fn generate_value(output: &mut String, value_def: &ValueDef, indent: &str) {
         if let Some(kind) = obj.get("kind").and_then(|v| v.as_str()) {
             match kind {
                 "literal" => {
-                    if let Some(value) = obj.get("value") {
-                        if let Some(lit_obj) = value.as_object() {
-                            if let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str()) {
-                                match lit_type {
-                                    "string" => {
-                                        if let Some(s) =
-                                            lit_obj.get("value").and_then(|v| v.as_str())
-                                        {
-                                            let _ = writeln!(output, "{}\"{}\"", indent, s);
-                                        }
-                                    }
-                                    "int" => {
-                                        if let Some(n) =
-                                            lit_obj.get("value").and_then(|v| v.as_i64())
-                                        {
-                                            let _ = writeln!(output, "{}{}", indent, n);
-                                        }
-                                    }
-                                    "bool" => {
-                                        if let Some(b) =
-                                            lit_obj.get("value").and_then(|v| v.as_bool())
-                                        {
-                                            let _ = writeln!(
-                                                output,
-                                                "{}{}",
-                                                indent,
-                                                if b { "True" } else { "False" }
-                                            );
-                                        }
-                                    }
-                                    _ => {
-                                        let _ = writeln!(
-                                            output,
-                                            "{}// Unknown literal type: {}",
-                                            indent, lit_type
-                                        );
-                                    }
+                    if let Some(value) = obj.get("value")
+                        && let Some(lit_obj) = value.as_object()
+                        && let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str())
+                    {
+                        match lit_type {
+                            "string" => {
+                                if let Some(s) = lit_obj.get("value").and_then(|v| v.as_str()) {
+                                    let _ = writeln!(output, "{}\"{}\"", indent, s);
                                 }
+                            }
+                            "int" => {
+                                if let Some(n) = lit_obj.get("value").and_then(|v| v.as_i64()) {
+                                    let _ = writeln!(output, "{}{}", indent, n);
+                                }
+                            }
+                            "bool" => {
+                                if let Some(b) = lit_obj.get("value").and_then(|v| v.as_bool()) {
+                                    let _ = writeln!(
+                                        output,
+                                        "{}{}",
+                                        indent,
+                                        if b { "True" } else { "False" }
+                                    );
+                                }
+                            }
+                            _ => {
+                                let _ = writeln!(
+                                    output,
+                                    "{}// Unknown literal type: {}",
+                                    indent, lit_type
+                                );
                             }
                         }
                     }

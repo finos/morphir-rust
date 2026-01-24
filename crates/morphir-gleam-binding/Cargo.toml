@@ -11,16 +11,45 @@ keywords.workspace = true
 categories.workspace = true
 description = "Gleam language binding for Morphir - frontend and backend extension"
 
+[package.metadata.coverage]
+threshold = 40  # Minimum line coverage percentage required
+
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Extension SDK
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 
 # WASM plugin development
-extism-pdk = "1.2"
+extism-pdk = "1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# Parser dependencies
+logos = "0.16"
+chumsky = "0.12"
+
+# Morphir IR (for visitors)
+morphir-ir = { path = "../morphir-ir" }
+morphir-common = { path = "../morphir-common" }  # For Vfs and pipeline
+indexmap = "2.0"  # Required for V4 IndexMap structures
+anyhow = "1.0"
+
+# Pretty printing (Wadler-style)
+pretty = "0.12"
+
+[dev-dependencies]
+cucumber = { version = "0.22", features = ["output-json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+[[test]]
+name = "acceptance"
+harness = false

@@ -1,6 +1,6 @@
 #![allow(clippy::get_first)]
 use anyhow::Result;
-use cucumber::{given, then, when, World};
+use cucumber::{World, given, then, when};
 use indexmap::IndexMap;
 use morphir_common::config::MorphirConfig;
 use morphir_common::loader::{self, LoadedDistribution};
@@ -485,15 +485,15 @@ async fn record_fields_kebab_case(w: &mut TestWorld) {
     fn check_record_fields(value: &serde_json::Value) {
         if let Some(obj) = value.as_object() {
             // Compact Record format: {"Record": {field1: type1, ...}}
-            if let Some(record) = obj.get("Record") {
-                if let Some(fields) = record.as_object() {
-                    for (name, _) in fields {
-                        assert!(
-                            is_kebab_case(name),
-                            "Record field name '{}' is not in kebab-case format",
-                            name
-                        );
-                    }
+            if let Some(record) = obj.get("Record")
+                && let Some(fields) = record.as_object()
+            {
+                for (name, _) in fields {
+                    assert!(
+                        is_kebab_case(name),
+                        "Record field name '{}' is not in kebab-case format",
+                        name
+                    );
                 }
             }
             // Recursively check nested objects

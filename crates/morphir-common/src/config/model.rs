@@ -70,6 +70,9 @@ pub struct MorphirSection {
     pub version: String,
     /// Minimum CLI version
     pub min_cli_version: Option<String>,
+    /// Enable dev mode (run from source instead of installed binary)
+    #[serde(default)]
+    pub dev_mode: bool,
 }
 
 /// [project] section
@@ -104,7 +107,7 @@ pub(crate) fn default_source_dir() -> String {
 }
 
 pub(crate) fn default_output_dir() -> String {
-    ".morphir-dist".to_string()
+    ".morphir/out".to_string()
 }
 
 /// [workspace] section
@@ -132,6 +135,15 @@ fn default_workspace_output() -> String {
 pub struct FrontendSection {
     /// Default source language
     pub language: Option<String>,
+    /// Emit parse stage output as JSON (default: true)
+    /// When enabled, writes parsed AST to .morphir/out/<project>/parse/<module>.json
+    #[serde(default = "default_true")]
+    pub emit_parse_stage: bool,
+    /// Treat parse stage emission failures as fatal errors (default: false)
+    /// When true, compilation fails if parse stage output cannot be written
+    /// When false, failures are logged as warnings but compilation continues
+    #[serde(default)]
+    pub emit_parse_stage_fatal: bool,
     /// Language-specific settings
     #[serde(flatten)]
     pub settings: HashMap<String, toml::Value>,

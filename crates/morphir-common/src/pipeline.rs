@@ -4,6 +4,9 @@
 
 use crate::Result;
 
+pub mod decorators;
+pub mod ir;
+
 /// A step in a transformation pipeline.
 ///
 /// Consumes an input of type `In` and produces an output of type `Out`.

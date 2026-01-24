@@ -1,0 +1,11 @@
+#!/bin/sh
+#MISE description="Build debug binary"
+#MISE sources=["Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml", "crates/**/src/**/*.rs"]
+#MISE outputs=[".morphir/build/bin/morphir-debug"]
+
+set -e
+cargo build --bin morphir
+mkdir -p .morphir/build/bin
+cp target/debug/morphir .morphir/build/bin/morphir-debug
+chmod +x .morphir/build/bin/morphir-debug
+echo "Debug binary staged at .morphir/build/bin/morphir-debug"

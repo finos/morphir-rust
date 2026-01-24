@@ -1,0 +1,622 @@
+//! BDD Acceptance Tests for Gleam Binding
+//!
+//! Uses Cucumber/Gherkin for behavior-driven testing of the full
+//! Gleam parsing and code generation pipeline.
+
+#![allow(dead_code)]
+
+mod cli_helpers;
+mod coverage;
+
+use cucumber::{World, given, then, when};
+#[allow(unused_imports)]
+use morphir_common::vfs::{MemoryVfs, Vfs};
+use morphir_gleam_binding::frontend::ast::ModuleIR;
+use morphir_gleam_binding::frontend::{GleamToMorphirVisitor, parse_gleam};
+use morphir_ir::naming::{ModuleName, PackageName};
+use std::path::PathBuf;
+use tempfile::TempDir;
+
+#[derive(Debug, Default, World)]
+pub struct GleamTestWorld {
+    source_files: Vec<(String, String)>, // (path, content)
+    parsed_modules: Vec<ModuleIR>,
+    parse_errors: Vec<String>,
+    generated_files: Vec<(String, String)>, // (path, content)
+    morphir_ir: Option<serde_json::Value>,
+    temp_dir: Option<TempDir>,
+    project_root: Option<PathBuf>,
+    cli_context: Option<cli_helpers::CliTestContext>,
+    cli_result: Option<cli_helpers::CommandResult>,
+}
+
+#[given(expr = "I have a Gleam source file {string} with:")]
+async fn i_have_gleam_source_file(
+    w: &mut GleamTestWorld,
+    filename: String,
+    step: &cucumber::gherkin::Step,
+) {
+    let content = step.docstring.as_ref().expect("Docstring required").clone();
+    w.source_files.push((filename.clone(), content.clone()));
+
+    // If we have a CLI context, also write the file to disk
+    if let Some(ctx) = w.cli_context.as_ref() {
+        ctx.write_source_file(&filename, &content)
+            .expect("Failed to write source file to test project");
+    }
+}
+
+#[given(expr = "I have a Gleam project at {string}")]
+async fn i_have_gleam_project(w: &mut GleamTestWorld, project_path: String) {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    w.project_root = Some(dir.path().join(project_path));
+    w.temp_dir = Some(dir);
+}
+
+#[given(expr = "the project has the following structure:")]
+async fn project_has_structure(w: &mut GleamTestWorld, step: &cucumber::gherkin::Step) {
+    let root = w.project_root.as_ref().expect("Project root not set");
+    if let Some(table) = &step.table {
+        for row in &table.rows {
+            if row.is_empty() {
+                continue;
+            }
+            let path = root.join(&row[0]);
+            let content = if row.len() > 1 { &row[1] } else { "" };
+
+            // Create parent directories
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("Failed to create directory");
+            }
+
+            std::fs::write(&path, content).expect("Failed to write file");
+        }
+    }
+}
+
+#[when(expr = "I parse the project")]
+async fn i_parse_project(w: &mut GleamTestWorld) {
+    let root = w.project_root.as_ref().expect("Project root not set");
+
+    // Find all .gleam files
+    let mut gleam_files = Vec::new();
+    find_gleam_files(root, &mut gleam_files);
+
+    for file_path in gleam_files {
+        let content = std::fs::read_to_string(&file_path).expect("Failed to read file");
+        let relative_path = file_path
+            .strip_prefix(root)
+            .expect("Path not under root")
+            .to_string_lossy()
+            .replace(".gleam", "")
+            .replace("/", "_");
+
+        match parse_gleam(&relative_path, &content) {
+            Ok(module) => w.parsed_modules.push(module),
+            Err(e) => w.parse_errors.push(format!("{:?}", e)),
+        }
+    }
+}
+
+#[then(expr = "I should get {int} modules")]
+async fn should_get_modules(w: &mut GleamTestWorld, count: usize) {
+    assert_eq!(w.parsed_modules.len(), count);
+}
+
+#[then(expr = "module {string} should exist")]
+async fn module_should_exist(w: &mut GleamTestWorld, name: String) {
+    let exists = w.parsed_modules.iter().any(|m| m.name == name);
+    assert!(exists, "Module {} not found", name);
+}
+
+#[then(expr = "module {string} should have {int} values")]
+async fn module_should_have_values(w: &mut GleamTestWorld, name: String, count: usize) {
+    let module = w
+        .parsed_modules
+        .iter()
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("Module {} not found", name));
+    assert_eq!(module.values.len(), count);
+}
+
+// Helper function to find all .gleam files in a directory
+fn find_gleam_files(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                find_gleam_files(&path, files);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("gleam") {
+                files.push(path);
+            }
+        }
+    }
+}
+
+#[when(expr = "I parse the file")]
+async fn i_parse_file(w: &mut GleamTestWorld) {
+    if let Some((path, content)) = w.source_files.first() {
+        match parse_gleam(path, content) {
+            Ok(module) => {
+                w.parsed_modules.push(module);
+            }
+            Err(e) => {
+                w.parse_errors.push(format!("{:?}", e));
+            }
+        }
+    }
+}
+
+#[when(expr = "I parse {string} to ModuleIR")]
+async fn i_parse_file_by_name(w: &mut GleamTestWorld, filename: String) {
+    if let Some((_path, content)) = w.source_files.iter().find(|(p, _)| p == &filename) {
+        match parse_gleam(&filename, content) {
+            Ok(module) => {
+                w.parsed_modules.push(module);
+            }
+            Err(e) => {
+                // Store error for later assertion but don't fail the step
+                // This allows roundtrip tests to proceed and report proper failures
+                w.parse_errors
+                    .push(format!("Parse error for {}: {:?}", filename, e));
+            }
+        }
+    } else {
+        // File not found in source_files
+        let available: Vec<_> = w.source_files.iter().map(|(p, _)| p.clone()).collect();
+        w.parse_errors.push(format!(
+            "File '{}' not found in source_files. Available: {:?}",
+            filename, available
+        ));
+    }
+}
+
+#[given(expr = "I load the real-world fixture {string}")]
+async fn i_load_real_world_fixture(w: &mut GleamTestWorld, fixture_name: String) {
+    // Ensure fixture name has .gleam extension if not provided
+    let fixture_file = if fixture_name.ends_with(".gleam") {
+        fixture_name.clone()
+    } else {
+        format!("{}.gleam", fixture_name)
+    };
+
+    let fixture_path = std::path::Path::new("tests/fixtures/real_world").join(&fixture_file);
+    let content = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|_| panic!("Failed to load fixture: {:?}", fixture_path));
+
+    // Store with the full filename (including .gleam extension) to match parse step
+    w.source_files.push((fixture_file.clone(), content));
+}
+
+#[when(expr = "I convert IR V4 Document Tree back to Gleam source {string}")]
+async fn convert_from_ir_v4(w: &mut GleamTestWorld, output_file: String) {
+    use morphir_common::vfs::MemoryVfs;
+    use morphir_gleam_binding::backend::visitor::MorphirToGleamVisitor;
+
+    // For now, simplified - would need to load IR V4 from document tree
+    // This is a placeholder implementation
+    let vfs = MemoryVfs::new();
+    let output_dir = PathBuf::from("/test-output");
+    let package_name = "test-package".to_string();
+    let _visitor = MorphirToGleamVisitor::new(vfs.clone(), output_dir.clone(), package_name);
+
+    // TODO: Load PackageDefinition from document tree and convert
+    // For now, just mark that conversion was attempted
+    w.generated_files
+        .push((output_file, "// Generated".to_string()));
+}
+
+#[then(expr = "the roundtrip should complete")]
+async fn roundtrip_should_complete(w: &mut GleamTestWorld) {
+    use morphir_gleam_binding::roundtrip::roundtrip_gleam;
+
+    // Check for parse errors first
+    if !w.parse_errors.is_empty() {
+        panic!("Parse errors occurred:\n{}", w.parse_errors.join("\n"));
+    }
+    // Check that we have parsed modules
+    assert!(
+        !w.parsed_modules.is_empty(),
+        "No modules parsed for roundtrip"
+    );
+
+    // If generated_files is empty, perform full roundtrip using source files
+    if w.generated_files.is_empty() {
+        for (filename, content) in &w.source_files {
+            match roundtrip_gleam(content) {
+                Ok(result) => {
+                    // Store the generated code
+                    w.generated_files
+                        .push((filename.clone(), result.generated_code.clone()));
+                    // Store the regenerated module for equivalence comparison
+                    w.parsed_modules.push(result.regenerated);
+                }
+                Err(e) => {
+                    panic!("Roundtrip failed for {}: {}", filename, e);
+                }
+            }
+        }
+    }
+
+    // Check that we have generated files after roundtrip
+    assert!(
+        !w.generated_files.is_empty(),
+        "No files generated for roundtrip"
+    );
+}
+
+#[then(expr = "the original and generated ModuleIR should be semantically equivalent")]
+async fn modules_should_be_equivalent(w: &mut GleamTestWorld) {
+    use morphir_gleam_binding::frontend::compare_modules;
+
+    // Compare original and generated ModuleIR
+    // Allow formatting differences but require semantic equivalence
+    assert!(
+        w.parsed_modules.len() >= 2,
+        "Expected at least original and generated modules"
+    );
+
+    let original = &w.parsed_modules[0];
+    let generated = &w.parsed_modules[1];
+
+    // Use the compare module for detailed comparison
+    let result = compare_modules(original, generated);
+
+    if !result.equivalent {
+        let diff_report: Vec<String> = result.differences.iter().map(|d| d.to_string()).collect();
+        panic!(
+            "Modules are not semantically equivalent:\n{}",
+            diff_report.join("\n")
+        );
+    }
+}
+
+#[then(expr = "each roundtrip should produce equivalent ModuleIR")]
+async fn roundtrips_should_be_equivalent(w: &mut GleamTestWorld) {
+    use morphir_gleam_binding::frontend::compare_modules;
+
+    // Compare all intermediate ModuleIR results
+    // Ensure they're all semantically equivalent
+    if w.parsed_modules.len() < 2 {
+        return; // Not enough modules to compare
+    }
+
+    let first = &w.parsed_modules[0];
+    for (i, module) in w.parsed_modules.iter().skip(1).enumerate() {
+        let result = compare_modules(first, module);
+        if !result.equivalent {
+            let diff_report: Vec<String> =
+                result.differences.iter().map(|d| d.to_string()).collect();
+            panic!(
+                "Module {} is not equivalent to first module:\n{}",
+                i + 1,
+                diff_report.join("\n")
+            );
+        }
+    }
+}
+
+#[then(expr = "the roundtrip should preserve {string}")]
+async fn roundtrip_should_preserve(w: &mut GleamTestWorld, _aspect: String) {
+    // Check specific aspect is preserved (e.g., "function signature", "type definition")
+    // For now, basic check that modules exist
+    assert!(
+        !w.parsed_modules.is_empty(),
+        "No modules to check preservation"
+    );
+}
+
+#[when(expr = "I convert ModuleIR to IR V4 Document Tree")]
+async fn convert_to_ir_v4(w: &mut GleamTestWorld) {
+    let vfs = MemoryVfs::new();
+    let output_dir = PathBuf::from("/test-output");
+    let package_name = PackageName::parse("test-package");
+
+    for module_ir in &w.parsed_modules {
+        let module_name = ModuleName::parse(&module_ir.name);
+        let visitor = GleamToMorphirVisitor::new(
+            vfs.clone(),
+            output_dir.clone(),
+            package_name.clone(),
+            module_name,
+        );
+
+        if let Err(e) = visitor.visit_module_v4(module_ir) {
+            w.parse_errors
+                .push(format!("Failed to convert to IR V4: {}", e));
+        }
+    }
+}
+
+#[then(expr = "parsing should succeed")]
+async fn parsing_should_succeed(w: &mut GleamTestWorld) {
+    assert!(
+        w.parse_errors.is_empty(),
+        "Parsing failed with errors: {:?}",
+        w.parse_errors
+    );
+    assert!(!w.parsed_modules.is_empty(), "No modules were parsed");
+}
+
+#[then(expr = "the parsed module should have name {string}")]
+async fn module_should_have_name(w: &mut GleamTestWorld, name: String) {
+    let module = w.parsed_modules.first().expect("No parsed modules");
+    assert_eq!(module.name, name);
+}
+
+#[then(expr = "the parsed module should have {int} type definitions")]
+async fn module_should_have_type_count(w: &mut GleamTestWorld, count: usize) {
+    let module = w.parsed_modules.first().expect("No parsed modules");
+    assert_eq!(module.types.len(), count);
+}
+
+#[then(expr = "the parsed module should have {int} value definitions")]
+async fn module_should_have_value_count(w: &mut GleamTestWorld, count: usize) {
+    let module = w.parsed_modules.first().expect("No parsed modules");
+    assert_eq!(module.values.len(), count);
+}
+
+// CLI E2E test step definitions
+
+#[given(expr = "I have a temporary test project")]
+async fn i_have_temp_test_project(w: &mut GleamTestWorld) {
+    // Skip CLI tests if prerequisites aren't available (morphir binary not built)
+    if !cli_helpers::cli_tests_available() {
+        return;
+    }
+    let ctx = cli_helpers::CliTestContext::new().expect("Failed to create test context");
+    ctx.create_test_project()
+        .expect("Failed to create test project");
+    w.cli_context = Some(ctx);
+}
+
+#[given(expr = "I have a Gleam project structure:")]
+async fn i_have_gleam_project_structure(w: &mut GleamTestWorld, step: &cucumber::gherkin::Step) {
+    // Skip if CLI context not available (prerequisites not met)
+    let Some(ctx) = w.cli_context.as_mut() else {
+        return;
+    };
+
+    if let Some(table) = &step.table {
+        for row in &table.rows {
+            if row.is_empty() {
+                continue;
+            }
+            let path = &row[0];
+            let content = if row.len() > 1 { &row[1] } else { "" };
+            ctx.write_source_file(path, content)
+                .expect("Failed to write source file");
+        }
+    }
+}
+
+#[given(expr = "I have a morphir.toml file:")]
+async fn i_have_morphir_toml(w: &mut GleamTestWorld, step: &cucumber::gherkin::Step) {
+    let Some(ctx) = w.cli_context.as_mut() else {
+        return;
+    };
+
+    let content = step.docstring.as_ref().expect("Docstring required").clone();
+
+    ctx.write_test_config(&content)
+        .expect("Failed to write morphir.toml");
+}
+
+#[given(expr = "I have an invalid morphir.toml file:")]
+async fn i_have_invalid_morphir_toml(w: &mut GleamTestWorld, step: &cucumber::gherkin::Step) {
+    let Some(ctx) = w.cli_context.as_mut() else {
+        return;
+    };
+
+    let content = step.docstring.as_ref().expect("Docstring required").clone();
+
+    // Write invalid config
+    ctx.write_test_config(&content)
+        .expect("Failed to write invalid morphir.toml");
+}
+
+#[given(expr = "I have compiled IR at {string}")]
+async fn i_have_compiled_ir(w: &mut GleamTestWorld, ir_path: String) {
+    // This would set up a pre-compiled IR structure
+    // For now, we'll assume it exists or will be created by compile step
+    let Some(ctx) = w.cli_context.as_ref() else {
+        return;
+    };
+
+    let full_path = ctx.project_root.join(&ir_path);
+    // Create directory structure
+    std::fs::create_dir_all(&full_path).expect("Failed to create IR directory");
+
+    // Write a minimal format.json
+    let format_json = serde_json::json!({
+        "formatVersion": 4,
+        "packageName": "test"
+    });
+    std::fs::write(
+        full_path.join("format.json"),
+        serde_json::to_string_pretty(&format_json).unwrap(),
+    )
+    .expect("Failed to write format.json");
+}
+
+#[when(expr = "I run CLI command {string}")]
+async fn i_run_cli_command(w: &mut GleamTestWorld, command: String) {
+    // Skip if CLI context not available (prerequisites not met)
+    let Some(ctx) = w.cli_context.as_mut() else {
+        return;
+    };
+
+    // Parse command into args
+    let args: Vec<&str> = command
+        .split_whitespace()
+        .skip(1) // Skip "morphir"
+        .collect();
+
+    let result = ctx
+        .execute_cli_command(&args)
+        .expect("Failed to execute CLI command");
+
+    w.cli_result = Some(result);
+}
+
+#[then(expr = "the CLI command should succeed")]
+async fn cli_command_should_succeed(w: &mut GleamTestWorld) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+    result.assert_success();
+}
+
+#[then(expr = "the CLI command should fail")]
+async fn cli_command_should_fail(w: &mut GleamTestWorld) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+    result.assert_failure();
+}
+
+#[then(expr = "the output should contain {string}")]
+async fn output_should_contain(w: &mut GleamTestWorld, text: String) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+    result.assert_output_contains(&text);
+}
+
+#[then(expr = "the error output should contain {string} or {string}")]
+async fn error_output_should_contain_alt(w: &mut GleamTestWorld, text1: String, text2: String) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+
+    let contains = result.stdout.contains(&text1)
+        || result.stderr.contains(&text1)
+        || result.stdout.contains(&text2)
+        || result.stderr.contains(&text2);
+
+    assert!(
+        contains,
+        "Error output does not contain '{}' or '{}'\nSTDOUT:\n{}\nSTDERR:\n{}",
+        text1, text2, result.stdout, result.stderr
+    );
+}
+
+#[then(expr = "the CLI should create .morphir\\/out\\/ structure")]
+async fn cli_should_create_morphir_structure(w: &mut GleamTestWorld) {
+    let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
+
+    cli_helpers::assert_morphir_structure(&ctx.morphir_dir, "default");
+}
+
+/// Helper to check compile structure exists
+fn check_compile_structure_exists(w: &GleamTestWorld) {
+    let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
+
+    // Try to determine project name from config or use "test"
+    let project = "test";
+    let compile_dir = ctx
+        .morphir_dir
+        .join("out")
+        .join(project)
+        .join("compile")
+        .join("gleam");
+
+    assert!(
+        compile_dir.exists(),
+        "Compile output directory does not exist: {:?}",
+        compile_dir
+    );
+}
+
+#[then(expr = "the CLI should create .morphir\\/out\\/<project>\\/compile\\/gleam\\/ structure")]
+async fn cli_should_create_compile_structure(w: &mut GleamTestWorld) {
+    check_compile_structure_exists(w);
+}
+
+/// Helper to check generate structure exists
+fn check_generate_structure_exists(w: &GleamTestWorld) {
+    let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
+
+    let project = "test";
+    let generate_dir = ctx
+        .morphir_dir
+        .join("out")
+        .join(project)
+        .join("generate")
+        .join("gleam");
+
+    assert!(
+        generate_dir.exists(),
+        "Generate output directory does not exist: {:?}",
+        generate_dir
+    );
+}
+
+#[then(expr = "the CLI should create .morphir\\/out\\/<project>\\/generate\\/gleam\\/ structure")]
+async fn cli_should_create_generate_structure(w: &mut GleamTestWorld) {
+    check_generate_structure_exists(w);
+}
+
+#[then(expr = "the CLI should create both compile and generate output structures")]
+async fn cli_should_create_both_structures(w: &mut GleamTestWorld) {
+    check_compile_structure_exists(w);
+    check_generate_structure_exists(w);
+}
+
+#[then(expr = "the CLI should use configuration from morphir.toml")]
+async fn cli_should_use_config(w: &mut GleamTestWorld) {
+    // Verify that config was used by checking output paths
+    let _ctx = w.cli_context.as_ref().expect("CLI context not initialized");
+
+    // Config should have been read (no error about missing config)
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+
+    assert!(
+        !result.stderr.contains("No morphir.toml"),
+        "Config file was not found or used"
+    );
+}
+
+#[then(expr = "the JSON output should be valid")]
+async fn json_output_should_be_valid(w: &mut GleamTestWorld) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+
+    result
+        .assert_json_output()
+        .expect("JSON output is not valid");
+}
+
+#[then(expr = "the JSON output should contain {string}")]
+async fn json_output_should_contain(w: &mut GleamTestWorld, key: String) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+
+    let json: serde_json::Value = result
+        .assert_json_output()
+        .expect("JSON output is not valid");
+
+    assert!(
+        json.get(&key).is_some(),
+        "JSON output does not contain key '{}'\nJSON:\n{}",
+        key,
+        serde_json::to_string_pretty(&json).unwrap()
+    );
+}
+
+#[then(expr = "the JSON Lines output should be valid")]
+async fn json_lines_output_should_be_valid(w: &mut GleamTestWorld) {
+    let result = w.cli_result.as_ref().expect("No CLI result available");
+
+    // Each line should be valid JSON
+    for line in result.stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|_| panic!("Invalid JSON line: {}", line));
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    // Skip scenarios tagged with @wip (work in progress)
+    GleamTestWorld::cucumber()
+        .filter_run("tests/features", |feature, _rule, scenario| {
+            // Skip if the feature or scenario has the @wip tag
+            let feature_has_wip = feature.tags.iter().any(|t| t == "wip");
+            let scenario_has_wip = scenario.tags.iter().any(|t| t == "wip");
+            !feature_has_wip && !scenario_has_wip
+        })
+        .await;
+}

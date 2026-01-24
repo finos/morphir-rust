@@ -1,0 +1,11 @@
+#!/bin/sh
+#MISE description="Build release binary"
+#MISE sources=["Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml", "crates/**/src/**/*.rs"]
+#MISE outputs=[".morphir/build/bin/morphir"]
+
+set -e
+cargo build --release --bin morphir
+mkdir -p .morphir/build/bin
+cp target/release/morphir .morphir/build/bin/morphir
+chmod +x .morphir/build/bin/morphir
+echo "Binary staged at .morphir/build/bin/morphir"

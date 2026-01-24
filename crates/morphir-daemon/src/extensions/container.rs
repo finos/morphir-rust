@@ -6,7 +6,7 @@ use crate::error::{DaemonError, Result};
 use crate::extensions::host_functions::MorphirHostFunctions;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use extism::{Manifest, Plugin, Wasm};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

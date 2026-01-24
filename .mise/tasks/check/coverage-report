@@ -1,0 +1,47 @@
+#!/bin/sh
+#MISE description="Generate HTML coverage report"
+#MISE sources=["Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml", "crates/**/src/**/*.rs"]
+#MISE outputs=["target/llvm-cov/html/index.html"]
+
+set -e
+
+# Check if jq is available
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for coverage report generation"
+    exit 1
+fi
+
+# Get all package metadata once
+METADATA=$(cargo metadata --format-version=1 --no-deps 2>/dev/null)
+
+# Build list of packages with coverage thresholds
+PACKAGES=""
+for crate_dir in crates/*; do
+    crate_name=$(basename "$crate_dir")
+    threshold=$(echo "$METADATA" |
+        jq -r ".packages[] | select(.name == \"$crate_name\") | .metadata.coverage.threshold // 0")
+
+    if [ "$threshold" != "0" ] && [ "$threshold" != "null" ] && [ -n "$threshold" ]; then
+        if [ -n "$PACKAGES" ]; then
+            PACKAGES="$PACKAGES --package $crate_name"
+        else
+            PACKAGES="--package $crate_name"
+        fi
+    fi
+done
+
+if [ -z "$PACKAGES" ]; then
+    echo "No packages with coverage thresholds configured."
+    echo "To add a threshold, add to the crate's Cargo.toml:"
+    echo "  [package.metadata.coverage]"
+    echo "  threshold = 70"
+    exit 0
+fi
+
+# Generate HTML coverage report for packages with thresholds (lib tests only)
+echo "Generating coverage report for packages with thresholds..."
+echo "Packages: $PACKAGES"
+eval "cargo llvm-cov --html --lib $PACKAGES"
+
+echo ""
+echo "Coverage report generated at target/llvm-cov/html/index.html"

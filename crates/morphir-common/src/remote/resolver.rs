@@ -8,7 +8,7 @@ use crate::remote::cache::SourceCache;
 use crate::remote::config::RemoteSourceConfig;
 use crate::remote::error::{RemoteSourceError, Result};
 use crate::remote::git::GitFetcher;
-use crate::remote::http::{fetch_gist, HttpFetcher};
+use crate::remote::http::{HttpFetcher, fetch_gist};
 use crate::remote::source::RemoteSource;
 use std::path::PathBuf;
 
@@ -100,10 +100,10 @@ impl RemoteSourceResolver {
         }
 
         // Check trusted GitHub orgs
-        if let RemoteSource::GitHub { owner, .. } = source {
-            if self.config.is_trusted_github_org(owner) {
-                return true;
-            }
+        if let RemoteSource::GitHub { owner, .. } = source
+            && self.config.is_trusted_github_org(owner)
+        {
+            return true;
         }
 
         // Check URL patterns
@@ -142,10 +142,11 @@ impl RemoteSourceResolver {
         }
 
         // Check cache
-        if options.use_cache && !options.force_refresh {
-            if let Some(cached_path) = self.cache.get(source) {
-                return Ok(cached_path);
-            }
+        if options.use_cache
+            && !options.force_refresh
+            && let Some(cached_path) = self.cache.get(source)
+        {
+            return Ok(cached_path);
         }
 
         // Fetch based on source type

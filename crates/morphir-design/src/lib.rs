@@ -1,14 +1,13 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod config;
+pub mod extensions;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use config::{
+    ConfigContext, discover_config, discover_morphir_dir, ensure_morphir_structure,
+    load_config_context, resolve_compile_output, resolve_dist_output, resolve_generate_output,
+    resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
+    resolve_test_scenario, sanitize_project_name,
+};
+pub use extensions::{
+    BuiltinExtension, ExtensionInfo, ExtensionSource, discover_builtin_extensions,
+    get_builtin_extension_path, resolve_extension_source,
+};

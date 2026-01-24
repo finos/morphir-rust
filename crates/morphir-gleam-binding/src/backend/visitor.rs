@@ -191,8 +191,26 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
         output.push_str(") {\n");
 
-        // Body
-        self.generate_value_expr(output, &value_def.value.body.get_expression()?)?;
+        // Body - V4 stores body as JSON, so we generate based on the JSON representation
+        match &value_def.value.body {
+            morphir_ir::ir::v4::ValueBody::ExpressionBody { body } => {
+                // For now, output the JSON as a todo placeholder
+                // A full implementation would deserialize and generate proper Gleam code
+                output.push_str("  todo // ");
+                output.push_str(&body.to_string());
+            }
+            morphir_ir::ir::v4::ValueBody::NativeBody { hint, .. } => {
+                output.push_str("  // native: ");
+                output.push_str(&format!("{:?}", hint));
+            }
+            morphir_ir::ir::v4::ValueBody::ExternalBody { external_name, .. } => {
+                output.push_str("  // external: ");
+                output.push_str(external_name);
+            }
+            morphir_ir::ir::v4::ValueBody::IncompleteBody { .. } => {
+                output.push_str("  todo // incomplete");
+            }
+        }
 
         output.push_str("\n}\n");
         Ok(())
@@ -363,6 +381,9 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(&c.to_string());
                 output.push_str("'");
             }
+            MorphirLiteral::Decimal(d) => {
+                output.push_str(d);
+            }
         }
         Ok(())
     }
@@ -377,6 +398,23 @@ impl ValueBodyExt for morphir_ir::ir::value_expr::ValueBody<TypeAttributes, Valu
     fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>> {
         match self {
             morphir_ir::ir::value_expr::ValueBody::Expression(expr) => Ok(expr),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Expected expression body",
+            )),
+        }
+    }
+}
+
+// Helper trait for V4 ValueBody
+trait V4ValueBodyExt {
+    fn get_expression_json(&self) -> Result<&serde_json::Value>;
+}
+
+impl V4ValueBodyExt for morphir_ir::ir::v4::ValueBody {
+    fn get_expression_json(&self) -> Result<&serde_json::Value> {
+        match self {
+            morphir_ir::ir::v4::ValueBody::ExpressionBody { body } => Ok(body),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Expected expression body",

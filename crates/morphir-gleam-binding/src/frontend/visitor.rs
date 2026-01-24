@@ -11,14 +11,14 @@ use morphir_common::vfs::Vfs;
 use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
 use morphir_ir::ir::literal::Literal as MorphirLiteral;
 use morphir_ir::ir::pattern::Pattern as MorphirPattern;
-use morphir_ir::ir::type_def::TypeDefinition;
 use morphir_ir::ir::type_expr::{Field, Type};
 use morphir_ir::ir::v4::{
-    Access as MorphirAccess, AccessControlledConstructors, AccessControlledModuleDefinition,
+    Access as MorphirAccess, AccessControlledConstructors,
     AccessControlledTypeDefinition, AccessControlledValueDefinition, ConstructorArg,
-    ConstructorDefinition, ModuleDefinition, PackageDefinition,
+    ConstructorDefinition, InputTypeEntry, TypeDefinition as V4TypeDefinition,
+    ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
 };
-use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueBody, ValueDefinition};
+use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
 use morphir_ir::naming::{FQName, ModuleName, Name, PackageName};
 use serde_json;
 use std::io::Result;
@@ -181,8 +181,6 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
     /// Convert TypeDef to Morphir IR TypeDefinition
     fn convert_type_def(&self, type_def: &TypeDef) -> Result<AccessControlledTypeDefinition> {
-        use morphir_ir::ir::type_def::TypeDefinition;
-
         let access = match type_def.access {
             Access::Public => MorphirAccess::Public,
             Access::Private => MorphirAccess::Private,
@@ -221,7 +219,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     })
                     .collect();
 
-                let type_def = TypeDefinition::CustomTypeDefinition {
+                let v4_type_def = V4TypeDefinition::CustomTypeDefinition {
                     type_params: type_params.clone(),
                     constructors: AccessControlledConstructors {
                         access: MorphirAccess::Public,
@@ -231,20 +229,20 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
                 Ok(AccessControlledTypeDefinition {
                     access,
-                    value: type_def,
+                    value: v4_type_def,
                 })
             }
             _ => {
                 // Type alias
                 let type_expr = self.convert_type_expr(&type_def.body);
-                let type_def = TypeDefinition::TypeAliasDefinition {
+                let v4_type_def = V4TypeDefinition::TypeAliasDefinition {
                     type_params: type_params.clone(),
                     type_expr: serde_json::to_value(&type_expr).unwrap_or(serde_json::Value::Null),
                 };
 
                 Ok(AccessControlledTypeDefinition {
                     access,
-                    value: type_def,
+                    value: v4_type_def,
                 })
             }
         }
@@ -258,28 +256,29 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         };
 
         // Convert input types (from type annotation if present)
-        // V4 uses Vec<InputType> not IndexMap
-        let input_types: Vec<
-            morphir_ir::ir::value_expr::InputType<TypeAttributes, ValueAttributes>,
-        > = if let Some(type_ann) = &value_def.type_annotation {
-            // Extract input types from function type
-            self.extract_input_types_vec(type_ann)
-        } else {
-            vec![]
-        };
+        // V4 uses IndexMap<String, InputTypeEntry>
+        let input_types: IndexMap<String, InputTypeEntry> =
+            if let Some(type_ann) = &value_def.type_annotation {
+                self.extract_input_types_v4(type_ann)
+            } else {
+                IndexMap::new()
+            };
 
         // Convert output type
         let output_type = if let Some(type_ann) = &value_def.type_annotation {
-            self.extract_output_type_type(type_ann)
+            let morphir_type = self.extract_output_type_type(type_ann);
+            serde_json::to_value(&morphir_type).unwrap_or(serde_json::Value::Null)
         } else {
-            Type::Unit(TypeAttributes::default()) // Infer later
+            serde_json::json!({"Unit": {}})
         };
 
         // Convert body expression
         let body_value = self.convert_expr(&value_def.body);
-        let body = ValueBody::Expression(body_value);
+        let body = V4ValueBody::ExpressionBody {
+            body: serde_json::to_value(&body_value).unwrap_or(serde_json::Value::Null),
+        };
 
-        let value_def = morphir_ir::ir::value_expr::ValueDefinition {
+        let v4_value_def = V4ValueDefinition {
             input_types,
             output_type,
             body,
@@ -287,26 +286,26 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         Ok(AccessControlledValueDefinition {
             access,
-            value: value_def,
+            value: v4_value_def,
         })
     }
 
-    /// Extract input types from function type annotation (returns Vec<InputType>)
-    fn extract_input_types_vec(
-        &self,
-        type_expr: &TypeExpr,
-    ) -> Vec<morphir_ir::ir::value_expr::InputType<TypeAttributes, ValueAttributes>> {
-        let mut inputs = Vec::new();
+    /// Extract input types from function type annotation (returns V4 IndexMap format)
+    fn extract_input_types_v4(&self, type_expr: &TypeExpr) -> IndexMap<String, InputTypeEntry> {
+        let mut inputs = IndexMap::new();
 
         // Extract function argument types
         // For now, simple extraction - can be enhanced to handle curried functions
         if let TypeExpr::Function { from, to: _ } = type_expr {
             let morphir_type = self.convert_type_expr(from);
-            inputs.push(morphir_ir::ir::value_expr::InputType(
-                Name::from("arg1"),
-                ValueAttributes::default(),
-                morphir_type,
-            ));
+            inputs.insert(
+                "arg1".to_string(),
+                InputTypeEntry {
+                    type_attributes: None,
+                    input_type: serde_json::to_value(&morphir_type)
+                        .unwrap_or(serde_json::Value::Null),
+                },
+            );
         }
 
         inputs
@@ -390,8 +389,8 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             Expr::Let { name, value, body } => {
                 // Convert to LetDefinition
                 let def = morphir_ir::ir::value_expr::ValueDefinition {
-                    input_types: IndexMap::new(),
-                    output_type: serde_json::Value::Null,
+                    input_types: vec![],
+                    output_type: Type::Unit(TypeAttributes::default()),
                     body: ValueBody::Expression(self.convert_expr(value)),
                 };
 
@@ -465,7 +464,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         match pattern {
             Pattern::Wildcard => MorphirPattern::WildcardPattern(attrs),
             Pattern::Variable { name } => MorphirPattern::AsPattern(
-                attrs,
+                attrs.clone(),
                 Box::new(MorphirPattern::WildcardPattern(attrs)),
                 Name::from(name.as_str()),
             ),

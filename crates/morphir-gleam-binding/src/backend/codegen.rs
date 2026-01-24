@@ -1,9 +1,8 @@
 //! Gleam code generation from Morphir IR
 
-use anyhow;
-use morphir_common::vfs::OsVfs;
+use morphir_common::vfs::{OsVfs, Vfs};
 use morphir_extension_sdk::prelude::*;
-use morphir_ir::ir::v4::{AccessControlledModuleDefinition, PackageDefinition};
+use morphir_ir::ir::v4::PackageDefinition;
 use morphir_ir::naming::ModuleName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -108,8 +107,7 @@ fn generate_from_package_definition(
         .map(String::from)
         .unwrap_or_else(|| "default-package".to_string());
 
-    let vfs = OsVfs;
-    let visitor = MorphirToGleamVisitor::new(vfs, output_dir.clone(), package_name);
+    let visitor = MorphirToGleamVisitor::new(OsVfs, output_dir.clone(), package_name);
 
     let mut artifacts = Vec::new();
 
@@ -119,10 +117,11 @@ fn generate_from_package_definition(
 
         match visitor.visit_module(&module_path, module_def) {
             Ok(_) => {
-                // Read generated file
+                // Read generated file using a new OsVfs instance
                 let file_path = output_dir.join(format!("{}.gleam", module_path_str));
-                if vfs.exists(&file_path) {
-                    match vfs.read_to_string(&file_path) {
+                let read_vfs = OsVfs;
+                if read_vfs.exists(&file_path) {
+                    match read_vfs.read_to_string(&file_path) {
                         Ok(content) => {
                             artifacts.push(Artifact {
                                 path: format!("{}.gleam", module_path_str),
@@ -131,17 +130,17 @@ fn generate_from_package_definition(
                             });
                         }
                         Err(e) => {
-                            return Err(anyhow::anyhow!("Failed to read generated file: {}", e));
+                            return Err(ExtensionError::execution(format!("Failed to read generated file: {}", e)));
                         }
                     }
                 }
             }
             Err(e) => {
-                return Err(anyhow::anyhow!(
+                return Err(ExtensionError::execution(format!(
                     "Failed to generate module {}: {}",
                     module_path_str,
                     e
-                ));
+                )));
             }
         }
     }

@@ -4,7 +4,7 @@
 //! - Frontend: Parse Gleam source files to Morphir IR
 //! - Backend: Generate Gleam code from Morphir IR
 
-use morphir_common::vfs::OsVfs;
+use morphir_common::vfs::{OsVfs, Vfs};
 use morphir_extension_sdk::prelude::*;
 use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
@@ -65,8 +65,6 @@ impl Frontend for GleamExtension {
             .map(|s| PackageName::parse(s))
             .unwrap_or_else(|| PackageName::parse("default-package"));
 
-        let vfs = OsVfs;
-
         for source in &request.sources {
             match frontend::parse_gleam(&source.path, &source.content) {
                 Ok(module_ir) => {
@@ -77,7 +75,7 @@ impl Frontend for GleamExtension {
 
                     // Convert to Morphir IR V4 Document Tree format
                     let visitor = frontend::GleamToMorphirVisitor::new(
-                        vfs,
+                        OsVfs,
                         output_dir.clone(),
                         package_name.clone(),
                         module_name,
@@ -88,6 +86,7 @@ impl Frontend for GleamExtension {
                             // Read format.json as IR representation
                             // output_dir is already .morphir/out/<project>/compile/<language>/
                             let format_json_path = output_dir.join("format.json");
+                            let vfs = OsVfs;
                             if vfs.exists(&format_json_path) {
                                 match vfs.read_to_string(&format_json_path) {
                                     Ok(format_content) => {

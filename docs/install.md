@@ -121,6 +121,7 @@ morphir self install 0.1.0
 # Remove old versions
 morphir self prune
 
+
 # Update the launcher script itself
 morphir self update
 

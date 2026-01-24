@@ -1013,12 +1013,12 @@ fn convert_type_alias_to_v4(arr: &[serde_json::Value]) -> v4::TypeDefinition {
 }
 
 /// Extract type parameters from JSON array as V4Name (kebab-case string serialization)
-fn extract_type_params(json: &serde_json::Value) -> Vec<v4::V4Name> {
+fn extract_type_params(json: &serde_json::Value) -> Vec<v4::Name> {
     json.as_array()
         .map(|arr| {
             arr.iter()
                 .filter_map(extract_name_from_json)
-                .map(v4::V4Name::from)
+                .map(v4::Name::from)
                 .collect()
         })
         .unwrap_or_default()
@@ -1089,7 +1089,7 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
         return None;
     }
 
-    let name = extract_name_from_json(&arr[0]).map(v4::V4Name::from)?;
+    let name = extract_name_from_json(&arr[0]).map(v4::Name::from)?;
 
     let args: Vec<v4::ConstructorArg> = arr[1]
         .as_array()
@@ -1101,7 +1101,7 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
                     if arg_arr.len() < 2 {
                         return None;
                     }
-                    let arg_name = extract_name_from_json(&arg_arr[0]).map(v4::V4Name::from)?;
+                    let arg_name = extract_name_from_json(&arg_arr[0]).map(v4::Name::from)?;
                     let arg_type = convert_type_expr_to_v4(&arg_arr[1]);
                     Some(v4::ConstructorArg {
                         name: arg_name,

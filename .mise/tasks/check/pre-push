@@ -1,6 +1,6 @@
 #!/bin/sh
 #MISE description="Run all checks required before pushing"
-#MISE depends=["check:fmt", "check:lint"]
+#MISE depends=["check:fmt", "check:lint:rust", "check:lint:shell"]
 
 set -e
 

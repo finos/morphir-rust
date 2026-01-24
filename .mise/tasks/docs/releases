@@ -15,7 +15,7 @@ fi
 echo "Generating release notes from CHANGELOG.md..."
 
 # Generate the releases.md file
-cat > "$RELEASES" << 'FRONTMATTER'
+cat >"$RELEASES" <<'FRONTMATTER'
 ---
 layout: default
 title: Release Notes
@@ -82,10 +82,10 @@ skip_unreleased { next }
 
 # Print content in version sections
 in_version { print }
-' "$CHANGELOG" >> "$RELEASES"
+' "$CHANGELOG" >>"$RELEASES"
 
 # Add footer
-cat >> "$RELEASES" << 'FOOTER'
+cat >>"$RELEASES" <<'FOOTER'
 
 ---
 

@@ -70,11 +70,8 @@ impl JsonPager {
                 ranges
                     .into_iter()
                     .map(|(style, text)| {
-                        let fg = Color::Rgb(
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                        );
+                        let fg =
+                            Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
                         let mut ratatui_style = Style::default().fg(fg);
                         if style.font_style.contains(FontStyle::BOLD) {
                             ratatui_style = ratatui_style.add_modifier(Modifier::BOLD);
@@ -225,8 +222,12 @@ impl JsonPager {
 
     /// Render the header bar.
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let header = Paragraph::new(format!(" File: {}", self.title))
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD));
+        let header = Paragraph::new(format!(" File: {}", self.title)).style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(header, area);
     }
 

@@ -5,6 +5,19 @@
 //! - File logs go to `.morphir/logs/` (workspace) or `~/.morphir/logs/` (global)
 //! - Structured JSON format for file logs
 //! - Configurable via environment variables and morphir.toml
+//!
+//! # Usage
+//!
+//! ```ignore
+//! // Initialize with defaults (console to stderr, no file logging)
+//! let _guard = logging::init_default();
+//!
+//! // Or initialize from environment variables
+//! let _guard = logging::init_from_env();
+//! ```
+
+// Allow dead code while the logging infrastructure is scaffolded but not yet integrated
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use tracing::Level;

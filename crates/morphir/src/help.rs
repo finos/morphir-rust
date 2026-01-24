@@ -76,6 +76,7 @@ pub fn should_show_full_help(args: &[String]) -> bool {
 }
 
 /// Create a styled skin for terminal markdown rendering.
+#[allow(dead_code)]
 pub fn make_skin() -> MadSkin {
     use termimad::crossterm::style::Color;
 
@@ -103,12 +104,14 @@ pub fn make_skin() -> MadSkin {
 }
 
 /// Print markdown text to the console with syntax highlighting.
+#[allow(dead_code)]
 pub fn print_markdown(text: &str) {
     let skin = make_skin();
     skin.print_text(text);
 }
 
 /// Print markdown text inline (without newline).
+#[allow(dead_code)]
 pub fn print_markdown_inline(text: &str) {
     let skin = make_skin();
     print!("{}", skin.term_text(text));

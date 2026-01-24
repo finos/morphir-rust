@@ -4,7 +4,7 @@
 //! - Frontend: Parse Gleam source files to Morphir IR
 //! - Backend: Generate Gleam code from Morphir IR
 
-use morphir_common::vfs::{OsVfs, Vfs};
+use morphir_common::vfs::OsVfs;
 use morphir_extension_sdk::prelude::*;
 use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
@@ -119,47 +119,11 @@ impl Frontend for GleamExtension {
 
                     match visitor.visit_module_v4(&module_ir) {
                         Ok(_) => {
-                            // Read format.json as IR representation
-                            // output_dir is already .morphir/out/<project>/compile/<language>/
-                            let format_json_path = output_dir.join("format.json");
-                            let vfs = OsVfs;
-                            if vfs.exists(&format_json_path) {
-                                match vfs.read_to_string(&format_json_path) {
-                                    Ok(format_content) => {
-                                        match serde_json::from_str::<serde_json::Value>(
-                                            &format_content,
-                                        ) {
-                                            Ok(ir_json) => {
-                                                ir_modules.push(ir_json);
-                                            }
-                                            Err(e) => {
-                                                diagnostics.push(Diagnostic {
-                                                    severity: DiagnosticSeverity::Error,
-                                                    code: Some("E002".into()),
-                                                    message: format!(
-                                                        "Failed to parse format.json: {}",
-                                                        e
-                                                    ),
-                                                    location: None,
-                                                    related: vec![],
-                                                });
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        diagnostics.push(Diagnostic {
-                                            severity: DiagnosticSeverity::Error,
-                                            code: Some("E003".into()),
-                                            message: format!("Failed to read format.json: {}", e),
-                                            location: None,
-                                            related: vec![],
-                                        });
-                                    }
-                                }
-                            } else {
-                                // Fallback: serialize ModuleIR directly
-                                ir_modules.push(serde_json::to_value(&module_ir)?);
-                            }
+                            // Build format.json in memory without disk I/O
+                            // This avoids reading the entire file back after writing it,
+                            // which could cause memory issues for large projects
+                            let ir_json = visitor.build_format_json();
+                            ir_modules.push(ir_json);
                         }
                         Err(e) => {
                             diagnostics.push(Diagnostic {

@@ -7,6 +7,688 @@ use crate::ir::{classic, v4};
 use crate::naming::Name;
 use indexmap::IndexMap;
 
+// =============================================================================
+// Type Expression Conversion (Classic Array -> V4 Object Wrapper)
+// =============================================================================
+
+/// Convert a Classic type expression (array format) to V4 format (object wrapper).
+///
+/// Classic format: `["TypeName", {attrs}, ...args]`
+/// V4 format: `{ "TypeName": { field: value, ... } }`
+fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
+    let arr = match json.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => return json.clone(), // Not an array or empty, return as-is
+    };
+
+    let tag = match arr[0].as_str() {
+        Some(t) => t,
+        None => return json.clone(), // First element not a string, return as-is
+    };
+
+    match tag {
+        "Variable" => {
+            // Classic: ["Variable", {attrs}, ["name", "parts"]]
+            let name = if arr.len() > 2 {
+                extract_name_from_json(&arr[2])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "Variable": { "name": name } })
+        }
+        "Reference" => {
+            // Classic: ["Reference", {attrs}, [pkg_path, mod_path, local_name], [type_args]]
+            let fqname = if arr.len() > 2 {
+                extract_fqname_from_classic(&arr[2])
+            } else {
+                String::new()
+            };
+            let args: Vec<serde_json::Value> = if arr.len() > 3 {
+                arr[3]
+                    .as_array()
+                    .map(|a| a.iter().map(convert_type_expr_to_v4).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "Reference": { "fqname": fqname, "args": args } })
+        }
+        "Tuple" => {
+            // Classic: ["Tuple", {attrs}, [elements...]]
+            let elements: Vec<serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|a| a.iter().map(convert_type_expr_to_v4).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "Tuple": { "elements": elements } })
+        }
+        "Record" => {
+            // Classic: ["Record", {attrs}, [[["field", "name"], type_expr], ...]]
+            let fields: IndexMap<String, serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|fields_arr| {
+                        fields_arr
+                            .iter()
+                            .filter_map(|field| {
+                                let field_arr = field.as_array()?;
+                                if field_arr.len() < 2 {
+                                    return None;
+                                }
+                                let name = extract_name_from_json(&field_arr[0])?;
+                                let tpe = convert_type_expr_to_v4(&field_arr[1]);
+                                Some((name.to_string(), tpe))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                IndexMap::new()
+            };
+            serde_json::json!({ "Record": { "fields": fields } })
+        }
+        "ExtensibleRecord" => {
+            // Classic: ["ExtensibleRecord", {attrs}, ["var", "name"], [[field_name, type], ...]]
+            let variable = if arr.len() > 2 {
+                extract_name_from_json(&arr[2])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let fields: IndexMap<String, serde_json::Value> = if arr.len() > 3 {
+                arr[3]
+                    .as_array()
+                    .map(|fields_arr| {
+                        fields_arr
+                            .iter()
+                            .filter_map(|field| {
+                                let field_arr = field.as_array()?;
+                                if field_arr.len() < 2 {
+                                    return None;
+                                }
+                                let name = extract_name_from_json(&field_arr[0])?;
+                                let tpe = convert_type_expr_to_v4(&field_arr[1]);
+                                Some((name.to_string(), tpe))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                IndexMap::new()
+            };
+            serde_json::json!({ "ExtensibleRecord": { "variable": variable, "fields": fields } })
+        }
+        "Function" => {
+            // Classic: ["Function", {attrs}, arg_type, return_type]
+            let arg = if arr.len() > 2 {
+                convert_type_expr_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let result = if arr.len() > 3 {
+                convert_type_expr_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "Function": { "arg": arg, "result": result } })
+        }
+        "Unit" => {
+            // Classic: ["Unit", {attrs}]
+            serde_json::json!({ "Unit": {} })
+        }
+        _ => {
+            // Unknown type tag, return as-is
+            json.clone()
+        }
+    }
+}
+
+/// Extract FQName from Classic format and convert to canonical string.
+///
+/// Classic format: `[package_path, module_path, local_name]`
+/// where each path is `[["word1"], ["word2", "word3"]]`
+fn extract_fqname_from_classic(json: &serde_json::Value) -> String {
+    let arr = match json.as_array() {
+        Some(a) if a.len() >= 3 => a,
+        _ => return String::new(),
+    };
+
+    // Extract package path: [["word1"], ["word2"]] -> "word1/word2"
+    let package_path = extract_path_from_classic(&arr[0]);
+    // Extract module path: [["word1", "word2"]] -> "word1-word2"
+    let module_path = extract_path_from_classic(&arr[1]);
+    // Extract local name: ["word1", "word2"] -> "word1-word2"
+    let local_name = extract_name_from_json(&arr[2])
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+
+    format!("{}:{}#{}", package_path, module_path, local_name)
+}
+
+/// Extract Path from Classic format and convert to canonical string.
+///
+/// Classic format: `[["word1"], ["word2", "word3"]]` -> "word1/word2-word3"
+fn extract_path_from_classic(json: &serde_json::Value) -> String {
+    json.as_array()
+        .map(|segments| {
+            segments
+                .iter()
+                .filter_map(|seg| extract_name_from_json(seg).map(|n| n.to_string()))
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_default()
+}
+
+/// Convert a Classic value expression (array format) to V4 format (object wrapper).
+///
+/// Classic format: `["ValueTag", {attrs}, ...args]`
+/// V4 format: `{ "ValueTag": { field: value, ... } }`
+fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
+    let arr = match json.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => return json.clone(),
+    };
+
+    let tag = match arr[0].as_str() {
+        Some(t) => t,
+        None => return json.clone(),
+    };
+
+    match tag {
+        "Unit" => serde_json::json!({ "Unit": {} }),
+        "Literal" => {
+            // Classic: ["Literal", {attrs}, literal_value]
+            if arr.len() > 2 {
+                let literal = convert_literal_to_v4(&arr[2]);
+                serde_json::json!({ "Literal": { "value": literal } })
+            } else {
+                serde_json::json!({ "Literal": { "value": null } })
+            }
+        }
+        "Constructor" => {
+            // Classic: ["Constructor", {attrs}, fqname]
+            let fqname = if arr.len() > 2 {
+                extract_fqname_from_classic(&arr[2])
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "Constructor": { "fqname": fqname } })
+        }
+        "Variable" => {
+            // Classic: ["Variable", {attrs}, ["name", "parts"]]
+            let name = if arr.len() > 2 {
+                extract_name_from_json(&arr[2])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "Variable": { "name": name } })
+        }
+        "Reference" => {
+            // Classic: ["Reference", {attrs}, fqname]
+            let fqname = if arr.len() > 2 {
+                extract_fqname_from_classic(&arr[2])
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "Reference": { "fqname": fqname } })
+        }
+        "Tuple" => {
+            // Classic: ["Tuple", {attrs}, [elements...]]
+            let elements: Vec<serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|a| a.iter().map(convert_value_expr_to_v4).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "Tuple": { "elements": elements } })
+        }
+        "List" => {
+            // Classic: ["List", {attrs}, [items...]]
+            let items: Vec<serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|a| a.iter().map(convert_value_expr_to_v4).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "List": { "items": items } })
+        }
+        "Record" => {
+            // Classic: ["Record", {attrs}, [[["field", "name"], value], ...]]
+            let fields: IndexMap<String, serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|fields_arr| {
+                        fields_arr
+                            .iter()
+                            .filter_map(|field| {
+                                let field_arr = field.as_array()?;
+                                if field_arr.len() < 2 {
+                                    return None;
+                                }
+                                let name = extract_name_from_json(&field_arr[0])?;
+                                let val = convert_value_expr_to_v4(&field_arr[1]);
+                                Some((name.to_string(), val))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                IndexMap::new()
+            };
+            serde_json::json!({ "Record": { "fields": fields } })
+        }
+        "Field" => {
+            // Classic: ["Field", {attrs}, target_expr, ["field", "name"]]
+            let target = if arr.len() > 2 {
+                convert_value_expr_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let name = if arr.len() > 3 {
+                extract_name_from_json(&arr[3])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "Field": { "target": target, "name": name } })
+        }
+        "FieldFunction" => {
+            // Classic: ["FieldFunction", {attrs}, ["field", "name"]]
+            let name = if arr.len() > 2 {
+                extract_name_from_json(&arr[2])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "FieldFunction": { "name": name } })
+        }
+        "Apply" => {
+            // Classic: ["Apply", {attrs}, function, argument]
+            let function = if arr.len() > 2 {
+                convert_value_expr_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let argument = if arr.len() > 3 {
+                convert_value_expr_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "Apply": { "function": function, "argument": argument } })
+        }
+        "Lambda" => {
+            // Classic: ["Lambda", {attrs}, pattern, body]
+            let pattern = if arr.len() > 2 {
+                convert_pattern_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let body = if arr.len() > 3 {
+                convert_value_expr_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "Lambda": { "pattern": pattern, "body": body } })
+        }
+        "LetDefinition" => {
+            // Classic: ["LetDefinition", {attrs}, ["name"], def, in_expr]
+            let name = if arr.len() > 2 {
+                extract_name_from_json(&arr[2])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let definition = if arr.len() > 3 {
+                convert_value_def_inline_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            let in_expr = if arr.len() > 4 {
+                convert_value_expr_to_v4(&arr[4])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "LetDefinition": { "name": name, "definition": definition, "in": in_expr } })
+        }
+        "LetRecursion" => {
+            // Classic: ["LetRecursion", {attrs}, [[name, def], ...], in_expr]
+            let definitions: IndexMap<String, serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|defs| {
+                        defs.iter()
+                            .filter_map(|def_entry| {
+                                let entry_arr = def_entry.as_array()?;
+                                if entry_arr.len() < 2 {
+                                    return None;
+                                }
+                                let name = extract_name_from_json(&entry_arr[0])?;
+                                let def = convert_value_def_inline_to_v4(&entry_arr[1]);
+                                Some((name.to_string(), def))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                IndexMap::new()
+            };
+            let in_expr = if arr.len() > 3 {
+                convert_value_expr_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "LetRecursion": { "definitions": definitions, "in": in_expr } })
+        }
+        "Destructure" => {
+            // Classic: ["Destructure", {attrs}, pattern, value_expr, in_expr]
+            let pattern = if arr.len() > 2 {
+                convert_pattern_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let value = if arr.len() > 3 {
+                convert_value_expr_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            let in_expr = if arr.len() > 4 {
+                convert_value_expr_to_v4(&arr[4])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "Destructure": { "pattern": pattern, "value": value, "in": in_expr } })
+        }
+        "IfThenElse" => {
+            // Classic: ["IfThenElse", {attrs}, condition, then_branch, else_branch]
+            let condition = if arr.len() > 2 {
+                convert_value_expr_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let then_branch = if arr.len() > 3 {
+                convert_value_expr_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            let else_branch = if arr.len() > 4 {
+                convert_value_expr_to_v4(&arr[4])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "IfThenElse": { "condition": condition, "then": then_branch, "else": else_branch } })
+        }
+        "PatternMatch" => {
+            // Classic: ["PatternMatch", {attrs}, match_expr, [[pattern, body], ...]]
+            let value = if arr.len() > 2 {
+                convert_value_expr_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let cases: Vec<serde_json::Value> = if arr.len() > 3 {
+                arr[3]
+                    .as_array()
+                    .map(|cases_arr| {
+                        cases_arr
+                            .iter()
+                            .filter_map(|case| {
+                                let case_arr = case.as_array()?;
+                                if case_arr.len() < 2 {
+                                    return None;
+                                }
+                                let pattern = convert_pattern_to_v4(&case_arr[0]);
+                                let body = convert_value_expr_to_v4(&case_arr[1]);
+                                Some(serde_json::json!({ "pattern": pattern, "body": body }))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "PatternMatch": { "value": value, "cases": cases } })
+        }
+        "UpdateRecord" => {
+            // Classic: ["UpdateRecord", {attrs}, target, [[field_name, value], ...]]
+            let target = if arr.len() > 2 {
+                convert_value_expr_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let fields: IndexMap<String, serde_json::Value> = if arr.len() > 3 {
+                arr[3]
+                    .as_array()
+                    .map(|fields_arr| {
+                        fields_arr
+                            .iter()
+                            .filter_map(|field| {
+                                let field_arr = field.as_array()?;
+                                if field_arr.len() < 2 {
+                                    return None;
+                                }
+                                let name = extract_name_from_json(&field_arr[0])?;
+                                let val = convert_value_expr_to_v4(&field_arr[1]);
+                                Some((name.to_string(), val))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                IndexMap::new()
+            };
+            serde_json::json!({ "UpdateRecord": { "target": target, "fields": fields } })
+        }
+        _ => {
+            // Unknown value tag, return as-is
+            json.clone()
+        }
+    }
+}
+
+/// Convert a Classic pattern to V4 format.
+fn convert_pattern_to_v4(json: &serde_json::Value) -> serde_json::Value {
+    let arr = match json.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => return json.clone(),
+    };
+
+    let tag = match arr[0].as_str() {
+        Some(t) => t,
+        None => return json.clone(),
+    };
+
+    match tag {
+        "WildcardPattern" => serde_json::json!({ "WildcardPattern": {} }),
+        "AsPattern" => {
+            // Classic: ["AsPattern", {attrs}, pattern, ["name"]]
+            let pattern = if arr.len() > 2 {
+                convert_pattern_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let name = if arr.len() > 3 {
+                extract_name_from_json(&arr[3])
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            serde_json::json!({ "AsPattern": { "pattern": pattern, "name": name } })
+        }
+        "TuplePattern" => {
+            // Classic: ["TuplePattern", {attrs}, [patterns...]]
+            let patterns: Vec<serde_json::Value> = if arr.len() > 2 {
+                arr[2]
+                    .as_array()
+                    .map(|a| a.iter().map(convert_pattern_to_v4).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "TuplePattern": { "patterns": patterns } })
+        }
+        "ConstructorPattern" => {
+            // Classic: ["ConstructorPattern", {attrs}, fqname, [arg_patterns...]]
+            let fqname = if arr.len() > 2 {
+                extract_fqname_from_classic(&arr[2])
+            } else {
+                String::new()
+            };
+            let args: Vec<serde_json::Value> = if arr.len() > 3 {
+                arr[3]
+                    .as_array()
+                    .map(|a| a.iter().map(convert_pattern_to_v4).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            serde_json::json!({ "ConstructorPattern": { "fqname": fqname, "args": args } })
+        }
+        "EmptyListPattern" => serde_json::json!({ "EmptyListPattern": {} }),
+        "HeadTailPattern" => {
+            // Classic: ["HeadTailPattern", {attrs}, head_pattern, tail_pattern]
+            let head = if arr.len() > 2 {
+                convert_pattern_to_v4(&arr[2])
+            } else {
+                serde_json::Value::Null
+            };
+            let tail = if arr.len() > 3 {
+                convert_pattern_to_v4(&arr[3])
+            } else {
+                serde_json::Value::Null
+            };
+            serde_json::json!({ "HeadTailPattern": { "head": head, "tail": tail } })
+        }
+        "LiteralPattern" => {
+            // Classic: ["LiteralPattern", {attrs}, literal_value]
+            if arr.len() > 2 {
+                let literal = convert_literal_to_v4(&arr[2]);
+                serde_json::json!({ "LiteralPattern": { "value": literal } })
+            } else {
+                serde_json::json!({ "LiteralPattern": { "value": null } })
+            }
+        }
+        "UnitPattern" => serde_json::json!({ "UnitPattern": {} }),
+        _ => json.clone(),
+    }
+}
+
+/// Convert a Classic literal to V4 format.
+fn convert_literal_to_v4(json: &serde_json::Value) -> serde_json::Value {
+    let arr = match json.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => return json.clone(),
+    };
+
+    let tag = match arr[0].as_str() {
+        Some(t) => t,
+        None => return json.clone(),
+    };
+
+    match tag {
+        "BoolLiteral" => {
+            if arr.len() > 1 {
+                serde_json::json!({ "BoolLiteral": arr[1] })
+            } else {
+                serde_json::json!({ "BoolLiteral": false })
+            }
+        }
+        "CharLiteral" => {
+            if arr.len() > 1 {
+                serde_json::json!({ "CharLiteral": arr[1] })
+            } else {
+                serde_json::json!({ "CharLiteral": "" })
+            }
+        }
+        "StringLiteral" => {
+            if arr.len() > 1 {
+                serde_json::json!({ "StringLiteral": arr[1] })
+            } else {
+                serde_json::json!({ "StringLiteral": "" })
+            }
+        }
+        "WholeNumberLiteral" => {
+            if arr.len() > 1 {
+                serde_json::json!({ "WholeNumberLiteral": arr[1] })
+            } else {
+                serde_json::json!({ "WholeNumberLiteral": 0 })
+            }
+        }
+        "FloatLiteral" => {
+            if arr.len() > 1 {
+                serde_json::json!({ "FloatLiteral": arr[1] })
+            } else {
+                serde_json::json!({ "FloatLiteral": 0.0 })
+            }
+        }
+        "DecimalLiteral" => {
+            if arr.len() > 1 {
+                serde_json::json!({ "DecimalLiteral": arr[1] })
+            } else {
+                serde_json::json!({ "DecimalLiteral": "0" })
+            }
+        }
+        _ => json.clone(),
+    }
+}
+
+/// Convert a Classic inline value definition to V4 format.
+fn convert_value_def_inline_to_v4(json: &serde_json::Value) -> serde_json::Value {
+    // Classic format: {inputTypes: [...], outputType: ..., body: ...}
+    if let Some(obj) = json.as_object() {
+        let input_types: IndexMap<String, serde_json::Value> = obj
+            .get("inputTypes")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|input| {
+                        let input_arr = input.as_array()?;
+                        if input_arr.len() < 3 {
+                            return None;
+                        }
+                        let name = extract_name_from_json(&input_arr[0])?;
+                        let typ = convert_type_expr_to_v4(&input_arr[2]);
+                        Some((name.to_string(), typ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let output_type = obj
+            .get("outputType")
+            .map(convert_type_expr_to_v4)
+            .unwrap_or(serde_json::Value::Null);
+
+        let body = obj
+            .get("body")
+            .map(convert_value_expr_to_v4)
+            .unwrap_or(serde_json::Value::Null);
+
+        serde_json::json!({
+            "inputTypes": input_types,
+            "outputType": output_type,
+            "body": body
+        })
+    } else {
+        json.clone()
+    }
+}
+
 /// Convert a Classic package to V4 format.
 ///
 /// # Arguments
@@ -319,7 +1001,7 @@ fn convert_type_alias_to_v4(arr: &[serde_json::Value]) -> v4::TypeDefinition {
     };
 
     let type_expr = if arr.len() > 2 {
-        arr[2].clone()
+        convert_type_expr_to_v4(&arr[2])
     } else {
         serde_json::Value::Null
     };
@@ -330,10 +1012,15 @@ fn convert_type_alias_to_v4(arr: &[serde_json::Value]) -> v4::TypeDefinition {
     }
 }
 
-/// Extract type parameters from JSON array
-fn extract_type_params(json: &serde_json::Value) -> Vec<Name> {
+/// Extract type parameters from JSON array as V4Name (kebab-case string serialization)
+fn extract_type_params(json: &serde_json::Value) -> Vec<v4::V4Name> {
     json.as_array()
-        .map(|arr| arr.iter().filter_map(extract_name_from_json).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(extract_name_from_json)
+                .map(v4::V4Name::from)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -402,7 +1089,7 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
         return None;
     }
 
-    let name = extract_name_from_json(&arr[0])?;
+    let name = extract_name_from_json(&arr[0]).map(v4::V4Name::from)?;
 
     let args: Vec<v4::ConstructorArg> = arr[1]
         .as_array()
@@ -414,8 +1101,8 @@ fn convert_constructor_to_v4(json: &serde_json::Value) -> Option<v4::Constructor
                     if arg_arr.len() < 2 {
                         return None;
                     }
-                    let arg_name = extract_name_from_json(&arg_arr[0])?;
-                    let arg_type = arg_arr[1].clone();
+                    let arg_name = extract_name_from_json(&arg_arr[0]).map(v4::V4Name::from)?;
+                    let arg_type = convert_type_expr_to_v4(&arg_arr[1]);
                     Some(v4::ConstructorArg {
                         name: arg_name,
                         arg_type,
@@ -444,7 +1131,7 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
                         }
                         let name = extract_name_from_json(&input_arr[0])?;
                         let attrs = input_arr[1].clone();
-                        let typ = input_arr[2].clone();
+                        let typ = convert_type_expr_to_v4(&input_arr[2]);
                         Some((
                             name.to_string(),
                             v4::InputTypeEntry {
@@ -466,10 +1153,13 @@ fn convert_value_definition_to_v4(value: &serde_json::Value) -> v4::ValueDefinit
 
         let output_type = obj
             .get("outputType")
-            .cloned()
+            .map(convert_type_expr_to_v4)
             .unwrap_or(serde_json::Value::Null);
 
-        let body_json = obj.get("body").cloned().unwrap_or(serde_json::Value::Null);
+        let body_json = obj
+            .get("body")
+            .map(convert_value_expr_to_v4)
+            .unwrap_or(serde_json::Value::Null);
         let body = v4::ValueBody::ExpressionBody { body: body_json };
 
         v4::ValueDefinition {

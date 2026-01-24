@@ -19,6 +19,78 @@ pub use crate::naming::Name;
 pub use crate::naming::PackageName;
 pub use crate::naming::Path;
 
+/// V4 Name wrapper that serializes as kebab-case string.
+/// Use this instead of `Name` in V4 structures for proper JSON serialization.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V4Name(pub Name);
+
+impl V4Name {
+    pub fn new(name: Name) -> Self {
+        Self(name)
+    }
+}
+
+impl std::str::FromStr for V4Name {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Name::from(s)))
+    }
+}
+
+impl From<Name> for V4Name {
+    fn from(name: Name) -> Self {
+        Self(name)
+    }
+}
+
+impl From<V4Name> for Name {
+    fn from(v4name: V4Name) -> Self {
+        v4name.0
+    }
+}
+
+impl std::fmt::Display for V4Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Serialize for V4Name {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for V4Name {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self(Name::from(&s)))
+    }
+}
+
+impl JsonSchema for V4Name {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "V4Name".into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::V4Name").into()
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string"
+        })
+    }
+}
+
 /// Top-level IR file structure
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -212,15 +284,15 @@ pub struct ModuleSpecification {
 pub enum TypeSpecification {
     /// Type alias specification
     TypeAliasSpecification {
-        type_params: Vec<Name>,
+        type_params: Vec<V4Name>,
         #[serde(rename = "typeExp")]
         type_expr: serde_json::Value, // TODO: Use TypeExpr when serde is complete
     },
     /// Opaque type (constructors hidden)
-    OpaqueTypeSpecification { type_params: Vec<Name> },
+    OpaqueTypeSpecification { type_params: Vec<V4Name> },
     /// Custom type with public constructors
     CustomTypeSpecification {
-        type_params: Vec<Name>,
+        type_params: Vec<V4Name>,
         constructors: Vec<ConstructorSpecification>,
     },
 }
@@ -229,7 +301,7 @@ pub enum TypeSpecification {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorSpecification {
-    pub name: Name,
+    pub name: V4Name,
     pub args: Vec<ConstructorArgSpec>,
 }
 
@@ -237,7 +309,7 @@ pub struct ConstructorSpecification {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorArgSpec {
-    pub name: Name,
+    pub name: V4Name,
     #[serde(rename = "type")]
     pub arg_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
 }
@@ -288,11 +360,11 @@ pub struct AccessControlledTypeDefinition {
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum TypeDefinition {
     TypeAliasDefinition {
-        type_params: Vec<Name>,
+        type_params: Vec<V4Name>,
         type_expr: serde_json::Value, // TODO: Use TypeExpr when serde is complete
     },
     CustomTypeDefinition {
-        type_params: Vec<Name>,
+        type_params: Vec<V4Name>,
         constructors: AccessControlledConstructors,
     },
 }
@@ -336,14 +408,14 @@ impl Serialize for TypeDefinition {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TypeAliasDefContent {
-    type_params: Vec<Name>,
+    type_params: Vec<V4Name>,
     type_exp: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CustomTypeDefContent {
-    type_params: Vec<Name>,
+    type_params: Vec<V4Name>,
     constructors: AccessControlledConstructors,
 }
 
@@ -389,7 +461,7 @@ pub struct AccessControlledConstructors {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorDefinition {
-    pub name: Name,
+    pub name: V4Name,
     pub args: Vec<ConstructorArg>,
 }
 
@@ -397,7 +469,7 @@ pub struct ConstructorDefinition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorArg {
-    pub name: Name,
+    pub name: V4Name,
     #[serde(rename = "type")]
     pub arg_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
 }

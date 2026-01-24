@@ -202,6 +202,8 @@ async fn convert_from_ir_v4(w: &mut GleamTestWorld, output_file: String) {
 
 #[then(expr = "the roundtrip should complete")]
 async fn roundtrip_should_complete(w: &mut GleamTestWorld) {
+    use morphir_gleam_binding::roundtrip::roundtrip_gleam;
+
     // Check for parse errors first
     if !w.parse_errors.is_empty() {
         panic!("Parse errors occurred:\n{}", w.parse_errors.join("\n"));
@@ -211,7 +213,26 @@ async fn roundtrip_should_complete(w: &mut GleamTestWorld) {
         !w.parsed_modules.is_empty(),
         "No modules parsed for roundtrip"
     );
-    // Check that we have generated files
+
+    // If generated_files is empty, perform full roundtrip using source files
+    if w.generated_files.is_empty() {
+        for (filename, content) in &w.source_files {
+            match roundtrip_gleam(content) {
+                Ok(result) => {
+                    // Store the generated code
+                    w.generated_files
+                        .push((filename.clone(), result.generated_code.clone()));
+                    // Store the regenerated module for equivalence comparison
+                    w.parsed_modules.push(result.regenerated);
+                }
+                Err(e) => {
+                    panic!("Roundtrip failed for {}: {}", filename, e);
+                }
+            }
+        }
+    }
+
+    // Check that we have generated files after roundtrip
     assert!(
         !w.generated_files.is_empty(),
         "No files generated for roundtrip"

@@ -47,6 +47,6 @@ Print version
 - [`morphir extension update [-v --version <VERSION>] <NAME>`](/extension/update.md)
 - [`morphir extension uninstall <NAME>`](/extension/uninstall.md)
 - [`morphir ir <SUBCOMMAND>`](/ir.md)
-- [`morphir ir migrate <FLAGS>`](/ir/migrate.md)
+- [`morphir ir migrate <FLAGS> <INPUT>`](/ir/migrate.md)
 - [`morphir schema [-o --output <OUTPUT>]`](/schema.md)
 - [`morphir version [--json]`](/version.md)

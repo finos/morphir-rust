@@ -192,9 +192,21 @@ enum ExtensionAction {
 #[derive(Clone, Subcommand)]
 enum IrAction {
     /// Migrate IR between versions
+    #[command(long_about = "Migrate IR between versions
+
+Converts Morphir IR between Classic (V1-V3) and V4 formats. Supports local files, URLs, and GitHub shorthand sources.
+
+**Examples:**
+
+```bash
+morphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json --target-version v4
+morphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json -o ./lcr-v4.json
+morphir ir migrate ./morphir-ir-v4.json -o ./morphir-ir-classic.json --target-version classic
+```
+
+See the [IR Migration Guide](/ir-migrate/) for detailed real-world examples including the US Federal Reserve FR 2052a regulation model.")]
     Migrate {
-        /// Input file, directory, or remote source (e.g., github:owner/repo)
-        #[arg(short, long)]
+        /// Input file, directory, or remote source (e.g., github:owner/repo, URL)
         input: String,
         /// Output file or directory
         #[arg(short, long)]
@@ -208,6 +220,9 @@ enum IrAction {
         /// Skip cache entirely for remote sources
         #[arg(long)]
         no_cache: bool,
+        /// Output result as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -265,12 +280,14 @@ impl AppSession for MorphirSession {
                     target_version,
                     force_refresh,
                     no_cache,
+                    json,
                 } => run_migrate(
                     input.clone(),
                     output.clone(),
                     target_version.clone(),
                     *force_refresh,
                     *no_cache,
+                    *json,
                 ),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),

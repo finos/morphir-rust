@@ -33,7 +33,7 @@ permalink: /
 curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
 
 # Migrate a Morphir IR file to V4 format
-morphir ir migrate --input ./morphir-ir.json --output ./v4.json
+morphir ir migrate ./morphir-ir.json --output ./v4.json
 
 # Generate JSON Schema
 morphir schema --output ./morphir-ir-schema.json
@@ -54,6 +54,7 @@ Morphir Rust is part of the larger Morphir ecosystem:
 
 ## Quick Links
 
+- [Release Notes](releases) - What's new in Morphir Rust
 - [FINOS Morphir Project](https://morphir.finos.org)
 - [LCR Interactive Demo](https://lcr-interactive.finos.org/) - See Morphir in action
 

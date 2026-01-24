@@ -36,7 +36,8 @@ Guide through pre-release preparation:
    mise run release:changelog-release <version>
    # Help user move entries from [Unreleased] to [version]
    cargo check  # Update Cargo.lock
-   git add Cargo.toml Cargo.lock CHANGELOG.md
+   mise run docs:generate  # Update docs site (CLI docs + release notes)
+   git add Cargo.toml Cargo.lock CHANGELOG.md docs/
    git commit -m "chore: prepare release v<version>"
    mise run release:tag-create <version> --push
    ```
@@ -166,6 +167,9 @@ Generate user-friendly release summaries:
 | Create tag | `mise run release:tag-create <v> [--push]` | Create release tag |
 | Pre-release workflow | `mise run release:pre-release <v>` | Full pre-release checklist |
 | Post-release validation | `mise run release:post-release <v>` | Validate release artifacts |
+| Generate all docs | `mise run docs:generate` | CLI + release notes |
+| Generate release notes | `mise run docs:releases` | From CHANGELOG.md |
+| Serve docs locally | `mise run docs:serve` | Jekyll dev server |
 
 ## Important Guidelines
 

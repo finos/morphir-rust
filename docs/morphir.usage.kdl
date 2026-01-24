@@ -86,9 +86,7 @@ cmd extension subcommand_required=#true help="Manage Morphir extensions" {
 }
 cmd ir subcommand_required=#true help="Manage Morphir IR" {
     cmd migrate help="Migrate IR between versions" {
-        flag "-i --input" help="Input file, directory, or remote source (e.g., github:owner/repo)" required=#true {
-            arg <INPUT>
-        }
+        long_help "Migrate IR between versions\n\nConverts Morphir IR between Classic (V1-V3) and V4 formats. Supports local files, URLs, and GitHub shorthand sources.\n\n**Examples:**\n\n```bash\nmorphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json --target-version v4\nmorphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json -o ./lcr-v4.json\nmorphir ir migrate ./morphir-ir-v4.json -o ./morphir-ir-classic.json --target-version classic\n```\n\nSee the [IR Migration Guide](/ir-migrate/) for detailed real-world examples including the US Federal Reserve FR 2052a regulation model."
         flag "-o --output" help="Output file or directory" required=#true {
             arg <OUTPUT>
         }
@@ -97,6 +95,8 @@ cmd ir subcommand_required=#true help="Manage Morphir IR" {
         }
         flag --force-refresh help="Force refresh cached remote sources"
         flag --no-cache help="Skip cache entirely for remote sources"
+        flag --json help="Output result as JSON (for scripting)"
+        arg <INPUT> help="Input file, directory, or remote source (e.g., github:owner/repo, URL)"
     }
 }
 cmd schema help="Generate JSON Schema for Morphir IR" {

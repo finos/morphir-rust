@@ -15,4 +15,4 @@ Manage Morphir IR
 
 ## Subcommands
 
-- [`morphir ir migrate <FLAGS>`](/ir/migrate.md)
+- [`morphir ir migrate <FLAGS> <INPUT>`](/ir/migrate.md)

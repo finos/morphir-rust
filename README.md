@@ -196,6 +196,21 @@ mise run docs:markdown     # Markdown docs
 mise run docs:completions  # Shell completions
 ```
 
+### CLI Reference Documentation
+
+The CLI reference docs in `docs/cli/` are auto-generated from `docs/morphir.usage.kdl`:
+
+```sh
+# Using mise task (recommended)
+mise run docs:cli
+
+# Or manually:
+usage generate markdown --file docs/morphir.usage.kdl --multi --out-dir docs/cli/ --url-prefix /cli/
+docs/scripts/add-frontmatter.sh
+```
+
+**Important**: To add examples to CLI docs, edit the `long_help` field in `morphir.usage.kdl`, not the generated markdown files. For detailed guides, create separate pages in `docs/` (e.g., `docs/ir-migrate.md`).
+
 ## Development Setup
 
 ```sh
@@ -238,6 +253,7 @@ mise run check:fmt    # Format check
 mise run check:lint   # Lint check
 
 # CLI Documentation
+mise run docs:cli          # Regenerate CLI reference docs from KDL spec
 mise run docs:generate     # Generate all docs
 mise run docs:man          # Man pages only
 mise run docs:markdown     # Markdown only

@@ -15,8 +15,8 @@ remote_theme: just-the-docs/just-the-docs@v0.10.0
 plugins:
   - jekyll-remote-theme
 
-# Color scheme - morphir_light with dark toggle
-color_scheme: morphir_light
+# Color scheme - light (default) with dark toggle support
+color_scheme: light
 
 # Enable search
 search_enabled: true
@@ -64,6 +64,14 @@ sass:
 
 # Permalink style
 permalink: pretty
+
+# Front matter defaults for generated CLI docs
+# Note: just-the-docs auto-infers titles from H1 headers
+defaults:
+  - scope:
+      path: "cli"
+    values:
+      layout: default
 
 # Exclude from build
 exclude:

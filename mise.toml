@@ -10,9 +10,3 @@ ruby = "3.3"
 # For Jekyll gems
 GEM_HOME = "{{config_root}}/.gems"
 PATH = "{{config_root}}/.gems/bin:{{env.PATH}}"
-
-[tasks."check:lint"]
-description = "Run all linters (Rust, shell, YAML)"
-depends = ["check:lint:rust", "check:lint:shell", "check:lint:yaml"]
-run = "echo 'All lint checks passed!'"
-

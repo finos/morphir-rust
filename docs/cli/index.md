@@ -27,6 +27,8 @@ Print version
 
 ## Subcommands
 
+- [`morphir compile [FLAGS]`](/compile.md)
+- [`morphir generate [FLAGS]`](/generate.md)
 - [`morphir tool <SUBCOMMAND>`](/tool.md)
 - [`morphir tool install [-v --version <VERSION>] <NAME>`](/tool/install.md)
 - [`morphir tool list`](/tool/list.md)

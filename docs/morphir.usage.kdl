@@ -5,12 +5,7 @@ about "CLI for working with Morphir IR - functional domain modeling and business
 usage "Usage: morphir [OPTIONS] [COMMAND]"
 flag --help-all help="Print help including experimental commands"
 flag "-V --version" help="Print version"
-cmd validate hide=#true help="[Experimental] Validate Morphir IR models" {
-    flag "-i --input" help="Path to the Morphir IR file or directory" {
-        arg <INPUT>
-    }
-}
-cmd compile hide=#true help="[Experimental] Compile source code to Morphir IR" {
+cmd compile help="Compile source code to Morphir IR" {
     flag "-l --language" help="Source language (e.g., gleam, elm)" {
         arg <LANGUAGE>
     }
@@ -32,7 +27,7 @@ cmd compile hide=#true help="[Experimental] Compile source code to Morphir IR" {
     flag --json help="Output as JSON"
     flag --json-lines help="Output as JSON Lines (streaming)"
 }
-cmd generate hide=#true help="[Experimental] Generate code from Morphir IR" {
+cmd generate help="Generate code from Morphir IR" {
     flag "-t --target" help="Target language or format" {
         arg <TARGET>
     }
@@ -50,6 +45,11 @@ cmd generate hide=#true help="[Experimental] Generate code from Morphir IR" {
     }
     flag --json help="Output as JSON"
     flag --json-lines help="Output as JSON Lines (streaming)"
+}
+cmd validate hide=#true help="[Experimental] Validate Morphir IR models" {
+    flag "-i --input" help="Path to the Morphir IR file or directory" {
+        arg <INPUT>
+    }
 }
 cmd transform hide=#true help="[Experimental] Transform Morphir IR" {
     flag "-i --input" help="Path to the Morphir IR file or directory" {

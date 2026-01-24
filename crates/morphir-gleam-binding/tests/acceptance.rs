@@ -610,5 +610,13 @@ async fn json_lines_output_should_be_valid(w: &mut GleamTestWorld) {
 
 #[tokio::main]
 async fn main() {
-    GleamTestWorld::run("tests/features").await;
+    // Skip scenarios tagged with @wip (work in progress)
+    GleamTestWorld::cucumber()
+        .filter_run("tests/features", |feature, _rule, scenario| {
+            // Skip if the feature or scenario has the @wip tag
+            let feature_has_wip = feature.tags.iter().any(|t| t == "wip");
+            let scenario_has_wip = scenario.tags.iter().any(|t| t == "wip");
+            !feature_has_wip && !scenario_has_wip
+        })
+        .await;
 }

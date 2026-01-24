@@ -1,4 +1,27 @@
-//! CLI testing helpers for BDD acceptance tests
+//! Integration test utilities for Morphir CLI testing
+//!
+//! This crate provides helpers for running CLI integration tests that require
+//! the morphir binary to be pre-built and available.
+//!
+//! # Binary Location
+//!
+//! The CLI tests look for the morphir binary in these locations (in order):
+//! 1. `.morphir/build/bin/morphir` (staged release binary - preferred for CI)
+//! 2. `.morphir/build/bin/morphir-debug` (staged debug binary)
+//! 3. `target/release/morphir`
+//! 4. `target/debug/morphir`
+//!
+//! # Usage
+//!
+//! Build the binary first:
+//! ```sh
+//! mise run build:release
+//! ```
+//!
+//! Then run integration tests:
+//! ```sh
+//! mise run test:integration
+//! ```
 
 #![allow(dead_code)]
 

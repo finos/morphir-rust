@@ -2325,6 +2325,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "cucumber",
+ "morphir-common",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"

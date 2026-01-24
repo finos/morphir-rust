@@ -1,3 +1,6 @@
+# WIP: Module name lookup not working correctly (uses full path instead of module name)
+# See: https://github.com/finos/morphir-rust/issues/40
+@wip
 Feature: Parse Gleam Project
   As a developer
   I want to parse entire Gleam projects

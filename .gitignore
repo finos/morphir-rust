@@ -44,3 +44,6 @@ docs/.jekyll-cache/
 
 # Morphir launcher cache (local testing)
 .morphir-version.local
+
+# Build artifacts (staged binaries for testing)
+.morphir/build/

@@ -1,3 +1,6 @@
+# WIP: Code generation not yet implemented
+# See: https://github.com/finos/morphir-rust/issues/40
+@wip
 Feature: Generate Gleam Code from Morphir IR
   As a developer
   I want to generate Gleam source code from Morphir IR

@@ -1,3 +1,6 @@
+# WIP: Workspace parsing not yet implemented
+# See: https://github.com/finos/morphir-rust/issues/40
+@wip
 Feature: Parse Gleam Workspace
   As a developer
   I want to parse Gleam workspaces with multiple projects

@@ -1,0 +1,18 @@
+#!/bin/sh
+#MISE description="Run integration tests (requires pre-built binary in .morphir/build/bin/)"
+
+set -e
+
+MORPHIR_BIN=".morphir/build/bin/morphir"
+
+if [ ! -x "$MORPHIR_BIN" ]; then
+    echo "Error: morphir binary not found at $MORPHIR_BIN"
+    echo "Run 'mise run build:release' first or download from CI artifacts"
+    exit 1
+fi
+
+echo "Using morphir binary: $MORPHIR_BIN"
+"$MORPHIR_BIN" --version
+
+# Run integration tests without compiling the binary
+cargo test --verbose --test '*' "$@"

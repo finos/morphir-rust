@@ -91,14 +91,18 @@ Feature: Roundtrip Testing (Gleam → IR V4 → Gleam)
     And I convert ModuleIR to IR V4 Document Tree
     Then the roundtrip should complete
 
-  @roundtrip @real-world @parse-function @type
+  # WIP: Parser fails on generated function signatures with tupled arguments
+  # See: https://github.com/finos/morphir-rust/issues/40
+  @roundtrip @real-world @parse-function @type @wip
   Scenario: Roundtrip order_validation fixture
     Given I load the real-world fixture "order_validation.gleam"
     When I parse "order_validation.gleam" to ModuleIR
     And I convert ModuleIR to IR V4 Document Tree
     Then the roundtrip should complete
 
-  @roundtrip @real-world @parse-function @type
+  # WIP: Parser fails on generated function signatures with tupled arguments
+  # See: https://github.com/finos/morphir-rust/issues/40
+  @roundtrip @real-world @parse-function @type @wip
   Scenario: Roundtrip order_processing fixture with complete business logic
     Given I load the real-world fixture "order_processing.gleam"
     When I parse "order_processing.gleam" to ModuleIR

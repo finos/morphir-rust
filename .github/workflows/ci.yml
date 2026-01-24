@@ -17,10 +17,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install mise
+        uses: jdx/mise-action@v2
 
       - name: Cache dependencies
         uses: actions/cache@v5
@@ -29,15 +27,15 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-lint-
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: mise run check:fmt
 
       - name: Lint with Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: mise run check:lint:rust
 
   lint-shell:
     name: Lint (Shell)
@@ -73,8 +71,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
 
       - name: Cache dependencies
         uses: actions/cache@v5
@@ -83,94 +81,27 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-build-
 
       - name: Build release binary
-        run: cargo build --release --bin morphir
+        run: mise run build:release
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: morphir-binary-${{ runner.os }}
-          path: target/release/morphir
+          path: .morphir/build/bin/morphir
           retention-days: 1
 
-  test:
+  test-unit:
     name: Test (Unit)
     runs-on: ubuntu-latest
     needs: [lint-rust]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Run unit tests
-        run: cargo test --verbose --lib --bins
-
-  test-integration:
-    name: Test (Integration)
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Download morphir binary
-        uses: actions/download-artifact@v4
-        with:
-          name: morphir-binary-${{ runner.os }}
-          path: target/release/
-
-      - name: Make binary executable
-        run: chmod +x target/release/morphir
-
-      - name: Verify binary works
-        run: ./target/release/morphir --version
-
-      - name: Run integration tests
-        env:
-          CARGO_TARGET_DIR: target
-        run: cargo test --verbose --test '*'
-
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-    needs: [lint-rust]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Install mise
         uses: jdx/mise-action@v2
@@ -182,9 +113,71 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-test-
+
+      - name: Run unit tests
+        run: mise run test:unit
+
+  test-integration:
+    name: Test (Integration)
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install mise
+        uses: jdx/mise-action@v2
+
+      - name: Cache dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Download morphir binary
+        uses: actions/download-artifact@v4
+        with:
+          name: morphir-binary-${{ runner.os }}
+          path: .morphir/build/bin/
+
+      - name: Make binary executable
+        run: chmod +x .morphir/build/bin/morphir
+
+      - name: Verify binary works
+        run: .morphir/build/bin/morphir --version
+
+      - name: Run integration tests
+        run: mise run test:integration
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    needs: [lint-rust]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install mise
+        uses: jdx/mise-action@v2
+
+      - name: Cache dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-docs-
 
       - name: Build Rust docs
         run: cargo doc --no-deps
@@ -207,11 +200,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
 
       - name: Install mise
         uses: jdx/mise-action@v2

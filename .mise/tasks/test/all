@@ -1,0 +1,7 @@
+#!/bin/sh
+#MISE description="Run all tests (unit + integration)"
+#MISE depends=["build:release"]
+
+set -e
+mise run test:unit
+mise run test:integration

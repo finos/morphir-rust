@@ -22,7 +22,9 @@ fn given_temp_project(world: &mut CliWorld) {
     }
 
     let context = CliTestContext::new().expect("Failed to create test context");
-    context.create_test_project().expect("Failed to create test project");
+    context
+        .create_test_project()
+        .expect("Failed to create test project");
     world.context = Some(context);
 }
 
@@ -30,8 +32,12 @@ fn given_temp_project(world: &mut CliWorld) {
 #[given(regex = r#"I have a Gleam source file "([^"]+)" with:"#)]
 fn given_gleam_source_file(world: &mut CliWorld, path: String, step: &cucumber::gherkin::Step) {
     if let Some(context) = &world.context {
-        let content = step.docstring().expect("Expected docstring with file content");
-        context.write_source_file(&path, content).expect("Failed to write source file");
+        let content = step
+            .docstring()
+            .expect("Expected docstring with file content");
+        context
+            .write_source_file(&path, content)
+            .expect("Failed to write source file");
     }
 }
 

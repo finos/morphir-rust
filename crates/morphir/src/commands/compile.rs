@@ -38,7 +38,7 @@ pub async fn run_compile(
     let ctx = load_config_context(&config_file).map_err(|e| CliError::Config { error: e })?;
 
     // Ensure .morphir/ structure exists
-    ensure_morphir_structure(&ctx.morphir_dir).map_err(|e| CliError::FileSystem { error: e })?;
+    ensure_morphir_structure(&ctx.morphir_dir).map_err(|e| CliError::Config { error: e })?;
 
     // Determine language (from CLI or config)
     let lang = language
@@ -168,7 +168,7 @@ pub async fn run_compile(
                 modules: vec![],
                 output_path: output_path.to_string_lossy().to_string(),
             };
-            write_output(format, &output)?;
+            write_output(format, &output).map_err(CliError::from)?;
         } else {
             let err = CliError::Compilation {
                 message: error_msg.to_string(),
@@ -189,7 +189,7 @@ pub async fn run_compile(
             modules,
             output_path: output_path.to_string_lossy().to_string(),
         };
-        write_output(format, &output)?;
+        write_output(format, &output).map_err(CliError::from)?;
     } else {
         println!("Compilation successful!");
         println!("Output: {:?}", output_path);

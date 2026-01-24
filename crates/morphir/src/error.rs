@@ -2,7 +2,6 @@
 
 use crate::output::{Diagnostic, OutputFormat};
 use miette::Diagnostic as MietteDiagnostic;
-use serde::Serialize;
 
 /// CLI error that can be formatted for human or JSON output
 #[derive(Debug, thiserror::Error, MietteDiagnostic)]
@@ -48,8 +47,8 @@ impl CliError {
 
     /// Report error using miette (for human-readable output)
     pub fn report(&self) {
-        use miette::Report;
-        eprintln!("{}", Report::new(self.clone()));
+        // Print error with color using owo_colors if available
+        eprintln!("error: {}", self);
     }
 
     /// Report error based on output format

@@ -19,10 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-## [0.1.1] - 2026-01-24
+## [0.2.0] - 2026-01-24
 
 ### Added
 
+- **Core CLI Commands**: Promoted `compile` and `generate` from experimental to stable
+  - `morphir compile` - Compile source code to Morphir IR using language extensions
+  - `morphir generate` - Generate code from Morphir IR using target extensions
 - **TUI Pager**: Interactive JSON viewer with syntax highlighting and vim-like navigation
   - Visual mode (`v`, `V`) for selecting text
   - Yank to clipboard (`y`) with WSL, X11, Wayland, and macOS support
@@ -45,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **VFS Consistency**: `MemoryVfs::exists()` now returns `true` for directories, matching `OsVfs` behavior
+- **Compile Path Resolution**: `source_directory` from config is now resolved relative to the config file location, not the current working directory
 
 ### Changed
 
@@ -79,6 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WASM Bindings**: WebAssembly backend for browser and edge deployments
 - **Gleam Binding**: Language binding for Gleam frontend/backend
 
-[Unreleased]: https://github.com/finos/morphir-rust/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/finos/morphir-rust/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/finos/morphir-rust/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/finos/morphir-rust/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/finos/morphir-rust/releases/tag/v0.1.0

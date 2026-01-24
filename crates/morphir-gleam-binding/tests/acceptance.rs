@@ -15,7 +15,7 @@ use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-#[derive(Debug, World)]
+#[derive(Debug, Default, World)]
 pub struct GleamTestWorld {
     source_files: Vec<(String, String)>, // (path, content)
     parsed_modules: Vec<ModuleIR>,
@@ -85,7 +85,7 @@ async fn i_parse_project(w: &mut GleamTestWorld) {
 
         match parse_gleam(&relative_path, &content) {
             Ok(module) => w.parsed_modules.push(module),
-            Err(e) => w.parse_errors.push(e.to_string()),
+            Err(e) => w.parse_errors.push(format!("{:?}", e)),
         }
     }
 }
@@ -133,7 +133,7 @@ async fn i_parse_file(w: &mut GleamTestWorld) {
                 w.parsed_modules.push(module);
             }
             Err(e) => {
-                w.parse_errors.push(e.to_string());
+                w.parse_errors.push(format!("{:?}", e));
             }
         }
     }
@@ -147,7 +147,7 @@ async fn i_parse_file_by_name(w: &mut GleamTestWorld, filename: String) {
                 w.parsed_modules.push(module);
             }
             Err(e) => {
-                w.parse_errors.push(e.to_string());
+                w.parse_errors.push(format!("{:?}", e));
             }
         }
     }
@@ -412,15 +412,15 @@ async fn error_output_should_contain_alt(w: &mut GleamTestWorld, text1: String, 
     );
 }
 
-#[then(expr = "the CLI should create .morphir/out/ structure")]
+#[then(expr = "the CLI should create .morphir\\/out\\/ structure")]
 async fn cli_should_create_morphir_structure(w: &mut GleamTestWorld) {
     let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
 
     cli_helpers::assert_morphir_structure(&ctx.morphir_dir, "default");
 }
 
-#[then(expr = "the CLI should create .morphir/out/<project>/compile/gleam/ structure")]
-async fn cli_should_create_compile_structure(w: &mut GleamTestWorld) {
+/// Helper to check compile structure exists
+fn check_compile_structure_exists(w: &GleamTestWorld) {
     let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
 
     // Try to determine project name from config or use "test"
@@ -439,8 +439,13 @@ async fn cli_should_create_compile_structure(w: &mut GleamTestWorld) {
     );
 }
 
-#[then(expr = "the CLI should create .morphir/out/<project>/generate/gleam/ structure")]
-async fn cli_should_create_generate_structure(w: &mut GleamTestWorld) {
+#[then(expr = "the CLI should create .morphir\\/out\\/<project>\\/compile\\/gleam\\/ structure")]
+async fn cli_should_create_compile_structure(w: &mut GleamTestWorld) {
+    check_compile_structure_exists(w);
+}
+
+/// Helper to check generate structure exists
+fn check_generate_structure_exists(w: &GleamTestWorld) {
     let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
 
     let project = "test";
@@ -458,10 +463,15 @@ async fn cli_should_create_generate_structure(w: &mut GleamTestWorld) {
     );
 }
 
+#[then(expr = "the CLI should create .morphir\\/out\\/<project>\\/generate\\/gleam\\/ structure")]
+async fn cli_should_create_generate_structure(w: &mut GleamTestWorld) {
+    check_generate_structure_exists(w);
+}
+
 #[then(expr = "the CLI should create both compile and generate output structures")]
 async fn cli_should_create_both_structures(w: &mut GleamTestWorld) {
-    cli_should_create_compile_structure(w).await;
-    cli_should_create_generate_structure(w).await;
+    check_compile_structure_exists(w);
+    check_generate_structure_exists(w);
 }
 
 #[then(expr = "the CLI should use configuration from morphir.toml")]

@@ -9,8 +9,8 @@ use morphir_extension_sdk::prelude::*;
 use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
 
-mod backend;
-mod frontend;
+pub mod backend;
+pub mod frontend;
 
 /// Gleam extension implementing both Frontend and Backend
 #[derive(Default)]

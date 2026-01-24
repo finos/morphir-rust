@@ -1,11 +1,13 @@
 //! CLI testing helpers for BDD acceptance tests
 
 use anyhow::Result;
+use morphir_common::vfs::Vfs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
 /// CLI test context for managing test environments
+#[derive(Debug)]
 pub struct CliTestContext {
     pub temp_dir: TempDir,
     pub project_root: PathBuf,
@@ -245,7 +247,7 @@ pub fn assert_morphir_structure(morphir_dir: &Path, project: &str) {
 
 /// Create a NotebookVfs from a test notebook file
 pub fn create_notebook_vfs(notebook_path: &Path) -> Result<morphir_common::vfs::NotebookVfs> {
-    morphir_common::vfs::NotebookVfs::from_file(notebook_path)
+    Ok(morphir_common::vfs::NotebookVfs::from_file(notebook_path)?)
 }
 
 /// Assert that a notebook contains a file with the given path

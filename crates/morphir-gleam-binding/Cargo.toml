@@ -15,7 +15,7 @@ description = "Gleam language binding for Morphir - frontend and backend extensi
 threshold = 40  # Minimum line coverage percentage required
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Extension SDK

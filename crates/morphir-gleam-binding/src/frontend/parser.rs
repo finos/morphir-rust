@@ -8,8 +8,8 @@ use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
 use crate::frontend::ast::{
-    Access, CaseBranch, Expr, Field, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef,
-    Variant,
+    Access, BinaryOperator, CaseBranch, Expr, Field, Literal, ModuleIR, Pattern, TypeDef, TypeExpr,
+    ValueDef, Variant,
 };
 use crate::frontend::errors::{ParseError, to_parse_error};
 use crate::frontend::lexer::{Token, tokenize};
@@ -119,7 +119,16 @@ fn variant_parser<'src, I>()
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
-    let variant_fields = type_expr_parser()
+    // Variant field can be:
+    // - Just a type: `Int`, `String`
+    // - Labelled: `name: Type`
+    let variant_field = identifier_parser()
+        .then_ignore(just(Token::Colon))
+        .then(type_expr_parser())
+        .map(|(_label, ty)| ty) // For now, discard label and keep type
+        .or(type_expr_parser());
+
+    let variant_fields = variant_field
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<_>>()
@@ -130,6 +139,40 @@ where
     type_identifier_parser()
         .then(variant_fields)
         .map(|(name, fields)| Variant { name, fields })
+}
+
+/// Block body parser - handles function bodies with multiple statements
+fn block_body_parser<'src, I>()
+-> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, SimpleSpan>>>
+where
+    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
+{
+    use crate::frontend::ast::Statement;
+
+    // Let assignment: `let pattern = value`
+    let let_statement = just(Token::Let)
+        .ignore_then(pattern_parser())
+        .then(just(Token::Colon).ignore_then(type_expr_parser()).or_not())
+        .then_ignore(just(Token::Equals))
+        .then(expr_parser())
+        .map(|((pattern, annotation), value)| Statement::Assignment {
+            pattern,
+            annotation,
+            value: Box::new(value),
+        });
+
+    // Expression statement (used for final expression or intermediate effects)
+    let expr_statement = expr_parser().map(Statement::Expression);
+
+    // A statement is either a let binding or an expression
+    let statement = let_statement.or(expr_statement);
+
+    // Block body: sequence of statements, last one is the result
+    statement
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .map(|statements| Expr::Block { statements })
 }
 
 /// Value definition parser
@@ -143,7 +186,13 @@ where
         .or_not()
         .map(|opt| opt.unwrap_or(Access::Private));
 
-    let params = identifier_parser()
+    // Parameter can be: `name` or `name: Type`
+    // For now we just capture the name and ignore the type annotation
+    let param = identifier_parser()
+        .then(just(Token::Colon).ignore_then(type_expr_parser()).or_not())
+        .map(|(name, _type_ann)| name);
+
+    let params = param
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<String>>()
@@ -151,15 +200,16 @@ where
         .or_not()
         .map(|opt: Option<Vec<String>>| opt.unwrap_or_default());
 
-    let type_ann = just(Token::Colon).ignore_then(type_expr_parser()).or_not();
+    // Return type annotation: `-> Type`
+    let return_type_ann = just(Token::Arrow).ignore_then(type_expr_parser()).or_not();
 
     access
         .then_ignore(just(Token::Fn))
         .then(identifier_parser())
         .then(params)
-        .then(type_ann)
+        .then(return_type_ann)
         .then_ignore(just(Token::LBrace))
-        .then(expr_parser())
+        .then(block_body_parser())
         .then_ignore(just(Token::RBrace))
         .map(
             |((((access, name), _params), type_annotation), body)| ValueDef {
@@ -210,6 +260,34 @@ where
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
             .map(|fields| Expr::Record { fields });
 
+        // Block expression: { let ... let ... expr }
+        // This is parsed similarly to function bodies but as an expression
+        let block_statement = {
+            use crate::frontend::ast::Statement;
+
+            let let_stmt = just(Token::Let)
+                .ignore_then(pattern_parser())
+                .then(just(Token::Colon).ignore_then(type_expr_parser()).or_not())
+                .then_ignore(just(Token::Equals))
+                .then(expr.clone())
+                .map(|((pattern, annotation), value)| Statement::Assignment {
+                    pattern,
+                    annotation,
+                    value: Box::new(value),
+                });
+
+            let expr_stmt = expr.clone().map(Statement::Expression);
+
+            let_stmt.or(expr_stmt)
+        };
+
+        let block_expr = block_statement
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(|statements| Expr::Block { statements });
+
         // Lambda: fn(param) { expr }
         let lambda = just(Token::Fn)
             .ignore_then(identifier_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
@@ -254,7 +332,8 @@ where
                 else_branch: Box::new(else_branch),
             });
 
-        // Case expression: case expr { pattern -> expr, ... }
+        // Case expression: case expr { pattern -> expr ... }
+        // Note: Gleam case branches are NOT comma-separated
         let case_branch = pattern_parser()
             .then_ignore(just(Token::Arrow))
             .then(expr.clone())
@@ -264,8 +343,8 @@ where
             .ignore_then(expr.clone())
             .then(
                 case_branch
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
+                    .repeated()
+                    .at_least(1)
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LBrace), just(Token::RBrace)),
             )
@@ -279,42 +358,115 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        // List literal: [elem, elem, ...] or [elem, ..rest]
+        let list_tail = just(Token::Spread).ignore_then(expr.clone()).or_not();
+
+        let list_literal = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .then(list_tail)
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|(elements, tail)| Expr::List {
+                elements,
+                tail: tail.map(Box::new),
+            });
+
         // Primary expressions (atoms)
+        // Note: block_expr must come after record to avoid ambiguity
+        // Records require `ident: expr`, blocks can start with `let` or any expr
         let atom = literal
             .or(variable)
             .or(constructor)
             .or(tuple)
             .or(record)
+            .or(block_expr)
+            .or(list_literal)
             .or(paren_expr);
 
         // Field access: expr.field
         let field_access = just(Token::Dot).ignore_then(identifier_parser());
 
-        // Function application: expr(expr)
+        // Function application: expr(arg1, arg2, ...)
         let application = expr
             .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
         // Build up expressions with postfix operators
-        let postfix = atom.foldl(
-            field_access
-                .map(PostfixOp::Field)
-                .or(application.map(PostfixOp::Apply))
-                .repeated(),
-            |lhs, op| match op {
-                PostfixOp::Field(label) => Expr::FieldAccess {
-                    container: Box::new(lhs),
-                    label,
+        let postfix = atom
+            .foldl(
+                field_access
+                    .map(PostfixOp::Field)
+                    .or(application.map(PostfixOp::Apply))
+                    .repeated(),
+                |lhs, op| match op {
+                    PostfixOp::Field(label) => Expr::FieldAccess {
+                        container: Box::new(lhs),
+                        label,
+                    },
+                    PostfixOp::Apply(arguments) => Expr::Apply {
+                        function: Box::new(lhs),
+                        arguments: arguments
+                            .into_iter()
+                            .map(|item| Field::Unlabelled { item })
+                            .collect(),
+                    },
                 },
-                PostfixOp::Apply(argument) => Expr::Apply {
-                    function: Box::new(lhs),
-                    arguments: vec![Field::Unlabelled { item: argument }],
-                },
-            },
-        );
+            )
+            .boxed(); // Box to enable Clone
+
+        // Binary operators - parse as: left op right (single binary op for now)
+        // A full implementation would use pratt parsing for proper precedence
+        let binary_op = choice((
+            // Comparison operators
+            just(Token::LtEq).to(BinaryOperator::LtEqInt),
+            just(Token::GtEq).to(BinaryOperator::GtEqInt),
+            just(Token::Lt).to(BinaryOperator::LtInt),
+            just(Token::Gt).to(BinaryOperator::GtInt),
+            just(Token::LtEqDot).to(BinaryOperator::LtEqFloat),
+            just(Token::GtEqDot).to(BinaryOperator::GtEqFloat),
+            just(Token::LtDot).to(BinaryOperator::LtFloat),
+            just(Token::GtDot).to(BinaryOperator::GtFloat),
+            just(Token::EqEq).to(BinaryOperator::Eq),
+            just(Token::NotEq).to(BinaryOperator::NotEq),
+            // Arithmetic operators
+            just(Token::Plus).to(BinaryOperator::AddInt),
+            just(Token::PlusDot).to(BinaryOperator::AddFloat),
+            just(Token::Minus).to(BinaryOperator::SubInt),
+            just(Token::MinusDot).to(BinaryOperator::SubFloat),
+            just(Token::Star).to(BinaryOperator::MultInt),
+            just(Token::StarDot).to(BinaryOperator::MultFloat),
+            just(Token::Slash).to(BinaryOperator::DivInt),
+            just(Token::SlashDot).to(BinaryOperator::DivFloat),
+            just(Token::Percent).to(BinaryOperator::RemainderInt),
+            // Logical operators
+            just(Token::AndAnd).to(BinaryOperator::And),
+            just(Token::OrOr).to(BinaryOperator::Or),
+            // Pipe and concatenate
+            just(Token::PipeRight).to(BinaryOperator::Pipe),
+            just(Token::Concatenate).to(BinaryOperator::Concatenate),
+        ));
+
+        // Binary expression: left op right (handles single binary ops)
+        let binary_expr =
+            postfix
+                .clone()
+                .then(binary_op.then(postfix).or_not())
+                .map(|(left, rhs)| match rhs {
+                    Some((op, right)) => Expr::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    None => left,
+                });
 
         // All expression forms
-        postfix
+        binary_expr
             .or(lambda)
             .or(let_binding)
             .or(if_expr)
@@ -327,7 +479,7 @@ where
 #[derive(Clone)]
 enum PostfixOp {
     Field(String),
-    Apply(Expr),
+    Apply(Vec<Expr>),
 }
 
 /// Type expression parser
@@ -452,24 +604,44 @@ where
             .or_not()
             .map(|opt: Option<Vec<Pattern>>| opt.unwrap_or_default());
 
-        let constructor_pattern = type_identifier_parser()
-            .then(constructor_args)
-            .map(|(name, args)| Pattern::Constructor {
-                module: None,
-                name,
-                arguments: args.into_iter().map(|p| Field::Unlabelled { item: p }).collect(),
-                with_spread: false,
-            });
+        let constructor_pattern =
+            type_identifier_parser()
+                .then(constructor_args)
+                .map(|(name, args)| Pattern::Constructor {
+                    module: None,
+                    name,
+                    arguments: args
+                        .into_iter()
+                        .map(|p| Field::Unlabelled { item: p })
+                        .collect(),
+                    with_spread: false,
+                });
 
         // Parenthesized pattern
         let paren_pattern = pattern
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        // List pattern: [elem, elem, ...] or [elem, ..rest]
+        let list_tail = just(Token::Spread).ignore_then(pattern.clone()).or_not();
+
+        let list_pattern = pattern
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .then(list_tail)
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|(elements, tail)| Pattern::List {
+                elements,
+                tail: tail.map(Box::new),
+            });
+
         wildcard
             .or(lit_pattern)
             .or(tuple_pattern)
             .or(constructor_pattern)
+            .or(list_pattern)
             .or(var_pattern)
             .or(paren_pattern)
             .boxed()
@@ -520,16 +692,61 @@ where
 // Public API
 // ============================================================================
 
+/// Extract module-level documentation from comment tokens
+///
+/// Module doc comments start with `////` and appear at the top of the file.
+/// Returns the combined documentation string (lines joined with newlines).
+fn extract_module_doc(tokens: &[(Token, SimpleSpan)]) -> Option<String> {
+    let mut doc_lines = Vec::new();
+
+    for (tok, _span) in tokens {
+        match tok {
+            Token::CommentModule(text) => {
+                doc_lines.push(text.trim().to_string());
+            }
+            // Normal comments and doc comments don't break the module doc block
+            Token::CommentNormal(_) | Token::CommentDoc(_) => {
+                // Continue looking for module docs
+            }
+            // Any non-comment token ends the module doc block
+            _ => {
+                break;
+            }
+        }
+    }
+
+    if doc_lines.is_empty() {
+        None
+    } else {
+        Some(doc_lines.join("\n"))
+    }
+}
+
 /// Parse Gleam source code into ModuleIR
 #[allow(clippy::result_large_err)]
 pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
     // Tokenize
     let tokens = tokenize(source);
 
+    // Extract module documentation from //// comments before filtering
+    let module_doc = extract_module_doc(&tokens);
+
+    // Filter out comment tokens for parsing
+    // Comments are captured above for documentation but shouldn't be parsed
+    let tokens: Vec<_> = tokens
+        .into_iter()
+        .filter(|(tok, _)| {
+            !matches!(
+                tok,
+                Token::CommentModule(_) | Token::CommentDoc(_) | Token::CommentNormal(_)
+            )
+        })
+        .collect();
+
     if tokens.is_empty() {
         return Ok(ModuleIR {
             name: extract_module_name(path),
-            doc: None,
+            doc: module_doc,
             types: vec![],
             values: vec![],
         });
@@ -547,6 +764,8 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
         Ok(mut module) => {
             // Set module name from path
             module.name = extract_module_name(path);
+            // Set module documentation from //// comments
+            module.doc = module_doc;
             Ok(module)
         }
         Err(errors) => {
@@ -647,5 +866,52 @@ pub type Maybe {
         let module = result.unwrap();
         assert_eq!(module.types.len(), 0);
         assert_eq!(module.values.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_module_doc() {
+        let source = r#"
+//// This is a module doc comment
+//// It spans multiple lines
+//// And describes the module
+
+pub fn hello() { "world" }
+"#;
+        let result = parse_gleam("documented.gleam", source);
+        assert!(result.is_ok());
+        let module = result.unwrap();
+        assert!(module.doc.is_some());
+        let doc = module.doc.unwrap();
+        assert!(doc.contains("This is a module doc comment"));
+        assert!(doc.contains("It spans multiple lines"));
+        assert!(doc.contains("And describes the module"));
+    }
+
+    #[test]
+    fn test_no_module_doc() {
+        let source = r#"
+// This is a normal comment
+/// This is a doc comment for the function
+pub fn hello() { "world" }
+"#;
+        let result = parse_gleam("no_module_doc.gleam", source);
+        assert!(result.is_ok());
+        let module = result.unwrap();
+        // Normal comments and item doc comments shouldn't become module doc
+        assert!(module.doc.is_none());
+    }
+
+    #[test]
+    fn test_module_doc_before_normal_comment() {
+        let source = r#"
+//// Module documentation here
+// Normal comment
+pub fn hello() { "world" }
+"#;
+        let result = parse_gleam("mixed_comments.gleam", source);
+        assert!(result.is_ok());
+        let module = result.unwrap();
+        assert!(module.doc.is_some());
+        assert!(module.doc.unwrap().contains("Module documentation here"));
     }
 }

@@ -149,10 +149,37 @@ async fn i_parse_file_by_name(w: &mut GleamTestWorld, filename: String) {
                 w.parsed_modules.push(module);
             }
             Err(e) => {
-                w.parse_errors.push(format!("{:?}", e));
+                // Store error for later assertion but don't fail the step
+                // This allows roundtrip tests to proceed and report proper failures
+                w.parse_errors
+                    .push(format!("Parse error for {}: {:?}", filename, e));
             }
         }
+    } else {
+        // File not found in source_files
+        let available: Vec<_> = w.source_files.iter().map(|(p, _)| p.clone()).collect();
+        w.parse_errors.push(format!(
+            "File '{}' not found in source_files. Available: {:?}",
+            filename, available
+        ));
     }
+}
+
+#[given(expr = "I load the real-world fixture {string}")]
+async fn i_load_real_world_fixture(w: &mut GleamTestWorld, fixture_name: String) {
+    // Ensure fixture name has .gleam extension if not provided
+    let fixture_file = if fixture_name.ends_with(".gleam") {
+        fixture_name.clone()
+    } else {
+        format!("{}.gleam", fixture_name)
+    };
+
+    let fixture_path = std::path::Path::new("tests/fixtures/real_world").join(&fixture_file);
+    let content = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|_| panic!("Failed to load fixture: {:?}", fixture_path));
+
+    // Store with the full filename (including .gleam extension) to match parse step
+    w.source_files.push((fixture_file.clone(), content));
 }
 
 #[when(expr = "I convert IR V4 Document Tree back to Gleam source {string}")]
@@ -175,6 +202,10 @@ async fn convert_from_ir_v4(w: &mut GleamTestWorld, output_file: String) {
 
 #[then(expr = "the roundtrip should complete")]
 async fn roundtrip_should_complete(w: &mut GleamTestWorld) {
+    // Check for parse errors first
+    if !w.parse_errors.is_empty() {
+        panic!("Parse errors occurred:\n{}", w.parse_errors.join("\n"));
+    }
     // Check that we have parsed modules
     assert!(
         !w.parsed_modules.is_empty(),

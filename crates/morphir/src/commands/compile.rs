@@ -141,12 +141,21 @@ pub async fn run_compile(options: CompileOptions) -> AppResult {
             error: std::io::Error::other(e),
         })?;
 
+    // Get emit_parse_stage setting from config (default: true)
+    let emit_parse_stage = ctx
+        .config
+        .frontend
+        .as_ref()
+        .map(|f| f.emit_parse_stage)
+        .unwrap_or(true);
+
     // Call extension's compile method
     let compile_params = serde_json::json!({
         "input": input_path.to_string_lossy(),
         "output": output_path.to_string_lossy(),
         "package_name": proj_name,
         "files": source_files,
+        "emitParseStage": emit_parse_stage,
     });
 
     let result: serde_json::Value = extension

@@ -58,6 +58,13 @@ impl Frontend for GleamExtension {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
 
+        // Check if we should emit parse stage output (default: true)
+        let emit_parse_stage = request
+            .options
+            .get("emitParseStage")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
         // Extract package name (from options or default)
         let package_name = request
             .options
@@ -69,6 +76,19 @@ impl Frontend for GleamExtension {
         for source in &request.sources {
             match frontend::parse_gleam(&source.path, &source.content) {
                 Ok(module_ir) => {
+                    // Emit parse stage JSON if enabled
+                    if emit_parse_stage {
+                        if let Err(e) = emit_parse_stage_json(&output_dir, &source.path, &module_ir)
+                        {
+                            diagnostics.push(Diagnostic {
+                                severity: DiagnosticSeverity::Warning,
+                                code: Some("W001".into()),
+                                message: format!("Failed to emit parse stage output: {}", e),
+                                location: None,
+                                related: vec![],
+                            });
+                        }
+                    }
                     // Extract module name from path
                     let module_name = ModuleName::parse(
                         &source.path.trim_end_matches(".gleam").replace('\\', "/"),
@@ -194,6 +214,46 @@ impl Backend for GleamExtension {
     fn target_languages() -> Vec<String> {
         vec!["gleam".into()]
     }
+}
+
+/// Emit parse stage output as JSON to the output directory
+///
+/// Writes the parsed ModuleIR to `.morphir/out/<project>/parse/<module>.json`
+/// This allows inspection of the intermediate AST before IR conversion.
+fn emit_parse_stage_json(
+    output_dir: &PathBuf,
+    source_path: &str,
+    module_ir: &frontend::ast::ModuleIR,
+) -> anyhow::Result<()> {
+    use std::fs;
+
+    // Create parse stage output directory
+    // output_dir is typically .morphir/out/<project>/compile/<language>/
+    // We want to write to .morphir/out/<project>/parse/
+    let parse_dir = if let Some(compile_dir) = output_dir.parent() {
+        if let Some(project_dir) = compile_dir.parent() {
+            project_dir.join("parse")
+        } else {
+            output_dir.join("parse")
+        }
+    } else {
+        output_dir.join("parse")
+    };
+
+    fs::create_dir_all(&parse_dir)?;
+
+    // Derive module filename from source path
+    let module_name = source_path
+        .trim_end_matches(".gleam")
+        .replace(['/', '\\'], "_");
+    let output_file = parse_dir.join(format!("{}.json", module_name));
+
+    // Write ModuleIR as pretty-printed JSON
+    let json = serde_json::to_string_pretty(module_ir)?;
+    fs::write(&output_file, json)?;
+
+    host_info!("Emitted parse stage: {:?}", output_file);
+    Ok(())
 }
 
 // Export the extension

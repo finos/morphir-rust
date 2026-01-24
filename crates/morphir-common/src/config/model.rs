@@ -132,6 +132,10 @@ fn default_workspace_output() -> String {
 pub struct FrontendSection {
     /// Default source language
     pub language: Option<String>,
+    /// Emit parse stage output as JSON (default: true)
+    /// When enabled, writes parsed AST to .morphir/out/<project>/parse/<module>.json
+    #[serde(default = "default_true")]
+    pub emit_parse_stage: bool,
     /// Language-specific settings
     #[serde(flatten)]
     pub settings: HashMap<String, toml::Value>,

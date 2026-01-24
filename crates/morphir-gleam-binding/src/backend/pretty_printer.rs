@@ -341,9 +341,7 @@ impl<'a> GleamPrinter<'a> {
                 }
             }
             TypeExpr::CustomType { variants } => {
-                let variants_doc =
-                    self.join(variants.iter().map(|v| self.variant(v)), self.text(" | "));
-                variants_doc
+                self.join(variants.iter().map(|v| self.variant(v)), self.text(" | "))
             }
             TypeExpr::Hole { name } => self.text(format!("_{}", name)),
         }

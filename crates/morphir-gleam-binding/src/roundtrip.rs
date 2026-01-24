@@ -9,7 +9,7 @@ use crate::frontend::{GleamToMorphirVisitor, parse_gleam};
 use morphir_common::vfs::{MemoryVfs, Vfs};
 use morphir_ir::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
 use morphir_ir::naming::{ModuleName, PackageName};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Result of a roundtrip operation
 #[derive(Debug)]
@@ -141,7 +141,7 @@ pub fn roundtrip_gleam_with_options(
 fn build_v4_module_from_ir(
     module_ir: &ModuleIR,
     vfs: &MemoryVfs,
-    output_dir: &PathBuf,
+    output_dir: &Path,
     package_name: &PackageName,
     module_name: &ModuleName,
 ) -> std::io::Result<AccessControlledModuleDefinition> {

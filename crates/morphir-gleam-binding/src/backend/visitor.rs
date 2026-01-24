@@ -7,12 +7,14 @@ use morphir_common::vfs::Vfs;
 use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
 use morphir_ir::ir::literal::Literal as MorphirLiteral;
 use morphir_ir::ir::pattern::Pattern as MorphirPattern;
+use morphir_ir::ir::serde_v4::deserialize_value;
 use morphir_ir::ir::v4::{
     Access as MorphirAccess, AccessControlledModuleDefinition, AccessControlledTypeDefinition,
     AccessControlledValueDefinition, ModuleDefinition,
 };
 use morphir_ir::ir::value_expr::Value;
 use morphir_ir::naming::ModuleName;
+use serde::de::IntoDeserializer;
 use std::io::Result;
 use std::path::PathBuf;
 
@@ -186,26 +188,33 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             output.push_str(&input.0.to_string());
         }
 
-        output.push_str(") {\n");
+        output.push_str(") {\n  ");
 
-        // Body - V4 stores body as JSON, so we generate based on the JSON representation
+        // Body - V4 stores body as JSON, deserialize and generate Gleam code
         match &value_def.value.body {
             morphir_ir::ir::v4::ValueBody::ExpressionBody { body } => {
-                // For now, output the JSON as a todo placeholder
-                // A full implementation would deserialize and generate proper Gleam code
-                output.push_str("  todo // ");
-                output.push_str(&body.to_string());
+                // Deserialize the V4 JSON body to a typed Value
+                match self.deserialize_value_body(body) {
+                    Ok(value) => {
+                        self.generate_value_expr(output, &value)?;
+                    }
+                    Err(e) => {
+                        // Fallback: output as todo with error message
+                        output.push_str("todo // deserialization error: ");
+                        output.push_str(&e);
+                    }
+                }
             }
             morphir_ir::ir::v4::ValueBody::NativeBody { hint, .. } => {
-                output.push_str("  // native: ");
+                output.push_str("// native: ");
                 output.push_str(&format!("{:?}", hint));
             }
             morphir_ir::ir::v4::ValueBody::ExternalBody { external_name, .. } => {
-                output.push_str("  // external: ");
+                output.push_str("// external: ");
                 output.push_str(external_name);
             }
             morphir_ir::ir::v4::ValueBody::IncompleteBody { .. } => {
-                output.push_str("  todo // incomplete");
+                output.push_str("todo // incomplete");
             }
         }
 
@@ -213,8 +222,16 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         Ok(())
     }
 
+    /// Deserialize a V4 JSON body to a typed Value
+    fn deserialize_value_body(
+        &self,
+        body: &serde_json::Value,
+    ) -> std::result::Result<Value<TypeAttributes, ValueAttributes>, String> {
+        let deserializer = body.clone().into_deserializer();
+        deserialize_value(deserializer).map_err(|e| e.to_string())
+    }
+
     /// Generate value expression
-    #[allow(dead_code)]
     fn generate_value_expr(
         &self,
         output: &mut String,
@@ -233,28 +250,29 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 self.generate_value_expr(output, argument)?;
                 output.push(')');
             }
-            Value::Lambda(_, _param, body) => {
+            Value::Lambda(_, param, body) => {
                 output.push_str("fn(");
-                // TODO: Extract param name from pattern
-                output.push('_');
+                self.generate_pattern(output, param)?;
                 output.push_str(") { ");
                 self.generate_value_expr(output, body)?;
                 output.push_str(" }");
             }
             Value::LetDefinition(_, name, def, body) => {
+                // Gleam uses: let name = value \n body (no 'in' keyword)
                 output.push_str("let ");
                 output.push_str(&name.to_string());
                 output.push_str(" = ");
                 self.generate_value_expr(output, def.body.get_expression()?)?;
-                output.push_str(" in ");
+                output.push_str("\n  ");
                 self.generate_value_expr(output, body)?;
             }
             Value::IfThenElse(_, condition, then_branch, else_branch) => {
-                output.push_str("if ");
+                // Gleam supports case for boolean pattern matching
+                output.push_str("case ");
                 self.generate_value_expr(output, condition)?;
-                output.push_str(" { ");
+                output.push_str(" { True -> ");
                 self.generate_value_expr(output, then_branch)?;
-                output.push_str(" } else { ");
+                output.push_str(", False -> ");
                 self.generate_value_expr(output, else_branch)?;
                 output.push_str(" }");
             }
@@ -291,7 +309,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(" { ");
                 for (i, case) in cases.iter().enumerate() {
                     if i > 0 {
-                        output.push_str(", ");
+                        output.push(' ');
                     }
                     self.generate_pattern(output, &case.0)?;
                     output.push_str(" -> ");
@@ -302,6 +320,23 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             Value::Constructor(_, fqname) => {
                 output.push_str(&fqname.local_name.to_string());
             }
+            Value::Reference(_, fqname) => {
+                // For references, output just the local name for now
+                output.push_str(&fqname.local_name.to_string());
+            }
+            Value::List(_, items) => {
+                output.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str(", ");
+                    }
+                    self.generate_value_expr(output, item)?;
+                }
+                output.push(']');
+            }
+            Value::Unit(_) => {
+                output.push_str("Nil");
+            }
             _ => {
                 output.push_str("todo");
             }
@@ -310,7 +345,6 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
     }
 
     /// Generate pattern
-    #[allow(dead_code)]
     fn generate_pattern(
         &self,
         output: &mut String,
@@ -321,9 +355,15 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push('_');
             }
             MorphirPattern::AsPattern(_, sub_pattern, name) => {
-                self.generate_pattern(output, sub_pattern)?;
-                output.push_str(" as ");
-                output.push_str(&name.to_string());
+                // In Gleam, `x as name` is often just a binding
+                // If sub_pattern is wildcard, just output the name
+                if matches!(**sub_pattern, MorphirPattern::WildcardPattern(_)) {
+                    output.push_str(&name.to_string());
+                } else {
+                    self.generate_pattern(output, sub_pattern)?;
+                    output.push_str(" as ");
+                    output.push_str(&name.to_string());
+                }
             }
             MorphirPattern::TuplePattern(_, elements) => {
                 output.push_str("#(");
@@ -351,16 +391,26 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             MorphirPattern::LiteralPattern(_, lit) => {
                 self.generate_literal(output, lit)?;
             }
-            _ => {
-                output.push('_');
+            MorphirPattern::UnitPattern(_) => {
+                output.push_str("Nil");
+            }
+            MorphirPattern::HeadTailPattern(_, head, tail) => {
+                // Gleam list pattern: [head, ..tail]
+                output.push('[');
+                self.generate_pattern(output, head)?;
+                output.push_str(", ..");
+                self.generate_pattern(output, tail)?;
+                output.push(']');
+            }
+            MorphirPattern::EmptyListPattern(_) => {
+                output.push_str("[]");
             }
         }
         Ok(())
     }
 
     /// Generate literal
-    #[allow(dead_code)]
-    pub(crate) fn generate_literal(&self, output: &mut String, lit: &MorphirLiteral) -> Result<()> {
+    fn generate_literal(&self, output: &mut String, lit: &MorphirLiteral) -> Result<()> {
         match lit {
             MorphirLiteral::Bool(b) => {
                 output.push_str(if *b { "True" } else { "False" });
@@ -389,8 +439,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
     }
 }
 
-// Helper trait for ValueBody
-#[allow(dead_code)]
+/// Helper trait for ValueBody to extract the expression
 trait ValueBodyExt {
     fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>>;
 }
@@ -399,24 +448,6 @@ impl ValueBodyExt for morphir_ir::ir::value_expr::ValueBody<TypeAttributes, Valu
     fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>> {
         match self {
             morphir_ir::ir::value_expr::ValueBody::Expression(expr) => Ok(expr),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Expected expression body",
-            )),
-        }
-    }
-}
-
-// Helper trait for V4 ValueBody
-#[allow(dead_code)]
-trait V4ValueBodyExt {
-    fn get_expression_json(&self) -> Result<&serde_json::Value>;
-}
-
-impl V4ValueBodyExt for morphir_ir::ir::v4::ValueBody {
-    fn get_expression_json(&self) -> Result<&serde_json::Value> {
-        match self {
-            morphir_ir::ir::v4::ValueBody::ExpressionBody { body } => Ok(body),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Expected expression body",

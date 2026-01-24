@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 pub mod backend;
 pub mod frontend;
+pub mod roundtrip;
 
 /// Gleam extension implementing both Frontend and Backend
 #[derive(Default)]

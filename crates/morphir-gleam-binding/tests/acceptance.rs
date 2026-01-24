@@ -189,6 +189,8 @@ async fn roundtrip_should_complete(w: &mut GleamTestWorld) {
 
 #[then(expr = "the original and generated ModuleIR should be semantically equivalent")]
 async fn modules_should_be_equivalent(w: &mut GleamTestWorld) {
+    use morphir_gleam_binding::frontend::compare_modules;
+
     // Compare original and generated ModuleIR
     // Allow formatting differences but require semantic equivalence
     assert!(
@@ -199,22 +201,22 @@ async fn modules_should_be_equivalent(w: &mut GleamTestWorld) {
     let original = &w.parsed_modules[0];
     let generated = &w.parsed_modules[1];
 
-    // Basic semantic equivalence check
-    assert_eq!(original.name, generated.name, "Module names should match");
-    assert_eq!(
-        original.types.len(),
-        generated.types.len(),
-        "Type count should match"
-    );
-    assert_eq!(
-        original.values.len(),
-        generated.values.len(),
-        "Value count should match"
-    );
+    // Use the compare module for detailed comparison
+    let result = compare_modules(original, generated);
+
+    if !result.equivalent {
+        let diff_report: Vec<String> = result.differences.iter().map(|d| d.to_string()).collect();
+        panic!(
+            "Modules are not semantically equivalent:\n{}",
+            diff_report.join("\n")
+        );
+    }
 }
 
 #[then(expr = "each roundtrip should produce equivalent ModuleIR")]
 async fn roundtrips_should_be_equivalent(w: &mut GleamTestWorld) {
+    use morphir_gleam_binding::frontend::compare_modules;
+
     // Compare all intermediate ModuleIR results
     // Ensure they're all semantically equivalent
     if w.parsed_modules.len() < 2 {
@@ -222,10 +224,17 @@ async fn roundtrips_should_be_equivalent(w: &mut GleamTestWorld) {
     }
 
     let first = &w.parsed_modules[0];
-    for module in w.parsed_modules.iter().skip(1) {
-        assert_eq!(first.name, module.name);
-        assert_eq!(first.types.len(), module.types.len());
-        assert_eq!(first.values.len(), module.values.len());
+    for (i, module) in w.parsed_modules.iter().skip(1).enumerate() {
+        let result = compare_modules(first, module);
+        if !result.equivalent {
+            let diff_report: Vec<String> =
+                result.differences.iter().map(|d| d.to_string()).collect();
+            panic!(
+                "Module {} is not equivalent to first module:\n{}",
+                i + 1,
+                diff_report.join("\n")
+            );
+        }
     }
 }
 

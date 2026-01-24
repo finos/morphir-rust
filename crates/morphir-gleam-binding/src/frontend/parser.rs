@@ -373,6 +373,25 @@ where
                 tail: tail.map(Box::new),
             });
 
+        // Todo expression: todo or todo("message")
+        let todo_message = expr
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .or_not();
+
+        let todo_expr = just(Token::Todo)
+            .ignore_then(todo_message.clone())
+            .map(|message| Expr::Todo {
+                message: message.map(Box::new),
+            });
+
+        // Panic expression: panic or panic("message")
+        let panic_expr = just(Token::Panic)
+            .ignore_then(todo_message)
+            .map(|message| Expr::Panic {
+                message: message.map(Box::new),
+            });
+
         // Primary expressions (atoms)
         // Note: block_expr must come after record to avoid ambiguity
         // Records require `ident: expr`, blocks can start with `let` or any expr
@@ -383,6 +402,8 @@ where
             .or(record)
             .or(block_expr)
             .or(list_literal)
+            .or(todo_expr)
+            .or(panic_expr)
             .or(paren_expr);
 
         // Field access: expr.field

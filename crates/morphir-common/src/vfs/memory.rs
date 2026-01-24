@@ -52,7 +52,24 @@ impl Vfs for MemoryVfs {
     fn exists(&self, path: &Path) -> bool {
         let path = MemoryVfs::normalize_path(path);
         let files = self.files.lock().unwrap();
-        files.contains_key(&path)
+
+        // Check if it's a file
+        if files.contains_key(&path) {
+            return true;
+        }
+
+        // Check if it's a directory (any file has this path as a prefix)
+        // This is consistent with OsVfs/std::path::Path::exists() semantics
+        if path == Path::new(".") || path == Path::new("/") {
+            return !files.is_empty();
+        }
+
+        for k in files.keys() {
+            if k.starts_with(&path) && k != &path {
+                return true;
+            }
+        }
+        false
     }
 
     fn is_dir(&self, path: &Path) -> bool {

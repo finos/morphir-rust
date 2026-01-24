@@ -11,6 +11,7 @@ use morphir_common::vfs::Vfs;
 use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
 use morphir_ir::ir::literal::Literal as MorphirLiteral;
 use morphir_ir::ir::pattern::Pattern as MorphirPattern;
+use morphir_ir::ir::serde_v4::serialize_value;
 use morphir_ir::ir::type_expr::{Field, Type};
 use morphir_ir::ir::v4::{
     Access as MorphirAccess, AccessControlledConstructors, AccessControlledTypeDefinition,
@@ -20,9 +21,22 @@ use morphir_ir::ir::v4::{
 };
 use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
 use morphir_ir::naming::{FQName, ModuleName, Name, PackageName};
+use serde::Serialize;
 use serde_json;
 use std::io::Result;
 use std::path::{Path, PathBuf};
+
+/// Wrapper type that serializes Value in V4 format
+struct V4ValueWrapper<'a, TA: Clone + Serialize, VA: Clone + Serialize>(&'a Value<TA, VA>);
+
+impl<'a, TA: Clone + Serialize, VA: Clone + Serialize> Serialize for V4ValueWrapper<'a, TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_value(self.0, serializer)
+    }
+}
 
 /// Distribution layout mode
 #[derive(Debug, Clone, Copy)]
@@ -272,10 +286,11 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             serde_json::json!({"Unit": {}})
         };
 
-        // Convert body expression
+        // Convert body expression and serialize in V4 format
         let body_value = self.convert_expr(&value_def.body);
         let body = V4ValueBody::ExpressionBody {
-            body: serde_json::to_value(&body_value).unwrap_or(serde_json::Value::Null),
+            body: serde_json::to_value(V4ValueWrapper(&body_value))
+                .unwrap_or(serde_json::Value::Null),
         };
 
         let v4_value_def = V4ValueDefinition {

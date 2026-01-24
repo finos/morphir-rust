@@ -120,7 +120,8 @@ pub fn roundtrip_gleam_with_options(
         .map_err(|e| RoundtripError::CodeGenError(e.to_string()))?;
 
     // Read generated Gleam code
-    let gen_file_path = gen_output_dir.join(format!("{}.gleam", module_name));
+    // Use mod_name.to_string() to match the path format used by the visitor
+    let gen_file_path = gen_output_dir.join(format!("{}.gleam", mod_name));
     let generated_code = gen_vfs.read_to_string(&gen_file_path).map_err(|e| {
         RoundtripError::CodeGenError(format!("Failed to read generated file: {}", e))
     })?;
@@ -146,7 +147,9 @@ fn build_v4_module_from_ir(
     module_name: &ModuleName,
 ) -> std::io::Result<AccessControlledModuleDefinition> {
     use indexmap::IndexMap;
-    use morphir_ir::ir::v4::Access;
+    use morphir_ir::ir::v4::{
+        Access, AccessControlledTypeDefinition, AccessControlledValueDefinition,
+    };
 
     // Try to read the written V4 files and reconstruct the module definition
     let module_dir = output_dir
@@ -155,33 +158,48 @@ fn build_v4_module_from_ir(
         .join(package_name.to_string())
         .join(module_name.to_string());
 
-    let mut types = IndexMap::new();
-    let mut values = IndexMap::new();
+    let mut types: IndexMap<String, AccessControlledTypeDefinition> = IndexMap::new();
+    let mut values: IndexMap<String, AccessControlledValueDefinition> = IndexMap::new();
 
-    // Read type definitions
+    // Read type definitions - frontend writes .type.json extension
+    // Note: MemoryVfs doesn't track directories, so we directly check file existence
     let types_dir = module_dir.join("types");
-    if vfs.exists(&types_dir) {
-        for type_def in &module_ir.types {
-            let type_file = types_dir.join(format!("{}.json", type_def.name));
-            if vfs.exists(&type_file)
-                && let Ok(content) = vfs.read_to_string(&type_file)
-                && let Ok(type_def_json) = serde_json::from_str(&content)
-            {
-                types.insert(type_def.name.clone(), type_def_json);
+    for type_def in &module_ir.types {
+        let type_file = types_dir.join(format!("{}.type.json", type_def.name));
+        if vfs.exists(&type_file)
+            && let Ok(content) = vfs.read_to_string(&type_file)
+        {
+            match serde_json::from_str::<AccessControlledTypeDefinition>(&content) {
+                Ok(type_def_v4) => {
+                    types.insert(type_def.name.clone(), type_def_v4);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to deserialize type '{}': {}",
+                        type_def.name, e
+                    );
+                }
             }
         }
     }
 
-    // Read value definitions
+    // Read value definitions - frontend writes .value.json extension
     let values_dir = module_dir.join("values");
-    if vfs.exists(&values_dir) {
-        for value_def in &module_ir.values {
-            let value_file = values_dir.join(format!("{}.json", value_def.name));
-            if vfs.exists(&value_file)
-                && let Ok(content) = vfs.read_to_string(&value_file)
-                && let Ok(value_def_json) = serde_json::from_str(&content)
-            {
-                values.insert(value_def.name.clone(), value_def_json);
+    for value_def in &module_ir.values {
+        let value_file = values_dir.join(format!("{}.value.json", value_def.name));
+        if vfs.exists(&value_file)
+            && let Ok(content) = vfs.read_to_string(&value_file)
+        {
+            match serde_json::from_str::<AccessControlledValueDefinition>(&content) {
+                Ok(value_def_v4) => {
+                    values.insert(value_def.name.clone(), value_def_v4);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to deserialize value '{}': {}",
+                        value_def.name, e
+                    );
+                }
             }
         }
     }
@@ -191,7 +209,7 @@ fn build_v4_module_from_ir(
         value: ModuleDefinition {
             types,
             values,
-            doc: None,
+            doc: module_ir.doc.clone(),
         },
     })
 }
@@ -201,6 +219,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_roundtrip_debug_vfs() {
+        let source = r#"pub fn answer() { 42 }"#;
+
+        // Step 1: Parse
+        let original = parse_gleam("input.gleam", source).unwrap();
+        println!("Parsed module values: {:?}", original.values.len());
+
+        // Step 2: Convert to IR V4
+        let ir_vfs = MemoryVfs::new();
+        let output_dir = PathBuf::from("/ir");
+        let pkg_name = PackageName::parse("test");
+        let mod_name = ModuleName::parse("test_module");
+
+        let frontend_visitor = GleamToMorphirVisitor::new(
+            ir_vfs.clone(),
+            output_dir.clone(),
+            pkg_name.clone(),
+            mod_name.clone(),
+        );
+
+        frontend_visitor.visit_module_v4(&original).unwrap();
+
+        // Debug: list all files in VFS
+        println!("\nFiles in VFS after frontend visitor:");
+        fn list_all_files(vfs: &MemoryVfs, dir: &Path, indent: &str) {
+            if let Ok(entries) = vfs.list_dir(dir) {
+                for entry in entries {
+                    println!("{}{:?}", indent, entry);
+                    if !entry.to_string_lossy().contains('.') {
+                        // Likely a directory, recurse
+                        list_all_files(vfs, &entry, &format!("{}  ", indent));
+                    }
+                }
+            }
+        }
+        list_all_files(&ir_vfs, &PathBuf::from("/ir"), "  ");
+
+        // Check specific files - use to_string() for proper kebab-case conversion
+        let value_file = output_dir
+            .join(".morphir-dist")
+            .join("pkg")
+            .join(pkg_name.to_string())
+            .join(mod_name.to_string())
+            .join("values")
+            .join("answer.value.json");
+        println!("\nChecking value file: {:?}", value_file);
+        println!("  exists: {}", ir_vfs.exists(&value_file));
+        if ir_vfs.exists(&value_file) {
+            let content = ir_vfs.read_to_string(&value_file).unwrap();
+            println!("  content: {}", content);
+        }
+    }
+
+    #[test]
     fn test_roundtrip_simple_function() {
         let source = r#"pub fn answer() { 42 }"#;
 
@@ -208,10 +280,10 @@ mod tests {
 
         // For now, we just check that it doesn't panic
         // Real assertions will be added as we build out the infrastructure
-        match result {
+        match &result {
             Ok(r) => {
                 println!("Original: {:?}", r.original);
-                println!("Generated code:\n{}", r.generated_code);
+                println!("Generated code:\n---\n{}\n---", r.generated_code);
                 println!("Regenerated: {:?}", r.regenerated);
             }
             Err(e) => {
@@ -219,6 +291,9 @@ mod tests {
                 // For now, we allow errors as we build out the infrastructure
             }
         }
+
+        // TODO: Add assertion once roundtrip works
+        // assert!(result.is_ok(), "Roundtrip should succeed");
     }
 
     #[test]

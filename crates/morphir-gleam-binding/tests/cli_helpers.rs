@@ -9,6 +9,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
+/// Check if CLI tests can run (morphir binary available or cargo run works)
+pub fn cli_tests_available() -> bool {
+    // Check if morphir binary exists
+    if CliTestContext::get_morphir_binary().is_some() {
+        return true;
+    }
+    // Check if we can find the workspace root (needed for cargo run)
+    if CliTestContext::find_workspace_root().is_some() {
+        // Try to verify cargo is available
+        return Command::new("cargo").arg("--version").output().is_ok();
+    }
+    false
+}
+
 /// CLI test context for managing test environments
 #[derive(Debug)]
 pub struct CliTestContext {
@@ -62,8 +76,28 @@ impl CliTestContext {
         Ok(())
     }
 
+    /// Find the workspace root by looking for Cargo.toml with [workspace]
+    pub fn find_workspace_root() -> Option<PathBuf> {
+        // Start from CARGO_MANIFEST_DIR if available
+        let start_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap());
+
+        let mut current = start_dir.as_path();
+        loop {
+            let cargo_toml = current.join("Cargo.toml");
+            if cargo_toml.exists()
+                && let Ok(content) = std::fs::read_to_string(&cargo_toml)
+                && content.contains("[workspace]")
+            {
+                return Some(current.to_path_buf());
+            }
+            current = current.parent()?;
+        }
+    }
+
     /// Get the path to the morphir CLI binary
-    fn get_morphir_binary() -> Option<PathBuf> {
+    pub fn get_morphir_binary() -> Option<PathBuf> {
         // Try multiple locations
         let possible_paths = vec![
             // Built binary in target directory
@@ -88,18 +122,23 @@ impl CliTestContext {
 
     /// Execute a morphir CLI command
     pub fn execute_cli_command(&self, args: &[&str]) -> Result<CommandResult> {
+        // Find workspace root by looking for Cargo.toml with [workspace]
+        let workspace_root = Self::find_workspace_root()
+            .ok_or_else(|| anyhow::anyhow!("Could not find workspace root"))?;
+
         let mut cmd = if let Some(binary) = Self::get_morphir_binary() {
             // Use built binary
             Command::new(&binary)
         } else {
-            // Fall back to cargo run
+            // Fall back to cargo run with absolute path to workspace Cargo.toml
+            let manifest_path = workspace_root.join("Cargo.toml");
             let mut cargo_cmd = Command::new("cargo");
             cargo_cmd.args([
                 "run",
                 "--bin",
                 "morphir",
                 "--manifest-path",
-                "../../Cargo.toml",
+                manifest_path.to_str().unwrap(),
                 "--",
             ]);
             cargo_cmd

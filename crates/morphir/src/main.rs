@@ -229,6 +229,9 @@ See the [IR Migration Guide](/ir-migrate/) for detailed real-world examples incl
         /// Output result as JSON (for scripting)
         #[arg(long)]
         json: bool,
+        /// Use expanded (non-compact) format for V4 output
+        #[arg(long)]
+        expanded: bool,
     },
 }
 
@@ -287,6 +290,7 @@ impl AppSession for MorphirSession {
                     force_refresh,
                     no_cache,
                     json,
+                    expanded,
                 } => run_migrate(
                     input.clone(),
                     output.clone(),
@@ -294,6 +298,7 @@ impl AppSession for MorphirSession {
                     *force_refresh,
                     *no_cache,
                     *json,
+                    *expanded,
                 ),
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
@@ -356,7 +361,8 @@ async fn main() -> starbase::MainResult {
                     force_refresh,
                     no_cache,
                     json,
-                } => run_migrate(input, output, target_version, force_refresh, no_cache, json),
+                    expanded,
+                } => run_migrate(input, output, target_version, force_refresh, no_cache, json, expanded),
             };
             match result {
                 Ok(Some(code)) => return Ok(std::process::ExitCode::from(code)),

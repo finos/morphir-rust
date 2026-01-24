@@ -114,6 +114,7 @@ fn resolve_target_version(version: &str) -> Result<(bool, &'static str), String>
 /// * `force_refresh` - Force refresh cached remote sources
 /// * `no_cache` - Skip cache entirely for remote sources
 /// * `json` - Output result as JSON
+/// * `expanded` - Use expanded (non-compact) format for V4 output
 pub fn run_migrate(
     input: String,
     output: Option<PathBuf>,
@@ -121,6 +122,7 @@ pub fn run_migrate(
     force_refresh: bool,
     no_cache: bool,
     json: bool,
+    expanded: bool,
 ) -> AppResult {
     let output_str = output
         .as_ref()
@@ -238,7 +240,7 @@ pub fn run_migrate(
                     warnings.push(warn);
                 }
 
-                let v4_pkg = converter::classic_to_v4(pkg);
+                let v4_pkg = converter::classic_to_v4_with_options(pkg, !expanded);
 
                 // Wrap in V4 IRFile
                 let v4_ir = v4::IRFile {

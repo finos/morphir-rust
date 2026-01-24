@@ -6,6 +6,23 @@
 use crate::ir::{classic, v4};
 use crate::naming::Name;
 use indexmap::IndexMap;
+use std::cell::RefCell;
+
+// Thread-local configuration for conversion options
+thread_local! {
+    static USE_COMPACT_FORMAT: RefCell<bool> = const { RefCell::new(true) };
+}
+
+/// Set whether to use compact format for V4 output.
+/// When false, uses expanded/verbose format.
+fn set_compact_format(compact: bool) {
+    USE_COMPACT_FORMAT.with(|f| *f.borrow_mut() = compact);
+}
+
+/// Check if compact format should be used.
+fn is_compact_format() -> bool {
+    USE_COMPACT_FORMAT.with(|f| *f.borrow())
+}
 
 // =============================================================================
 // Type Expression Conversion (Classic Array -> V4 Object Wrapper)
@@ -29,7 +46,6 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
     match tag {
         "Variable" => {
             // Classic: ["Variable", {attrs}, ["name", "parts"]]
-            // Most compact format: bare name string (distinguishable from FQName by lack of : and #)
             let name = if arr.len() > 2 {
                 extract_name_from_json(&arr[2])
                     .map(|n| n.to_string())
@@ -37,7 +53,12 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 String::new()
             };
-            serde_json::json!(name)
+            // Compact: bare name string; Expanded: {"Variable": name}
+            if is_compact_format() {
+                serde_json::json!(name)
+            } else {
+                serde_json::json!({ "Variable": name })
+            }
         }
         "Reference" => {
             // Classic: ["Reference", {attrs}, [pkg_path, mod_path, local_name], [type_args]]
@@ -54,13 +75,18 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 vec![]
             };
-            // Use most compact format: bare fqname string when no args, otherwise array [fqname, arg1, arg2, ...]
-            if args.is_empty() {
-                serde_json::json!(fqname)
+            if is_compact_format() {
+                // Compact: bare fqname when no args, array [fqname, arg1, ...] with args
+                if args.is_empty() {
+                    serde_json::json!(fqname)
+                } else {
+                    let mut ref_arr = vec![serde_json::json!(fqname)];
+                    ref_arr.extend(args);
+                    serde_json::json!({ "Reference": ref_arr })
+                }
             } else {
-                let mut ref_arr = vec![serde_json::json!(fqname)];
-                ref_arr.extend(args);
-                serde_json::json!({ "Reference": ref_arr })
+                // Expanded: always object with fqname and args fields
+                serde_json::json!({ "Reference": { "fqname": fqname, "args": args } })
             }
         }
         "Tuple" => {
@@ -761,7 +787,7 @@ fn convert_value_def_inline_to_v4(json: &serde_json::Value) -> serde_json::Value
     }
 }
 
-/// Convert a Classic package to V4 format.
+/// Convert a Classic package to V4 format using compact (default) format.
 ///
 /// # Arguments
 /// * `pkg` - The Classic package to convert
@@ -769,8 +795,23 @@ fn convert_value_def_inline_to_v4(json: &serde_json::Value) -> serde_json::Value
 /// # Returns
 /// A V4 PackageDefinition with converted modules
 pub fn classic_to_v4(pkg: classic::Package) -> v4::PackageDefinition {
+    classic_to_v4_with_options(pkg, true)
+}
+
+/// Convert a Classic package to V4 format with configurable output format.
+///
+/// # Arguments
+/// * `pkg` - The Classic package to convert
+/// * `compact` - If true, use compact format; if false, use expanded format
+///
+/// # Returns
+/// A V4 PackageDefinition with converted modules
+pub fn classic_to_v4_with_options(pkg: classic::Package, compact: bool) -> v4::PackageDefinition {
+    set_compact_format(compact);
     let modules: IndexMap<String, v4::AccessControlledModuleDefinition> =
         pkg.modules.into_iter().map(convert_module_to_v4).collect();
+    // Reset to default (compact) after conversion
+    set_compact_format(true);
 
     v4::PackageDefinition { modules }
 }

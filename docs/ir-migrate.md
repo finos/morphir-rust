@@ -338,7 +338,7 @@ jq '.formatVersion' lcr-v4.json
 # Output: "4.0.0"
 ```
 
-The same type definition in V4 format:
+The same type definition in V4 compact format:
 
 ```json
 {
@@ -349,18 +349,14 @@ The same type definition in V4 format:
       "dependencies": {},
       "def": {
         "modules": {
-          "regulation/u.s/f.r.2052.a/data.tables": {
+          "regulation/u-s/f-r-2052-a/data-tables": {
             "types": {
               "currency": {
                 "access": "Public",
                 "def": {
                   "TypeAliasDefinition": {
                     "typeParams": [],
-                    "typeExp": {
-                      "Reference": {
-                        "fqName": "morphir/sdk:string#String"
-                      }
-                    }
+                    "typeExp": "morphir/s-d-k:string#string"
                   }
                 }
               }
@@ -373,14 +369,18 @@ The same type definition in V4 format:
 }
 ```
 
+Note the compact type expression: a simple Reference with no type arguments becomes a bare FQName string.
+
 ### Key Differences Observed
 
 | Aspect | Classic (V3) | V4 |
 |--------|-------------|-----|
 | **Format version** | `3` (integer) | `"4.0.0"` (semver string) |
 | **Distribution** | `["Library", [...], [...], {...}]` | `{ "Library": {...} }` |
-| **Module paths** | `[["regulation"], ["u", "s"], ...]` | `"regulation/u.s/..."` |
-| **Type references** | `["Reference", {}, [...], [...], []]` | `{ "Reference": { "fqName": "..." } }` |
+| **Module paths** | `[["regulation"], ["u", "s"], ...]` | `"regulation/u-s/..."` (kebab-case) |
+| **Type references** | `["Reference", {}, [...], [...], []]` | `"pkg:mod#name"` (bare FQName) |
+| **Type variables** | `["Variable", {}, ["a"]]` | `"a"` (bare name) |
+| **Value references** | `["Reference", {}, [...]]` | `{"Reference": "pkg:mod#name"}` |
 | **Access modifiers** | `["Public", ...]` | `{ "access": "Public", ... }` |
 
 ### Step 5: Verify the Migration
@@ -412,21 +412,61 @@ morphir schema generate \
 
 ## Format Differences
 
+V4 uses a compact object notation that is both human-readable and unambiguous. The format uses contextual compaction where possible.
+
 ### Type Expressions
 
-**Classic format:**
-```json
-["Variable", {}, ["a"]]
-```
+Type expressions use maximally compact forms since their context is unambiguous.
 
-**V4 format:**
-```json
-{ "Variable": { "name": "a" } }
-```
+**Variable**
+
+Classic: `["Variable", {}, ["a"]]`
+
+V4 (compact): `"a"` — bare name string (no `:` or `#` distinguishes from FQName)
+
+**Reference (no type arguments)**
+
+Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["string"]], ["string"]], []]`
+
+V4 (compact): `"morphir/s-d-k:string#string"` — bare FQName string
+
+**Reference (with type arguments)**
+
+Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["list"]], ["list"]], [["Variable", {}, ["a"]]]]`
+
+V4: `{"Reference": {"fqname": "morphir/s-d-k:list#list", "args": ["a"]}}`
+
+**Record**
+
+Classic: `["Record", {}, [[["field", "name"], type_expr], ...]]`
+
+V4 (compact): `{"Record": {"field-name": "morphir/s-d-k:string#string", ...}}` — fields directly under Record
+
+**Tuple**
+
+Classic: `["Tuple", {}, [type1, type2]]`
+
+V4: `{"Tuple": {"elements": ["morphir/s-d-k:int#int", "morphir/s-d-k:string#string"]}}`
 
 ### Value Expressions
 
-**Classic format:**
+Value expressions use object wrappers to distinguish expression types, but with compact inner values.
+
+**Variable**
+
+Classic: `["Variable", {}, ["x"]]`
+
+V4: `{"Variable": "x"}` — name directly under Variable
+
+**Reference**
+
+Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["basics"]], ["add"]]]`
+
+V4: `{"Reference": "morphir/s-d-k:basics#add"}` — FQName directly under Reference
+
+**Apply**
+
+Classic:
 ```json
 ["Apply", {},
   ["Reference", {}, [["morphir"], ["s", "d", "k"]], [["basics"]], ["add"]],
@@ -434,18 +474,27 @@ morphir schema generate \
 ]
 ```
 
-**V4 format:**
+V4:
 ```json
 {
   "Apply": {
-    "function": {
-      "Reference": { "fqName": "morphir/sdk:basics#add" }
-    },
-    "argument": {
-      "Literal": { "value": { "IntLiteral": { "value": 1 } } }
-    }
+    "function": {"Reference": "morphir/s-d-k:basics#add"},
+    "argument": {"Literal": {"IntLiteral": 1}}
   }
 }
+```
+
+**Record**
+
+Classic: `["Record", {}, [[["name"], value_expr], ...]]`
+
+V4 (compact): `{"Record": {"name": {"Variable": "x"}, ...}}` — fields directly under Record
+
+**Literal**
+
+Classic: `["Literal", {}, ["IntLiteral", 42]]`
+
+V4: `{"Literal": {"IntLiteral": 42}}`
 ```
 
 ### Module Structure

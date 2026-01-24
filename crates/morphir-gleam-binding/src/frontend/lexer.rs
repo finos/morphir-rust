@@ -18,9 +18,16 @@ use std::ops::Range;
 /// Reference: https://github.com/gleam-lang/glexer
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\r\n]+")]
-#[logos(skip r"//[^\n]*")]
 #[derive(Default)]
 pub enum Token {
+    // Comments (captured, not skipped) - ordered by priority for longest match
+    #[regex(r"////[^\n]*", priority = 4, allow_greedy = true, callback = |lex| lex.slice()[4..].to_string())]
+    CommentModule(String),
+    #[regex(r"///[^\n]*", priority = 3, allow_greedy = true, callback = |lex| lex.slice()[3..].to_string())]
+    CommentDoc(String),
+    #[regex(r"//[^\n]*", priority = 2, allow_greedy = true, callback = |lex| lex.slice()[2..].to_string())]
+    CommentNormal(String),
+
     // Keywords
     #[token("pub")]
     Pub,
@@ -56,6 +63,25 @@ pub enum Token {
     True,
     #[token("False")]
     False,
+    // Additional keywords from glexer
+    #[token("auto")]
+    Auto,
+    #[token("delegate")]
+    Delegate,
+    #[token("derive")]
+    Derive,
+    #[token("echo")]
+    Echo,
+    #[token("implement")]
+    Implement,
+    #[token("macro")]
+    Macro,
+    #[token("opaque")]
+    Opaque,
+    #[token("panic")]
+    Panic,
+    #[token("test")]
+    Test,
 
     // Literals
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
@@ -78,11 +104,19 @@ pub enum Token {
     #[regex(r"[A-Z][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     TypeIdent(String),
 
+    // Discard name pattern (e.g., _unused, _name)
+    #[regex(r"_[a-zA-Z0-9_]+", priority = 3, callback = |lex| lex.slice().to_string())]
+    DiscardName(String),
+
     // Operators
     #[token("->")]
     Arrow,
+    #[token("<-")]
+    LeftArrow,
     #[token("=")]
     Equals,
+    #[token("|>")]
+    PipeRight,
     #[token("|")]
     Pipe,
     #[token("_", priority = 1)]
@@ -91,6 +125,16 @@ pub enum Token {
     Cons,
     #[token("..")]
     Spread,
+    // Float operators (higher priority to match before integer versions)
+    #[token("+.")]
+    PlusDot,
+    #[token("-.")]
+    MinusDot,
+    #[token("*.")]
+    StarDot,
+    #[token("/.")]
+    SlashDot,
+    // Integer arithmetic operators
     #[token("+")]
     Plus,
     #[token("-")]
@@ -101,18 +145,34 @@ pub enum Token {
     Slash,
     #[token("%")]
     Percent,
+    // Float comparison operators (higher priority)
+    #[token("<=.")]
+    LtEqDot,
+    #[token(">=.")]
+    GtEqDot,
+    #[token("<.")]
+    LtDot,
+    #[token(">.")]
+    GtDot,
+    // Integer comparison operators
     #[token("==")]
     EqEq,
     #[token("!=")]
     NotEq,
-    #[token("<")]
-    Lt,
-    #[token(">")]
-    Gt,
     #[token("<=")]
     LtEq,
     #[token(">=")]
     GtEq,
+    #[token("<>")]
+    Concatenate,
+    #[token("<<")]
+    LeftShift,
+    #[token(">>")]
+    RightShift,
+    #[token("<")]
+    Lt,
+    #[token(">")]
+    Gt,
     #[token("&&")]
     AndAnd,
     #[token("||")]
@@ -121,6 +181,8 @@ pub enum Token {
     Not,
     #[token("?")]
     Question,
+    #[token("@")]
+    At,
 
     // Punctuation
     #[token("(")]

@@ -3,7 +3,9 @@
 //! This visitor traverses the parsed Gleam AST and converts it to Morphir IR V4
 //! format, producing a Document Tree structure by default.
 
-use crate::frontend::ast::{Access, Expr, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef};
+use crate::frontend::ast::{
+    Access, Expr, Field as AstField, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef,
+};
 use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
 use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
@@ -294,16 +296,22 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         // Extract function argument types
         // For now, simple extraction - can be enhanced to handle curried functions
-        if let TypeExpr::Function { from, to: _ } = type_expr {
-            let morphir_type = self.convert_type_expr(from);
-            inputs.insert(
-                "arg1".to_string(),
-                InputTypeEntry {
-                    type_attributes: None,
-                    input_type: serde_json::to_value(&morphir_type)
-                        .unwrap_or(serde_json::Value::Null),
-                },
-            );
+        if let TypeExpr::Function {
+            parameters,
+            return_type: _,
+        } = type_expr
+        {
+            for (i, param) in parameters.iter().enumerate() {
+                let morphir_type = self.convert_type_expr(param);
+                inputs.insert(
+                    format!("arg{}", i + 1),
+                    InputTypeEntry {
+                        type_attributes: None,
+                        input_type: serde_json::to_value(&morphir_type)
+                            .unwrap_or(serde_json::Value::Null),
+                    },
+                );
+            }
         }
 
         inputs
@@ -312,7 +320,10 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     /// Extract output type from function type annotation (returns Type)
     fn extract_output_type_type(&self, type_expr: &TypeExpr) -> Type<TypeAttributes> {
         match type_expr {
-            TypeExpr::Function { from: _, to } => self.convert_type_expr(to),
+            TypeExpr::Function {
+                parameters: _,
+                return_type,
+            } => self.convert_type_expr(return_type),
             _ => self.convert_type_expr(type_expr),
         }
     }
@@ -324,11 +335,17 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         match type_expr {
             TypeExpr::Variable { name } => Type::Variable(attrs, Name::from(name.as_str())),
             TypeExpr::Unit => Type::Unit(attrs),
-            TypeExpr::Function { from, to } => Type::Function(
-                attrs,
-                Box::new(self.convert_type_expr(from)),
-                Box::new(self.convert_type_expr(to)),
-            ),
+            TypeExpr::Function {
+                parameters,
+                return_type,
+            } => {
+                // Convert multi-param function to curried form
+                let mut result = self.convert_type_expr(return_type);
+                for param in parameters.iter().rev() {
+                    result = Type::Function(attrs.clone(), Box::new(self.convert_type_expr(param)), Box::new(result));
+                }
+                result
+            }
             TypeExpr::Record { fields } => {
                 let morphir_fields: Vec<Field<TypeAttributes>> = fields
                     .iter()
@@ -344,7 +361,11 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     elements.iter().map(|e| self.convert_type_expr(e)).collect();
                 Type::Tuple(attrs, morphir_elements)
             }
-            TypeExpr::Reference { name, args } => {
+            TypeExpr::Named {
+                module: _,
+                name,
+                parameters,
+            } => {
                 // Build FQName from reference name
                 // For now, assume it's in the current module
                 let fqname = FQName {
@@ -354,7 +375,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 };
 
                 let morphir_args: Vec<Type<TypeAttributes>> =
-                    args.iter().map(|a| self.convert_type_expr(a)).collect();
+                    parameters.iter().map(|a| self.convert_type_expr(a)).collect();
 
                 Type::Reference(attrs, fqname, morphir_args)
             }
@@ -362,6 +383,21 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 // Custom types are handled at definition level
                 Type::Unit(attrs) // Placeholder
             }
+            TypeExpr::Hole { .. } => {
+                // Type holes are placeholders
+                Type::Unit(attrs)
+            }
+        }
+    }
+
+    /// Helper to extract expression from Field<Expr>
+    fn extract_field_expr(&self, field: &AstField<Expr>) -> Value<TypeAttributes, ValueAttributes> {
+        match field {
+            AstField::Labelled { item, .. } => self.convert_expr(item),
+            AstField::Shorthand { name } => {
+                Value::Variable(ValueAttributes::default(), Name::from(name.as_str()))
+            }
+            AstField::Unlabelled { item } => self.convert_expr(item),
         }
     }
 
@@ -372,17 +408,36 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         match expr {
             Expr::Literal { value } => Value::Literal(attrs, self.convert_literal(value)),
             Expr::Variable { name } => Value::Variable(attrs, Name::from(name.as_str())),
-            Expr::Apply { function, argument } => Value::Apply(
-                attrs,
-                Box::new(self.convert_expr(function)),
-                Box::new(self.convert_expr(argument)),
-            ),
-            Expr::Lambda { param: _, body } => {
-                Value::Lambda(
-                    attrs,
-                    MorphirPattern::WildcardPattern(ValueAttributes::default()), // TODO: Convert param
-                    Box::new(self.convert_expr(body)),
-                )
+            Expr::Apply {
+                function,
+                arguments,
+            } => {
+                // Convert multiple arguments to curried apply
+                let mut result = self.convert_expr(function);
+                for arg in arguments {
+                    result = Value::Apply(
+                        attrs.clone(),
+                        Box::new(result),
+                        Box::new(self.extract_field_expr(arg)),
+                    );
+                }
+                result
+            }
+            Expr::Lambda { params, body } => {
+                // Convert multi-param lambda to curried form
+                let mut result = self.convert_expr(body);
+                for param in params.iter().rev() {
+                    result = Value::Lambda(
+                        attrs.clone(),
+                        MorphirPattern::AsPattern(
+                            ValueAttributes::default(),
+                            Box::new(MorphirPattern::WildcardPattern(ValueAttributes::default())),
+                            Name::from(param.as_str()),
+                        ),
+                        Box::new(result),
+                    );
+                }
+                result
             }
             Expr::Let { name, value, body } => {
                 // Convert to LetDefinition
@@ -418,20 +473,34 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     .collect();
                 Value::Record(attrs, morphir_fields)
             }
-            Expr::Field { record, field } => Value::Field(
+            Expr::FieldAccess { container, label } => Value::Field(
                 attrs,
-                Box::new(self.convert_expr(record)),
-                Name::from(field.as_str()),
+                Box::new(self.convert_expr(container)),
+                Name::from(label.as_str()),
             ),
             Expr::Tuple { elements } => {
                 let morphir_elements: Vec<Value<TypeAttributes, ValueAttributes>> =
                     elements.iter().map(|e| self.convert_expr(e)).collect();
                 Value::Tuple(attrs, morphir_elements)
             }
-            Expr::Case { subject, branches } => {
+            Expr::TupleIndex { tuple, index } => {
+                // Convert to field access with numeric index
+                Value::Field(
+                    attrs,
+                    Box::new(self.convert_expr(tuple)),
+                    Name::from(format!("{}", index).as_str()),
+                )
+            }
+            Expr::Case { subjects, clauses } => {
+                // For now, handle single subject case
+                let subject = subjects
+                    .first()
+                    .map(|s| self.convert_expr(s))
+                    .unwrap_or_else(|| Value::Unit(attrs.clone()));
+
                 let morphir_cases: Vec<
                     morphir_ir::ir::value_expr::PatternCase<TypeAttributes, ValueAttributes>,
-                > = branches
+                > = clauses
                     .iter()
                     .map(|branch| {
                         morphir_ir::ir::value_expr::PatternCase(
@@ -441,9 +510,9 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     })
                     .collect();
 
-                Value::PatternMatch(attrs, Box::new(self.convert_expr(subject)), morphir_cases)
+                Value::PatternMatch(attrs, Box::new(subject), morphir_cases)
             }
-            Expr::Constructor { name } => {
+            Expr::Constructor { module: _, name } => {
                 // Build FQName for constructor
                 let fqname = FQName {
                     package_path: self.package_name.clone().into(),
@@ -452,6 +521,115 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 };
                 Value::Constructor(attrs, fqname)
             }
+            Expr::BinaryOp { op, left, right } => {
+                // Convert binary op to function application
+                let op_name = format!("{:?}", op).to_lowercase();
+                let fqname = FQName {
+                    package_path: self.package_name.clone().into(),
+                    module_path: self.module_name.clone().into(),
+                    local_name: Name::from(op_name.as_str()),
+                };
+                let op_ref = Value::Reference(attrs.clone(), fqname);
+                Value::Apply(
+                    attrs.clone(),
+                    Box::new(Value::Apply(
+                        attrs.clone(),
+                        Box::new(op_ref),
+                        Box::new(self.convert_expr(left)),
+                    )),
+                    Box::new(self.convert_expr(right)),
+                )
+            }
+            Expr::NegateInt { value } => {
+                // Convert to negate function application
+                let fqname = FQName {
+                    package_path: self.package_name.clone().into(),
+                    module_path: self.module_name.clone().into(),
+                    local_name: Name::from("negate"),
+                };
+                Value::Apply(
+                    attrs.clone(),
+                    Box::new(Value::Reference(attrs, fqname)),
+                    Box::new(self.convert_expr(value)),
+                )
+            }
+            Expr::NegateBool { value } => {
+                // Convert to not function application
+                let fqname = FQName {
+                    package_path: self.package_name.clone().into(),
+                    module_path: self.module_name.clone().into(),
+                    local_name: Name::from("not"),
+                };
+                Value::Apply(
+                    attrs.clone(),
+                    Box::new(Value::Reference(attrs, fqname)),
+                    Box::new(self.convert_expr(value)),
+                )
+            }
+            Expr::List { elements, tail } => {
+                let morphir_elements: Vec<Value<TypeAttributes, ValueAttributes>> =
+                    elements.iter().map(|e| self.convert_expr(e)).collect();
+                // For now, ignore tail and just create a list
+                let _ = tail; // TODO: Handle tail properly
+                Value::List(attrs, morphir_elements)
+            }
+            Expr::Block { statements } => {
+                // Convert block to sequence of let bindings
+                // For now, just return the last expression
+                if let Some(last) = statements.last() {
+                    match last {
+                        crate::frontend::ast::Statement::Expression(e) => self.convert_expr(e),
+                        _ => Value::Unit(attrs),
+                    }
+                } else {
+                    Value::Unit(attrs)
+                }
+            }
+            Expr::Panic { message } => {
+                // Convert to panic function call
+                let msg_expr = message
+                    .as_ref()
+                    .map(|m| self.convert_expr(m))
+                    .unwrap_or_else(|| {
+                        Value::Literal(attrs.clone(), MorphirLiteral::string("panic"))
+                    });
+                let _ = msg_expr; // TODO: Use message in panic representation
+                Value::Unit(attrs) // Placeholder - Morphir IR doesn't have panic
+            }
+            Expr::Todo { message } => {
+                // Convert to todo placeholder
+                let _ = message;
+                Value::Unit(attrs) // Placeholder
+            }
+            Expr::Echo { expression, body: _ } => {
+                // Echo just returns its expression
+                self.convert_expr(expression)
+            }
+            Expr::BitString { .. } => {
+                // Bit strings not yet supported
+                Value::Unit(attrs)
+            }
+            Expr::FnCapture { .. } => {
+                // Function capture not yet supported
+                Value::Unit(attrs)
+            }
+            Expr::RecordUpdate { .. } => {
+                // Record update not yet supported
+                Value::Unit(attrs)
+            }
+        }
+    }
+
+    /// Helper to extract pattern from Field<Pattern>
+    fn extract_field_pattern(&self, field: &AstField<Pattern>) -> MorphirPattern<ValueAttributes> {
+        match field {
+            AstField::Labelled { item, .. } => self.convert_pattern(item),
+            AstField::Shorthand { name } => MorphirPattern::AsPattern(
+                ValueAttributes::default(),
+                Box::new(MorphirPattern::WildcardPattern(ValueAttributes::default())),
+                Name::from(name.as_str()),
+            ),
+            AstField::Unlabelled { item } => self.convert_pattern(item),
         }
     }
 
@@ -466,18 +644,26 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Box::new(MorphirPattern::WildcardPattern(attrs)),
                 Name::from(name.as_str()),
             ),
+            Pattern::Discard { name: _ } => MorphirPattern::WildcardPattern(attrs),
             Pattern::Literal { value } => {
                 MorphirPattern::LiteralPattern(attrs, self.convert_literal(value))
             }
-            Pattern::Constructor { name, args } => {
+            Pattern::Constructor {
+                module: _,
+                name,
+                arguments,
+                with_spread: _,
+            } => {
                 let fqname = FQName {
                     package_path: self.package_name.clone().into(),
                     module_path: self.module_name.clone().into(),
                     local_name: Name::from(name.as_str()),
                 };
 
-                let morphir_args: Vec<MorphirPattern<ValueAttributes>> =
-                    args.iter().map(|a| self.convert_pattern(a)).collect();
+                let morphir_args: Vec<MorphirPattern<ValueAttributes>> = arguments
+                    .iter()
+                    .map(|a| self.extract_field_pattern(a))
+                    .collect();
 
                 MorphirPattern::ConstructorPattern(attrs, fqname, morphir_args)
             }
@@ -485,6 +671,27 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let morphir_elements: Vec<MorphirPattern<ValueAttributes>> =
                     elements.iter().map(|e| self.convert_pattern(e)).collect();
                 MorphirPattern::TuplePattern(attrs, morphir_elements)
+            }
+            Pattern::List { elements, tail } => {
+                // Convert to nested HeadTailPattern or EmptyListPattern
+                let morphir_elements: Vec<MorphirPattern<ValueAttributes>> =
+                    elements.iter().map(|e| self.convert_pattern(e)).collect();
+                // For now, just convert to tuple pattern (Morphir IR list patterns)
+                let _ = tail; // TODO: Handle tail properly
+                MorphirPattern::TuplePattern(attrs, morphir_elements)
+            }
+            Pattern::Assignment { pattern, name } => MorphirPattern::AsPattern(
+                attrs.clone(),
+                Box::new(self.convert_pattern(pattern)),
+                Name::from(name.as_str()),
+            ),
+            Pattern::Concatenate { .. } => {
+                // String concatenation patterns not directly supported
+                MorphirPattern::WildcardPattern(attrs)
+            }
+            Pattern::BitString { .. } => {
+                // Bit string patterns not yet supported
+                MorphirPattern::WildcardPattern(attrs)
             }
         }
     }

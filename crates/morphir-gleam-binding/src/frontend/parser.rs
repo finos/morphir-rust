@@ -8,7 +8,8 @@ use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
 use crate::frontend::ast::{
-    Access, CaseBranch, Expr, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef, Variant,
+    Access, CaseBranch, Expr, Field, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef,
+    Variant,
 };
 use crate::frontend::errors::{ParseError, to_parse_error};
 use crate::frontend::lexer::{Token, tokenize};
@@ -183,7 +184,8 @@ where
         let variable = identifier_parser().map(|name| Expr::Variable { name });
 
         // Constructors (uppercase identifiers)
-        let constructor = type_identifier_parser().map(|name| Expr::Constructor { name });
+        let constructor =
+            type_identifier_parser().map(|name| Expr::Constructor { module: None, name });
 
         // Tuples: #(expr, expr, ...)
         let tuple = just(Token::Hash)
@@ -215,7 +217,7 @@ where
             .then(expr.clone())
             .then_ignore(just(Token::RBrace))
             .map(|(param, body)| Expr::Lambda {
-                param,
+                params: vec![param],
                 body: Box::new(body),
             });
 
@@ -267,9 +269,9 @@ where
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LBrace), just(Token::RBrace)),
             )
-            .map(|(subject, branches)| Expr::Case {
-                subject: Box::new(subject),
-                branches,
+            .map(|(subject, clauses)| Expr::Case {
+                subjects: vec![subject],
+                clauses,
             });
 
         // Parenthesized expression
@@ -300,13 +302,13 @@ where
                 .or(application.map(PostfixOp::Apply))
                 .repeated(),
             |lhs, op| match op {
-                PostfixOp::Field(field) => Expr::Field {
-                    record: Box::new(lhs),
-                    field,
+                PostfixOp::Field(label) => Expr::FieldAccess {
+                    container: Box::new(lhs),
+                    label,
                 },
                 PostfixOp::Apply(argument) => Expr::Apply {
                     function: Box::new(lhs),
-                    argument: Box::new(argument),
+                    arguments: vec![Field::Unlabelled { item: argument }],
                 },
             },
         );
@@ -379,7 +381,11 @@ where
 
         let ref_type = type_identifier_parser()
             .then(type_args)
-            .map(|(name, args)| TypeExpr::Reference { name, args });
+            .map(|(name, parameters)| TypeExpr::Named {
+                module: None,
+                name,
+                parameters,
+            });
 
         // Parenthesized type
         let paren_type = type_expr
@@ -395,12 +401,13 @@ where
             .or(paren_type);
 
         // Function types: Type -> Type (right-associative)
+        // Note: For simplicity, we treat `A -> B` as fn(A) -> B
         primary
             .foldl(
                 just(Token::Arrow).ignore_then(type_expr).repeated(),
-                |from, to| TypeExpr::Function {
-                    from: Box::new(from),
-                    to: Box::new(to),
+                |param, return_type| TypeExpr::Function {
+                    parameters: vec![param],
+                    return_type: Box::new(return_type),
                 },
             )
             .boxed()
@@ -447,7 +454,12 @@ where
 
         let constructor_pattern = type_identifier_parser()
             .then(constructor_args)
-            .map(|(name, args)| Pattern::Constructor { name, args });
+            .map(|(name, args)| Pattern::Constructor {
+                module: None,
+                name,
+                arguments: args.into_iter().map(|p| Field::Unlabelled { item: p }).collect(),
+                with_spread: false,
+            });
 
         // Parenthesized pattern
         let paren_pattern = pattern

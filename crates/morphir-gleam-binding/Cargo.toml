@@ -38,6 +38,9 @@ morphir-common = { path = "../morphir-common" }  # For Vfs and pipeline
 indexmap = "2.0"  # Required for V4 IndexMap structures
 anyhow = "1.0"
 
+# Pretty printing (Wadler-style)
+pretty = "0.12"
+
 [dev-dependencies]
 cucumber = { version = "0.22", features = ["output-json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -5,7 +5,7 @@
 //! the meaning of the code.
 
 use super::ast::{
-    CaseBranch, Expr, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef, Variant,
+    CaseBranch, Expr, Field, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef, Variant,
 };
 
 /// Result of comparing two ModuleIRs
@@ -256,14 +256,21 @@ fn type_expr_equivalent(a: &TypeExpr, b: &TypeExpr) -> bool {
         (TypeExpr::Unit, TypeExpr::Unit) => true,
         (
             TypeExpr::Function {
-                from: from_a,
-                to: to_a,
+                parameters: params_a,
+                return_type: ret_a,
             },
             TypeExpr::Function {
-                from: from_b,
-                to: to_b,
+                parameters: params_b,
+                return_type: ret_b,
             },
-        ) => type_expr_equivalent(from_a, from_b) && type_expr_equivalent(to_a, to_b),
+        ) => {
+            params_a.len() == params_b.len()
+                && params_a
+                    .iter()
+                    .zip(params_b.iter())
+                    .all(|(a, b)| type_expr_equivalent(a, b))
+                && type_expr_equivalent(ret_a, ret_b)
+        }
         (TypeExpr::Record { fields: fields_a }, TypeExpr::Record { fields: fields_b }) => {
             fields_a.len() == fields_b.len()
                 && fields_a.iter().zip(fields_b.iter()).all(
@@ -280,20 +287,23 @@ fn type_expr_equivalent(a: &TypeExpr, b: &TypeExpr) -> bool {
                     .all(|(a, b)| type_expr_equivalent(a, b))
         }
         (
-            TypeExpr::Reference {
+            TypeExpr::Named {
+                module: mod_a,
                 name: name_a,
-                args: args_a,
+                parameters: params_a,
             },
-            TypeExpr::Reference {
+            TypeExpr::Named {
+                module: mod_b,
                 name: name_b,
-                args: args_b,
+                parameters: params_b,
             },
         ) => {
-            name_a == name_b
-                && args_a.len() == args_b.len()
-                && args_a
+            mod_a == mod_b
+                && name_a == name_b
+                && params_a.len() == params_b.len()
+                && params_a
                     .iter()
-                    .zip(args_b.iter())
+                    .zip(params_b.iter())
                     .all(|(a, b)| type_expr_equivalent(a, b))
         }
         (
@@ -310,6 +320,7 @@ fn type_expr_equivalent(a: &TypeExpr, b: &TypeExpr) -> bool {
                     .zip(variants_b.iter())
                     .all(|(a, b)| variant_equivalent(a, b))
         }
+        (TypeExpr::Hole { name: name_a }, TypeExpr::Hole { name: name_b }) => name_a == name_b,
         _ => false,
     }
 }
@@ -324,6 +335,21 @@ fn variant_equivalent(a: &Variant, b: &Variant) -> bool {
             .all(|(fa, fb)| type_expr_equivalent(fa, fb))
 }
 
+/// Helper to check if two Field<Expr> lists are equivalent
+fn field_expr_list_equivalent(a: &[Field<Expr>], b: &[Field<Expr>]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).all(|(fa, fb)| match (fa, fb) {
+        (Field::Labelled { label: la, item: ia }, Field::Labelled { label: lb, item: ib }) => {
+            la == lb && expr_equivalent(ia, ib)
+        }
+        (Field::Shorthand { name: na }, Field::Shorthand { name: nb }) => na == nb,
+        (Field::Unlabelled { item: ia }, Field::Unlabelled { item: ib }) => expr_equivalent(ia, ib),
+        _ => false,
+    })
+}
+
 /// Check if two expressions are equivalent
 fn expr_equivalent(a: &Expr, b: &Expr) -> bool {
     match (a, b) {
@@ -334,23 +360,23 @@ fn expr_equivalent(a: &Expr, b: &Expr) -> bool {
         (
             Expr::Apply {
                 function: func_a,
-                argument: arg_a,
+                arguments: args_a,
             },
             Expr::Apply {
                 function: func_b,
-                argument: arg_b,
+                arguments: args_b,
             },
-        ) => expr_equivalent(func_a, func_b) && expr_equivalent(arg_a, arg_b),
+        ) => expr_equivalent(func_a, func_b) && field_expr_list_equivalent(args_a, args_b),
         (
             Expr::Lambda {
-                param: param_a,
+                params: params_a,
                 body: body_a,
             },
             Expr::Lambda {
-                param: param_b,
+                params: params_b,
                 body: body_b,
             },
-        ) => param_a == param_b && expr_equivalent(body_a, body_b),
+        ) => params_a == params_b && expr_equivalent(body_a, body_b),
         (
             Expr::Let {
                 name: name_a,
@@ -391,15 +417,15 @@ fn expr_equivalent(a: &Expr, b: &Expr) -> bool {
                     })
         }
         (
-            Expr::Field {
-                record: record_a,
-                field: field_a,
+            Expr::FieldAccess {
+                container: cont_a,
+                label: label_a,
             },
-            Expr::Field {
-                record: record_b,
-                field: field_b,
+            Expr::FieldAccess {
+                container: cont_b,
+                label: label_b,
             },
-        ) => expr_equivalent(record_a, record_b) && field_a == field_b,
+        ) => expr_equivalent(cont_a, cont_b) && label_a == label_b,
         (Expr::Tuple { elements: elems_a }, Expr::Tuple { elements: elems_b }) => {
             elems_a.len() == elems_b.len()
                 && elems_a
@@ -408,25 +434,95 @@ fn expr_equivalent(a: &Expr, b: &Expr) -> bool {
                     .all(|(a, b)| expr_equivalent(a, b))
         }
         (
+            Expr::TupleIndex {
+                tuple: tuple_a,
+                index: idx_a,
+            },
+            Expr::TupleIndex {
+                tuple: tuple_b,
+                index: idx_b,
+            },
+        ) => expr_equivalent(tuple_a, tuple_b) && idx_a == idx_b,
+        (
             Expr::Case {
-                subject: subject_a,
-                branches: branches_a,
+                subjects: subjs_a,
+                clauses: clauses_a,
             },
             Expr::Case {
-                subject: subject_b,
-                branches: branches_b,
+                subjects: subjs_b,
+                clauses: clauses_b,
             },
         ) => {
-            expr_equivalent(subject_a, subject_b)
-                && branches_a.len() == branches_b.len()
-                && branches_a
+            subjs_a.len() == subjs_b.len()
+                && subjs_a
                     .iter()
-                    .zip(branches_b.iter())
+                    .zip(subjs_b.iter())
+                    .all(|(a, b)| expr_equivalent(a, b))
+                && clauses_a.len() == clauses_b.len()
+                && clauses_a
+                    .iter()
+                    .zip(clauses_b.iter())
                     .all(|(a, b)| case_branch_equivalent(a, b))
         }
-        (Expr::Constructor { name: name_a }, Expr::Constructor { name: name_b }) => {
-            name_a == name_b
+        (
+            Expr::Constructor {
+                module: mod_a,
+                name: name_a,
+            },
+            Expr::Constructor {
+                module: mod_b,
+                name: name_b,
+            },
+        ) => mod_a == mod_b && name_a == name_b,
+        (
+            Expr::BinaryOp {
+                op: op_a,
+                left: left_a,
+                right: right_a,
+            },
+            Expr::BinaryOp {
+                op: op_b,
+                left: left_b,
+                right: right_b,
+            },
+        ) => op_a == op_b && expr_equivalent(left_a, left_b) && expr_equivalent(right_a, right_b),
+        (Expr::NegateInt { value: val_a }, Expr::NegateInt { value: val_b }) => {
+            expr_equivalent(val_a, val_b)
         }
+        (Expr::NegateBool { value: val_a }, Expr::NegateBool { value: val_b }) => {
+            expr_equivalent(val_a, val_b)
+        }
+        (
+            Expr::List {
+                elements: elems_a,
+                tail: tail_a,
+            },
+            Expr::List {
+                elements: elems_b,
+                tail: tail_b,
+            },
+        ) => {
+            elems_a.len() == elems_b.len()
+                && elems_a
+                    .iter()
+                    .zip(elems_b.iter())
+                    .all(|(a, b)| expr_equivalent(a, b))
+                && match (tail_a, tail_b) {
+                    (Some(ta), Some(tb)) => expr_equivalent(ta, tb),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        (Expr::Panic { message: msg_a }, Expr::Panic { message: msg_b }) => match (msg_a, msg_b) {
+            (Some(a), Some(b)) => expr_equivalent(a, b),
+            (None, None) => true,
+            _ => false,
+        },
+        (Expr::Todo { message: msg_a }, Expr::Todo { message: msg_b }) => match (msg_a, msg_b) {
+            (Some(a), Some(b)) => expr_equivalent(a, b),
+            (None, None) => true,
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -436,6 +532,24 @@ fn case_branch_equivalent(a: &CaseBranch, b: &CaseBranch) -> bool {
     pattern_equivalent(&a.pattern, &b.pattern) && expr_equivalent(&a.body, &b.body)
 }
 
+/// Helper to check if two Field<Pattern> lists are equivalent
+fn field_pattern_list_equivalent(a: &[Field<Pattern>], b: &[Field<Pattern>]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).all(|(fa, fb)| match (fa, fb) {
+        (
+            Field::Labelled { label: la, item: ia },
+            Field::Labelled { label: lb, item: ib },
+        ) => la == lb && pattern_equivalent(ia, ib),
+        (Field::Shorthand { name: na }, Field::Shorthand { name: nb }) => na == nb,
+        (Field::Unlabelled { item: ia }, Field::Unlabelled { item: ib }) => {
+            pattern_equivalent(ia, ib)
+        }
+        _ => false,
+    })
+}
+
 /// Check if two patterns are equivalent
 fn pattern_equivalent(a: &Pattern, b: &Pattern) -> bool {
     match (a, b) {
@@ -443,25 +557,28 @@ fn pattern_equivalent(a: &Pattern, b: &Pattern) -> bool {
         (Pattern::Variable { name: name_a }, Pattern::Variable { name: name_b }) => {
             name_a == name_b
         }
+        (Pattern::Discard { name: name_a }, Pattern::Discard { name: name_b }) => name_a == name_b,
         (Pattern::Literal { value: lit_a }, Pattern::Literal { value: lit_b }) => {
             literal_equivalent(lit_a, lit_b)
         }
         (
             Pattern::Constructor {
+                module: mod_a,
                 name: name_a,
-                args: args_a,
+                arguments: args_a,
+                with_spread: spread_a,
             },
             Pattern::Constructor {
+                module: mod_b,
                 name: name_b,
-                args: args_b,
+                arguments: args_b,
+                with_spread: spread_b,
             },
         ) => {
-            name_a == name_b
-                && args_a.len() == args_b.len()
-                && args_a
-                    .iter()
-                    .zip(args_b.iter())
-                    .all(|(a, b)| pattern_equivalent(a, b))
+            mod_a == mod_b
+                && name_a == name_b
+                && spread_a == spread_b
+                && field_pattern_list_equivalent(args_a, args_b)
         }
         (Pattern::Tuple { elements: elems_a }, Pattern::Tuple { elements: elems_b }) => {
             elems_a.len() == elems_b.len()
@@ -470,6 +587,37 @@ fn pattern_equivalent(a: &Pattern, b: &Pattern) -> bool {
                     .zip(elems_b.iter())
                     .all(|(a, b)| pattern_equivalent(a, b))
         }
+        (
+            Pattern::List {
+                elements: elems_a,
+                tail: tail_a,
+            },
+            Pattern::List {
+                elements: elems_b,
+                tail: tail_b,
+            },
+        ) => {
+            elems_a.len() == elems_b.len()
+                && elems_a
+                    .iter()
+                    .zip(elems_b.iter())
+                    .all(|(a, b)| pattern_equivalent(a, b))
+                && match (tail_a, tail_b) {
+                    (Some(ta), Some(tb)) => pattern_equivalent(ta, tb),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        (
+            Pattern::Assignment {
+                pattern: pat_a,
+                name: name_a,
+            },
+            Pattern::Assignment {
+                pattern: pat_b,
+                name: name_b,
+            },
+        ) => name_a == name_b && pattern_equivalent(pat_a, pat_b),
         _ => false,
     }
 }

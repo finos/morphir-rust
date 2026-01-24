@@ -163,12 +163,11 @@ fn build_v4_module_from_ir(
     if vfs.exists(&types_dir) {
         for type_def in &module_ir.types {
             let type_file = types_dir.join(format!("{}.json", type_def.name));
-            if vfs.exists(&type_file) {
-                if let Ok(content) = vfs.read_to_string(&type_file) {
-                    if let Ok(type_def_json) = serde_json::from_str(&content) {
-                        types.insert(type_def.name.clone(), type_def_json);
-                    }
-                }
+            if vfs.exists(&type_file)
+                && let Ok(content) = vfs.read_to_string(&type_file)
+                && let Ok(type_def_json) = serde_json::from_str(&content)
+            {
+                types.insert(type_def.name.clone(), type_def_json);
             }
         }
     }
@@ -178,12 +177,11 @@ fn build_v4_module_from_ir(
     if vfs.exists(&values_dir) {
         for value_def in &module_ir.values {
             let value_file = values_dir.join(format!("{}.json", value_def.name));
-            if vfs.exists(&value_file) {
-                if let Ok(content) = vfs.read_to_string(&value_file) {
-                    if let Ok(value_def_json) = serde_json::from_str(&content) {
-                        values.insert(value_def.name.clone(), value_def_json);
-                    }
-                }
+            if vfs.exists(&value_file)
+                && let Ok(content) = vfs.read_to_string(&value_file)
+                && let Ok(value_def_json) = serde_json::from_str(&content)
+            {
+                values.insert(value_def.name.clone(), value_def_json);
             }
         }
     }

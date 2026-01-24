@@ -12,11 +12,14 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
 
 ---
 
-## v0.1.1 (January 24, 2026)
+## v0.2.0 (January 24, 2026)
 
 
 ### Added
 
+- **Core CLI Commands**: Promoted `compile` and `generate` from experimental to stable
+  - `morphir compile` - Compile source code to Morphir IR using language extensions
+  - `morphir generate` - Generate code from Morphir IR using target extensions
 - **TUI Pager**: Interactive JSON viewer with syntax highlighting and vim-like navigation
   - Visual mode (`v`, `V`) for selecting text
   - Yank to clipboard (`y`) with WSL, X11, Wayland, and macOS support
@@ -39,6 +42,7 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
 ### Fixed
 
 - **VFS Consistency**: `MemoryVfs::exists()` now returns `true` for directories, matching `OsVfs` behavior
+- **Compile Path Resolution**: `source_directory` from config is now resolved relative to the config file location, not the current working directory
 
 ### Changed
 

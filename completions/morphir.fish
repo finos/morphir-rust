@@ -10,7 +10,7 @@ end
 
 set _usage_spec_morphir 'name morphir
 bin morphir
-version "0.1.0"
+version "0.2.0"
 about "CLI for working with Morphir IR - functional domain modeling and business logic"
 usage "Usage: morphir [OPTIONS] [COMMAND]"
 flag --help-all help="Print help including experimental commands"

@@ -11,7 +11,7 @@ permalink: /cli/
 
 **Usage**: `morphir [--help-all] [-V --version] <SUBCOMMAND>`
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 
 - **Usage**: `morphir [--help-all] [-V --version] <SUBCOMMAND>`
 

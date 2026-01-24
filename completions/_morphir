@@ -17,7 +17,7 @@ _morphir() {
   cat > "$spec_file" <<'__USAGE_EOF__'
 name morphir
 bin morphir
-version "0.1.0"
+version "0.2.0"
 about "CLI for working with Morphir IR - functional domain modeling and business logic"
 usage "Usage: morphir [OPTIONS] [COMMAND]"
 flag --help-all help="Print help including experimental commands"

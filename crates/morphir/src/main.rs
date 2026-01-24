@@ -1,14 +1,17 @@
 use clap::{Parser, Subcommand};
 use starbase::{App, AppResult, AppSession};
 
-mod commands;
+pub mod commands;
+pub mod error;
 mod help;
 mod logging;
+pub mod output;
 mod tui;
 
 use commands::{
-    run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update, run_extension_install,
-    run_extension_list, run_extension_uninstall, run_extension_update, run_generate, run_migrate,
+    run_compile, run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update,
+    run_extension_install, run_extension_list, run_extension_uninstall, run_extension_update,
+    run_generate, run_gleam_compile, run_gleam_generate, run_gleam_roundtrip, run_migrate,
     run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform,
     run_validate, run_version,
 };
@@ -42,6 +45,34 @@ enum Commands {
         #[arg(short, long)]
         input: Option<String>,
     },
+    /// [Experimental] Compile source code to Morphir IR
+    #[command(hide = true)]
+    Compile {
+        /// Source language (e.g., gleam, elm)
+        #[arg(short, long)]
+        language: Option<String>,
+        /// Input source directory or file
+        #[arg(short, long)]
+        input: Option<String>,
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Package name override
+        #[arg(long)]
+        package_name: Option<String>,
+        /// Explicit config file path
+        #[arg(long)]
+        config: Option<String>,
+        /// Project name (for workspaces)
+        #[arg(long)]
+        project: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Output as JSON Lines (streaming)
+        #[arg(long)]
+        json_lines: bool,
+    },
     /// [Experimental] Generate code from Morphir IR
     #[command(hide = true)]
     Generate {
@@ -54,6 +85,18 @@ enum Commands {
         /// Output directory
         #[arg(short, long)]
         output: Option<String>,
+        /// Explicit config file path
+        #[arg(long)]
+        config: Option<String>,
+        /// Project name (for workspaces)
+        #[arg(long)]
+        project: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Output as JSON Lines (streaming)
+        #[arg(long)]
+        json_lines: bool,
     },
     /// [Experimental] Transform Morphir IR
     #[command(hide = true)]
@@ -86,6 +129,17 @@ enum Commands {
     Ir {
         #[command(subcommand)]
         action: IrAction,
+    },
+    /// Gleam language binding commands
+    Gleam {
+        #[command(subcommand)]
+        action: GleamAction,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Output as JSON Lines (streaming)
+        #[arg(long)]
+        json_lines: bool,
     },
     /// Generate JSON Schema for Morphir IR
     Schema {
@@ -188,6 +242,61 @@ enum ExtensionAction {
 }
 
 #[derive(Clone, Subcommand)]
+enum GleamAction {
+    /// Compile Gleam source to Morphir IR
+    Compile {
+        /// Input source directory or file
+        #[arg(short, long)]
+        input: Option<String>,
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Package name override
+        #[arg(long)]
+        package_name: Option<String>,
+        /// Explicit config file path
+        #[arg(long)]
+        config: Option<String>,
+        /// Project name (for workspaces)
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Generate Gleam code from Morphir IR
+    Generate {
+        /// Path to the Morphir IR file or directory
+        #[arg(short, long)]
+        input: Option<String>,
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Explicit config file path
+        #[arg(long)]
+        config: Option<String>,
+        /// Project name (for workspaces)
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Roundtrip: compile then generate (for testing)
+    Roundtrip {
+        /// Input source directory or file
+        #[arg(short, long)]
+        input: Option<String>,
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Package name override
+        #[arg(long)]
+        package_name: Option<String>,
+        /// Explicit config file path
+        #[arg(long)]
+        config: Option<String>,
+        /// Project name (for workspaces)
+        #[arg(long)]
+        project: Option<String>,
+    },
+}
+
+#[derive(Clone, Subcommand)]
 enum IrAction {
     /// Migrate IR between versions
     #[command(long_about = "Migrate IR between versions
@@ -246,11 +355,42 @@ impl AppSession for MorphirSession {
     async fn execute(&mut self) -> AppResult {
         match &self.command {
             Commands::Validate { input } => run_validate(input.clone()),
+            Commands::Compile {
+                language,
+                input,
+                output,
+                package_name,
+                config,
+                project,
+                json,
+                json_lines,
+            } => run_compile(
+                language.clone(),
+                input.clone(),
+                output.clone(),
+                package_name.clone(),
+                config.clone(),
+                project.clone(),
+                *json,
+                *json_lines,
+            ).await,
             Commands::Generate {
                 target,
                 input,
                 output,
-            } => run_generate(target.clone(), input.clone(), output.clone()),
+                config,
+                project,
+                json,
+                json_lines,
+            } => run_generate(
+                target.clone(),
+                input.clone(),
+                output.clone(),
+                config.clone(),
+                project.clone(),
+                *json,
+                *json_lines,
+            ).await,
             Commands::Transform { input, output } => run_transform(input.clone(), output.clone()),
             Commands::Tool { action } => match action {
                 ToolAction::Install { name, version } => {
@@ -300,6 +440,54 @@ impl AppSession for MorphirSession {
                     *json,
                     *expanded,
                 ),
+            },
+            Commands::Gleam { action, json, json_lines } => match action {
+                GleamAction::Compile {
+                    input,
+                    output,
+                    package_name,
+                    config,
+                    project,
+                } => run_gleam_compile(
+                    input.clone(),
+                    output.clone(),
+                    package_name.clone(),
+                    config.clone(),
+                    project.clone(),
+                    *json,
+                    *json_lines,
+                )
+                .await,
+                GleamAction::Generate {
+                    input,
+                    output,
+                    config,
+                    project,
+                } => run_gleam_generate(
+                    input.clone(),
+                    output.clone(),
+                    config.clone(),
+                    project.clone(),
+                    *json,
+                    *json_lines,
+                )
+                .await,
+                GleamAction::Roundtrip {
+                    input,
+                    output,
+                    package_name,
+                    config,
+                    project,
+                } => run_gleam_roundtrip(
+                    input.clone(),
+                    output.clone(),
+                    package_name.clone(),
+                    config.clone(),
+                    project.clone(),
+                    *json,
+                    *json_lines,
+                )
+                .await,
             },
             Commands::Schema { output } => commands::schema::run_schema(output.clone()),
             Commands::Version { json } => run_version(*json),

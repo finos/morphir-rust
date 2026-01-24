@@ -1,0 +1,273 @@
+//! CLI testing helpers for BDD acceptance tests
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use tempfile::TempDir;
+use anyhow::Result;
+
+/// CLI test context for managing test environments
+pub struct CliTestContext {
+    pub temp_dir: TempDir,
+    pub project_root: PathBuf,
+    pub morphir_dir: PathBuf,
+}
+
+impl CliTestContext {
+    /// Create a new test context with temporary directory
+    pub fn new() -> Result<Self> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().to_path_buf();
+        let morphir_dir = project_root.join(".morphir");
+        
+        Ok(Self {
+            temp_dir,
+            project_root,
+            morphir_dir,
+        })
+    }
+
+    /// Create a test project structure
+    pub fn create_test_project(&self) -> Result<()> {
+        std::fs::create_dir_all(self.project_root.join("src"))?;
+        Ok(())
+    }
+
+    /// Create a test workspace structure
+    pub fn create_test_workspace(&self, members: &[&str]) -> Result<()> {
+        for member in members {
+            let member_path = self.project_root.join(member);
+            std::fs::create_dir_all(member_path.join("src"))?;
+        }
+        Ok(())
+    }
+
+    /// Write a morphir.toml configuration file
+    pub fn write_test_config(&self, config_content: &str) -> Result<()> {
+        std::fs::write(self.project_root.join("morphir.toml"), config_content)?;
+        Ok(())
+    }
+
+    /// Write a test source file
+    pub fn write_source_file(&self, path: &str, content: &str) -> Result<()> {
+        let file_path = self.project_root.join(path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&file_path, content)?;
+        Ok(())
+    }
+
+    /// Get the path to the morphir CLI binary
+    fn get_morphir_binary() -> Option<PathBuf> {
+        // Try multiple locations
+        let possible_paths = vec![
+            // Built binary in target directory
+            {
+                let target_dir = std::env::var("CARGO_TARGET_DIR")
+                    .unwrap_or_else(|_| "target".to_string());
+                PathBuf::from(target_dir)
+                    .join("debug")
+                    .join("morphir")
+            },
+            // Release binary
+            {
+                let target_dir = std::env::var("CARGO_TARGET_DIR")
+                    .unwrap_or_else(|_| "target".to_string());
+                PathBuf::from(target_dir)
+                    .join("release")
+                    .join("morphir")
+            },
+            // In workspace root target
+            PathBuf::from("../../target/debug/morphir"),
+            PathBuf::from("../../target/release/morphir"),
+        ];
+        
+        for path in possible_paths {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+        
+        None
+    }
+
+    /// Execute a morphir CLI command
+    pub fn execute_cli_command(
+        &self,
+        args: &[&str],
+    ) -> Result<CommandResult> {
+        let mut cmd = if let Some(binary) = Self::get_morphir_binary() {
+            // Use built binary
+            Command::new(&binary)
+        } else {
+            // Fall back to cargo run
+            let mut cargo_cmd = Command::new("cargo");
+            cargo_cmd.args(&["run", "--bin", "morphir", "--manifest-path", "../../Cargo.toml", "--"]);
+            cargo_cmd
+        };
+        
+        cmd.args(args);
+        cmd.current_dir(&self.project_root);
+        cmd.env("RUST_BACKTRACE", "1");
+        cmd.env("RUST_LOG", "error"); // Reduce noise in test output
+        
+        let output = cmd.output()?;
+        
+        Ok(CommandResult {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+            success: output.status.success(),
+        })
+    }
+
+    /// Load a test fixture from .morphir/test/fixtures/
+    pub fn load_test_fixture(&self, name: &str) -> Result<PathBuf> {
+        let fixture_path = self.morphir_dir
+            .join("test")
+            .join("fixtures")
+            .join(name);
+        
+        if fixture_path.exists() {
+            Ok(fixture_path)
+        } else {
+            // Try in workspace root
+            let workspace_fixture = self.project_root
+                .parent()
+                .unwrap_or(&self.project_root)
+                .join(".morphir")
+                .join("test")
+                .join("fixtures")
+                .join(name);
+            
+            if workspace_fixture.exists() {
+                Ok(workspace_fixture)
+            } else {
+                Err(anyhow::anyhow!("Test fixture not found: {}", name))
+            }
+        }
+    }
+
+    /// Load a test scenario from .morphir/test/scenarios/
+    pub fn load_test_scenario(&self, name: &str) -> Result<PathBuf> {
+        let scenario_path = self.morphir_dir
+            .join("test")
+            .join("scenarios")
+            .join(name);
+        
+        if scenario_path.exists() {
+            Ok(scenario_path)
+        } else {
+            // Try in workspace root
+            let workspace_scenario = self.project_root
+                .parent()
+                .unwrap_or(&self.project_root)
+                .join(".morphir")
+                .join("test")
+                .join("scenarios")
+                .join(name);
+            
+            if workspace_scenario.exists() {
+                Ok(workspace_scenario)
+            } else {
+                Err(anyhow::anyhow!("Test scenario not found: {}", name))
+            }
+        }
+    }
+}
+
+/// Result of a CLI command execution
+#[derive(Debug, Clone)]
+pub struct CommandResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    pub success: bool,
+}
+
+impl CommandResult {
+    /// Assert that the command succeeded
+    pub fn assert_success(&self) {
+        assert!(
+            self.success,
+            "Command failed with exit code {}\nSTDOUT:\n{}\nSTDERR:\n{}",
+            self.exit_code,
+            self.stdout,
+            self.stderr
+        );
+    }
+
+    /// Assert that the command failed
+    pub fn assert_failure(&self) {
+        assert!(
+            !self.success,
+            "Command unexpectedly succeeded\nSTDOUT:\n{}\nSTDERR:\n{}",
+            self.stdout,
+            self.stderr
+        );
+    }
+
+    /// Assert that output contains text
+    pub fn assert_output_contains(&self, text: &str) {
+        assert!(
+            self.stdout.contains(text) || self.stderr.contains(text),
+            "Output does not contain '{}'\nSTDOUT:\n{}\nSTDERR:\n{}",
+            text,
+            self.stdout,
+            self.stderr
+        );
+    }
+
+    /// Assert JSON output structure
+    pub fn assert_json_output(&self) -> Result<serde_json::Value> {
+        let json: serde_json::Value = serde_json::from_str(&self.stdout)?;
+        Ok(json)
+    }
+}
+
+/// Assert that files exist
+pub fn assert_files_exist(root: &Path, files: &[&str]) {
+    for file in files {
+        let path = root.join(file);
+        assert!(
+            path.exists(),
+            "File does not exist: {:?}",
+            path
+        );
+    }
+}
+
+/// Assert .morphir/ folder structure
+pub fn assert_morphir_structure(morphir_dir: &Path, project: &str) {
+    assert!(
+        morphir_dir.exists(),
+        ".morphir/ directory does not exist: {:?}",
+        morphir_dir
+    );
+    
+    let out_dir = morphir_dir.join("out").join(project);
+    assert!(
+        out_dir.exists(),
+        ".morphir/out/{} directory does not exist: {:?}",
+        project,
+        out_dir
+    );
+}
+
+/// Create a NotebookVfs from a test notebook file
+pub fn create_notebook_vfs(notebook_path: &Path) -> Result<morphir_common::vfs::NotebookVfs> {
+    morphir_common::vfs::NotebookVfs::from_file(notebook_path)
+}
+
+/// Assert that a notebook contains a file with the given path
+pub fn assert_notebook_contains_file(
+    notebook: &morphir_common::vfs::NotebookVfs,
+    file_path: &Path,
+) -> Result<()> {
+    assert!(
+        notebook.exists(file_path),
+        "Notebook does not contain file: {:?}",
+        file_path
+    );
+    Ok(())
+}

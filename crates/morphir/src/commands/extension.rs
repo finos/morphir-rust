@@ -146,8 +146,12 @@ pub fn run_extension_install(name: String, version: Option<String>) -> AppResult
 
 /// Run the extension list command
 pub fn run_extension_list() -> AppResult {
-    println!("Listing installed Morphir extensions...\n");
+    println!("Listing Morphir extensions...\n");
 
+    // Discover builtin extensions
+    let builtins = morphir_design::discover_builtin_extensions();
+    
+    // Load registry extensions
     let registry = match ExtensionRegistry::load() {
         Ok(reg) => reg,
         Err(e) => {
@@ -156,20 +160,56 @@ pub fn run_extension_list() -> AppResult {
         }
     };
 
-    let extensions = registry.list_extensions();
+    let registry_extensions = registry.list_extensions();
 
-    if extensions.is_empty() {
-        println!("No extensions installed.");
+    // Display builtin extensions
+    if !builtins.is_empty() {
+        println!("Builtin Extensions:");
+        println!("{:<20} {:<15} {:<30} Description", "Extension", "Version", "Capabilities");
+        println!("{}", "-".repeat(85));
+        for builtin in &builtins {
+            let languages = builtin.languages.join(", ");
+            let targets = builtin.targets.join(", ");
+            let capabilities = if !languages.is_empty() && !targets.is_empty() {
+                format!("Frontend: {} | Backend: {}", languages, targets)
+            } else if !languages.is_empty() {
+                format!("Frontend: {}", languages)
+            } else if !targets.is_empty() {
+                format!("Backend: {}", targets)
+            } else {
+                "N/A".to_string()
+            };
+            println!(
+                "{:<20} {:<15} {:<30} {}",
+                builtin.id,
+                "builtin",
+                capabilities,
+                builtin.name
+            );
+        }
+        println!();
+    }
+
+    // Display registry extensions
+    if registry_extensions.is_empty() && builtins.is_empty() {
+        println!("No extensions available.");
         println!("Use 'morphir extension install <name>' to install an extension");
-    } else {
+    } else if !registry_extensions.is_empty() {
+        println!("Installed Extensions (from registry):");
         println!("{:<20} {:<15} Description", "Extension", "Version");
         println!("{}", "-".repeat(70));
-        for ext in &extensions {
+        for ext in &registry_extensions {
             let description = ext.description.as_deref().unwrap_or("No description");
             let version_str = ext.version.as_deref().unwrap_or(DEFAULT_VERSION);
             println!("{:<20} {:<15} {}", ext.name, version_str, description);
         }
-        println!("\nTotal: {} extension(s) installed", extensions.len());
+        println!();
+    }
+
+    let total = builtins.len() + registry_extensions.len();
+    if total > 0 {
+        println!("Total: {} extension(s) available ({} builtin, {} installed)", 
+                 total, builtins.len(), registry_extensions.len());
     }
 
     Ok(None)

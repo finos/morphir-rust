@@ -1,0 +1,122 @@
+# Feature Registry for Gleam Binding
+# Defines feature taxonomy and tracks implementation status
+
+features:
+  frontend:
+    parsing:
+      - id: parse-function-def
+        name: "Parse function definitions"
+        category: "parsing"
+        scenarios: ["@parse-function"]
+        status: "implemented"
+        implementation_path: "src/frontend/parser.rs:value_def_parser"
+        test_path: "tests/features/parsing.feature"
+      
+      - id: parse-type-def
+        name: "Parse type definitions"
+        category: "parsing"
+        scenarios: ["@parse-type"]
+        status: "implemented"
+        implementation_path: "src/frontend/parser.rs:type_def_parser"
+        test_path: "tests/features/parsing.feature"
+      
+      - id: parse-expression
+        name: "Parse expressions"
+        category: "parsing"
+        scenarios: ["@parse-expression"]
+        status: "implemented"
+        implementation_path: "src/frontend/parser.rs:expr_parser"
+        test_path: "tests/features/parsing.feature"
+    
+    visitor:
+      - id: visitor-value
+        name: "Convert value expressions to Morphir IR"
+        category: "visitor"
+        scenarios: ["@visitor-value"]
+        status: "implemented"
+        implementation_path: "src/frontend/visitor.rs:convert_expr"
+        test_path: "tests/features/roundtrip.feature"
+      
+      - id: visitor-type
+        name: "Convert type expressions to Morphir IR"
+        category: "visitor"
+        scenarios: ["@visitor-type"]
+        status: "implemented"
+        implementation_path: "src/frontend/visitor.rs:convert_type_expr"
+        test_path: "tests/features/roundtrip.feature"
+  
+  backend:
+    codegen:
+      - id: codegen-function
+        name: "Generate function definitions"
+        category: "codegen"
+        scenarios: ["@codegen-function"]
+        status: "implemented"
+        implementation_path: "src/backend/visitor.rs:generate_value_def"
+        test_path: "tests/features/roundtrip.feature"
+      
+      - id: codegen-type
+        name: "Generate type definitions"
+        category: "codegen"
+        scenarios: ["@codegen-type"]
+        status: "implemented"
+        implementation_path: "src/backend/visitor.rs:generate_type_def"
+        test_path: "tests/features/roundtrip.feature"
+  
+  roundtrip:
+    - id: roundtrip-function
+      name: "Roundtrip function definitions"
+      category: "roundtrip"
+      scenarios: ["@roundtrip-function"]
+      status: "partial"
+      implementation_path: "tests/acceptance.rs"
+      test_path: "tests/features/roundtrip.feature"
+
+  cli:
+    - id: cli-compile
+      name: "CLI compile command"
+      category: "cli"
+      scenarios: ["@cli"]
+      status: "implemented"
+      implementation_path: "crates/morphir/src/commands/compile.rs"
+      test_path: "tests/features/cli.feature"
+    
+    - id: cli-generate
+      name: "CLI generate command"
+      category: "cli"
+      scenarios: ["@cli"]
+      status: "implemented"
+      implementation_path: "crates/morphir/src/commands/generate.rs"
+      test_path: "tests/features/cli.feature"
+    
+    - id: cli-gleam
+      name: "Gleam-specific CLI commands"
+      category: "cli"
+      scenarios: ["@cli"]
+      status: "implemented"
+      implementation_path: "crates/morphir/src/commands/gleam.rs"
+      test_path: "tests/features/cli.feature"
+    
+    - id: cli-config
+      name: "Configuration-driven CLI usage"
+      category: "cli"
+      scenarios: ["@cli", "@config"]
+      status: "implemented"
+      implementation_path: "crates/morphir-design/src/config.rs"
+      test_path: "tests/features/cli.feature"
+    
+    - id: cli-json-output
+      name: "JSON output support"
+      category: "cli"
+      scenarios: ["@cli", "@json"]
+      status: "implemented"
+      implementation_path: "crates/morphir/src/output.rs"
+      test_path: "tests/features/cli.feature"
+    
+    - id: cli-error-handling
+      name: "Error handling and diagnostics"
+      category: "cli"
+      scenarios: ["@cli", "@error-handling"]
+      status: "implemented"
+      implementation_path: "crates/morphir/src/error.rs"
+      test_path: "tests/features/cli.feature"

@@ -260,6 +260,63 @@ impl ExtensionRegistry {
         }
         results
     }
+
+    /// Register a builtin extension
+    pub async fn register_builtin(&self, id: &str, path: PathBuf) -> Result<()> {
+        self.register(ExtensionConfig {
+            id: id.to_string(),
+            source: ExtensionSource::Path { path },
+            enabled: true,
+            config: HashMap::new(),
+        })
+        .await
+    }
+
+    /// Find a frontend extension by language name
+    pub async fn find_extension_by_language(&self, language: &str) -> Option<Arc<ExtensionContainer>> {
+        // First check builtin extensions (by ID matching language)
+        if let Ok(ext) = self.load(language).await {
+            if ext.supports(ExtensionType::Frontend) {
+                return Some(ext);
+            }
+        }
+
+        // Then check registered extensions
+        let extensions = self.extensions.read().await;
+        for ext in extensions.values() {
+            if ext.supports(ExtensionType::Frontend) {
+                // For now, match by ID. In the future, we could query the extension
+                // for its supported languages
+                if ext.id() == language {
+                    return Some(ext.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a backend extension by target language name
+    pub async fn find_extension_by_target(&self, target: &str) -> Option<Arc<ExtensionContainer>> {
+        // First check builtin extensions (by ID matching target)
+        if let Ok(ext) = self.load(target).await {
+            if ext.supports(ExtensionType::Backend) {
+                return Some(ext);
+            }
+        }
+
+        // Then check registered extensions
+        let extensions = self.extensions.read().await;
+        for ext in extensions.values() {
+            if ext.supports(ExtensionType::Backend) {
+                // For now, match by ID. In the future, we could query the extension
+                // for its supported targets
+                if ext.id() == target {
+                    return Some(ext.clone());
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

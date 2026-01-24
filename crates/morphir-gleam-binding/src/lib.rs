@@ -4,7 +4,10 @@
 //! - Frontend: Parse Gleam source files to Morphir IR
 //! - Backend: Generate Gleam code from Morphir IR
 
+use morphir_common::vfs::OsVfs;
 use morphir_extension_sdk::prelude::*;
+use morphir_ir::naming::{ModuleName, PackageName};
+use std::path::PathBuf;
 
 mod backend;
 mod frontend;
@@ -46,25 +49,95 @@ impl Frontend for GleamExtension {
         let mut ir_modules = Vec::new();
         let mut diagnostics = Vec::new();
 
+        // Determine output directory (from options or default)
+        let output_dir = request
+            .options
+            .get("outputDir")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        // Extract package name (from options or default)
+        let package_name = request
+            .options
+            .get("packageName")
+            .and_then(|v| v.as_str())
+            .map(|s| PackageName::parse(s))
+            .unwrap_or_else(|| PackageName::parse("default-package"));
+
+        let vfs = OsVfs;
+
         for source in &request.sources {
             match frontend::parse_gleam(&source.path, &source.content) {
                 Ok(module_ir) => {
-                    ir_modules.push(module_ir);
+                    // Extract module name from path
+                    let module_name = ModuleName::parse(
+                        &source
+                            .path
+                            .trim_end_matches(".gleam")
+                            .replace('\\', "/"),
+                    );
+
+                    // Convert to Morphir IR V4 Document Tree format
+                    let visitor = frontend::GleamToMorphirVisitor::new(
+                        vfs,
+                        output_dir.clone(),
+                        package_name.clone(),
+                        module_name,
+                    );
+
+                    match visitor.visit_module_v4(&module_ir) {
+                        Ok(_) => {
+                            // Read format.json as IR representation
+                            // output_dir is already .morphir/out/<project>/compile/<language>/
+                            let format_json_path = output_dir
+                                .join("format.json");
+                            if vfs.exists(&format_json_path) {
+                                match vfs.read_to_string(&format_json_path) {
+                                    Ok(format_content) => {
+                                        match serde_json::from_str::<serde_json::Value>(&format_content) {
+                                            Ok(ir_json) => {
+                                                ir_modules.push(ir_json);
+                                            }
+                                            Err(e) => {
+                                                diagnostics.push(Diagnostic {
+                                                    severity: DiagnosticSeverity::Error,
+                                                    code: Some("E002".into()),
+                                                    message: format!("Failed to parse format.json: {}", e),
+                                                    location: None,
+                                                    related: vec![],
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        diagnostics.push(Diagnostic {
+                                            severity: DiagnosticSeverity::Error,
+                                            code: Some("E003".into()),
+                                            message: format!("Failed to read format.json: {}", e),
+                                            location: None,
+                                            related: vec![],
+                                        });
+                                    }
+                                }
+                            } else {
+                                // Fallback: serialize ModuleIR directly
+                                ir_modules.push(serde_json::to_value(&module_ir)?);
+                            }
+                        }
+                        Err(e) => {
+                            diagnostics.push(Diagnostic {
+                                severity: DiagnosticSeverity::Error,
+                                code: Some("E004".into()),
+                                message: format!("Failed to convert to Morphir IR: {}", e),
+                                location: None,
+                                related: vec![],
+                            });
+                        }
+                    }
                 }
                 Err(e) => {
-                    diagnostics.push(Diagnostic {
-                        severity: DiagnosticSeverity::Error,
-                        code: Some("E001".into()),
-                        message: e.to_string() as String,
-                        location: Some(SourceLocation {
-                            file: source.path.clone(),
-                            start_line: 1,
-                            start_col: 1,
-                            end_line: 1,
-                            end_col: 1,
-                        }),
-                        related: vec![],
-                    });
+                    diagnostics.push(e.to_diagnostic(&source.path, &source.content));
                 }
             }
         }

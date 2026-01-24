@@ -1,9 +1,16 @@
 //! Gleam code generation from Morphir IR
 
+use anyhow;
+use morphir_common::vfs::OsVfs;
 use morphir_extension_sdk::prelude::*;
+use morphir_ir::ir::v4::{AccessControlledModuleDefinition, PackageDefinition};
+use morphir_ir::naming::ModuleName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::path::PathBuf;
+
+mod visitor;
 
 /// Morphir distribution IR (simplified)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +52,12 @@ pub fn generate_gleam(
     ir: &serde_json::Value,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
+    // Try to parse as V4 PackageDefinition first
+    if let Ok(package_def) = serde_json::from_value::<PackageDefinition>(ir.clone()) {
+        return generate_from_package_definition(package_def, options);
+    }
+
+    // Fallback to legacy format
     let mut artifacts = Vec::new();
 
     // Try to parse as distribution or module list
@@ -73,6 +86,62 @@ pub fn generate_gleam(
             content: code,
             binary: false,
         });
+    }
+
+    Ok(artifacts)
+}
+
+/// Generate from V4 PackageDefinition using visitor
+fn generate_from_package_definition(
+    package_def: PackageDefinition,
+    options: &HashMap<String, serde_json::Value>,
+) -> Result<Vec<Artifact>> {
+    use visitor::MorphirToGleamVisitor;
+
+    let output_dir = options
+        .get("outputDir")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let package_name = options
+        .get("packageName")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| "default-package".to_string());
+
+    let vfs = OsVfs;
+    let visitor = MorphirToGleamVisitor::new(vfs, output_dir.clone(), package_name);
+
+    let mut artifacts = Vec::new();
+
+    // Generate each module
+    for (module_path_str, module_def) in &package_def.modules {
+        let module_path = ModuleName::parse(module_path_str);
+        
+        match visitor.visit_module(&module_path, module_def) {
+            Ok(_) => {
+                // Read generated file
+                let file_path = output_dir.join(format!("{}.gleam", module_path_str));
+                if vfs.exists(&file_path) {
+                    match vfs.read_to_string(&file_path) {
+                        Ok(content) => {
+                            artifacts.push(Artifact {
+                                path: format!("{}.gleam", module_path_str),
+                                content,
+                                binary: false,
+                            });
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("Failed to read generated file: {}", e));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to generate module {}: {}", module_path_str, e));
+            }
+        }
     }
 
     Ok(artifacts)

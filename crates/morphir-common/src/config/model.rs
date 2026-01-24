@@ -104,7 +104,7 @@ pub(crate) fn default_source_dir() -> String {
 }
 
 pub(crate) fn default_output_dir() -> String {
-    ".morphir-dist".to_string()
+    ".morphir/out".to_string()
 }
 
 /// [workspace] section

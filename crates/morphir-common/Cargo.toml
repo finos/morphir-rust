@@ -20,6 +20,7 @@ dirs = "6.0"
 morphir-ir = { path = "../morphir-ir" }
 glob = "0.3"
 indexmap = { version = "2", features = ["serde"] }
+nbformat = "0.1"
 
 # Remote source support
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }

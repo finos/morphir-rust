@@ -1,6 +1,8 @@
+pub mod compile;
 pub mod dist;
 pub mod extension;
 pub mod generate;
+pub mod gleam;
 pub mod migrate;
 pub mod schema;
 pub mod tool;
@@ -8,9 +10,11 @@ pub mod transform;
 pub mod validate;
 pub mod version;
 
+pub use compile::*;
 pub use dist::*;
 pub use extension::*;
 pub use generate::*;
+pub use gleam::*;
 pub use migrate::*;
 pub use tool::*;
 pub use transform::*;

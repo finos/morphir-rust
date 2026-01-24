@@ -11,6 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 description = "CLI for working with Morphir IR - functional domain modeling and business logic"
 
+[lib]
+name = "morphir"
+path = "src/lib.rs"
+
 [[bin]]
 name = "morphir"
 path = "src/main.rs"
@@ -23,10 +27,14 @@ termimad = "0.30"
 syntect = "5"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 morphir-ir = { path = "../morphir-ir" }
 morphir-common = { path = "../morphir-common" }
+morphir-design = { path = "../morphir-design" }
+morphir-daemon = { path = "../morphir-daemon" }
+walkdir = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "6.0"
@@ -48,6 +56,10 @@ tracing-appender = { workspace = true }
 
 [build-dependencies]
 chrono = "0.4"
+
+[[test]]
+name = "cli_integration"
+path = "tests/cli_integration.rs"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }.{ archive-format }"

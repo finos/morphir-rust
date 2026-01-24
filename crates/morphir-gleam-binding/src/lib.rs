@@ -77,17 +77,16 @@ impl Frontend for GleamExtension {
             match frontend::parse_gleam(&source.path, &source.content) {
                 Ok(module_ir) => {
                     // Emit parse stage JSON if enabled
-                    if emit_parse_stage {
-                        if let Err(e) = emit_parse_stage_json(&output_dir, &source.path, &module_ir)
-                        {
-                            diagnostics.push(Diagnostic {
-                                severity: DiagnosticSeverity::Warning,
-                                code: Some("W001".into()),
-                                message: format!("Failed to emit parse stage output: {}", e),
-                                location: None,
-                                related: vec![],
-                            });
-                        }
+                    if emit_parse_stage
+                        && let Err(e) = emit_parse_stage_json(&output_dir, &source.path, &module_ir)
+                    {
+                        diagnostics.push(Diagnostic {
+                            severity: DiagnosticSeverity::Warning,
+                            code: Some("W001".into()),
+                            message: format!("Failed to emit parse stage output: {}", e),
+                            location: None,
+                            related: vec![],
+                        });
                     }
                     // Extract module name from path
                     let module_name = ModuleName::parse(
@@ -221,7 +220,7 @@ impl Backend for GleamExtension {
 /// Writes the parsed ModuleIR to `.morphir/out/<project>/parse/<module>.json`
 /// This allows inspection of the intermediate AST before IR conversion.
 fn emit_parse_stage_json(
-    output_dir: &PathBuf,
+    output_dir: &std::path::Path,
     source_path: &str,
     module_ir: &frontend::ast::ModuleIR,
 ) -> anyhow::Result<()> {

@@ -120,7 +120,64 @@ morphir self install 0.1.0
 
 # Remove old versions
 morphir self prune
+
+# Update the launcher script itself
+morphir self update
+
+# Show dev mode status
+morphir self dev
 ```
+
+## Dev Mode
+
+Dev mode allows you to run morphir from a local source checkout instead of a downloaded binary. This is useful for:
+
+- Developing and testing changes to morphir
+- Debugging issues with local modifications
+- CI/CD pipelines that build from source
+
+### Enabling Dev Mode
+
+There are several ways to enable dev mode:
+
+```bash
+# One-time: use --dev flag
+morphir --dev <command>
+
+# Session: set environment variable
+export MORPHIR_DEV=1
+
+# Project: create .morphir-version with "local-dev"
+echo "local-dev" > .morphir-version
+
+# Config: add to morphir.toml
+cat >> morphir.toml << 'EOF'
+[morphir]
+dev_mode = true
+EOF
+```
+
+### Source Directory Detection
+
+When dev mode is enabled, the launcher automatically searches for the morphir-rust source directory in this order:
+
+1. `MORPHIR_DEV_PATH` environment variable
+2. CI environment variables (`GITHUB_WORKSPACE`, `CI_PROJECT_DIR`, etc.)
+3. Current directory and parent directories
+4. Common development locations (`~/code/morphir-rust`, `~/dev/morphir-rust`, etc.)
+
+### Dev Mode Status
+
+Check your dev mode configuration:
+
+```bash
+morphir self dev
+```
+
+This shows:
+- Whether dev mode is enabled and why
+- The detected source directory
+- Available debug/release binaries
 
 ## Environment Variables
 
@@ -129,6 +186,8 @@ morphir self prune
 | `MORPHIR_VERSION` | Override version to use |
 | `MORPHIR_HOME` | Override home directory (default: `~/.morphir`) |
 | `MORPHIR_BACKEND` | Force specific backend: `mise`, `binstall`, `github`, `cargo` |
+| `MORPHIR_DEV` | Set to `1` or `true` to enable dev mode |
+| `MORPHIR_DEV_PATH` | Path to morphir-rust source directory for dev mode |
 
 ## Uninstalling
 

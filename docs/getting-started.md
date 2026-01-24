@@ -135,6 +135,20 @@ morphir self list
 morphir self which
 ```
 
+### Dev Mode
+
+For developing and testing morphir itself, you can run from a local source checkout:
+
+```bash
+# One-time dev mode
+morphir --dev ir migrate --input ./ir.json
+
+# Check dev mode status
+morphir self dev
+```
+
+See the [Installation Guide](install#dev-mode) for more details.
+
 ## Next Steps
 
 - [Installation Guide](install) - Detailed installation options

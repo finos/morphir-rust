@@ -28,6 +28,17 @@ For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust
   - Supports `.morphir-version` file for per-project version pinning
   - Auto-downloads correct version on first run
   - `morphir self upgrade` to fetch latest version
+- **Dev Mode**: Run morphir from local source for development and testing
+  - Enable via `--dev` flag, `MORPHIR_DEV=1`, `local-dev` in `.morphir-version`, or `dev_mode=true` in `morphir.toml`
+  - `morphir self dev` to check dev mode status and configuration
+  - Auto-detects source directory from CI environments and common locations
+- **Gleam Binding**: Roundtrip testing infrastructure for Gleam code
+  - Compile Gleam to IR V4, generate back to Gleam, verify equivalence
+  - Support for todo/panic expressions in parser
+
+### Fixed
+
+- **VFS Consistency**: `MemoryVfs::exists()` now returns `true` for directories, matching `OsVfs` behavior
 
 ### Changed
 

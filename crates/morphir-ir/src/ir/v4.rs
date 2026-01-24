@@ -13,7 +13,7 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-// Re-export naming types
+// Re-export naming types - Name now serializes as V4 canonical format (kebab-case string)
 pub use crate::naming::ModuleName;
 pub use crate::naming::Name;
 pub use crate::naming::PackageName;

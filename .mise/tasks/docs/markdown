@@ -16,6 +16,72 @@ cargo build -p morphir --quiet
 if command -v usage >/dev/null 2>&1; then
     echo "Generating markdown documentation..."
     usage generate markdown --file docs/morphir.usage.kdl --out-dir docs/cli --multi
+
+    # Add just-the-docs front matter to generated files
+    echo "Adding front matter for just-the-docs theme..."
+
+    # CLI index page
+    if [ -f docs/cli/index.md ]; then
+        CONTENT=$(cat docs/cli/index.md)
+        cat >docs/cli/index.md <<'FRONTMATTER'
+---
+layout: default
+title: CLI Reference
+nav_order: 4
+has_children: true
+permalink: /cli/
+---
+
+FRONTMATTER
+        echo "$CONTENT" >>docs/cli/index.md
+    fi
+
+    # Process subcommand pages
+    for cmd in ir schema version tool dist extension; do
+        if [ -f "docs/cli/${cmd}.md" ]; then
+            CONTENT=$(cat "docs/cli/${cmd}.md")
+
+            # Determine if this command has children
+            HAS_CHILDREN="false"
+            if [ -d "docs/cli/${cmd}" ]; then
+                HAS_CHILDREN="true"
+            fi
+
+            cat >"docs/cli/${cmd}.md" <<FRONTMATTER
+---
+layout: default
+title: ${cmd}
+parent: CLI Reference
+has_children: ${HAS_CHILDREN}
+nav_order: $(echo "$cmd" | cksum | cut -d' ' -f1 | head -c2)
+---
+
+FRONTMATTER
+            echo "$CONTENT" >>"docs/cli/${cmd}.md"
+        fi
+
+        # Process child pages
+        if [ -d "docs/cli/${cmd}" ]; then
+            for subpage in "docs/cli/${cmd}"/*.md; do
+                if [ -f "$subpage" ]; then
+                    SUBCMD=$(basename "$subpage" .md)
+                    CONTENT=$(cat "$subpage")
+
+                    cat >"$subpage" <<FRONTMATTER
+---
+layout: default
+title: ${cmd} ${SUBCMD}
+parent: ${cmd}
+grand_parent: CLI Reference
+---
+
+FRONTMATTER
+                    echo "$CONTENT" >>"$subpage"
+                fi
+            done
+        fi
+    done
+
     echo "Markdown docs generated in docs/cli/"
 else
     echo "Warning: 'usage' CLI not found. Install with: mise install"

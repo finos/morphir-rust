@@ -1,0 +1,112 @@
+#!/bin/sh
+#MISE description="Generate release notes from CHANGELOG.md"
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+CHANGELOG="$REPO_ROOT/CHANGELOG.md"
+RELEASES="$REPO_ROOT/docs/releases.md"
+
+if [ ! -f "$CHANGELOG" ]; then
+    echo "Error: CHANGELOG.md not found at $CHANGELOG"
+    exit 1
+fi
+
+echo "Generating release notes from CHANGELOG.md..."
+
+# Generate the releases.md file
+cat >"$RELEASES" <<'FRONTMATTER'
+---
+layout: default
+title: Release Notes
+nav_order: 6
+---
+
+# Release Notes
+
+All notable changes to Morphir Rust are documented here. This project follows [Semantic Versioning](https://semver.org/).
+
+For the full changelog, see [CHANGELOG.md](https://github.com/finos/morphir-rust/blob/main/CHANGELOG.md) on GitHub.
+
+---
+
+FRONTMATTER
+
+# Parse CHANGELOG.md and convert to docs format
+# Skip the header and extract version sections
+awk '
+BEGIN { in_version = 0; skip_unreleased = 0 }
+
+# Skip footer links at end of file
+/^\[Unreleased\]:/ { next }
+/^\[[0-9]+\.[0-9]+\.[0-9]+\]:/ { next }
+
+# Skip the changelog header
+/^# Changelog/ { next }
+/^All notable changes/ { next }
+/^The format is based on/ { next }
+/^and this project adheres/ { next }
+/^$/ && !in_version { next }
+
+# Handle [Unreleased] section - skip it for docs
+/^## \[Unreleased\]/ {
+    skip_unreleased = 1
+    next
+}
+
+# Handle version headers
+/^## \[[0-9]+\.[0-9]+\.[0-9]+\]/ {
+    skip_unreleased = 0
+    in_version = 1
+    # Extract version and date using portable regex
+    version = $0
+    gsub(/.*\[/, "", version)
+    gsub(/\].*/, "", version)
+
+    release_date = $0
+    gsub(/.*- /, "", release_date)
+    gsub(/ *$/, "", release_date)
+
+    # Format date nicely (YYYY-MM-DD to Month DD, YYYY)
+    cmd = "date -d \"" release_date "\" \"+%B %d, %Y\" 2>/dev/null || date -j -f \"%Y-%m-%d\" \"" release_date "\" \"+%B %d, %Y\" 2>/dev/null || echo \"" release_date "\""
+    cmd | getline formatted_date
+    close(cmd)
+
+    print "## v" version " (" formatted_date ")"
+    print ""
+    next
+}
+
+# Skip content in Unreleased section
+skip_unreleased { next }
+
+# Print content in version sections
+in_version { print }
+' "$CHANGELOG" >>"$RELEASES"
+
+# Add footer
+cat >>"$RELEASES" <<'FOOTER'
+
+---
+
+## Upgrading
+
+To upgrade to the latest version:
+
+```bash
+# Using the launcher
+morphir self upgrade
+
+# Using mise
+mise upgrade github:finos/morphir-rust
+
+# Using cargo
+cargo install --git https://github.com/finos/morphir-rust morphir --force
+```
+
+## Reporting Issues
+
+Found a bug or have a feature request? Please [open an issue](https://github.com/finos/morphir-rust/issues/new) on GitHub.
+FOOTER
+
+echo "Release notes generated at docs/releases.md"

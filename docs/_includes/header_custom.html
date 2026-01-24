@@ -1,0 +1,36 @@
+<button class="theme-toggle js-toggle-dark-mode" aria-label="Toggle dark mode" onclick="toggleTheme();">
+  <i class="fa-solid fa-sun sun-icon"></i>
+  <i class="fa-solid fa-moon moon-icon" style="display:none;"></i>
+</button>
+
+<script>
+function toggleTheme() {
+  var current = localStorage.getItem('morphir-theme') || 'light';
+  var next = (current === 'dark') ? 'light' : 'dark';
+  localStorage.setItem('morphir-theme', next);
+
+  var link = document.querySelector('link[href*="just-the-docs-"]');
+  if (link) {
+    link.href = link.href.replace('just-the-docs-default', 'just-the-docs-' + next)
+                         .replace('just-the-docs-light', 'just-the-docs-' + next)
+                         .replace('just-the-docs-dark', 'just-the-docs-' + next);
+  }
+
+  document.querySelector('.sun-icon').style.display = (next === 'dark') ? 'none' : 'inline';
+  document.querySelector('.moon-icon').style.display = (next === 'dark') ? 'inline' : 'none';
+}
+
+// Run immediately - DOM elements are already available at this point
+(function() {
+  var theme = localStorage.getItem('morphir-theme');
+  if (theme === 'dark') {
+    var link = document.querySelector('link[href*="just-the-docs-"]');
+    if (link) {
+      link.href = link.href.replace('just-the-docs-default', 'just-the-docs-dark')
+                           .replace('just-the-docs-light', 'just-the-docs-dark');
+    }
+    document.querySelector('.sun-icon').style.display = 'none';
+    document.querySelector('.moon-icon').style.display = 'inline';
+  }
+})();
+</script>

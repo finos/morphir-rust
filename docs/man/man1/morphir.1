@@ -8,9 +8,6 @@ CLI for working with Morphir IR \- functional domain modeling and business logic
 .PP
 .SH OPTIONS
 .TP
-\fB\-h, \-\-help\fR
-Print help (use \-\-help\-all to include experimental commands)
-.TP
 \fB\-\-help\-all\fR
 Print help including experimental commands
 .TP
@@ -196,26 +193,57 @@ Uninstall a Morphir extension
 Name of the extension to uninstall
 .SH "MORPHIR IR MIGRATE"
 Migrate IR between versions
+
+Converts Morphir IR between Classic (V1\-V3) and V4 formats. Supports local files, URLs, and GitHub shorthand sources.
+
+**Examples:**
+
+```bash
+# Migrate to file
+morphir ir migrate ./morphir\-ir.json \-o ./morphir\-ir\-v4.json \-\-target\-version v4
+
+# Migrate from URL
+morphir ir migrate https://lcr\-interactive.finos.org/server/morphir\-ir.json \-o ./lcr\-v4.json
+
+# Display in console with syntax highlighting (no \-o)
+morphir ir migrate ./morphir\-ir.json
+
+# Downgrade V4 to Classic
+morphir ir migrate ./morphir\-ir\-v4.json \-o ./morphir\-ir\-classic.json \-\-target\-version classic
+```
+
+See the [IR Migration Guide](/ir\-migrate/) for detailed real\-world examples including the US Federal Reserve FR 2052a regulation model.
 .PP
-\fBUsage:\fR morphir ir migrate [OPTIONS]
+\fBUsage:\fR morphir ir migrate [OPTIONS] <INPUT>
 .PP
 \fBOptions:\fR
 .PP
 .TP
-\fB\-i, \-\-input\fR \fI<INPUT>\fR
-Input file, directory, or remote source (e.g., github:owner/repo)
-.TP
 \fB\-o, \-\-output\fR \fI<OUTPUT>\fR
-Output file or directory
+Output file or directory (if omitted, displays in console with syntax highlighting)
 .TP
 \fB\-\-target\-version\fR \fI<TARGET_VERSION>\fR
-Target version (v4 or classic)
+Target version: latest, v4/4, classic, v3/3, v2/2, v1/1 (default: latest)
+.RS
+\fIDefault: \fRlatest
+.RE
 .TP
 \fB\-\-force\-refresh\fR
 Force refresh cached remote sources
 .TP
 \fB\-\-no\-cache\fR
 Skip cache entirely for remote sources
+.TP
+\fB\-\-json\fR
+Output result as JSON (for scripting)
+.TP
+\fB\-\-expanded\fR
+Use expanded (non\-compact) format for V4 output
+\fBArguments:\fR
+.PP
+.TP
+\fB<INPUT>\fR
+Input file, directory, or remote source (e.g., github:owner/repo, URL)
 .SH "MORPHIR SCHEMA"
 Generate JSON Schema for Morphir IR
 .PP

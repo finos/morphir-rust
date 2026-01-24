@@ -19,6 +19,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [0.1.1] - 2026-01-24
+
+### Added
+
+- **TUI Pager**: Interactive JSON viewer with syntax highlighting and vim-like navigation
+  - Visual mode (`v`, `V`) for selecting text
+  - Yank to clipboard (`y`) with WSL, X11, Wayland, and macOS support
+  - Word motions (`w`, `b`), line jumps (`g`, `G`), and scroll controls
+- **Expanded Format**: `--expanded` flag for `morphir ir migrate` produces verbose V4 output
+  - Variables: `{"Variable": {"name": "a"}}` instead of `"a"`
+  - References: `{"Reference": {"fqname": "...", "args": [...]}}` instead of array format
+- **Launcher Script**: Self-updating launcher with version management (`scripts/morphir.sh`)
+  - Supports `.morphir-version` file for per-project version pinning
+  - Auto-downloads correct version on first run
+  - `morphir self upgrade` to fetch latest version
+
+### Changed
+
+- **V4 Compact Format Improvements**:
+  - Reference with args now uses array format: `{"Reference": ["fqname", arg1, ...]}`
+  - Type variables are bare name strings in compact mode: `"a"`
+  - References without args are bare FQName strings: `"morphir/sdk:int#int"`
+- **V4 Canonical Naming**: `Name` type now uses kebab-case by default (e.g., `my-function`)
+- **Documentation Site**: Restructured with just-the-docs theme and morphir.finos.org branding
+
 ## [0.1.0] - 2026-01-23
 
 ### Added
@@ -43,5 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WASM Bindings**: WebAssembly backend for browser and edge deployments
 - **Gleam Binding**: Language binding for Gleam frontend/backend
 
-[Unreleased]: https://github.com/finos/morphir-rust/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/finos/morphir-rust/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/finos/morphir-rust/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/finos/morphir-rust/releases/tag/v0.1.0

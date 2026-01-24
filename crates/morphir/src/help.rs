@@ -1,6 +1,7 @@
 //! Help and banner display utilities for the Morphir CLI.
 
 use owo_colors::{OwoColorize, XtermColors};
+use termimad::MadSkin;
 
 /// Print the Morphir ASCII art banner with branded colors.
 pub fn print_banner() {
@@ -72,4 +73,46 @@ pub fn should_show_full_help(args: &[String]) -> bool {
             && args
                 .iter()
                 .any(|a| a == "--all" || a == "--full" || a == "--experimental"))
+}
+
+/// Create a styled skin for terminal markdown rendering.
+#[allow(dead_code)]
+pub fn make_skin() -> MadSkin {
+    use termimad::crossterm::style::Color;
+
+    let mut skin = MadSkin::default();
+
+    // Morphir brand colors
+    let blue = Color::AnsiValue(33); // Bright blue
+    let orange = Color::AnsiValue(208); // Orange
+
+    // Headers in blue
+    skin.headers[0].set_fg(blue);
+    skin.headers[1].set_fg(blue);
+    skin.headers[2].set_fg(blue);
+
+    // Bold/emphasis in orange
+    skin.bold.set_fg(orange);
+
+    // Code blocks with background
+    skin.code_block.set_bg(Color::AnsiValue(236)); // Dark gray background
+
+    // Inline code styling
+    skin.inline_code.set_bg(Color::AnsiValue(236));
+
+    skin
+}
+
+/// Print markdown text to the console with syntax highlighting.
+#[allow(dead_code)]
+pub fn print_markdown(text: &str) {
+    let skin = make_skin();
+    skin.print_text(text);
+}
+
+/// Print markdown text inline (without newline).
+#[allow(dead_code)]
+pub fn print_markdown_inline(text: &str) {
+    let skin = make_skin();
+    print!("{}", skin.term_text(text));
 }

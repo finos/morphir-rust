@@ -1,28 +1,81 @@
 # GitHub Pages configuration for Morphir Rust documentation
 title: Morphir Rust
-description: Rust tooling for the Morphir ecosystem
-remote_theme: pages-themes/minimal@v0.2.0
+description: >-
+  CLI tools and libraries for working with Morphir IR -
+  functional domain modeling and business logic
+url: https://finos.github.io
+baseurl: /morphir-rust
+
+# Logo - from morphir.finos.org
+logo: "/assets/images/logo.png"
+favicon_ico: "/assets/images/favicon.ico"
+
+# Theme - just-the-docs has sidebar navigation with nesting
+remote_theme: just-the-docs/just-the-docs@v0.10.0
 plugins:
   - jekyll-remote-theme
 
-# Navigation
-header_pages:
-  - index.md
-  - ir-migrate.md
+# Color scheme - light (default) with dark toggle support
+color_scheme: light
+
+# Enable search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Aux links (top right)
+aux_links:
+  "GitHub":
+    - "https://github.com/finos/morphir-rust"
+  "Morphir":
+    - "https://morphir.finos.org"
+
+aux_links_new_tab: true
+
+# Footer content
+footer_content: >-
+  Copyright &copy; 2022-2025 <a href="https://www.finos.org">FINOS</a>.
+  Distributed under the <a href="https://github.com/finos/morphir-rust/blob/main/LICENSE">Apache License 2.0</a>.
+  <br>Part of the <a href="https://morphir.finos.org">Morphir</a> ecosystem.
+
+# Back to top link
+back_to_top: true
+back_to_top_text: "Back to top"
+
+# Heading anchor links
+heading_anchors: true
 
 # Build settings
 markdown: kramdown
 highlighter: rouge
+kramdown:
+  input: GFM
+  hard_wrap: false
 
-# Collections for organizing docs
-collections:
-  docs:
-    output: true
-    permalink: /:collection/:name
+# Sass settings - suppress deprecation warnings from theme dependencies
+sass:
+  quiet_deps: true
 
-# Default front matter
+# Permalink style
+permalink: pretty
+
+# Front matter defaults for generated CLI docs
+# Note: just-the-docs auto-infers titles from H1 headers
 defaults:
   - scope:
-      path: ""
+      path: "cli"
     values:
       layout: default
+
+# Exclude from build
+exclude:
+  - morphir.usage.kdl
+  - man/
+  - Gemfile
+  - Gemfile.lock

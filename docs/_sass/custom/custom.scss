@@ -1,0 +1,48 @@
+// Custom styles for Morphir Rust documentation
+
+// Hero section on landing page
+.hero-banner {
+  background: linear-gradient(135deg, #2e8555 0%, #25c2a0 100%);
+  color: white;
+  padding: 3rem 2rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  text-align: center;
+
+  h1 {
+    color: white;
+    margin-bottom: 1rem;
+  }
+
+  p {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 1.25rem;
+  }
+}
+
+// Logo in header
+.site-logo {
+  max-height: 40px;
+  margin-right: 0.5rem;
+}
+
+// Better code block styling
+.highlight {
+  border-radius: 6px;
+}
+
+// Link hover effects matching morphir green
+a:hover {
+  text-decoration-color: #2e8555;
+}
+
+// Button styling
+.btn-primary {
+  background-color: #2e8555;
+  border-color: #2e8555;
+
+  &:hover {
+    background-color: #29784c;
+    border-color: #29784c;
+  }
+}

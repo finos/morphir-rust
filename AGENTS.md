@@ -36,7 +36,9 @@ When uncertain about Morphir-specific design decisions, consult the reference im
 
 ### Key Libraries & Frameworks
 - **CLI Framework**: `starbase` (application structure), `clap` (command parsing)
+- **TUI**: `ratatui` (terminal UI widgets), `crossterm` (cross-platform terminal manipulation), `tuirealm` (component framework)
 - **Serialization**: `serde` & `serde_json` (JSON handling), `schemars` (JSON Schema generation)
+- **Logging**: `tracing` (structured logging), `tracing-subscriber` (log subscribers), `tracing-appender` (file logging)
 - **Error Handling**: `thiserror` (library errors), `anyhow` (application/CLI errors)
 
 ## Coding Standards & Best Practices
@@ -128,6 +130,89 @@ Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
   - **Alternative**: `.morphir/out/` (for Morphir-specific outputs)
 - **Redirect Output**: When running commands that generate output files, explicitly redirect them to the gitignored locations above rather than letting them write to the working directory.
 - **Clean Working Directory**: Keep the git working directory clean to avoid accidental commits of temporary files.
+
+### Logging Standards
+- **stdout is Reserved for Output**: Never write logs to stdout. stdout is exclusively for actual program output (command results, generated content, data). This ensures:
+  - CLI output can be piped to other commands
+  - JSON/structured output remains parseable
+  - Scripts can capture actual results without log noise
+- **stderr for Console Logging**: All console-level logging (warnings, errors, progress messages) must go to stderr.
+- **File-Based Logging**: Log files should be written to:
+  - **Workspace-local**: `.morphir/logs/` when inside a morphir workspace (a directory containing `morphir.toml` or `.morphir/`)
+  - **Global fallback**: `~/.morphir/logs/` when not in a workspace
+- **Log Levels**: Use appropriate log levels:
+  - `error`: Unrecoverable failures
+  - `warn`: Recoverable issues or deprecation notices
+  - `info`: High-level progress indicators (default for CLI)
+  - `debug`: Detailed operational information
+  - `trace`: Highly verbose debugging output
+- **Structured Logging**: Prefer structured log formats (JSON lines) for file-based logs to enable analysis and aggregation.
+- **Rotation**: File logs should support rotation to prevent unbounded growth.
+- **Configuration**: Log destinations and levels should be configurable via:
+  - Environment variables: `MORPHIR_LOG_LEVEL`, `MORPHIR_LOG_DIR`
+  - Config file: `[logging]` section in `morphir.toml`
+
+## CLI Documentation Generation
+
+The CLI reference documentation is auto-generated from the Rust CLI source code via clap's usage output.
+
+### Key Files
+- **Source of Truth**: `crates/morphir/src/main.rs` - Rust source with clap derive macros
+- **Intermediate**: `docs/morphir.usage.kdl` - Generated from `morphir usage` command
+- **Generated Output**: `docs/cli/` directory - Markdown files generated from the KDL spec
+- **Task**: `.mise/tasks/docs/markdown` - Orchestrates generation and post-processing
+
+### Regenerating CLI Docs
+
+```bash
+mise run docs:markdown    # Regenerate CLI docs
+mise run docs:generate    # Regenerate all docs (CLI + release notes)
+```
+
+The task automatically:
+1. Builds the morphir binary
+2. Generates `docs/morphir.usage.kdl` from `morphir usage`
+3. Generates markdown with `usage generate markdown`
+4. Adds Jekyll front matter for just-the-docs theme
+
+### Adding Examples to CLI Docs
+
+**DO NOT** add examples directly to generated markdown files or the KDL file - they will be lost on regeneration.
+
+Instead, add a `long_about` attribute in the Rust source code (`crates/morphir/src/main.rs`):
+
+```rust
+#[derive(Clone, Subcommand)]
+enum IrAction {
+    /// Migrate IR between versions
+    #[command(long_about = "Migrate IR between versions
+
+Converts Morphir IR between Classic (V1-V3) and V4 formats.
+
+**Examples:**
+
+```bash
+morphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json
+```
+
+See the [IR Migration Guide](/ir-migrate/) for details.")]
+    Migrate {
+        // fields...
+    }
+}
+```
+
+For detailed real-world examples (like step-by-step walkthroughs), add them to separate guide pages in `docs/` that are NOT auto-generated (e.g., `docs/ir-migrate.md`).
+
+### Clap Attributes for Documentation
+- Doc comment (`///`) - Short description shown in command listing
+- `#[command(long_about = "...")]` - Extended help with examples (supports markdown)
+- `#[command(hide = true)]` - Hide command from default help (experimental commands)
+- `#[arg(short, long)]` - Short and long flag names
+- `#[arg(required = true)]` - Mark argument as required
+
+### Markdown Console Rendering
+The CLI includes `termimad` for rendering markdown to the terminal with proper syntax highlighting. Use `help::print_markdown()` in `crates/morphir/src/help.rs` to render markdown text.
 
 ## Release Management
 

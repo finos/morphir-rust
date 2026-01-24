@@ -16,7 +16,6 @@ bin morphir
 version "0.1.0"
 about "CLI for working with Morphir IR - functional domain modeling and business logic"
 usage "Usage: morphir [OPTIONS] [COMMAND]"
-flag "-h --help" help="Print help (use --help-all to include experimental commands)"
 flag --help-all help="Print help including experimental commands"
 flag "-V --version" help="Print version"
 cmd validate hide=#true help="[Experimental] Validate Morphir IR models" {
@@ -99,17 +98,18 @@ cmd extension subcommand_required=#true help="Manage Morphir extensions" {
 }
 cmd ir subcommand_required=#true help="Manage Morphir IR" {
     cmd migrate help="Migrate IR between versions" {
-        flag "-i --input" help="Input file, directory, or remote source (e.g., github:owner/repo)" required=#true {
-            arg <INPUT>
-        }
-        flag "-o --output" help="Output file or directory" required=#true {
+        long_help "Migrate IR between versions\n\nConverts Morphir IR between Classic (V1-V3) and V4 formats. Supports local files, URLs, and GitHub shorthand sources.\n\n**Examples:**\n\n```bash\n# Migrate to file\nmorphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json --target-version v4\n\n# Migrate from URL\nmorphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json -o ./lcr-v4.json\n\n# Display in console with syntax highlighting (no -o)\nmorphir ir migrate ./morphir-ir.json\n\n# Downgrade V4 to Classic\nmorphir ir migrate ./morphir-ir-v4.json -o ./morphir-ir-classic.json --target-version classic\n```\n\nSee the [IR Migration Guide](/ir-migrate/) for detailed real-world examples including the US Federal Reserve FR 2052a regulation model."
+        flag "-o --output" help="Output file or directory (if omitted, displays in console with syntax highlighting)" {
             arg <OUTPUT>
         }
-        flag --target-version help="Target version (v4 or classic)" {
+        flag --target-version help="Target version: latest, v4/4, classic, v3/3, v2/2, v1/1 (default: latest)" default=latest {
             arg <TARGET_VERSION>
         }
         flag --force-refresh help="Force refresh cached remote sources"
         flag --no-cache help="Skip cache entirely for remote sources"
+        flag --json help="Output result as JSON (for scripting)"
+        flag --expanded help="Use expanded (non-compact) format for V4 output"
+        arg <INPUT> help="Input file, directory, or remote source (e.g., github:owner/repo, URL)"
     }
 }
 cmd schema help="Generate JSON Schema for Morphir IR" {

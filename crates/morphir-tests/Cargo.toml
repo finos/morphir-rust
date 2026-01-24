@@ -18,6 +18,7 @@ serde_json = "1.0"
 morphir-ir = { path = "../morphir-ir" }
 morphir-common = { path = "../morphir-common" }
 indexmap = { version = "2", features = ["serde"] }
+regex = "1"
 
 [[test]]
 name = "acceptance"

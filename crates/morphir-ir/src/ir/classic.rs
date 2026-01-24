@@ -1,7 +1,117 @@
 //! Morphir IR data structures for Classic/Legacy format (V1/V2/V3).
 
-use crate::naming::Path;
+use crate::naming::{Name, Path};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Classic Name type that serializes as array format.
+///
+/// In Classic format (V1/V2/V3), names are represented as arrays of word strings
+/// like `["my", "type", "name"]` rather than the V4 kebab-case string `"my-type-name"`.
+///
+/// Use this when working with Classic IR serialization. For all other purposes,
+/// use the standard `Name` type which serializes in V4 canonical format.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClassicName(pub Name);
+
+impl ClassicName {
+    /// Create a new ClassicName from a Name
+    pub fn new(name: Name) -> Self {
+        Self(name)
+    }
+
+    /// Get the inner Name
+    pub fn inner(&self) -> &Name {
+        &self.0
+    }
+
+    /// Convert to the standard Name type
+    pub fn into_inner(self) -> Name {
+        self.0
+    }
+}
+
+impl std::fmt::Display for ClassicName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<Name> for ClassicName {
+    fn from(name: Name) -> Self {
+        Self(name)
+    }
+}
+
+impl From<ClassicName> for Name {
+    fn from(classic: ClassicName) -> Self {
+        classic.0
+    }
+}
+
+impl From<&str> for ClassicName {
+    fn from(s: &str) -> Self {
+        Self(Name::from(s))
+    }
+}
+
+impl Serialize for ClassicName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Classic format: serialize as array of words
+        self.0.words.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClassicName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        // Accept both array format (Classic) and string format (V4) for flexibility
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            // V4 canonical string format: "testModule" or "my-function"
+            serde_json::Value::String(s) => Ok(ClassicName(Name::from(&s))),
+            // Classic array format: ["test", "module"]
+            serde_json::Value::Array(arr) => {
+                let words: Result<Vec<String>, _> = arr
+                    .into_iter()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => Ok(s),
+                        _ => Err(de::Error::custom("expected string in ClassicName array")),
+                    })
+                    .collect();
+                Ok(ClassicName(Name { words: words? }))
+            }
+            _ => Err(de::Error::custom(
+                "expected string or array for ClassicName",
+            )),
+        }
+    }
+}
+
+impl JsonSchema for ClassicName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ClassicName".into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::ClassicName").into()
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Classic format is an array of strings
+        schemars::json_schema!({
+            "type": "array",
+            "items": { "type": "string" }
+        })
+    }
+}
 
 /// Top-level Distribution wrapper with format version
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

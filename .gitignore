@@ -1,9 +1,22 @@
+# OS files
 .DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*~
+*.bak
+
+# Environment files (may contain secrets)
+.env
+.env.*
+.envrc
 
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # Docusaurus generated folders
 website/translated_docs/
@@ -11,15 +24,23 @@ website/build/
 website/i18n/
 website/.docusaurus/
 
-# Yarn build
+# Yarn/Node
 website/node_modules/
+website/package-lock.json
+node_modules/
 
 # Generated docs
 docs/contributing.md
 
-# We use YARN
-website/package-lock.json
-
 # Agent temporary outputs
 .agents/out/
 .morphir/out/
+
+# Ruby/Jekyll
+.gems/
+docs/Gemfile.lock
+docs/_site/
+docs/.jekyll-cache/
+
+# Morphir launcher cache (local testing)
+.morphir-version.local

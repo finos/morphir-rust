@@ -1,11 +1,20 @@
 ---
 layout: default
 title: Home
+nav_order: 1
+permalink: /
 ---
 
-# Morphir Rust Documentation
+<div class="hero-banner">
+  <img src="{{ '/assets/images/logo_white.png' | relative_url }}" alt="Morphir" style="max-width: 300px; margin-bottom: 1rem;">
+  <h1>Morphir Rust</h1>
+  <p>Rust-based tooling for the Morphir ecosystem</p>
+</div>
 
-Welcome to the documentation for **Morphir Rust** - Rust tooling for the Morphir ecosystem.
+[Get Started](getting-started){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
+[View on GitHub](https://github.com/finos/morphir-rust){: .btn .fs-5 .mb-4 .mb-md-0 }
+
+---
 
 ## What is Morphir?
 
@@ -17,89 +26,37 @@ Welcome to the documentation for **Morphir Rust** - Rust tooling for the Morphir
 - Optimization
 - Execution
 
-## CLI Commands
-
-### Stable Commands
-
-| Command | Description |
-|---------|-------------|
-| [`ir migrate`](ir-migrate.md) | Convert Morphir IR between format versions |
-| `schema` | Generate JSON Schema for Morphir IR |
-| `tool` | Manage Morphir tools |
-| `dist` | Manage Morphir distributions |
-| `extension` | Manage Morphir extensions |
-
-### [IR Migrate](ir-migrate.md)
-
-Convert Morphir IR between format versions (Classic V1-V3 ↔ V4). Supports local files and remote sources.
+## Quick Start
 
 ```bash
-# Migrate local file to V4
-morphir ir migrate --input ./morphir-ir.json --output ./v4.json
+# Install morphir
+curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
 
-# Migrate from remote URL (e.g., the LCR regulatory model)
-morphir ir migrate \
-    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
-    --output ./lcr-v4.json
+# Migrate a Morphir IR file to V4 format
+morphir ir migrate ./morphir-ir.json --output ./v4.json
+
+# Generate JSON Schema
+morphir schema --output ./morphir-ir-schema.json
 ```
 
-### Experimental Commands
+## Morphir Ecosystem
 
-Use `morphir --help-all` to see experimental commands:
+Morphir Rust is part of the larger Morphir ecosystem:
 
-| Command | Description |
+| Project | Description |
 |---------|-------------|
-| `validate` | Validate Morphir IR models |
-| `generate` | Generate code from Morphir IR |
-| `transform` | Transform Morphir IR |
+| [morphir](https://github.com/finos/morphir) | Core Morphir specification |
+| [morphir-elm](https://github.com/finos/morphir-elm) | Reference implementation (Elm) |
+| [morphir-jvm](https://github.com/finos/morphir-jvm) | JVM implementation |
+| [morphir-scala](https://github.com/finos/morphir-scala) | Scala implementation |
+| [morphir-dotnet](https://github.com/finos/morphir-dotnet) | .NET implementation |
+| **morphir-rust** | Rust implementation (this project) |
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/finos/morphir-rust)
-- [FINOS Morphir Project](https://github.com/finos/morphir)
-- [LCR Interactive Demo](https://lcr-interactive.finos.org/) - See Morphir in action with the Basel III Liquidity Coverage Ratio regulation
-
-## Getting Started
-
-### Installation
-
-```bash
-# Using cargo-binstall (recommended)
-cargo binstall morphir
-
-# Using mise
-mise install morphir
-
-# Or build from source
-git clone https://github.com/finos/morphir-rust.git
-cd morphir-rust
-cargo install --path crates/morphir
-```
-
-### Getting Help
-
-```bash
-# Show help
-morphir --help
-
-# Show help including experimental commands
-morphir --help-all
-morphir help --full
-morphir help --experimental
-```
-
-### Basic Usage
-
-```bash
-# Migrate IR to V4 format
-morphir ir migrate --input ./morphir-ir.json --output ./v4.json
-
-# Generate JSON Schema for Morphir IR
-morphir schema --output ./morphir-ir-schema.json
-
-# Validate a Morphir IR file (experimental)
-morphir validate --input ./morphir-ir.json
-```
+- [Release Notes](releases) - What's new in Morphir Rust
+- [FINOS Morphir Project](https://morphir.finos.org)
+- [LCR Interactive Demo](https://lcr-interactive.finos.org/) - See Morphir in action
 
 ## Contributing
 

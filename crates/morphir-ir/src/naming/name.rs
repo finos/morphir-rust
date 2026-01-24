@@ -102,7 +102,8 @@ impl Serialize for Name {
     where
         S: serde::Serializer,
     {
-        self.words.serialize(serializer)
+        // V4 canonical format: serialize as kebab-case string
+        serializer.serialize_str(&self.to_kebab_case())
     }
 }
 

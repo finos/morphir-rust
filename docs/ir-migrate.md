@@ -1,6 +1,7 @@
 ---
 layout: default
-title: IR Migrate Command
+title: IR Migration Guide
+nav_order: 5
 ---
 
 # IR Migrate Command
@@ -21,22 +22,28 @@ The migrate command handles bidirectional conversion between these formats while
 ## Usage
 
 ```bash
-morphir ir migrate --input <INPUT> --output <OUTPUT> [OPTIONS]
+morphir ir migrate <INPUT> -o <OUTPUT> [OPTIONS]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `-i, --input <INPUT>` | Input source: local file path, URL, or remote source shorthand |
-| `-o, --output <OUTPUT>` | Output file path for migrated IR |
-| `--target-version <VERSION>` | Target format version: `v4` or `classic` (default: `v4`) |
+| `<INPUT>` | Input source: local file path, URL, or remote source shorthand |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output <OUTPUT>` | Output file path for migrated IR (if omitted, displays to console with syntax highlighting) |
+| `--target-version <VERSION>` | Target format version: `latest`, `v4`/`4`, `classic`, `v3`/`3`, `v2`/`2`, `v1`/`1` (default: `latest`, which is currently `v4`) |
 | `--force-refresh` | Force refresh cached remote sources |
 | `--no-cache` | Skip cache entirely for remote sources |
+| `--json` | Output result as JSON for scripting |
 
 ### Supported Input Sources
 
-The `--input` argument accepts multiple source types:
+The `<INPUT>` argument accepts multiple source types:
 
 | Source Type | Format | Example |
 |-------------|--------|---------|
@@ -53,8 +60,7 @@ The `--input` argument accepts multiple source types:
 Convert an existing Classic format IR to the new V4 format:
 
 ```bash
-morphir ir migrate \
-    --input ./morphir-ir.json \
+morphir ir migrate ./morphir-ir.json \
     --output ./morphir-ir-v4.json \
     --target-version v4
 ```
@@ -71,8 +77,7 @@ Migration complete.
 Downgrade a V4 IR file to Classic format for compatibility with older tools:
 
 ```bash
-morphir ir migrate \
-    --input ./morphir-ir-v4.json \
+morphir ir migrate ./morphir-ir-v4.json \
     --output ./morphir-ir-classic.json \
     --target-version classic
 ```
@@ -89,20 +94,81 @@ Migration complete.
 When `--target-version` is omitted, the command defaults to V4:
 
 ```bash
-morphir ir migrate \
-    --input ./morphir-ir.json \
+morphir ir migrate ./morphir-ir.json \
     --output ./morphir-ir-migrated.json
 ```
+
+### Console Output with Pager
+
+When `--output` is omitted (and `--json` is not set), the migrated IR is displayed in an interactive pager with JSON syntax highlighting:
+
+```bash
+morphir ir migrate ./morphir-ir.json
+```
+
+The command uses (in order of preference):
+1. **bat** - Best experience with built-in syntax highlighting and scrolling
+2. **$PAGER** - Your configured pager (from environment variable)
+3. **less** - Common pager with ANSI color support (`less -R`)
+4. **most** - Alternative pager with color support
+5. **more** - Basic pager (no color support)
+6. **Direct output** - If no pager is available, outputs directly with syntax highlighting
+
+This is useful for quickly inspecting migrated IR without creating a file. Use standard pager keys (q to quit, arrow keys to scroll, / to search).
 
 ### In-place Migration
 
 To migrate in-place (overwrite the original), use the same path for input and output:
 
 ```bash
-morphir ir migrate \
-    --input ./morphir-ir.json \
+morphir ir migrate ./morphir-ir.json \
     --output ./morphir-ir.json \
     --target-version v4
+```
+
+### JSON Output for Scripting
+
+Use `--json` to get machine-readable output for CI/CD pipelines and scripts:
+
+```bash
+morphir ir migrate ./morphir-ir.json \
+    --output ./morphir-ir-v4.json \
+    --json
+```
+
+Success output:
+```json
+{
+  "success": true,
+  "input": "./morphir-ir.json",
+  "output": "./morphir-ir-v4.json",
+  "source_format": "classic",
+  "target_format": "v4"
+}
+```
+
+Error output:
+```json
+{
+  "success": false,
+  "input": "./nonexistent.json",
+  "output": "./output.json",
+  "error": "Failed to load input: file not found"
+}
+```
+
+With warnings:
+```json
+{
+  "success": true,
+  "input": "./morphir-ir.json",
+  "output": "./morphir-ir-v4.json",
+  "source_format": "classic",
+  "target_format": "v4",
+  "warnings": [
+    "3 dependencies found in Classic format. Dependency conversion is not yet supported and will be omitted."
+  ]
+}
 ```
 
 ## Remote Sources
@@ -115,8 +181,7 @@ Fetch and migrate IR directly from a URL:
 
 ```bash
 # Migrate the LCR (Liquidity Coverage Ratio) IR - a comprehensive regulatory model
-morphir ir migrate \
-    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
+morphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json \
     --output ./lcr-v4.json \
     --target-version v4
 ```
@@ -129,13 +194,11 @@ Use the `github:` shorthand for GitHub repositories:
 
 ```bash
 # Fetch from a specific branch
-morphir ir migrate \
-    --input github:finos/morphir-examples@main/examples/basic/morphir-ir.json \
+morphir ir migrate github:finos/morphir-examples@main/examples/basic/morphir-ir.json \
     --output ./example-v4.json
 
 # Fetch from a tag
-morphir ir migrate \
-    --input github:finos/morphir-examples@v1.0.0/examples/basic/morphir-ir.json \
+morphir ir migrate github:finos/morphir-examples@v1.0.0/examples/basic/morphir-ir.json \
     --output ./example-v4.json
 ```
 
@@ -145,14 +208,12 @@ Remote sources are cached locally to avoid repeated downloads:
 
 ```bash
 # Force refresh - re-download even if cached
-morphir ir migrate \
-    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
+morphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json \
     --output ./lcr-v4.json \
     --force-refresh
 
 # Skip cache entirely
-morphir ir migrate \
-    --input github:finos/morphir-examples/examples/basic/morphir-ir.json \
+morphir ir migrate github:finos/morphir-examples/examples/basic/morphir-ir.json \
     --output ./example-v4.json \
     --no-cache
 ```
@@ -176,23 +237,236 @@ max_size_mb = 500
 ttl_secs = 86400  # 24 hours
 ```
 
+## Real-World Example: US Federal Reserve FR 2052a Regulation
+
+This section demonstrates migrating a real-world Morphir IR: the **Liquidity Coverage Ratio (LCR)** model, which implements the US Federal Reserve's FR 2052a Complex Institution Liquidity Monitoring Report.
+
+### About the LCR Model
+
+The LCR IR is a production-quality example of Morphir used for regulatory compliance:
+
+- **Purpose**: Models data tables and business rules for liquidity reporting
+- **Regulation**: US Federal Reserve FR 2052a
+- **Format**: Classic (V3)
+- **Size**: ~2MB, containing hundreds of type definitions and functions
+
+The model includes:
+- **Inflow tables**: Asset inflows, unsecured inflows, secured inflows
+- **Outflow tables**: Deposit outflows, wholesale funding, secured funding
+- **Supplemental tables**: Derivatives collateral, FX exposure, balance sheet items
+
+### Step 1: Fetch and Inspect the IR
+
+First, download and examine the source IR:
+
+```bash
+# Download the LCR IR
+curl -o lcr-classic.json https://lcr-interactive.finos.org/server/morphir-ir.json
+
+# Check the format version
+jq '.formatVersion' lcr-classic.json
+# Output: 3
+```
+
+The `formatVersion: 3` indicates this is a Classic format IR.
+
+### Step 2: Examine the Classic Structure
+
+Let's look at a type definition in Classic format:
+
+```bash
+# View the package structure
+jq '.distribution[1]' lcr-classic.json | head -20
+```
+
+Classic format uses tagged arrays for expressions:
+
+```json
+{
+  "formatVersion": 3,
+  "distribution": [
+    "Library",
+    [["regulation"]],
+    [],
+    {
+      "modules": [
+        [
+          [["regulation"], ["u", "s"], ["f", "r", "2052", "a"], ["data", "tables"]],
+          {
+            "types": [
+              [
+                ["currency"],
+                ["Public", ["TypeAliasDefinition", [], ["Reference", {}, [["morphir"], ["s", "d", "k"]], [["string"]], []]]]
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  ]
+}
+```
+
+### Step 3: Migrate to V4 Format
+
+Now migrate the IR to V4 format:
+
+```bash
+morphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json \
+    --output ./lcr-v4.json \
+    --target-version v4
+```
+
+Expected output:
+```
+Migrating IR from "https://lcr-interactive.finos.org/server/morphir-ir.json" to "./lcr-v4.json"
+Source format: Classic (V3)
+Target format: V4
+Downloading from remote source...
+Converting 1 package, 5 modules, 847 types, 312 values...
+Migration complete.
+Output written to: ./lcr-v4.json
+```
+
+### Step 4: Compare the Results
+
+Examine the V4 output structure:
+
+```bash
+# Check the new format version
+jq '.formatVersion' lcr-v4.json
+# Output: "4.0.0"
+```
+
+The same type definition in V4 compact format:
+
+```json
+{
+  "formatVersion": "4.0.0",
+  "distribution": {
+    "Library": {
+      "packageName": "regulation",
+      "dependencies": {},
+      "def": {
+        "modules": {
+          "regulation/u-s/f-r-2052-a/data-tables": {
+            "types": {
+              "currency": {
+                "access": "Public",
+                "def": {
+                  "TypeAliasDefinition": {
+                    "typeParams": [],
+                    "typeExp": "morphir/s-d-k:string#string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Note the compact type expression: a simple Reference with no type arguments becomes a bare FQName string.
+
+### Key Differences Observed
+
+| Aspect | Classic (V3) | V4 |
+|--------|-------------|-----|
+| **Format version** | `3` (integer) | `"4.0.0"` (semver string) |
+| **Distribution** | `["Library", [...], [...], {...}]` | `{ "Library": {...} }` |
+| **Module paths** | `[["regulation"], ["u", "s"], ...]` | `"regulation/u-s/..."` (kebab-case) |
+| **Type references** | `["Reference", {}, [...], [...], []]` | `"pkg:mod#name"` (bare FQName) |
+| **Type variables** | `["Variable", {}, ["a"]]` | `"a"` (bare name) |
+| **Value references** | `["Reference", {}, [...]]` | `{"Reference": "pkg:mod#name"}` |
+| **Access modifiers** | `["Public", ...]` | `{ "access": "Public", ... }` |
+
+### Step 5: Verify the Migration
+
+You can verify the migration preserved all data:
+
+```bash
+# Count types in both versions
+echo "Classic types: $(jq '[.. | .types? // empty | keys | length] | add' lcr-classic.json)"
+echo "V4 types: $(jq '[.. | .types? // empty | keys | length] | add' lcr-v4.json)"
+
+# Both should show the same count
+```
+
+### Using the Migrated IR
+
+The V4 format IR can now be used with:
+
+- **morphir-rust** tooling (schema generation, validation)
+- **Modern Morphir toolchains** expecting V4 format
+- **Code generators** that read the cleaner V4 structure
+
+```bash
+# Generate JSON Schema from the migrated V4 IR
+morphir schema generate \
+    --input ./lcr-v4.json \
+    --output ./lcr-schema.json
+```
+
 ## Format Differences
+
+V4 uses a compact object notation that is both human-readable and unambiguous. The format uses contextual compaction where possible.
 
 ### Type Expressions
 
-**Classic format:**
-```json
-["Variable", {}, ["a"]]
-```
+Type expressions use maximally compact forms since their context is unambiguous.
 
-**V4 format:**
-```json
-{ "Variable": { "name": "a" } }
-```
+**Variable**
+
+Classic: `["Variable", {}, ["a"]]`
+
+V4 (compact): `"a"` — bare name string (no `:` or `#` distinguishes from FQName)
+
+**Reference (no type arguments)**
+
+Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["string"]], ["string"]], []]`
+
+V4 (compact): `"morphir/s-d-k:string#string"` — bare FQName string
+
+**Reference (with type arguments)**
+
+Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["list"]], ["list"]], [["Variable", {}, ["a"]]]]`
+
+V4: `{"Reference": ["morphir/s-d-k:list#list", "a"]}` — array with FQName first, followed by type args
+
+**Record**
+
+Classic: `["Record", {}, [[["field", "name"], type_expr], ...]]`
+
+V4 (compact): `{"Record": {"field-name": "morphir/s-d-k:string#string", ...}}` — fields directly under Record
+
+**Tuple**
+
+Classic: `["Tuple", {}, [type1, type2]]`
+
+V4: `{"Tuple": {"elements": ["morphir/s-d-k:int#int", "morphir/s-d-k:string#string"]}}`
 
 ### Value Expressions
 
-**Classic format:**
+Value expressions use object wrappers to distinguish expression types, but with compact inner values.
+
+**Variable**
+
+Classic: `["Variable", {}, ["x"]]`
+
+V4: `{"Variable": "x"}` — name directly under Variable
+
+**Reference**
+
+Classic: `["Reference", {}, [["morphir"], ["s", "d", "k"]], [["basics"]], ["add"]]]`
+
+V4: `{"Reference": "morphir/s-d-k:basics#add"}` — FQName directly under Reference
+
+**Apply**
+
+Classic:
 ```json
 ["Apply", {},
   ["Reference", {}, [["morphir"], ["s", "d", "k"]], [["basics"]], ["add"]],
@@ -200,18 +474,27 @@ ttl_secs = 86400  # 24 hours
 ]
 ```
 
-**V4 format:**
+V4:
 ```json
 {
   "Apply": {
-    "function": {
-      "Reference": { "fqName": "morphir/sdk:basics#add" }
-    },
-    "argument": {
-      "Literal": { "value": { "IntLiteral": { "value": 1 } } }
-    }
+    "function": {"Reference": "morphir/s-d-k:basics#add"},
+    "argument": {"Literal": {"IntLiteral": 1}}
   }
 }
+```
+
+**Record**
+
+Classic: `["Record", {}, [[["name"], value_expr], ...]]`
+
+V4 (compact): `{"Record": {"name": {"Variable": "x"}, ...}}` — fields directly under Record
+
+**Literal**
+
+Classic: `["Literal", {}, ["IntLiteral", 42]]`
+
+V4: `{"Literal": {"IntLiteral": 42}}`
 ```
 
 ### Module Structure
@@ -278,8 +561,7 @@ Add migration as a build step to ensure V4 compatibility:
 # GitHub Actions example
 - name: Migrate IR to V4
   run: |
-    morphir ir migrate \
-      --input ./morphir-ir.json \
+    morphir ir migrate ./morphir-ir.json \
       --output ./dist/morphir-ir.json \
       --target-version v4
 ```
@@ -291,8 +573,7 @@ Validate and migrate on commit:
 ```bash
 #!/bin/bash
 # .git/hooks/pre-commit
-morphir ir migrate \
-    --input morphir-ir.json \
+morphir ir migrate morphir-ir.json \
     --output morphir-ir.json \
     --target-version v4
 git add morphir-ir.json

@@ -61,3 +61,7 @@ Skip cache entirely for remote sources
 ### `--json`
 
 Output result as JSON (for scripting)
+
+### `--expanded`
+
+Use expanded (non-compact) format for V4 output

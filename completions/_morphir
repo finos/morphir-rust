@@ -112,6 +112,7 @@ cmd ir subcommand_required=#true help="Manage Morphir IR" {
         flag --force-refresh help="Force refresh cached remote sources"
         flag --no-cache help="Skip cache entirely for remote sources"
         flag --json help="Output result as JSON (for scripting)"
+        flag --expanded help="Use expanded (non-compact) format for V4 output"
         arg <INPUT> help="Input file, directory, or remote source (e.g., github:owner/repo, URL)"
     }
 }

@@ -8,8 +8,9 @@ pub struct Header {
     pub seqnum: u64,
     /// Session ID (UUID).
     pub session_id: String,
-    /// Message kind/hint.
-    pub kind: String,
+    /// Message kind/hint (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl Default for Header {
@@ -17,7 +18,7 @@ impl Default for Header {
         Self {
             seqnum: 0,
             session_id: String::new(),
-            kind: String::new(),
+            kind: None,
         }
     }
 }
@@ -85,7 +86,7 @@ impl Envelope {
             header: Header {
                 seqnum: 0,
                 session_id: String::new(),
-                kind: kind.into(),
+                kind: Some(kind.into()),
             },
             content_type: content_type.into(),
             content: content.into(),
@@ -136,7 +137,7 @@ mod tests {
     #[test]
     fn test_envelope_with_kind() {
         let envelope = Envelope::with_kind("req-kind", "text/plain", b"hello".to_vec());
-        assert_eq!(envelope.header.kind, "req-kind");
+        assert_eq!(envelope.header.kind, Some("req-kind".to_string()));
         assert_eq!(envelope.content_type, "text/plain");
     }
 

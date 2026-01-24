@@ -53,11 +53,11 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 String::new()
             };
-            // Compact: bare name string; Expanded: {"Variable": name}
+            // Compact: bare name string; Expanded: {"Variable": {"name": name}}
             if is_compact_format() {
                 serde_json::json!(name)
             } else {
-                serde_json::json!({ "Variable": name })
+                serde_json::json!({ "Variable": { "name": name } })
             }
         }
         "Reference" => {
@@ -1740,5 +1740,98 @@ mod tests {
 
         let err = ConversionError::Message("Test error".to_string());
         assert_eq!(err.to_string(), "Test error");
+    }
+
+    #[test]
+    fn test_convert_type_expr_variable_compact_format() {
+        // Classic Variable: ["Variable", {attrs}, ["name"]]
+        let classic_var = serde_json::json!(["Variable", {}, ["a"]]);
+
+        // Ensure compact mode is on (default)
+        set_compact_format(true);
+        let v4_json = convert_type_expr_to_v4(&classic_var);
+
+        // Compact: bare name string
+        assert_eq!(v4_json, serde_json::json!("a"));
+    }
+
+    #[test]
+    fn test_convert_type_expr_variable_expanded_format() {
+        // Classic Variable: ["Variable", {attrs}, ["name"]]
+        let classic_var = serde_json::json!(["Variable", {}, ["a"]]);
+
+        // Set expanded mode
+        set_compact_format(false);
+        let v4_json = convert_type_expr_to_v4(&classic_var);
+
+        // Expanded: {"Variable": {"name": name}}
+        assert_eq!(v4_json, serde_json::json!({"Variable": {"name": "a"}}));
+
+        // Reset to compact mode for other tests
+        set_compact_format(true);
+    }
+
+    #[test]
+    fn test_convert_type_expr_reference_compact_format() {
+        // Classic Reference without args: ["Reference", {attrs}, [pkg_path, mod_path, local_name], []]
+        // Package path: [["morphir"]] -> "morphir"
+        // Module path: [["sdk"]] -> "sdk"
+        // Local name: ["int"] -> "int"
+        let classic_ref =
+            serde_json::json!(["Reference", {}, [[["morphir"]], [["sdk"]], ["int"]], []]);
+
+        set_compact_format(true);
+        let v4_json = convert_type_expr_to_v4(&classic_ref);
+
+        // Compact without args: bare fqname string
+        assert_eq!(v4_json, serde_json::json!("morphir:sdk#int"));
+    }
+
+    #[test]
+    fn test_convert_type_expr_reference_with_args_compact_format() {
+        // Classic Reference with args: ["Reference", {}, [pkg_path, mod_path, local_name], [type_args]]
+        let classic_ref = serde_json::json!([
+            "Reference",
+            {},
+            [[["morphir"]], [["sdk"]], ["list"]],
+            [["Variable", {}, ["a"]]]
+        ]);
+
+        set_compact_format(true);
+        let v4_json = convert_type_expr_to_v4(&classic_ref);
+
+        // Compact with args: {"Reference": [fqname, arg1, ...]}
+        assert_eq!(
+            v4_json,
+            serde_json::json!({"Reference": ["morphir:sdk#list", "a"]})
+        );
+    }
+
+    #[test]
+    fn test_convert_type_expr_reference_expanded_format() {
+        // Classic Reference with args
+        let classic_ref = serde_json::json!([
+            "Reference",
+            {},
+            [[["morphir"]], [["sdk"]], ["list"]],
+            [["Variable", {}, ["a"]]]
+        ]);
+
+        set_compact_format(false);
+        let v4_json = convert_type_expr_to_v4(&classic_ref);
+
+        // Expanded: {"Reference": {"fqname": ..., "args": [...]}}
+        assert_eq!(
+            v4_json,
+            serde_json::json!({
+                "Reference": {
+                    "fqname": "morphir:sdk#list",
+                    "args": [{"Variable": {"name": "a"}}]
+                }
+            })
+        );
+
+        // Reset to compact mode
+        set_compact_format(true);
     }
 }

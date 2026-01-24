@@ -1,0 +1,64 @@
+#!/bin/sh
+#MISE description="Check code coverage meets per-crate thresholds"
+#MISE depends=["check:coverage-report"]
+
+set -e
+
+# Check if jq is available
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for threshold checking"
+    exit 1
+fi
+
+# Get all package metadata once
+METADATA=$(cargo metadata --format-version=1 --no-deps 2>/dev/null)
+
+# Track if any crate was checked
+CRATES_CHECKED=0
+FAILED=0
+
+# Check each crate
+for crate_dir in crates/*; do
+    crate_name=$(basename "$crate_dir")
+
+    # Read threshold from Cargo.toml metadata (default 0)
+    threshold=$(echo "$METADATA" | \
+        jq -r ".packages[] | select(.name == \"$crate_name\") | .metadata.coverage.threshold // 0")
+
+    # Skip if threshold is 0 or null (not configured)
+    if [ "$threshold" = "0" ] || [ "$threshold" = "null" ] || [ -z "$threshold" ]; then
+        echo "[$crate_name] No coverage threshold configured, skipping"
+        continue
+    fi
+
+    CRATES_CHECKED=$((CRATES_CHECKED + 1))
+
+    # Run coverage for this crate (uses cached instrumented build from report, lib tests only)
+    coverage=$(cargo llvm-cov --package "$crate_name" --lib --json 2>/dev/null | \
+        jq -r '.data[0].totals.lines.percent // 0')
+
+    # Compare coverage to threshold using awk (more portable than bc)
+    if [ "$(echo "$coverage $threshold" | awk '{print ($1 < $2) ? 1 : 0}')" = "1" ]; then
+        echo "[$crate_name] FAIL: Coverage ${coverage}% < threshold ${threshold}%"
+        FAILED=1
+    else
+        echo "[$crate_name] OK: Coverage ${coverage}% >= threshold ${threshold}%"
+    fi
+done
+
+if [ "$CRATES_CHECKED" = "0" ]; then
+    echo ""
+    echo "No crates have coverage thresholds configured."
+    echo "To add a threshold, add to the crate's Cargo.toml:"
+    echo "  [package.metadata.coverage]"
+    echo "  threshold = 70"
+fi
+
+if [ "$FAILED" = "1" ]; then
+    echo ""
+    echo "Coverage check FAILED: One or more crates below threshold"
+    exit 1
+fi
+
+echo ""
+echo "All coverage thresholds met!"

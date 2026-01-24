@@ -5,6 +5,7 @@ shellcheck = "latest"
 shfmt = "latest"
 yamllint = "latest"
 ruby = "3.3"
+"cargo:cargo-llvm-cov" = "latest"
 
 [env]
 # For Jekyll gems

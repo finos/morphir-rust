@@ -11,6 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 description = "Gleam language binding for Morphir - frontend and backend extension"
 
+[package.metadata.coverage]
+threshold = 40  # Minimum line coverage percentage required
+
 [lib]
 crate-type = ["cdylib"]
 

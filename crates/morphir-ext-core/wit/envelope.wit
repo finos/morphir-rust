@@ -4,7 +4,7 @@ interface envelope {
     record header {
         seqnum: u64,
         session-id: string,
-        kind: string,
+        kind: option<string>,
     }
 
     record envelope {

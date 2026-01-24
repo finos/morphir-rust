@@ -70,6 +70,9 @@ pub struct MorphirSection {
     pub version: String,
     /// Minimum CLI version
     pub min_cli_version: Option<String>,
+    /// Enable dev mode (run from source instead of installed binary)
+    #[serde(default)]
+    pub dev_mode: bool,
 }
 
 /// [project] section

@@ -8,17 +8,26 @@
 # Usage:
 #   morphir <args>              Run morphir with the resolved version
 #   morphir +0.1.0 <args>       Run with a specific version
+#   morphir --dev <args>        Run from local source (dev mode)
 #   morphir self upgrade        Upgrade to latest version
 #   morphir self list           List installed versions
 #   morphir self which          Show which version would be used
 #   morphir self install <ver>  Install a specific version
 #   morphir self prune          Remove old versions
 #   morphir self update         Update this launcher script
+#   morphir self dev            Show dev mode status
 #
 # Environment variables:
 #   MORPHIR_VERSION   Override version to use
 #   MORPHIR_BACKEND   Force backend: mise, binstall, github, cargo
 #   MORPHIR_HOME      Override home directory (default: ~/.morphir)
+#   MORPHIR_DEV       Set to 1 to enable dev mode
+#   MORPHIR_DEV_PATH  Path to morphir-rust source directory
+#
+# Dev mode:
+#   Dev mode runs morphir from local source instead of downloading a binary.
+#   Enable via: --dev flag, MORPHIR_DEV=1, "local-dev" in .morphir-version,
+#   or dev_mode=true in morphir.toml [morphir] section.
 #
 
 set -euo pipefail
@@ -29,6 +38,14 @@ REPO="finos/morphir-rust"
 GITHUB_API="https://api.github.com/repos/$REPO"
 GITHUB_RELEASES="https://github.com/$REPO/releases"
 CACHE_TTL=86400  # 24 hours in seconds
+
+# Dev mode: when enabled, runs from local source instead of downloaded binary
+# Can be enabled via:
+#   - MORPHIR_DEV=1 environment variable
+#   - --dev command-line flag
+#   - "local-dev" in .morphir-version file
+#   - dev_mode = true in morphir.toml [morphir] section
+# MORPHIR_DEV_PATH can specify the source repository path (default: auto-detect)
 
 # Colors for output (disabled if not a terminal)
 if [[ -t 1 ]]; then
@@ -108,6 +125,164 @@ find_toml_version() {
         dir="$(dirname "$dir")"
     done
     return 1
+}
+
+# Check if dev mode is enabled via morphir.toml
+find_toml_dev_mode() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -f "$dir/morphir.toml" ]]; then
+            # Check for dev_mode = true in [morphir] section
+            if grep -qE '^\s*dev_mode\s*=\s*(true|1|yes)' "$dir/morphir.toml"; then
+                echo "$dir"
+                return 0
+            fi
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+# Find the morphir-rust source directory for dev mode
+find_dev_source_dir() {
+    # Helper function to check if a directory is the morphir-rust repo
+    is_morphir_repo() {
+        local dir="$1"
+        # Check for workspace Cargo.toml with crates/morphir
+        if [[ -f "$dir/Cargo.toml" && -d "$dir/crates/morphir" ]]; then
+            if grep -q '\[workspace\]' "$dir/Cargo.toml" 2>/dev/null; then
+                return 0
+            fi
+        fi
+        # Also check for direct morphir package
+        if [[ -f "$dir/Cargo.toml" ]] && grep -q 'name = "morphir"' "$dir/Cargo.toml" 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    }
+
+    # 1. Check MORPHIR_DEV_PATH environment variable
+    if [[ -n "${MORPHIR_DEV_PATH:-}" && -d "$MORPHIR_DEV_PATH" ]]; then
+        if is_morphir_repo "$MORPHIR_DEV_PATH"; then
+            echo "$MORPHIR_DEV_PATH"
+            return 0
+        fi
+    fi
+
+    # 2. Check CI environment variables
+    local ci_locations=(
+        "${GITHUB_WORKSPACE:-}"       # GitHub Actions
+        "${CI_PROJECT_DIR:-}"         # GitLab CI
+        "${WORKSPACE:-}"              # Jenkins
+        "${BITBUCKET_CLONE_DIR:-}"    # Bitbucket Pipelines
+        "${CIRCLE_WORKING_DIRECTORY:-}" # CircleCI
+        "${TRAVIS_BUILD_DIR:-}"       # Travis CI
+    )
+
+    for ci_loc in "${ci_locations[@]}"; do
+        if [[ -n "$ci_loc" && -d "$ci_loc" ]]; then
+            if is_morphir_repo "$ci_loc"; then
+                echo "$ci_loc"
+                return 0
+            fi
+        fi
+    done
+
+    # 3. Check if current directory or parent is the source repo
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if is_morphir_repo "$dir"; then
+            echo "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+
+    # 4. Check common development locations (local dev)
+    local common_locations=(
+        "$HOME/code/morphir-rust"
+        "$HOME/dev/morphir-rust"
+        "$HOME/src/morphir-rust"
+        "$HOME/projects/morphir-rust"
+        "$HOME/repos/finos/morphir-rust"
+        "$HOME/code/repos/github/finos/morphir-rust"
+    )
+
+    for loc in "${common_locations[@]}"; do
+        if is_morphir_repo "$loc"; then
+            echo "$loc"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Check if we should run in dev mode
+is_dev_mode() {
+    local cli_dev_flag="$1"
+
+    # 1. CLI --dev flag
+    if [[ "$cli_dev_flag" == "true" ]]; then
+        return 0
+    fi
+
+    # 2. MORPHIR_DEV environment variable
+    if [[ "${MORPHIR_DEV:-}" == "1" || "${MORPHIR_DEV:-}" == "true" ]]; then
+        return 0
+    fi
+
+    # 3. Check .morphir-version for "local-dev"
+    if version_file=$(find_version_file); then
+        local version_content
+        version_content=$(cat "$version_file" | tr -d '[:space:]')
+        if [[ "$version_content" == "local-dev" ]]; then
+            return 0
+        fi
+    fi
+
+    # 4. Check morphir.toml for dev_mode = true
+    if find_toml_dev_mode >/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Run morphir in dev mode (from source)
+run_dev_mode() {
+    local args=("$@")
+
+    local source_dir
+    if ! source_dir=$(find_dev_source_dir); then
+        log_error "Dev mode enabled but cannot find morphir-rust source directory"
+        log_error "Set MORPHIR_DEV_PATH to the morphir-rust repository path"
+        exit 1
+    fi
+
+    log_info "Running in dev mode from: $source_dir"
+
+    # Check if we have a pre-built debug binary
+    local debug_binary="$source_dir/target/debug/morphir"
+    local release_binary="$source_dir/target/release/morphir"
+
+    if [[ -x "$debug_binary" ]]; then
+        # Check if source files are newer than binary
+        local needs_rebuild=false
+        if [[ -n "$(find "$source_dir/crates" -name "*.rs" -newer "$debug_binary" 2>/dev/null | head -1)" ]]; then
+            needs_rebuild=true
+        fi
+
+        if [[ "$needs_rebuild" == "false" ]]; then
+            log_info "Using cached debug binary"
+            exec "$debug_binary" "${args[@]}"
+        fi
+    fi
+
+    # Build and run with cargo
+    log_info "Building and running with cargo..."
+    cd "$source_dir"
+    exec cargo run --bin morphir -- "${args[@]}"
 }
 
 # Get latest version from GitHub API (with caching)
@@ -487,6 +662,85 @@ handle_self() {
             log_success "Updated launcher script"
             ;;
 
+        dev)
+            log_info "Dev mode status:"
+            echo ""
+
+            # Check each source of dev mode
+            local dev_enabled=false
+
+            # Check MORPHIR_DEV env
+            if [[ "${MORPHIR_DEV:-}" == "1" || "${MORPHIR_DEV:-}" == "true" ]]; then
+                echo "  MORPHIR_DEV env:     enabled"
+                dev_enabled=true
+            else
+                echo "  MORPHIR_DEV env:     not set"
+            fi
+
+            # Check .morphir-version
+            if version_file=$(find_version_file 2>/dev/null); then
+                local version_content
+                version_content=$(cat "$version_file" | tr -d '[:space:]')
+                if [[ "$version_content" == "local-dev" ]]; then
+                    echo "  .morphir-version:    local-dev (enabled)"
+                    dev_enabled=true
+                else
+                    echo "  .morphir-version:    $version_content"
+                fi
+            else
+                echo "  .morphir-version:    not found"
+            fi
+
+            # Check morphir.toml
+            if toml_dir=$(find_toml_dev_mode 2>/dev/null); then
+                echo "  morphir.toml:        dev_mode=true at $toml_dir"
+                dev_enabled=true
+            else
+                echo "  morphir.toml:        dev_mode not set"
+            fi
+
+            # Check MORPHIR_DEV_PATH
+            if [[ -n "${MORPHIR_DEV_PATH:-}" ]]; then
+                echo "  MORPHIR_DEV_PATH:    $MORPHIR_DEV_PATH"
+            else
+                echo "  MORPHIR_DEV_PATH:    not set (will auto-detect)"
+            fi
+
+            # Try to find source directory
+            echo ""
+            if source_dir=$(find_dev_source_dir 2>/dev/null); then
+                echo "  Source directory:    $source_dir"
+
+                # Check for built binaries
+                if [[ -x "$source_dir/target/debug/morphir" ]]; then
+                    echo "  Debug binary:        $source_dir/target/debug/morphir (available)"
+                else
+                    echo "  Debug binary:        not built"
+                fi
+                if [[ -x "$source_dir/target/release/morphir" ]]; then
+                    echo "  Release binary:      $source_dir/target/release/morphir (available)"
+                else
+                    echo "  Release binary:      not built"
+                fi
+            else
+                echo "  Source directory:    not found"
+            fi
+
+            echo ""
+            if [[ "$dev_enabled" == "true" ]]; then
+                echo -e "${GREEN}Dev mode is ENABLED${NC}"
+            else
+                echo -e "${YELLOW}Dev mode is DISABLED${NC}"
+            fi
+
+            echo ""
+            echo "To enable dev mode, use one of:"
+            echo "  - morphir --dev <command>        (one-time)"
+            echo "  - export MORPHIR_DEV=1           (session)"
+            echo "  - echo 'local-dev' > .morphir-version  (project)"
+            echo "  - Add 'dev_mode = true' to morphir.toml [morphir] section"
+            ;;
+
         help|*)
             cat <<EOF
 morphir self - Manage the morphir installation
@@ -498,11 +752,18 @@ Commands:
   install <ver>    Install a specific version
   prune            Remove old versions (keeps current)
   update           Update this launcher script
+  dev              Show dev mode status and configuration
 
 Environment variables:
   MORPHIR_VERSION  Override version to use
   MORPHIR_BACKEND  Force backend: mise, binstall, github, cargo
   MORPHIR_HOME     Override home directory (default: ~/.morphir)
+  MORPHIR_DEV      Set to 1 to enable dev mode (run from source)
+  MORPHIR_DEV_PATH Path to morphir-rust source directory
+
+Dev mode:
+  Use --dev flag or set MORPHIR_DEV=1 to run from local source.
+  Put "local-dev" in .morphir-version or dev_mode=true in morphir.toml.
 EOF
             ;;
     esac
@@ -515,6 +776,7 @@ main() {
 
     # Parse arguments
     local version_override=""
+    local dev_flag="false"
     local args=()
 
     while [[ $# -gt 0 ]]; do
@@ -523,6 +785,11 @@ main() {
                 # Version override: +0.1.0
                 version_override="${1#+}"
                 version_override="${version_override#v}"
+                shift
+                ;;
+            --dev)
+                # Enable dev mode
+                dev_flag="true"
                 shift
                 ;;
             self)
@@ -537,6 +804,12 @@ main() {
                 ;;
         esac
     done
+
+    # Check if we should run in dev mode
+    if is_dev_mode "$dev_flag"; then
+        run_dev_mode "${args[@]}"
+        exit 0
+    fi
 
     # Resolve version
     local version

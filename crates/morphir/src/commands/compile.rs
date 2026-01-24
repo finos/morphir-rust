@@ -5,6 +5,7 @@ use crate::output::Diagnostic;
 use morphir_daemon::extensions::registry::ExtensionRegistry;
 use morphir_design::{
     discover_config, ensure_morphir_structure, load_config_context, resolve_compile_output,
+    resolve_path_relative_to_config,
 };
 use starbase::AppResult;
 use std::path::{Path, PathBuf};
@@ -78,11 +79,19 @@ pub async fn run_compile(options: CompileOptions) -> AppResult {
         .or_else(|| ctx.config.project.as_ref().map(|p| p.name.clone()))
         .unwrap_or_else(|| "default".to_string());
 
-    // Determine input path
+    // Determine input path (resolve relative to config file location)
     let input_path = if let Some(inp) = input {
-        PathBuf::from(inp)
+        // CLI-provided input is resolved relative to current working directory
+        let inp_path = PathBuf::from(inp);
+        if inp_path.is_absolute() {
+            inp_path
+        } else {
+            start_dir.join(inp_path)
+        }
     } else {
-        ctx.config
+        // Config-provided source_directory is resolved relative to config file
+        let raw_path = ctx
+            .config
             .project
             .as_ref()
             .map(|p| PathBuf::from(&p.source_directory))
@@ -94,7 +103,9 @@ pub async fn run_compile(options: CompileOptions) -> AppResult {
                         .map(PathBuf::from)
                 })
             })
-            .unwrap_or_else(|| PathBuf::from("src"))
+            .unwrap_or_else(|| PathBuf::from("src"));
+
+        resolve_path_relative_to_config(&raw_path, &ctx.config_path)
     };
 
     // Determine output path

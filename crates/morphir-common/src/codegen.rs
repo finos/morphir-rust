@@ -2,6 +2,8 @@
 //!
 //! Common utilities for code generation across language bindings.
 
+use std::fmt;
+
 /// Indentation helper
 pub struct Indent {
     level: usize,
@@ -13,10 +15,6 @@ impl Indent {
         Self { level, size }
     }
 
-    pub fn to_string(&self) -> String {
-        " ".repeat(self.level * self.size)
-    }
-
     pub fn increment(&mut self) {
         self.level += 1;
     }
@@ -25,6 +23,12 @@ impl Indent {
         if self.level > 0 {
             self.level -= 1;
         }
+    }
+}
+
+impl fmt::Display for Indent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", " ".repeat(self.level * self.size))
     }
 }
 

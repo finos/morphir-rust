@@ -1,16 +1,14 @@
 //! Generate command for code generation from Morphir IR
 
-use crate::error::{CliError, convert_extension_diagnostics};
-use crate::output::{Diagnostic, GenerateOutput, OutputFormat, write_output};
-use anyhow::Context;
+use crate::error::CliError;
+use crate::output::Diagnostic;
 use morphir_common::loader::load_ir;
-use morphir_daemon::extensions::container::ExtensionType;
 use morphir_daemon::extensions::registry::ExtensionRegistry;
 use morphir_design::{
     discover_config, ensure_morphir_structure, load_config_context, resolve_generate_output,
 };
 use starbase::AppResult;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Run the generate command
 pub async fn run_generate(
@@ -18,7 +16,7 @@ pub async fn run_generate(
     input: Option<String>,
     output: Option<String>,
     config_path: Option<String>,
-    project: Option<String>,
+    _project: Option<String>,
     json: bool,
     json_lines: bool,
 ) -> AppResult {
@@ -118,7 +116,7 @@ pub async fn run_generate(
 
     // Load IR (detect format)
     let ir_data = load_ir(&input_path).map_err(|e| CliError::FileSystem {
-        error: std::io::Error::new(std::io::ErrorKind::Other, e),
+        error: std::io::Error::other(e),
     })?;
 
     // Call extension's generate method

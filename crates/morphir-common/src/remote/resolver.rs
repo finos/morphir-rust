@@ -100,10 +100,10 @@ impl RemoteSourceResolver {
         }
 
         // Check trusted GitHub orgs
-        if let RemoteSource::GitHub { owner, .. } = source {
-            if self.config.is_trusted_github_org(owner) {
-                return true;
-            }
+        if let RemoteSource::GitHub { owner, .. } = source
+            && self.config.is_trusted_github_org(owner)
+        {
+            return true;
         }
 
         // Check URL patterns
@@ -142,10 +142,11 @@ impl RemoteSourceResolver {
         }
 
         // Check cache
-        if options.use_cache && !options.force_refresh {
-            if let Some(cached_path) = self.cache.get(source) {
-                return Ok(cached_path);
-            }
+        if options.use_cache
+            && !options.force_refresh
+            && let Some(cached_path) = self.cache.get(source)
+        {
+            return Ok(cached_path);
         }
 
         // Fetch based on source type

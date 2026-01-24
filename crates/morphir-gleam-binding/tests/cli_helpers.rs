@@ -1,9 +1,12 @@
 //! CLI testing helpers for BDD acceptance tests
 
+#![allow(dead_code)]
+
 use anyhow::Result;
+#[allow(unused_imports)]
 use morphir_common::vfs::Vfs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 use tempfile::TempDir;
 
 /// CLI test context for managing test environments
@@ -80,13 +83,7 @@ impl CliTestContext {
             PathBuf::from("../../target/release/morphir"),
         ];
 
-        for path in possible_paths {
-            if path.exists() {
-                return Some(path);
-            }
-        }
-
-        None
+        possible_paths.into_iter().find(|path| path.exists())
     }
 
     /// Execute a morphir CLI command
@@ -97,7 +94,7 @@ impl CliTestContext {
         } else {
             // Fall back to cargo run
             let mut cargo_cmd = Command::new("cargo");
-            cargo_cmd.args(&[
+            cargo_cmd.args([
                 "run",
                 "--bin",
                 "morphir",

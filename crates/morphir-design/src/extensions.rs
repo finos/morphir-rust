@@ -17,18 +17,14 @@ pub struct BuiltinExtension {
 
 /// Discover builtin extensions from CLI resources
 pub fn discover_builtin_extensions() -> Vec<BuiltinExtension> {
-    let mut extensions = Vec::new();
-
     // Gleam binding is a builtin extension
-    extensions.push(BuiltinExtension {
+    vec![BuiltinExtension {
         id: "gleam".to_string(),
         name: "Gleam Language Binding".to_string(),
         path: get_builtin_extension_path("gleam"),
         languages: vec!["gleam".to_string()],
         targets: vec!["gleam".to_string()],
-    });
-
-    extensions
+    }]
 }
 
 /// Get the path to a builtin extension WASM file
@@ -53,10 +49,10 @@ pub fn get_builtin_extension_path(extension_id: &str) -> Option<PathBuf> {
     ];
 
     for path_opt in possible_paths {
-        if let Some(path) = path_opt {
-            if path.exists() {
-                return Some(path);
-            }
+        if let Some(path) = path_opt
+            && path.exists()
+        {
+            return Some(path);
         }
     }
 

@@ -9,11 +9,11 @@ pub mod output;
 mod tui;
 
 use commands::{
-    run_compile, run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update,
-    run_extension_install, run_extension_list, run_extension_uninstall, run_extension_update,
-    run_generate, run_gleam_compile, run_gleam_generate, run_gleam_roundtrip, run_migrate,
-    run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update, run_transform,
-    run_validate, run_version,
+    compile::CompileOptions, run_compile, run_dist_install, run_dist_list, run_dist_uninstall,
+    run_dist_update, run_extension_install, run_extension_list, run_extension_uninstall,
+    run_extension_update, run_generate, run_gleam_compile, run_gleam_generate, run_gleam_roundtrip,
+    run_migrate, run_tool_install, run_tool_list, run_tool_uninstall, run_tool_update,
+    run_transform, run_validate, run_version,
 };
 
 /// Morphir CLI - Tools for functional domain modeling and business logic
@@ -365,16 +365,16 @@ impl AppSession for MorphirSession {
                 json,
                 json_lines,
             } => {
-                run_compile(
-                    language.clone(),
-                    input.clone(),
-                    output.clone(),
-                    package_name.clone(),
-                    config.clone(),
-                    project.clone(),
-                    *json,
-                    *json_lines,
-                )
+                run_compile(CompileOptions {
+                    language: language.clone(),
+                    input: input.clone(),
+                    output: output.clone(),
+                    package_name: package_name.clone(),
+                    config_path: config.clone(),
+                    project: project.clone(),
+                    json: *json,
+                    json_lines: *json_lines,
+                })
                 .await
             }
             Commands::Generate {

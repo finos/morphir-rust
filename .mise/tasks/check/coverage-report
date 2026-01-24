@@ -18,7 +18,7 @@ METADATA=$(cargo metadata --format-version=1 --no-deps 2>/dev/null)
 PACKAGES=""
 for crate_dir in crates/*; do
     crate_name=$(basename "$crate_dir")
-    threshold=$(echo "$METADATA" | \
+    threshold=$(echo "$METADATA" |
         jq -r ".packages[] | select(.name == \"$crate_name\") | .metadata.coverage.threshold // 0")
 
     if [ "$threshold" != "0" ] && [ "$threshold" != "null" ] && [ -n "$threshold" ]; then

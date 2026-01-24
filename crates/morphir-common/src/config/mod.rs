@@ -16,11 +16,11 @@ impl MorphirConfig {
         let content = std::fs::read_to_string(path)?;
 
         // Detect format based on extension
-        if let Some(ext) = path.extension() {
-            if ext == "json" {
-                let legacy: LegacyProjectConfig = serde_json::from_str(&content)?;
-                return Ok(legacy.into());
-            }
+        if let Some(ext) = path.extension()
+            && ext == "json"
+        {
+            let legacy: LegacyProjectConfig = serde_json::from_str(&content)?;
+            return Ok(legacy.into());
         }
 
         // Default to TOML

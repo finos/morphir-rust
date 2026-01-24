@@ -232,7 +232,7 @@ pub fn resolve_test_scenario(name: &str, morphir_dir: &Path) -> PathBuf {
 pub fn sanitize_project_name(name: &str) -> String {
     // Replace invalid characters, but preserve structure
     // For now, just replace slashes and spaces
-    name.replace('/', "-").replace(' ', "-").replace('\\', "-")
+    name.replace(['/', ' ', '\\'], "-")
 }
 
 /// Resolve path relative to config file location

@@ -24,26 +24,23 @@ pub fn detect_ir_version(ir: &Value) -> Option<IrVersion> {
     }
 
     // Check for V4 wrapper object format
-    if let Some(obj) = ir.as_object() {
-        if obj.contains_key("Library")
+    if let Some(obj) = ir.as_object()
+        && (obj.contains_key("Library")
             || obj.contains_key("Specs")
-            || obj.contains_key("Application")
-        {
-            return Some(IrVersion::V4);
-        }
+            || obj.contains_key("Application"))
+    {
+        return Some(IrVersion::V4);
     }
 
     // Check for V3 tagged array format
-    if let Some(arr) = ir.as_array() {
-        if !arr.is_empty() {
-            if let Some(first) = arr.first() {
-                if let Some(tag) = first.as_str() {
-                    // V3 uses tagged arrays like ["Library", ...]
-                    if tag == "Library" || tag == "Specs" || tag == "Application" {
-                        return Some(IrVersion::V3);
-                    }
-                }
-            }
+    if let Some(arr) = ir.as_array()
+        && !arr.is_empty()
+        && let Some(first) = arr.first()
+        && let Some(tag) = first.as_str()
+    {
+        // V3 uses tagged arrays like ["Library", ...]
+        if tag == "Library" || tag == "Specs" || tag == "Application" {
+            return Some(IrVersion::V3);
         }
     }
 
@@ -110,19 +107,10 @@ impl Step for FormatDetector {
 }
 
 /// Pipeline configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PipelineConfig {
     pub transforms: Vec<String>,
     pub decorator_dir: Option<PathBuf>,
-}
-
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            transforms: vec![],
-            decorator_dir: None,
-        }
-    }
 }
 
 /// Build a pipeline from configuration

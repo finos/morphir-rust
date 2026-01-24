@@ -62,7 +62,7 @@ impl Frontend for GleamExtension {
             .options
             .get("packageName")
             .and_then(|v| v.as_str())
-            .map(|s| PackageName::parse(s))
+            .map(PackageName::parse)
             .unwrap_or_else(|| PackageName::parse("default-package"));
 
         for source in &request.sources {

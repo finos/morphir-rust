@@ -62,23 +62,22 @@ impl DecoratorLoader {
         let mut registry = DecoratorRegistry::new();
 
         // Walk deco directory and load all .deco.json files
-        if vfs.exists(&self.deco_dir) && vfs.is_dir(&self.deco_dir) {
-            if let Ok(entries) = fs::read_dir(&self.deco_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file()
-                        && path.extension().and_then(|s| s.to_str()) == Some("deco.json")
-                    {
-                        if let Ok(content) = vfs.read_to_string(&path) {
-                            if let Ok(deco) = serde_json::from_str::<Value>(&content) {
-                                // Extract target FQName from decorator
-                                if let Some(target) = deco.get("target").and_then(|t| t.as_str()) {
-                                    // Parse FQName (format: "package:module#name")
-                                    if let Some(fqname) = parse_fqname_from_string(target) {
-                                        registry.add_decoration(fqname, deco);
-                                    }
-                                }
-                            }
+        if vfs.exists(&self.deco_dir)
+            && vfs.is_dir(&self.deco_dir)
+            && let Ok(entries) = fs::read_dir(&self.deco_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && path.extension().and_then(|s| s.to_str()) == Some("deco.json")
+                    && let Ok(content) = vfs.read_to_string(&path)
+                    && let Ok(deco) = serde_json::from_str::<Value>(&content)
+                {
+                    // Extract target FQName from decorator
+                    if let Some(target) = deco.get("target").and_then(|t| t.as_str()) {
+                        // Parse FQName (format: "package:module#name")
+                        if let Some(fqname) = parse_fqname_from_string(target) {
+                            registry.add_decoration(fqname, deco);
                         }
                     }
                 }
@@ -113,7 +112,7 @@ fn parse_fqname_from_string(s: &str) -> Option<FQName> {
 
     Some(FQName {
         package_path: PackageName::new(package_path).into(),
-        module_path: module_path.into(),
+        module_path,
         local_name,
     })
 }

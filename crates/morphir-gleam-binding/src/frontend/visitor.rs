@@ -3,9 +3,7 @@
 //! This visitor traverses the parsed Gleam AST and converts it to Morphir IR V4
 //! format, producing a Document Tree structure by default.
 
-use crate::frontend::parser::{
-    Access, Expr, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef,
-};
+use crate::frontend::ast::{Access, Expr, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef};
 use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
 use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
@@ -13,16 +11,16 @@ use morphir_ir::ir::literal::Literal as MorphirLiteral;
 use morphir_ir::ir::pattern::Pattern as MorphirPattern;
 use morphir_ir::ir::type_expr::{Field, Type};
 use morphir_ir::ir::v4::{
-    Access as MorphirAccess, AccessControlledConstructors,
-    AccessControlledTypeDefinition, AccessControlledValueDefinition, ConstructorArg,
-    ConstructorDefinition, InputTypeEntry, TypeDefinition as V4TypeDefinition,
-    ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
+    Access as MorphirAccess, AccessControlledConstructors, AccessControlledTypeDefinition,
+    AccessControlledValueDefinition, ConstructorArg, ConstructorDefinition, InputTypeEntry,
+    TypeDefinition as V4TypeDefinition, ValueBody as V4ValueBody,
+    ValueDefinition as V4ValueDefinition,
 };
 use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
 use morphir_ir::naming::{FQName, ModuleName, Name, PackageName};
 use serde_json;
 use std::io::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Distribution layout mode
 #[derive(Debug, Clone, Copy)]
@@ -105,7 +103,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Write module.json manifest
-    fn write_module_manifest(&self, module_dir: &PathBuf, module_ir: &ModuleIR) -> Result<()> {
+    fn write_module_manifest(&self, module_dir: &Path, module_ir: &ModuleIR) -> Result<()> {
         let manifest = serde_json::json!({
             "module": self.module_name.to_string(),
             "doc": module_ir.doc,
@@ -120,7 +118,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Write individual type definition file
-    fn write_type_definition(&self, types_dir: &PathBuf, type_def: &TypeDef) -> Result<()> {
+    fn write_type_definition(&self, types_dir: &Path, type_def: &TypeDef) -> Result<()> {
         // Convert to Morphir IR type definition
         let morphir_type_def = self.convert_type_def(type_def)?;
 
@@ -134,7 +132,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Write individual value definition file
-    fn write_value_definition(&self, values_dir: &PathBuf, value_def: &ValueDef) -> Result<()> {
+    fn write_value_definition(&self, values_dir: &Path, value_def: &ValueDef) -> Result<()> {
         // Convert to Morphir IR value definition
         let morphir_value_def = self.convert_value_def(value_def)?;
 
@@ -379,7 +377,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Box::new(self.convert_expr(function)),
                 Box::new(self.convert_expr(argument)),
             ),
-            Expr::Lambda { param, body } => {
+            Expr::Lambda { param: _, body } => {
                 Value::Lambda(
                     attrs,
                     MorphirPattern::WildcardPattern(ValueAttributes::default()), // TODO: Convert param
@@ -506,7 +504,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::parser::{Access, Expr, Literal, ModuleIR, TypeExpr, ValueDef};
+    use crate::frontend::ast::{Access, Expr, Literal, ModuleIR, ValueDef};
     use morphir_common::vfs::MemoryVfs;
     use morphir_ir::naming::{ModuleName, PackageName};
     use std::path::PathBuf;

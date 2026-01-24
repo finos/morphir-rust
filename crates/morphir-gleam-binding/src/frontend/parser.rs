@@ -1,520 +1,17 @@
 //! Gleam parser - converts Gleam source code to Morphir IR
 //!
-//! This implementation uses `logos` for lexing and `chumsky` for parsing,
-//! following patterns from the official Gleam implementations (glexer and glance).
+//! This implementation uses `chumsky` for parsing, following patterns from
+//! the official Gleam implementations (glance).
 
 use chumsky::input::{IterInput, ValueInput};
 use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
-use logos::Logos;
-use serde::{Deserialize, Serialize};
-use std::ops::Range;
 
-// ============================================================================
-// Lexer (Tokenization)
-// ============================================================================
-
-/// Token type for Gleam source code
-///
-/// Based on glexer (official Gleam lexer) token definitions.
-/// Reference: https://github.com/gleam-lang/glexer
-#[derive(Logos, Debug, PartialEq, Clone)]
-#[logos(skip r"[ \t\r\n]+")]
-#[logos(skip r"//[^\n]*")]
-pub enum Token {
-    // Keywords
-    #[token("pub")]
-    Pub,
-    #[token("fn")]
-    Fn,
-    #[token("type")]
-    Type,
-    #[token("let")]
-    Let,
-    #[token("case")]
-    Case,
-    #[token("if")]
-    If,
-    #[token("else")]
-    Else,
-    #[token("use")]
-    Use,
-    #[token("import")]
-    Import,
-    #[token("external")]
-    External,
-    #[token("const")]
-    Const,
-    #[token("as")]
-    As,
-    #[token("try")]
-    Try,
-    #[token("assert")]
-    Assert,
-    #[token("todo")]
-    Todo,
-    #[token("True")]
-    True,
-    #[token("False")]
-    False,
-
-    // Literals
-    #[regex(r#""([^"\\]|\\.)*""#, |lex| {
-        let slice = lex.slice();
-        // Remove quotes and unescape
-        slice[1..slice.len()-1].to_string()
-    })]
-    String(String),
-
-    #[regex(r"\d+", |lex| lex.slice().parse().ok())]
-    Int(i64),
-
-    #[regex(r"\d+\.\d+", |lex| lex.slice().parse().ok())]
-    Float(f64),
-
-    // Identifiers (with priority to avoid conflict with Underscore)
-    #[regex(r"[a-z][a-zA-Z0-9_]*", priority = 2, callback = |lex| lex.slice().to_string())]
-    Ident(String),
-
-    #[regex(r"[A-Z][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
-    TypeIdent(String),
-
-    // Operators
-    #[token("->")]
-    Arrow,
-    #[token("=")]
-    Equals,
-    #[token("|")]
-    Pipe,
-    #[token("_", priority = 1)]
-    Underscore,
-    #[token("::")]
-    Cons,
-    #[token("..")]
-    Spread,
-    #[token("+")]
-    Plus,
-    #[token("-")]
-    Minus,
-    #[token("*")]
-    Star,
-    #[token("/")]
-    Slash,
-    #[token("%")]
-    Percent,
-    #[token("==")]
-    EqEq,
-    #[token("!=")]
-    NotEq,
-    #[token("<")]
-    Lt,
-    #[token(">")]
-    Gt,
-    #[token("<=")]
-    LtEq,
-    #[token(">=")]
-    GtEq,
-    #[token("&&")]
-    AndAnd,
-    #[token("||")]
-    OrOr,
-    #[token("!")]
-    Not,
-    #[token("?")]
-    Question,
-
-    // Punctuation
-    #[token("(")]
-    LParen,
-    #[token(")")]
-    RParen,
-    #[token("{")]
-    LBrace,
-    #[token("}")]
-    RBrace,
-    #[token("[")]
-    LBracket,
-    #[token("]")]
-    RBracket,
-    #[token("#")]
-    Hash,
-    #[token(":")]
-    Colon,
-    #[token(",")]
-    Comma,
-    #[token(".")]
-    Dot,
-    #[token(";")]
-    Semicolon,
-
-    /// Error token for unrecognized input
-    Error,
-}
-
-/// Span type for tracking source positions
-pub type Span = Range<usize>;
-
-/// Token with span information
-pub type SpannedToken = (Token, SimpleSpan);
-
-/// Tokenize Gleam source code with spans for chumsky 0.12
-pub fn tokenize(source: &str) -> Vec<SpannedToken> {
-    Token::lexer(source)
-        .spanned()
-        .map(|(tok, span)| (tok.unwrap_or(Token::Error), span.into()))
-        .collect()
-}
-
-// Error token variant needs to be added
-impl Default for Token {
-    fn default() -> Self {
-        Token::Error
-    }
-}
-
-// ============================================================================
-// Parser (Grammar)
-// ============================================================================
-
-/// Parse error type with span information
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    pub message: String,
-    pub span: Span,
-    pub expected: Vec<String>,
-    pub found: Option<String>,
-    pub hint: Option<String>,
-    pub source_snippet: Option<String>,
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} at {:?}", self.message, self.span)
-    }
-}
-
-impl std::error::Error for ParseError {}
-
-/// Convert ParseError to extension SDK Diagnostic
-impl ParseError {
-    pub fn to_diagnostic(
-        &self,
-        file_path: &str,
-        source: &str,
-    ) -> morphir_extension_sdk::types::Diagnostic {
-        use morphir_extension_sdk::types::{Diagnostic, DiagnosticSeverity, SourceLocation};
-
-        // Convert span to line/column
-        let (start_line, start_col) = span_to_line_column(source, self.span.start);
-        let (end_line, end_col) = span_to_line_column(source, self.span.end);
-
-        let location = SourceLocation {
-            file: file_path.to_string(),
-            start_line,
-            start_col,
-            end_line,
-            end_col,
-        };
-
-        // Build error message with hint
-        let mut message = self.message.clone();
-        if let Some(hint) = &self.hint {
-            message.push_str("\n");
-            message.push_str(hint);
-        }
-        if let Some(snippet) = &self.source_snippet {
-            message.push_str("\n");
-            message.push_str(&format!("Found: {}", snippet));
-        }
-
-        Diagnostic {
-            severity: DiagnosticSeverity::Error,
-            code: Some("PARSE_ERROR".to_string()),
-            message,
-            location: Some(location),
-            related: vec![],
-        }
-    }
-}
-
-/// Convert byte offset to line/column
-fn span_to_line_column(source: &str, offset: usize) -> (u32, u32) {
-    let mut line = 1;
-    let mut col = 1;
-
-    for (i, ch) in source.char_indices() {
-        if i >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-
-    (line, col)
-}
-
-/// Convert chumsky Rich error to ParseError
-fn to_parse_error(err: &Rich<'_, Token, SimpleSpan>, source: &str) -> ParseError {
-    let span = err.span();
-    let span_range = span.start..span.end;
-
-    // Extract expected tokens
-    let expected: Vec<String> = err
-        .expected()
-        .map(|e| format!("{:?}", e))
-        .collect();
-
-    let found = err.found().map(|t| format!("{:?}", t));
-
-    // Extract source snippet for context
-    let snippet = if span.start < source.len() && span.end <= source.len() {
-        Some(source[span_range.clone()].to_string())
-    } else {
-        None
-    };
-
-    // Generate hint based on expected tokens
-    let hint = if !expected.is_empty() {
-        Some(format!("Expected one of: {}", expected.join(", ")))
-    } else {
-        None
-    };
-
-    ParseError {
-        message: format!("Parse error: {:?}", err.reason()),
-        span: span_range,
-        expected,
-        found,
-        hint,
-        source_snippet: snippet,
-    }
-}
-
-/// Parse Gleam source code into ModuleIR
-pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
-    // Tokenize
-    let tokens = tokenize(source);
-
-    if tokens.is_empty() {
-        return Ok(ModuleIR {
-            name: extract_module_name(path),
-            doc: None,
-            types: vec![],
-            values: vec![],
-        });
-    }
-
-    // Create end-of-input span
-    let eoi = SimpleSpan::from(source.len()..source.len());
-
-    // Create IterInput from tokens for parsing (handles (Token, Span) tuples)
-    let input = IterInput::new(tokens.into_iter(), eoi);
-
-    // Parse using chumsky 0.12 API
-    let parser = module_parser();
-    match parser.parse(input).into_result() {
-        Ok(mut module) => {
-            // Set module name from path
-            module.name = extract_module_name(path);
-            Ok(module)
-        }
-        Err(errors) => {
-            // Return first error (could be enhanced to return multiple)
-            if let Some(err) = errors.first() {
-                Err(to_parse_error(err, source))
-            } else {
-                Err(ParseError {
-                    message: "Unknown parse error".to_string(),
-                    span: 0..0,
-                    expected: vec![],
-                    found: None,
-                    hint: None,
-                    source_snippet: None,
-                })
-            }
-        }
-    }
-}
-
-/// Extract module name from file path
-fn extract_module_name(path: &str) -> String {
-    path.trim_end_matches(".gleam")
-        .replace('/', "_")
-        .replace('\\', "_")
-}
-
-// ============================================================================
-// AST Types (existing, kept for compatibility)
-// ============================================================================
-
-/// Morphir module IR representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModuleIR {
-    /// Module name (e.g., "my/module")
-    pub name: String,
-    /// Module documentation
-    #[serde(default)]
-    pub doc: Option<String>,
-    /// Type definitions
-    #[serde(default)]
-    pub types: Vec<TypeDef>,
-    /// Value definitions (functions and constants)
-    #[serde(default)]
-    pub values: Vec<ValueDef>,
-}
-
-/// Type definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TypeDef {
-    /// Type name
-    pub name: String,
-    /// Type parameters
-    #[serde(default)]
-    pub params: Vec<String>,
-    /// Type body
-    pub body: TypeExpr,
-    /// Access control (pub or private)
-    #[serde(default)]
-    pub access: Access,
-}
-
-/// Access control
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Access {
-    #[default]
-    Private,
-    Public,
-}
-
-/// Type expression
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum TypeExpr {
-    /// Type variable (e.g., `a`)
-    Variable { name: String },
-    /// Unit type
-    Unit,
-    /// Function type (e.g., `Int -> String`)
-    Function {
-        from: Box<TypeExpr>,
-        to: Box<TypeExpr>,
-    },
-    /// Record type (e.g., `{ name: String, age: Int }`)
-    Record { fields: Vec<(String, TypeExpr)> },
-    /// Tuple type (e.g., `#(Int, String)`)
-    Tuple { elements: Vec<TypeExpr> },
-    /// Reference to named type (e.g., `List(Int)`)
-    Reference { name: String, args: Vec<TypeExpr> },
-    /// Custom type variant
-    CustomType { variants: Vec<Variant> },
-}
-
-/// Custom type variant
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Variant {
-    /// Variant name
-    pub name: String,
-    /// Variant fields
-    #[serde(default)]
-    pub fields: Vec<TypeExpr>,
-}
-
-/// Value definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValueDef {
-    /// Value name
-    pub name: String,
-    /// Type annotation
-    #[serde(default)]
-    pub type_annotation: Option<TypeExpr>,
-    /// Value body
-    pub body: Expr,
-    /// Access control (pub or private)
-    #[serde(default)]
-    pub access: Access,
-}
-
-/// Expression
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum Expr {
-    /// Literal value
-    Literal { value: Literal },
-    /// Variable reference
-    Variable { name: String },
-    /// Function application
-    Apply {
-        function: Box<Expr>,
-        argument: Box<Expr>,
-    },
-    /// Lambda expression
-    Lambda { param: String, body: Box<Expr> },
-    /// Let binding
-    Let {
-        name: String,
-        value: Box<Expr>,
-        body: Box<Expr>,
-    },
-    /// If expression
-    If {
-        condition: Box<Expr>,
-        then_branch: Box<Expr>,
-        else_branch: Box<Expr>,
-    },
-    /// Record construction
-    Record { fields: Vec<(String, Expr)> },
-    /// Record field access
-    Field { record: Box<Expr>, field: String },
-    /// Tuple construction
-    Tuple { elements: Vec<Expr> },
-    /// Pattern match / case expression
-    Case {
-        subject: Box<Expr>,
-        branches: Vec<CaseBranch>,
-    },
-    /// Constructor reference
-    Constructor { name: String },
-}
-
-/// Literal value
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum Literal {
-    Bool { value: bool },
-    Int { value: i64 },
-    Float { value: f64 },
-    String { value: String },
-    Char { value: char },
-}
-
-/// Case branch
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CaseBranch {
-    /// Pattern to match
-    pub pattern: Pattern,
-    /// Body expression
-    pub body: Expr,
-}
-
-/// Pattern for matching
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum Pattern {
-    /// Wildcard pattern (_)
-    Wildcard,
-    /// Variable binding
-    Variable { name: String },
-    /// Literal pattern
-    Literal { value: Literal },
-    /// Constructor pattern
-    Constructor { name: String, args: Vec<Pattern> },
-    /// Tuple pattern
-    Tuple { elements: Vec<Pattern> },
-}
+use crate::frontend::ast::{
+    Access, CaseBranch, Expr, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef, Variant,
+};
+use crate::frontend::errors::{ParseError, to_parse_error};
+use crate::frontend::lexer::{Token, tokenize};
 
 // ============================================================================
 // Parser Combinators (Chumsky 0.12 API)
@@ -528,39 +25,37 @@ enum Statement {
 }
 
 /// Main module parser
-fn module_parser<'src, I>(
-) -> impl Parser<'src, I, ModuleIR, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn module_parser<'src, I>()
+-> impl Parser<'src, I, ModuleIR, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
     // Parse module-level statements
     let stmt = statement_parser().then_ignore(just(Token::Semicolon).or_not());
 
-    stmt.repeated()
-        .collect::<Vec<_>>()
-        .map(|stmts| {
-            let mut types = Vec::new();
-            let mut values = Vec::new();
+    stmt.repeated().collect::<Vec<_>>().map(|stmts| {
+        let mut types = Vec::new();
+        let mut values = Vec::new();
 
-            for stmt in stmts {
-                match stmt {
-                    Statement::TypeDef(td) => types.push(td),
-                    Statement::ValueDef(vd) => values.push(vd),
-                }
+        for stmt in stmts {
+            match stmt {
+                Statement::TypeDef(td) => types.push(td),
+                Statement::ValueDef(vd) => values.push(vd),
             }
+        }
 
-            ModuleIR {
-                name: String::new(), // Will be set from path
-                doc: None,
-                types,
-                values,
-            }
-        })
+        ModuleIR {
+            name: String::new(), // Will be set from path
+            doc: None,
+            types,
+            values,
+        }
+    })
 }
 
 /// Statement parser
-fn statement_parser<'src, I>(
-) -> impl Parser<'src, I, Statement, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn statement_parser<'src, I>()
+-> impl Parser<'src, I, Statement, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -570,8 +65,8 @@ where
 }
 
 /// Type definition parser
-fn type_def_parser<'src, I>(
-) -> impl Parser<'src, I, TypeDef, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn type_def_parser<'src, I>()
+-> impl Parser<'src, I, TypeDef, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -605,8 +100,8 @@ where
 
 /// Custom type body parser (variants)
 /// In Gleam, variants are listed consecutively without separators (whitespace is skipped)
-fn custom_type_body_parser<'src, I>(
-) -> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn custom_type_body_parser<'src, I>()
+-> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -618,8 +113,8 @@ where
 }
 
 /// Variant parser
-fn variant_parser<'src, I>(
-) -> impl Parser<'src, I, Variant, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn variant_parser<'src, I>()
+-> impl Parser<'src, I, Variant, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -637,8 +132,8 @@ where
 }
 
 /// Value definition parser
-fn value_def_parser<'src, I>(
-) -> impl Parser<'src, I, ValueDef, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn value_def_parser<'src, I>()
+-> impl Parser<'src, I, ValueDef, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -655,9 +150,7 @@ where
         .or_not()
         .map(|opt: Option<Vec<String>>| opt.unwrap_or_default());
 
-    let type_ann = just(Token::Colon)
-        .ignore_then(type_expr_parser())
-        .or_not();
+    let type_ann = just(Token::Colon).ignore_then(type_expr_parser()).or_not();
 
     access
         .then_ignore(just(Token::Fn))
@@ -667,17 +160,18 @@ where
         .then_ignore(just(Token::LBrace))
         .then(expr_parser())
         .then_ignore(just(Token::RBrace))
-        .map(|((((access, name), _params), type_annotation), body)| ValueDef {
-            name,
-            type_annotation,
-            body,
-            access,
-        })
+        .map(
+            |((((access, name), _params), type_annotation), body)| ValueDef {
+                name,
+                type_annotation,
+                body,
+                access,
+            },
+        )
 }
 
 /// Expression parser
-fn expr_parser<'src, I>(
-) -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn expr_parser<'src, I>() -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -716,9 +210,7 @@ where
 
         // Lambda: fn(param) { expr }
         let lambda = just(Token::Fn)
-            .ignore_then(
-                identifier_parser().delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
+            .ignore_then(identifier_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then_ignore(just(Token::LBrace))
             .then(expr.clone())
             .then_ignore(just(Token::RBrace))
@@ -804,8 +296,8 @@ where
         // Build up expressions with postfix operators
         let postfix = atom.foldl(
             field_access
-                .map(|f| PostfixOp::Field(f))
-                .or(application.map(|a| PostfixOp::Apply(a)))
+                .map(PostfixOp::Field)
+                .or(application.map(PostfixOp::Apply))
                 .repeated(),
             |lhs, op| match op {
                 PostfixOp::Field(field) => Expr::Field {
@@ -820,7 +312,12 @@ where
         );
 
         // All expression forms
-        postfix.or(lambda).or(let_binding).or(if_expr).or(case_expr).boxed()
+        postfix
+            .or(lambda)
+            .or(let_binding)
+            .or(if_expr)
+            .or(case_expr)
+            .boxed()
     })
 }
 
@@ -832,8 +329,8 @@ enum PostfixOp {
 }
 
 /// Type expression parser
-fn type_expr_parser<'src, I>(
-) -> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn type_expr_parser<'src, I>()
+-> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -898,21 +395,21 @@ where
             .or(paren_type);
 
         // Function types: Type -> Type (right-associative)
-        primary.foldl(
-            just(Token::Arrow)
-                .ignore_then(type_expr)
-                .repeated(),
-            |from, to| TypeExpr::Function {
-                from: Box::new(from),
-                to: Box::new(to),
-            },
-        ).boxed()
+        primary
+            .foldl(
+                just(Token::Arrow).ignore_then(type_expr).repeated(),
+                |from, to| TypeExpr::Function {
+                    from: Box::new(from),
+                    to: Box::new(to),
+                },
+            )
+            .boxed()
     })
 }
 
 /// Pattern parser
-fn pattern_parser<'src, I>(
-) -> impl Parser<'src, I, Pattern, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn pattern_parser<'src, I>()
+-> impl Parser<'src, I, Pattern, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -968,8 +465,8 @@ where
 }
 
 /// Literal parser
-fn literal_parser<'src, I>(
-) -> impl Parser<'src, I, Literal, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn literal_parser<'src, I>()
+-> impl Parser<'src, I, Literal, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -984,8 +481,8 @@ where
 }
 
 /// Identifier parser (lowercase)
-fn identifier_parser<'src, I>(
-) -> impl Parser<'src, I, String, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn identifier_parser<'src, I>()
+-> impl Parser<'src, I, String, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -996,8 +493,8 @@ where
 }
 
 /// Type identifier parser (uppercase)
-fn type_identifier_parser<'src, I>(
-) -> impl Parser<'src, I, String, extra::Err<Rich<'src, Token, SimpleSpan>>>
+fn type_identifier_parser<'src, I>()
+-> impl Parser<'src, I, String, extra::Err<Rich<'src, Token, SimpleSpan>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
@@ -1007,16 +504,73 @@ where
     .labelled("type identifier")
 }
 
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Parse Gleam source code into ModuleIR
+#[allow(clippy::result_large_err)]
+pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
+    // Tokenize
+    let tokens = tokenize(source);
+
+    if tokens.is_empty() {
+        return Ok(ModuleIR {
+            name: extract_module_name(path),
+            doc: None,
+            types: vec![],
+            values: vec![],
+        });
+    }
+
+    // Create end-of-input span
+    let eoi = SimpleSpan::from(source.len()..source.len());
+
+    // Create IterInput from tokens for parsing (handles (Token, Span) tuples)
+    let input = IterInput::new(tokens.into_iter(), eoi);
+
+    // Parse using chumsky 0.12 API
+    let parser = module_parser();
+    match parser.parse(input).into_result() {
+        Ok(mut module) => {
+            // Set module name from path
+            module.name = extract_module_name(path);
+            Ok(module)
+        }
+        Err(errors) => {
+            // Return first error (could be enhanced to return multiple)
+            if let Some(err) = errors.first() {
+                Err(to_parse_error(err, source))
+            } else {
+                Err(ParseError {
+                    message: "Unknown parse error".to_string(),
+                    span: 0..0,
+                    expected: vec![],
+                    found: None,
+                    hint: None,
+                    source_snippet: None,
+                })
+            }
+        }
+    }
+}
+
+/// Extract module name from file path
+fn extract_module_name(path: &str) -> String {
+    path.trim_end_matches(".gleam").replace(['/', '\\'], "_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::lexer::{Token, tokenize};
 
     #[test]
     fn test_tokenize_simple() {
         let source = "pub fn hello() { \"world\" }";
         let tokens = tokenize(source);
 
-        assert!(tokens.len() > 0);
+        assert!(!tokens.is_empty());
         assert_eq!(tokens[0].0, Token::Pub);
         assert_eq!(tokens[1].0, Token::Fn);
     }

@@ -1,5 +1,6 @@
 //! Gleam-specific subcommands
 
+use crate::commands::compile::CompileOptions;
 use crate::commands::{run_compile, run_generate};
 use starbase::AppResult;
 
@@ -13,8 +14,8 @@ pub async fn run_gleam_compile(
     json: bool,
     json_lines: bool,
 ) -> AppResult {
-    run_compile(
-        Some("gleam".to_string()), // Set language to gleam
+    run_compile(CompileOptions {
+        language: Some("gleam".to_string()), // Set language to gleam
         input,
         output,
         package_name,
@@ -22,7 +23,7 @@ pub async fn run_gleam_compile(
         project,
         json,
         json_lines,
-    )
+    })
     .await
 }
 

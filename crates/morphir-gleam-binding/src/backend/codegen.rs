@@ -130,7 +130,10 @@ fn generate_from_package_definition(
                             });
                         }
                         Err(e) => {
-                            return Err(ExtensionError::execution(format!("Failed to read generated file: {}", e)));
+                            return Err(ExtensionError::execution(format!(
+                                "Failed to read generated file: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -138,8 +141,7 @@ fn generate_from_package_definition(
             Err(e) => {
                 return Err(ExtensionError::execution(format!(
                     "Failed to generate module {}: {}",
-                    module_path_str,
-                    e
+                    module_path_str, e
                 )));
             }
         }
@@ -199,14 +201,12 @@ fn generate_type(output: &mut String, type_def: &TypeDef, indent: &str) {
                 "record" => {
                     if let Some(fields) = obj.get("fields").and_then(|v| v.as_array()) {
                         for field in fields {
-                            if let Some(arr) = field.as_array() {
-                                if arr.len() >= 2 {
-                                    if let (Some(name), Some(_type_expr)) =
-                                        (arr[0].as_str(), arr.get(1))
-                                    {
-                                        let _ = writeln!(output, "{}{}: Unknown,", indent, name);
-                                    }
-                                }
+                            if let Some(arr) = field.as_array()
+                                && arr.len() >= 2
+                                && let (Some(name), Some(_type_expr)) =
+                                    (arr[0].as_str(), arr.get(1))
+                            {
+                                let _ = writeln!(output, "{}{}: Unknown,", indent, name);
                             }
                         }
                     }
@@ -232,44 +232,37 @@ fn generate_value(output: &mut String, value_def: &ValueDef, indent: &str) {
         if let Some(kind) = obj.get("kind").and_then(|v| v.as_str()) {
             match kind {
                 "literal" => {
-                    if let Some(value) = obj.get("value") {
-                        if let Some(lit_obj) = value.as_object() {
-                            if let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str()) {
-                                match lit_type {
-                                    "string" => {
-                                        if let Some(s) =
-                                            lit_obj.get("value").and_then(|v| v.as_str())
-                                        {
-                                            let _ = writeln!(output, "{}\"{}\"", indent, s);
-                                        }
-                                    }
-                                    "int" => {
-                                        if let Some(n) =
-                                            lit_obj.get("value").and_then(|v| v.as_i64())
-                                        {
-                                            let _ = writeln!(output, "{}{}", indent, n);
-                                        }
-                                    }
-                                    "bool" => {
-                                        if let Some(b) =
-                                            lit_obj.get("value").and_then(|v| v.as_bool())
-                                        {
-                                            let _ = writeln!(
-                                                output,
-                                                "{}{}",
-                                                indent,
-                                                if b { "True" } else { "False" }
-                                            );
-                                        }
-                                    }
-                                    _ => {
-                                        let _ = writeln!(
-                                            output,
-                                            "{}// Unknown literal type: {}",
-                                            indent, lit_type
-                                        );
-                                    }
+                    if let Some(value) = obj.get("value")
+                        && let Some(lit_obj) = value.as_object()
+                        && let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str())
+                    {
+                        match lit_type {
+                            "string" => {
+                                if let Some(s) = lit_obj.get("value").and_then(|v| v.as_str()) {
+                                    let _ = writeln!(output, "{}\"{}\"", indent, s);
                                 }
+                            }
+                            "int" => {
+                                if let Some(n) = lit_obj.get("value").and_then(|v| v.as_i64()) {
+                                    let _ = writeln!(output, "{}{}", indent, n);
+                                }
+                            }
+                            "bool" => {
+                                if let Some(b) = lit_obj.get("value").and_then(|v| v.as_bool()) {
+                                    let _ = writeln!(
+                                        output,
+                                        "{}{}",
+                                        indent,
+                                        if b { "True" } else { "False" }
+                                    );
+                                }
+                            }
+                            _ => {
+                                let _ = writeln!(
+                                    output,
+                                    "{}// Unknown literal type: {}",
+                                    indent, lit_type
+                                );
                             }
                         }
                     }

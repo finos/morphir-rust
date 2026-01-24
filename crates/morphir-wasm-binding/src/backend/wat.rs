@@ -104,56 +104,51 @@ fn compile_to_wat(name: &str, modules: &[ModuleIR], pretty: bool) -> String {
 
 /// Generate WAT instructions for a Morphir expression
 fn generate_wat_body(output: &mut String, body: &serde_json::Value, indent: &str) {
-    if let Some(obj) = body.as_object() {
-        if let Some(kind) = obj.get("kind").and_then(|v| v.as_str()) {
-            match kind {
-                "literal" => {
-                    if let Some(value) = obj.get("value") {
-                        if let Some(lit_obj) = value.as_object() {
-                            if let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str()) {
-                                match lit_type {
-                                    "int" => {
-                                        if let Some(n) =
-                                            lit_obj.get("value").and_then(|v| v.as_i64())
-                                        {
-                                            let _ = writeln!(output, "{}(i32.const {})", indent, n);
-                                            return;
-                                        }
-                                    }
-                                    "bool" => {
-                                        if let Some(b) =
-                                            lit_obj.get("value").and_then(|v| v.as_bool())
-                                        {
-                                            let _ = writeln!(
-                                                output,
-                                                "{}(i32.const {})",
-                                                indent,
-                                                if b { 1 } else { 0 }
-                                            );
-                                            return;
-                                        }
-                                    }
-                                    _ => {
-                                        let _ = writeln!(
-                                            output,
-                                            "{};;  Unsupported literal type: {}",
-                                            indent, lit_type
-                                        );
-                                    }
-                                }
+    if let Some(obj) = body.as_object()
+        && let Some(kind) = obj.get("kind").and_then(|v| v.as_str())
+    {
+        match kind {
+            "literal" => {
+                if let Some(value) = obj.get("value")
+                    && let Some(lit_obj) = value.as_object()
+                    && let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str())
+                {
+                    match lit_type {
+                        "int" => {
+                            if let Some(n) = lit_obj.get("value").and_then(|v| v.as_i64()) {
+                                let _ = writeln!(output, "{}(i32.const {})", indent, n);
+                                return;
                             }
+                        }
+                        "bool" => {
+                            if let Some(b) = lit_obj.get("value").and_then(|v| v.as_bool()) {
+                                let _ = writeln!(
+                                    output,
+                                    "{}(i32.const {})",
+                                    indent,
+                                    if b { 1 } else { 0 }
+                                );
+                                return;
+                            }
+                        }
+                        _ => {
+                            let _ = writeln!(
+                                output,
+                                "{};;  Unsupported literal type: {}",
+                                indent, lit_type
+                            );
                         }
                     }
                 }
-                "apply" => {
-                    let _ = writeln!(output, "{};;  Function application", indent);
-                }
-                "lambda" => {
-                    let _ = writeln!(output, "{};;  Lambda expression", indent);
-                }
-                _ => {
-                    let _ = writeln!(output, "{};;  Expression kind: {}", indent, kind);
-                }
+            }
+            "apply" => {
+                let _ = writeln!(output, "{};;  Function application", indent);
+            }
+            "lambda" => {
+                let _ = writeln!(output, "{};;  Lambda expression", indent);
+            }
+            _ => {
+                let _ = writeln!(output, "{};;  Expression kind: {}", indent, kind);
             }
         }
     }

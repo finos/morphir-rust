@@ -1,9 +1,7 @@
 //! Compile command for compiling source code to Morphir IR
 
-use crate::error::{CliError, convert_extension_diagnostics, handle_error};
-use crate::output::{CompileOutput, Diagnostic, OutputFormat, write_output};
-use anyhow::Context;
-use morphir_daemon::extensions::container::ExtensionType;
+use crate::error::CliError;
+use crate::output::Diagnostic;
 use morphir_daemon::extensions::registry::ExtensionRegistry;
 use morphir_design::{
     discover_config, ensure_morphir_structure, load_config_context, resolve_compile_output,
@@ -11,17 +9,39 @@ use morphir_design::{
 use starbase::AppResult;
 use std::path::{Path, PathBuf};
 
+/// Options for the compile command
+#[derive(Debug, Default)]
+pub struct CompileOptions {
+    /// Language to compile (e.g., "gleam", "elm")
+    pub language: Option<String>,
+    /// Input path or directory
+    pub input: Option<String>,
+    /// Output path
+    pub output: Option<String>,
+    /// Package name override
+    pub package_name: Option<String>,
+    /// Path to configuration file
+    pub config_path: Option<String>,
+    /// Project name (currently unused)
+    pub project: Option<String>,
+    /// Output JSON format
+    pub json: bool,
+    /// Output JSON lines format
+    pub json_lines: bool,
+}
+
 /// Run the compile command
-pub async fn run_compile(
-    language: Option<String>,
-    input: Option<String>,
-    output: Option<String>,
-    package_name: Option<String>,
-    config_path: Option<String>,
-    project: Option<String>,
-    json: bool,
-    json_lines: bool,
-) -> AppResult {
+pub async fn run_compile(options: CompileOptions) -> AppResult {
+    let CompileOptions {
+        language,
+        input,
+        output,
+        package_name,
+        config_path,
+        project: _project,
+        json,
+        json_lines,
+    } = options;
     use crate::output::{CompileOutput, OutputFormat, write_output};
     // Discover config if not provided
     let start_dir = std::env::current_dir().map_err(|e| CliError::FileSystem { error: e })?;
@@ -118,7 +138,7 @@ pub async fn run_compile(
     // Collect source files
     let source_files =
         collect_source_files(&input_path, &lang).map_err(|e| CliError::FileSystem {
-            error: std::io::Error::new(std::io::ErrorKind::Other, e),
+            error: std::io::Error::other(e),
         })?;
 
     // Call extension's compile method
@@ -233,12 +253,11 @@ fn collect_source_files(input_path: &Path, language: &str) -> anyhow::Result<Vec
     // Walk directory and collect files
     for entry in walkdir::WalkDir::new(input_path) {
         let entry = entry?;
-        if entry.file_type().is_file() {
-            if let Some(file_ext) = entry.path().extension() {
-                if file_ext == ext {
-                    files.push(entry.path().to_string_lossy().to_string());
-                }
-            }
+        if entry.file_type().is_file()
+            && let Some(file_ext) = entry.path().extension()
+            && file_ext == ext
+        {
+            files.push(entry.path().to_string_lossy().to_string());
         }
     }
 

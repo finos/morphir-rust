@@ -2,6 +2,8 @@
 //!
 //! Tracks feature implementation status and generates coverage reports.
 
+#![allow(dead_code)]
+
 #[cfg(test)]
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

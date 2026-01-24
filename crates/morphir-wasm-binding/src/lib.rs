@@ -51,11 +51,10 @@ impl Backend for WasmExtension {
         match backend::generate_wasm(&request.ir, &request.options) {
             Ok(mut artifacts) => {
                 // Optionally generate WAT as well
-                if emit_wat {
-                    if let Ok(wat_artifacts) = backend::generate_wat(&request.ir, &request.options)
-                    {
-                        artifacts.extend(wat_artifacts);
-                    }
+                if emit_wat
+                    && let Ok(wat_artifacts) = backend::generate_wat(&request.ir, &request.options)
+                {
+                    artifacts.extend(wat_artifacts);
                 }
 
                 Ok(GenerateResult {

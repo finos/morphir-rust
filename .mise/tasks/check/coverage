@@ -22,7 +22,7 @@ for crate_dir in crates/*; do
     crate_name=$(basename "$crate_dir")
 
     # Read threshold from Cargo.toml metadata (default 0)
-    threshold=$(echo "$METADATA" | \
+    threshold=$(echo "$METADATA" |
         jq -r ".packages[] | select(.name == \"$crate_name\") | .metadata.coverage.threshold // 0")
 
     # Skip if threshold is 0 or null (not configured)
@@ -34,7 +34,7 @@ for crate_dir in crates/*; do
     CRATES_CHECKED=$((CRATES_CHECKED + 1))
 
     # Run coverage for this crate (uses cached instrumented build from report, lib tests only)
-    coverage=$(cargo llvm-cov --package "$crate_name" --lib --json 2>/dev/null | \
+    coverage=$(cargo llvm-cov --package "$crate_name" --lib --json 2>/dev/null |
         jq -r '.data[0].totals.lines.percent // 0')
 
     # Compare coverage to threshold using awk (more portable than bc)

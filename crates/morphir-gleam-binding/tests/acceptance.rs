@@ -3,13 +3,15 @@
 //! Uses Cucumber/Gherkin for behavior-driven testing of the full
 //! Gleam parsing and code generation pipeline.
 
+#![allow(dead_code)]
+
 mod cli_helpers;
 mod coverage;
 
-use anyhow::Result;
 use cucumber::{World, given, then, when};
+#[allow(unused_imports)]
 use morphir_common::vfs::{MemoryVfs, Vfs};
-use morphir_gleam_binding::frontend::parser::ModuleIR;
+use morphir_gleam_binding::frontend::ast::ModuleIR;
 use morphir_gleam_binding::frontend::{GleamToMorphirVisitor, parse_gleam};
 use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
@@ -107,7 +109,7 @@ async fn module_should_have_values(w: &mut GleamTestWorld, name: String, count: 
         .parsed_modules
         .iter()
         .find(|m| m.name == name)
-        .expect(&format!("Module {} not found", name));
+        .unwrap_or_else(|| panic!("Module {} not found", name));
     assert_eq!(module.values.len(), count);
 }
 
@@ -155,17 +157,15 @@ async fn i_parse_file_by_name(w: &mut GleamTestWorld, filename: String) {
 
 #[when(expr = "I convert IR V4 Document Tree back to Gleam source {string}")]
 async fn convert_from_ir_v4(w: &mut GleamTestWorld, output_file: String) {
-    use morphir_common::vfs::{MemoryVfs, Vfs};
+    use morphir_common::vfs::MemoryVfs;
     use morphir_gleam_binding::backend::visitor::MorphirToGleamVisitor;
-    use morphir_ir::ir::v4::PackageDefinition;
-    use morphir_ir::naming::ModuleName;
 
     // For now, simplified - would need to load IR V4 from document tree
     // This is a placeholder implementation
     let vfs = MemoryVfs::new();
     let output_dir = PathBuf::from("/test-output");
     let package_name = "test-package".to_string();
-    let visitor = MorphirToGleamVisitor::new(vfs.clone(), output_dir.clone(), package_name);
+    let _visitor = MorphirToGleamVisitor::new(vfs.clone(), output_dir.clone(), package_name);
 
     // TODO: Load PackageDefinition from document tree and convert
     // For now, just mark that conversion was attempted
@@ -241,8 +241,6 @@ async fn roundtrip_should_preserve(w: &mut GleamTestWorld, _aspect: String) {
 
 #[when(expr = "I convert ModuleIR to IR V4 Document Tree")]
 async fn convert_to_ir_v4(w: &mut GleamTestWorld) {
-    use morphir_common::vfs::Vfs;
-
     let vfs = MemoryVfs::new();
     let output_dir = PathBuf::from("/test-output");
     let package_name = PackageName::parse("test-package");
@@ -477,7 +475,7 @@ async fn cli_should_create_both_structures(w: &mut GleamTestWorld) {
 #[then(expr = "the CLI should use configuration from morphir.toml")]
 async fn cli_should_use_config(w: &mut GleamTestWorld) {
     // Verify that config was used by checking output paths
-    let ctx = w.cli_context.as_ref().expect("CLI context not initialized");
+    let _ctx = w.cli_context.as_ref().expect("CLI context not initialized");
 
     // Config should have been read (no error about missing config)
     let result = w.cli_result.as_ref().expect("No CLI result available");
@@ -523,7 +521,7 @@ async fn json_lines_output_should_be_valid(w: &mut GleamTestWorld) {
             continue;
         }
         serde_json::from_str::<serde_json::Value>(line)
-            .expect(&format!("Invalid JSON line: {}", line));
+            .unwrap_or_else(|_| panic!("Invalid JSON line: {}", line));
     }
 }
 

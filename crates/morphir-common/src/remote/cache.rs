@@ -102,16 +102,13 @@ impl SourceCache {
         }
 
         // Check TTL if configured
-        if self.config.ttl_secs > 0 {
-            if let Ok(metadata) = fs::metadata(&path) {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(elapsed) = SystemTime::now().duration_since(modified) {
-                        if elapsed > Duration::from_secs(self.config.ttl_secs) {
-                            return false;
-                        }
-                    }
-                }
-            }
+        if self.config.ttl_secs > 0
+            && let Ok(metadata) = fs::metadata(&path)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(elapsed) = SystemTime::now().duration_since(modified)
+            && elapsed > Duration::from_secs(self.config.ttl_secs)
+        {
+            return false;
         }
 
         true

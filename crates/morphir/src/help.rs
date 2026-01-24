@@ -59,6 +59,7 @@ pub fn print_full_help<C: clap::CommandFactory>() {
 }
 
 /// Print Gleam command examples and usage
+#[allow(dead_code)]
 pub fn print_gleam_help() {
     println!();
     println!("Gleam Language Binding Commands");

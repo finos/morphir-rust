@@ -33,16 +33,16 @@ impl HttpFetcher {
         }
 
         // Set proxies
-        if let Some(ref proxy_url) = config.http_proxy {
-            if let Ok(proxy) = reqwest::Proxy::http(proxy_url) {
-                builder = builder.proxy(proxy);
-            }
+        if let Some(ref proxy_url) = config.http_proxy
+            && let Ok(proxy) = reqwest::Proxy::http(proxy_url)
+        {
+            builder = builder.proxy(proxy);
         }
 
-        if let Some(ref proxy_url) = config.https_proxy {
-            if let Ok(proxy) = reqwest::Proxy::https(proxy_url) {
-                builder = builder.proxy(proxy);
-            }
+        if let Some(ref proxy_url) = config.https_proxy
+            && let Ok(proxy) = reqwest::Proxy::https(proxy_url)
+        {
+            builder = builder.proxy(proxy);
         }
 
         let client = builder.build().map_err(|e| {
@@ -174,10 +174,10 @@ impl HttpFetcher {
             if file.is_dir() {
                 std::fs::create_dir_all(&outpath)?;
             } else {
-                if let Some(parent) = outpath.parent() {
-                    if !parent.exists() {
-                        std::fs::create_dir_all(parent)?;
-                    }
+                if let Some(parent) = outpath.parent()
+                    && !parent.exists()
+                {
+                    std::fs::create_dir_all(parent)?;
                 }
 
                 let mut outfile = std::fs::File::create(&outpath)?;

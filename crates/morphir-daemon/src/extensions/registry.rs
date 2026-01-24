@@ -278,10 +278,10 @@ impl ExtensionRegistry {
         language: &str,
     ) -> Option<Arc<ExtensionContainer>> {
         // First check builtin extensions (by ID matching language)
-        if let Ok(ext) = self.load(language).await {
-            if ext.supports(ExtensionType::Frontend) {
-                return Some(ext);
-            }
+        if let Ok(ext) = self.load(language).await
+            && ext.supports(ExtensionType::Frontend)
+        {
+            return Some(ext);
         }
 
         // Then check registered extensions
@@ -301,10 +301,10 @@ impl ExtensionRegistry {
     /// Find a backend extension by target language name
     pub async fn find_extension_by_target(&self, target: &str) -> Option<Arc<ExtensionContainer>> {
         // First check builtin extensions (by ID matching target)
-        if let Ok(ext) = self.load(target).await {
-            if ext.supports(ExtensionType::Backend) {
-                return Some(ext);
-            }
+        if let Ok(ext) = self.load(target).await
+            && ext.supports(ExtensionType::Backend)
+        {
+            return Some(ext);
         }
 
         // Then check registered extensions

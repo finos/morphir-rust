@@ -123,44 +123,35 @@ fn compile_to_wasm(modules: &[ModuleIR]) -> Result<Vec<u8>> {
 
 /// Generate WASM instructions for a Morphir expression
 fn generate_function_body(func: &mut Function, body: &serde_json::Value) -> Result<()> {
-    if let Some(obj) = body.as_object() {
-        if let Some(kind) = obj.get("kind").and_then(|v| v.as_str()) {
-            match kind {
-                "literal" => {
-                    if let Some(value) = obj.get("value") {
-                        if let Some(lit_obj) = value.as_object() {
-                            if let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str()) {
-                                match lit_type {
-                                    "int" => {
-                                        if let Some(n) =
-                                            lit_obj.get("value").and_then(|v| v.as_i64())
-                                        {
-                                            func.instruction(&Instruction::I32Const(n as i32));
-                                            func.instruction(&Instruction::End);
-                                            return Ok(());
-                                        }
-                                    }
-                                    "bool" => {
-                                        if let Some(b) =
-                                            lit_obj.get("value").and_then(|v| v.as_bool())
-                                        {
-                                            func.instruction(&Instruction::I32Const(if b {
-                                                1
-                                            } else {
-                                                0
-                                            }));
-                                            func.instruction(&Instruction::End);
-                                            return Ok(());
-                                        }
-                                    }
-                                    _ => {}
-                                }
+    if let Some(obj) = body.as_object()
+        && let Some(kind) = obj.get("kind").and_then(|v| v.as_str())
+    {
+        match kind {
+            "literal" => {
+                if let Some(value) = obj.get("value")
+                    && let Some(lit_obj) = value.as_object()
+                    && let Some(lit_type) = lit_obj.get("type").and_then(|v| v.as_str())
+                {
+                    match lit_type {
+                        "int" => {
+                            if let Some(n) = lit_obj.get("value").and_then(|v| v.as_i64()) {
+                                func.instruction(&Instruction::I32Const(n as i32));
+                                func.instruction(&Instruction::End);
+                                return Ok(());
                             }
                         }
+                        "bool" => {
+                            if let Some(b) = lit_obj.get("value").and_then(|v| v.as_bool()) {
+                                func.instruction(&Instruction::I32Const(if b { 1 } else { 0 }));
+                                func.instruction(&Instruction::End);
+                                return Ok(());
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
 

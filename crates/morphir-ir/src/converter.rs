@@ -1023,23 +1023,20 @@ fn extract_name_from_json(json: &serde_json::Value) -> Option<Name> {
 fn convert_type_definition_to_v4(value: &serde_json::Value) -> v4::TypeDefinition {
     // The value contains doc and a nested value structure
     // Try to extract the actual type definition
-    if let Some(obj) = value.as_object() {
-        if let Some(inner_value) = obj.get("value") {
-            // Check if it's a CustomTypeDefinition or TypeAliasDefinition
-            if let Some(arr) = inner_value.as_array() {
-                if !arr.is_empty() {
-                    let tag = arr[0].as_str().unwrap_or("");
-                    match tag {
-                        "CustomTypeDefinition" => {
-                            return convert_custom_type_to_v4(arr);
-                        }
-                        "TypeAliasDefinition" => {
-                            return convert_type_alias_to_v4(arr);
-                        }
-                        _ => {}
-                    }
-                }
+    if let Some(obj) = value.as_object()
+        && let Some(inner_value) = obj.get("value")
+        && let Some(arr) = inner_value.as_array()
+        && !arr.is_empty()
+    {
+        let tag = arr[0].as_str().unwrap_or("");
+        match tag {
+            "CustomTypeDefinition" => {
+                return convert_custom_type_to_v4(arr);
             }
+            "TypeAliasDefinition" => {
+                return convert_type_alias_to_v4(arr);
+            }
+            _ => {}
         }
     }
 

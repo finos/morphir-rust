@@ -5,6 +5,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use anyhow::Result;
 
+// Actor module for async message handling
+pub mod actor;
+pub use actor::{
+    ExtensionActor, 
+    InitMsg, UpdateMsg, SubscriptionsMsg, InfoMsg, 
+    SetEnvVarMsg, GetEnvVarMsg, ModelCommands
+};
+
 // Re-export core types
 pub use morphir_ext_core::{Envelope, Header, EnvValue as CoreEnvValue, LogLevel as CoreLogLevel};
 

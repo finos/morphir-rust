@@ -20,7 +20,7 @@ wasmtime = { version = "41.0.0", features = ["component-model", "async"] }
 wasmtime-wasi = "41.0.0"
 
 # Actor Model
-kameo = "0.13"
+kameo = "0.19"
 
 # Async Runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

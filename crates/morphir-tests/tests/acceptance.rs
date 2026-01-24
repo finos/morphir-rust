@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub struct TestWorld {
     input_path: PathBuf,
     loaded_content: Option<String>,
+    intermediate_content: Option<String>,
     last_result: Option<Result<()>>,
     memory_vfs: Option<MemoryVfs>,
     glob_results: Vec<PathBuf>,
@@ -26,6 +27,7 @@ impl Default for TestWorld {
         Self {
             input_path: PathBuf::new(),
             loaded_content: None,
+            intermediate_content: None,
             last_result: None,
             memory_vfs: None,
             glob_results: Vec::new(),
@@ -234,6 +236,367 @@ async fn i_should_get_valid_ir(w: &mut TestWorld, version: String) {
 #[then(expr = "the output file should be a valid {string} IR distribution")]
 async fn output_should_be_valid(w: &mut TestWorld, version: String) {
     i_should_get_valid_ir(w, version).await;
+}
+
+// Migration steps for fixtures
+
+#[given(expr = "I have a {string} IR file from fixtures {string}")]
+async fn i_have_ir_from_fixtures(w: &mut TestWorld, _version: String, fixture_path: String) {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    w.input_path = PathBuf::from(manifest_dir)
+        .join("fixtures")
+        .join(fixture_path);
+    if !w.input_path.exists() {
+        panic!("Fixture file not found: {:?}", w.input_path);
+    }
+}
+
+#[when(expr = "I save the result as intermediate")]
+async fn save_result_as_intermediate(w: &mut TestWorld) {
+    w.intermediate_content = w.loaded_content.clone();
+}
+
+#[when(expr = "I run \"morphir ir migrate\" on intermediate to version {string}")]
+async fn run_migrate_on_intermediate(w: &mut TestWorld, target_version: String) {
+    let content = w
+        .intermediate_content
+        .as_ref()
+        .expect("No intermediate content");
+    let target_v4 = target_version == "v4";
+
+    // Try to parse as V4 first, then Classic
+    let result_content = if let Ok(ir_file) = serde_json::from_str::<v4::IRFile>(content) {
+        if !target_v4 {
+            let v4::Distribution::Library(lib_content) = ir_file.distribution else {
+                panic!("Expected Library distribution");
+            };
+            let classic_pkg = converter::v4_to_classic(lib_content.def);
+            let classic_dist = morphir_ir::ir::classic::Distribution {
+                format_version: 2024,
+                distribution: morphir_ir::ir::classic::DistributionBody::Library(
+                    morphir_ir::ir::classic::LibraryTag::Library,
+                    lib_content.package_name.into_path(),
+                    vec![],
+                    classic_pkg,
+                ),
+            };
+            serde_json::to_string(&classic_dist)
+        } else {
+            serde_json::to_string(&ir_file)
+        }
+    } else if let Ok(classic_dist) =
+        serde_json::from_str::<morphir_ir::ir::classic::Distribution>(content)
+    {
+        if target_v4 {
+            let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_path, _, pkg) =
+                classic_dist.distribution;
+            let v4_pkg = converter::classic_to_v4(pkg);
+            let v4_ir = v4::IRFile {
+                format_version: v4::FormatVersion::default(),
+                distribution: v4::Distribution::Library(v4::LibraryContent {
+                    package_name: morphir_ir::naming::PackageName::from(pkg_path),
+                    dependencies: IndexMap::new(),
+                    def: v4_pkg,
+                }),
+            };
+            serde_json::to_string(&v4_ir)
+        } else {
+            serde_json::to_string(&classic_dist)
+        }
+    } else {
+        panic!("Could not parse intermediate content as V4 or Classic");
+    };
+
+    match result_content {
+        Ok(content) => {
+            w.loaded_content = Some(content);
+            w.last_result = Some(Ok(()));
+        }
+        Err(e) => w.last_result = Some(Err(e.into())),
+    }
+}
+
+// V4 Format Validation Steps
+
+#[then(expr = "all module names should use kebab-case format")]
+async fn all_module_names_kebab_case(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (name, _) in modules {
+            assert!(
+                is_kebab_case(name),
+                "Module name '{}' is not in kebab-case format",
+                name
+            );
+        }
+    }
+}
+
+#[then(expr = "all type names should use kebab-case format")]
+async fn all_type_names_kebab_case(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (_, module) in modules {
+            if let Some(types) = module.pointer("/value/types").and_then(|t| t.as_object()) {
+                for (name, _) in types {
+                    assert!(
+                        is_kebab_case(name),
+                        "Type name '{}' is not in kebab-case format",
+                        name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[then(expr = "all value names should use kebab-case format")]
+async fn all_value_names_kebab_case(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (_, module) in modules {
+            if let Some(values) = module.pointer("/value/values").and_then(|v| v.as_object()) {
+                for (name, _) in values {
+                    assert!(
+                        is_kebab_case(name),
+                        "Value name '{}' is not in kebab-case format",
+                        name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[then(expr = "all constructor names should use kebab-case format")]
+async fn all_constructor_names_kebab_case(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (_, module) in modules {
+            if let Some(types) = module.pointer("/value/types").and_then(|t| t.as_object()) {
+                for (_, type_def) in types {
+                    if let Some(constructors) = type_def
+                        .pointer("/CustomTypeDefinition/constructors/value")
+                        .and_then(|c| c.as_array())
+                    {
+                        for ctor in constructors {
+                            if let Some(name) = ctor.get("name").and_then(|n| n.as_str()) {
+                                assert!(
+                                    is_kebab_case(name),
+                                    "Constructor name '{}' is not in kebab-case format",
+                                    name
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[then(expr = "type references should use the V4 object wrapper format")]
+async fn type_refs_use_object_wrapper(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    // Check that type expressions use object wrapper format (e.g., {"Reference": {...}})
+    fn check_type_expr(value: &serde_json::Value) -> bool {
+        if let Some(obj) = value.as_object() {
+            // Valid V4 type expression wrappers
+            let valid_tags = [
+                "Reference",
+                "Variable",
+                "Tuple",
+                "Record",
+                "Function",
+                "Unit",
+                "ExtensibleRecord",
+            ];
+            obj.keys().any(|k| valid_tags.contains(&k.as_str()))
+        } else {
+            // Arrays are Classic format
+            !value.is_array()
+        }
+    }
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (_, module) in modules {
+            if let Some(types) = module.pointer("/value/types").and_then(|t| t.as_object()) {
+                for (_, type_def) in types {
+                    if let Some(type_exp) = type_def.pointer("/TypeAliasDefinition/typeExp") {
+                        assert!(
+                            check_type_expr(type_exp),
+                            "Type expression is not in V4 object wrapper format: {:?}",
+                            type_exp
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[then(expr = "FQNames should use canonical format")]
+async fn fqnames_use_canonical_format(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+
+    // Canonical FQName format: "package/path:module#name"
+    let fqname_pattern = regex::Regex::new(r#""fqname"\s*:\s*"([^"]+)""#).unwrap();
+
+    for cap in fqname_pattern.captures_iter(content) {
+        let fqname = &cap[1];
+        assert!(
+            fqname.contains(':') && fqname.contains('#'),
+            "FQName '{}' is not in canonical format (expected 'package:module#name')",
+            fqname
+        );
+    }
+}
+
+#[then(expr = "record type fields should use kebab-case names")]
+async fn record_fields_kebab_case(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    fn check_record_fields(value: &serde_json::Value) {
+        if let Some(obj) = value.as_object() {
+            // Compact Record format: {"Record": {field1: type1, ...}}
+            if let Some(record) = obj.get("Record") {
+                if let Some(fields) = record.as_object() {
+                    for (name, _) in fields {
+                        assert!(
+                            is_kebab_case(name),
+                            "Record field name '{}' is not in kebab-case format",
+                            name
+                        );
+                    }
+                }
+            }
+            // Recursively check nested objects
+            for (_, v) in obj {
+                check_record_fields(v);
+            }
+        } else if let Some(arr) = value.as_array() {
+            for v in arr {
+                check_record_fields(v);
+            }
+        }
+    }
+
+    check_record_fields(&v);
+}
+
+#[then(expr = "value definitions should have non-null body content")]
+async fn value_defs_have_body(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (mod_name, module) in modules {
+            if let Some(values) = module.pointer("/value/values").and_then(|v| v.as_object()) {
+                for (val_name, val_def) in values {
+                    let body = val_def.pointer("/body/ExpressionBody/body");
+                    assert!(
+                        body.is_some() && !body.unwrap().is_null(),
+                        "Value '{}::{}' has null body",
+                        mod_name,
+                        val_name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[then(expr = "value definitions should have properly converted inputTypes")]
+async fn value_defs_have_input_types(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (_, module) in modules {
+            if let Some(values) = module.pointer("/value/values").and_then(|v| v.as_object()) {
+                for (val_name, val_def) in values {
+                    if let Some(input_types) = val_def.get("inputTypes").and_then(|i| i.as_object())
+                    {
+                        for (param_name, param_def) in input_types {
+                            // Check that input type uses V4 format
+                            assert!(
+                                param_def.get("type").is_some()
+                                    || param_def.get("input_type").is_some(),
+                                "Value '{}' parameter '{}' missing type field",
+                                val_name,
+                                param_name
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[then(expr = "value definitions should have properly converted outputType")]
+async fn value_defs_have_output_type(w: &mut TestWorld) {
+    let content = w.loaded_content.as_ref().expect("No loaded content");
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
+
+    if let Some(modules) = v
+        .pointer("/distribution/Library/def/modules")
+        .and_then(|m| m.as_object())
+    {
+        for (mod_name, module) in modules {
+            if let Some(values) = module.pointer("/value/values").and_then(|v| v.as_object()) {
+                for (val_name, val_def) in values {
+                    let output_type = val_def.get("outputType");
+                    assert!(
+                        output_type.is_some() && !output_type.unwrap().is_null(),
+                        "Value '{}::{}' has null outputType",
+                        mod_name,
+                        val_name
+                    );
+                }
+            }
+        }
+    }
+}
+
+// Helper function to check if a string is in kebab-case format
+fn is_kebab_case(s: &str) -> bool {
+    // Kebab-case: lowercase letters and hyphens, no underscores or uppercase
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 #[then(expr = "the package name should be {string}")]

@@ -362,7 +362,15 @@ async fn main() -> starbase::MainResult {
                     no_cache,
                     json,
                     expanded,
-                } => run_migrate(input, output, target_version, force_refresh, no_cache, json, expanded),
+                } => run_migrate(
+                    input,
+                    output,
+                    target_version,
+                    force_refresh,
+                    no_cache,
+                    json,
+                    expanded,
+                ),
             };
             match result {
                 Ok(Some(code)) => return Ok(std::process::ExitCode::from(code)),

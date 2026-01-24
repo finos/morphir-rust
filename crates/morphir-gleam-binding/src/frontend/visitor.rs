@@ -81,6 +81,16 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         }
     }
 
+    /// Build format.json structure in memory without disk I/O
+    pub fn build_format_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "formatVersion": "4.0.0",
+            "distribution": "Library",
+            "packageName": self.package_name.to_string(),
+            "layout": "VfsMode"
+        })
+    }
+
     /// Visit module and write Document Tree structure
     fn visit_module_vfs_mode(&self, module_ir: &ModuleIR) -> Result<()> {
         // Create .morphir-dist/pkg/package-name/module-path/ structure

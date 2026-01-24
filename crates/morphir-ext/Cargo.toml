@@ -1,0 +1,32 @@
+[package]
+name = "morphir-ext"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+# Morphir dependencies
+morphir-ext-core = { path = "../morphir-ext-core" }
+
+# Wasmtime (Host Runtime)
+wasmtime = { version = "41.0.0", features = ["component-model", "async"] }
+wasmtime-wasi = "41.0.0"
+
+# Actor Model
+kameo = "0.13"
+
+# Async Runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+
+# Error Handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { version = "0.1" }

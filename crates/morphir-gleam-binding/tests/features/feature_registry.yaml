@@ -11,7 +11,7 @@ features:
         status: "implemented"
         implementation_path: "src/frontend/parser.rs:value_def_parser"
         test_path: "tests/features/parsing.feature"
-      
+
       - id: parse-type-def
         name: "Parse type definitions"
         category: "parsing"
@@ -19,7 +19,7 @@ features:
         status: "implemented"
         implementation_path: "src/frontend/parser.rs:type_def_parser"
         test_path: "tests/features/parsing.feature"
-      
+
       - id: parse-expression
         name: "Parse expressions"
         category: "parsing"
@@ -27,7 +27,7 @@ features:
         status: "implemented"
         implementation_path: "src/frontend/parser.rs:expr_parser"
         test_path: "tests/features/parsing.feature"
-    
+
     visitor:
       - id: visitor-value
         name: "Convert value expressions to Morphir IR"
@@ -36,7 +36,7 @@ features:
         status: "implemented"
         implementation_path: "src/frontend/visitor.rs:convert_expr"
         test_path: "tests/features/roundtrip.feature"
-      
+
       - id: visitor-type
         name: "Convert type expressions to Morphir IR"
         category: "visitor"
@@ -44,7 +44,7 @@ features:
         status: "implemented"
         implementation_path: "src/frontend/visitor.rs:convert_type_expr"
         test_path: "tests/features/roundtrip.feature"
-  
+
   backend:
     codegen:
       - id: codegen-function
@@ -54,7 +54,7 @@ features:
         status: "implemented"
         implementation_path: "src/backend/visitor.rs:generate_value_def"
         test_path: "tests/features/roundtrip.feature"
-      
+
       - id: codegen-type
         name: "Generate type definitions"
         category: "codegen"
@@ -62,7 +62,7 @@ features:
         status: "implemented"
         implementation_path: "src/backend/visitor.rs:generate_type_def"
         test_path: "tests/features/roundtrip.feature"
-  
+
   roundtrip:
     - id: roundtrip-function
       name: "Roundtrip function definitions"
@@ -80,7 +80,7 @@ features:
       status: "implemented"
       implementation_path: "crates/morphir/src/commands/compile.rs"
       test_path: "tests/features/cli.feature"
-    
+
     - id: cli-generate
       name: "CLI generate command"
       category: "cli"
@@ -88,7 +88,7 @@ features:
       status: "implemented"
       implementation_path: "crates/morphir/src/commands/generate.rs"
       test_path: "tests/features/cli.feature"
-    
+
     - id: cli-gleam
       name: "Gleam-specific CLI commands"
       category: "cli"
@@ -96,7 +96,7 @@ features:
       status: "implemented"
       implementation_path: "crates/morphir/src/commands/gleam.rs"
       test_path: "tests/features/cli.feature"
-    
+
     - id: cli-config
       name: "Configuration-driven CLI usage"
       category: "cli"
@@ -104,7 +104,7 @@ features:
       status: "implemented"
       implementation_path: "crates/morphir-design/src/config.rs"
       test_path: "tests/features/cli.feature"
-    
+
     - id: cli-json-output
       name: "JSON output support"
       category: "cli"
@@ -112,7 +112,7 @@ features:
       status: "implemented"
       implementation_path: "crates/morphir/src/output.rs"
       test_path: "tests/features/cli.feature"
-    
+
     - id: cli-error-handling
       name: "Error handling and diagnostics"
       category: "cli"

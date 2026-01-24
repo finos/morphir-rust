@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 /// Convert a kebab-case or snake-case name to PascalCase for Gleam type constructors
 fn to_pascal_case(name: &str) -> String {
-    name.split(|c| c == '-' || c == '_')
+    name.split(['-', '_'])
         .filter(|s| !s.is_empty())
         .map(|word| {
             let mut chars = word.chars();
@@ -214,17 +214,17 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                                 output.push_str(&to_pascal_case(type_name));
                             }
                             // Handle type arguments if present
-                            if let Some(Value::Array(args)) = ref_obj.get("args") {
-                                if !args.is_empty() {
-                                    output.push('(');
-                                    for (i, arg) in args.iter().enumerate() {
-                                        if i > 0 {
-                                            output.push_str(", ");
-                                        }
-                                        self.generate_type_expr(output, arg)?;
+                            if let Some(Value::Array(args)) = ref_obj.get("args")
+                                && !args.is_empty()
+                            {
+                                output.push('(');
+                                for (i, arg) in args.iter().enumerate() {
+                                    if i > 0 {
+                                        output.push_str(", ");
                                     }
-                                    output.push(')');
+                                    self.generate_type_expr(output, arg)?;
                                 }
+                                output.push(')');
                             }
                         }
                         Value::Array(arr) if !arr.is_empty() => {
@@ -254,10 +254,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                             if let Some(Value::String(name)) = var_obj.get("name") {
                                 output.push_str(name);
                             } else {
-                                output.push_str("a");
+                                output.push('a');
                             }
                         }
-                        _ => output.push_str("a"),
+                        _ => output.push('a'),
                     }
                 } else if let Some(tuple) = obj.get("Tuple") {
                     // Tuple type: {"Tuple": [type1, type2, ...]}
@@ -289,7 +289,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     }
                 } else {
                     // Unknown type structure, use a placeholder
-                    output.push_str("a");
+                    output.push('a');
                 }
             }
             // Array format (compact Reference): ["fqname", arg1, arg2, ...]
@@ -311,7 +311,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             }
             _ => {
                 // Fallback for unknown formats
-                output.push_str("a");
+                output.push('a');
             }
         }
 

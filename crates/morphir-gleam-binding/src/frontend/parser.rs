@@ -16,7 +16,7 @@ use std::ops::Range;
 ///
 /// Based on glexer (official Gleam lexer) token definitions.
 /// Reference: https://github.com/gleam-lang/glexer
-#[derive(Logos, Debug, PartialEq, Clone)]
+#[derive(Logos, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Token {
     // Keywords
     #[token("pub")]
@@ -258,7 +258,7 @@ fn span_to_line_column(source: &str, offset: usize) -> (u32, u32) {
 }
 
 /// Convert chumsky error to ParseError
-fn to_parse_error(err: chumsky::error::Simple<Token>, source: &str) -> ParseError {
+fn to_parse_error<'a>(err: chumsky::error::Simple<'a, Token>, source: &str) -> ParseError {
     let span = err.span();
     let expected: Vec<String> = err
         .expected()
@@ -306,12 +306,9 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
 
     // Parse
     let parser = module_parser();
-    let input = chumsky::input::SpannedInput::new(
-        &tokens[..],
-        source.as_bytes().len(),
-        |(token, span): &(Token, Span)| span.clone(),
-    );
-
+    // In chumsky 0.12, we parse from a slice of tokens using Stream
+    use chumsky::input::Stream;
+    let input = Stream::from_iter(tokens.iter().cloned());
     match parser.parse(input) {
         Ok(mut module) => {
             // Set module name from path
@@ -517,7 +514,7 @@ pub enum Pattern {
 // ============================================================================
 
 /// Main module parser
-fn module_parser() -> impl Parser<Token, ModuleIR, Error = chumsky::error::Simple<Token>> {
+fn module_parser<'a>() -> impl Parser<'a, Token, ModuleIR> {
     // Parse module-level statements
     let stmt = statement_parser().then_ignore(just(Token::Semicolon).or_not());
 
@@ -542,7 +539,7 @@ fn module_parser() -> impl Parser<Token, ModuleIR, Error = chumsky::error::Simpl
 }
 
 /// Statement parser
-fn statement_parser() -> impl Parser<Token, Statement, Error = chumsky::error::Simple<Token>> {
+fn statement_parser<'a>() -> impl Parser<'a, Token, Statement> {
     type_def_parser()
         .map(Statement::TypeDef)
         .or(value_def_parser().map(Statement::ValueDef))
@@ -556,7 +553,7 @@ enum Statement {
 }
 
 /// Type definition parser
-fn type_def_parser() -> impl Parser<Token, TypeDef, Error = chumsky::error::Simple<Token>> {
+fn type_def_parser<'a>() -> impl Parser<'a, Token, TypeDef> {
     let access = just(Token::Pub)
         .map(|_| Access::Public)
         .or_not()
@@ -588,8 +585,7 @@ fn type_def_parser() -> impl Parser<Token, TypeDef, Error = chumsky::error::Simp
 }
 
 /// Custom type body parser (variants)
-fn custom_type_body_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Simple<Token>>
-{
+fn custom_type_body_parser<'a>() -> impl Parser<'a, Token, TypeExpr> {
     variant_parser()
         .separated_by(just(Token::Pipe))
         .allow_trailing()
@@ -598,7 +594,7 @@ fn custom_type_body_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::er
 }
 
 /// Variant parser
-fn variant_parser() -> impl Parser<Token, Variant, Error = chumsky::error::Simple<Token>> {
+fn variant_parser<'a>() -> impl Parser<'a, Token, Variant> {
     type_identifier_parser()
         .then(
             type_expr_parser()
@@ -612,7 +608,7 @@ fn variant_parser() -> impl Parser<Token, Variant, Error = chumsky::error::Simpl
 }
 
 /// Value definition parser
-fn value_def_parser() -> impl Parser<Token, ValueDef, Error = chumsky::error::Simple<Token>> {
+fn value_def_parser<'a>() -> impl Parser<'a, Token, ValueDef> {
     let access = just(Token::Pub)
         .map(|_| Access::Public)
         .or_not()
@@ -649,7 +645,7 @@ fn value_def_parser() -> impl Parser<Token, ValueDef, Error = chumsky::error::Si
 }
 
 /// Expression parser
-fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Token>> {
+fn expr_parser<'a>() -> impl Parser<'a, Token, Expr> {
     recursive(|expr| {
         // Literals
         let literal = literal_parser().map(|lit| Expr::Literal { value: lit });
@@ -801,7 +797,7 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = chumsky::error::Simple<Toke
 }
 
 /// Type expression parser
-fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Simple<Token>> {
+fn type_expr_parser<'a>() -> impl Parser<'a, Token, TypeExpr> {
     recursive(|type_expr| {
         // Type variable
         let type_var = identifier_parser().map(|name| TypeExpr::Variable { name });
@@ -879,7 +875,7 @@ fn type_expr_parser() -> impl Parser<Token, TypeExpr, Error = chumsky::error::Si
 }
 
 /// Pattern parser
-fn pattern_parser() -> impl Parser<Token, Pattern, Error = chumsky::error::Simple<Token>> {
+fn pattern_parser<'a>() -> impl Parser<'a, Token, Pattern> {
     recursive(|pattern| {
         // Wildcard
         let wildcard = just(Token::Underscore).map(|_| Pattern::Wildcard);
@@ -926,7 +922,7 @@ fn pattern_parser() -> impl Parser<Token, Pattern, Error = chumsky::error::Simpl
 }
 
 /// Literal parser
-fn literal_parser() -> impl Parser<Token, Literal, Error = chumsky::error::Simple<Token>> {
+fn literal_parser<'a>() -> impl Parser<'a, Token, Literal> {
     filter_map(|span, token| match token {
         Token::True => Some(Literal::Bool { value: true }),
         Token::False => Some(Literal::Bool { value: false }),
@@ -939,8 +935,8 @@ fn literal_parser() -> impl Parser<Token, Literal, Error = chumsky::error::Simpl
 }
 
 /// Identifier parser (lowercase)
-fn identifier_parser() -> impl Parser<Token, String, Error = chumsky::error::Simple<Token>> {
-    filter_map(|span, token| match token {
+fn identifier_parser<'a>() -> impl Parser<'a, Token, String> {
+    filter_map(|span, token: Token| match token {
         Token::Ident(name) => Some(name),
         _ => None,
     })
@@ -948,7 +944,7 @@ fn identifier_parser() -> impl Parser<Token, String, Error = chumsky::error::Sim
 }
 
 /// Type identifier parser (uppercase)
-fn type_identifier_parser() -> impl Parser<Token, String, Error = chumsky::error::Simple<Token>> {
+fn type_identifier_parser<'a>() -> impl Parser<'a, Token, String> {
     filter_map(|span, token| match token {
         Token::TypeIdent(name) => Some(name),
         _ => None,

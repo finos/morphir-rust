@@ -49,7 +49,7 @@ impl CliError {
     /// Report error using miette (for human-readable output)
     pub fn report(&self) {
         use miette::Report;
-        eprintln!("{}", Report::new(self));
+        eprintln!("{}", Report::new(self.clone()));
     }
 
     /// Report error based on output format

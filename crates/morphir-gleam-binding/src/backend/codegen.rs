@@ -94,7 +94,7 @@ fn generate_from_package_definition(
     package_def: PackageDefinition,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
-    use visitor::MorphirToGleamVisitor;
+    use super::visitor::MorphirToGleamVisitor;
 
     let output_dir = options
         .get("outputDir")

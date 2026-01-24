@@ -28,19 +28,21 @@ impl OutputFormat {
 }
 
 /// Write output in the specified format
-pub fn write_output<T: Serialize>(format: OutputFormat, value: &T) -> anyhow::Result<()> {
+pub fn write_output<T: Serialize>(format: OutputFormat, value: &T) -> std::io::Result<()> {
     match format {
         OutputFormat::Human => {
             // Human-readable output is handled by command-specific logic
             Ok(())
         }
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(value)?;
+            let json = serde_json::to_string_pretty(value)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             println!("{}", json);
             Ok(())
         }
         OutputFormat::JsonLines => {
-            let json = serde_json::to_string(value)?;
+            let json = serde_json::to_string(value)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             println!("{}", json);
             Ok(())
         }

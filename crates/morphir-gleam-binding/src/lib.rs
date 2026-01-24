@@ -65,6 +65,13 @@ impl Frontend for GleamExtension {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
+        // Check if parse stage failures should be fatal (default: false)
+        let emit_parse_stage_fatal = request
+            .options
+            .get("emitParseStageFatal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         // Extract package name (from options or default)
         let package_name = request
             .options
@@ -80,13 +87,22 @@ impl Frontend for GleamExtension {
                     if emit_parse_stage
                         && let Err(e) = emit_parse_stage_json(&output_dir, &source.path, &module_ir)
                     {
-                        diagnostics.push(Diagnostic {
-                            severity: DiagnosticSeverity::Warning,
-                            code: Some("W001".into()),
-                            message: format!("Failed to emit parse stage output: {}", e),
-                            location: None,
-                            related: vec![],
-                        });
+                        if emit_parse_stage_fatal {
+                            // Fatal error: propagate the failure
+                            return Err(ExtensionError::ExecutionFailed(format!(
+                                "Failed to emit parse stage output: {}",
+                                e
+                            )));
+                        } else {
+                            // Non-fatal: log as warning and continue
+                            diagnostics.push(Diagnostic {
+                                severity: DiagnosticSeverity::Warning,
+                                code: Some("W001".into()),
+                                message: format!("Failed to emit parse stage output: {}", e),
+                                location: None,
+                                related: vec![],
+                            });
+                        }
                     }
                     // Extract module name from path
                     let module_name = ModuleName::parse(

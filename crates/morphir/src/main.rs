@@ -3,6 +3,8 @@ use starbase::{App, AppResult, AppSession};
 
 mod commands;
 mod help;
+mod logging;
+mod tui;
 
 use commands::{
     run_dist_install, run_dist_list, run_dist_uninstall, run_dist_update, run_extension_install,
@@ -16,12 +18,8 @@ use commands::{
 #[command(name = "morphir")]
 #[command(about = "CLI for working with Morphir IR - functional domain modeling and business logic", long_about = None)]
 #[command(version)]
-#[command(disable_help_flag = true, disable_version_flag = true)]
+#[command(disable_version_flag = true)]
 struct Cli {
-    /// Print help (use --help-all to include experimental commands)
-    #[arg(short, long, action = clap::ArgAction::Help)]
-    help: Option<bool>,
-
     /// Print help including experimental commands
     #[arg(long)]
     help_all: bool,
@@ -199,8 +197,16 @@ Converts Morphir IR between Classic (V1-V3) and V4 formats. Supports local files
 **Examples:**
 
 ```bash
+# Migrate to file
 morphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json --target-version v4
+
+# Migrate from URL
 morphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json -o ./lcr-v4.json
+
+# Display in console with syntax highlighting (no -o)
+morphir ir migrate ./morphir-ir.json
+
+# Downgrade V4 to Classic
 morphir ir migrate ./morphir-ir-v4.json -o ./morphir-ir-classic.json --target-version classic
 ```
 
@@ -208,12 +214,12 @@ See the [IR Migration Guide](/ir-migrate/) for detailed real-world examples incl
     Migrate {
         /// Input file, directory, or remote source (e.g., github:owner/repo, URL)
         input: String,
-        /// Output file or directory
+        /// Output file or directory (if omitted, displays in console with syntax highlighting)
         #[arg(short, long)]
-        output: std::path::PathBuf,
-        /// Target version (v4 or classic)
-        #[arg(long)]
-        target_version: Option<String>,
+        output: Option<std::path::PathBuf>,
+        /// Target version: latest, v4/4, classic, v3/3, v2/2, v1/1 (default: latest)
+        #[arg(long, default_value = "latest")]
+        target_version: String,
         /// Force refresh cached remote sources
         #[arg(long)]
         force_refresh: bool,
@@ -336,6 +342,31 @@ async fn main() -> starbase::MainResult {
         let spec: usage::Spec = cli.into();
         println!("{}", spec);
         return Ok(std::process::ExitCode::SUCCESS);
+    }
+
+    // Handle ir subcommand early (before starbase) to avoid double execution
+    if args.len() >= 3 && args[1] == "ir" {
+        let cli = Cli::parse();
+        if let Some(Commands::Ir { action }) = cli.command {
+            let result = match action {
+                IrAction::Migrate {
+                    input,
+                    output,
+                    target_version,
+                    force_refresh,
+                    no_cache,
+                    json,
+                } => run_migrate(input, output, target_version, force_refresh, no_cache, json),
+            };
+            match result {
+                Ok(Some(code)) => return Ok(std::process::ExitCode::from(code)),
+                Ok(None) => return Ok(std::process::ExitCode::SUCCESS),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return Ok(std::process::ExitCode::from(1));
+                }
+            }
+        }
     }
 
     let cli = Cli::parse();

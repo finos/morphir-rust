@@ -36,7 +36,9 @@ When uncertain about Morphir-specific design decisions, consult the reference im
 
 ### Key Libraries & Frameworks
 - **CLI Framework**: `starbase` (application structure), `clap` (command parsing)
+- **TUI**: `ratatui` (terminal UI widgets), `crossterm` (cross-platform terminal manipulation), `tuirealm` (component framework)
 - **Serialization**: `serde` & `serde_json` (JSON handling), `schemars` (JSON Schema generation)
+- **Logging**: `tracing` (structured logging), `tracing-subscriber` (log subscribers), `tracing-appender` (file logging)
 - **Error Handling**: `thiserror` (library errors), `anyhow` (application/CLI errors)
 
 ## Coding Standards & Best Practices
@@ -128,6 +130,27 @@ Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
   - **Alternative**: `.morphir/out/` (for Morphir-specific outputs)
 - **Redirect Output**: When running commands that generate output files, explicitly redirect them to the gitignored locations above rather than letting them write to the working directory.
 - **Clean Working Directory**: Keep the git working directory clean to avoid accidental commits of temporary files.
+
+### Logging Standards
+- **stdout is Reserved for Output**: Never write logs to stdout. stdout is exclusively for actual program output (command results, generated content, data). This ensures:
+  - CLI output can be piped to other commands
+  - JSON/structured output remains parseable
+  - Scripts can capture actual results without log noise
+- **stderr for Console Logging**: All console-level logging (warnings, errors, progress messages) must go to stderr.
+- **File-Based Logging**: Log files should be written to:
+  - **Workspace-local**: `.morphir/logs/` when inside a morphir workspace (a directory containing `morphir.toml` or `.morphir/`)
+  - **Global fallback**: `~/.morphir/logs/` when not in a workspace
+- **Log Levels**: Use appropriate log levels:
+  - `error`: Unrecoverable failures
+  - `warn`: Recoverable issues or deprecation notices
+  - `info`: High-level progress indicators (default for CLI)
+  - `debug`: Detailed operational information
+  - `trace`: Highly verbose debugging output
+- **Structured Logging**: Prefer structured log formats (JSON lines) for file-based logs to enable analysis and aggregation.
+- **Rotation**: File logs should support rotation to prevent unbounded growth.
+- **Configuration**: Log destinations and levels should be configurable via:
+  - Environment variables: `MORPHIR_LOG_LEVEL`, `MORPHIR_LOG_DIR`
+  - Config file: `[logging]` section in `morphir.toml`
 
 ## CLI Documentation Generation
 

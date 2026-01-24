@@ -20,6 +20,7 @@ starbase = { workspace = true }
 clap = { workspace = true, features = ["color"] }
 owo-colors = "4"
 termimad = "0.30"
+syntect = "5"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = "0.1"
@@ -32,6 +33,18 @@ dirs = "6.0"
 schemars = "0.9"
 indexmap = { version = "2", features = ["serde"] }
 usage-lib = { version = "2", features = ["clap", "docs"] }
+
+# TUI
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tuirealm = { workspace = true }
+tui-realm-stdlib = { workspace = true }
+tui-realm-textarea = { workspace = true }
+
+# Structured logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 [build-dependencies]
 chrono = "0.4"

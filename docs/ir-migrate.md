@@ -35,8 +35,8 @@ morphir ir migrate <INPUT> -o <OUTPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output <OUTPUT>` | Output file path for migrated IR (required) |
-| `--target-version <VERSION>` | Target format version: `v4` or `classic` (default: `v4`) |
+| `-o, --output <OUTPUT>` | Output file path for migrated IR (if omitted, displays to console with syntax highlighting) |
+| `--target-version <VERSION>` | Target format version: `latest`, `v4`/`4`, `classic`, `v3`/`3`, `v2`/`2`, `v1`/`1` (default: `latest`, which is currently `v4`) |
 | `--force-refresh` | Force refresh cached remote sources |
 | `--no-cache` | Skip cache entirely for remote sources |
 | `--json` | Output result as JSON for scripting |
@@ -97,6 +97,24 @@ When `--target-version` is omitted, the command defaults to V4:
 morphir ir migrate ./morphir-ir.json \
     --output ./morphir-ir-migrated.json
 ```
+
+### Console Output with Pager
+
+When `--output` is omitted (and `--json` is not set), the migrated IR is displayed in an interactive pager with JSON syntax highlighting:
+
+```bash
+morphir ir migrate ./morphir-ir.json
+```
+
+The command uses (in order of preference):
+1. **bat** - Best experience with built-in syntax highlighting and scrolling
+2. **$PAGER** - Your configured pager (from environment variable)
+3. **less** - Common pager with ANSI color support (`less -R`)
+4. **most** - Alternative pager with color support
+5. **more** - Basic pager (no color support)
+6. **Direct output** - If no pager is available, outputs directly with syntax highlighting
+
+This is useful for quickly inspecting migrated IR without creating a file. Use standard pager keys (q to quit, arrow keys to scroll, / to search).
 
 ### In-place Migration
 

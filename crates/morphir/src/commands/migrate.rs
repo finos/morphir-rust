@@ -2,6 +2,7 @@
 //!
 //! Command to migrate Morphir IR between versions and formats.
 
+use crate::tui::JsonPager;
 use indexmap::IndexMap;
 use morphir_common::loader::{load_distribution, LoadedDistribution};
 use morphir_common::remote::{RemoteSource, RemoteSourceResolver, ResolveOptions};
@@ -59,24 +60,72 @@ impl MigrateResult {
     }
 }
 
+/// Display JSON content using the ratatui-based pager with syntax highlighting.
+fn display_json_in_pager(content: &str, title: &str) -> std::io::Result<()> {
+    let pager = JsonPager::new(content.to_string(), title.to_string());
+    pager.run()
+}
+
+/// Write content to output file or display in pager with syntax highlighting.
+fn write_or_display(output: &Option<PathBuf>, content: &str, json_mode: bool, title: &str) {
+    match output {
+        Some(path) => {
+            std::fs::write(path, content).expect("Failed to write output");
+        }
+        None => {
+            if !json_mode {
+                // Display in pager with syntax highlighting (like bat)
+                if let Err(e) = display_json_in_pager(content, title) {
+                    eprintln!("Failed to display output: {}", e);
+                    // Fallback to plain output
+                    println!("{}", content);
+                }
+            } else {
+                // In JSON mode with no output file, emit the migrated IR to stdout
+                println!("{}", content);
+            }
+        }
+    }
+}
+
+/// Resolve target version string to a normalized format.
+/// Returns (is_v4, format_name) where format_name is either "v4" or "classic".
+fn resolve_target_version(version: &str) -> Result<(bool, &'static str), String> {
+    match version.to_lowercase().as_str() {
+        // Latest always resolves to the newest format
+        "latest" => Ok((true, "v4")),
+        // V4 format
+        "v4" | "4" => Ok((true, "v4")),
+        // Classic formats (V1, V2, V3) all map to "classic"
+        "classic" | "v3" | "3" | "v2" | "2" | "v1" | "1" => Ok((false, "classic")),
+        _ => Err(format!(
+            "Invalid target version '{}'. Valid values: latest, v4, 4, classic, v3, 3, v2, 2, v1, 1",
+            version
+        )),
+    }
+}
+
 /// Run the migrate command.
 ///
 /// # Arguments
 /// * `input` - Input file path or remote source
 /// * `output` - Output file path
-/// * `target_version` - Target format version ("v4" or "classic")
+/// * `target_version` - Target format version ("latest", "v4", or "classic")
 /// * `force_refresh` - Force refresh cached remote sources
 /// * `no_cache` - Skip cache entirely for remote sources
 /// * `json` - Output result as JSON
 pub fn run_migrate(
     input: String,
-    output: PathBuf,
-    target_version: Option<String>,
+    output: Option<PathBuf>,
+    target_version: String,
     force_refresh: bool,
     no_cache: bool,
     json: bool,
 ) -> AppResult {
-    let output_str = output.display().to_string();
+    let output_str = output
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<console>".to_string());
     let mut warnings: Vec<String> = Vec::new();
 
     // Helper to output error
@@ -139,7 +188,10 @@ pub fn run_migrate(
     };
 
     if !json {
-        println!("Migrating IR from {:?} to {:?}", local_path, output);
+        match &output {
+            Some(path) => eprintln!("Migrating IR from {:?} to {:?}", local_path, path),
+            None => eprintln!("Migrating IR from {:?} (displaying to console)", local_path),
+        }
     }
 
     let vfs = OsVfs;
@@ -154,15 +206,21 @@ pub fn run_migrate(
     };
 
     // Convert
-    let target_v4 = target_version.as_deref() == Some("v4") || target_version.is_none();
-    let target_format = if target_v4 { "v4" } else { "classic" };
+    // Resolve target version
+    let (target_v4, target_format) = match resolve_target_version(&target_version) {
+        Ok(result) => result,
+        Err(msg) => {
+            output_error(&msg);
+            return Ok(Some(1));
+        }
+    };
 
     match dist {
         LoadedDistribution::Classic(dist) => {
             let source_format = "classic";
             if target_v4 {
                 if !json {
-                    println!("Converting Classic -> V4");
+                    eprintln!("Converting Classic -> V4");
                 }
                 let classic::DistributionBody::Library(_, package_path, classic_deps, pkg) =
                     dist.distribution;
@@ -192,11 +250,14 @@ pub fn run_migrate(
                     }),
                 };
 
-                // Save v4_ir
+                // Save or display v4_ir
                 let content = serde_json::to_string_pretty(&v4_ir).expect("Failed to serialize");
-                std::fs::write(&output, content).expect("Failed to write output");
+                let title = format!("morphir-ir.json (V4 format, migrated from {})", input);
+                write_or_display(&output, &content, json, &title);
 
-                if json {
+                if json && output.is_some() {
+                    // Only print MigrateResult to stdout when output file is specified
+                    // When no output file, the migrated IR goes to stdout and metadata to stderr
                     let result = MigrateResult::success(
                         &input,
                         &output_str,
@@ -208,12 +269,13 @@ pub fn run_migrate(
                 }
             } else {
                 if !json {
-                    println!("Input is Classic, Target is Classic. Copying...");
+                    eprintln!("Input is Classic, Target is Classic. Copying...");
                 }
                 let content = serde_json::to_string_pretty(&dist).expect("Failed to serialize");
-                std::fs::write(&output, content).expect("Failed to write output");
+                let title = format!("morphir-ir.json (Classic format, from {})", input);
+                write_or_display(&output, &content, json, &title);
 
-                if json {
+                if json && output.is_some() {
                     let result = MigrateResult::success(
                         &input,
                         &output_str,
@@ -229,7 +291,7 @@ pub fn run_migrate(
             let source_format = "v4";
             if !target_v4 {
                 if !json {
-                    println!("Converting V4 -> Classic");
+                    eprintln!("Converting V4 -> Classic");
                 }
                 let v4::Distribution::Library(lib_content) = ir_file.distribution else {
                     output_error("Only Library distributions can be converted to Classic format");
@@ -264,9 +326,10 @@ pub fn run_migrate(
 
                 let content =
                     serde_json::to_string_pretty(&classic_dist).expect("Failed to serialize");
-                std::fs::write(&output, content).expect("Failed to write output");
+                let title = format!("morphir-ir.json (Classic format, migrated from {})", input);
+                write_or_display(&output, &content, json, &title);
 
-                if json {
+                if json && output.is_some() {
                     let result = MigrateResult::success(
                         &input,
                         &output_str,
@@ -278,12 +341,13 @@ pub fn run_migrate(
                 }
             } else {
                 if !json {
-                    println!("Input is V4, Target is V4. Copying...");
+                    eprintln!("Input is V4, Target is V4. Copying...");
                 }
                 let content = serde_json::to_string_pretty(&ir_file).expect("Failed to serialize");
-                std::fs::write(&output, content).expect("Failed to write output");
+                let title = format!("morphir-ir.json (V4 format, from {})", input);
+                write_or_display(&output, &content, json, &title);
 
-                if json {
+                if json && output.is_some() {
                     let result = MigrateResult::success(
                         &input,
                         &output_str,
@@ -298,7 +362,7 @@ pub fn run_migrate(
     }
 
     if !json {
-        println!("Migration complete.");
+        eprintln!("Migration complete.");
     }
     Ok(None)
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::fmt;
 
-use super::Attributes;
+use super::Attrs;
 use super::naming::Path;
 use super::package::{PackageDefinition, PackageSpecification};
 use super::types::Type;
@@ -26,8 +26,8 @@ pub struct Distribution {
 pub enum DistributionBody {
     Library(
         Path,
-        Vec<(Path, PackageSpecification<Attributes>)>,
-        PackageDefinition<Attributes, Type<Attributes>>,
+        Vec<(Path, PackageSpecification<Attrs>)>,
+        PackageDefinition<Attrs, Type<Attrs>>,
     ),
 }
 
@@ -77,10 +77,10 @@ impl<'de> Deserialize<'de> for DistributionBody {
                             .next_element::<Path>()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                         let deps = seq
-                            .next_element::<Vec<(Path, PackageSpecification<Attributes>)>>()?
+                            .next_element::<Vec<(Path, PackageSpecification<Attrs>)>>()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
                         let package = seq
-                            .next_element::<PackageDefinition<Attributes, Type<Attributes>>>()?
+                            .next_element::<PackageDefinition<Attrs, Type<Attrs>>>()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
 
                         if let Some(IgnoredAny) = seq.next_element()? {

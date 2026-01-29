@@ -22,13 +22,13 @@ pub mod package;
 
 // Re-exports for convenience
 pub use access::{Access, AccessControlled};
-pub use attributes::Attributes;
+pub use attributes::Attrs;
 pub use distribution::{Distribution, DistributionBody, LibraryTag};
 pub use documented::Documented;
 pub use literal::Literal;
 pub use module::{ModuleDefinition, ModuleEntry, ModuleSpecification};
 pub use naming::{FQName, Name, Path};
-pub use package::{Package, PackageDefinition, PackageSpecification};
+pub use package::{PackageDefinition, PackageSpecification};
 pub use pattern::Pattern;
 pub use types::{Constructor, Field, Type, TypeDefinition, TypeSpecification};
 pub use value::{Definition, Value, ValueDefinition, ValueSpecification};

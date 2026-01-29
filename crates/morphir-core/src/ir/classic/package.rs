@@ -62,6 +62,3 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for ModuleSpecEntry<A> {
 pub struct PackageDefinition<TA, VA> {
     pub modules: Vec<ModuleEntry<TA, VA>>,
 }
-
-/// Alias for PackageDefinition for backward compatibility
-pub type Package<TA, VA> = PackageDefinition<TA, VA>;

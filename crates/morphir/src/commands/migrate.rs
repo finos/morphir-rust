@@ -225,7 +225,7 @@ pub fn run_migrate(
                 let classic::DistributionBody::Library(_, package_path, classic_deps, pkg) =
                     dist.distribution;
 
-                // Warn if dependencies will be lost (Classic deps format differs from V4)
+                // Warn if dependencies will be lost (a Classic deps format differs from V4)
                 if !classic_deps.is_empty() {
                     let warn = format!(
                         "{} dependencies found in Classic format. \

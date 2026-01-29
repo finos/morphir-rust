@@ -7,14 +7,18 @@ parent: Morphir Extensions
 
 # Wasm Extension Architecture (Interactive Session)
 
-**Status:** Draft  
-**Version:** 0.2.0  
-**Last Updated:** 2026-01-25
+**Status:** Draft
+**Version:** 0.3.0
+**Last Updated:** 2026-01-29
 
 ## Session framing
 
-**Goal:** Update the extension and daemon design to include the hidden Extism runtime, the envelope protocol, TEA runtime semantics, and Kameo actors.  
-**Outcome:** This document captures the updated architecture and ABI contracts as an interactive design session.
+**Goal:** Update the extension and daemon design to include the hidden Extism runtime, the envelope protocol, TEA
+runtime semantics, Kameo actors, and support for multiple client types (CLI, Morphir-Live using Dioxus framework, WASM
+clients with core Wasm and WASM Component Model + WASI).
+**Outcome:** This document captures the updated architecture and ABI contracts as an interactive design session,
+including deployment modes for native, daemon, Dioxus-based multi-platform (web/desktop), core Wasm (browser and
+non-browser), and WASM Component + WASI environments.
 
 ## Interactive design session
 
@@ -66,40 +70,49 @@ We want a unified extension model that supports design-time and runtime extensio
 ## High-level architecture
 
 ```text
-+-------------------------+
-|        CLI Client       |
-+-----------+-------------+
-            |
-            v
-+-------------------------+
-|         Daemon          |
-|  (manages actors, I/O)  |
-+-----------+-------------+
-            |
-            v
-+-------------------------+
-|       Kameo Actor       |
-|  (extension instance)   |
-+-----------+-------------+
-            |
-            v
-+-------------------------+
-|     Morphir Runtime     |
-|  (Rust, uses Extism)    |
-+-----------+-------------+
-            |
-            v
-+-------------------------+
-|    Extension Program    |
-|   (Wasm, core/component)|
-+-------------------------+
++---------------------------+     +---------------------------+     +---------------------------+
+|      CLI Client           |     |   Morphir-Live            |     |  WASM Client              |
+|   (native binary)         |     |  (Dioxus: Web/Desktop)    |     |  (Core/Component+WASI)    |
++------------+--------------+     +-------------+-------------+     +-------------+-------------+
+             |                                  |                                 |
+             |                                  |                                 |
+             v                                  v                                 v
++---------------------------------------------------------------------------------------------+
+|                                        Daemon/Host Layer                                    |
+|                           (manages actors, I/O, routing, state)                            |
++---------------------------------------------------------------------------------------------+
+             |                                  |                                 |
+             v                                  v                                 v
++---------------------------+     +---------------------------+     +---------------------------+
+|      Kameo Actor          |     |      Kameo Actor          |     |   Direct Runtime Call     |
+|  (extension instance)     |     |  (extension instance)     |     | (browser, no daemon)      |
++------------+--------------+     +-------------+-------------+     +-------------+-------------+
+             |                                  |                                 |
+             v                                  v                                 v
++---------------------------------------------------------------------------------------------+
+|                                     Morphir Runtime                                         |
+|                          (Rust, uses Extism internally for extensions)                     |
+|                        (can be compiled to native or Wasm itself)                          |
++---------------------------------------------------------------------------------------------+
+             |                                  |                                 |
+             v                                  v                                 v
++---------------------------+     +---------------------------+     +---------------------------+
+|   Extension Program       |     |   Extension Program       |     |   Extension Program       |
+| (Wasm core/component)     |     | (Wasm core/component)     |     | (Wasm core/component)     |
++---------------------------+     +---------------------------+     +---------------------------+
 ```
 
 Key points:
 
-- The **CLI** talks to a **daemon**.
-- The **daemon** manages **Kameo actors**, one per operation/extension instance.
-- Each **actor** hosts:
+- **Multiple client types** access the runtime:
+    - **CLI Client**: Native binary for command-line usage
+    - **Morphir-Live**: Multi-platform app from finos/morphir using Dioxus framework (targets web and desktop)
+    - **WASM Client**: Runtime compiled to Wasm, supporting:
+        - Core Wasm (browser or non-browser hosts)
+        - WASM Component Model with WASI (Wasmtime, browser with polyfills, etc.)
+- The **daemon/host layer** manages **Kameo actors**, one per operation/extension instance.
+- **Direct runtime calls** are possible in browser environments without daemon (for WASM clients).
+- Each **actor** (or direct call) hosts:
   - the **Morphir runtime** (Rust, compiled to native or Wasm)
   - one or more **extension programs** (Wasm modules)
 - The runtime uses **Extism internally** to load and call extension programs.
@@ -115,18 +128,23 @@ Key points:
 
 The **host** is any environment that runs the Morphir runtime:
 
-- CLI process
-- Daemon process
-- Long-running service
-- Browser (via jco, for a Wasm-compiled runtime)
-- Wasmtime, GraalVM, Node/Deno/Bun
+- **CLI process**: Native binary for command-line usage
+- **Daemon process**: Long-running service managing multiple sessions
+- **Morphir-Live**: Multi-platform application using Dioxus framework (Rust → Web/Desktop, from finos/morphir)
+- **WASM Client**: Runtime compiled to Wasm, runnable in:
+    - **Core Wasm**: Browser (via WebAssembly API), Wasmtime, wasmer, Node, Deno, Bun
+    - **WASM Component Model + WASI**: Wasmtime, wasmer with WASI support, browser with WASI polyfills
+- **Long-running service**: Backend services, API servers
+- **Other embedded runtimes**: GraalVM, custom Wasm hosts
 
 Responsibilities:
 
-- Start and manage Kameo actors
+- Start and manage Kameo actors (daemon/service mode)
+- **OR** Make direct runtime calls (browser/WASM client mode)
 - Provide host functions (logging, HTTP, filesystem, timers, etc.)
 - Manage workspace and session state
-- Route messages between CLI and actors
+- Route messages between clients and actors (in daemon mode)
+- Handle persistence and caching (in daemon mode)
 
 ### Runtime
 
@@ -172,10 +190,19 @@ A **program** is a Wasm module that implements one of:
 
 Programs may be:
 
-- Core Wasm modules (simple `(ptr,len)` ABI)
-- Component Model components (WIT-based, where supported)
+- **Core Wasm modules** (wasm32-unknown-unknown):
+    - Simple `(ptr,len)` ABI for passing bytes
+    - Works in any Wasm host (browser, Node, Wasmtime, etc.)
+    - No access to system resources unless provided by host imports
+- **WASM Component Model** (WIT-based):
+    - Type-safe interfaces defined via WIT (WebAssembly Interface Types)
+    - Can include WASI (WebAssembly System Interface) for system access:
+        - **WASI Preview 2**: Filesystem, sockets, environment, clocks, random
+        - Enables portable system-level extensions
+    - Requires Component Model-capable host (Wasmtime, wasmer, or polyfills)
 
-Programs are dynamically loaded by the runtime via Extism.
+Programs are dynamically loaded by the runtime via Extism (for core Wasm) or Component Model loaders (for WASM
+Components).
 
 ## Envelope protocol
 
@@ -657,23 +684,25 @@ Actor structure:
 +----------------------------------+
 ```
 
-## CLI -> daemon -> actor flow
+## Client to runtime flows
+
+### Daemon-based flow (CLI, Morphir-Live in remote mode)
 
 ```text
-+---------+        +-----------+        +-----------+
-|   CLI   | -----> |  Daemon   | -----> |   Actor   |
-+---------+        +-----------+        +-----------+
-                        |                    |
-                        | loads runtime       |
-                        | loads extension(s)  |
-                        | executes TEA or     |
-                        | process()           |
-                        | returns results     |
++-----------+        +-----------+        +-----------+
+|  Client   | -----> |  Daemon   | -----> |   Actor   |
++-----------+        +-----------+        +-----------+
+                          |                    |
+                          | loads runtime       |
+                          | loads extension(s)  |
+                          | executes TEA or     |
+                          | process()           |
+                          | returns results     |
 ```
 
 Typical flow:
 
-1. CLI sends a request: "run transform X on workspace Y".
+1. Client (CLI, Morphir-Live, etc.) sends a request: "run transform X on workspace Y".
 2. Daemon:
    - creates or reuses an actor for that workspace/session
    - instructs it to load extension X (if not already loaded)
@@ -682,58 +711,390 @@ Typical flow:
    - calls `process` or `init/update/subscriptions`
    - uses host functions as needed
    - returns results to daemon
-4. Daemon streams results back to CLI.
+4. Daemon streams results back to client.
 
-## Browser and other hosts
+### Direct runtime flow (WASM client, Morphir-Live standalone)
 
-Because Extism is hidden:
+```text
++------------------+        +------------------+        +-------------------+
+|   WASM Client    | -----> | Runtime (Wasm)   | -----> |  Extension (Wasm) |
++------------------+        +------------------+        +-------------------+
+  (JS/TS, Rust,             (Rust compiled               (core/component)
+   Python, etc.)             to Wasm)
+```
 
-- In **native/daemon** environments:
-  - Runtime uses Extism internally.
-- In **browser** environments:
-  - You can compile the runtime itself to Wasm and use jco or another host.
-  - The extension ABI (envelope + TEA/design-time) stays the same.
-  - You can replace Extism with:
-    - direct `WebAssembly.instantiate`
-    - jco for Component Model
-    - Wasmtime in other contexts
+Typical flow:
 
-The key: **extension authors never see the engine**.
+1. Client code (JS/TS, Rust, Python, etc.) calls runtime API with envelope.
+2. Runtime (compiled to Wasm):
+    - loads extension if not already loaded
+    - calls extension function with envelope
+    - interprets commands/subscriptions
+    - calls host functions (browser APIs, WASI, custom imports)
+3. Runtime returns result envelope to client.
+4. Client handles result (update UI, process data, etc.).
+
+**Variants**:
+
+- **Core Wasm**: Uses `WebAssembly.instantiate` or equivalent host API
+- **WASM Component + WASI**: Uses WIT bindings, can access filesystem, network, environment via WASI
+
+## Client deployment modes
+
+Because Extism is hidden and the envelope protocol is host-agnostic, multiple deployment modes are supported:
+
+### Native/Daemon Mode
+
+- **CLI Client**: Native binary communicating with daemon
+- **Daemon**: Long-running service managing Kameo actors
+- **Runtime**: Uses Extism internally to load extensions
+- **Use cases**: Development, CI/CD, backend services
+
+### Morphir-Live Progressive Web App
+
+- **Client**: Progressive Web App from finos/morphir (Rust → Wasm)
+- **Architecture**: Rust runtime compiled to Wasm, running in browser
+- **Actor support**: Can run Kameo actors in Wasm or make direct calls
+- **Daemon option**: Can connect to remote daemon or run standalone
+- **Use cases**: Interactive exploration, live documentation, educational demos
+
+### WASM Client (Portable Wasm)
+
+- **Client**: Runtime compiled to Wasm, runnable in various environments
+- **Direct calls**: No daemon required, runtime and extensions all Wasm
+- **Variants**:
+    - **Core Wasm (wasm32-unknown-unknown)**:
+        - Browser: Via `WebAssembly.instantiate`
+        - Node/Deno/Bun: Via WebAssembly APIs
+        - Wasmtime/wasmer: Embedded in other applications
+    - **WASM Component Model + WASI**:
+        - Wasmtime: Full WASI support, filesystem, network
+        - Wasmer: WASI support
+        - Browser: Via WASI polyfills or jco
+        - Enables richer host functions (file I/O, sockets, etc.)
+- **Extism alternative**: Can replace Extism with:
+    - Direct `WebAssembly.instantiate` for core Wasm
+    - jco/wasm-tools for Component Model
+    - Host-native Wasm APIs
+- **Use cases**:
+    - Embedded widgets in web apps
+    - Static sites with client-side IR processing
+    - Serverless/edge functions
+    - Portable CLI tools (single Wasm binary)
+    - Sandboxed execution environments
+
+### Service/Backend Mode
+
+- **Long-running services**: API servers, data processing pipelines
+- **Actor pools**: Managed Kameo actors for concurrency
+- **Persistence**: Cached compilation results, persistent workspace state
+- **Use cases**: Production deployments, scalable processing
+
+### Portable Runtime Mode
+
+- **Other hosts**: Wasmtime, GraalVM, Node/Deno/Bun
+- **Same ABI**: Envelope protocol + TEA/design-time interfaces
+- **Engine flexibility**: Can swap Extism for host-specific Wasm implementation
+- **Use cases**: Embedding in existing platforms, custom integrations
+
+The key: **extension authors never see the engine** and **the same extension works across all deployment modes**.
+
+## Crate structure
+
+The implementation is organized into the following crates:
+
+### `morphir-ext-core`
+
+**Status:** ✅ Complete
+
+Core protocol definitions shared by all extension implementations:
+
+- `Envelope` struct with `Header`, `content_type`, and `content`
+- JSON codec for envelope serialization/deserialization
+- Core WASM ABI definitions (pointer-based memory access)
+- WIT interface definitions (envelope.wit, program.wit, runtime.wit)
+
+### `morphir-ext`
+
+**Status:** 🔄 In Progress
+
+Main extension runtime and execution infrastructure:
+
+- ✅ `ExtensionRuntime` trait (abstraction over WASM engines)
+- ✅ `ExtensionInstance` (wraps `ExtensionRuntime`, manages state)
+- ✅ `ExtensionActor` (Kameo actor wrapper for daemon mode)
+- 🔴 `ExtismRuntime` (Extism implementation of `ExtensionRuntime`)
+- 🔴 `DirectRuntime` (direct execution without actors)
+- 🔴 `DaemonClient` (IPC client connecting to daemon actors)
+- 🔴 Host functions (log, HTTP, workspace, IR helpers)
+
+**Key insight:** `morphir-ext` contains both:
+
+- The **interface** (`ExtensionRuntime` trait)
+- Multiple **implementations** (Extism, direct, daemon client)
+- **Execution modes** (direct vs actor-based)
+
+**Client flexibility:** All clients can choose their execution mode:
+
+- **DirectRuntime**: Embedded execution (CLI, Morphir-Live, browser/WASM)
+    - No daemon required
+    - Extensions run in-process
+    - Suitable for single-user, local execution
+- **DaemonClient**: Remote execution via daemon (CLI, Morphir-Live, IDE)
+    - Shared state and caching across sessions
+    - File watching and incremental compilation
+    - Multi-user/multi-project support
+
+The choice depends on deployment needs, not client type.
+
+### `morphir-daemon`
+
+**Status:** 🔄 In Progress
+
+Daemon service for long-running extension hosting:
+
+- JSON-RPC server for CLI/IDE integration
+- File watching and incremental compilation
+- Extension registry and loading
+- Actor pool management (using `morphir-ext` actors)
+- Workspace and session state management
+
+### `morphir-runtime`
+
+**Status:** 🔴 Not Started
+
+Runtime execution semantics (TEA-style runtime extensions):
+
+- IR evaluation engine
+- Effect handlers and interpreters
+- Domain logic execution
+- Uses `morphir-ext` for extension hosting
+
+### `morphir-design`
+
+**Status:** 🔴 Not Started
+
+Design-time operations (frontends, backends, transforms):
+
+- Frontend compilation (source → IR)
+- Backend generation (IR → target code)
+- IR transformations and decorators
+- Uses `morphir-ext` for extension hosting
+
+### `morphir-builtins`
+
+**Status:** ✅ Complete (structure), 🔄 In Progress (migrate implementation)
+
+Builtin extensions bundled with Morphir:
+
+- ✅ `BuiltinExtension` trait (native + optional WASM)
+- ✅ `BuiltinRegistry` for discovery
+- 🔄 `migrate` extension (IR v3 ↔ v4 transformation)
+- 🔴 Future: TypeScript backend, Scala backend, etc.
+
+**Dual execution modes:**
+
+- **Native**: Direct Rust implementation (always available, best performance)
+- **WASM**: Compiled to WASM for extension architecture validation
+
+**Key insight:** Builtins are **both** usable as Rust libraries AND as WASM extensions, providing flexibility and
+testing coverage for the extension architecture.
+
+## Steel Thread: Migrate Command
+
+**Goal:** Build a working end-to-end slice of functionality using the `migrate` command as a design-time extension (IR
+transform/backend).
+
+### Why Migrate Command?
+
+The `migrate` command transforms Morphir IR from one version to another, making it an ideal steel thread because:
+
+- **Design-time operation**: IR → IR transform (backend pattern)
+- **Self-contained**: No runtime execution needed
+- **Real-world use case**: Actual production requirement
+- **Tests the full stack**: Extension loading, envelope protocol, DirectRuntime, WASM execution
+
+### Steel Thread Scope
+
+Implement **minimal viable path** through the architecture:
+
+```text
+CLI ---> DirectRuntime ---> ExtismRuntime ---> migrate.wasm
+         (morphir-ext)      (morphir-ext)      (extension)
+              |
+              v
+         ExtensionInstance
+         (state management)
+```
+
+### Implementation Steps (Steel Thread)
+
+1. **Minimal ExtismRuntime** (morphir-rust-ext1)
+    - Load WASM module via Extism
+    - Implement `call_envelope()` only
+    - Skip TEA helpers for now
+    - Basic error handling
+
+2. **Minimal DirectRuntime** (morphir-rust-direct1)
+    - Wrap ExtismRuntime
+    - Expose simple API: `execute(func, input) -> output`
+    - No state management initially
+
+3. **Minimal Host Functions** (morphir-rust-std1)
+    - `log()` only for debugging
+    - Skip HTTP, workspace, etc. for now
+
+4. **Migrate Extension** (morphir-builtins)
+    - ✅ Already created in `morphir-builtins` crate
+    - Implements `BuiltinExtension` trait
+    - Native Rust implementation available immediately
+    - Can be compiled to WASM for architecture testing
+    - Takes IR envelope → returns migrated IR envelope
+
+5. **CLI Integration**
+    - `morphir migrate` command can use either:
+        - **Native mode**: Call `MigrateExtension::execute_native()` directly (fast)
+        - **WASM mode**: Load via DirectRuntime + ExtismRuntime (validates architecture)
+    - Start with native mode, add WASM option later
+
+### Success Criteria (Steel Thread)
+
+- [ ] `morphir migrate input.json output.json` works end-to-end
+- [ ] Extension loaded via ExtismRuntime
+- [ ] Envelope protocol used throughout
+- [ ] No daemon required (DirectRuntime only)
+- [ ] Demonstrates extension architecture viability
+
+### After Steel Thread
+
+Once the steel thread works, expand:
+
+- Add full TEA runtime support
+- Add DaemonClient for remote execution
+- Add more host functions
+- Build more complex extensions
 
 ## Implementation roadmap
 
-1. **Envelope layer**
-   - Implement `Envelope` + JSON codec (host side).
-   - Define JSON payload conventions for TEA and design-time.
+### Phase 0: Steel Thread (P0 - FIRST!)
 
-2. **Extism integration**
-   - Implement `ExtismRuntime` wrapper (`call_envelope`).
-   - Register basic host functions (log, random).
+Build working end-to-end with `migrate` command:
 
-3. **TEA runtime**
-   - Implement `MorphirProgram` on top of `ExtismRuntime`.
-   - Implement `start`, `send`, `poll` semantics.
+1. Minimal ExtismRuntime (call_envelope only)
+2. Minimal DirectRuntime (simple wrapper)
+3. Minimal host functions (log only)
+4. Migrate extension (IR v3 → v4)
+5. CLI integration
 
-4. **Design-time runtime**
-   - Implement `process` calls for design-time extensions.
-   - Add a simple extension registry.
+**Target:** Working `morphir migrate` using extension architecture
 
-5. **Kameo actors**
-   - Wrap runtime in actors.
-   - Add workspace/session state.
-   - Add message protocol between daemon and actors.
+### Phase 1: Core Runtime (P1)
 
-6. **CLI + daemon**
-   - Define CLI commands.
-   - Implement daemon routing to actors.
+1. ✅ **Envelope layer** (morphir-rust-env1)
+    - `Envelope` + JSON codec implemented in `morphir-ext-core`
+    - JSON payload conventions defined
 
-7. **Standard library**
-   - Flesh out host functions (HTTP, workspace, IR helpers).
-   - Provide language-specific SDKs for extension authors.
+2. 🔄 **Extism integration** (morphir-rust-ext1)
+    - Implement `ExtismRuntime` in `morphir-ext/src/extism_runtime.rs`
+    - Implement `ExtensionRuntime` trait for `ExtismRuntime`
+    - Register basic host functions (log, random)
 
-8. **Component Model compatibility (optional/next)**
+3. 🔄 **TEA runtime** (morphir-rust-tea1)
+    - Already have TEA helpers in `ExtensionRuntime` trait
+    - Add command interpreter
+    - Add subscription manager
+    - Implement `start`, `send`, `poll` semantics
+
+4. **Design-time runtime** (morphir-rust-dt1)
+    - Implement `process` calls for design-time extensions
+    - Add extension registry in `morphir-daemon`
+    - Support frontend-compile and backend-generate
+
+5. **Standard library** (morphir-rust-std1)
+    - Implement host functions in `morphir-ext/src/host_functions.rs`
+    - HTTP, workspace, IR helpers
+    - Register with Extism
+    - Provide language-specific SDKs for extension authors
+
+### Phase 2: Native Client Support (P1)
+
+6. ✅ **Kameo actors** (morphir-rust-kam1)
+    - `ExtensionActor` implemented in `morphir-ext/src/actor.rs`
+    - Wraps `ExtensionInstance`
+    - Message handlers for init/update/subscriptions
+
+7. **Direct runtime** (NEW)
+    - Implement `DirectRuntime` in `morphir-ext/src/direct.rs`
+    - For browser/WASM mode (no actors, no IPC)
+    - Wraps `ExtensionInstance` directly
+
+8. **Daemon client** (NEW)
+    - Implement `DaemonClient` in `morphir-ext/src/daemon_client.rs`
+    - IPC to actor-based daemon
+    - Implements `ExtensionRuntime` trait
+
+9. **CLI + daemon**
+    - Define CLI commands in `morphir` crate
+    - Implement daemon routing to actors in `morphir-daemon`
+    - Add session management and persistence
+
+### Phase 3: WASM Client Support (P2)
+
+8. **Runtime → Core WASM compilation**
+    - Compile Morphir runtime to core Wasm (wasm32-unknown-unknown).
+    - Test core runtime APIs in multiple environments:
+        - Browser (via WebAssembly API)
+        - Node/Deno/Bun (via WebAssembly APIs)
+        - Wasmtime/wasmer (embedded mode)
+    - Ensure Extism or alternative works in Wasm context.
+
+9. **WASM client interface**
+    - Define language bindings for runtime API:
+        - JavaScript/TypeScript (for browser, Node, Deno, Bun)
+        - Rust (via wasm-bindgen for browser, direct for Wasmtime)
+        - Python (via wasmtime-py or similar)
+    - Implement envelope protocol over language boundaries.
+    - Add environment-appropriate host functions:
+        - Browser: IndexedDB, fetch, localStorage
+        - WASI: Filesystem, sockets, environment variables
+        - Custom: Host-specific imports
+
+10. **Morphir-Live integration (Dioxus framework)**
+    - Create integration layer for finos/morphir's Morphir-Live app (Dioxus-based).
+    - Support desktop mode (native binary with embedded runtime).
+    - Support web mode (Rust → Wasm with direct runtime calls).
+    - Support both standalone mode (embedded runtime) and daemon mode (connect to remote).
+    - Add web-specific features (offline, service worker, caching) for web target.
+
+### Phase 4: Component Model & Advanced Features (P2-P3)
+
+11. **WASM Component Model + WASI support**
     - Define WIT for envelope + TEA + design-time.
-    - Provide wrappers for Component Model hosts (Wasmtime, jco).
+    - Compile runtime as WASM Component (with WASI preview 2).
+    - Provide wrappers for Component Model hosts:
+        - Wasmtime (native WASI support)
+        - Wasmer (WASI support)
+        - Browser (via WASI polyfills or jco)
+    - Implement WASI-based host functions:
+        - Filesystem operations (wasi:filesystem)
+        - Network sockets (wasi:sockets)
+        - Environment variables (wasi:cli-base)
+    - Test Component Model extensions across all client types.
+
+12. **Cross-client testing**
+    - Create test suite that runs on:
+        - CLI (native)
+        - Daemon (native)
+        - Morphir-Live (Dioxus: web/desktop)
+        - WASM clients (core Wasm: browser, Node, Wasmtime)
+        - WASM Component clients (WASI: Wasmtime, wasmer)
+    - Verify envelope protocol works consistently across all targets.
+    - Benchmark performance across deployment modes:
+        - Native vs core Wasm vs WASM Component
+        - Browser vs Node vs Wasmtime
+        - Standalone vs daemon mode
+    - Test Dioxus web target with both standalone and daemon modes.
+    - Validate WASI host functions work correctly in Wasmtime/wasmer.
 
 ## Recommended packaging
 
@@ -751,9 +1112,20 @@ This design gives Morphir:
 - A **unified extension model** for design-time and runtime.
 - A **stable, engine-agnostic ABI** based on envelopes and TEA.
 - A **hidden Extism integration** that simplifies implementation without leaking into extension APIs.
-- A **Kameo actor-based host** that provides isolation, concurrency, and lifecycle management.
+- A **Kameo actor-based host** that provides isolation, concurrency, and lifecycle management (for daemon/service mode).
 - A **standard library** exposed as host functions, not engine details.
-- A path to **Component Model** and **browser execution** without breaking existing extensions.
+- **Multiple deployment modes**:
+    - Native CLI + daemon for development and backend services
+    - Morphir-Live (Dioxus) for web and desktop interactive exploration
+    - Core WASM clients for embedded, browser, Node/Deno/Bun, and edge deployments
+    - WASM Component + WASI for portable CLI tools and sandboxed execution
+    - Service/backend mode for production deployments
+- A path to **Component Model + WASI** and **portable Wasm execution** without breaking existing extensions.
+- **Write once, run anywhere**: The same extension works across:
+    - Native: CLI, daemon, services
+    - Dioxus: Morphir-Live (web/desktop)
+    - Core Wasm: Browser, Node, Deno, Bun, Wasmtime, wasmer
+    - WASM Component + WASI: Wasmtime, wasmer, edge runtimes
 
 ## Related documents
 

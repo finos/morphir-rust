@@ -4,6 +4,19 @@ members = [
 ]
 resolver = "2"
 
+# Don't build examples by default
+default-members = [
+    "crates/morphir-cli",
+    "crates/morphir-common",
+    "crates/morphir-core",
+    "crates/morphir-daemon",
+    "crates/morphir-ext",
+    "crates/morphir-ext-core",
+    "crates/morphir-extensions-client",
+    "crates/morphir-formatter",
+    "crates/morphir-runtime",
+]
+
 [workspace.package]
 version = "0.2.0"
 edition = "2024"

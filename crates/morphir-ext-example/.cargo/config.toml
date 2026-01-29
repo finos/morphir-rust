@@ -1,0 +1,10 @@
+# WebAssembly build configuration for morphir-ext-example
+#
+# This extension is meant to be compiled to WebAssembly and loaded by a host runtime.
+# Build with: cargo build --package morphir-ext-example
+
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+# No special flags needed for basic WebAssembly build

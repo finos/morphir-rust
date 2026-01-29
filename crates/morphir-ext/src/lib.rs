@@ -6,6 +6,4 @@ pub mod actor;
 pub mod runtime;
 
 // Re-export main types
-pub use runtime::{
-    ExtensionInstance, ExtensionRuntime, WitEnvelope, EnvValue, LogLevel,
-};
+pub use runtime::{EnvValue, ExtensionInstance, ExtensionRuntime, LogLevel, WitEnvelope};

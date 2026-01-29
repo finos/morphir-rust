@@ -1,5 +1,5 @@
-use morphir_core::ir::classic::types::Type;
 use morphir_core::ir::classic::naming::Name;
+use morphir_core::ir::classic::types::Type;
 
 #[test]
 fn test_type_variable() {
@@ -16,7 +16,7 @@ fn test_type_reference_no_args() {
     // Reference(A, FQName, Vec<Type<A>>)
     // [ "Reference", attributes, FQName, [args] ]
     // FQName is [ [pkg], [mod], name ]
-    
+
     let json = r#"["Reference", null, [[["my"],["pkg"]], [["my"],["mod"]], ["my","type"]], []]"#;
     let t: Type<()> = serde_json::from_str(json).expect("Failed to parse Reference");
     match t {
@@ -64,10 +64,11 @@ fn test_type_tuple() {
 fn test_type_record() {
     // Record(A, Vec<Field<A>>)
     // Field is [name, type] or {"name":..., "tpe":...}
-    
+
     // Test Array Format
     let json_array = r#"["Record", null, [ [["field", "1"], ["Variable", null, ["a"]]] ]]"#;
-    let t: Type<()> = serde_json::from_str(json_array).expect("Failed to parse Record array format");
+    let t: Type<()> =
+        serde_json::from_str(json_array).expect("Failed to parse Record array format");
     match t {
         Type::Record(_, fields) => {
             assert_eq!(fields.len(), 1);
@@ -92,7 +93,7 @@ fn test_type_function() {
                 _ => panic!("Expected Variable arg"),
             }
             match *ret {
-                 Type::Variable(_, name) => assert_eq!(name, Name::from_str("b")),
+                Type::Variable(_, name) => assert_eq!(name, Name::from_str("b")),
                 _ => panic!("Expected Variable ret"),
             }
         }

@@ -1,14 +1,14 @@
+use morphir_core::intern;
 use morphir_core::ir::classic::literal::Literal;
 use morphir_core::ir::classic::naming::Name;
+use morphir_core::ir::classic::pattern::Pattern;
 use morphir_core::ir::classic::types::Type;
 use morphir_core::ir::classic::value::Value;
-use morphir_core::ir::classic::pattern::Pattern;
-use morphir_core::intern;
 use serde_json::json;
 
 #[test]
 fn test_simpler_name_loading() {
-    let json = json!(["foo","bar"]);
+    let json = json!(["foo", "bar"]);
     let name: Name = serde_json::from_value(json).expect("Failed to parse Name");
     assert_eq!(name.words, vec![intern("foo"), intern("bar")]);
 }
@@ -32,7 +32,11 @@ fn test_simpler_type_loading() {
     assert!(matches!(t, Type::Variable(_, _)));
 
     // Tuple: ["Tuple", attrs, elements]
-    let json_tuple = json!(["Tuple", null, [["Variable", null, ["a"]], ["Variable", null, ["b"]]]]);
+    let json_tuple = json!([
+        "Tuple",
+        null,
+        [["Variable", null, ["a"]], ["Variable", null, ["b"]]]
+    ]);
     let t: Type<()> = serde_json::from_value(json_tuple).expect("Failed to parse Tuple");
     assert!(matches!(t, Type::Tuple(_, _)));
 }
@@ -58,7 +62,12 @@ fn test_simpler_value_loading() {
     assert!(matches!(v, Value::Literal(_, _)));
 
     // Apply: ["Apply", attrs, func, arg]
-    let json_apply = json!(["Apply", null, ["Variable", null, ["f"]], ["Variable", null, ["x"]]]);
+    let json_apply = json!([
+        "Apply",
+        null,
+        ["Variable", null, ["f"]],
+        ["Variable", null, ["x"]]
+    ]);
     let v: Value<(), ()> = serde_json::from_value(json_apply).expect("Failed to parse Apply");
     assert!(matches!(v, Value::Apply(_, _, _)));
 }

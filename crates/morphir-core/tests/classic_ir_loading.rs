@@ -17,26 +17,28 @@ fn test_load_reference_model_distribution() {
     // Skip if the file doesn't exist (e.g., morphir-elm not checked out)
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(REFERENCE_MODEL_IR);
     if !path.exists() {
-        eprintln!(
-            "Skipping test: reference model not found at {:?}",
-            path
-        );
+        eprintln!("Skipping test: reference model not found at {:?}", path);
         return;
     }
 
     let content = fs::read_to_string(&path).expect("Failed to read morphir-ir.json");
-    
+
     // Try to parse via Value to bypass recursion limit issues in from_str
-    let json_val: serde_json::Value = serde_json::from_str(&content).expect("Failed to parse to Value");
+    let json_val: serde_json::Value =
+        serde_json::from_str(&content).expect("Failed to parse to Value");
     let result: Result<Distribution, _> = serde_json::from_value(json_val);
-    
+
     match result {
         Ok(dist) => {
             println!("Successfully loaded distribution!");
             println!("  Format version: {}", dist.format_version);
             // Print some basic info about the distribution
             match &dist.distribution {
-                morphir_core::ir::classic::DistributionBody::Library(package_name, _deps, package) => {
+                morphir_core::ir::classic::DistributionBody::Library(
+                    package_name,
+                    _deps,
+                    package,
+                ) => {
                     println!("  Package name: {:?}", package_name);
                     println!("  Module count: {}", package.modules.len());
                 }
@@ -45,12 +47,12 @@ fn test_load_reference_model_distribution() {
         Err(e) => {
             // Print helpful debug info
             eprintln!("Failed to parse distribution: {}", e);
-            
+
             // Try to find what line/column the error is at
             if let Some(line) = content.lines().next() {
                 eprintln!("First line: {}", &line[..line.len().min(200)]);
             }
-            
+
             panic!("Failed to parse distribution: {}", e);
         }
     }
@@ -61,19 +63,17 @@ fn test_load_lcr_model_distribution() {
     // Skip if the file doesn't exist
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(LCR_MODEL_IR);
     if !path.exists() {
-        eprintln!(
-            "Skipping test: LCR model not found at {:?}",
-            path
-        );
+        eprintln!("Skipping test: LCR model not found at {:?}", path);
         return;
     }
 
     let content = fs::read_to_string(&path).expect("Failed to read LCR morphir-ir.json");
-    
+
     // Try to parse via Value to bypass recursion limit issues in from_str
-    let json_val: serde_json::Value = serde_json::from_str(&content).expect("Failed to parse to Value");
+    let json_val: serde_json::Value =
+        serde_json::from_str(&content).expect("Failed to parse to Value");
     let result: Result<Distribution, _> = serde_json::from_value(json_val);
-    
+
     match result {
         Ok(dist) => {
             println!("Successfully loaded LCR distribution!");
@@ -82,7 +82,7 @@ fn test_load_lcr_model_distribution() {
                 morphir_core::ir::classic::DistributionBody::Library(package_name, _, package) => {
                     println!("  Package name: {:?}", package_name);
                     println!("  Module count: {}", package.modules.len());
-                    
+
                     // Print some module info
                     for (i, entry) in package.modules.iter().take(5).enumerate() {
                         println!("  Module {}: {:?}", i, entry.path);

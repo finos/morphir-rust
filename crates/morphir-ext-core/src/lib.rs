@@ -6,4 +6,4 @@ pub mod abi;
 pub mod envelope;
 
 // Re-export main types for convenience
-pub use envelope::{Envelope, Header, EnvelopeError, encode_envelope, decode_envelope};
+pub use envelope::{Envelope, EnvelopeError, Header, decode_envelope, encode_envelope};

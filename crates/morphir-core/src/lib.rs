@@ -7,10 +7,9 @@ pub mod error;
 pub mod ir;
 pub mod naming;
 
-pub use naming::{intern, resolve, Word};
+pub use naming::{Word, intern, resolve};
 
 // Re-export commonly used items for convenience
 // pub mod visitor {
 //     pub use crate::traversal::*;
 // }
-

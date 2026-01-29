@@ -17,4 +17,3 @@ pub struct AccessControlled<A> {
     pub access: Access,
     pub value: A,
 }
-

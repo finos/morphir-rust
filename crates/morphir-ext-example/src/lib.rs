@@ -33,7 +33,7 @@ struct CounterExtension;
 impl Guest for CounterExtension {
     fn init(init_data: Envelope) -> (Envelope, Envelope) {
         runtime::log(runtime::LogLevel::Info, "Counter extension initializing");
-        
+
         // Parse initial count from init_data if provided
         let initial_count = if !init_data.content.is_empty() {
             serde_json::from_slice::<CounterModel>(&init_data.content)
@@ -42,31 +42,39 @@ impl Guest for CounterExtension {
         } else {
             0
         };
-        
-        let model = CounterModel { count: initial_count };
+
+        let model = CounterModel {
+            count: initial_count,
+        };
         let model_envelope = make_json_envelope("model", &model);
-        
+
         // No initial commands
         let commands_envelope = make_json_envelope("commands", &Vec::<String>::new());
-        
+
         (model_envelope, commands_envelope)
     }
-    
+
     fn update(msg: Envelope, model: Envelope) -> (Envelope, Envelope) {
         // Parse current model
-        let mut current_model: CounterModel = serde_json::from_slice(&model.content)
-            .unwrap_or_default();
-        
+        let mut current_model: CounterModel =
+            serde_json::from_slice(&model.content).unwrap_or_default();
+
         // Parse message
         if let Ok(counter_msg) = serde_json::from_slice::<CounterMsg>(&msg.content) {
             match counter_msg {
                 CounterMsg::Increment => {
                     current_model.count += 1;
-                    runtime::log(runtime::LogLevel::Debug, &format!("Incremented to {}", current_model.count));
+                    runtime::log(
+                        runtime::LogLevel::Debug,
+                        &format!("Incremented to {}", current_model.count),
+                    );
                 }
                 CounterMsg::Decrement => {
                     current_model.count -= 1;
-                    runtime::log(runtime::LogLevel::Debug, &format!("Decremented to {}", current_model.count));
+                    runtime::log(
+                        runtime::LogLevel::Debug,
+                        &format!("Decremented to {}", current_model.count),
+                    );
                 }
                 CounterMsg::Reset => {
                     current_model.count = 0;
@@ -74,19 +82,19 @@ impl Guest for CounterExtension {
                 }
             }
         }
-        
+
         let new_model_envelope = make_json_envelope("model", &current_model);
         let commands_envelope = make_json_envelope("commands", &Vec::<String>::new());
-        
+
         (new_model_envelope, commands_envelope)
     }
-    
+
     fn subscriptions(model: Envelope) -> Envelope {
         // No subscriptions for counter
         let _ = model;
         make_json_envelope("subscriptions", &Vec::<String>::new())
     }
-    
+
     fn get_capabilities() -> Envelope {
         let info = serde_json::json!({
             "name": "Counter Extension",

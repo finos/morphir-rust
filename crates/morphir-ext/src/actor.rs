@@ -1,13 +1,10 @@
 //! Actor wrapper for Morphir extensions using Kameo.
 
+use anyhow::Result;
 use kameo::Actor;
 use kameo::message::{Context, Message};
-use anyhow::Result;
 
-use crate::{
-    ExtensionInstance,
-    WitEnvelope, EnvValue,
-};
+use crate::{EnvValue, ExtensionInstance, WitEnvelope};
 
 /// Message to initialize the extension.
 #[derive(Debug)]
@@ -68,12 +65,8 @@ impl ExtensionActor {
 // Message handler for Init
 impl Message<InitMsg> for ExtensionActor {
     type Reply = Result<ModelCommands>;
-    
-    async fn handle(
-        &mut self,
-        msg: InitMsg,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
+
+    async fn handle(&mut self, msg: InitMsg, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let (model, commands) = self.instance.init(msg.init_data)?;
         Ok(ModelCommands { model, commands })
     }
@@ -109,7 +102,7 @@ impl Message<SubscriptionsMsg> for ExtensionActor {
 // Message handler for Info
 impl Message<InfoMsg> for ExtensionActor {
     type Reply = Result<WitEnvelope>;
-    
+
     async fn handle(
         &mut self,
         _msg: InfoMsg,
@@ -122,7 +115,7 @@ impl Message<InfoMsg> for ExtensionActor {
 // Message handler for SetEnvVar
 impl Message<SetEnvVarMsg> for ExtensionActor {
     type Reply = ();
-    
+
     async fn handle(
         &mut self,
         msg: SetEnvVarMsg,
@@ -135,7 +128,7 @@ impl Message<SetEnvVarMsg> for ExtensionActor {
 // Message handler for GetEnvVar
 impl Message<GetEnvVarMsg> for ExtensionActor {
     type Reply = Option<EnvValue>;
-    
+
     async fn handle(
         &mut self,
         msg: GetEnvVarMsg,
@@ -148,7 +141,7 @@ impl Message<GetEnvVarMsg> for ExtensionActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_init_msg_debug() {
         // Just test that types are debuggable

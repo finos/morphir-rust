@@ -1,7 +1,7 @@
 //! Runtime types and traits for Morphir extensions.
 
-use morphir_ext_core::Envelope;
 use anyhow::Result;
+use morphir_ext_core::Envelope;
 use serde::{Deserialize, Serialize};
 
 /// WIT-compatible envelope type alias.
@@ -135,7 +135,8 @@ impl ExtensionInstance {
 
     /// Get extension capabilities/info.
     pub fn info(&mut self) -> Result<Envelope> {
-        self.runtime.call_envelope("get_capabilities", &Envelope::json(&serde_json::json!({}))?)
+        self.runtime
+            .call_envelope("get-capabilities", &Envelope::json(&serde_json::json!({}))?)
     }
 
     /// Set an environment variable.

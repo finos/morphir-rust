@@ -1,4 +1,4 @@
-use lasso::{ThreadedRodeo, Spur};
+use lasso::{Spur, ThreadedRodeo};
 use std::sync::OnceLock;
 
 static INTERNER: OnceLock<ThreadedRodeo> = OnceLock::new();

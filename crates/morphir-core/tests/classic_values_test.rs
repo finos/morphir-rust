@@ -1,6 +1,6 @@
-use morphir_core::ir::classic::value::Value;
 use morphir_core::ir::classic::literal::Literal;
 use morphir_core::ir::classic::naming::Name;
+use morphir_core::ir::classic::value::Value;
 
 #[test]
 fn test_value_variable() {
@@ -26,7 +26,7 @@ fn test_value_literal() {
 fn test_value_reference() {
     // Reference in Value position
     // ["Reference", attributes, FQName]  <-- Note: Value::Reference has different structure than Type::Reference (no args)
-    
+
     let json = r#"["Reference", null, [[["p"]],[["m"]],["v"]]]"#;
     let v: Value<(), ()> = serde_json::from_str(json).expect("Failed to parse Reference");
     match v {

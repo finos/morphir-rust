@@ -1,4 +1,4 @@
-use morphir_core::ir::classic::naming::{Name, Path, FQName};
+use morphir_core::ir::classic::naming::{FQName, Name, Path};
 
 #[test]
 fn test_classic_name_serialization() {
@@ -12,10 +12,7 @@ fn test_classic_name_serialization() {
 
 #[test]
 fn test_classic_path_serialization() {
-    let path = Path::new(vec![
-        Name::from_str("morphir"),
-        Name::from_str("sdk"),
-    ]);
+    let path = Path::new(vec![Name::from_str("morphir"), Name::from_str("sdk")]);
     let json = serde_json::to_string(&path).unwrap();
     assert_eq!(json, r#"[["morphir"],["sdk"]]"#);
 

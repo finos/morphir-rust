@@ -1,15 +1,15 @@
 #![allow(clippy::duplicate_mod)]
 pub mod fqname;
+pub mod interner;
 pub mod module_name;
 pub mod name;
 pub mod package_name;
 pub mod path;
 pub mod qname;
-pub mod interner;
 
 // Re-export common types
-pub use interner::{intern, resolve, Word};
 pub use fqname::FQName;
+pub use interner::{Word, intern, resolve};
 pub use module_name::ModuleName;
 pub use name::Name;
 pub use package_name::PackageName;

@@ -1,3 +1,39 @@
+# Auto detect text files and normalize to LF on commit
+* text=auto eol=lf
+
+# Explicit text files
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.wit text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+*.fish text eol=lf
+*.py text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.scss text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.gleam text eol=lf
+*.feature text eol=lf
+
+# Windows-specific files keep CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.wasm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads

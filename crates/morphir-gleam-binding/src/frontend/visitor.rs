@@ -8,19 +8,19 @@ use crate::frontend::ast::{
 };
 use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
-use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
-use morphir_ir::ir::literal::Literal as MorphirLiteral;
-use morphir_ir::ir::pattern::Pattern as MorphirPattern;
-use morphir_ir::ir::serde_v4::serialize_value;
-use morphir_ir::ir::type_expr::{Field, Type};
-use morphir_ir::ir::v4::{
+use morphir_core::ir::attributes::{TypeAttributes, ValueAttributes};
+use morphir_core::ir::literal::Literal as MorphirLiteral;
+use morphir_core::ir::pattern::Pattern as MorphirPattern;
+use morphir_core::ir::serde_v4::serialize_value;
+use morphir_core::ir::type_expr::{Field, Type};
+use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlledConstructors, AccessControlledTypeDefinition,
     AccessControlledValueDefinition, ConstructorArg, ConstructorDefinition, InputTypeEntry,
     TypeDefinition as V4TypeDefinition, ValueBody as V4ValueBody,
     ValueDefinition as V4ValueDefinition,
 };
-use morphir_ir::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
-use morphir_ir::naming::{FQName, ModuleName, Name, PackageName};
+use morphir_core::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
+use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
 use serde::Serialize;
 use serde_json;
 use std::io::Result;
@@ -472,7 +472,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             }
             Expr::Let { name, value, body } => {
                 // Convert to LetDefinition
-                let def = morphir_ir::ir::value_expr::ValueDefinition {
+                let def = morphir_core::ir::value_expr::ValueDefinition {
                     input_types: vec![],
                     output_type: Type::Unit(TypeAttributes::default()),
                     body: ValueBody::Expression(self.convert_expr(value)),
@@ -530,11 +530,11 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     .unwrap_or_else(|| Value::Unit(attrs.clone()));
 
                 let morphir_cases: Vec<
-                    morphir_ir::ir::value_expr::PatternCase<TypeAttributes, ValueAttributes>,
+                    morphir_core::ir::value_expr::PatternCase<TypeAttributes, ValueAttributes>,
                 > = clauses
                     .iter()
                     .map(|branch| {
-                        morphir_ir::ir::value_expr::PatternCase(
+                        morphir_core::ir::value_expr::PatternCase(
                             self.convert_pattern(&branch.pattern),
                             self.convert_expr(&branch.body),
                         )
@@ -747,7 +747,7 @@ mod tests {
     use super::*;
     use crate::frontend::ast::{Access, Expr, Literal, ModuleIR, ValueDef};
     use morphir_common::vfs::MemoryVfs;
-    use morphir_ir::naming::{ModuleName, PackageName};
+    use morphir_core::naming::{ModuleName, PackageName};
     use std::path::PathBuf;
 
     #[test]

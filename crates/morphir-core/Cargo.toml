@@ -1,5 +1,5 @@
 [package]
-name = "morphir-ir"
+name = "morphir-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,10 +9,10 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Morphir IR model definitions and utilities"
+description = "Morphir core model definitions and utilities"
 
 [lib]
-name = "morphir_ir"
+name = "morphir_core"
 path = "src/lib.rs"
 
 [dependencies]
@@ -25,4 +25,3 @@ indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 rstest = "0.26"
-

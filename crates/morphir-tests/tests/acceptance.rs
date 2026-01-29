@@ -5,8 +5,8 @@ use indexmap::IndexMap;
 use morphir_common::config::MorphirConfig;
 use morphir_common::loader::{self, LoadedDistribution};
 use morphir_common::vfs::{MemoryVfs, OsVfs, Vfs};
-use morphir_ir::converter;
-use morphir_ir::ir::v4;
+use morphir_core::converter;
+use morphir_core::ir::v4;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, World)]
@@ -163,13 +163,17 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
             let result_content = match dist {
                 LoadedDistribution::Classic(classic_dist) => {
                     if target_v4 {
-                        let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_path, _, pkg) =
-                            classic_dist.distribution;
+                        let morphir_core::ir::classic::DistributionBody::Library(
+                            _,
+                            pkg_path,
+                            _,
+                            pkg,
+                        ) = classic_dist.distribution;
                         let v4_pkg = converter::classic_to_v4(pkg);
                         let v4_ir = v4::IRFile {
                             format_version: v4::FormatVersion::default(),
                             distribution: v4::Distribution::Library(v4::LibraryContent {
-                                package_name: morphir_ir::naming::PackageName::from(pkg_path),
+                                package_name: morphir_core::naming::PackageName::from(pkg_path),
                                 dependencies: IndexMap::new(),
                                 def: v4_pkg,
                             }),
@@ -185,10 +189,10 @@ async fn i_run_migrate(w: &mut TestWorld, target_version: String) {
                             return;
                         };
                         let classic_pkg = converter::v4_to_classic(lib_content.def);
-                        let classic_dist = morphir_ir::ir::classic::Distribution {
+                        let classic_dist = morphir_core::ir::classic::Distribution {
                             format_version: 2024,
-                            distribution: morphir_ir::ir::classic::DistributionBody::Library(
-                                morphir_ir::ir::classic::LibraryTag::Library,
+                            distribution: morphir_core::ir::classic::DistributionBody::Library(
+                                morphir_core::ir::classic::LibraryTag::Library,
                                 lib_content.package_name.into_path(),
                                 vec![],
                                 classic_pkg,
@@ -228,7 +232,7 @@ async fn i_should_get_valid_ir(w: &mut TestWorld, version: String) {
         let _ir_file: v4::IRFile =
             serde_json::from_str(content).expect("Failed to parse as V4 IR file");
     } else {
-        let _dist: morphir_ir::ir::classic::Distribution =
+        let _dist: morphir_core::ir::classic::Distribution =
             serde_json::from_str(content).expect("Failed to parse as Classic Distribution");
     }
 }
@@ -271,10 +275,10 @@ async fn run_migrate_on_intermediate(w: &mut TestWorld, target_version: String) 
                 panic!("Expected Library distribution");
             };
             let classic_pkg = converter::v4_to_classic(lib_content.def);
-            let classic_dist = morphir_ir::ir::classic::Distribution {
+            let classic_dist = morphir_core::ir::classic::Distribution {
                 format_version: 2024,
-                distribution: morphir_ir::ir::classic::DistributionBody::Library(
-                    morphir_ir::ir::classic::LibraryTag::Library,
+                distribution: morphir_core::ir::classic::DistributionBody::Library(
+                    morphir_core::ir::classic::LibraryTag::Library,
                     lib_content.package_name.into_path(),
                     vec![],
                     classic_pkg,
@@ -285,16 +289,16 @@ async fn run_migrate_on_intermediate(w: &mut TestWorld, target_version: String) 
             serde_json::to_string(&ir_file)
         }
     } else if let Ok(classic_dist) =
-        serde_json::from_str::<morphir_ir::ir::classic::Distribution>(content)
+        serde_json::from_str::<morphir_core::ir::classic::Distribution>(content)
     {
         if target_v4 {
-            let morphir_ir::ir::classic::DistributionBody::Library(_, pkg_path, _, pkg) =
+            let morphir_core::ir::classic::DistributionBody::Library(_, pkg_path, _, pkg) =
                 classic_dist.distribution;
             let v4_pkg = converter::classic_to_v4(pkg);
             let v4_ir = v4::IRFile {
                 format_version: v4::FormatVersion::default(),
                 distribution: v4::Distribution::Library(v4::LibraryContent {
-                    package_name: morphir_ir::naming::PackageName::from(pkg_path),
+                    package_name: morphir_core::naming::PackageName::from(pkg_path),
                     dependencies: IndexMap::new(),
                     def: v4_pkg,
                 }),
@@ -729,14 +733,14 @@ struct ModuleCountingVisitor {
     count: usize,
 }
 
-impl morphir_ir::visitor::Visitor for ModuleCountingVisitor {
+impl morphir_core::visitor::Visitor for ModuleCountingVisitor {
     fn visit_module(
         &mut self,
-        cursor: &mut morphir_ir::visitor::Cursor,
-        _module: &morphir_ir::ir::classic::Module,
+        cursor: &mut morphir_core::visitor::Cursor,
+        _module: &morphir_core::ir::classic::Module,
     ) {
         self.count += 1;
-        morphir_ir::visitor::walk_module(self, cursor, _module);
+        morphir_core::visitor::walk_module(self, cursor, _module);
     }
 }
 
@@ -744,16 +748,16 @@ struct VariableCountingVisitor {
     count: usize,
 }
 
-impl morphir_ir::visitor::Visitor for VariableCountingVisitor {
+impl morphir_core::visitor::Visitor for VariableCountingVisitor {
     fn visit_expression(
         &mut self,
-        cursor: &mut morphir_ir::visitor::Cursor,
-        expr: &morphir_ir::ir::classic::Expression,
+        cursor: &mut morphir_core::visitor::Cursor,
+        expr: &morphir_core::ir::classic::Expression,
     ) {
-        if let morphir_ir::ir::classic::Expression::Variable { .. } = expr {
+        if let morphir_core::ir::classic::Expression::Variable { .. } = expr {
             self.count += 1;
         }
-        morphir_ir::visitor::walk_expression(self, cursor, expr);
+        morphir_core::visitor::walk_expression(self, cursor, expr);
     }
 }
 
@@ -765,7 +769,7 @@ async fn i_visit_distribution(w: &mut TestWorld) {
     match load_res {
         LoadedDistribution::Classic(dist) => {
             let mut visitor = ModuleCountingVisitor { count: 0 };
-            use morphir_ir::visitor::Visitor;
+            use morphir_core::visitor::Visitor;
             visitor.traverse(&dist);
             w.visitor_count = visitor.count;
         }
@@ -787,7 +791,7 @@ async fn i_visit_expression(w: &mut TestWorld) {
     match load_res {
         LoadedDistribution::Classic(dist) => {
             let mut visitor = VariableCountingVisitor { count: 0 };
-            use morphir_ir::visitor::Visitor;
+            use morphir_core::visitor::Visitor;
             visitor.traverse(&dist);
             w.visitor_count = visitor.count;
         }

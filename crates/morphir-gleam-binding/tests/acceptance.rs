@@ -11,9 +11,9 @@ mod coverage;
 use cucumber::{World, given, then, when};
 #[allow(unused_imports)]
 use morphir_common::vfs::{MemoryVfs, Vfs};
+use morphir_core::naming::{ModuleName, PackageName};
 use morphir_gleam_binding::frontend::ast::ModuleIR;
 use morphir_gleam_binding::frontend::{GleamToMorphirVisitor, parse_gleam};
-use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -23,7 +23,7 @@ pub struct GleamTestWorld {
     parsed_modules: Vec<ModuleIR>,
     parse_errors: Vec<String>,
     generated_files: Vec<(String, String)>, // (path, content)
-    morphir_ir: Option<serde_json::Value>,
+    morphir_core: Option<serde_json::Value>,
     temp_dir: Option<TempDir>,
     project_root: Option<PathBuf>,
     cli_context: Option<cli_helpers::CliTestContext>,

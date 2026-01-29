@@ -5,7 +5,7 @@
 use crate::Result;
 use crate::pipeline::{Pipeline, Step};
 use anyhow;
-use morphir_ir::converter;
+use morphir_core::converter;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -57,7 +57,7 @@ impl Step for V3ToV4Converter {
 
     fn run(&self, input: Self::Input) -> Result<Self::Output> {
         // Deserialize to Classic Package
-        let classic_pkg: morphir_ir::ir::classic::Package = serde_json::from_value(input)
+        let classic_pkg: morphir_core::ir::classic::Package = serde_json::from_value(input)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize Classic IR: {}", e))?;
 
         // Convert to V4
@@ -79,7 +79,7 @@ impl Step for V4ToV3Converter {
 
     fn run(&self, input: Self::Input) -> Result<Self::Output> {
         // Deserialize to V4 PackageDefinition
-        let v4_pkg: morphir_ir::ir::v4::PackageDefinition = serde_json::from_value(input)
+        let v4_pkg: morphir_core::ir::v4::PackageDefinition = serde_json::from_value(input)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize V4 IR: {}", e))?;
 
         // Convert to Classic

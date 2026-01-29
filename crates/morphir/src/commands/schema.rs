@@ -1,4 +1,4 @@
-use morphir_ir::ir::v4::IRFile;
+use morphir_core::ir::v4::IRFile;
 use schemars::schema_for;
 use starbase::AppResult;
 use std::path::PathBuf;

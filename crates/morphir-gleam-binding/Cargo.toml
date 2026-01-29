@@ -12,7 +12,7 @@ categories.workspace = true
 description = "Gleam language binding for Morphir - frontend and backend extension"
 
 [package.metadata.coverage]
-threshold = 40  # Minimum line coverage percentage required
+threshold = 40 # Minimum line coverage percentage required
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -33,9 +33,9 @@ logos = "0.16"
 chumsky = "0.12"
 
 # Morphir IR (for visitors)
-morphir-ir = { path = "../morphir-ir" }
-morphir-common = { path = "../morphir-common" }  # For Vfs and pipeline
-indexmap = "2.0"  # Required for V4 IndexMap structures
+morphir-core = { path = "../morphir-core" }
+morphir-common = { path = "../morphir-common" } # For Vfs and pipeline
+indexmap = "2.0"                                # Required for V4 IndexMap structures
 anyhow = "1.0"
 
 # Pretty printing (Wadler-style)

@@ -1,0 +1,43 @@
+package morphir:ext@0.1.0;
+
+interface runtime {
+    use envelope.{envelope};
+
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error
+    }
+
+    variant env-value {
+        text(string),
+        text-list(list<string>),
+        boolean(bool),
+        v-u8(u8),
+        v-u16(u16),
+        v-u32(u32),
+        v-u64(u64),
+        v-s8(s8),
+        v-s16(s16),
+        v-s32(s32),
+        v-s64(s64),
+        v-f32(f32),
+        v-f64(f64)
+    }
+
+    /// Log a message to the host.
+    log: func(level: log-level, msg: string);
+
+    /// Get an environment variable.
+    get-env-var: func(name: string) -> option<env-value>;
+
+    /// Set an environment variable.
+    set-env-var: func(name: string, value: env-value);
+}
+
+world extension {
+    import runtime;
+    export program;
+}

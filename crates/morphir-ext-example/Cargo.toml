@@ -1,0 +1,29 @@
+[package]
+name = "morphir-ext-example"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Core types shared with host
+morphir-ext-core = { path = "../morphir-ext-core" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# WASI bindings
+wit-bindgen = "0.51.0"
+
+[package.metadata.component]
+package = "morphir:ext-example"

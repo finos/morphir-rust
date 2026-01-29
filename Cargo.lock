@@ -1336,6 +1336,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "downcast-rs"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
+
+[[package]]
 name = "duct"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2678,6 +2684,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "kameo"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c42ee4184bdd5866e790df1af2d4167cd5b4844a5e74436ce8a5e1453c698a4"
+dependencies = [
+ "downcast-rs",
+ "dyn-clone",
+ "futures",
+ "kameo_macros",
+ "once_cell",
+ "serde",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "kameo_macros"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d137602d8f93fe9989d925767e1a80595eb8e881e592c110f191767b06b6fe49"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+ "uuid",
+]
+
+[[package]]
 name = "kasuari"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3204,10 +3240,22 @@ dependencies = [
 [[package]]
 name = "morphir-ext"
 version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "kameo",
+ "morphir-ext-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "morphir-ext-core"
 version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_bytes",
+ "serde_json",
+]
 
 [[package]]
 name = "morphir-ext-example"
@@ -4750,6 +4798,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5593,6 +5651,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 

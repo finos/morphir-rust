@@ -70,7 +70,7 @@ pub mod guest {
 /// the pointers must be managed by the caller.
 /// 
 /// The header is serialized to JSON.
-pub fn into_raw_parts(mut envelope: Envelope) -> (Ptr, Len, Ptr, Len, Ptr, Len) {
+pub fn into_raw_parts(envelope: Envelope) -> (Ptr, Len, Ptr, Len, Ptr, Len) {
     let mut hdr = serde_json::to_vec(&envelope.header).unwrap_or_default();
     hdr.shrink_to_fit();
     

@@ -87,14 +87,14 @@ impl Guest for CounterExtension {
         make_json_envelope("subscriptions", &Vec::<String>::new())
     }
     
-    fn info() -> Envelope {
+    fn get_capabilities() -> Envelope {
         let info = serde_json::json!({
             "name": "Counter Extension",
             "version": "0.1.0",
             "description": "A simple counter demonstrating the TEA pattern",
             "author": "Morphir Team"
         });
-        make_json_envelope("info", &info)
+        make_json_envelope("capabilities", &info)
     }
 }
 

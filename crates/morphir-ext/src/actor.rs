@@ -5,7 +5,7 @@ use kameo::message::{Context, Message};
 use anyhow::Result;
 
 use crate::{
-    ExtensionInstance, ExtensionRuntime, 
+    ExtensionInstance,
     WitEnvelope, EnvValue,
 };
 
@@ -63,20 +63,6 @@ impl ExtensionActor {
     pub fn new(instance: ExtensionInstance) -> Self {
         Self { instance }
     }
-    
-    /// Create a new ExtensionActor by loading a component from a file.
-    pub fn from_file(runtime: &ExtensionRuntime, path: impl AsRef<std::path::Path>) -> Result<Self> {
-        let component = runtime.load_component(path)?;
-        let instance = runtime.instantiate(&component)?;
-        Ok(Self::new(instance))
-    }
-    
-    /// Create a new ExtensionActor by loading a component from bytes.
-    pub fn from_bytes(runtime: &ExtensionRuntime, bytes: &[u8]) -> Result<Self> {
-        let component = runtime.load_component_from_bytes(bytes)?;
-        let instance = runtime.instantiate(&component)?;
-        Ok(Self::new(instance))
-    }
 }
 
 // Message handler for Init
@@ -96,7 +82,7 @@ impl Message<InitMsg> for ExtensionActor {
 // Message handler for Update
 impl Message<UpdateMsg> for ExtensionActor {
     type Reply = Result<ModelCommands>;
-    
+
     async fn handle(
         &mut self,
         msg: UpdateMsg,
@@ -110,7 +96,7 @@ impl Message<UpdateMsg> for ExtensionActor {
 // Message handler for Subscriptions
 impl Message<SubscriptionsMsg> for ExtensionActor {
     type Reply = Result<WitEnvelope>;
-    
+
     async fn handle(
         &mut self,
         msg: SubscriptionsMsg,

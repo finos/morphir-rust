@@ -43,6 +43,7 @@ footer_content: >-
   Copyright &copy; 2022-2025 <a href="https://www.finos.org">FINOS</a>.
   Distributed under the <a href="https://github.com/finos/morphir-rust/blob/main/LICENSE">Apache License 2.0</a>.
   <br>Part of the <a href="https://morphir.finos.org">Morphir</a> ecosystem.
+  <br><a href="/morphir-rust/llms.txt">llms.txt</a> · <a href="/morphir-rust/llms-full.txt">llms-full.txt</a>
 
 # Back to top link
 back_to_top: true

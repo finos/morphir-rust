@@ -69,11 +69,23 @@ Then manually in `CHANGELOG.md`:
 3. Clear `[Unreleased]` categories (keep the headers)
 4. Update comparison links at bottom
 
+#### Step 6b: Update documentation
+```bash
+mise run docs:generate   # CLI docs + release notes
+mise run docs:llms-txt   # AI-readable documentation index
+```
+
+This generates:
+- CLI reference documentation from usage spec
+- Release notes from CHANGELOG.md
+- `docs/llms.txt` - compact index for LLMs
+- `docs/llms-full.txt` - complete documentation for LLMs
+
 ### Phase 3: Commit & Tag
 
 #### Step 7: Commit release preparation
 ```bash
-git add Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/
 git commit -m "chore: prepare release v<version>"
 ```
 
@@ -136,7 +148,9 @@ mise run release:pre-release 0.2.0
 mise run release:version-bump 0.2.0
 # Edit CHANGELOG.md manually
 cargo check
-git add Cargo.toml Cargo.lock CHANGELOG.md
+mise run docs:generate    # CLI docs + release notes
+mise run docs:llms-txt    # AI-readable doc index
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/
 git commit -m "chore: prepare release v0.2.0"
 mise run release:tag-create 0.2.0 --push
 # Wait for CI, review draft, publish

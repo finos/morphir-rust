@@ -58,6 +58,15 @@ Morphir Rust is part of the larger Morphir ecosystem:
 - [FINOS Morphir Project](https://morphir.finos.org)
 - [LCR Interactive Demo](https://lcr-interactive.finos.org/) - See Morphir in action
 
+## For AI Agents
+
+This documentation is available in AI-friendly formats:
+
+- [llms.txt](llms.txt) - Compact index with links and descriptions
+- [llms-full.txt](llms-full.txt) - Complete documentation in a single file
+
+These files follow the [llms.txt specification](https://llmstxt.org/) for machine-readable documentation.
+
 ## Contributing
 
 Morphir Rust is part of the [FINOS](https://www.finos.org/) foundation. Contributions are welcome!

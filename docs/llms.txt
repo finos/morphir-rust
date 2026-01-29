@@ -1,0 +1,94 @@
+# Morphir Rust
+
+> Rust-based CLI tools and libraries for the Morphir ecosystem. Morphir enables functional domain modeling where you write business logic once and consume it through visualizations, code generation, type checking, and execution.
+
+Morphir Rust provides tools for working with Morphir IR (Intermediate Representation), including format migration, validation, and code generation. It supports language bindings for Gleam and includes an extension system for adding new languages and targets.
+
+## Getting Started
+
+- [Getting Started](https://finos.github.io/morphir-rust/getting-started): This guide will help you get up and running with Morphir Rust.
+
+## CLI Reference
+
+- [CLI Reference](https://finos.github.io/morphir-rust/cli/): **Usage**: `morphir [--help-all] [-V --version] <SUBCOMMAND>`
+- [morphir self](https://finos.github.io/morphir-rust/cli/self): **Usage**: `morphir self <COMMAND>`
+- [tool](https://finos.github.io/morphir-rust/cli/tool): - **Usage**: `morphir tool <SUBCOMMAND>`
+- [extension](https://finos.github.io/morphir-rust/cli/extension): - **Usage**: `morphir extension <SUBCOMMAND>`
+- [ir](https://finos.github.io/morphir-rust/cli/ir): - **Usage**: `morphir ir <SUBCOMMAND>`
+- [compile](https://finos.github.io/morphir-rust/cli/compile): - **Usage**: `morphir compile [FLAGS]`
+- [generate](https://finos.github.io/morphir-rust/cli/generate): - **Usage**: `morphir generate [FLAGS]`
+- [gleam](https://finos.github.io/morphir-rust/cli/gleam): - **Usage**: `morphir gleam [--json] [--json-lines] <SUBCOMMAND>`
+- [schema](https://finos.github.io/morphir-rust/cli/schema): - **Usage**: `morphir schema [-o --output <OUTPUT>]`
+- [version](https://finos.github.io/morphir-rust/cli/version): - **Usage**: `morphir version [--json]`
+- [dist](https://finos.github.io/morphir-rust/cli/dist): - **Usage**: `morphir dist <SUBCOMMAND>`
+- [dist install](https://finos.github.io/morphir-rust/cli/dist/install): - **Usage**: `morphir dist install [-v --version <VERSION>] <NAME>`
+- [dist list](https://finos.github.io/morphir-rust/cli/dist/list): - **Usage**: `morphir dist list`
+- [dist uninstall](https://finos.github.io/morphir-rust/cli/dist/uninstall): - **Usage**: `morphir dist uninstall <NAME>`
+- [dist update](https://finos.github.io/morphir-rust/cli/dist/update): - **Usage**: `morphir dist update [-v --version <VERSION>] <NAME>`
+- [extension install](https://finos.github.io/morphir-rust/cli/extension/install): - **Usage**: `morphir extension install [-v --version <VERSION>] <NAME>`
+- [extension list](https://finos.github.io/morphir-rust/cli/extension/list): - **Usage**: `morphir extension list`
+- [extension uninstall](https://finos.github.io/morphir-rust/cli/extension/uninstall): - **Usage**: `morphir extension uninstall <NAME>`
+- [extension update](https://finos.github.io/morphir-rust/cli/extension/update): - **Usage**: `morphir extension update [-v --version <VERSION>] <NAME>`
+- [gleam compile](https://finos.github.io/morphir-rust/cli/gleam/compile): - **Usage**: `morphir gleam compile [FLAGS]`
+- [gleam generate](https://finos.github.io/morphir-rust/cli/gleam/generate): - **Usage**: `morphir gleam generate [FLAGS]`
+- [gleam roundtrip](https://finos.github.io/morphir-rust/cli/gleam/roundtrip): - **Usage**: `morphir gleam roundtrip [FLAGS]`
+- [ir migrate](https://finos.github.io/morphir-rust/cli/ir/migrate): - **Usage**: `morphir ir migrate [FLAGS] <INPUT>`
+- [tool install](https://finos.github.io/morphir-rust/cli/tool/install): - **Usage**: `morphir tool install [-v --version <VERSION>] <NAME>`
+- [tool list](https://finos.github.io/morphir-rust/cli/tool/list): - **Usage**: `morphir tool list`
+- [tool uninstall](https://finos.github.io/morphir-rust/cli/tool/uninstall): - **Usage**: `morphir tool uninstall <NAME>`
+- [tool update](https://finos.github.io/morphir-rust/cli/tool/update): - **Usage**: `morphir tool update [-v --version <VERSION>] <NAME>`
+
+## Tutorials
+
+- [Getting Started Tutorial](https://finos.github.io/morphir-rust/tutorials/getting-started-tutorial): This tutorial will walk you through setting up your first Morphir project and using the CLI to compile and generate code.
+- [Gleam Language Binding Tutorial](https://finos.github.io/morphir-rust/tutorials/gleam-tutorial): This tutorial covers using Morphir with Gleam, including compilation, code generation, and roundtrip testing.
+- [Configuration Guide](https://finos.github.io/morphir-rust/tutorials/configuration-guide): Morphir uses `morphir.toml` (or `morphir.json`) for project and workspace configuration.
+- [Complete Workflow](https://finos.github.io/morphir-rust/tutorials/complete-workflow): This guide walks through a complete end-to-end workflow using Morphir with Gleam.
+- [Tutorials](https://finos.github.io/morphir-rust/tutorials/): Step-by-step guides for using Morphir Rust.
+- [Extension Development Tutorial](https://finos.github.io/morphir-rust/tutorials/extension-tutorial): Learn how to create Morphir extensions for new languages or targets.
+
+## For Contributors
+
+- [Architecture Overview](https://finos.github.io/morphir-rust/contributors/architecture): This document provides an overview of the Morphir Rust architecture.
+- [Morphir Daemon](https://finos.github.io/morphir-rust/contributors/design/daemon/README): The Morphir Daemon is a long-running service that manages workspaces, projects, builds, and provides IDE integration.
+- [Morphir Extensions](https://finos.github.io/morphir-rust/contributors/design/extensions/README): The extension architecture for adding capabilities to Morphir via WASM components and the task system.
+- [Extension System Design](https://finos.github.io/morphir-rust/contributors/extension-system): This document describes the Morphir extension system, including current implementation and future vision.
+- [CLI Architecture](https://finos.github.io/morphir-rust/contributors/cli-architecture): This document describes the architecture of the Morphir CLI, including command structure, configuration handling, and extension integration.
+- [Design-Time Crate](https://finos.github.io/morphir-rust/contributors/design-time-crate): The `morphir-design` crate provides reusable design-time tooling that can be used by the CLI, IDEs, build tools, and other Morphir tooling.
+- [Design Documents](https://finos.github.io/morphir-rust/contributors/design/README): This directory contains design documents for the Morphir daemon and extension system, covering architecture, protocols, and implementation details.
+- [Development Guide](https://finos.github.io/morphir-rust/contributors/development): This guide helps developers contribute to Morphir Rust.
+- [For Contributors](https://finos.github.io/morphir-rust/contributors/): Documentation for developers contributing to Morphir Rust.
+- [Extension Development Reference](https://finos.github.io/morphir-rust/extensions/DEVELOPMENT): This guide describes how to develop Morphir extensions using various programming languages. Morphir extensions are WebAssembly (Wasm) components that follow the The Elm Architecture (TEA) pattern.
+
+## Optional
+
+- [Morphir Extension System Design Documents](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/README): This directory contains the complete design documentation for the Morphir Extension System, an actor-based, multi-protocol architecture for extending Morphir functionality.
+- [Morphir Extension System - Overview](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/00-overview): **Status:** Draft **Version:** 0.1.0 **Last Updated:** 2025-01-23
+- [Tasks](https://finos.github.io/morphir-rust/contributors/design/extensions/tasks): This document defines the task system for Morphir, modeled after [mise tasks](https://mise.jdx.dev/tasks/).
+- [Workspace Lifecycle](https://finos.github.io/morphir-rust/contributors/design/daemon/lifecycle): This document defines the lifecycle operations for Morphir workspaces: creation, opening, closing, and configuration management.
+- [Installation](https://finos.github.io/morphir-rust/install): There are several ways to install the Morphir CLI.
+- [Morphir Extension System - Architecture](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/01-architecture): **Status:** Draft **Version:** 0.1.0
+- [Project Management](https://finos.github.io/morphir-rust/contributors/design/daemon/projects): This document defines operations for managing projects within a Morphir workspace.
+- [WASM Component Model](https://finos.github.io/morphir-rust/contributors/design/extensions/wasm-component): This document defines WIT (WebAssembly Interface Types) interfaces for implementing Morphir backends and extensions as portable, sandboxed WASM components.
+- [Dependency Management](https://finos.github.io/morphir-rust/contributors/design/daemon/dependencies): This document defines dependency resolution and management for Morphir workspaces.
+- [Extension Host Interface](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/02-extension-host-interface): **Status:** Draft **Version:** 0.1.0
+- [File Watching](https://finos.github.io/morphir-rust/contributors/design/daemon/watching): This document defines the file watching system for Morphir workspaces, enabling automatic recompilation on source changes.
+- [JSON-RPC Extension Host](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/03-jsonrpc-host): **Status:** Draft **Version:** 0.1.0
+- [Build Operations](https://finos.github.io/morphir-rust/contributors/design/daemon/build): This document defines build orchestration, cleaning, and diagnostic operations for Morphir workspaces.
+- [gRPC Extension Host](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/04-grpc-host): **Status:** Draft **Version:** 0.1.0
+- [Package Management](https://finos.github.io/morphir-rust/contributors/design/daemon/packages): This document defines the package format, registry backends, and publishing workflow for Morphir packages.
+- [Release Notes](https://finos.github.io/morphir-rust/releases): All notable changes to Morphir Rust are documented here. This project follows [Semantic Versioning](https://semver.org/).
+- [Stdio Extension Host](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/05-stdio-host): **Status:** Draft **Version:** 0.1.0
+- [Configuration System](https://finos.github.io/morphir-rust/contributors/design/daemon/configuration): This module describes the Morphir configuration system design, covering project configuration, workspace configuration, and the merge/resolution rules.
+- [Extism WASM Extension Host](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/06-extism-wasm-host): **Status:** Draft **Version:** 0.1.0
+- [WASM Component Model Extension Host](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/07-wasm-component-host): **Status:** Draft **Version:** 0.1.0
+- [Workspace Mode Configuration](https://finos.github.io/morphir-rust/contributors/design/daemon/workspace-config): This document describes workspace-specific configuration in `morphir.toml`.
+- [Extension Manager](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/08-extension-manager): **Status:** Draft **Version:** 0.1.0
+- [morphir.toml Specification](https://finos.github.io/morphir-rust/contributors/design/daemon/morphir-toml): This document provides the complete specification for the `morphir.toml` configuration file format.
+- [Configuration Merge Rules](https://finos.github.io/morphir-rust/contributors/design/daemon/merge-rules): This document specifies how configuration from multiple sources is merged and resolved.
+- [Security and Isolation](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/09-security-and-isolation): **Status:** Draft **Version:** 0.1.0
+- [Environment Variables](https://finos.github.io/morphir-rust/contributors/design/daemon/environment): This document specifies all environment variables recognized by Morphir.
+- [Protocol Specifications](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/10-protocol-specifications): **Status:** Draft **Version:** 0.1.0
+- [Wasm Extension Architecture (Interactive Session)](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/12-wasm-extension-architecture-session): **Status:** Draft **Version:** 0.3.0 **Last Updated:** 2026-01-29
+- [CLI-Daemon Interaction](https://finos.github.io/morphir-rust/contributors/design/daemon/cli-interaction): This document defines how the Morphir CLI communicates with the Morphir Daemon, including connection modes, transport protocols, and lifecycle management.
+- [Examples and Recipes](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/11-examples-and-recipes): **Status:** Draft **Version:** 0.1.0

@@ -27,7 +27,7 @@ if command -v usage >/dev/null 2>&1; then
 ---
 layout: default
 title: CLI Reference
-nav_order: 4
+nav_order: 5
 has_children: true
 permalink: /cli/
 ---
@@ -37,7 +37,8 @@ FRONTMATTER
     fi
 
     # Process subcommand pages
-    for cmd in ir schema version tool dist extension; do
+    # Note: 'self' is excluded as it has manually-maintained documentation
+    for cmd in compile generate gleam ir schema version tool dist extension; do
         if [ -f "docs/cli/${cmd}.md" ]; then
             CONTENT=$(cat "docs/cli/${cmd}.md")
 

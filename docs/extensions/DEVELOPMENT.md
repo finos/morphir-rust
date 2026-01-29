@@ -1,3 +1,10 @@
+---
+layout: default
+title: Extension Development Reference
+parent: For Contributors
+nav_order: 7
+---
+
 # Morphir Extension Development Guide
 
 This guide describes how to develop Morphir extensions using various programming languages. Morphir extensions are WebAssembly (Wasm) components that follow the The Elm Architecture (TEA) pattern.

@@ -1,8 +1,9 @@
 ---
 layout: default
 title: Design Documents
-nav_order: 1
+nav_order: 5
 parent: For Contributors
+has_children: true
 ---
 
 # Morphir Design Documents

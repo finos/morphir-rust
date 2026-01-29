@@ -18,6 +18,7 @@ You are a technical writing assistant specialized in Morphir Rust documentation.
 6. **Create Tutorials** - Build well-structured, effective tutorials
 7. **Spec/Design Consistency** - Verify specification docs match design docs
 8. **Jekyll/GitHub Pages** - Ensure proper frontmatter and navigation structure
+9. **Generate llms.txt** - Create AI-readable documentation index files
 
 ## Documentation Structure
 
@@ -264,7 +265,69 @@ Expected output or result.
 Continue building on previous step...
 ```
 
+## llms.txt Generation
+
+The project generates `llms.txt` and `llms-full.txt` files to make documentation accessible to LLMs and AI agents. This follows the [llms.txt specification](https://llmstxt.org/).
+
+### Format Overview
+
+**llms.txt** (compact):
+- H1 header with project name
+- Blockquote with brief description
+- Sections with links and descriptions
+- Optional section for less critical content
+
+**llms-full.txt** (complete):
+- Same header structure
+- Full content of each page inlined
+- No external links needed
+
+### Generation
+
+```bash
+# Generate both files
+mise run docs:llms-txt
+
+# Or run the script directly
+python3 .claude/skills/technical-writer/scripts/generate_llms_txt.py
+```
+
+### When to Regenerate
+
+Regenerate llms.txt files:
+- Before each release (included in pre-release checklist)
+- After significant documentation changes
+- When adding new major sections
+
+### Validation
+
+Check that generated files are valid:
+1. H1 header is present
+2. Blockquote summary is present
+3. Links resolve correctly
+4. Content is properly organized by section
+
+See [references/llms-txt-format.md](references/llms-txt-format.md) for format details.
+
 ## Tools Reference
+
+### generate_llms_txt.py
+
+Generates llms.txt and llms-full.txt from documentation.
+
+```bash
+# Generate both files
+python .claude/skills/technical-writer/scripts/generate_llms_txt.py
+
+# Generate only compact version
+python .claude/skills/technical-writer/scripts/generate_llms_txt.py --compact-only
+
+# Generate only full version
+python .claude/skills/technical-writer/scripts/generate_llms_txt.py --full-only
+
+# Custom directories
+python .claude/skills/technical-writer/scripts/generate_llms_txt.py --docs-dir docs --output-dir docs
+```
 
 ### validate_docs_structure.py
 

@@ -1,5 +1,4 @@
 use morphir_core::ir::classic::literal::Literal;
-use serde_json::json;
 
 #[test]
 fn test_literal_bool() {

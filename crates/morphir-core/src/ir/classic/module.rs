@@ -2,7 +2,7 @@
 //!
 //! Module structures for the Classic Morphir IR format.
 
-use serde::de::{self, SeqAccess, Visitor};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -44,7 +44,7 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Modul
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
 
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
+                if let Some(IgnoredAny) = seq.next_element()? {
                     return Err(de::Error::custom("Expected end of ModuleEntry array"));
                 }
 
@@ -57,14 +57,20 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Modul
 }
 
 /// Module specification (public interface only)
+pub type ModuleTypeSpecification<A> = (Name, Documented<super::types::TypeSpecification<A>>);
+pub type ModuleValueSpecification<A> = (Name, Documented<super::value::ValueSpecification<A>>);
+pub type ModuleTypeDefinition<A> = (Name, AccessControlled<Documented<TypeDefinition<A>>>);
+pub type ModuleValueDefinition<TA, VA> =
+    (Name, AccessControlled<Documented<ValueDefinition<TA, VA>>>);
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(deserialize = "A: Deserialize<'de>"))]
 pub struct ModuleSpecification<A> {
     #[serde(default)]
-    pub types: Vec<(Name, Documented<super::types::TypeSpecification<A>>)>,
+    pub types: Vec<ModuleTypeSpecification<A>>,
     #[serde(default)]
-    pub values: Vec<(Name, Documented<super::value::ValueSpecification<A>>)>,
+    pub values: Vec<ModuleValueSpecification<A>>,
     pub doc: Option<String>,
 }
 
@@ -74,16 +80,8 @@ pub struct ModuleSpecification<A> {
 #[serde(bound(deserialize = "TA: Deserialize<'de>, VA: Deserialize<'de>"))]
 pub struct ModuleDefinition<TA, VA> {
     #[serde(default)]
-    pub types: Vec<(
-        Name,
-        AccessControlled<Documented<TypeDefinition<TA>>>,
-    )>,
+    pub types: Vec<ModuleTypeDefinition<TA>>,
     #[serde(default)]
-    pub values: Vec<(
-        Name,
-        AccessControlled<Documented<ValueDefinition<TA, VA>>>,
-    )>,
+    pub values: Vec<ModuleValueDefinition<TA, VA>>,
     pub doc: Option<String>,
 }
-
-

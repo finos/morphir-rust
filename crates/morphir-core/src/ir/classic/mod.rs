@@ -7,6 +7,7 @@
 
 // Core types
 pub mod access;
+pub mod attributes;
 pub mod documented;
 pub mod literal;
 pub mod naming;
@@ -21,6 +22,7 @@ pub mod package;
 
 // Re-exports for convenience
 pub use access::{Access, AccessControlled};
+pub use attributes::Attributes;
 pub use distribution::{Distribution, DistributionBody, LibraryTag};
 pub use documented::Documented;
 pub use literal::Literal;
@@ -30,5 +32,3 @@ pub use package::{Package, PackageDefinition, PackageSpecification};
 pub use pattern::Pattern;
 pub use types::{Constructor, Field, Type, TypeDefinition, TypeSpecification};
 pub use value::{Definition, Value, ValueDefinition, ValueSpecification};
-
-

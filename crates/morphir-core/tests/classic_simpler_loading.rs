@@ -1,15 +1,16 @@
 use morphir_core::ir::classic::literal::Literal;
-use morphir_core::ir::classic::naming::{Name, Path, FQName};
+use morphir_core::ir::classic::naming::Name;
 use morphir_core::ir::classic::types::Type;
 use morphir_core::ir::classic::value::Value;
 use morphir_core::ir::classic::pattern::Pattern;
+use morphir_core::intern;
 use serde_json::json;
 
 #[test]
 fn test_simpler_name_loading() {
     let json = json!(["foo","bar"]);
     let name: Name = serde_json::from_value(json).expect("Failed to parse Name");
-    assert_eq!(name.words, vec!["foo", "bar"]);
+    assert_eq!(name.words, vec![intern("foo"), intern("bar")]);
 }
 
 #[test]

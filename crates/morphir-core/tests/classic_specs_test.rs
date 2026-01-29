@@ -1,24 +1,23 @@
-use morphir_core::ir::classic::types::{TypeSpecification, Type};
 use morphir_core::ir::classic::naming::Name;
-use serde_json::json;
-use std::str::FromStr;
+use morphir_core::ir::classic::types::{Type, TypeSpecification};
 
 #[test]
 fn test_type_alias_specification() {
     // ["TypeAliasSpecification", type_params, type_exp]
     let json = r#"["TypeAliasSpecification", [["a"]], ["Variable", null, ["a"]]]"#;
-    let spec: TypeSpecification<()> = serde_json::from_str(json).expect("Failed to parse TypeAliasSpecification");
-    
+    let spec: TypeSpecification<()> =
+        serde_json::from_str(json).expect("Failed to parse TypeAliasSpecification");
+
     match spec {
-        TypeSpecification::TypeAliasSpecification(params, tpe) => {
+        TypeSpecification::Alias(params, ty) => {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0], Name::from_str("a"));
-            match tpe {
-                 Type::Variable(_, name) => assert_eq!(name, Name::from_str("a")),
-                 _ => panic!("Expected Variable type"),
+            match ty {
+                Type::Variable(_, name) => assert_eq!(name, Name::from_str("a")),
+                _ => panic!("Expected Variable type"),
             }
         }
-        _ => panic!("Expected TypeAliasSpecification"),
+        _ => panic!("Expected Alias specification"),
     }
 }
 
@@ -26,13 +25,14 @@ fn test_type_alias_specification() {
 fn test_opaque_type_specification() {
     // ["OpaqueTypeSpecification", type_params]
     let json = r#"["OpaqueTypeSpecification", [["a"], ["b"]]]"#;
-    let spec: TypeSpecification<()> = serde_json::from_str(json).expect("Failed to parse OpaqueTypeSpecification");
-    
+    let spec: TypeSpecification<()> =
+        serde_json::from_str(json).expect("Failed to parse OpaqueTypeSpecification");
+
     match spec {
-        TypeSpecification::OpaqueTypeSpecification(params) => {
+        TypeSpecification::Opaque(params) => {
             assert_eq!(params.len(), 2);
             assert_eq!(params[0], Name::from_str("a"));
         }
-        _ => panic!("Expected OpaqueTypeSpecification"),
+        _ => panic!("Expected Opaque specification"),
     }
 }

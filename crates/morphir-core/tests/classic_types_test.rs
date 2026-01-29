@@ -1,6 +1,5 @@
-use morphir_core::ir::classic::types::{Type, Field};
-use morphir_core::ir::classic::naming::{Name, FQName, Path}; // Correct types for classic
-use std::str::FromStr;
+use morphir_core::ir::classic::types::Type;
+use morphir_core::ir::classic::naming::Name;
 
 #[test]
 fn test_type_variable() {

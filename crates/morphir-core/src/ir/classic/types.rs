@@ -3,9 +3,10 @@
 //! Type definitions for the Classic Morphir IR format (V1-V3 compatible).
 
 use super::naming::{FQName, Name};
-use serde::de::{self, SeqAccess, Visitor};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
 use std::fmt;
 
 use super::access::AccessControlled;
@@ -105,13 +106,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
             where
                 V: SeqAccess<'de>,
             {
-                let tag: String = seq
+                let tag: Cow<'de, str> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                
-                // eprintln!("DEBUG: Type tag: {}", tag);
 
-                match tag.as_str() {
+                match tag.as_ref() {
                     "ExtensibleRecord" | "extensible_record" => {
                         let a = seq
                             .next_element()?
@@ -123,8 +122,10 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of ExtensibleRecord array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of ExtensibleRecord array",
+                            ));
                         }
 
                         Ok(Type::ExtensibleRecord(a, name, fields))
@@ -140,8 +141,8 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of Function array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Function array"));
                         }
 
                         Ok(Type::Function(a, arg, ret))
@@ -153,12 +154,12 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                         let fields = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        
+
                         // Consume closing bracket
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of Record array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Record array"));
                         }
-                        
+
                         Ok(Type::Record(a, fields))
                     }
                     "Reference" | "reference" => {
@@ -171,10 +172,10 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                         let args = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        
+
                         // Consume closing bracket
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of Reference array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Reference array"));
                         }
 
                         Ok(Type::Reference(a, name, args))
@@ -187,8 +188,8 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of Tuple array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Tuple array"));
                         }
 
                         Ok(Type::Tuple(a, elements))
@@ -197,9 +198,9 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                         let a = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        
-                         if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of Unit array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Unit array"));
                         }
 
                         Ok(Type::Unit(a))
@@ -211,16 +212,16 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
                         let name = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        
+
                         // Consume closing bracket
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of Variable array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Variable array"));
                         }
 
                         Ok(Type::Variable(a, name))
                     }
                     _ => Err(de::Error::unknown_variant(
-                        &tag,
+                        tag.as_ref(),
                         &[
                             "ExtensibleRecord",
                             "Function",
@@ -247,7 +248,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field<A> {
     pub name: Name,
-    pub tpe: Type<A>,
+    pub ty: Type<A>,
 }
 
 impl<A: Serialize> Serialize for Field<A> {
@@ -257,7 +258,7 @@ impl<A: Serialize> Serialize for Field<A> {
     {
         let mut tuple = serializer.serialize_tuple(2)?;
         tuple.serialize_element(&self.name)?;
-        tuple.serialize_element(&self.tpe)?;
+        tuple.serialize_element(&self.ty)?;
         tuple.end()
     }
 }
@@ -277,19 +278,18 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
             where
                 V: SeqAccess<'de>,
             {
-
                 let name = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let tpe = seq
+                let ty = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                     return Err(de::Error::custom("Expected end of Field array"));
+
+                if seq.next_element::<IgnoredAny>()?.is_some() {
+                    return Err(de::Error::custom("Expected end of Field array"));
                 }
 
-                Ok(Field { name, tpe })
+                Ok(Field { name, ty })
             }
 
             fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
@@ -297,7 +297,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
                 V: de::MapAccess<'de>,
             {
                 let mut name = None;
-                let mut tpe = None;
+                let mut ty = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "name" => {
@@ -306,11 +306,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
                             }
                             name = Some(map.next_value()?);
                         }
-                        "tpe" => {
-                            if tpe.is_some() {
-                                return Err(de::Error::duplicate_field("tpe"));
+                        "tpe" | "ty" | "type" => {
+                            if ty.is_some() {
+                                return Err(de::Error::duplicate_field("ty"));
                             }
-                            tpe = Some(map.next_value()?);
+                            ty = Some(map.next_value()?);
                         }
                         _ => {
                             let _ = map.next_value::<de::IgnoredAny>()?;
@@ -318,8 +318,8 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
                     }
                 }
                 let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
-                let tpe = tpe.ok_or_else(|| de::Error::missing_field("tpe"))?;
-                Ok(Field { name, tpe })
+                let ty = ty.ok_or_else(|| de::Error::missing_field("ty"))?;
+                Ok(Field { name, ty })
             }
         }
         deserializer.deserialize_any(FieldVisitor(std::marker::PhantomData))
@@ -333,9 +333,9 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
 /// Type specification (opaque, alias, or custom)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeSpecification<A> {
-    TypeAliasSpecification(Vec<Name>, Type<A>),
-    OpaqueTypeSpecification(Vec<Name>),
-    CustomTypeSpecification(Vec<Name>, Vec<Constructor<A>>),
+    Alias(Vec<Name>, Type<A>),
+    Opaque(Vec<Name>),
+    Custom(Vec<Name>, Vec<Constructor<A>>),
 }
 
 impl<A: Serialize> Serialize for TypeSpecification<A> {
@@ -344,20 +344,20 @@ impl<A: Serialize> Serialize for TypeSpecification<A> {
         S: Serializer,
     {
         match self {
-            TypeSpecification::TypeAliasSpecification(params, tpe) => {
+            TypeSpecification::Alias(params, ty) => {
                 let mut tuple = serializer.serialize_tuple(3)?;
                 tuple.serialize_element("TypeAliasSpecification")?;
                 tuple.serialize_element(params)?;
-                tuple.serialize_element(tpe)?;
+                tuple.serialize_element(ty)?;
                 tuple.end()
             }
-            TypeSpecification::OpaqueTypeSpecification(params) => {
+            TypeSpecification::Opaque(params) => {
                 let mut tuple = serializer.serialize_tuple(2)?;
                 tuple.serialize_element("OpaqueTypeSpecification")?;
                 tuple.serialize_element(params)?;
                 tuple.end()
             }
-            TypeSpecification::CustomTypeSpecification(params, ctors) => {
+            TypeSpecification::Custom(params, ctors) => {
                 let mut tuple = serializer.serialize_tuple(3)?;
                 tuple.serialize_element("CustomTypeSpecification")?;
                 tuple.serialize_element(params)?;
@@ -391,26 +391,30 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for TypeSpecification<A> {
                         let params = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let tpe = seq
+                        let ty = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of TypeAliasSpecification array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of TypeAliasSpecification array",
+                            ));
                         }
 
-                        Ok(TypeSpecification::TypeAliasSpecification(params, tpe))
+                        Ok(TypeSpecification::Alias(params, ty))
                     }
                     "OpaqueTypeSpecification" | "opaque_type_specification" => {
                         let params = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of OpaqueTypeSpecification array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of OpaqueTypeSpecification array",
+                            ));
                         }
 
-                        Ok(TypeSpecification::OpaqueTypeSpecification(params))
+                        Ok(TypeSpecification::Opaque(params))
                     }
                     "CustomTypeSpecification" | "custom_type_specification" => {
                         let params = seq
@@ -419,12 +423,14 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for TypeSpecification<A> {
                         let ctors = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of CustomTypeSpecification array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of CustomTypeSpecification array",
+                            ));
                         }
 
-                        Ok(TypeSpecification::CustomTypeSpecification(params, ctors))
+                        Ok(TypeSpecification::Custom(params, ctors))
                     }
                     _ => Err(de::Error::unknown_variant(
                         &tag,
@@ -485,9 +491,9 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Constructor<A> {
                 let args = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                     return Err(de::Error::custom("Expected end of Constructor array"));
+
+                if seq.next_element::<IgnoredAny>()?.is_some() {
+                    return Err(de::Error::custom("Expected end of Constructor array"));
                 }
 
                 Ok(Constructor { name, args })
@@ -504,8 +510,8 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Constructor<A> {
 /// Type definition (alias or custom)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDefinition<A> {
-    TypeAliasDefinition(Vec<Name>, Type<A>),
-    CustomTypeDefinition(Vec<Name>, AccessControlled<Vec<Constructor<A>>>),
+    Alias(Vec<Name>, Type<A>),
+    Custom(Vec<Name>, AccessControlled<Vec<Constructor<A>>>),
 }
 
 impl<A: Serialize> Serialize for TypeDefinition<A> {
@@ -514,14 +520,14 @@ impl<A: Serialize> Serialize for TypeDefinition<A> {
         S: Serializer,
     {
         match self {
-            TypeDefinition::TypeAliasDefinition(params, tpe) => {
+            TypeDefinition::Alias(params, ty) => {
                 let mut tuple = serializer.serialize_tuple(3)?;
                 tuple.serialize_element("TypeAliasDefinition")?;
                 tuple.serialize_element(params)?;
-                tuple.serialize_element(tpe)?;
+                tuple.serialize_element(ty)?;
                 tuple.end()
             }
-            TypeDefinition::CustomTypeDefinition(params, ctors) => {
+            TypeDefinition::Custom(params, ctors) => {
                 let mut tuple = serializer.serialize_tuple(3)?;
                 tuple.serialize_element("CustomTypeDefinition")?;
                 tuple.serialize_element(params)?;
@@ -555,15 +561,17 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for TypeDefinition<A> {
                         let params = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let tpe = seq
+                        let ty = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of TypeAliasDefinition array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of TypeAliasDefinition array",
+                            ));
                         }
 
-                        Ok(TypeDefinition::TypeAliasDefinition(params, tpe))
+                        Ok(TypeDefinition::Alias(params, ty))
                     }
                     "CustomTypeDefinition" | "custom_type_definition" => {
                         let params = seq
@@ -573,11 +581,13 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for TypeDefinition<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of CustomTypeDefinition array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of CustomTypeDefinition array",
+                            ));
                         }
 
-                        Ok(TypeDefinition::CustomTypeDefinition(params, ctors))
+                        Ok(TypeDefinition::Custom(params, ctors))
                     }
                     _ => Err(de::Error::unknown_variant(
                         &tag,
@@ -593,12 +603,92 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for TypeDefinition<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::classic::naming::Path;
 
     #[test]
-    fn test_serialize_type() {
+    fn test_serialize_type_variable() {
         let t: Type<()> = Type::Variable((), Name::from_str("a"));
         let json = serde_json::to_string(&t).unwrap();
-        // Name serializes as an array of lowercase words in Classic IR
         assert_eq!(json, r#"["Variable",null,["a"]]"#);
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
+    }
+
+    #[test]
+    fn test_serialize_type_unit() {
+        let t: Type<()> = Type::Unit(());
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(json, r#"["Unit",null]"#);
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
+    }
+
+    #[test]
+    fn test_serialize_type_tuple() {
+        let t: Type<()> = Type::Tuple((), vec![Type::Unit(()), Type::Unit(())]);
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(json, r#"["Tuple",null,[["Unit",null],["Unit",null]]]"#);
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
+    }
+
+    #[test]
+    fn test_serialize_type_function() {
+        let t: Type<()> = Type::Function((), Box::new(Type::Unit(())), Box::new(Type::Unit(())));
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(json, r#"["Function",null,["Unit",null],["Unit",null]]"#);
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
+    }
+
+    #[test]
+    fn test_serialize_type_record() {
+        let t: Type<()> = Type::Record(
+            (),
+            vec![Field {
+                name: Name::from_str("x"),
+                ty: Type::Unit(()),
+            }],
+        );
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(json, r#"["Record",null,[[["x"],["Unit",null]]]]"#);
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
+    }
+
+    #[test]
+    fn test_serialize_type_reference() {
+        let fq = FQName::new(
+            Path::new(vec![Name::from_str("pkg")]),
+            Path::new(vec![Name::from_str("mod")]),
+            Name::from_str("ref"),
+        );
+        let t: Type<()> = Type::Reference((), fq, vec![Type::Unit(())]);
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(
+            json,
+            r#"["Reference",null,[[["pkg"]],[["mod"]],["ref"]],[["Unit",null]]]"#
+        );
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
+    }
+
+    #[test]
+    fn test_serialize_type_extensible_record() {
+        let t: Type<()> = Type::ExtensibleRecord(
+            (),
+            Name::from_str("r"),
+            vec![Field {
+                name: Name::from_str("x"),
+                ty: Type::Unit(()),
+            }],
+        );
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(
+            json,
+            r#"["ExtensibleRecord",null,["r"],[[["x"],["Unit",null]]]]"#
+        );
+        let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, t);
     }
 }

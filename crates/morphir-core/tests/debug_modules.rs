@@ -51,7 +51,7 @@ fn test_debug_reference_model_modules() {
                     let col = e.column(); // Note: for from_value, this is often 0
                     eprintln!("   Error at column: {}", col);
                     if col > 0 && col <= json_str.len() {
-                         let start = if col > 50 { col - 50 } else { 0 };
+                         let start = col.saturating_sub(50);
                          let end = if col + 50 < json_str.len() { col + 50 } else { json_str.len() };
                          eprintln!("   Context: ...{}...", &json_str[start..end]);
                     } else if col == 0 && json_str.len() > 100 {

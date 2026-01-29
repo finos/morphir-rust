@@ -3,9 +3,10 @@
 //! Value expressions for the Classic Morphir IR format (V1-V3 compatible).
 
 use super::naming::{FQName, Name};
-use serde::de::{self, SeqAccess, Visitor};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
 use std::fmt;
 
 use super::literal::Literal;
@@ -209,122 +210,246 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Value
             where
                 V: SeqAccess<'de>,
             {
-                let tag: String = seq
+                let tag: Cow<'de, str> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                match tag.as_str() {
+                match tag.as_ref() {
                     "Apply" | "apply" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let func = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let arg = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Apply array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let func = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let arg = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Apply array"));
+                        }
                         Ok(Value::Apply(va, func, arg))
                     }
                     "Constructor" | "constructor" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Constructor array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let name = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Constructor array"));
+                        }
                         Ok(Value::Constructor(va, name))
                     }
                     "Destructure" | "destructure" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let pattern = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let value = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        let in_expr = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Destructure array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let pattern = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let value = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        let in_expr = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Destructure array"));
+                        }
                         Ok(Value::Destructure(va, pattern, value, in_expr))
                     }
                     "Field" | "field" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let record = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Field array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let record = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let name = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Field array"));
+                        }
                         Ok(Value::Field(va, record, name))
                     }
                     "FieldFunction" | "field_function" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of FieldFunction array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let name = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of FieldFunction array"));
+                        }
                         Ok(Value::FieldFunction(va, name))
                     }
                     "IfThenElse" | "if_then_else" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let cond = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let then_branch = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        let else_branch = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of IfThenElse array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let cond = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let then_branch = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        let else_branch = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of IfThenElse array"));
+                        }
                         Ok(Value::IfThenElse(va, cond, then_branch, else_branch))
                     }
                     "Lambda" | "lambda" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let pattern = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let body = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Lambda array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let pattern = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let body = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Lambda array"));
+                        }
                         Ok(Value::Lambda(va, pattern, body))
                     }
                     "LetDefinition" | "let_definition" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let def = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        let in_expr = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of LetDefinition array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let name = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let def = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        let in_expr = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of LetDefinition array"));
+                        }
                         Ok(Value::LetDefinition(va, name, def, in_expr))
                     }
                     "LetRecursion" | "let_recursion" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let defs = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let in_expr = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of LetRecursion array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let defs = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let in_expr = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of LetRecursion array"));
+                        }
                         Ok(Value::LetRecursion(va, defs, in_expr))
                     }
                     "List" | "list" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let elements = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of List array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let elements = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of List array"));
+                        }
                         Ok(Value::List(va, elements))
                     }
                     "Literal" | "literal" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let lit = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Literal array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let lit = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Literal array"));
+                        }
                         Ok(Value::Literal(va, lit))
                     }
                     "PatternMatch" | "pattern_match" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let expr = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let cases = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of PatternMatch array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let expr = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let cases = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of PatternMatch array"));
+                        }
                         Ok(Value::PatternMatch(va, expr, cases))
                     }
                     "Record" | "record" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let fields = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Record array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let fields = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Record array"));
+                        }
                         Ok(Value::Record(va, fields))
                     }
                     "Tuple" | "tuple" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let elements = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Tuple array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let elements = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Tuple array"));
+                        }
                         Ok(Value::Tuple(va, elements))
                     }
                     "Unit" | "unit" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Unit array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Unit array"));
+                        }
                         Ok(Value::Unit(va))
                     }
                     "Update" | "update" | "UpdateRecord" | "update_record" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let record = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let fields = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Update array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let record = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let fields = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Update array"));
+                        }
                         Ok(Value::Update(va, record, fields))
                     }
                     "Variable" | "variable" => {
-                        let va = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Variable array")); }
+                        let va = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let name = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Variable array"));
+                        }
                         Ok(Value::Variable(va, name))
                     }
                     "Reference" | "reference" => {
@@ -334,14 +459,34 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Value
                         let name = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? { return Err(de::Error::custom("Expected end of Reference array")); }
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of Reference array"));
+                        }
                         Ok(Value::Reference(va, name))
                     }
-                    _ => Err(de::Error::unknown_variant(&tag, &[
-                        "Apply", "Constructor", "Destructure", "Field", "FieldFunction",
-                        "IfThenElse", "Lambda", "LetDefinition", "LetRecursion", "List",
-                        "Literal", "PatternMatch", "Record", "Tuple", "Unit", "Update", "Variable", "Reference",
-                    ])),
+                    _ => Err(de::Error::unknown_variant(
+                        &tag,
+                        &[
+                            "Apply",
+                            "Constructor",
+                            "Destructure",
+                            "Field",
+                            "FieldFunction",
+                            "IfThenElse",
+                            "Lambda",
+                            "LetDefinition",
+                            "LetRecursion",
+                            "List",
+                            "Literal",
+                            "PatternMatch",
+                            "Record",
+                            "Tuple",
+                            "Unit",
+                            "Update",
+                            "Variable",
+                            "Reference",
+                        ],
+                    )),
                 }
             }
         }
@@ -357,7 +502,7 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Value
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValueParameter<A> {
     pub name: Name,
-    pub tpe: Type<A>,
+    pub ty: Type<A>,
 }
 
 impl<'de, A: Deserialize<'de>> Deserialize<'de> for ValueParameter<A> {
@@ -375,12 +520,16 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for ValueParameter<A> {
             where
                 V: SeqAccess<'de>,
             {
-                let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let tpe = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let ty = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                if let Some(IgnoredAny) = seq.next_element()? {
                     return Err(de::Error::custom("Expected end of ValueParameter array"));
                 }
-                Ok(ValueParameter { name, tpe })
+                Ok(ValueParameter { name, ty })
             }
         }
         deserializer.deserialize_seq(VPVisitor(std::marker::PhantomData))
@@ -392,7 +541,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for ValueParameter<A> {
 pub struct ValueArgument<TA, VA> {
     pub name: Name,
     pub annotation: VA,
-    pub tpe: Type<TA>,
+    pub ty: Type<TA>,
 }
 
 impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for ValueArgument<TA, VA> {
@@ -410,13 +559,23 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Value
             where
                 V: SeqAccess<'de>,
             {
-                let name = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let annotation = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let tpe = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let annotation = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let ty = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                if let Some(IgnoredAny) = seq.next_element()? {
                     return Err(de::Error::custom("Expected end of ValueArgument array"));
                 }
-                Ok(ValueArgument { name, annotation, tpe })
+                Ok(ValueArgument {
+                    name,
+                    annotation,
+                    ty,
+                })
             }
         }
         deserializer.deserialize_seq(VAVisitor(std::marker::PhantomData))
@@ -452,6 +611,7 @@ pub struct Definition<TA, VA> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::classic::naming::Path;
 
     #[test]
     fn test_serialize_value_apply() {
@@ -461,7 +621,95 @@ mod tests {
             Box::new(Value::Variable((), Name::from_str("x"))),
         );
         let json = serde_json::to_string(&v).unwrap();
-        assert!(json.contains("Apply"));
-        assert!(json.contains("Variable"));
+        assert_eq!(
+            json,
+            r#"["Apply",null,["Variable",null,["f"]],["Variable",null,["x"]]]"#
+        );
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_serialize_value_variable() {
+        let v: Value<(), ()> = Value::Variable((), Name::from_str("x"));
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, r#"["Variable",null,["x"]]"#);
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_serialize_value_literal() {
+        let v: Value<(), ()> = Value::Literal((), Literal::WholeNumber(123));
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, r#"["Literal",null,["WholeNumberLiteral",123]]"#);
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_serialize_value_lambda() {
+        let v: Value<(), ()> = Value::Lambda(
+            (),
+            Pattern::Variable((), Name::from_str("x")),
+            Box::new(Value::Variable((), Name::from_str("x"))),
+        );
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(
+            json,
+            r#"["Lambda",null,["VariablePattern",null,["x"]],["Variable",null,["x"]]]"#
+        );
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_serialize_value_let_definition() {
+        let def = Definition {
+            input_types: vec![],
+            output_type: Type::Unit(()),
+            body: Box::new(Value::Unit(())),
+        };
+        let v: Value<(), ()> = Value::LetDefinition(
+            (),
+            Name::from_str("x"),
+            Box::new(def),
+            Box::new(Value::Variable((), Name::from_str("x"))),
+        );
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(json.contains(r#"["LetDefinition",null,["x"],"#));
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_serialize_value_reference() {
+        let fq = FQName::new(
+            Path::new(vec![Name::from_str("pkg")]),
+            Path::new(vec![Name::from_str("mod")]),
+            Name::from_str("ref"),
+        );
+        let v: Value<(), ()> = Value::Reference((), fq);
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, r#"["Reference",null,[[["pkg"]],[["mod"]],["ref"]]]"#);
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_serialize_value_if_then_else() {
+        let v: Value<(), ()> = Value::IfThenElse(
+            (),
+            Box::new(Value::Literal((), Literal::Bool(true))),
+            Box::new(Value::Literal((), Literal::WholeNumber(1))),
+            Box::new(Value::Literal((), Literal::WholeNumber(0))),
+        );
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(
+            json,
+            r#"["IfThenElse",null,["Literal",null,["BoolLiteral",true]],["Literal",null,["WholeNumberLiteral",1]],["Literal",null,["WholeNumberLiteral",0]]]"#
+        );
+        let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
     }
 }

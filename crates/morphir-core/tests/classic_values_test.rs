@@ -1,7 +1,6 @@
 use morphir_core::ir::classic::value::Value;
 use morphir_core::ir::classic::literal::Literal;
-use morphir_core::ir::classic::naming::{Name, FQName};
-use std::str::FromStr;
+use morphir_core::ir::classic::naming::Name;
 
 #[test]
 fn test_value_variable() {

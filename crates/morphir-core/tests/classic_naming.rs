@@ -1,5 +1,4 @@
 use morphir_core::ir::classic::naming::{Name, Path, FQName};
-use serde_json::json;
 
 #[test]
 fn test_classic_name_serialization() {

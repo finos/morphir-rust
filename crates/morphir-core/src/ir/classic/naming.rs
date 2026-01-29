@@ -3,23 +3,24 @@
 //! Name, Path, and FQName for the Classic Morphir IR format.
 //! These use array-based serialization instead of string-based.
 
-use serde::de::{self, SeqAccess, Visitor};
+use crate::naming::{Word, intern, resolve};
+use schemars::JsonSchema;
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 /// Classic Name - a list of words, serialized as ["word1", "word2"]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 pub struct Name {
-    pub words: Vec<String>,
+    #[schemars(with = "Vec<String>")]
+    pub words: Vec<Word>,
 }
 
-impl Name {
-    pub fn new(words: Vec<String>) -> Self {
-        Self { words }
-    }
+impl std::str::FromStr for Name {
+    type Err = std::convert::Infallible;
 
-    pub fn from_str(s: &str) -> Self {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Implements behavior matching Elm's regex: "([a-zA-Z][a-z]*|[0-9]+)"
         let mut words = Vec::new();
         let chars: Vec<char> = s.chars().collect();
@@ -28,7 +29,7 @@ impl Name {
 
         while i < len {
             let c = chars[i];
-            
+
             if c.is_ascii_alphabetic() {
                 // Match [a-zA-Z]
                 // Start of a word
@@ -38,28 +39,52 @@ impl Name {
                 while i < len && chars[i].is_ascii_lowercase() {
                     i += 1;
                 }
-                words.push(s[start..i].to_string().to_lowercase());
+                words.push(intern(&s[start..i].to_lowercase()));
             } else if c.is_ascii_digit() {
                 // Match [0-9]+
                 let start = i;
                 i += 1;
                 while i < len && chars[i].is_ascii_digit() {
-                     i += 1;
+                    i += 1;
                 }
-                words.push(s[start..i].to_string().to_lowercase());
+                words.push(intern(&s[start..i].to_lowercase()));
             } else {
                 // Delimiter or other character, skip
                 i += 1;
             }
         }
 
-        Name { words }
+        Ok(Name { words })
+    }
+}
+
+impl Name {
+    pub fn new<I, S>(words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self {
+            words: words.into_iter().map(|w| intern(w.as_ref())).collect(),
+        }
+    }
+
+    /// Helper for from_str that unwraps since it's infallible
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        <Self as std::str::FromStr>::from_str(s).unwrap()
     }
 }
 
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.words.join("-"))
+        for (i, word) in self.words.iter().enumerate() {
+            if i > 0 {
+                write!(f, "-")?;
+            }
+            write!(f, "{}", resolve(*word))?;
+        }
+        Ok(())
     }
 }
 
@@ -69,7 +94,7 @@ impl Serialize for Name {
         S: Serializer,
     {
         // Classic format: ["word1", "word2"]
-        serializer.collect_seq(&self.words)
+        serializer.collect_seq(self.words.iter().map(|w| resolve(*w)))
     }
 }
 
@@ -93,7 +118,7 @@ impl<'de> Deserialize<'de> for Name {
             {
                 let mut words = Vec::new();
                 while let Some(word) = seq.next_element::<String>()? {
-                    words.push(word);
+                    words.push(intern(&word));
                 }
                 Ok(Name { words })
             }
@@ -104,7 +129,7 @@ impl<'de> Deserialize<'de> for Name {
 }
 
 /// Classic Path - a list of Names, serialized as [["word1"], ["word2", "word3"]]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 pub struct Path {
     pub segments: Vec<Name>,
 }
@@ -117,8 +142,13 @@ impl Path {
 
 impl fmt::Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let parts: Vec<String> = self.segments.iter().map(|n| n.to_string()).collect();
-        write!(f, "{}", parts.join("."))
+        for (i, segment) in self.segments.iter().enumerate() {
+            if i > 0 {
+                write!(f, ".")?;
+            }
+            write!(f, "{}", segment)?;
+        }
+        Ok(())
     }
 }
 
@@ -232,9 +262,9 @@ impl<'de> Deserialize<'de> for FQName {
                 let local_name = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                     return Err(de::Error::custom("Expected end of FQName array"));
+
+                if seq.next_element::<IgnoredAny>()?.is_some() {
+                    return Err(de::Error::custom("Expected end of FQName array"));
                 }
 
                 Ok(FQName {
@@ -246,5 +276,36 @@ impl<'de> Deserialize<'de> for FQName {
         }
 
         deserializer.deserialize_seq(FQNameVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_name_display() {
+        let n = Name::from_str("foo-bar_baz");
+        assert_eq!(n.to_string(), "foo-bar-baz");
+    }
+
+    #[test]
+    fn test_path_display() {
+        let p = Path::new(vec![Name::from_str("foo"), Name::from_str("bar")]);
+        assert_eq!(p.to_string(), "foo.bar");
+    }
+
+    #[test]
+    fn test_name_from_str_edge_cases() {
+        assert_eq!(Name::from_str("").words, Vec::<Word>::new());
+        assert_eq!(Name::from_str("123").words, vec![intern("123")]);
+        assert_eq!(
+            Name::from_str("ABC").words,
+            vec![intern("a"), intern("b"), intern("c")]
+        );
+        assert_eq!(
+            Name::from_str("a1b2").words,
+            vec![intern("a"), intern("1"), intern("b"), intern("2")]
+        );
     }
 }

@@ -1,7 +1,7 @@
-use morphir_core::ir::classic::module::{ModuleEntry, ModuleDefinition};
+use morphir_core::ir::classic::module::ModuleEntry;
 use morphir_core::ir::classic::access::Access;
 use morphir_core::ir::classic::naming::Name;
-use serde_json::json;
+use morphir_core::intern;
 
 #[test]
 fn test_module_empty() {
@@ -18,7 +18,7 @@ fn test_module_empty() {
     let entry: ModuleEntry<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse empty module");
     let path = entry.path;
     let access_mod = entry.definition;
-    assert_eq!(path.segments[0].words[0], "my");
+    assert_eq!(path.segments[0].words[0], intern("my"));
     assert!(matches!(access_mod.access, Access::Public));
      assert!(access_mod.value.types.is_empty());
     assert!(access_mod.value.values.is_empty());

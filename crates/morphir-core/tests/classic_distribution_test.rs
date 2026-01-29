@@ -1,10 +1,7 @@
 use morphir_core::ir::classic::distribution::{Distribution, DistributionBody};
 use morphir_core::ir::classic::package::Package;
-use morphir_core::ir::classic::module::{ModuleEntry, ModuleDefinition};
-use morphir_core::ir::classic::naming::{Path, Name};
-use morphir_core::ir::classic::access::{AccessControlled, Access};
-use std::str::FromStr;
-use serde_json::json;
+use morphir_core::ir::classic::access::Access;
+use morphir_core::intern;
 
 #[test]
 fn test_deserialize_minimal_package() {
@@ -36,7 +33,7 @@ fn test_deserialize_package_with_one_module() {
     let pkg: Package<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse package with module");
     assert_eq!(pkg.modules.len(), 1);
     let entry = &pkg.modules[0];
-    assert_eq!(entry.path.segments[0].words[0], "my");
+    assert_eq!(entry.path.segments[0].words[0], intern("my"));
     assert!(matches!(entry.definition.access, Access::Public));
 }
 

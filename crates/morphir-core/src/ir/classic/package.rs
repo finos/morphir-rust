@@ -1,7 +1,7 @@
 use super::module::{ModuleEntry, ModuleSpecification};
 use super::naming::Path;
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde::de::{self, SeqAccess, Visitor};
 use std::fmt;
 
 /// Package specification - contains a list of module specifications
@@ -42,7 +42,7 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for ModuleSpecEntry<A> {
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
 
-                if let Some(_) = seq.next_element::<serde_json::Value>()? {
+                if let Some(IgnoredAny) = seq.next_element()? {
                     return Err(de::Error::custom("Expected end of ModuleSpecEntry array"));
                 }
 

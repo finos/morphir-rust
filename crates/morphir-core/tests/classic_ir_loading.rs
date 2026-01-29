@@ -47,7 +47,7 @@ fn test_load_reference_model_distribution() {
             eprintln!("Failed to parse distribution: {}", e);
             
             // Try to find what line/column the error is at
-            if let Some(line) = content.lines().nth(0) {
+            if let Some(line) = content.lines().next() {
                 eprintln!("First line: {}", &line[..line.len().min(200)]);
             }
             

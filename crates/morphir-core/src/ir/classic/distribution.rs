@@ -2,11 +2,13 @@
 //!
 //! Distribution wrapper for the Classic Morphir IR format.
 
-use serde::de::{self, SeqAccess, Visitor};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
 use std::fmt;
 
+use super::Attributes;
 use super::naming::Path;
 use super::package::{PackageDefinition, PackageSpecification};
 use super::types::Type;
@@ -24,8 +26,8 @@ pub struct Distribution {
 pub enum DistributionBody {
     Library(
         Path,
-        Vec<(Path, PackageSpecification<serde_json::Value>)>,
-        PackageDefinition<serde_json::Value, Type<serde_json::Value>>,
+        Vec<(Path, PackageSpecification<Attributes>)>,
+        PackageDefinition<Attributes, Type<Attributes>>,
     ),
 }
 
@@ -65,29 +67,31 @@ impl<'de> Deserialize<'de> for DistributionBody {
             where
                 V: SeqAccess<'de>,
             {
-                let tag: String = seq
+                let tag: Cow<'de, str> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                match tag.as_str() {
+                match tag.as_ref() {
                     "Library" | "library" => {
                         let path = seq
                             .next_element::<Path>()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                         let deps = seq
-                            .next_element::<Vec<(Path, PackageSpecification<serde_json::Value>)>>()?
+                            .next_element::<Vec<(Path, PackageSpecification<Attributes>)>>()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
                         let package = seq
-                            .next_element::<PackageDefinition<serde_json::Value, Type<serde_json::Value>>>()?
+                            .next_element::<PackageDefinition<Attributes, Type<Attributes>>>()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of DistributionBody array"));
+
+                        if let Some(IgnoredAny) = seq.next_element()? {
+                            return Err(de::Error::custom(
+                                "Expected end of DistributionBody array",
+                            ));
                         }
 
                         Ok(DistributionBody::Library(path, deps, package))
                     }
-                    _ => Err(de::Error::unknown_variant(&tag, &["Library"])),
+                    _ => Err(de::Error::unknown_variant(tag.as_ref(), &["Library"])),
                 }
             }
         }
@@ -102,4 +106,3 @@ pub enum LibraryTag {
     #[serde(alias = "library")]
     Library,
 }
-

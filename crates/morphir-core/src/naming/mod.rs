@@ -5,8 +5,10 @@ pub mod name;
 pub mod package_name;
 pub mod path;
 pub mod qname;
+pub mod interner;
 
 // Re-export common types
+pub use interner::{intern, resolve, Word};
 pub use fqname::FQName;
 pub use module_name::ModuleName;
 pub use name::Name;

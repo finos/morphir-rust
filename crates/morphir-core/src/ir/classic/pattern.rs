@@ -3,9 +3,10 @@
 //! Pattern matching for the Classic Morphir IR format.
 
 use super::naming::{FQName, Name};
-use serde::de::{self, SeqAccess, Visitor};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
 use std::fmt;
 
 use super::literal::Literal;
@@ -115,20 +116,20 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
             where
                 V: SeqAccess<'de>,
             {
-                let tag: String = seq
+                let tag: Cow<'de, str> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                match tag.as_str() {
+                match tag.as_ref() {
                     "WildcardPattern" | "wildcard" => {
                         let a = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of WildcardPattern array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of WildcardPattern array"));
                         }
-                        
+
                         Ok(Pattern::Wildcard(a))
                     }
                     "AsPattern" | "as_pattern" => {
@@ -141,11 +142,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                         let name = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                            
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of AsPattern array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of AsPattern array"));
                         }
-                        
+
                         Ok(Pattern::As(a, pattern, name))
                     }
                     "TuplePattern" | "tuple_pattern" => {
@@ -155,11 +156,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                         let patterns = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                            
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of TuplePattern array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of TuplePattern array"));
                         }
-                        
+
                         Ok(Pattern::Tuple(a, patterns))
                     }
                     "ConstructorPattern" | "constructor_pattern" => {
@@ -173,8 +174,10 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of ConstructorPattern array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of ConstructorPattern array",
+                            ));
                         }
 
                         Ok(Pattern::Constructor(a, name, args))
@@ -183,9 +186,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                         let a = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of EmptyListPattern array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of EmptyListPattern array",
+                            ));
                         }
 
                         Ok(Pattern::EmptyList(a))
@@ -200,11 +205,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                         let tail = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of HeadTailPattern array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of HeadTailPattern array"));
                         }
-                        
+
                         Ok(Pattern::HeadTail(a, head, tail))
                     }
                     "LiteralPattern" | "literal_pattern" => {
@@ -214,9 +219,9 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                         let lit = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of LiteralPattern array"));
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of LiteralPattern array"));
                         }
 
                         Ok(Pattern::Literal(a, lit))
@@ -226,8 +231,8 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of UnitPattern array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of UnitPattern array"));
                         }
 
                         Ok(Pattern::Unit(a))
@@ -240,14 +245,14 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
 
-                        if let Some(_) = seq.next_element::<serde_json::Value>()? {
-                             return Err(de::Error::custom("Expected end of VariablePattern array"));
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom("Expected end of VariablePattern array"));
                         }
 
                         Ok(Pattern::Variable(a, name))
                     }
                     _ => Err(de::Error::unknown_variant(
-                        &tag,
+                        tag.as_ref(),
                         &[
                             "WildcardPattern",
                             "AsPattern",
@@ -264,5 +269,112 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
             }
         }
         deserializer.deserialize_seq(PatternVisitor(std::marker::PhantomData))
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::classic::naming::Path;
+
+    #[test]
+    fn test_serialize_pattern_wildcard() {
+        let p: Pattern<()> = Pattern::Wildcard(());
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"["WildcardPattern",null]"#);
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_variable() {
+        let p: Pattern<()> = Pattern::Variable((), Name::from_str("x"));
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"["VariablePattern",null,["x"]]"#);
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_as() {
+        let p: Pattern<()> = Pattern::As((), Box::new(Pattern::Wildcard(())), Name::from_str("x"));
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"["AsPattern",null,["WildcardPattern",null],["x"]]"#);
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_tuple() {
+        let p: Pattern<()> = Pattern::Tuple((), vec![Pattern::Wildcard(()), Pattern::Wildcard(())]);
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"["TuplePattern",null,[["WildcardPattern",null],["WildcardPattern",null]]]"#
+        );
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_constructor() {
+        let fq = FQName::new(
+            Path::new(vec![Name::from_str("pkg")]),
+            Path::new(vec![Name::from_str("mod")]),
+            Name::from_str("ctor"),
+        );
+        let p: Pattern<()> = Pattern::Constructor((), fq, vec![Pattern::Wildcard(())]);
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"["ConstructorPattern",null,[[["pkg"]],[["mod"]],["ctor"]],[["WildcardPattern",null]]]"#
+        );
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_empty_list() {
+        let p: Pattern<()> = Pattern::EmptyList(());
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"["EmptyListPattern",null]"#);
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_head_tail() {
+        let p: Pattern<()> = Pattern::HeadTail(
+            (),
+            Box::new(Pattern::Wildcard(())),
+            Box::new(Pattern::Wildcard(())),
+        );
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"["HeadTailPattern",null,["WildcardPattern",null],["WildcardPattern",null]]"#
+        );
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_literal() {
+        let p: Pattern<()> = Pattern::Literal((), Literal::WholeNumber(123));
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"["LiteralPattern",null,["WholeNumberLiteral",123]]"#
+        );
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
+    }
+
+    #[test]
+    fn test_serialize_pattern_unit() {
+        let p: Pattern<()> = Pattern::Unit(());
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"["UnitPattern",null]"#);
+        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, p);
     }
 }

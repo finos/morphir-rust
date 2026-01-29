@@ -3,13 +3,9 @@
 //! Command to migrate Morphir IR between versions and formats.
 
 use crate::tui::JsonPager;
-use indexmap::IndexMap;
 use morphir_common::loader::{LoadedDistribution, load_distribution};
 use morphir_common::remote::{RemoteSource, RemoteSourceResolver, ResolveOptions};
 use morphir_common::vfs::OsVfs;
-use morphir_ir::converter;
-use morphir_ir::ir::{classic, v4};
-use morphir_ir::naming::PackageName;
 use serde::Serialize;
 use starbase::AppResult;
 use std::path::PathBuf;
@@ -122,13 +118,13 @@ pub fn run_migrate(
     force_refresh: bool,
     no_cache: bool,
     json: bool,
-    expanded: bool,
+    _expanded: bool, // TODO: Will be used when converter module is re-enabled
 ) -> AppResult {
     let output_str = output
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "<console>".to_string());
-    let mut warnings: Vec<String> = Vec::new();
+    let warnings: Vec<String> = Vec::new(); // TODO: Will collect warnings when converter is re-enabled
 
     // Helper to output error
     let output_error = |msg: &str| {
@@ -221,54 +217,14 @@ pub fn run_migrate(
         LoadedDistribution::Classic(dist) => {
             let source_format = "classic";
             if target_v4 {
-                if !json {
-                    eprintln!("Converting Classic -> V4");
-                }
-                let classic::DistributionBody::Library(_, package_path, classic_deps, pkg) =
-                    dist.distribution;
-
-                // Warn if dependencies will be lost (Classic deps format differs from V4)
-                if !classic_deps.is_empty() {
-                    let warn = format!(
-                        "{} dependencies found in Classic format. \
-                         Dependency conversion is not yet supported and will be omitted.",
-                        classic_deps.len()
-                    );
-                    if !json {
-                        eprintln!("Warning: {}", warn);
-                    }
-                    warnings.push(warn);
-                }
-
-                let v4_pkg = converter::classic_to_v4_with_options(pkg, !expanded);
-
-                // Wrap in V4 IRFile
-                let v4_ir = v4::IRFile {
-                    format_version: v4::FormatVersion::default(),
-                    distribution: v4::Distribution::Library(v4::LibraryContent {
-                        package_name: PackageName::from(package_path),
-                        dependencies: IndexMap::new(), // TODO: Convert classic deps when format is understood
-                        def: v4_pkg,
-                    }),
-                };
-
-                // Save or display v4_ir
-                let content = serde_json::to_string_pretty(&v4_ir).expect("Failed to serialize");
-                let title = format!("morphir-ir.json (V4 format, migrated from {})", input);
-                write_or_display(&output, &content, json, &title);
-
-                if json && output.is_some() {
-                    // Only print MigrateResult to stdout when output file is specified
-                    // When no output file, the migrated IR goes to stdout and metadata to stderr
-                    let result = MigrateResult::success(
-                        &input,
-                        &output_str,
-                        source_format,
-                        target_format,
-                        warnings,
-                    );
-                    println!("{}", serde_json::to_string_pretty(&result).unwrap());
-                }
+                // Classic -> V4 conversion is not yet implemented
+                // The converter module is currently disabled pending type system updates
+                output_error(
+                    "Classic -> V4 conversion is not yet implemented. \
+                     The converter module is currently being updated. \
+                     Use --target=classic to copy the file as-is.",
+                );
+                return Ok(Some(1));
             } else {
                 if !json {
                     eprintln!("Input is Classic, Target is Classic. Copying...");
@@ -292,55 +248,14 @@ pub fn run_migrate(
         LoadedDistribution::V4(ir_file) => {
             let source_format = "v4";
             if !target_v4 {
-                if !json {
-                    eprintln!("Converting V4 -> Classic");
-                }
-                let v4::Distribution::Library(lib_content) = ir_file.distribution else {
-                    output_error("Only Library distributions can be converted to Classic format");
-                    return Ok(Some(1));
-                };
-
-                // Warn if dependencies will be lost
-                if !lib_content.dependencies.is_empty() {
-                    let warn = format!(
-                        "{} dependencies found in V4 format. \
-                         Dependency conversion is not yet supported and will be omitted.",
-                        lib_content.dependencies.len()
-                    );
-                    if !json {
-                        eprintln!("Warning: {}", warn);
-                    }
-                    warnings.push(warn);
-                }
-
-                let classic_pkg = converter::v4_to_classic(lib_content.def);
-
-                // Wrap in Classic Distribution
-                let classic_dist = classic::Distribution {
-                    format_version: 1,
-                    distribution: classic::DistributionBody::Library(
-                        classic::LibraryTag::Library,
-                        lib_content.package_name.into_path(),
-                        vec![], // TODO: Convert V4 deps to classic format
-                        classic_pkg,
-                    ),
-                };
-
-                let content =
-                    serde_json::to_string_pretty(&classic_dist).expect("Failed to serialize");
-                let title = format!("morphir-ir.json (Classic format, migrated from {})", input);
-                write_or_display(&output, &content, json, &title);
-
-                if json && output.is_some() {
-                    let result = MigrateResult::success(
-                        &input,
-                        &output_str,
-                        source_format,
-                        target_format,
-                        warnings,
-                    );
-                    println!("{}", serde_json::to_string_pretty(&result).unwrap());
-                }
+                // V4 -> Classic conversion is not yet implemented
+                // The converter module is currently disabled pending type system updates
+                output_error(
+                    "V4 -> Classic conversion is not yet implemented. \
+                     The converter module is currently being updated. \
+                     Use --target=v4 to copy the file as-is.",
+                );
+                return Ok(Some(1));
             } else {
                 if !json {
                     eprintln!("Input is V4, Target is V4. Copying...");

@@ -12,10 +12,10 @@ use tempfile::TempDir;
 /// Check if CLI tests can run (morphir binary available or cargo run works)
 pub fn cli_tests_available() -> bool {
     // Check if staged binary exists (preferred for CI)
-    if let Some(workspace_root) = CliTestContext::find_workspace_root() {
-        if workspace_root.join(".morphir/build/bin/morphir").exists() {
-            return true;
-        }
+    if let Some(workspace_root) = CliTestContext::find_workspace_root()
+        && workspace_root.join(".morphir/build/bin/morphir").exists()
+    {
+        return true;
     }
     // Check if morphir binary exists in target
     if CliTestContext::get_morphir_binary().is_some() {

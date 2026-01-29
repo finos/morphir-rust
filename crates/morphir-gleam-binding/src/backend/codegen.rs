@@ -1,9 +1,9 @@
 //! Gleam code generation from Morphir IR
 
 use morphir_common::vfs::{OsVfs, Vfs};
+use morphir_core::ir::v4::PackageDefinition;
+use morphir_core::naming::ModuleName;
 use morphir_extension_sdk::prelude::*;
-use morphir_ir::ir::v4::PackageDefinition;
-use morphir_ir::naming::ModuleName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;

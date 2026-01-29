@@ -1,0 +1,15 @@
+package morphir:ext@0.1.0;
+
+interface envelope {
+    record header {
+        seqnum: u64,
+        session-id: string,
+        kind: option<string>,
+    }
+
+    record envelope {
+        header: header,
+        content-type: string,
+        content: list<u8>,
+    }
+}

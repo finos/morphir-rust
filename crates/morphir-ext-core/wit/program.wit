@@ -1,0 +1,40 @@
+package morphir:ext@0.1.0;
+
+interface program {
+    use envelope.{envelope};
+
+    /// Initialize the extension with startup flags.
+    /// Returns the initial model and any initial commands.
+    init: func(init-data: envelope) -> tuple<envelope, envelope>;
+
+    /// Update the extension state based on a message.
+    /// Returns the new model and any commands.
+    update: func(msg: envelope, model: envelope) -> tuple<envelope, envelope>;
+
+    /// Get active subscriptions based on the model.
+    subscriptions: func(model: envelope) -> envelope;
+
+    /// Get capabilities as a JSON envelope.
+    get-capabilities: func() -> envelope;
+}
+
+interface design-time-frontend {
+    use envelope.{envelope};
+
+    /// Frontend compilation: source -> IR
+    frontend-compile: func(input: envelope) -> envelope;
+}
+
+interface design-time-backend {
+    use envelope.{envelope};
+
+    /// Backend generation: IR -> artifacts
+    backend-generate: func(input: envelope) -> envelope;
+}
+
+interface common-backend {
+    use envelope.{envelope};
+
+    /// Backend capability discovery.
+    get-capabilities: func() -> envelope;
+}

@@ -45,6 +45,7 @@ The **[Actor-Based Extension System Design](actor-based/)** documents describe a
 
 - [Actor-Based Design Overview](actor-based/00-overview.md) - System overview and goals
 - [Architecture](actor-based/01-architecture.md) - Detailed component architecture
+- [Wasm Extension Architecture (Interactive Session)](actor-based/12-wasm-extension-architecture-session.md) - Hidden Extism, envelope protocol, TEA runtime, and Kameo actors
 - [Extension Manager](actor-based/08-extension-manager.md) - Central coordinator actor
 - [Protocol Implementations](actor-based/) - JSON-RPC, gRPC, stdio, WASM hosts
 

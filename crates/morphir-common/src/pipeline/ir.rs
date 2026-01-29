@@ -5,7 +5,6 @@
 use crate::Result;
 use crate::pipeline::{Pipeline, Step};
 use anyhow;
-use morphir_ir::converter;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -55,17 +54,9 @@ impl Step for V3ToV4Converter {
     type Input = Value;
     type Output = Value;
 
-    fn run(&self, input: Self::Input) -> Result<Self::Output> {
-        // Deserialize to Classic Package
-        let classic_pkg: morphir_ir::ir::classic::Package = serde_json::from_value(input)
-            .map_err(|e| anyhow::anyhow!("Failed to deserialize Classic IR: {}", e))?;
-
-        // Convert to V4
-        let v4_pkg = converter::classic_to_v4(classic_pkg);
-
-        // Serialize back to JSON
-        serde_json::to_value(v4_pkg)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize V4 IR: {}", e))
+    fn run(&self, _input: Self::Input) -> Result<Self::Output> {
+        // TODO: V3 to V4 conversion not yet implemented
+        Err(anyhow::anyhow!("V3 to V4 conversion not yet implemented"))
     }
 }
 
@@ -77,17 +68,9 @@ impl Step for V4ToV3Converter {
     type Input = Value;
     type Output = Value;
 
-    fn run(&self, input: Self::Input) -> Result<Self::Output> {
-        // Deserialize to V4 PackageDefinition
-        let v4_pkg: morphir_ir::ir::v4::PackageDefinition = serde_json::from_value(input)
-            .map_err(|e| anyhow::anyhow!("Failed to deserialize V4 IR: {}", e))?;
-
-        // Convert to Classic
-        let classic_pkg = converter::v4_to_classic(v4_pkg);
-
-        // Serialize back to JSON
-        serde_json::to_value(classic_pkg)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize Classic IR: {}", e))
+    fn run(&self, _input: Self::Input) -> Result<Self::Output> {
+        // TODO: V4 to V3 conversion not yet implemented
+        Err(anyhow::anyhow!("V4 to V3 conversion not yet implemented"))
     }
 }
 

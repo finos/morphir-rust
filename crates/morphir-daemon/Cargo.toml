@@ -17,7 +17,14 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "net", "signal"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "fs",
+    "net",
+    "signal",
+] }
 async-trait = "0.1"
 
 # JSON-RPC
@@ -40,15 +47,20 @@ tracing = "0.1"
 extism = "1"
 
 # HTTP client (for downloading extensions)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 
 # Directory utilities
 dirs = "6"
 
 # Internal crates
-morphir-ir = { path = "../morphir-ir" }
+morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk", features = ["host"] }
+morphir-extension-sdk = { path = "../morphir-extension-sdk", features = [
+    "host",
+] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -30,7 +30,7 @@ thiserror = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-morphir-ir = { path = "../morphir-ir" }
+morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
 morphir-design = { path = "../morphir-design" }
 morphir-daemon = { path = "../morphir-daemon" }
@@ -74,4 +74,3 @@ pkg-fmt = "zip"
 
 [package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
 pkg-fmt = "zip"
-

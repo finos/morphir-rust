@@ -4,16 +4,16 @@
 //! using Vfs for file generation.
 
 use morphir_common::vfs::Vfs;
-use morphir_ir::ir::attributes::{TypeAttributes, ValueAttributes};
-use morphir_ir::ir::literal::Literal as MorphirLiteral;
-use morphir_ir::ir::pattern::Pattern as MorphirPattern;
-use morphir_ir::ir::serde_v4::deserialize_value;
-use morphir_ir::ir::v4::{
+use morphir_core::ir::attributes::{TypeAttributes, ValueAttributes};
+use morphir_core::ir::literal::Literal as MorphirLiteral;
+use morphir_core::ir::pattern::Pattern as MorphirPattern;
+use morphir_core::ir::serde_v4::deserialize_value;
+use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlledModuleDefinition, AccessControlledTypeDefinition,
     AccessControlledValueDefinition, ModuleDefinition,
 };
-use morphir_ir::ir::value_expr::Value;
-use morphir_ir::naming::ModuleName;
+use morphir_core::ir::value_expr::Value;
+use morphir_core::naming::ModuleName;
 use serde::de::IntoDeserializer;
 use std::io::Result;
 use std::path::PathBuf;
@@ -101,7 +101,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         type_name: &str,
         type_def: &AccessControlledTypeDefinition,
     ) -> Result<()> {
-        use morphir_ir::ir::v4::TypeDefinition;
+        use morphir_core::ir::v4::TypeDefinition;
 
         // Access control
         if matches!(type_def.access, MorphirAccess::Public) {
@@ -346,7 +346,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
         // Body - V4 stores body as JSON, deserialize and generate Gleam code
         match &value_def.value.body {
-            morphir_ir::ir::v4::ValueBody::ExpressionBody { body } => {
+            morphir_core::ir::v4::ValueBody::ExpressionBody { body } => {
                 // Deserialize the V4 JSON body to a typed Value
                 match self.deserialize_value_body(body) {
                     Ok(value) => {
@@ -359,15 +359,15 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     }
                 }
             }
-            morphir_ir::ir::v4::ValueBody::NativeBody { hint, .. } => {
+            morphir_core::ir::v4::ValueBody::NativeBody { hint, .. } => {
                 output.push_str("// native: ");
                 output.push_str(&format!("{:?}", hint));
             }
-            morphir_ir::ir::v4::ValueBody::ExternalBody { external_name, .. } => {
+            morphir_core::ir::v4::ValueBody::ExternalBody { external_name, .. } => {
                 output.push_str("// external: ");
                 output.push_str(external_name);
             }
-            morphir_ir::ir::v4::ValueBody::IncompleteBody { .. } => {
+            morphir_core::ir::v4::ValueBody::IncompleteBody { .. } => {
                 output.push_str("todo // incomplete");
             }
         }
@@ -598,10 +598,10 @@ trait ValueBodyExt {
     fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>>;
 }
 
-impl ValueBodyExt for morphir_ir::ir::value_expr::ValueBody<TypeAttributes, ValueAttributes> {
+impl ValueBodyExt for morphir_core::ir::value_expr::ValueBody<TypeAttributes, ValueAttributes> {
     fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>> {
         match self {
-            morphir_ir::ir::value_expr::ValueBody::Expression(expr) => Ok(expr),
+            morphir_core::ir::value_expr::ValueBody::Expression(expr) => Ok(expr),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Expected expression body",
@@ -615,9 +615,9 @@ mod tests {
     use super::*;
     use indexmap::IndexMap;
     use morphir_common::vfs::MemoryVfs;
-    use morphir_ir::ir::v4::Access as MorphirAccess;
-    use morphir_ir::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
-    use morphir_ir::naming::ModuleName;
+    use morphir_core::ir::v4::Access as MorphirAccess;
+    use morphir_core::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
+    use morphir_core::naming::ModuleName;
     use std::path::PathBuf;
 
     #[test]

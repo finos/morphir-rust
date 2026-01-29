@@ -5,7 +5,7 @@
 
 use crate::Result;
 use crate::pipeline::Step;
-use morphir_ir::naming::FQName;
+use morphir_core::naming::FQName;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -90,7 +90,7 @@ impl DecoratorLoader {
 
 /// Parse FQName from string format "package:module#name"
 fn parse_fqname_from_string(s: &str) -> Option<FQName> {
-    use morphir_ir::naming::{Name, PackageName, Path};
+    use morphir_core::naming::{Name, PackageName, Path};
 
     // Split by #
     let parts: Vec<&str> = s.split('#').collect();

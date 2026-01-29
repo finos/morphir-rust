@@ -1,5 +1,5 @@
 [package]
-name = "morphir-ir"
+name = "morphir-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,10 +9,10 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Morphir IR model definitions and utilities"
+description = "Morphir core model definitions and utilities"
 
 [lib]
-name = "morphir_ir"
+name = "morphir_core"
 path = "src/lib.rs"
 
 [dependencies]
@@ -22,7 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = { version = "0.9", features = ["derive", "indexmap2"] }
 indexmap = { version = "2", features = ["serde"] }
+lasso = { version = "0.7", features = ["multi-threaded", "serde"] }
 
 [dev-dependencies]
 rstest = "0.26"
-

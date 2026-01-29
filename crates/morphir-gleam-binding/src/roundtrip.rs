@@ -7,8 +7,8 @@ use crate::backend::MorphirToGleamVisitor;
 use crate::frontend::ast::ModuleIR;
 use crate::frontend::{GleamToMorphirVisitor, parse_gleam};
 use morphir_common::vfs::{MemoryVfs, Vfs};
-use morphir_ir::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
-use morphir_ir::naming::{ModuleName, PackageName};
+use morphir_core::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
+use morphir_core::naming::{ModuleName, PackageName};
 use std::path::{Path, PathBuf};
 
 /// Result of a roundtrip operation
@@ -147,7 +147,7 @@ fn build_v4_module_from_ir(
     module_name: &ModuleName,
 ) -> std::io::Result<AccessControlledModuleDefinition> {
     use indexmap::IndexMap;
-    use morphir_ir::ir::v4::{
+    use morphir_core::ir::v4::{
         Access, AccessControlledTypeDefinition, AccessControlledValueDefinition,
     };
 

@@ -4,6 +4,22 @@ members = [
 ]
 resolver = "2"
 
+# Don't build examples by default (morphir-ext-example needs wasm32 target)
+default-members = [
+    "crates/morphir",
+    "crates/morphir-builtins",
+    "crates/morphir-common",
+    "crates/morphir-core",
+    "crates/morphir-daemon",
+    "crates/morphir-design",
+    "crates/morphir-ext",
+    "crates/morphir-ext-core",
+    "crates/morphir-extension-sdk",
+    "crates/morphir-gleam-binding",
+    "crates/morphir-runtime",
+    "crates/morphir-wasm-binding",
+]
+
 [workspace.package]
 version = "0.2.0"
 edition = "2024"

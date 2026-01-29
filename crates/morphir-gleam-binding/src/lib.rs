@@ -5,8 +5,8 @@
 //! - Backend: Generate Gleam code from Morphir IR
 
 use morphir_common::vfs::OsVfs;
+use morphir_core::naming::{ModuleName, PackageName};
 use morphir_extension_sdk::prelude::*;
-use morphir_ir::naming::{ModuleName, PackageName};
 use std::path::PathBuf;
 
 pub mod backend;

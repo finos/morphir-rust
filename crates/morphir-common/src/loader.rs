@@ -2,8 +2,8 @@ use crate::remote::{RemoteSource, RemoteSourceResolver, ResolveOptions};
 use crate::vfs::{OsVfs, Vfs};
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use morphir_ir::ir::{classic, v4};
-use morphir_ir::naming::PackageName;
+use morphir_core::ir::{classic, v4};
+use morphir_core::naming::PackageName;
 use std::path::Path;
 
 #[derive(Debug)]

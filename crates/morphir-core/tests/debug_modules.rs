@@ -37,7 +37,7 @@ fn test_debug_reference_model_modules() {
             eprintln!("   Array Length: {}", arr.len());
         }
         // Try to deserialize this specific module to ModuleEntry
-        let result: Result<ModuleEntry, _> = serde_json::from_value(mod_json.clone());
+        let result: Result<ModuleEntry<Value, Value>, serde_json::Error> = serde_json::from_value(mod_json.clone());
         
         // Serialize to string for debugging context
         let json_str = serde_json::to_string(&mod_json).unwrap_or_else(|_| "FAILED_TO_SERIALIZE".to_string());

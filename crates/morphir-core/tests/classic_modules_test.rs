@@ -15,8 +15,9 @@ fn test_module_empty() {
             }
         }
     ]"#;
-    let entry: ModuleEntry = serde_json::from_str(json).expect("Failed to parse empty module");
-    let (path, access_mod) = entry;
+    let entry: ModuleEntry<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse empty module");
+    let path = entry.path;
+    let access_mod = entry.definition;
     assert_eq!(path.segments[0].words[0], "my");
     assert!(matches!(access_mod.access, Access::Public));
      assert!(access_mod.value.types.is_empty());
@@ -51,8 +52,8 @@ fn test_module_with_type() {
         }
     ]"#;
 
-    let entry: ModuleEntry = serde_json::from_str(json).expect("Failed to parse module with type");
-    let (_, access_mod) = entry;
+    let entry: ModuleEntry<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse module with type");
+    let access_mod = entry.definition;
     assert!(matches!(access_mod.access, Access::Private));
     assert_eq!(access_mod.value.types.len(), 1);
     let (name, acc_doc_def) = &access_mod.value.types[0];

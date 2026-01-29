@@ -8,7 +8,7 @@ fn test_repro_trailing_chars() {
         [["my"],["pkg"]],
         { "access": "Public", "value": { "types": [], "values": [] } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_empty);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_empty);
     assert!(res.is_ok(), "Empty module failed: {:?}", res.err());
 
     // 2. ModuleEntry with TypeAlias (Simple Variable)
@@ -21,7 +21,7 @@ fn test_repro_trailing_chars() {
             "values": [] 
         } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_alias_var);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_alias_var);
     assert!(res.is_ok(), "Simple alias failed: {:?}", res.err());
 
     // 3. ModuleEntry with Record
@@ -36,7 +36,7 @@ fn test_repro_trailing_chars() {
             "values": [] 
         } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_record);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_record);
     assert!(res.is_ok(), "Record failed: {:?}", res.err());
 
     // 4. ModuleEntry with Reference (The suspect)
@@ -52,7 +52,7 @@ fn test_repro_trailing_chars() {
             "values": [] 
         } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_ref);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_ref);
     assert!(res.is_ok(), "Reference failed: {:?}", res.err());
 
     // 5. ModuleEntry with CustomTypeDefinition
@@ -69,7 +69,7 @@ fn test_repro_trailing_chars() {
             "values": [] 
         } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_custom);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_custom);
     assert!(res.is_ok(), "CustomType failed: {:?}", res.err());
 
     // 6. ModuleEntry with Value containing Type (LetDefinition)
@@ -97,7 +97,7 @@ fn test_repro_trailing_chars() {
             ] 
         } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_let);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_let);
     assert!(res.is_ok(), "LetDefinition failed: {:?}", res.err());
 
     // 7. Deep Nesting (Recursion Check)
@@ -122,7 +122,7 @@ fn test_repro_trailing_chars() {
             ] 
         } }
     ]);
-    let res: Result<ModuleEntry, _> = serde_json::from_value(json_deep);
+    let res: Result<ModuleEntry<serde_json::Value, serde_json::Value>, _> = serde_json::from_value(json_deep);
     // Explicitly check if it fails due to recursion
     if let Err(e) = &res {
         eprintln!("Deep recursion error: {}", e);

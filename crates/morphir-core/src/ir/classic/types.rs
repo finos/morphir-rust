@@ -598,7 +598,7 @@ mod tests {
     fn test_serialize_type() {
         let t: Type<()> = Type::Variable((), Name::from_str("a"));
         let json = serde_json::to_string(&t).unwrap();
-        // Name serializes as kebab-case string in V4 format
-        assert_eq!(json, r#"["Variable",null,"a"]"#);
+        // Name serializes as an array of lowercase words in Classic IR
+        assert_eq!(json, r#"["Variable",null,["a"]]"#);
     }
 }

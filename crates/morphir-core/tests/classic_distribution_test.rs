@@ -11,13 +11,13 @@ fn test_deserialize_minimal_package() {
     let json = r#"{
         "modules": []
     }"#;
-    let pkg: Package = serde_json::from_str(json).expect("Failed to parse minimal package");
+    let pkg: Package<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse minimal package");
     assert!(pkg.modules.is_empty());
 }
 
 #[test]
 fn test_deserialize_package_with_one_module() {
-    // ModuleEntry is (Path, AccessControlled<ModuleDefinition>)
+    // ModuleEntry is structural [Path, AccessControlled<ModuleDefinition>]
     // ModuleDefinition has {types: [], values: []}
     let json = r#"{
         "modules": [
@@ -33,11 +33,11 @@ fn test_deserialize_package_with_one_module() {
             ]
         ]
     }"#;
-    let pkg: Package = serde_json::from_str(json).expect("Failed to parse package with module");
+    let pkg: Package<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse package with module");
     assert_eq!(pkg.modules.len(), 1);
-    let (path, access_mod) = &pkg.modules[0];
-    assert_eq!(path.segments[0].words[0], "my");
-    assert!(matches!(access_mod.access, Access::Public));
+    let entry = &pkg.modules[0];
+    assert_eq!(entry.path.segments[0].words[0], "my");
+    assert!(matches!(entry.definition.access, Access::Public));
 }
 
 #[test]

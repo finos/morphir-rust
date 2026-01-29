@@ -67,7 +67,7 @@ fn test_type_record() {
     // Field is [name, type] or {"name":..., "tpe":...}
     
     // Test Array Format
-    let json_array = r#"["Record", null, [ [["field1"], ["Variable", null, ["a"]]] ]]"#;
+    let json_array = r#"["Record", null, [ [["field", "1"], ["Variable", null, ["a"]]] ]]"#;
     let t: Type<()> = serde_json::from_str(json_array).expect("Failed to parse Record array format");
     match t {
         Type::Record(_, fields) => {

@@ -14,20 +14,20 @@ use super::value::ValueDefinition;
 
 /// Module entry - [modulePath, AccessControlled<ModuleDefinition>]
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ModuleEntry {
+pub struct ModuleEntry<TA, VA> {
     pub path: Path,
-    pub definition: AccessControlled<ModuleDefinition>,
+    pub definition: AccessControlled<ModuleDefinition<TA, VA>>,
 }
 
-impl<'de> Deserialize<'de> for ModuleEntry {
+impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for ModuleEntry<TA, VA> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct ModuleEntryVisitor;
+        struct ModuleEntryVisitor<TA, VA>(std::marker::PhantomData<(TA, VA)>);
 
-        impl<'de> Visitor<'de> for ModuleEntryVisitor {
-            type Value = ModuleEntry;
+        impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Visitor<'de> for ModuleEntryVisitor<TA, VA> {
+            type Value = ModuleEntry<TA, VA>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a ModuleEntry array [path, definition]")
@@ -52,48 +52,38 @@ impl<'de> Deserialize<'de> for ModuleEntry {
             }
         }
 
-        deserializer.deserialize_seq(ModuleEntryVisitor)
+        deserializer.deserialize_seq(ModuleEntryVisitor(std::marker::PhantomData))
     }
 }
 
-/// Module definition - the inner content of a module
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModuleDefinition {
-    #[serde(default)]
-    pub types: Vec<(
-        Name,
-        AccessControlled<Documented<TypeDefinition<serde_json::Value>>>,
-    )>,
-    #[serde(default)]
-    pub values: Vec<(
-        Name,
-        AccessControlled<Documented<ValueDefinition<serde_json::Value, serde_json::Value>>>,
-    )>,
-}
-
-// Keep the old Module struct for compatibility during migration
-/// Module definition (legacy format)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Module {
-    pub name: Path,
-    pub detail: ModuleDetail,
-}
-
-/// Module details (legacy format)
+/// Module specification (public interface only)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModuleDetail {
-    pub documentation: Option<String>,
+#[serde(bound(deserialize = "A: Deserialize<'de>"))]
+pub struct ModuleSpecification<A> {
+    #[serde(default)]
+    pub types: Vec<(Name, Documented<super::types::TypeSpecification<A>>)>,
+    #[serde(default)]
+    pub values: Vec<(Name, Documented<super::value::ValueSpecification<A>>)>,
+    pub doc: Option<String>,
+}
+
+/// Module definition (full implementation)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "TA: Deserialize<'de>, VA: Deserialize<'de>"))]
+pub struct ModuleDefinition<TA, VA> {
     #[serde(default)]
     pub types: Vec<(
         Name,
-        AccessControlled<Documented<TypeDefinition<serde_json::Value>>>,
+        AccessControlled<Documented<TypeDefinition<TA>>>,
     )>,
     #[serde(default)]
     pub values: Vec<(
         Name,
-        AccessControlled<Documented<ValueDefinition<serde_json::Value, serde_json::Value>>>,
+        AccessControlled<Documented<ValueDefinition<TA, VA>>>,
     )>,
+    pub doc: Option<String>,
 }
 
 

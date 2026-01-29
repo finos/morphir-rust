@@ -8,7 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 use super::naming::Path;
-use super::package::Package;
+use super::package::{PackageDefinition, PackageSpecification};
+use super::types::Type;
 
 /// Distribution of packages
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,7 +22,11 @@ pub struct Distribution {
 /// Distribution body - serialized as ["Library", packagePath, dependencies, package]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DistributionBody {
-    Library(Path, Vec<serde_json::Value>, Package),
+    Library(
+        Path,
+        Vec<(Path, PackageSpecification<serde_json::Value>)>,
+        PackageDefinition<serde_json::Value, Type<serde_json::Value>>,
+    ),
 }
 
 impl Serialize for DistributionBody {
@@ -70,10 +75,10 @@ impl<'de> Deserialize<'de> for DistributionBody {
                             .next_element::<Path>()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                         let deps = seq
-                            .next_element::<Vec<serde_json::Value>>()?
+                            .next_element::<Vec<(Path, PackageSpecification<serde_json::Value>)>>()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
                         let package = seq
-                            .next_element::<Package>()?
+                            .next_element::<PackageDefinition<serde_json::Value, Type<serde_json::Value>>>()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
                         
                         if let Some(_) = seq.next_element::<serde_json::Value>()? {

@@ -62,7 +62,10 @@ pub trait BuiltinExtension: Send + Sync {
     /// Returns `Some` when the extension has been compiled to WASM and
     /// embedded in the binary via `include_bytes!`.
     #[cfg(feature = "wasm")]
-    fn wasm_bytes() -> Option<&'static [u8]> {
+    fn wasm_bytes() -> Option<&'static [u8]>
+    where
+        Self: Sized,
+    {
         None
     }
 }

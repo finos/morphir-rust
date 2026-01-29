@@ -1,14 +1,15 @@
-use morphir_core::ir::classic::distribution::{Distribution, DistributionBody};
-use morphir_core::ir::classic::package::Package;
-use morphir_core::ir::classic::access::Access;
 use morphir_core::intern;
+use morphir_core::ir::classic::access::Access;
+use morphir_core::ir::classic::distribution::{Distribution, DistributionBody};
+use morphir_core::ir::classic::package::PackageDefinition;
 
 #[test]
 fn test_deserialize_minimal_package() {
     let json = r#"{
         "modules": []
     }"#;
-    let pkg: Package<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse minimal package");
+    let pkg: PackageDefinition<serde_json::Value, serde_json::Value> =
+        serde_json::from_str(json).expect("Failed to parse minimal package");
     assert!(pkg.modules.is_empty());
 }
 
@@ -30,7 +31,8 @@ fn test_deserialize_package_with_one_module() {
             ]
         ]
     }"#;
-    let pkg: Package<serde_json::Value, serde_json::Value> = serde_json::from_str(json).expect("Failed to parse package with module");
+    let pkg: PackageDefinition<serde_json::Value, serde_json::Value> =
+        serde_json::from_str(json).expect("Failed to parse package with module");
     assert_eq!(pkg.modules.len(), 1);
     let entry = &pkg.modules[0];
     assert_eq!(entry.path.segments[0].words[0], intern("my"));
@@ -50,8 +52,9 @@ fn test_deserialize_minimal_distribution() {
             }
         ]
     }"#;
-    
-    let dist: Distribution = serde_json::from_str(json).expect("Failed to parse minimal distribution");
+
+    let dist: Distribution =
+        serde_json::from_str(json).expect("Failed to parse minimal distribution");
     assert_eq!(dist.format_version, 3);
     match dist.distribution {
         DistributionBody::Library(path, deps, pkg) => {

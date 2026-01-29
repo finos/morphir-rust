@@ -21,7 +21,7 @@ impl BuiltinRegistry {
         #[cfg(feature = "migrate")]
         {
             use crate::migrate::MigrateExtension;
-            let ext = MigrateExtension::default();
+            let ext = MigrateExtension;
             registry.register(Box::new(ext));
         }
 
@@ -67,7 +67,7 @@ mod tests {
 
         #[cfg(feature = "migrate")]
         {
-            assert!(builtins.len() >= 1, "Expected at least migrate builtin");
+            assert!(!builtins.is_empty(), "Expected at least migrate builtin");
             assert!(registry.contains("migrate"), "Should contain migrate");
         }
     }

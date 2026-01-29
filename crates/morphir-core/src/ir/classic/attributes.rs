@@ -8,8 +8,9 @@ use std::fmt;
 /// A specialized Option-like type for attributes with custom serialization behavior.
 /// In Morphir IR V3, empty attributes are represented as `{}` in JSON.
 /// This type is similar to `Option<A>` but with special serialization handling.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum Attrs<A = ()> {
+    #[default]
     None,
     Some(A),
 }
@@ -86,9 +87,10 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Attrs<A> {
                 } else {
                     // Reconstruct the map and deserialize
                     let map_value = serde_json::Value::Object(
-                        entries.into_iter()
+                        entries
+                            .into_iter()
                             .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), v)))
-                            .collect()
+                            .collect(),
                     );
                     let value = A::deserialize(map_value).map_err(Error::custom)?;
                     Ok(Attrs::Some(value))
@@ -128,12 +130,6 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Attrs<A> {
 
 impl From<()> for Attrs {
     fn from(_: ()) -> Self {
-        Attrs::None
-    }
-}
-
-impl Default for Attrs {
-    fn default() -> Self {
         Attrs::None
     }
 }
@@ -188,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_default() {
-        let attrs = Attrs::default();
+        let attrs: Attrs = Attrs::default();
         assert_eq!(attrs, Attrs::None);
     }
 
@@ -223,10 +219,13 @@ mod tests {
         let json = r#"{"name":"test","version":1}"#;
         let attrs: Attrs<CustomAttrs> = serde_json::from_str(json).expect("Failed to deserialize");
 
-        assert_eq!(attrs, Attrs::Some(CustomAttrs {
-            name: "test".to_string(),
-            version: 1,
-        }));
+        assert_eq!(
+            attrs,
+            Attrs::Some(CustomAttrs {
+                name: "test".to_string(),
+                version: 1,
+            })
+        );
     }
 
     #[test]
@@ -243,7 +242,8 @@ mod tests {
         });
 
         let serialized = serde_json::to_string(&original).expect("Failed to serialize");
-        let deserialized: Attrs<CustomAttrs> = serde_json::from_str(&serialized).expect("Failed to deserialize");
+        let deserialized: Attrs<CustomAttrs> =
+            serde_json::from_str(&serialized).expect("Failed to deserialize");
 
         assert_eq!(original, deserialized);
     }
@@ -282,7 +282,8 @@ mod tests {
         assert_eq!(json, expected);
 
         // Verify it deserializes back correctly
-        let deserialized: Attrs<MyAttrs> = serde_json::from_str(&json).expect("Failed to deserialize");
+        let deserialized: Attrs<MyAttrs> =
+            serde_json::from_str(&json).expect("Failed to deserialize");
         assert_eq!(deserialized, attrs);
     }
 
@@ -300,7 +301,8 @@ mod tests {
         assert_eq!(json, "{}");
 
         // Verify {} deserializes back to None
-        let deserialized: Attrs<MyAttrs> = serde_json::from_str(&json).expect("Failed to deserialize");
+        let deserialized: Attrs<MyAttrs> =
+            serde_json::from_str(&json).expect("Failed to deserialize");
         assert_eq!(deserialized, Attrs::None);
     }
 }

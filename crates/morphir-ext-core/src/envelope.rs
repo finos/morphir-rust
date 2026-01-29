@@ -6,25 +6,17 @@
 use serde::{Deserialize, Serialize};
 
 /// Header contains metadata for envelope routing and tracking.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
     /// Sequence number for tracking message order.
+    #[serde(default)]
     pub seqnum: u64,
     /// Session identifier for grouping related messages.
+    #[serde(default)]
     pub session_id: String,
     /// Optional kind/type hint for the envelope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-}
-
-impl Default for Header {
-    fn default() -> Self {
-        Self {
-            seqnum: 0,
-            session_id: String::new(),
-            kind: None,
-        }
-    }
 }
 
 /// Envelope wraps all extension messages with metadata and typed content.

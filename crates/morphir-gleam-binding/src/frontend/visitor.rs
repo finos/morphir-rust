@@ -11,7 +11,6 @@ use morphir_common::vfs::Vfs;
 use morphir_core::ir::attributes::{TypeAttributes, ValueAttributes};
 use morphir_core::ir::literal::Literal as MorphirLiteral;
 use morphir_core::ir::pattern::Pattern as MorphirPattern;
-use morphir_core::ir::serde_v4::serialize_value;
 use morphir_core::ir::type_expr::{Field, Type};
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlledConstructors, AccessControlledTypeDefinition,
@@ -21,22 +20,10 @@ use morphir_core::ir::v4::{
 };
 use morphir_core::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
-use serde::Serialize;
 use serde_json;
 use std::io::Result;
 use std::path::{Path, PathBuf};
 
-/// Wrapper type that serializes Value in V4 format
-struct V4ValueWrapper<'a>(&'a Value);
-
-impl<'a> Serialize for V4ValueWrapper<'a> {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serialize_value(self.0, serializer)
-    }
-}
 
 /// Distribution layout mode
 #[derive(Debug, Clone, Copy)]
@@ -230,8 +217,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                                 let morphir_type = self.convert_type_expr(field_type);
                                 ConstructorArg {
                                     name: Name::from(""), // Gleam doesn't name constructor args
-                                    arg_type: serde_json::to_value(&morphir_type)
-                                        .unwrap_or(serde_json::Value::Null),
+                                    arg_type: morphir_type,
                                 }
                             })
                             .collect();
@@ -261,7 +247,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let type_expr = self.convert_type_expr(&type_def.body);
                 let v4_type_def = V4TypeDefinition::TypeAliasDefinition {
                     type_params: type_params.clone(),
-                    type_expr: serde_json::to_value(&type_expr).unwrap_or(serde_json::Value::Null),
+                    type_expr,
                 };
 
                 Ok(AccessControlledTypeDefinition {
@@ -290,18 +276,14 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         // Convert output type
         let output_type = if let Some(type_ann) = &value_def.type_annotation {
-            let morphir_type = self.extract_output_type_type(type_ann);
-            serde_json::to_value(&morphir_type).unwrap_or(serde_json::Value::Null)
+            self.extract_output_type_type(type_ann)
         } else {
-            serde_json::json!({"Unit": {}})
+            Type::Unit(TypeAttributes::default())
         };
 
-        // Convert body expression and serialize in V4 format
+        // Convert body expression
         let body_value = self.convert_expr(&value_def.body);
-        let body = V4ValueBody::ExpressionBody {
-            body: serde_json::to_value(V4ValueWrapper(&body_value))
-                .unwrap_or(serde_json::Value::Null),
-        };
+        let body = V4ValueBody::ExpressionBody { body: body_value };
 
         let v4_value_def = V4ValueDefinition {
             input_types,
@@ -332,8 +314,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     format!("arg{}", i + 1),
                     InputTypeEntry {
                         type_attributes: None,
-                        input_type: serde_json::to_value(&morphir_type)
-                            .unwrap_or(serde_json::Value::Null),
+                        input_type: morphir_type,
                     },
                 );
             }

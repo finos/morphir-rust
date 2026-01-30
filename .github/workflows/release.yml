@@ -97,7 +97,7 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/morphir.exe" -DestinationPath "morphir-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: morphir-${{ matrix.target }}
           path: morphir-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true

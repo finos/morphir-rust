@@ -441,9 +441,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.54"
+version = "1.2.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6354c81bbfd62d9cfa9cb3c773c2b7b2a3a482d569de977fd0e961f6e7c00583"
+checksum = "47b26a0954ae34af09b50f0de26458fa95369a0d478d8236d3f93082b219bd29"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1526,9 +1526,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8591b0bcc8a98a64310a2fae1bb3e9b8564dd10e381e6e28010fde8e8e8568db"
+checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "finl_unicode"
@@ -3113,7 +3113,7 @@ dependencies = [
  "morphir-extension-sdk",
  "owo-colors",
  "ratatui 0.30.0",
- "schemars 0.9.0",
+ "schemars 1.2.0",
  "serde",
  "serde_json",
  "starbase",
@@ -3127,7 +3127,7 @@ dependencies = [
  "tracing-subscriber",
  "tui-realm-stdlib",
  "tui-realm-textarea",
- "tuirealm 2.2.0",
+ "tuirealm 3.3.0",
  "usage-lib",
  "walkdir",
 ]
@@ -3177,7 +3177,7 @@ dependencies = [
  "indexmap 2.13.0",
  "lasso",
  "rstest",
- "schemars 0.9.0",
+ "schemars 1.2.0",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -4675,9 +4675,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f"
 dependencies = [
  "dyn-clone",
- "indexmap 2.13.0",
  "ref-cast",
- "schemars_derive",
  "serde",
  "serde_json",
 ]
@@ -4689,16 +4687,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54e910108742c57a770f492731f99be216a52fadd361b06c8fb59d74ccc267d2"
 dependencies = [
  "dyn-clone",
+ "indexmap 2.13.0",
  "ref-cast",
+ "schemars_derive",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "schemars_derive"
-version = "0.9.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5016d94c77c6d32f0b8e08b781f7dc8a90c2007d4e77472cc2807bc10a8438fe"
+checksum = "4908ad288c5035a8eb12cfdf0d49270def0a268ee162b75eeee0f85d155a7c45"
 dependencies = [
  "proc-macro2",
  "quote",

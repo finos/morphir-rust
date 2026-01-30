@@ -3,31 +3,24 @@
 //! This module defines type definitions including type aliases and custom types
 //! (algebraic data types). V4 adds IncompleteTypeDefinition for error recovery.
 //!
-//! # Default Type Parameter
+//! # Examples
 //!
-//! V4 is the default format - `TypeDefinition` without type parameters uses `TypeAttributes`:
 //! ```rust,ignore
-//! let def: TypeDefinition = TypeDefinition::type_alias(...);  // V4
-//! let def: TypeDefinition<serde_json::Value> = ...;  // Classic
+//! let def: TypeDefinition = TypeDefinition::type_alias(vec![], Type::unit(TypeAttributes::default()));
 //! ```
 
-use super::attributes::TypeAttributes;
 use super::type_expr::Type;
 use super::value_expr::HoleReason;
 use crate::naming::Name;
 
-/// A type definition with generic attributes.
+/// A type definition with V4 attributes.
 ///
 /// Type definitions describe the shape of types in the Morphir IR.
 /// V4 adds IncompleteTypeDefinition for incremental compilation.
-///
-/// # Type Parameters
-/// - `A`: The type of attributes attached to type nodes.
-///   Defaults to `TypeAttributes` (V4 format).
 // The variant names include "Definition" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeDefinition<A: Clone = TypeAttributes> {
+pub enum TypeDefinition {
     /// Type alias definition
     ///
     /// Example: `type alias Person = { name : String, age : Int }`
@@ -35,7 +28,7 @@ pub enum TypeDefinition<A: Clone = TypeAttributes> {
         /// Type parameters (e.g., `a` in `type alias Maybe a = ...`)
         type_params: Vec<Name>,
         /// The type this alias expands to
-        type_expr: Type<A>,
+        type_expr: Type,
     },
 
     /// Custom type (algebraic data type) definition
@@ -45,7 +38,7 @@ pub enum TypeDefinition<A: Clone = TypeAttributes> {
         /// Type parameters
         type_params: Vec<Name>,
         /// Access control for the constructors
-        access_controlled_ctors: AccessControlled<Vec<Constructor<A>>>,
+        access_controlled_ctors: AccessControlled<Vec<Constructor>>,
     },
 
     /// Incomplete type definition (V4 only)
@@ -75,18 +68,18 @@ pub enum AccessControlled<T> {
 ///
 /// Example: `Just` in `type Maybe a = Just a | Nothing`
 #[derive(Debug, Clone, PartialEq)]
-pub struct Constructor<A: Clone = TypeAttributes> {
+pub struct Constructor {
     /// The name of the constructor (e.g., `Just`)
     pub name: Name,
     /// The arguments to the constructor with their names and types
-    pub args: Vec<ConstructorArg<A>>,
+    pub args: Vec<ConstructorArg>,
 }
 
 /// Constructor argument tuple struct: (name, type)
 ///
-/// More ergonomic than `(Name, Type<A>)`.
+/// More ergonomic than `(Name, Type)`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConstructorArg<A: Clone = TypeAttributes>(pub Name, pub Type<A>);
+pub struct ConstructorArg(pub Name, pub Type);
 
 /// Reason for an incomplete type (V4 only)
 #[derive(Debug, Clone, PartialEq)]
@@ -97,9 +90,9 @@ pub enum Incompleteness {
     Draft,
 }
 
-impl<A: Clone> TypeDefinition<A> {
+impl TypeDefinition {
     /// Create a type alias definition
-    pub fn type_alias(type_params: Vec<Name>, type_expr: Type<A>) -> Self {
+    pub fn type_alias(type_params: Vec<Name>, type_expr: Type) -> Self {
         TypeDefinition::TypeAliasDefinition {
             type_params,
             type_expr,
@@ -107,7 +100,7 @@ impl<A: Clone> TypeDefinition<A> {
     }
 
     /// Create a custom type definition with public constructors
-    pub fn custom_type_public(type_params: Vec<Name>, constructors: Vec<Constructor<A>>) -> Self {
+    pub fn custom_type_public(type_params: Vec<Name>, constructors: Vec<Constructor>) -> Self {
         TypeDefinition::CustomTypeDefinition {
             type_params,
             access_controlled_ctors: AccessControlled::Public(constructors),
@@ -115,7 +108,7 @@ impl<A: Clone> TypeDefinition<A> {
     }
 
     /// Create a custom type definition with private constructors (opaque type)
-    pub fn custom_type_private(type_params: Vec<Name>, constructors: Vec<Constructor<A>>) -> Self {
+    pub fn custom_type_private(type_params: Vec<Name>, constructors: Vec<Constructor>) -> Self {
         TypeDefinition::CustomTypeDefinition {
             type_params,
             access_controlled_ctors: AccessControlled::Private(constructors),
@@ -178,9 +171,9 @@ impl<T> AccessControlled<T> {
     }
 }
 
-impl<A: Clone> Constructor<A> {
+impl Constructor {
     /// Create a new constructor
-    pub fn new(name: Name, args: Vec<ConstructorArg<A>>) -> Self {
+    pub fn new(name: Name, args: Vec<ConstructorArg>) -> Self {
         Constructor { name, args }
     }
 
@@ -190,9 +183,9 @@ impl<A: Clone> Constructor<A> {
     }
 }
 
-impl<A: Clone> ConstructorArg<A> {
+impl ConstructorArg {
     /// Create a new constructor argument
-    pub fn new(name: Name, tpe: Type<A>) -> Self {
+    pub fn new(name: Name, tpe: Type) -> Self {
         ConstructorArg(name, tpe)
     }
 
@@ -202,7 +195,7 @@ impl<A: Clone> ConstructorArg<A> {
     }
 
     /// Get the type
-    pub fn tpe(&self) -> &Type<A> {
+    pub fn tpe(&self) -> &Type {
         &self.1
     }
 }
@@ -210,11 +203,13 @@ impl<A: Clone> ConstructorArg<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::attributes::TypeAttributes;
     use crate::ir::type_expr::Type;
 
     #[test]
     fn test_type_alias_definition() {
-        let def: TypeDefinition<()> = TypeDefinition::type_alias(vec![], Type::unit(()));
+        let def: TypeDefinition =
+            TypeDefinition::type_alias(vec![], Type::unit(TypeAttributes::default()));
         assert!(matches!(def, TypeDefinition::TypeAliasDefinition { .. }));
     }
 
@@ -225,11 +220,11 @@ mod tests {
             Name::from("Just"),
             vec![ConstructorArg::new(
                 Name::from("value"),
-                Type::variable((), Name::from("a")),
+                Type::variable(TypeAttributes::default(), Name::from("a")),
             )],
         );
 
-        let def: TypeDefinition<()> =
+        let def: TypeDefinition =
             TypeDefinition::custom_type_public(vec![Name::from("a")], vec![just, nothing]);
 
         if let TypeDefinition::CustomTypeDefinition {
@@ -247,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_opaque_type() {
-        let def: TypeDefinition<()> = TypeDefinition::custom_type_private(
+        let def: TypeDefinition = TypeDefinition::custom_type_private(
             vec![],
             vec![Constructor::constant(Name::from("Internal"))],
         );
@@ -265,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_incomplete_type_definition() {
-        let def: TypeDefinition<()> =
+        let def: TypeDefinition =
             TypeDefinition::incomplete(vec![Name::from("a")], Incompleteness::Draft);
 
         assert!(matches!(

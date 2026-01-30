@@ -37,6 +37,7 @@ Guide through pre-release preparation:
    # Help user move entries from [Unreleased] to [version]
    cargo check  # Update Cargo.lock
    mise run docs:generate  # Update docs site (CLI docs + release notes)
+   mise run docs:llms-txt  # Generate llms.txt for AI agents
    git add Cargo.toml Cargo.lock CHANGELOG.md docs/
    git commit -m "chore: prepare release v<version>"
    mise run release:tag-create <version> --push
@@ -169,6 +170,7 @@ Generate user-friendly release summaries:
 | Post-release validation | `mise run release:post-release <v>` | Validate release artifacts |
 | Generate all docs | `mise run docs:generate` | CLI + release notes |
 | Generate release notes | `mise run docs:releases` | From CHANGELOG.md |
+| Generate llms.txt | `mise run docs:llms-txt` | AI-readable doc index |
 | Serve docs locally | `mise run docs:serve` | Jekyll dev server |
 
 ## Important Guidelines

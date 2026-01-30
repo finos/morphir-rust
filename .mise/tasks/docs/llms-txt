@@ -1,0 +1,19 @@
+#!/bin/sh
+#MISE description="Generate llms.txt and llms-full.txt from documentation"
+#MISE alias="llms"
+
+set -e
+
+DOCS_DIR="${1:-docs}"
+OUTPUT_DIR="${2:-docs}"
+
+echo "Generating llms.txt files from ${DOCS_DIR}..."
+
+# Run the Python generator script
+python3 .claude/skills/technical-writer/scripts/generate_llms_txt.py \
+    --docs-dir "$DOCS_DIR" \
+    --output-dir "$OUTPUT_DIR"
+
+echo "Generated:"
+echo "  - ${OUTPUT_DIR}/llms.txt (compact index)"
+echo "  - ${OUTPUT_DIR}/llms-full.txt (full content)"

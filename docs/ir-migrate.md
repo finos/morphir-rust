@@ -1,7 +1,8 @@
 ---
 layout: default
 title: IR Migration Guide
-nav_order: 5
+nav_exclude: true
+redirect_to: /morphir-rust/cli/ir/migrate
 ---
 
 # IR Migrate Command

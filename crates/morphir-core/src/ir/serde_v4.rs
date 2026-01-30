@@ -437,6 +437,7 @@ struct VariableDeContent<A> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
 struct ReferenceDeContent<A: Clone> {
     fqname: String,
     args: Option<Vec<Type<A>>>,
@@ -445,6 +446,7 @@ struct ReferenceDeContent<A: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
 struct TupleDeContent<A: Clone> {
     elements: Vec<Type<A>>,
     attrs: Option<A>,
@@ -452,6 +454,7 @@ struct TupleDeContent<A: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
 struct RecordDeContent<A: Clone> {
     fields: IndexMap<String, Type<A>>,
     attrs: Option<A>,
@@ -459,6 +462,7 @@ struct RecordDeContent<A: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
 struct ExtensibleRecordDeContent<A: Clone> {
     variable: String,
     fields: IndexMap<String, Type<A>>,
@@ -467,6 +471,7 @@ struct ExtensibleRecordDeContent<A: Clone> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
 struct FunctionDeContent<A: Clone> {
     arg: Type<A>,
     result: Type<A>,

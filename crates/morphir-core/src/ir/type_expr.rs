@@ -1,95 +1,80 @@
 //! Type expressions for Morphir IR.
 //!
-//! This module defines the `Type<A>` enum which represents type expressions
-//! in the Morphir IR. The type parameter `A` represents the attributes
-//! associated with each type node.
+//! This module defines the `Type` enum which represents type expressions
+//! in the Morphir IR. Type attributes are always `TypeAttributes` (V4 format).
 //!
-//! # Default Type Parameter
+//! # Examples
 //!
-//! V4 is the default format - `Type` without type parameters uses `TypeAttributes`:
 //! ```rust,ignore
-//! let t: Type = Type::Unit(TypeAttributes::default());  // V4 type
-//! let t: Type<serde_json::Value> = Type::Unit(json!({}));  // Classic type
+//! let t: Type = Type::Unit(TypeAttributes::default());
 //! ```
 
 use super::attributes::TypeAttributes;
 use crate::naming::{FQName, Name};
 
-/// A type expression with generic attributes.
+/// A type expression with V4 attributes.
 ///
 /// Type expressions form the type system of Morphir IR. Each variant
-/// carries attributes of type `A` which can store metadata like
+/// carries `TypeAttributes` which can store metadata like
 /// source locations, type constraints, or extensions.
-///
-/// # Type Parameters
-/// - `A`: The type of attributes attached to each type node.
-///   Defaults to `TypeAttributes` (V4 format).
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// // V4 format (default) - uses TypeAttributes
 /// let t: Type = Type::Unit(TypeAttributes::default());
-///
-/// // Classic format - explicit serde_json::Value
-/// let t: Type<serde_json::Value> = Type::Unit(serde_json::json!({}));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type<A: Clone = TypeAttributes> {
+pub enum Type {
     /// Type variable (generic type parameter)
     ///
     /// Example: `a` in `List a`
-    Variable(A, Name),
+    Variable(TypeAttributes, Name),
 
     /// Reference to a named type
     ///
     /// Example: `List Int` is `Reference(_, fqname_of_list, [Type::Reference(_, fqname_of_int, [])])`
-    Reference(A, FQName, Vec<Type<A>>),
+    Reference(TypeAttributes, FQName, Vec<Type>),
 
     /// Tuple type (product type with positional elements)
     ///
     /// Example: `(Int, String, Bool)`
-    Tuple(A, Vec<Type<A>>),
+    Tuple(TypeAttributes, Vec<Type>),
 
     /// Record type (product type with named fields)
     ///
     /// Example: `{ name : String, age : Int }`
-    Record(A, Vec<Field<A>>),
+    Record(TypeAttributes, Vec<Field>),
 
     /// Extensible record type (record with a row variable)
     ///
     /// Example: `{ a | name : String }` where `a` is the row variable
-    ExtensibleRecord(A, Name, Vec<Field<A>>),
+    ExtensibleRecord(TypeAttributes, Name, Vec<Field>),
 
     /// Function type (arrow type)
     ///
     /// Example: `Int -> String`
-    Function(A, Box<Type<A>>, Box<Type<A>>),
+    Function(TypeAttributes, Box<Type>, Box<Type>),
 
     /// Unit type (empty tuple, void equivalent)
     ///
     /// Example: `()`
-    Unit(A),
+    Unit(TypeAttributes),
 }
 
 /// A field in a record type.
 ///
 /// Fields have a name and a type.
-///
-/// # Type Parameters
-/// - `A`: The type of attributes attached to the field's type.
-///   Defaults to `TypeAttributes` (V4 format).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Field<A: Clone = TypeAttributes> {
+pub struct Field {
     /// The name of the field
     pub name: Name,
     /// The type of the field
-    pub tpe: Type<A>,
+    pub tpe: Type,
 }
 
-impl<A: Clone> Type<A> {
+impl Type {
     /// Get the attributes of this type
-    pub fn attributes(&self) -> &A {
+    pub fn attributes(&self) -> &TypeAttributes {
         match self {
             Type::Variable(a, _) => a,
             Type::Reference(a, _, _) => a,
@@ -102,91 +87,44 @@ impl<A: Clone> Type<A> {
     }
 
     /// Create a variable type
-    pub fn variable(attrs: A, name: Name) -> Self {
+    pub fn variable(attrs: TypeAttributes, name: Name) -> Self {
         Type::Variable(attrs, name)
     }
 
     /// Create a reference type
-    pub fn reference(attrs: A, fqname: FQName, type_params: Vec<Type<A>>) -> Self {
+    pub fn reference(attrs: TypeAttributes, fqname: FQName, type_params: Vec<Type>) -> Self {
         Type::Reference(attrs, fqname, type_params)
     }
 
     /// Create a tuple type
-    pub fn tuple(attrs: A, elements: Vec<Type<A>>) -> Self {
+    pub fn tuple(attrs: TypeAttributes, elements: Vec<Type>) -> Self {
         Type::Tuple(attrs, elements)
     }
 
     /// Create a record type
-    pub fn record(attrs: A, fields: Vec<Field<A>>) -> Self {
+    pub fn record(attrs: TypeAttributes, fields: Vec<Field>) -> Self {
         Type::Record(attrs, fields)
     }
 
     /// Create an extensible record type
-    pub fn extensible_record(attrs: A, variable: Name, fields: Vec<Field<A>>) -> Self {
+    pub fn extensible_record(attrs: TypeAttributes, variable: Name, fields: Vec<Field>) -> Self {
         Type::ExtensibleRecord(attrs, variable, fields)
     }
 
     /// Create a function type
-    pub fn function(attrs: A, arg: Type<A>, result: Type<A>) -> Self {
+    pub fn function(attrs: TypeAttributes, arg: Type, result: Type) -> Self {
         Type::Function(attrs, Box::new(arg), Box::new(result))
     }
 
     /// Create a unit type
-    pub fn unit(attrs: A) -> Self {
+    pub fn unit(attrs: TypeAttributes) -> Self {
         Type::Unit(attrs)
     }
 }
 
-impl<A: Clone> Type<A> {
-    /// Map a function over the attributes of this type and all nested types
-    pub fn map_attributes<B: Clone, F>(&self, f: &F) -> Type<B>
-    where
-        F: Fn(&A) -> B,
-    {
-        match self {
-            Type::Variable(a, name) => Type::Variable(f(a), name.clone()),
-            Type::Reference(a, fqname, params) => Type::Reference(
-                f(a),
-                fqname.clone(),
-                params.iter().map(|p| p.map_attributes(f)).collect(),
-            ),
-            Type::Tuple(a, elements) => {
-                Type::Tuple(f(a), elements.iter().map(|e| e.map_attributes(f)).collect())
-            }
-            Type::Record(a, fields) => Type::Record(
-                f(a),
-                fields
-                    .iter()
-                    .map(|field| Field {
-                        name: field.name.clone(),
-                        tpe: field.tpe.map_attributes(f),
-                    })
-                    .collect(),
-            ),
-            Type::ExtensibleRecord(a, var, fields) => Type::ExtensibleRecord(
-                f(a),
-                var.clone(),
-                fields
-                    .iter()
-                    .map(|field| Field {
-                        name: field.name.clone(),
-                        tpe: field.tpe.map_attributes(f),
-                    })
-                    .collect(),
-            ),
-            Type::Function(a, arg, result) => Type::Function(
-                f(a),
-                Box::new(arg.map_attributes(f)),
-                Box::new(result.map_attributes(f)),
-            ),
-            Type::Unit(a) => Type::Unit(f(a)),
-        }
-    }
-}
-
-impl<A: Clone> Field<A> {
+impl Field {
     /// Create a new field
-    pub fn new(name: Name, tpe: Type<A>) -> Self {
+    pub fn new(name: Name, tpe: Type) -> Self {
         Field { name, tpe }
     }
 }
@@ -197,26 +135,23 @@ mod tests {
 
     #[test]
     fn test_variable_type() {
-        let var: Type<()> = Type::variable((), Name::from("a"));
+        let var: Type = Type::variable(TypeAttributes::default(), Name::from("a"));
         assert!(matches!(var, Type::Variable(_, _)));
     }
 
     #[test]
     fn test_unit_type() {
-        let unit: Type<()> = Type::unit(());
+        let unit: Type = Type::unit(TypeAttributes::default());
         assert!(matches!(unit, Type::Unit(_)));
     }
 
     #[test]
     fn test_function_type() {
-        let func: Type<()> = Type::function((), Type::unit(()), Type::unit(()));
+        let func: Type = Type::function(
+            TypeAttributes::default(),
+            Type::unit(TypeAttributes::default()),
+            Type::unit(TypeAttributes::default()),
+        );
         assert!(matches!(func, Type::Function(_, _, _)));
-    }
-
-    #[test]
-    fn test_map_attributes() {
-        let var: Type<i32> = Type::Variable(1, Name::from("a"));
-        let mapped: Type<String> = var.map_attributes(&|n| n.to_string());
-        assert!(matches!(mapped, Type::Variable(s, _) if s == "1"));
     }
 }

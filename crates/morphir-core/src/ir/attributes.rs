@@ -9,10 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::pattern::Pattern;
-use super::type_def::TypeDefinition;
-use super::type_expr::{Field, Type};
-use super::value_expr::{Value, ValueDefinition};
+use super::type_expr::Type;
+use super::value_expr::Value;
 
 /// Source location information for error messages and tooling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,27 +93,8 @@ pub type ValueExpr = Value;
 // =============================================================================
 // Classic Type Aliases - For backward compatibility with V1-V3
 // =============================================================================
-
-/// Classic attributes (empty object {})
-pub type ClassicAttrs = serde_json::Value;
-
-/// Classic Type expression with generic JSON attributes
-pub type ClassicType = Type<ClassicAttrs>;
-
-/// Classic Field with generic JSON attributes
-pub type ClassicField = Field<ClassicAttrs>;
-
-/// Classic Pattern with generic JSON attributes
-pub type ClassicPattern = Pattern<ClassicAttrs>;
-
-/// Classic Value with generic JSON attributes
-pub type ClassicValue = Value<ClassicAttrs, ClassicAttrs>;
-
-/// Classic Value definition with generic JSON attributes
-pub type ClassicValueDefinition = ValueDefinition<ClassicAttrs, ClassicAttrs>;
-
-/// Classic Type definition with generic JSON attributes
-pub type ClassicTypeDefinition = TypeDefinition<ClassicAttrs>;
+// Note: Classic types live in the ir::classic module and remain generic.
+// Use `crate::ir::classic::{Type, Pattern, Value, ...}` directly for V1-V3 support.
 
 // =============================================================================
 // Convenience constructors

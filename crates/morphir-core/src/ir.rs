@@ -4,11 +4,11 @@
 //!
 //! # Type Aliases
 //!
-//! For V4 (preferred), use `Type`, `Value`, `Pattern` directly (defaults to V4 attributes).
-//! Or use the convenience aliases `TypeExpr` and `ValueExpr`.
+//! For V4 (preferred), use `Type`, `Value`, `Pattern` directly with `TypeAttributes`
+//! and `ValueAttributes`. Or use the convenience aliases `TypeExpr` and `ValueExpr`.
 //!
-//! For Classic (V1-V3 compatibility), use the `Classic` prefix:
-//! - [`ClassicType`], [`ClassicValue`], [`ClassicPattern`], etc.
+//! For Classic (V1-V3 compatibility), use the `classic` submodule directly:
+//! - `ir::classic::Type<A>`, `ir::classic::Value<TA, VA>`, etc.
 
 // V4 Core Types (Primary)
 pub mod attributes;
@@ -26,14 +26,6 @@ pub mod v4;
 
 // Re-exports for V4 types (primary)
 pub use attributes::{
-    // Classic type aliases (for V1-V3 compatibility)
-    ClassicAttrs,
-    ClassicField,
-    ClassicPattern,
-    ClassicType,
-    ClassicTypeDefinition,
-    ClassicValue,
-    ClassicValueDefinition,
     SourceLocation,
     TypeAttributes,
     // Convenience aliases

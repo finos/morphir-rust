@@ -4,7 +4,6 @@
 //! using Vfs for file generation.
 
 use morphir_common::vfs::Vfs;
-use morphir_core::ir::attributes::{TypeAttributes, ValueAttributes};
 use morphir_core::ir::literal::Literal as MorphirLiteral;
 use morphir_core::ir::pattern::Pattern as MorphirPattern;
 use morphir_core::ir::serde_v4::deserialize_value;
@@ -396,17 +395,13 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
     fn deserialize_value_body(
         &self,
         body: &serde_json::Value,
-    ) -> std::result::Result<Value<TypeAttributes, ValueAttributes>, String> {
+    ) -> std::result::Result<Value, String> {
         let deserializer = body.clone().into_deserializer();
         deserialize_value(deserializer).map_err(|e| e.to_string())
     }
 
     /// Generate value expression
-    fn generate_value_expr(
-        &self,
-        output: &mut String,
-        value: &Value<TypeAttributes, ValueAttributes>,
-    ) -> Result<()> {
+    fn generate_value_expr(&self, output: &mut String, value: &Value) -> Result<()> {
         match value {
             Value::Literal(_, lit) => {
                 self.generate_literal(output, lit)?;
@@ -515,11 +510,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
     }
 
     /// Generate pattern
-    fn generate_pattern(
-        &self,
-        output: &mut String,
-        pattern: &MorphirPattern<ValueAttributes>,
-    ) -> Result<()> {
+    fn generate_pattern(&self, output: &mut String, pattern: &MorphirPattern) -> Result<()> {
         match pattern {
             MorphirPattern::WildcardPattern(_) => {
                 output.push('_');
@@ -611,11 +602,11 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
 /// Helper trait for ValueBody to extract the expression
 trait ValueBodyExt {
-    fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>>;
+    fn get_expression(&self) -> Result<&Value>;
 }
 
-impl ValueBodyExt for morphir_core::ir::value_expr::ValueBody<TypeAttributes, ValueAttributes> {
-    fn get_expression(&self) -> Result<&Value<TypeAttributes, ValueAttributes>> {
+impl ValueBodyExt for morphir_core::ir::value_expr::ValueBody {
+    fn get_expression(&self) -> Result<&Value> {
         match self {
             morphir_core::ir::value_expr::ValueBody::Expression(expr) => Ok(expr),
             _ => Err(std::io::Error::new(

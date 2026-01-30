@@ -27,9 +27,9 @@ use std::io::Result;
 use std::path::{Path, PathBuf};
 
 /// Wrapper type that serializes Value in V4 format
-struct V4ValueWrapper<'a, TA: Clone + Serialize, VA: Clone + Serialize>(&'a Value<TA, VA>);
+struct V4ValueWrapper<'a>(&'a Value);
 
-impl<'a, TA: Clone + Serialize, VA: Clone + Serialize> Serialize for V4ValueWrapper<'a, TA, VA> {
+impl<'a> Serialize for V4ValueWrapper<'a> {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -343,7 +343,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Extract output type from function type annotation (returns Type)
-    fn extract_output_type_type(&self, type_expr: &TypeExpr) -> Type<TypeAttributes> {
+    fn extract_output_type_type(&self, type_expr: &TypeExpr) -> Type {
         match type_expr {
             TypeExpr::Function {
                 parameters: _,
@@ -354,7 +354,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Convert TypeExpr to Morphir IR Type
-    pub(crate) fn convert_type_expr(&self, type_expr: &TypeExpr) -> Type<TypeAttributes> {
+    pub(crate) fn convert_type_expr(&self, type_expr: &TypeExpr) -> Type {
         let attrs = TypeAttributes::default();
 
         match type_expr {
@@ -376,7 +376,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 result
             }
             TypeExpr::Record { fields } => {
-                let morphir_fields: Vec<Field<TypeAttributes>> = fields
+                let morphir_fields: Vec<Field> = fields
                     .iter()
                     .map(|(name, tpe)| Field {
                         name: Name::from(name.as_str()),
@@ -386,7 +386,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Type::Record(attrs, morphir_fields)
             }
             TypeExpr::Tuple { elements } => {
-                let morphir_elements: Vec<Type<TypeAttributes>> =
+                let morphir_elements: Vec<Type> =
                     elements.iter().map(|e| self.convert_type_expr(e)).collect();
                 Type::Tuple(attrs, morphir_elements)
             }
@@ -403,7 +403,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     local_name: Name::from(name.as_str()),
                 };
 
-                let morphir_args: Vec<Type<TypeAttributes>> = parameters
+                let morphir_args: Vec<Type> = parameters
                     .iter()
                     .map(|a| self.convert_type_expr(a))
                     .collect();
@@ -422,7 +422,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Helper to extract expression from Field<Expr>
-    fn extract_field_expr(&self, field: &AstField<Expr>) -> Value<TypeAttributes, ValueAttributes> {
+    fn extract_field_expr(&self, field: &AstField<Expr>) -> Value {
         match field {
             AstField::Labelled { item, .. } => self.convert_expr(item),
             AstField::Shorthand { name } => {
@@ -433,7 +433,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Convert Expr to Morphir IR Value
-    pub(crate) fn convert_expr(&self, expr: &Expr) -> Value<TypeAttributes, ValueAttributes> {
+    pub(crate) fn convert_expr(&self, expr: &Expr) -> Value {
         let attrs = ValueAttributes::default();
 
         match expr {
@@ -496,7 +496,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Box::new(self.convert_expr(else_branch)),
             ),
             Expr::Record { fields } => {
-                let morphir_fields: Vec<RecordFieldEntry<TypeAttributes, ValueAttributes>> = fields
+                let morphir_fields: Vec<RecordFieldEntry> = fields
                     .iter()
                     .map(|(name, expr)| {
                         RecordFieldEntry(Name::from(name.as_str()), self.convert_expr(expr))
@@ -510,7 +510,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Name::from(label.as_str()),
             ),
             Expr::Tuple { elements } => {
-                let morphir_elements: Vec<Value<TypeAttributes, ValueAttributes>> =
+                let morphir_elements: Vec<Value> =
                     elements.iter().map(|e| self.convert_expr(e)).collect();
                 Value::Tuple(attrs, morphir_elements)
             }
@@ -529,9 +529,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     .map(|s| self.convert_expr(s))
                     .unwrap_or_else(|| Value::Unit(attrs.clone()));
 
-                let morphir_cases: Vec<
-                    morphir_core::ir::value_expr::PatternCase<TypeAttributes, ValueAttributes>,
-                > = clauses
+                let morphir_cases: Vec<morphir_core::ir::value_expr::PatternCase> = clauses
                     .iter()
                     .map(|branch| {
                         morphir_core::ir::value_expr::PatternCase(
@@ -598,7 +596,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 )
             }
             Expr::List { elements, tail } => {
-                let morphir_elements: Vec<Value<TypeAttributes, ValueAttributes>> =
+                let morphir_elements: Vec<Value> =
                     elements.iter().map(|e| self.convert_expr(e)).collect();
                 // For now, ignore tail and just create a list
                 let _ = tail; // TODO: Handle tail properly
@@ -655,7 +653,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Helper to extract pattern from Field<Pattern>
-    fn extract_field_pattern(&self, field: &AstField<Pattern>) -> MorphirPattern<ValueAttributes> {
+    fn extract_field_pattern(&self, field: &AstField<Pattern>) -> MorphirPattern {
         match field {
             AstField::Labelled { item, .. } => self.convert_pattern(item),
             AstField::Shorthand { name } => MorphirPattern::AsPattern(
@@ -668,7 +666,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Convert Pattern to Morphir IR Pattern
-    fn convert_pattern(&self, pattern: &Pattern) -> MorphirPattern<ValueAttributes> {
+    fn convert_pattern(&self, pattern: &Pattern) -> MorphirPattern {
         let attrs = ValueAttributes::default();
 
         match pattern {
@@ -694,7 +692,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     local_name: Name::from(name.as_str()),
                 };
 
-                let morphir_args: Vec<MorphirPattern<ValueAttributes>> = arguments
+                let morphir_args: Vec<MorphirPattern> = arguments
                     .iter()
                     .map(|a| self.extract_field_pattern(a))
                     .collect();
@@ -702,13 +700,13 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 MorphirPattern::ConstructorPattern(attrs, fqname, morphir_args)
             }
             Pattern::Tuple { elements } => {
-                let morphir_elements: Vec<MorphirPattern<ValueAttributes>> =
+                let morphir_elements: Vec<MorphirPattern> =
                     elements.iter().map(|e| self.convert_pattern(e)).collect();
                 MorphirPattern::TuplePattern(attrs, morphir_elements)
             }
             Pattern::List { elements, tail } => {
                 // Convert to nested HeadTailPattern or EmptyListPattern
-                let morphir_elements: Vec<MorphirPattern<ValueAttributes>> =
+                let morphir_elements: Vec<MorphirPattern> =
                     elements.iter().map(|e| self.convert_pattern(e)).collect();
                 // For now, just convert to tuple pattern (Morphir IR list patterns)
                 let _ = tail; // TODO: Handle tail properly

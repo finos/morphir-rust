@@ -1,160 +1,142 @@
 //! Value expressions for Morphir IR.
 //!
-//! This module defines the `Value<TA, VA>` enum which represents value expressions
-//! in the Morphir IR. The type parameters represent:
-//! - `TA`: Type attributes (attached to type nodes)
-//! - `VA`: Value attributes (attached to value nodes)
+//! This module defines the `Value` enum which represents value expressions
+//! in the Morphir IR. Values use `TypeAttributes` for type nodes and
+//! `ValueAttributes` for value nodes (V4 format).
 //!
-//! # Default Type Parameters
+//! # Examples
 //!
-//! V4 is the default format - `Value` without type parameters uses V4 attributes:
 //! ```rust,ignore
-//! let v: Value = Value::Unit(ValueAttributes::default());  // V4 value
-//! let v: Value<ClassicAttrs, ClassicAttrs> = Value::Unit(json!({}));  // Classic
+//! let v: Value = Value::Unit(ValueAttributes::default());
 //! ```
 
-use super::attributes::{TypeAttributes, ValueAttributes};
+use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::type_expr::Type;
 use crate::naming::{FQName, Name};
 
-/// A value expression with generic type and value attributes.
+/// A value expression with V4 attributes.
 ///
 /// Value expressions form the term-level representation in Morphir IR.
-/// Each variant carries value attributes of type `VA`, and types within
-/// carry type attributes of type `TA`.
-///
-/// # Type Parameters
-/// - `TA`: The type of attributes attached to type nodes.
-///   Defaults to `TypeAttributes` (V4 format).
-/// - `VA`: The type of attributes attached to value nodes.
-///   Defaults to `ValueAttributes` (V4 format).
+/// Each variant carries `ValueAttributes`, and types within
+/// carry `TypeAttributes`.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// // V4 format (default)
 /// let v: Value = Value::Unit(ValueAttributes::default());
-///
-/// // Classic format - explicit attributes
-/// let v: Value<serde_json::Value, serde_json::Value> = Value::Unit(serde_json::json!({}));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
+pub enum Value {
     // === Core expressions (all versions) ===
     /// Literal constant value
     ///
     /// Example: `42`, `"hello"`, `true`
-    Literal(VA, Literal),
+    Literal(ValueAttributes, Literal),
 
     /// Data constructor reference
     ///
     /// Example: `Just` in `Just 42`
-    Constructor(VA, FQName),
+    Constructor(ValueAttributes, FQName),
 
     /// Tuple construction
     ///
     /// Example: `(1, "hello", true)`
-    Tuple(VA, Vec<Value<TA, VA>>),
+    Tuple(ValueAttributes, Vec<Value>),
 
     /// List construction
     ///
     /// Example: `[1, 2, 3]`
-    List(VA, Vec<Value<TA, VA>>),
+    List(ValueAttributes, Vec<Value>),
 
     /// Record construction
     ///
     /// Example: `{ name = "Alice", age = 30 }`
-    Record(VA, Vec<RecordFieldEntry<TA, VA>>),
+    Record(ValueAttributes, Vec<RecordFieldEntry>),
 
     /// Variable reference
     ///
     /// Example: `x` in `let x = 1 in x + 1`
-    Variable(VA, Name),
+    Variable(ValueAttributes, Name),
 
     /// Reference to a named value
     ///
     /// Example: `List.map` referencing a module function
-    Reference(VA, FQName),
+    Reference(ValueAttributes, FQName),
 
     /// Field access on a record
     ///
     /// Example: `person.name`
-    Field(VA, Box<Value<TA, VA>>, Name),
+    Field(ValueAttributes, Box<Value>, Name),
 
     /// Field accessor function
     ///
     /// Example: `.name` as a function
-    FieldFunction(VA, Name),
+    FieldFunction(ValueAttributes, Name),
 
     /// Function application
     ///
     /// Example: `f x` applies function `f` to argument `x`
-    Apply(VA, Box<Value<TA, VA>>, Box<Value<TA, VA>>),
+    Apply(ValueAttributes, Box<Value>, Box<Value>),
 
     /// Lambda abstraction
     ///
     /// Example: `\x -> x + 1`
-    Lambda(VA, Pattern<VA>, Box<Value<TA, VA>>),
+    Lambda(ValueAttributes, Pattern, Box<Value>),
 
     /// Let binding with a value definition
     ///
     /// Example: `let x = 1 in x + 1`
-    LetDefinition(VA, Name, Box<ValueDefinition<TA, VA>>, Box<Value<TA, VA>>),
+    LetDefinition(ValueAttributes, Name, Box<ValueDefinition>, Box<Value>),
 
     /// Recursive let bindings
     ///
     /// Example: `let rec f = ... and g = ... in ...`
-    LetRecursion(VA, Vec<LetBinding<TA, VA>>, Box<Value<TA, VA>>),
+    LetRecursion(ValueAttributes, Vec<LetBinding>, Box<Value>),
 
     /// Pattern destructuring in let
     ///
     /// Example: `let (a, b) = tuple in a + b`
-    Destructure(VA, Pattern<VA>, Box<Value<TA, VA>>, Box<Value<TA, VA>>),
+    Destructure(ValueAttributes, Pattern, Box<Value>, Box<Value>),
 
     /// Conditional expression
     ///
     /// Example: `if cond then a else b`
-    IfThenElse(
-        VA,
-        Box<Value<TA, VA>>,
-        Box<Value<TA, VA>>,
-        Box<Value<TA, VA>>,
-    ),
+    IfThenElse(ValueAttributes, Box<Value>, Box<Value>, Box<Value>),
 
     /// Pattern matching
     ///
     /// Example: `case x of Just v -> v; Nothing -> 0`
-    PatternMatch(VA, Box<Value<TA, VA>>, Vec<PatternCase<TA, VA>>),
+    PatternMatch(ValueAttributes, Box<Value>, Vec<PatternCase>),
 
     /// Record update
     ///
     /// Example: `{ person | name = "Bob" }`
-    UpdateRecord(VA, Box<Value<TA, VA>>, Vec<RecordFieldEntry<TA, VA>>),
+    UpdateRecord(ValueAttributes, Box<Value>, Vec<RecordFieldEntry>),
 
     /// Unit value
     ///
     /// Example: `()`
-    Unit(VA),
+    Unit(ValueAttributes),
 
     // === V4-only constructs ===
     /// Incomplete/broken value placeholder (V4 only)
     ///
     /// Represents values that couldn't be fully resolved or compiled.
     /// Used for incremental compilation and error recovery.
-    Hole(VA, HoleReason, Option<Box<Type<TA>>>),
+    Hole(ValueAttributes, HoleReason, Option<Box<Type>>),
 
     /// Native platform operation (V4 only)
     ///
     /// Represents operations that are implemented natively by the platform
     /// rather than having an IR body.
-    Native(VA, FQName, NativeInfo),
+    Native(ValueAttributes, FQName, NativeInfo),
 
     /// External FFI call (V4 only)
     ///
     /// References an external function implementation.
-    External(VA, String, String), // external_name, target_platform
+    External(ValueAttributes, String, String), // external_name, target_platform
 }
 
 /// Reason why a value is incomplete/broken (V4 only)
@@ -207,67 +189,44 @@ pub struct NativeInfo {
 
 /// A value definition (function or constant)
 ///
-/// Classic format always has an expression body.
-/// V4 format supports additional body types (Native, External, Incomplete).
-///
-/// # Type Parameters
-/// - `TA`: Type attributes. Defaults to `TypeAttributes` (V4).
-/// - `VA`: Value attributes. Defaults to `ValueAttributes` (V4).
+/// V4 format supports multiple body types (Expression, Native, External, Incomplete).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValueDefinition<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
+pub struct ValueDefinition {
     /// Input parameters with their names, attributes, and types
-    pub input_types: Vec<InputType<TA, VA>>,
+    pub input_types: Vec<InputType>,
     /// Output/return type
-    pub output_type: Type<TA>,
+    pub output_type: Type,
     /// The body of the definition
-    pub body: ValueBody<TA, VA>,
+    pub body: ValueBody,
 }
 
 /// Input parameter tuple struct: (name, attributes, type)
 ///
-/// More ergonomic than `(Name, VA, Type<TA>)` - provides named fields via pattern matching.
+/// More ergonomic than `(Name, ValueAttributes, Type)` - provides named fields via pattern matching.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InputType<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
-    pub Name,
-    pub VA,
-    pub Type<TA>,
-);
+pub struct InputType(pub Name, pub ValueAttributes, pub Type);
 
 /// Record field entry tuple struct: (name, value)
 ///
 /// Used in Record and UpdateRecord value variants.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RecordFieldEntry<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
-    pub Name,
-    pub Value<TA, VA>,
-);
+pub struct RecordFieldEntry(pub Name, pub Value);
 
 /// Pattern match case tuple struct: (pattern, body)
 #[derive(Debug, Clone, PartialEq)]
-pub struct PatternCase<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
-    pub Pattern<VA>,
-    pub Value<TA, VA>,
-);
+pub struct PatternCase(pub Pattern, pub Value);
 
 /// Let-recursion binding tuple struct: (name, definition)
 #[derive(Debug, Clone, PartialEq)]
-pub struct LetBinding<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes>(
-    pub Name,
-    pub ValueDefinition<TA, VA>,
-);
+pub struct LetBinding(pub Name, pub ValueDefinition);
 
 /// The body of a value definition
 ///
-/// Classic format only supports Expression bodies.
-/// V4 format adds Native, External, and Incomplete body types.
-///
-/// # Type Parameters
-/// - `TA`: Type attributes. Defaults to `TypeAttributes` (V4).
-/// - `VA`: Value attributes. Defaults to `ValueAttributes` (V4).
+/// V4 format supports Expression, Native, External, and Incomplete body types.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ValueBody<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
+pub enum ValueBody {
     /// Normal expression body (all versions)
-    Expression(Value<TA, VA>),
+    Expression(Value),
 
     /// Native/builtin operation - no IR body (V4 only)
     Native(NativeInfo),
@@ -282,9 +241,9 @@ pub enum ValueBody<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
     Incomplete(HoleReason),
 }
 
-impl<TA: Clone, VA: Clone> Value<TA, VA> {
+impl Value {
     /// Get the attributes of this value
-    pub fn attributes(&self) -> &VA {
+    pub fn attributes(&self) -> &ValueAttributes {
         match self {
             Value::Literal(a, _) => a,
             Value::Constructor(a, _) => a,
@@ -311,51 +270,51 @@ impl<TA: Clone, VA: Clone> Value<TA, VA> {
     }
 
     /// Create a literal value
-    pub fn literal(attrs: VA, lit: Literal) -> Self {
+    pub fn literal(attrs: ValueAttributes, lit: Literal) -> Self {
         Value::Literal(attrs, lit)
     }
 
     /// Create a variable reference
-    pub fn variable(attrs: VA, name: Name) -> Self {
+    pub fn variable(attrs: ValueAttributes, name: Name) -> Self {
         Value::Variable(attrs, name)
     }
 
     /// Create a constructor reference
-    pub fn constructor(attrs: VA, name: FQName) -> Self {
+    pub fn constructor(attrs: ValueAttributes, name: FQName) -> Self {
         Value::Constructor(attrs, name)
     }
 
     /// Create a tuple
-    pub fn tuple(attrs: VA, elements: Vec<Value<TA, VA>>) -> Self {
+    pub fn tuple(attrs: ValueAttributes, elements: Vec<Value>) -> Self {
         Value::Tuple(attrs, elements)
     }
 
     /// Create a list
-    pub fn list(attrs: VA, elements: Vec<Value<TA, VA>>) -> Self {
+    pub fn list(attrs: ValueAttributes, elements: Vec<Value>) -> Self {
         Value::List(attrs, elements)
     }
 
     /// Create a record
-    pub fn record(attrs: VA, fields: Vec<RecordFieldEntry<TA, VA>>) -> Self {
+    pub fn record(attrs: ValueAttributes, fields: Vec<RecordFieldEntry>) -> Self {
         Value::Record(attrs, fields)
     }
 
     /// Create a function application
-    pub fn apply(attrs: VA, function: Value<TA, VA>, argument: Value<TA, VA>) -> Self {
+    pub fn apply(attrs: ValueAttributes, function: Value, argument: Value) -> Self {
         Value::Apply(attrs, Box::new(function), Box::new(argument))
     }
 
     /// Create a lambda expression
-    pub fn lambda(attrs: VA, pattern: Pattern<VA>, body: Value<TA, VA>) -> Self {
+    pub fn lambda(attrs: ValueAttributes, pattern: Pattern, body: Value) -> Self {
         Value::Lambda(attrs, pattern, Box::new(body))
     }
 
     /// Create an if-then-else expression
     pub fn if_then_else(
-        attrs: VA,
-        condition: Value<TA, VA>,
-        then_branch: Value<TA, VA>,
-        else_branch: Value<TA, VA>,
+        attrs: ValueAttributes,
+        condition: Value,
+        then_branch: Value,
+        else_branch: Value,
     ) -> Self {
         Value::IfThenElse(
             attrs,
@@ -366,18 +325,14 @@ impl<TA: Clone, VA: Clone> Value<TA, VA> {
     }
 
     /// Create a unit value
-    pub fn unit(attrs: VA) -> Self {
+    pub fn unit(attrs: ValueAttributes) -> Self {
         Value::Unit(attrs)
     }
 }
 
-impl<TA: Clone, VA: Clone> ValueDefinition<TA, VA> {
+impl ValueDefinition {
     /// Create a new value definition with an expression body
-    pub fn new(
-        input_types: Vec<InputType<TA, VA>>,
-        output_type: Type<TA>,
-        body: Value<TA, VA>,
-    ) -> Self {
+    pub fn new(input_types: Vec<InputType>, output_type: Type, body: Value) -> Self {
         ValueDefinition {
             input_types,
             output_type,
@@ -386,11 +341,7 @@ impl<TA: Clone, VA: Clone> ValueDefinition<TA, VA> {
     }
 
     /// Create a value definition with a native body (V4 only)
-    pub fn native(
-        input_types: Vec<InputType<TA, VA>>,
-        output_type: Type<TA>,
-        info: NativeInfo,
-    ) -> Self {
+    pub fn native(input_types: Vec<InputType>, output_type: Type, info: NativeInfo) -> Self {
         ValueDefinition {
             input_types,
             output_type,
@@ -400,9 +351,9 @@ impl<TA: Clone, VA: Clone> ValueDefinition<TA, VA> {
 }
 
 // Convenience constructors for tuple structs
-impl<TA: Clone, VA: Clone> InputType<TA, VA> {
+impl InputType {
     /// Create a new input type
-    pub fn new(name: Name, attrs: VA, tpe: Type<TA>) -> Self {
+    pub fn new(name: Name, attrs: ValueAttributes, tpe: Type) -> Self {
         InputType(name, attrs, tpe)
     }
 
@@ -412,19 +363,19 @@ impl<TA: Clone, VA: Clone> InputType<TA, VA> {
     }
 
     /// Get the attributes
-    pub fn attrs(&self) -> &VA {
+    pub fn attrs(&self) -> &ValueAttributes {
         &self.1
     }
 
     /// Get the type
-    pub fn tpe(&self) -> &Type<TA> {
+    pub fn tpe(&self) -> &Type {
         &self.2
     }
 }
 
-impl<TA: Clone, VA: Clone> RecordFieldEntry<TA, VA> {
+impl RecordFieldEntry {
     /// Create a new record field entry
-    pub fn new(name: Name, value: Value<TA, VA>) -> Self {
+    pub fn new(name: Name, value: Value) -> Self {
         RecordFieldEntry(name, value)
     }
 
@@ -434,31 +385,31 @@ impl<TA: Clone, VA: Clone> RecordFieldEntry<TA, VA> {
     }
 
     /// Get the value
-    pub fn value(&self) -> &Value<TA, VA> {
+    pub fn value(&self) -> &Value {
         &self.1
     }
 }
 
-impl<TA: Clone, VA: Clone> PatternCase<TA, VA> {
+impl PatternCase {
     /// Create a new pattern case
-    pub fn new(pattern: Pattern<VA>, body: Value<TA, VA>) -> Self {
+    pub fn new(pattern: Pattern, body: Value) -> Self {
         PatternCase(pattern, body)
     }
 
     /// Get the pattern
-    pub fn pattern(&self) -> &Pattern<VA> {
+    pub fn pattern(&self) -> &Pattern {
         &self.0
     }
 
     /// Get the body
-    pub fn body(&self) -> &Value<TA, VA> {
+    pub fn body(&self) -> &Value {
         &self.1
     }
 }
 
-impl<TA: Clone, VA: Clone> LetBinding<TA, VA> {
+impl LetBinding {
     /// Create a new let binding
-    pub fn new(name: Name, definition: ValueDefinition<TA, VA>) -> Self {
+    pub fn new(name: Name, definition: ValueDefinition) -> Self {
         LetBinding(name, definition)
     }
 
@@ -468,7 +419,7 @@ impl<TA: Clone, VA: Clone> LetBinding<TA, VA> {
     }
 
     /// Get the definition
-    pub fn definition(&self) -> &ValueDefinition<TA, VA> {
+    pub fn definition(&self) -> &ValueDefinition {
         &self.1
     }
 }
@@ -483,48 +434,62 @@ impl NativeInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::attributes::TypeAttributes;
 
     #[test]
     fn test_literal_value() {
-        let val: Value<(), ()> = Value::literal((), Literal::Integer(42));
+        let val: Value = Value::literal(ValueAttributes::default(), Literal::Integer(42));
         assert!(matches!(val, Value::Literal(_, Literal::Integer(42))));
     }
 
     #[test]
     fn test_variable_value() {
-        let val: Value<(), ()> = Value::variable((), Name::from("x"));
+        let val: Value = Value::variable(ValueAttributes::default(), Name::from("x"));
         assert!(matches!(val, Value::Variable(_, _)));
     }
 
     #[test]
     fn test_unit_value() {
-        let val: Value<(), ()> = Value::unit(());
+        let val: Value = Value::unit(ValueAttributes::default());
         assert!(matches!(val, Value::Unit(_)));
     }
 
     #[test]
     fn test_tuple_value() {
-        let val: Value<(), ()> = Value::tuple((), vec![Value::unit(()), Value::unit(())]);
+        let val: Value = Value::tuple(
+            ValueAttributes::default(),
+            vec![
+                Value::unit(ValueAttributes::default()),
+                Value::unit(ValueAttributes::default()),
+            ],
+        );
         assert!(matches!(val, Value::Tuple(_, elements) if elements.len() == 2));
     }
 
     #[test]
     fn test_lambda_value() {
-        let val: Value<(), ()> = Value::lambda((), Pattern::wildcard(()), Value::unit(()));
+        let val: Value = Value::lambda(
+            ValueAttributes::default(),
+            Pattern::wildcard(ValueAttributes::default()),
+            Value::unit(ValueAttributes::default()),
+        );
         assert!(matches!(val, Value::Lambda(_, _, _)));
     }
 
     #[test]
     fn test_value_definition() {
-        let def: ValueDefinition<(), ()> =
-            ValueDefinition::new(vec![], Type::unit(()), Value::unit(()));
+        let def: ValueDefinition = ValueDefinition::new(
+            vec![],
+            Type::unit(TypeAttributes::default()),
+            Value::unit(ValueAttributes::default()),
+        );
         assert!(matches!(def.body, ValueBody::Expression(_)));
     }
 
     #[test]
     fn test_hole_value() {
-        let val: Value<(), ()> = Value::Hole(
-            (),
+        let val: Value = Value::Hole(
+            ValueAttributes::default(),
             HoleReason::TypeMismatch {
                 expected: "Int".to_string(),
                 found: "String".to_string(),
@@ -539,9 +504,9 @@ mod tests {
 
     #[test]
     fn test_native_value_definition() {
-        let def: ValueDefinition<(), ()> = ValueDefinition::native(
+        let def: ValueDefinition = ValueDefinition::native(
             vec![],
-            Type::unit(()),
+            Type::unit(TypeAttributes::default()),
             NativeInfo::new(NativeHint::Arithmetic, Some("add operation".to_string())),
         );
         assert!(matches!(def.body, ValueBody::Native(_)));

@@ -193,6 +193,7 @@ impl Vfs for NotebookVfs {
                     tags: None,
                     jupyter: None,
                     execution: None,
+                    additional: Default::default(),
                 },
                 execution_count: None,
                 source: content.lines().map(|s| s.to_string()).collect(),

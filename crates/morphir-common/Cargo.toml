@@ -26,7 +26,7 @@ uuid = { version = "1.0", features = ["v4"] }
 # Remote source support
 reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
-    "rustls-tls",
+    "rustls",
     "json",
 ] }
 flate2 = "1.0"

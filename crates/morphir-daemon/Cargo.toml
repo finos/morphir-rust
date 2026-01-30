@@ -49,7 +49,7 @@ extism = "1"
 # HTTP client (for downloading extensions)
 reqwest = { version = "0.13", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "rustls",
 ] }
 
 # Directory utilities

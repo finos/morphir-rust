@@ -3162,15 +3162,15 @@ dependencies = [
 name = "morphir-builtins"
 version = "0.2.0"
 dependencies = [
-    "anyhow",
-    "indexmap 2.13.0",
-    "morphir-common",
-    "morphir-core",
-    "morphir-ext-core",
-    "serde",
-    "serde_json",
-    "tempfile",
-    "thiserror 1.0.69",
+ "anyhow",
+ "indexmap 2.13.0",
+ "morphir-common",
+ "morphir-core",
+ "morphir-ext-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

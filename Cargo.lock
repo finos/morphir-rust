@@ -3966,7 +3966,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -6169,9 +6169,9 @@ dependencies = [
 
 [[package]]
 name = "usage-lib"
-version = "2.13.1"
+version = "2.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "740feb3935827422f9e7c1311a48c138d8c7c3788e802b274afd029080b77d53"
+checksum = "55fbd2bc89440a7d76e3d0e698af0b9c4fb294bc633a940c85a4d643798b0d86"
 dependencies = [
  "clap",
  "heck",

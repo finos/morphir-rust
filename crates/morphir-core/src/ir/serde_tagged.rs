@@ -1,15 +1,16 @@
-//! Tagged array serialization for Morphir IR.
+//! Serde implementations for Morphir IR types.
 //!
-//! Morphir IR uses a tagged array format for serialization:
-//! - `["Variable", attrs, name]`
-//! - `["Reference", attrs, fqname, params]`
-//! - `["Tuple", attrs, elements]`
-//! - etc.
+//! Serialization uses V4 object wrapper format:
+//! - `{ "Variable": { "name": "a" } }`
+//! - `{ "Reference": { "fqname": "morphir/sdk:basics#int" } }`
+//! - `{ "Tuple": { "elements": [...] } }`
 //!
-//! This module provides Serialize/Deserialize implementations for Type, Pattern, and Value
-//! using this format.
+//! Deserialization accepts both V4 and Classic formats for backward compatibility:
+//! - V4 object: `{ "Variable": { "name": "a" } }`
+//! - Classic array: `["Variable", attrs, name]`
+//! - V4 shorthand: `"a"` (variable) or `"morphir/sdk:basics#int"` (reference)
 
-use serde::de::{self, Deserializer, SeqAccess, Visitor};
+use serde::de::{self, DeserializeOwned, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -17,6 +18,7 @@ use std::marker::PhantomData;
 
 use super::literal::Literal;
 use super::pattern::Pattern;
+use super::serde_v4;
 use super::type_expr::{Field, Type};
 use crate::naming::{FQName, Name};
 
@@ -29,80 +31,178 @@ impl<A: Clone + Serialize> Serialize for Type<A> {
     where
         S: Serializer,
     {
-        match self {
-            Type::Variable(attrs, name) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Variable")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(name)?;
-                seq.end()
-            }
-            Type::Reference(attrs, fqname, params) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Reference")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(fqname)?;
-                seq.serialize_element(params)?;
-                seq.end()
-            }
-            Type::Tuple(attrs, elements) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Tuple")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(elements)?;
-                seq.end()
-            }
-            Type::Record(attrs, fields) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Record")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(fields)?;
-                seq.end()
-            }
-            Type::ExtensibleRecord(attrs, var, fields) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("ExtensibleRecord")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(var)?;
-                seq.serialize_element(fields)?;
-                seq.end()
-            }
-            Type::Function(attrs, arg, result) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Function")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(arg)?;
-                seq.serialize_element(result)?;
-                seq.end()
-            }
-            Type::Unit(attrs) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element("Unit")?;
-                seq.serialize_element(attrs)?;
-                seq.end()
-            }
-        }
+        // Delegate to V4 object wrapper format
+        serde_v4::serialize_type(self, serializer)
     }
 }
 
-impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Type<A> {
+impl<'de, A: Clone + Default + DeserializeOwned> Deserialize<'de> for Type<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(TypeVisitor(PhantomData))
+        // Use deserialize_any to accept V4 objects, Classic arrays, and string shorthand
+        deserializer.deserialize_any(TypeVisitor(PhantomData))
     }
 }
 
 struct TypeVisitor<A>(PhantomData<A>);
 
-impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for TypeVisitor<A> {
+impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for TypeVisitor<A> {
     type Value = Type<A>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a tagged array like [\"Variable\", attrs, name]")
+        formatter.write_str(
+            "V4 object { \"Variable\": { \"name\": \"a\" } }, \
+             Classic array [\"Variable\", attrs, name], \
+             or string shorthand \"a\"",
+        )
     }
 
+    /// V4 object wrapper format: { "Variable": { "name": "a" } }
+    fn visit_map<M>(self, mut map: M) -> Result<Type<A>, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        use indexmap::IndexMap;
+
+        let (tag, value): (String, serde_json::Value) = map
+            .next_entry()?
+            .ok_or_else(|| de::Error::custom("expected object wrapper with single key"))?;
+
+        match tag.as_str() {
+            "Variable" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<A> {
+                    name: String,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let name = Name::from(content.name.as_str());
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Type::Variable(attrs, name))
+            }
+            "Reference" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    fqname: String,
+                    args: Option<Vec<Type<A>>>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let fqname = FQName::from_canonical_string(&content.fqname)
+                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
+                let attrs = content.attrs.unwrap_or_default();
+                let args = content.args.unwrap_or_default();
+                Ok(Type::Reference(attrs, fqname, args))
+            }
+            "Tuple" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    elements: Vec<Type<A>>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Type::Tuple(attrs, content.elements))
+            }
+            "Record" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    fields: IndexMap<String, Type<A>>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let fields = content
+                    .fields
+                    .into_iter()
+                    .map(|(name, tpe)| Field {
+                        name: Name::from(name.as_str()),
+                        tpe,
+                    })
+                    .collect();
+                Ok(Type::Record(attrs, fields))
+            }
+            "ExtensibleRecord" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    variable: String,
+                    fields: IndexMap<String, Type<A>>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let variable = Name::from(content.variable.as_str());
+                let fields = content
+                    .fields
+                    .into_iter()
+                    .map(|(name, tpe)| Field {
+                        name: Name::from(name.as_str()),
+                        tpe,
+                    })
+                    .collect();
+                Ok(Type::ExtensibleRecord(attrs, variable, fields))
+            }
+            "Function" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    arg: Type<A>,
+                    result: Type<A>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Type::Function(
+                    attrs,
+                    Box::new(content.arg),
+                    Box::new(content.result),
+                ))
+            }
+            "Unit" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<A> {
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Type::Unit(attrs))
+            }
+            _ => Err(de::Error::unknown_variant(
+                &tag,
+                &[
+                    "Variable",
+                    "Reference",
+                    "Tuple",
+                    "Record",
+                    "ExtensibleRecord",
+                    "Function",
+                    "Unit",
+                ],
+            )),
+        }
+    }
+
+    /// Classic tagged array format: ["Variable", attrs, name]
     fn visit_seq<V>(self, mut seq: V) -> Result<Type<A>, V::Error>
     where
         V: SeqAccess<'de>,
@@ -195,6 +295,23 @@ impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for TypeVisitor<A> {
             )),
         }
     }
+
+    /// V4 string shorthand: "a" for Variable, "morphir/sdk:basics#int" for Reference
+    fn visit_str<E>(self, v: &str) -> Result<Type<A>, E>
+    where
+        E: de::Error,
+    {
+        if v.contains(':') && v.contains('#') {
+            // FQName shorthand for Reference
+            let fqname = FQName::from_canonical_string(v)
+                .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
+            Ok(Type::Reference(A::default(), fqname, vec![]))
+        } else {
+            // Variable shorthand
+            let name = Name::from(v);
+            Ok(Type::Variable(A::default(), name))
+        }
+    }
 }
 
 // =============================================================================
@@ -214,7 +331,7 @@ impl<A: Clone + Serialize> Serialize for Field<A> {
     }
 }
 
-impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Field<A> {
+impl<'de, A: Clone + Default + DeserializeOwned> Deserialize<'de> for Field<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -228,7 +345,7 @@ impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Field<A> {
 
         struct FieldVisitor<A>(PhantomData<A>);
 
-        impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for FieldVisitor<A> {
+        impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for FieldVisitor<A> {
             type Value = Field<A>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -278,85 +395,166 @@ impl<A: Clone + Serialize> Serialize for Pattern<A> {
     where
         S: Serializer,
     {
-        match self {
-            Pattern::WildcardPattern(attrs) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element("WildcardPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.end()
-            }
-            Pattern::AsPattern(attrs, pattern, name) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("AsPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(pattern)?;
-                seq.serialize_element(name)?;
-                seq.end()
-            }
-            Pattern::TuplePattern(attrs, elements) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("TuplePattern")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(elements)?;
-                seq.end()
-            }
-            Pattern::ConstructorPattern(attrs, name, args) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("ConstructorPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(name)?;
-                seq.serialize_element(args)?;
-                seq.end()
-            }
-            Pattern::EmptyListPattern(attrs) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element("EmptyListPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.end()
-            }
-            Pattern::HeadTailPattern(attrs, head, tail) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("HeadTailPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(head)?;
-                seq.serialize_element(tail)?;
-                seq.end()
-            }
-            Pattern::LiteralPattern(attrs, lit) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("LiteralPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(lit)?;
-                seq.end()
-            }
-            Pattern::UnitPattern(attrs) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element("UnitPattern")?;
-                seq.serialize_element(attrs)?;
-                seq.end()
-            }
-        }
+        // Delegate to V4 object wrapper format
+        serde_v4::serialize_pattern(self, serializer)
     }
 }
 
-impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for Pattern<A> {
+impl<'de, A: Clone + Default + DeserializeOwned> Deserialize<'de> for Pattern<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(PatternVisitor(PhantomData))
+        // Use deserialize_any to accept V4 objects and Classic arrays
+        deserializer.deserialize_any(PatternVisitor(PhantomData))
     }
 }
 
 struct PatternVisitor<A>(PhantomData<A>);
 
-impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for PatternVisitor<A> {
+impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for PatternVisitor<A> {
     type Value = Pattern<A>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a tagged array like [\"WildcardPattern\", attrs]")
+        formatter.write_str(
+            "V4 object { \"WildcardPattern\": {} } or Classic array [\"WildcardPattern\", attrs]",
+        )
     }
 
+    /// V4 object wrapper format: { "WildcardPattern": {} }
+    fn visit_map<M>(self, mut map: M) -> Result<Pattern<A>, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let (tag, value): (String, serde_json::Value) = map
+            .next_entry()?
+            .ok_or_else(|| de::Error::custom("expected object wrapper with single key"))?;
+
+        match tag.as_str() {
+            "WildcardPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<A> {
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Pattern::WildcardPattern(attrs))
+            }
+            "AsPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    pattern: Pattern<A>,
+                    name: String,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let name = Name::from(content.name.as_str());
+                Ok(Pattern::AsPattern(attrs, Box::new(content.pattern), name))
+            }
+            "TuplePattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    elements: Vec<Pattern<A>>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Pattern::TuplePattern(attrs, content.elements))
+            }
+            "ConstructorPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    fqname: String,
+                    args: Vec<Pattern<A>>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let fqname = FQName::from_canonical_string(&content.fqname)
+                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
+                Ok(Pattern::ConstructorPattern(attrs, fqname, content.args))
+            }
+            "EmptyListPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<A> {
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Pattern::EmptyListPattern(attrs))
+            }
+            "HeadTailPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "A: Clone + Default + DeserializeOwned"))]
+                struct Content<A: Clone> {
+                    head: Pattern<A>,
+                    tail: Pattern<A>,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Pattern::HeadTailPattern(
+                    attrs,
+                    Box::new(content.head),
+                    Box::new(content.tail),
+                ))
+            }
+            "LiteralPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<A> {
+                    literal: Literal,
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Pattern::LiteralPattern(attrs, content.literal))
+            }
+            "UnitPattern" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<A> {
+                    attrs: Option<A>,
+                }
+                let content: Content<A> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Pattern::UnitPattern(attrs))
+            }
+            _ => Err(de::Error::unknown_variant(
+                &tag,
+                &[
+                    "WildcardPattern",
+                    "AsPattern",
+                    "TuplePattern",
+                    "ConstructorPattern",
+                    "EmptyListPattern",
+                    "HeadTailPattern",
+                    "LiteralPattern",
+                    "UnitPattern",
+                ],
+            )),
+        }
+    }
+
+    /// Classic tagged array format: ["WildcardPattern", attrs]
     fn visit_seq<V>(self, mut seq: V) -> Result<Pattern<A>, V::Error>
     where
         V: SeqAccess<'de>,
@@ -474,170 +672,8 @@ impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for Value<TA, VA> {
     where
         S: Serializer,
     {
-        match self {
-            Value::Literal(attrs, lit) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Literal")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(lit)?;
-                seq.end()
-            }
-            Value::Constructor(attrs, name) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Constructor")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(name)?;
-                seq.end()
-            }
-            Value::Tuple(attrs, elements) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Tuple")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(elements)?;
-                seq.end()
-            }
-            Value::List(attrs, elements) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("List")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(elements)?;
-                seq.end()
-            }
-            Value::Record(attrs, fields) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Record")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(fields)?;
-                seq.end()
-            }
-            Value::Variable(attrs, name) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Variable")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(name)?;
-                seq.end()
-            }
-            Value::Reference(attrs, fqname) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("Reference")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(fqname)?;
-                seq.end()
-            }
-            Value::Field(attrs, record, field_name) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Field")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(record)?;
-                seq.serialize_element(field_name)?;
-                seq.end()
-            }
-            Value::FieldFunction(attrs, name) => {
-                let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element("FieldFunction")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(name)?;
-                seq.end()
-            }
-            Value::Apply(attrs, func, arg) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Apply")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(func)?;
-                seq.serialize_element(arg)?;
-                seq.end()
-            }
-            Value::Lambda(attrs, pattern, body) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Lambda")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(pattern)?;
-                seq.serialize_element(body)?;
-                seq.end()
-            }
-            Value::LetDefinition(attrs, name, def, body) => {
-                let mut seq = serializer.serialize_seq(Some(5))?;
-                seq.serialize_element("LetDefinition")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(name)?;
-                seq.serialize_element(def)?;
-                seq.serialize_element(body)?;
-                seq.end()
-            }
-            Value::LetRecursion(attrs, defs, body) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("LetRecursion")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(defs)?;
-                seq.serialize_element(body)?;
-                seq.end()
-            }
-            Value::Destructure(attrs, pattern, val, body) => {
-                let mut seq = serializer.serialize_seq(Some(5))?;
-                seq.serialize_element("Destructure")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(pattern)?;
-                seq.serialize_element(val)?;
-                seq.serialize_element(body)?;
-                seq.end()
-            }
-            Value::IfThenElse(attrs, cond, then_branch, else_branch) => {
-                let mut seq = serializer.serialize_seq(Some(5))?;
-                seq.serialize_element("IfThenElse")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(cond)?;
-                seq.serialize_element(then_branch)?;
-                seq.serialize_element(else_branch)?;
-                seq.end()
-            }
-            Value::PatternMatch(attrs, input, cases) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("PatternMatch")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(input)?;
-                seq.serialize_element(cases)?;
-                seq.end()
-            }
-            Value::UpdateRecord(attrs, record, updates) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("UpdateRecord")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(record)?;
-                seq.serialize_element(updates)?;
-                seq.end()
-            }
-            Value::Unit(attrs) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element("Unit")?;
-                seq.serialize_element(attrs)?;
-                seq.end()
-            }
-            // V4-only variants
-            Value::Hole(attrs, reason, expected_type) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Hole")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(reason)?;
-                seq.serialize_element(expected_type)?;
-                seq.end()
-            }
-            Value::Native(attrs, fqname, info) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("Native")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(fqname)?;
-                seq.serialize_element(info)?;
-                seq.end()
-            }
-            Value::External(attrs, external_name, target_platform) => {
-                let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element("External")?;
-                seq.serialize_element(attrs)?;
-                seq.serialize_element(external_name)?;
-                seq.serialize_element(target_platform)?;
-                seq.end()
-            }
-        }
+        // Delegate to V4 object wrapper format
+        serde_v4::serialize_value(self, serializer)
     }
 }
 
@@ -942,7 +978,7 @@ impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for InputType<TA, V
     }
 }
 
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for InputType<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -951,7 +987,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
     {
         struct InputTypeVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+        impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
             for InputTypeVisitor<TA, VA>
         {
             type Value = InputType<TA, VA>;
@@ -994,7 +1030,7 @@ impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for RecordFieldEntr
     }
 }
 
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for RecordFieldEntry<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1003,7 +1039,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
     {
         struct RecordFieldEntryVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+        impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
             for RecordFieldEntryVisitor<TA, VA>
         {
             type Value = RecordFieldEntry<TA, VA>;
@@ -1043,7 +1079,7 @@ impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for PatternCase<TA,
     }
 }
 
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for PatternCase<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1052,7 +1088,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
     {
         struct PatternCaseVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+        impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
             for PatternCaseVisitor<TA, VA>
         {
             type Value = PatternCase<TA, VA>;
@@ -1092,7 +1128,7 @@ impl<TA: Clone + Serialize, VA: Clone + Serialize> Serialize for LetBinding<TA, 
     }
 }
 
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for LetBinding<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1101,7 +1137,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
     {
         struct LetBindingVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+        impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
             for LetBindingVisitor<TA, VA>
         {
             type Value = LetBinding<TA, VA>;
@@ -1141,14 +1177,14 @@ impl<A: Clone + Serialize> Serialize for ConstructorArg<A> {
     }
 }
 
-impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for ConstructorArg<A> {
+impl<'de, A: Clone + Default + DeserializeOwned> Deserialize<'de> for ConstructorArg<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct ConstructorArgVisitor<A>(PhantomData<A>);
 
-        impl<'de, A: Clone + Deserialize<'de>> Visitor<'de> for ConstructorArgVisitor<A> {
+        impl<'de, A: Clone + Default + DeserializeOwned> Visitor<'de> for ConstructorArgVisitor<A> {
             type Value = ConstructorArg<A>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -1174,7 +1210,7 @@ impl<'de, A: Clone + Deserialize<'de>> Deserialize<'de> for ConstructorArg<A> {
 }
 
 // Deserialize for ValueDefinition
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for ValueDefinition<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1191,7 +1227,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
 
         struct ValueDefinitionVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+        impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
             for ValueDefinitionVisitor<TA, VA>
         {
             type Value = ValueDefinition<TA, VA>;
@@ -1253,7 +1289,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
 }
 
 // Deserialize for ValueBody
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for ValueBody<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1273,7 +1309,7 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
 
         struct ValueBodyVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-        impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+        impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
             for ValueBodyVisitor<TA, VA>
         {
             type Value = ValueBody<TA, VA>;
@@ -1382,28 +1418,418 @@ impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserializ
 }
 
 // Deserialize for Value (complex, needs visitor)
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Deserialize<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Deserialize<'de>
     for Value<TA, VA>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(ValueVisitor(PhantomData))
+        // Use deserialize_any to accept V4 objects and Classic arrays
+        deserializer.deserialize_any(ValueVisitor(PhantomData))
     }
 }
 
 struct ValueVisitor<TA, VA>(PhantomData<(TA, VA)>);
 
-impl<'de, TA: Clone + Deserialize<'de>, VA: Clone + Deserialize<'de>> Visitor<'de>
+impl<'de, TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned> Visitor<'de>
     for ValueVisitor<TA, VA>
 {
     type Value = Value<TA, VA>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a tagged array like [\"Literal\", attrs, literal]")
+        formatter.write_str(
+            "V4 object { \"Variable\": { \"name\": \"x\" } } or Classic array [\"Literal\", attrs, lit]",
+        )
     }
 
+    /// V4 object wrapper format: { "Variable": { "name": "x" } }
+    fn visit_map<M>(self, mut map: M) -> Result<Value<TA, VA>, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        use super::value_expr::RecordFieldEntry;
+        use indexmap::IndexMap;
+
+        let (tag, value): (String, serde_json::Value) = map
+            .next_entry()?
+            .ok_or_else(|| de::Error::custom("expected object wrapper with single key"))?;
+
+        match tag.as_str() {
+            "Literal" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    literal: Literal,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Literal(attrs, content.literal))
+            }
+            "Constructor" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    fqname: String,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let fqname = FQName::from_canonical_string(&content.fqname)
+                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
+                Ok(Value::Constructor(attrs, fqname))
+            }
+            "Tuple" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    elements: Vec<Value<TA, VA>>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Tuple(attrs, content.elements))
+            }
+            "List" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    items: Vec<Value<TA, VA>>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::List(attrs, content.items))
+            }
+            "Record" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    fields: IndexMap<String, Value<TA, VA>>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let fields = content
+                    .fields
+                    .into_iter()
+                    .map(|(name, val)| RecordFieldEntry(Name::from(name.as_str()), val))
+                    .collect();
+                Ok(Value::Record(attrs, fields))
+            }
+            "Variable" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    name: String,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let name = Name::from(content.name.as_str());
+                Ok(Value::Variable(attrs, name))
+            }
+            "Reference" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    fqname: String,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let fqname = FQName::from_canonical_string(&content.fqname)
+                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
+                Ok(Value::Reference(attrs, fqname))
+            }
+            "Field" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    value: Value<TA, VA>,
+                    name: String,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let name = Name::from(content.name.as_str());
+                Ok(Value::Field(attrs, Box::new(content.value), name))
+            }
+            "FieldFunction" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    name: String,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let name = Name::from(content.name.as_str());
+                Ok(Value::FieldFunction(attrs, name))
+            }
+            "Apply" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    function: Value<TA, VA>,
+                    argument: Value<TA, VA>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Apply(
+                    attrs,
+                    Box::new(content.function),
+                    Box::new(content.argument),
+                ))
+            }
+            "Lambda" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    #[serde(rename = "argumentPattern")]
+                    argument_pattern: Pattern<VA>,
+                    body: Value<TA, VA>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Lambda(
+                    attrs,
+                    content.argument_pattern,
+                    Box::new(content.body),
+                ))
+            }
+            "LetDefinition" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    name: String,
+                    definition: ValueDefinition<TA, VA>,
+                    body: Value<TA, VA>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let name = Name::from(content.name.as_str());
+                Ok(Value::LetDefinition(
+                    attrs,
+                    name,
+                    Box::new(content.definition),
+                    Box::new(content.body),
+                ))
+            }
+            "LetRecursion" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    definitions: Vec<LetBinding<TA, VA>>,
+                    body: Value<TA, VA>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::LetRecursion(
+                    attrs,
+                    content.definitions,
+                    Box::new(content.body),
+                ))
+            }
+            "Destructure" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    pattern: Pattern<VA>,
+                    value: Value<TA, VA>,
+                    body: Value<TA, VA>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Destructure(
+                    attrs,
+                    content.pattern,
+                    Box::new(content.value),
+                    Box::new(content.body),
+                ))
+            }
+            "IfThenElse" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    condition: Value<TA, VA>,
+                    #[serde(rename = "thenBranch")]
+                    then_branch: Value<TA, VA>,
+                    #[serde(rename = "elseBranch")]
+                    else_branch: Value<TA, VA>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::IfThenElse(
+                    attrs,
+                    Box::new(content.condition),
+                    Box::new(content.then_branch),
+                    Box::new(content.else_branch),
+                ))
+            }
+            "PatternMatch" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    value: Value<TA, VA>,
+                    cases: Vec<PatternCase<TA, VA>>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::PatternMatch(
+                    attrs,
+                    Box::new(content.value),
+                    content.cases,
+                ))
+            }
+            "UpdateRecord" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    value: Value<TA, VA>,
+                    fields: IndexMap<String, Value<TA, VA>>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let updates = content
+                    .fields
+                    .into_iter()
+                    .map(|(name, val)| RecordFieldEntry(Name::from(name.as_str()), val))
+                    .collect();
+                Ok(Value::UpdateRecord(attrs, Box::new(content.value), updates))
+            }
+            "Unit" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Unit(attrs))
+            }
+            "Hole" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(bound(deserialize = "TA: Clone + Default + DeserializeOwned, VA: Clone + Default + DeserializeOwned"))]
+                struct Content<TA: Clone, VA: Clone> {
+                    reason: HoleReason,
+                    #[serde(rename = "expectedType")]
+                    expected_type: Option<Type<TA>>,
+                    attrs: Option<VA>,
+                }
+                let content: Content<TA, VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::Hole(
+                    attrs,
+                    content.reason,
+                    content.expected_type.map(Box::new),
+                ))
+            }
+            "Native" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    fqname: String,
+                    info: NativeInfo,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                let fqname = FQName::from_canonical_string(&content.fqname)
+                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
+                Ok(Value::Native(attrs, fqname, content.info))
+            }
+            "External" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Content<VA> {
+                    #[serde(rename = "externalName")]
+                    external_name: String,
+                    #[serde(rename = "targetPlatform")]
+                    target_platform: String,
+                    attrs: Option<VA>,
+                }
+                let content: Content<VA> =
+                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let attrs = content.attrs.unwrap_or_default();
+                Ok(Value::External(
+                    attrs,
+                    content.external_name,
+                    content.target_platform,
+                ))
+            }
+            _ => Err(de::Error::unknown_variant(
+                &tag,
+                &[
+                    "Literal",
+                    "Constructor",
+                    "Tuple",
+                    "List",
+                    "Record",
+                    "Variable",
+                    "Reference",
+                    "Field",
+                    "FieldFunction",
+                    "Apply",
+                    "Lambda",
+                    "LetDefinition",
+                    "LetRecursion",
+                    "Destructure",
+                    "IfThenElse",
+                    "PatternMatch",
+                    "UpdateRecord",
+                    "Unit",
+                    "Hole",
+                    "Native",
+                    "External",
+                ],
+            )),
+        }
+    }
+
+    /// Classic tagged array format: ["Literal", attrs, literal]
     fn visit_seq<V>(self, mut seq: V) -> Result<Value<TA, VA>, V::Error>
     where
         V: SeqAccess<'de>,
@@ -1856,5 +2282,499 @@ mod tests {
         let parsed: NativeInfo = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed.hint, NativeHint::StringOp));
         assert_eq!(parsed.description, Some("String operation".to_string()));
+    }
+
+    // ==========================================================================
+    // V4 Format Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_type_serializes_to_v4_wrapper_format() {
+        // Type should now serialize to V4 wrapper object format
+        let var: Type<()> = Type::Variable((), Name::from("a"));
+        let json = serde_json::to_string(&var).unwrap();
+
+        // V4 format: {"Variable": {"name": "a"}}
+        assert!(json.contains(r#""Variable""#));
+        assert!(json.contains(r#""name""#));
+        assert!(json.contains(r#""a""#));
+
+        // Should NOT be classic array format
+        assert!(!json.starts_with('['));
+    }
+
+    #[test]
+    fn test_type_deserializes_from_v4_format() {
+        // V4 object wrapper format
+        let json = r#"{"Variable": {"name": "a"}}"#;
+        let parsed: Type<()> = serde_json::from_str(json).unwrap();
+
+        match parsed {
+            Type::Variable(_, name) => {
+                assert_eq!(name.to_string(), "a");
+            }
+            _ => panic!("Expected Variable"),
+        }
+    }
+
+    #[test]
+    fn test_type_deserializes_from_classic_format() {
+        // Classic array format should still work for backward compatibility
+        let json = r#"["Variable", null, "a"]"#;
+        let parsed: Type<()> = serde_json::from_str(json).unwrap();
+
+        match parsed {
+            Type::Variable(_, name) => {
+                assert_eq!(name.to_string(), "a");
+            }
+            _ => panic!("Expected Variable"),
+        }
+    }
+
+    #[test]
+    fn test_type_deserializes_from_string_shorthand() {
+        // V4 string shorthand for Variable
+        let json = r#""x""#;
+        let parsed: Type<()> = serde_json::from_str(json).unwrap();
+
+        match parsed {
+            Type::Variable(_, name) => {
+                assert_eq!(name.to_string(), "x");
+            }
+            _ => panic!("Expected Variable"),
+        }
+    }
+
+    #[test]
+    fn test_type_reference_deserializes_from_fqname_shorthand() {
+        // V4 string shorthand for Reference with FQName
+        let json = r#""morphir/sdk:basics#int""#;
+        let parsed: Type<()> = serde_json::from_str(json).unwrap();
+
+        match parsed {
+            Type::Reference(_, fqname, args) => {
+                assert_eq!(fqname.to_canonical_string(), "morphir/sdk:basics#int");
+                assert!(args.is_empty());
+            }
+            _ => panic!("Expected Reference"),
+        }
+    }
+
+    #[test]
+    fn test_type_reference_v4_roundtrip() {
+        let tpe: Type<()> = Type::Reference(
+            (),
+            FQName::from_canonical_string("morphir/sdk:basics#int").unwrap(),
+            vec![],
+        );
+        let json = serde_json::to_string(&tpe).unwrap();
+
+        // V4 format: {"Reference": {"fqname": "morphir/sdk:basics#int"}}
+        assert!(json.contains(r#""Reference""#));
+        assert!(json.contains(r#""fqname""#));
+        assert!(json.contains(r#"morphir/sdk:basics#int"#));
+
+        let parsed: Type<()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Type::Reference(_, fqname, args) => {
+                assert_eq!(fqname.to_canonical_string(), "morphir/sdk:basics#int");
+                assert!(args.is_empty());
+            }
+            _ => panic!("Expected Reference"),
+        }
+    }
+
+    #[test]
+    fn test_type_function_v4_roundtrip() {
+        let tpe: Type<()> = Type::Function(
+            (),
+            Box::new(Type::Variable((), Name::from("a"))),
+            Box::new(Type::Variable((), Name::from("b"))),
+        );
+        let json = serde_json::to_string(&tpe).unwrap();
+
+        // V4 format: {"Function": {"arg": ..., "result": ...}}
+        assert!(json.contains(r#""Function""#));
+        assert!(json.contains(r#""arg""#));
+        assert!(json.contains(r#""result""#));
+
+        let parsed: Type<()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Type::Function(_, arg, result) => {
+                assert!(matches!(*arg, Type::Variable(_, _)));
+                assert!(matches!(*result, Type::Variable(_, _)));
+            }
+            _ => panic!("Expected Function"),
+        }
+    }
+
+    #[test]
+    fn test_type_record_v4_format() {
+        let tpe: Type<()> = Type::Record(
+            (),
+            vec![
+                Field {
+                    name: Name::from("name"),
+                    tpe: Type::Variable((), Name::from("a")),
+                },
+                Field {
+                    name: Name::from("age"),
+                    tpe: Type::Variable((), Name::from("b")),
+                },
+            ],
+        );
+        let json = serde_json::to_string(&tpe).unwrap();
+
+        // V4 format: {"Record": {"fields": {"name": ..., "age": ...}}}
+        assert!(json.contains(r#""Record""#));
+        assert!(json.contains(r#""fields""#));
+
+        let parsed: Type<()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Type::Record(_, fields) => {
+                assert_eq!(fields.len(), 2);
+            }
+            _ => panic!("Expected Record"),
+        }
+    }
+
+    // ==========================================================================
+    // Pattern V4 Format Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_pattern_serializes_to_v4_wrapper_format() {
+        let pattern: Pattern<()> = Pattern::WildcardPattern(());
+        let json = serde_json::to_string(&pattern).unwrap();
+
+        // V4 format: {"WildcardPattern": {}}
+        assert!(json.contains(r#""WildcardPattern""#));
+        assert!(!json.starts_with('['));
+    }
+
+    #[test]
+    fn test_pattern_deserializes_from_v4_format() {
+        let json = r#"{"WildcardPattern": {}}"#;
+        let parsed: Pattern<()> = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Pattern::WildcardPattern(_)));
+    }
+
+    #[test]
+    fn test_pattern_deserializes_from_classic_format() {
+        let json = r#"["WildcardPattern", null]"#;
+        let parsed: Pattern<()> = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Pattern::WildcardPattern(_)));
+    }
+
+    #[test]
+    fn test_pattern_tuple_v4_roundtrip() {
+        let pattern: Pattern<()> = Pattern::TuplePattern(
+            (),
+            vec![
+                Pattern::WildcardPattern(()),
+                Pattern::WildcardPattern(()),
+            ],
+        );
+        let json = serde_json::to_string(&pattern).unwrap();
+
+        assert!(json.contains(r#""TuplePattern""#));
+        assert!(json.contains(r#""elements""#));
+
+        let parsed: Pattern<()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Pattern::TuplePattern(_, elements) => {
+                assert_eq!(elements.len(), 2);
+            }
+            _ => panic!("Expected TuplePattern"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_literal_v4_roundtrip() {
+        let pattern: Pattern<()> = Pattern::LiteralPattern((), Literal::Integer(42));
+        let json = serde_json::to_string(&pattern).unwrap();
+
+        assert!(json.contains(r#""LiteralPattern""#));
+        assert!(json.contains(r#""IntegerLiteral""#));
+        assert!(json.contains("42"));
+
+        let parsed: Pattern<()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Pattern::LiteralPattern(_, Literal::Integer(v)) => {
+                assert_eq!(v, 42);
+            }
+            _ => panic!("Expected LiteralPattern with Integer"),
+        }
+    }
+
+    // ==========================================================================
+    // Literal V4 Format Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_literal_serializes_to_v4_wrapper_format() {
+        let lit = Literal::Integer(42);
+        let json = serde_json::to_string(&lit).unwrap();
+
+        // V4 format: {"IntegerLiteral": {"value": 42}}
+        assert!(json.contains(r#""IntegerLiteral""#));
+        assert!(json.contains(r#""value""#));
+        assert!(json.contains("42"));
+        assert!(!json.starts_with('['));
+    }
+
+    #[test]
+    fn test_literal_deserializes_from_v4_format() {
+        let json = r#"{"IntegerLiteral": {"value": 42}}"#;
+        let parsed: Literal = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, Literal::Integer(42));
+    }
+
+    #[test]
+    fn test_literal_deserializes_from_classic_format() {
+        let json = r#"["IntegerLiteral", 42]"#;
+        let parsed: Literal = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, Literal::Integer(42));
+    }
+
+    #[test]
+    fn test_literal_string_v4_roundtrip() {
+        let lit = Literal::String("hello".to_string());
+        let json = serde_json::to_string(&lit).unwrap();
+
+        assert!(json.contains(r#""StringLiteral""#));
+        assert!(json.contains("hello"));
+
+        let parsed: Literal = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, Literal::String("hello".to_string()));
+    }
+
+    #[test]
+    fn test_literal_bool_v4_roundtrip() {
+        let lit = Literal::Bool(true);
+        let json = serde_json::to_string(&lit).unwrap();
+
+        assert!(json.contains(r#""BoolLiteral""#));
+
+        let parsed: Literal = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, Literal::Bool(true));
+    }
+
+    // ==========================================================================
+    // Value V4 Format Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_value_serializes_to_v4_wrapper_format() {
+        let val: Value<(), ()> = Value::Unit(());
+        let json = serde_json::to_string(&val).unwrap();
+
+        // V4 format: {"Unit": {}}
+        assert!(json.contains(r#""Unit""#));
+        assert!(!json.starts_with('['));
+    }
+
+    #[test]
+    fn test_value_deserializes_from_v4_format() {
+        let json = r#"{"Unit": {}}"#;
+        let parsed: Value<(), ()> = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Value::Unit(_)));
+    }
+
+    #[test]
+    fn test_value_deserializes_from_classic_format() {
+        let json = r#"["Unit", null]"#;
+        let parsed: Value<(), ()> = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Value::Unit(_)));
+    }
+
+    #[test]
+    fn test_value_variable_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Variable((), Name::from("x"));
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Variable""#));
+        assert!(json.contains(r#""name""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Value::Variable(_, name) => {
+                assert_eq!(name.to_string(), "x");
+            }
+            _ => panic!("Expected Variable"),
+        }
+    }
+
+    #[test]
+    fn test_value_literal_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Literal((), Literal::Integer(123));
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Literal""#));
+        assert!(json.contains(r#""IntegerLiteral""#));
+        assert!(json.contains("123"));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Value::Literal(_, Literal::Integer(v)) => {
+                assert_eq!(v, 123);
+            }
+            _ => panic!("Expected Literal with Integer"),
+        }
+    }
+
+    #[test]
+    fn test_value_tuple_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Tuple(
+            (),
+            vec![Value::Unit(()), Value::Unit(())],
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Tuple""#));
+        assert!(json.contains(r#""elements""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Value::Tuple(_, elements) => {
+                assert_eq!(elements.len(), 2);
+            }
+            _ => panic!("Expected Tuple"),
+        }
+    }
+
+    #[test]
+    fn test_value_apply_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Apply(
+            (),
+            Box::new(Value::Variable((), Name::from("f"))),
+            Box::new(Value::Variable((), Name::from("x"))),
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Apply""#));
+        assert!(json.contains(r#""function""#));
+        assert!(json.contains(r#""argument""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Value::Apply(_, _, _)));
+    }
+
+    #[test]
+    fn test_value_lambda_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Lambda(
+            (),
+            Pattern::WildcardPattern(()),
+            Box::new(Value::Unit(())),
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Lambda""#));
+        assert!(json.contains(r#""argumentPattern""#));
+        assert!(json.contains(r#""body""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Value::Lambda(_, _, _)));
+    }
+
+    #[test]
+    fn test_value_if_then_else_v4_roundtrip() {
+        let val: Value<(), ()> = Value::IfThenElse(
+            (),
+            Box::new(Value::Literal((), Literal::Bool(true))),
+            Box::new(Value::Unit(())),
+            Box::new(Value::Unit(())),
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""IfThenElse""#));
+        assert!(json.contains(r#""condition""#));
+        assert!(json.contains(r#""thenBranch""#));
+        assert!(json.contains(r#""elseBranch""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Value::IfThenElse(_, _, _, _)));
+    }
+
+    #[test]
+    fn test_value_reference_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Reference(
+            (),
+            FQName::from_canonical_string("morphir/sdk:basics#add").unwrap(),
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Reference""#));
+        assert!(json.contains(r#""fqname""#));
+        assert!(json.contains("morphir/sdk:basics#add"));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Value::Reference(_, fqname) => {
+                assert_eq!(fqname.to_canonical_string(), "morphir/sdk:basics#add");
+            }
+            _ => panic!("Expected Reference"),
+        }
+    }
+
+    #[test]
+    fn test_value_list_v4_roundtrip() {
+        let val: Value<(), ()> = Value::List(
+            (),
+            vec![
+                Value::Literal((), Literal::Integer(1)),
+                Value::Literal((), Literal::Integer(2)),
+            ],
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""List""#));
+        assert!(json.contains(r#""items""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Value::List(_, elements) => {
+                assert_eq!(elements.len(), 2);
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_value_field_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Field(
+            (),
+            Box::new(Value::Variable((), Name::from("record"))),
+            Name::from("myField"),
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Field""#));
+        assert!(json.contains(r#""value""#));
+        assert!(json.contains(r#""name""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Value::Field(_, _, name) => {
+                // Name uses title case conversion
+                assert_eq!(name.to_string(), "my-field");
+            }
+            _ => panic!("Expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_value_constructor_v4_roundtrip() {
+        let val: Value<(), ()> = Value::Constructor(
+            (),
+            FQName::from_canonical_string("my/pkg:mod#MyType").unwrap(),
+        );
+        let json = serde_json::to_string(&val).unwrap();
+
+        assert!(json.contains(r#""Constructor""#));
+        assert!(json.contains(r#""fqname""#));
+
+        let parsed: Value<(), ()> = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Value::Constructor(_, _)));
     }
 }

@@ -13,6 +13,10 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use super::attributes::ValueAttributes;
+use super::type_expr::Type;
+use super::value_expr::Value;
+
 // Re-export naming types - Name now serializes as V4 canonical format (kebab-case string)
 pub use crate::naming::ModuleName;
 pub use crate::naming::Name;
@@ -20,7 +24,7 @@ pub use crate::naming::PackageName;
 pub use crate::naming::Path;
 
 /// Top-level IR file structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IRFile {
     pub format_version: FormatVersion,
@@ -78,7 +82,7 @@ impl Default for FormatVersion {
 
 /// Distribution enum - serializes as wrapper object format
 /// E.g., `{ "Library": { ... } }` or `{ "Specs": { ... } }`
-#[derive(Debug, Clone, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Distribution {
     Library(LibraryContent),
     Specs(SpecsContent),
@@ -157,7 +161,7 @@ impl<'de> Visitor<'de> for DistributionVisitor {
 }
 
 /// Library distribution content
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryContent {
     pub package_name: PackageName,
@@ -166,7 +170,7 @@ pub struct LibraryContent {
 }
 
 /// Specs distribution content (public interfaces only)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpecsContent {
     pub package_name: PackageName,
@@ -175,7 +179,7 @@ pub struct SpecsContent {
 }
 
 /// Application distribution content
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationContent {
     pub package_name: PackageName,
@@ -188,14 +192,14 @@ pub struct ApplicationContent {
 pub type Dependencies = IndexMap<String, PackageSpecification>;
 
 /// Package specification (for dependencies)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageSpecification {
     pub modules: IndexMap<String, ModuleSpecification>,
 }
 
 /// Module specification (public API only)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleSpecification {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -239,7 +243,7 @@ pub enum AnnotationArgument {
 /// Type specification (public API view of a type)
 // The variant names include "Specification" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TypeSpecification {
     /// Type alias specification
@@ -248,7 +252,7 @@ pub enum TypeSpecification {
         annotations: Vec<Annotation>,
         type_params: Vec<Name>,
         #[serde(rename = "typeExp")]
-        type_expr: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+        type_expr: Type,
     },
     /// Opaque type (constructors hidden)
     OpaqueTypeSpecification {
@@ -276,7 +280,7 @@ pub enum TypeSpecification {
 }
 
 /// Constructor specification
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorSpecification {
     pub name: Name,
@@ -284,36 +288,36 @@ pub struct ConstructorSpecification {
 }
 
 /// Constructor argument specification
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorArgSpec {
     pub name: Name,
     #[serde(rename = "type")]
-    pub arg_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    pub arg_type: Type,
 }
 
 /// Value specification (just the signature)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSpecification {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub inputs: IndexMap<String, serde_json::Value>, // TODO: Use TypeExpr when serde is complete
-    pub output: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    pub inputs: IndexMap<String, Type>,
+    pub output: Type,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
 }
 
 /// Package definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageDefinition {
     pub modules: IndexMap<String, AccessControlledModuleDefinition>,
 }
 
 /// Access-controlled module definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessControlledModuleDefinition {
     pub access: Access,
@@ -321,7 +325,7 @@ pub struct AccessControlledModuleDefinition {
 }
 
 /// Module definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleDefinition {
     pub types: IndexMap<String, AccessControlledTypeDefinition>,
@@ -331,7 +335,7 @@ pub struct ModuleDefinition {
 }
 
 /// Access-controlled type definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessControlledTypeDefinition {
     pub access: Access,
@@ -346,7 +350,7 @@ pub struct AccessControlledTypeDefinition {
 pub enum TypeDefinition {
     TypeAliasDefinition {
         type_params: Vec<Name>,
-        type_expr: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+        type_expr: Type,
     },
     CustomTypeDefinition {
         type_params: Vec<Name>,
@@ -415,7 +419,7 @@ impl Serialize for TypeDefinition {
 #[serde(rename_all = "camelCase")]
 struct TypeAliasDefContent {
     type_params: Vec<Name>,
-    type_exp: serde_json::Value,
+    type_exp: Type,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -522,7 +526,7 @@ impl<'de> Deserialize<'de> for Incompleteness {
 }
 
 /// Access-controlled constructors
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessControlledConstructors {
     pub access: Access,
@@ -530,7 +534,7 @@ pub struct AccessControlledConstructors {
 }
 
 /// Constructor definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorDefinition {
     pub name: Name,
@@ -538,16 +542,16 @@ pub struct ConstructorDefinition {
 }
 
 /// Constructor argument
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstructorArg {
     pub name: Name,
     #[serde(rename = "type")]
-    pub arg_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    pub arg_type: Type,
 }
 
 /// Access-controlled value definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessControlledValueDefinition {
     pub access: Access,
@@ -556,32 +560,30 @@ pub struct AccessControlledValueDefinition {
 }
 
 /// Value definition - uses wrapper object format for body
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueDefinition {
     pub input_types: IndexMap<String, InputTypeEntry>,
-    pub output_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    pub output_type: Type,
     pub body: ValueBody,
 }
 
 /// Input type entry
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputTypeEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub type_attributes: Option<serde_json::Value>,
+    pub type_attributes: Option<ValueAttributes>,
     #[serde(rename = "type")]
-    pub input_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    pub input_type: Type,
 }
 
 /// Value body - uses wrapper object format
 // The variant names include "Body" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ValueBody {
-    ExpressionBody {
-        body: serde_json::Value,
-    }, // TODO: Use ValueExpr when serde is complete
+    ExpressionBody { body: Value },
     NativeBody {
         hint: NativeHint,
         description: Option<String>,
@@ -637,7 +639,7 @@ impl Serialize for ValueBody {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExpressionBodySerContent<'a> {
-    body: &'a serde_json::Value,
+    body: &'a Value,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -668,10 +670,11 @@ impl<'de> Deserialize<'de> for ValueBody {
         let value = serde_json::Value::deserialize(deserializer)?;
         if let serde_json::Value::Object(map) = &value {
             if let Some(content) = map.get("ExpressionBody") {
-                let body = content
+                let body_json = content
                     .get("body")
-                    .cloned()
                     .ok_or_else(|| de::Error::missing_field("body"))?;
+                let body: Value =
+                    serde_json::from_value(body_json.clone()).map_err(de::Error::custom)?;
                 return Ok(ValueBody::ExpressionBody { body });
             }
             if let Some(content) = map.get("NativeBody") {
@@ -1044,8 +1047,9 @@ mod tests {
 
     #[test]
     fn test_value_body_expression_wrapper() {
+        use crate::ir::attributes::ValueAttributes;
         let body = ValueBody::ExpressionBody {
-            body: serde_json::json!({"Unit": {}}),
+            body: Value::Unit(ValueAttributes::default()),
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains("\"ExpressionBody\""));

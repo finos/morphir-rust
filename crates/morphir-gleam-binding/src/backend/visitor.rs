@@ -6,14 +6,12 @@
 use morphir_common::vfs::Vfs;
 use morphir_core::ir::literal::Literal as MorphirLiteral;
 use morphir_core::ir::pattern::Pattern as MorphirPattern;
-use morphir_core::ir::serde_v4::deserialize_value;
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlledModuleDefinition, AccessControlledTypeDefinition,
     AccessControlledValueDefinition, ModuleDefinition,
 };
 use morphir_core::ir::value_expr::Value;
 use morphir_core::naming::ModuleName;
-use serde::de::IntoDeserializer;
 use std::io::Result;
 use std::path::PathBuf;
 
@@ -193,140 +191,74 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         Ok(())
     }
 
-    /// Generate a Gleam type expression from V4 JSON type
-    fn generate_type_expr(&self, output: &mut String, type_json: &serde_json::Value) -> Result<()> {
-        use serde_json::Value;
+    /// Generate a Gleam type expression from IR Type
+    fn generate_type_expr(
+        &self,
+        output: &mut String,
+        type_expr: &morphir_core::ir::type_expr::Type,
+    ) -> Result<()> {
+        use morphir_core::ir::type_expr::Type;
 
-        match type_json {
-            // Simple string type reference (compact format): "morphir/sdk:int#int" or "a" (type variable)
-            Value::String(s) => {
-                if s.contains(':') || s.contains('#') {
-                    // FQName reference - extract the type name part
-                    let type_name = s
-                        .rsplit('#')
-                        .next()
-                        .and_then(|s| s.split(':').next())
-                        .unwrap_or(s);
-                    // Convert to PascalCase for Gleam
-                    output.push_str(&to_pascal_case(type_name));
-                } else {
-                    // Simple type variable
-                    output.push_str(s);
+        match type_expr {
+            Type::Variable(_, name) => {
+                output.push_str(&name.to_string());
+            }
+            Type::Reference(_, fqname, args) => {
+                let type_name = fqname.local_name.to_string();
+                output.push_str(&to_pascal_case(&type_name));
+                if !args.is_empty() {
+                    output.push('(');
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            output.push_str(", ");
+                        }
+                        self.generate_type_expr(output, arg)?;
+                    }
+                    output.push(')');
                 }
             }
-            // Object format: {"Reference": ...} or {"Variable": ...}
-            Value::Object(obj) => {
-                if let Some(reference) = obj.get("Reference") {
-                    // Reference type: {"Reference": "fqname"} or {"Reference": {"fqname": "...", "args": [...]}}
-                    match reference {
-                        Value::String(s) => {
-                            let type_name = s.rsplit('#').next().unwrap_or(s);
-                            output.push_str(&to_pascal_case(type_name));
-                        }
-                        Value::Object(ref_obj) => {
-                            if let Some(Value::String(fqname)) = ref_obj.get("fqname") {
-                                let type_name = fqname.rsplit('#').next().unwrap_or(fqname);
-                                output.push_str(&to_pascal_case(type_name));
-                            }
-                            // Handle type arguments if present
-                            if let Some(Value::Array(args)) = ref_obj.get("args")
-                                && !args.is_empty()
-                            {
-                                output.push('(');
-                                for (i, arg) in args.iter().enumerate() {
-                                    if i > 0 {
-                                        output.push_str(", ");
-                                    }
-                                    self.generate_type_expr(output, arg)?;
-                                }
-                                output.push(')');
-                            }
-                        }
-                        Value::Array(arr) if !arr.is_empty() => {
-                            // Array format: ["fqname", arg1, arg2, ...]
-                            if let Some(Value::String(fqname)) = arr.first() {
-                                let type_name = fqname.rsplit('#').next().unwrap_or(fqname);
-                                output.push_str(&to_pascal_case(type_name));
-                                if arr.len() > 1 {
-                                    output.push('(');
-                                    for (i, arg) in arr.iter().skip(1).enumerate() {
-                                        if i > 0 {
-                                            output.push_str(", ");
-                                        }
-                                        self.generate_type_expr(output, arg)?;
-                                    }
-                                    output.push(')');
-                                }
-                            }
-                        }
-                        _ => output.push_str("Unknown"),
+            Type::Tuple(_, elements) => {
+                output.push_str("#(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str(", ");
                     }
-                } else if let Some(var) = obj.get("Variable") {
-                    // Variable type: {"Variable": "a"} or {"Variable": {"name": "a"}}
-                    match var {
-                        Value::String(s) => output.push_str(s),
-                        Value::Object(var_obj) => {
-                            if let Some(Value::String(name)) = var_obj.get("name") {
-                                output.push_str(name);
-                            } else {
-                                output.push('a');
-                            }
-                        }
-                        _ => output.push('a'),
-                    }
-                } else if let Some(tuple) = obj.get("Tuple") {
-                    // Tuple type: {"Tuple": [type1, type2, ...]}
-                    if let Value::Array(elements) = tuple {
-                        output.push_str("#(");
-                        for (i, elem) in elements.iter().enumerate() {
-                            if i > 0 {
-                                output.push_str(", ");
-                            }
-                            self.generate_type_expr(output, elem)?;
-                        }
-                        output.push(')');
-                    } else {
-                        output.push_str("#()");
-                    }
-                } else if let Some(function) = obj.get("Function") {
-                    // Function type: {"Function": {"argumentType": ..., "returnType": ...}}
-                    if let Value::Object(fn_obj) = function {
-                        output.push_str("fn(");
-                        if let Some(arg_type) = fn_obj.get("argumentType") {
-                            self.generate_type_expr(output, arg_type)?;
-                        }
-                        output.push_str(") -> ");
-                        if let Some(return_type) = fn_obj.get("returnType") {
-                            self.generate_type_expr(output, return_type)?;
-                        }
-                    } else {
-                        output.push_str("fn() -> Nil");
-                    }
-                } else {
-                    // Unknown type structure, use a placeholder
-                    output.push('a');
+                    self.generate_type_expr(output, elem)?;
                 }
+                output.push(')');
             }
-            // Array format (compact Reference): ["fqname", arg1, arg2, ...]
-            Value::Array(arr) if !arr.is_empty() => {
-                if let Some(Value::String(fqname)) = arr.first() {
-                    let type_name = fqname.rsplit('#').next().unwrap_or(fqname);
-                    output.push_str(&to_pascal_case(type_name));
-                    if arr.len() > 1 {
-                        output.push('(');
-                        for (i, arg) in arr.iter().skip(1).enumerate() {
-                            if i > 0 {
-                                output.push_str(", ");
-                            }
-                            self.generate_type_expr(output, arg)?;
-                        }
-                        output.push(')');
+            Type::Record(_, fields) => {
+                output.push_str("{ ");
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str(", ");
                     }
+                    output.push_str(&field.name.to_string());
+                    output.push_str(": ");
+                    self.generate_type_expr(output, &field.tpe)?;
                 }
+                output.push_str(" }");
             }
-            _ => {
-                // Fallback for unknown formats
-                output.push('a');
+            Type::ExtensibleRecord(_, _, fields) => {
+                output.push_str("{ ");
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str(", ");
+                    }
+                    output.push_str(&field.name.to_string());
+                    output.push_str(": ");
+                    self.generate_type_expr(output, &field.tpe)?;
+                }
+                output.push_str(" }");
+            }
+            Type::Function(_, arg_type, return_type) => {
+                output.push_str("fn(");
+                self.generate_type_expr(output, arg_type)?;
+                output.push_str(") -> ");
+                self.generate_type_expr(output, return_type)?;
+            }
+            Type::Unit(_) => {
+                output.push_str("Nil");
             }
         }
 
@@ -359,20 +291,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
         output.push_str(") {\n  ");
 
-        // Body - V4 stores body as JSON, deserialize and generate Gleam code
+        // Body - V4 now stores body as actual Value
         match &value_def.value.body {
             morphir_core::ir::v4::ValueBody::ExpressionBody { body } => {
-                // Deserialize the V4 JSON body to a typed Value
-                match self.deserialize_value_body(body) {
-                    Ok(value) => {
-                        self.generate_value_expr(output, &value)?;
-                    }
-                    Err(e) => {
-                        // Fallback: output as todo with error message
-                        output.push_str("todo // deserialization error: ");
-                        output.push_str(&e);
-                    }
-                }
+                self.generate_value_expr(output, body)?;
             }
             morphir_core::ir::v4::ValueBody::NativeBody { hint, .. } => {
                 output.push_str("// native: ");
@@ -389,15 +311,6 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
         output.push_str("\n}\n");
         Ok(())
-    }
-
-    /// Deserialize a V4 JSON body to a typed Value
-    fn deserialize_value_body(
-        &self,
-        body: &serde_json::Value,
-    ) -> std::result::Result<Value, String> {
-        let deserializer = body.clone().into_deserializer();
-        deserialize_value(deserializer).map_err(|e| e.to_string())
     }
 
     /// Generate value expression

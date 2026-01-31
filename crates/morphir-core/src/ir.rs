@@ -4,51 +4,78 @@
 //!
 //! # Type Aliases
 //!
-//! For V4 (preferred), use `Type`, `Value`, `Pattern` directly (defaults to V4 attributes).
-//! Or use the convenience aliases `TypeExpr` and `ValueExpr`.
+//! For V4 (preferred), use `Type`, `Value`, `Pattern` directly with `TypeAttributes`
+//! and `ValueAttributes`. Or use the convenience aliases `TypeExpr` and `ValueExpr`.
 //!
-//! For Classic (V1-V3 compatibility), use the `Classic` prefix:
-//! - [`ClassicType`], [`ClassicValue`], [`ClassicPattern`], etc.
-
-// V4 Core Types (Primary)
-pub mod attributes;
-pub mod literal;
-pub mod pattern;
-pub mod serde_tagged;
-pub mod serde_v4;
-pub mod type_def;
-pub mod type_expr;
-pub mod value_expr;
+//! For Classic (V1-V3 compatibility), use the `classic` submodule directly:
+//! - `ir::classic::Type<A>`, `ir::classic::Value<TA, VA>`, etc.
 
 // Legacy support
 pub mod classic;
+
+// V4 is the primary format
 pub mod v4;
 
+// Re-export serde_tagged from v4 for backward compatibility
+pub use v4::serde_tagged;
+
 // Re-exports for V4 types (primary)
-pub use attributes::{
-    // Classic type aliases (for V1-V3 compatibility)
-    ClassicAttrs,
-    ClassicField,
-    ClassicPattern,
-    ClassicType,
-    ClassicTypeDefinition,
-    ClassicValue,
-    ClassicValueDefinition,
+pub use v4::{
+    // Access control
+    Access,
+    AccessControlled,
+    // Core expression types
+    Field,
+    Literal,
+    Pattern,
     SourceLocation,
+    Type,
     TypeAttributes,
-    // Convenience aliases
     TypeExpr,
+    Value,
     ValueAttributes,
     ValueExpr,
+    // Value expression types (from value module)
+    InputType,
+    LetBinding,
+    NativeInfo,
+    PatternCase,
+    RecordFieldEntry,
+    ValueExprBody as ValueBody,
+    ValueExprDefinition,
+    ValueHoleReason,
+    ValueNativeHint,
+    // Distribution types
+    ApplicationContent,
+    Dependencies,
+    Distribution,
+    EntryPoint,
+    EntryPointKind,
+    EntryPoints,
+    LibraryContent,
+    SpecsContent,
+    // Module types
+    ModuleDefinition,
+    ModuleSpecification,
+    // Package types
+    PackageDefinition,
+    PackageSpecification,
+    // Type definition types
+    ConstructorArg,
+    ConstructorArgSpec,
+    ConstructorDefinition,
+    ConstructorSpecification,
+    Incompleteness,
+    TypeDefinition,
+    TypeSpecification,
+    // Value definition types
+    HoleReason,
+    InputTypeEntry,
+    NativeHint,
+    ValueBody as ValueDefBody,
+    ValueDefinition,
+    ValueSpecification,
+    // Top-level types
+    FormatVersion,
+    IRFile,
 };
-pub use literal::Literal;
-pub use pattern::Pattern;
-pub use type_def::{AccessControlled, Constructor, ConstructorArg, Incompleteness, TypeDefinition};
-pub use type_expr::{Field, Type};
-pub use value_expr::{
-    HoleReason, InputType, LetBinding, NativeHint, NativeInfo, PatternCase, RecordFieldEntry,
-    Value, ValueBody, ValueDefinition,
-};
-
-// Re-export classic types for backward compatibility (temporary)
-pub use classic::*;

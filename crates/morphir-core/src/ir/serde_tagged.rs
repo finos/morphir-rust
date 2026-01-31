@@ -734,7 +734,11 @@ impl<'de> Deserialize<'de> for HoleReason {
                     }
                     _ => Err(de::Error::unknown_variant(
                         kind,
-                        &["UnresolvedReference", "DeletedDuringRefactor", "TypeMismatch"],
+                        &[
+                            "UnresolvedReference",
+                            "DeletedDuringRefactor",
+                            "TypeMismatch",
+                        ],
                     )),
                 }
             }

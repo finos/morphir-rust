@@ -300,7 +300,7 @@ pub struct ValueSpecification {
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub inputs: IndexMap<String, serde_json::Value>, // TODO: Use TypeExpr when serde is complete
-    pub output: serde_json::Value,                   // TODO: Use TypeExpr when serde is complete
+    pub output: serde_json::Value, // TODO: Use TypeExpr when serde is complete
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
 }
@@ -340,6 +340,8 @@ pub struct AccessControlledTypeDefinition {
 }
 
 /// Type definition - uses wrapper object format
+// The variant names include "Definition" suffix as per the Morphir specification
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum TypeDefinition {
     TypeAliasDefinition {
@@ -503,8 +505,8 @@ impl<'de> Deserialize<'de> for Incompleteness {
                             let reason_val = content
                                 .get("reason")
                                 .ok_or_else(|| de::Error::missing_field("reason"))?;
-                            let reason: HoleReason =
-                                serde_json::from_value(reason_val.clone()).map_err(de::Error::custom)?;
+                            let reason: HoleReason = serde_json::from_value(reason_val.clone())
+                                .map_err(de::Error::custom)?;
                             Ok(Incompleteness::Hole { reason })
                         }
                         "Draft" => Ok(Incompleteness::Draft),
@@ -744,12 +746,10 @@ impl Serialize for NativeHint {
             NativeHint::CollectionOp => {
                 map.serialize_entry("CollectionOp", &serde_json::json!({}))?
             }
-            NativeHint::PlatformSpecific { platform } => {
-                map.serialize_entry(
-                    "PlatformSpecific",
-                    &serde_json::json!({ "platform": platform }),
-                )?
-            }
+            NativeHint::PlatformSpecific { platform } => map.serialize_entry(
+                "PlatformSpecific",
+                &serde_json::json!({ "platform": platform }),
+            )?,
         }
         map.end()
     }

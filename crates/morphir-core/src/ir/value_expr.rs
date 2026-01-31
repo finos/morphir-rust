@@ -531,7 +531,10 @@ mod tests {
             },
             None,
         );
-        assert!(matches!(val, Value::Hole(_, HoleReason::TypeMismatch { .. }, None)));
+        assert!(matches!(
+            val,
+            Value::Hole(_, HoleReason::TypeMismatch { .. }, None)
+        ));
     }
 
     #[test]

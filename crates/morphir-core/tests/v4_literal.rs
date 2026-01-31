@@ -103,7 +103,7 @@ fn test_string_literal_round_trip() {
 
 #[test]
 fn test_float_literal_round_trip() {
-    let lit = Literal::float(3.14159);
+    let lit = Literal::float(1.23456);
 
     let json = serde_json::to_string(&lit).unwrap();
     let parsed: Literal = serde_json::from_str(&json).unwrap();

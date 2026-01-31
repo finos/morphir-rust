@@ -2,14 +2,15 @@
 //!
 //! Tests for loading V4 format distributions with V4-specific constructs.
 
-use morphir_core::ir::v4::{IRFile, Distribution, FormatVersion};
+use morphir_core::ir::v4::{Distribution, FormatVersion, IRFile};
 
-const V4_FIXTURE: &str = include_str!("../../integration-tests/fixtures/ir/v4/v4-library-distribution.json");
+const V4_FIXTURE: &str =
+    include_str!("../../integration-tests/fixtures/ir/v4/v4-library-distribution.json");
 
 #[test]
 fn test_load_v4_distribution_fixture() {
-    let ir: IRFile = serde_json::from_str(V4_FIXTURE)
-        .expect("Failed to parse V4 distribution fixture");
+    let ir: IRFile =
+        serde_json::from_str(V4_FIXTURE).expect("Failed to parse V4 distribution fixture");
 
     // format_version can be 4 (integer) or "4.0.0" (string)
     match ir.format_version {
@@ -47,8 +48,8 @@ fn test_v4_distribution_has_modules() {
 
 #[test]
 fn test_minimal_v4_distribution_serialize_deserialize() {
-    use morphir_core::ir::v4::{Distribution, LibraryContent, PackageDefinition};
     use indexmap::IndexMap;
+    use morphir_core::ir::v4::{Distribution, LibraryContent, PackageDefinition};
 
     let dist = Distribution::Library(LibraryContent {
         package_name: "test/pkg".parse().unwrap(),

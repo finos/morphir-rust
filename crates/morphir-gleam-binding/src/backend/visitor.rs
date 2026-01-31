@@ -137,6 +137,18 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     output.push(')');
                 }
             }
+            TypeDefinition::IncompleteTypeDefinition { type_params, .. } => {
+                if !type_params.is_empty() {
+                    output.push('(');
+                    for (i, param) in type_params.iter().enumerate() {
+                        if i > 0 {
+                            output.push_str(", ");
+                        }
+                        output.push_str(&param.to_string());
+                    }
+                    output.push(')');
+                }
+            }
         }
 
         output.push_str(" {\n");
@@ -171,6 +183,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     }
                 }
                 output.push('\n');
+            }
+            TypeDefinition::IncompleteTypeDefinition { .. } => {
+                // Incomplete type definition - generate a TODO comment
+                output.push_str("  // TODO: Incomplete type definition\n");
             }
         }
 

@@ -3,7 +3,7 @@
 //! Tests for Incompleteness enum variants against the V4 specification at
 //! https://morphir.finos.org/docs/spec/ir/schemas/v4/whats-new/
 
-use morphir_core::ir::v4::{Incompleteness, HoleReason};
+use morphir_core::ir::v4::{HoleReason, Incompleteness};
 
 #[test]
 fn test_incompleteness_draft_serialize() {
@@ -41,19 +41,18 @@ fn test_incompleteness_hole_with_unresolved_reference_serialize() {
 
 #[test]
 fn test_incompleteness_hole_with_unresolved_reference_deserialize() {
-    let json = r#"{"Hole": {"reason": {"UnresolvedReference": {"target": "acme/finance:ledger#calc"}}}}"#;
+    let json =
+        r#"{"Hole": {"reason": {"UnresolvedReference": {"target": "acme/finance:ledger#calc"}}}}"#;
 
     let incomp: Incompleteness = serde_json::from_str(json).unwrap();
 
     match incomp {
-        Incompleteness::Hole { reason } => {
-            match reason {
-                HoleReason::UnresolvedReference { target } => {
-                    assert_eq!(target, "acme/finance:ledger#calc");
-                }
-                _ => panic!("Expected UnresolvedReference reason"),
+        Incompleteness::Hole { reason } => match reason {
+            HoleReason::UnresolvedReference { target } => {
+                assert_eq!(target, "acme/finance:ledger#calc");
             }
-        }
+            _ => panic!("Expected UnresolvedReference reason"),
+        },
         _ => panic!("Expected Hole variant"),
     }
 }

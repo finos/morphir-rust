@@ -1244,9 +1244,10 @@ where
         NativeHint::Comparison => map.serialize_entry("Comparison", &serde_json::json!({}))?,
         NativeHint::StringOp => map.serialize_entry("StringOp", &serde_json::json!({}))?,
         NativeHint::CollectionOp => map.serialize_entry("CollectionOp", &serde_json::json!({}))?,
-        NativeHint::PlatformSpecific { platform } => {
-            map.serialize_entry("PlatformSpecific", &serde_json::json!({ "platform": platform }))?
-        }
+        NativeHint::PlatformSpecific { platform } => map.serialize_entry(
+            "PlatformSpecific",
+            &serde_json::json!({ "platform": platform }),
+        )?,
     }
     map.end()
 }

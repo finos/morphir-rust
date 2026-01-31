@@ -11,9 +11,8 @@ use morphir_common::vfs::Vfs;
 use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlled, ConstructorDefinition, InputTypeEntry,
-    Literal as MorphirLiteral,
-    Pattern as MorphirPattern,
-    TypeDefinition as V4TypeDefinition,
+    Literal as MorphirLiteral, ModuleDefinition,
+    Pattern as MorphirPattern, TypeDefinition,
     ValueBody as V4ValueBody,
     ValueDefinition as V4ValueDefinition,
 };
@@ -24,8 +23,8 @@ use std::path::{Path, PathBuf};
 
 // Type aliases for the new V4 generic types
 type AccessControlledValueDefinition = AccessControlled<V4ValueDefinition>;
-type AccessControlledTypeDefinition = AccessControlled<V4TypeDefinition>;
-type AccessControlledModuleDefinition = AccessControlled<morphir_core::ir::v4::ModuleDefinition>;
+type AccessControlledTypeDefinition = AccessControlled<TypeDefinition>;
+type AccessControlledModuleDefinition = AccessControlled<ModuleDefinition>;
 
 
 /// Distribution layout mode
@@ -233,7 +232,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     })
                     .collect();
 
-                let v4_type_def = V4TypeDefinition::CustomTypeDefinition {
+                let v4_type_def = TypeDefinition::CustomTypeDefinition {
                     type_params: type_params.clone(),
                     constructors: AccessControlled {
                         access: MorphirAccess::Public,
@@ -249,7 +248,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             _ => {
                 // Type alias
                 let type_expr = self.convert_type_expr(&type_def.body);
-                let v4_type_def = V4TypeDefinition::TypeAliasDefinition {
+                let v4_type_def = TypeDefinition::TypeAliasDefinition {
                     type_params: type_params.clone(),
                     type_expr,
                 };

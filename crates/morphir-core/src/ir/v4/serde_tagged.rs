@@ -15,15 +15,15 @@ use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use super::type_def::ConstructorArg;
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::serde_v4;
-use super::type_def::ConstructorArg;
-use super::type_expr::{Field, Type};
-use super::value_expr::{
+use super::types::{Field, Type};
+use super::value::{
     HoleReason, InputType, LetBinding, NativeHint, NativeInfo, PatternCase, RecordFieldEntry,
-    Value, ValueBody, ValueDefinition,
+    Value, ValueDefinition,
 };
 use crate::naming::{FQName, Name};
 
@@ -892,63 +892,7 @@ impl<'de> Deserialize<'de> for NativeInfo {
     }
 }
 
-// Serialize ValueDefinition
-impl Serialize for ValueDefinition {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ValueDefinition", 3)?;
-        state.serialize_field("inputTypes", &self.input_types)?;
-        state.serialize_field("outputType", &self.output_type)?;
-        state.serialize_field("body", &self.body)?;
-        state.end()
-    }
-}
 
-// Serialize ValueBody
-impl Serialize for ValueBody {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            ValueBody::Expression(val) => {
-                use serde::ser::SerializeStruct;
-                let mut state = serializer.serialize_struct("ValueBody", 2)?;
-                state.serialize_field("kind", "Expression")?;
-                state.serialize_field("value", val)?;
-                state.end()
-            }
-            ValueBody::Native(info) => {
-                use serde::ser::SerializeStruct;
-                let mut state = serializer.serialize_struct("ValueBody", 2)?;
-                state.serialize_field("kind", "Native")?;
-                state.serialize_field("info", info)?;
-                state.end()
-            }
-            ValueBody::External {
-                external_name,
-                target_platform,
-            } => {
-                use serde::ser::SerializeStruct;
-                let mut state = serializer.serialize_struct("ValueBody", 3)?;
-                state.serialize_field("kind", "External")?;
-                state.serialize_field("externalName", external_name)?;
-                state.serialize_field("targetPlatform", target_platform)?;
-                state.end()
-            }
-            ValueBody::Incomplete(reason) => {
-                use serde::ser::SerializeStruct;
-                let mut state = serializer.serialize_struct("ValueBody", 2)?;
-                state.serialize_field("kind", "Incomplete")?;
-                state.serialize_field("reason", reason)?;
-                state.end()
-            }
-        }
-    }
-}
 
 // =============================================================================
 // Tuple Struct Serialization (InputType, RecordFieldEntry, PatternCase, LetBinding, ConstructorArg)
@@ -1183,205 +1127,7 @@ impl<'de> Deserialize<'de> for ConstructorArg {
     }
 }
 
-// Deserialize for ValueDefinition
-impl<'de> Deserialize<'de> for ValueDefinition {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "camelCase")]
-        enum FieldName {
-            InputTypes,
-            OutputType,
-            Body,
-        }
 
-        struct ValueDefinitionVisitor;
-
-        impl<'de> Visitor<'de> for ValueDefinitionVisitor {
-            type Value = ValueDefinition;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a value definition with inputTypes, outputType, and body")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<ValueDefinition, V::Error>
-            where
-                V: de::MapAccess<'de>,
-            {
-                let mut input_types = None;
-                let mut output_type = None;
-                let mut body = None;
-
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        FieldName::InputTypes => {
-                            if input_types.is_some() {
-                                return Err(de::Error::duplicate_field("inputTypes"));
-                            }
-                            input_types = Some(map.next_value()?);
-                        }
-                        FieldName::OutputType => {
-                            if output_type.is_some() {
-                                return Err(de::Error::duplicate_field("outputType"));
-                            }
-                            output_type = Some(map.next_value()?);
-                        }
-                        FieldName::Body => {
-                            if body.is_some() {
-                                return Err(de::Error::duplicate_field("body"));
-                            }
-                            body = Some(map.next_value()?);
-                        }
-                    }
-                }
-
-                let input_types =
-                    input_types.ok_or_else(|| de::Error::missing_field("inputTypes"))?;
-                let output_type =
-                    output_type.ok_or_else(|| de::Error::missing_field("outputType"))?;
-                let body = body.ok_or_else(|| de::Error::missing_field("body"))?;
-                Ok(ValueDefinition {
-                    input_types,
-                    output_type,
-                    body,
-                })
-            }
-        }
-
-        deserializer.deserialize_struct(
-            "ValueDefinition",
-            &["inputTypes", "outputType", "body"],
-            ValueDefinitionVisitor,
-        )
-    }
-}
-
-// Deserialize for ValueBody
-impl<'de> Deserialize<'de> for ValueBody {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "camelCase")]
-        enum FieldName {
-            Kind,
-            Value,
-            Info,
-            ExternalName,
-            TargetPlatform,
-            Reason,
-        }
-
-        struct ValueBodyVisitor;
-
-        impl<'de> Visitor<'de> for ValueBodyVisitor {
-            type Value = ValueBody;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a value body with kind field")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<ValueBody, V::Error>
-            where
-                V: de::MapAccess<'de>,
-            {
-                let mut kind: Option<String> = None;
-                let mut value: Option<Value> = None;
-                let mut info: Option<NativeInfo> = None;
-                let mut external_name: Option<String> = None;
-                let mut target_platform: Option<String> = None;
-                let mut reason: Option<HoleReason> = None;
-
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        FieldName::Kind => {
-                            if kind.is_some() {
-                                return Err(de::Error::duplicate_field("kind"));
-                            }
-                            kind = Some(map.next_value()?);
-                        }
-                        FieldName::Value => {
-                            if value.is_some() {
-                                return Err(de::Error::duplicate_field("value"));
-                            }
-                            value = Some(map.next_value()?);
-                        }
-                        FieldName::Info => {
-                            if info.is_some() {
-                                return Err(de::Error::duplicate_field("info"));
-                            }
-                            info = Some(map.next_value()?);
-                        }
-                        FieldName::ExternalName => {
-                            if external_name.is_some() {
-                                return Err(de::Error::duplicate_field("externalName"));
-                            }
-                            external_name = Some(map.next_value()?);
-                        }
-                        FieldName::TargetPlatform => {
-                            if target_platform.is_some() {
-                                return Err(de::Error::duplicate_field("targetPlatform"));
-                            }
-                            target_platform = Some(map.next_value()?);
-                        }
-                        FieldName::Reason => {
-                            if reason.is_some() {
-                                return Err(de::Error::duplicate_field("reason"));
-                            }
-                            reason = Some(map.next_value()?);
-                        }
-                    }
-                }
-
-                let kind = kind.ok_or_else(|| de::Error::missing_field("kind"))?;
-                match kind.as_str() {
-                    "Expression" => {
-                        let val = value.ok_or_else(|| de::Error::missing_field("value"))?;
-                        Ok(ValueBody::Expression(val))
-                    }
-                    "Native" => {
-                        let info = info.ok_or_else(|| de::Error::missing_field("info"))?;
-                        Ok(ValueBody::Native(info))
-                    }
-                    "External" => {
-                        let external_name = external_name
-                            .ok_or_else(|| de::Error::missing_field("externalName"))?;
-                        let target_platform = target_platform
-                            .ok_or_else(|| de::Error::missing_field("targetPlatform"))?;
-                        Ok(ValueBody::External {
-                            external_name,
-                            target_platform,
-                        })
-                    }
-                    "Incomplete" => {
-                        let reason = reason.ok_or_else(|| de::Error::missing_field("reason"))?;
-                        Ok(ValueBody::Incomplete(reason))
-                    }
-                    _ => Err(de::Error::unknown_variant(
-                        &kind,
-                        &["Expression", "Native", "External", "Incomplete"],
-                    )),
-                }
-            }
-        }
-
-        deserializer.deserialize_struct(
-            "ValueBody",
-            &[
-                "kind",
-                "value",
-                "info",
-                "externalName",
-                "targetPlatform",
-                "reason",
-            ],
-            ValueBodyVisitor,
-        )
-    }
-}
 
 // Deserialize for Value (complex, needs visitor)
 impl<'de> Deserialize<'de> for Value {

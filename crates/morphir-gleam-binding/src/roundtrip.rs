@@ -7,9 +7,12 @@ use crate::backend::MorphirToGleamVisitor;
 use crate::frontend::ast::ModuleIR;
 use crate::frontend::{GleamToMorphirVisitor, parse_gleam};
 use morphir_common::vfs::{MemoryVfs, Vfs};
-use morphir_core::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
+use morphir_core::ir::v4::{AccessControlled, ModuleDefinition};
 use morphir_core::naming::{ModuleName, PackageName};
 use std::path::{Path, PathBuf};
+
+// Type alias for the new V4 generic type
+type AccessControlledModuleDefinition = AccessControlled<ModuleDefinition>;
 
 /// Result of a roundtrip operation
 #[derive(Debug)]
@@ -148,7 +151,7 @@ fn build_v4_module_from_ir(
 ) -> std::io::Result<AccessControlledModuleDefinition> {
     use indexmap::IndexMap;
     use morphir_core::ir::v4::{
-        Access, AccessControlledTypeDefinition, AccessControlledValueDefinition,
+        Access, AccessControlled, TypeDefinition, ValueDefinition,
     };
 
     // Try to read the written V4 files and reconstruct the module definition
@@ -158,8 +161,8 @@ fn build_v4_module_from_ir(
         .join(package_name.to_string())
         .join(module_name.to_string());
 
-    let mut types: IndexMap<String, AccessControlledTypeDefinition> = IndexMap::new();
-    let mut values: IndexMap<String, AccessControlledValueDefinition> = IndexMap::new();
+    let mut types: IndexMap<String, AccessControlled<TypeDefinition>> = IndexMap::new();
+    let mut values: IndexMap<String, AccessControlled<ValueDefinition>> = IndexMap::new();
 
     // Read type definitions - frontend writes .type.json extension
     // Note: MemoryVfs doesn't track directories, so we directly check file existence
@@ -169,7 +172,7 @@ fn build_v4_module_from_ir(
         if vfs.exists(&type_file)
             && let Ok(content) = vfs.read_to_string(&type_file)
         {
-            match serde_json::from_str::<AccessControlledTypeDefinition>(&content) {
+            match serde_json::from_str::<AccessControlled<TypeDefinition>>(&content) {
                 Ok(type_def_v4) => {
                     types.insert(type_def.name.clone(), type_def_v4);
                 }
@@ -190,7 +193,7 @@ fn build_v4_module_from_ir(
         if vfs.exists(&value_file)
             && let Ok(content) = vfs.read_to_string(&value_file)
         {
-            match serde_json::from_str::<AccessControlledValueDefinition>(&content) {
+            match serde_json::from_str::<AccessControlled<ValueDefinition>>(&content) {
                 Ok(value_def_v4) => {
                     values.insert(value_def.name.clone(), value_def_v4);
                 }
@@ -204,7 +207,7 @@ fn build_v4_module_from_ir(
         }
     }
 
-    Ok(AccessControlledModuleDefinition {
+    Ok(AccessControlled {
         access: Access::Public,
         value: ModuleDefinition {
             types,

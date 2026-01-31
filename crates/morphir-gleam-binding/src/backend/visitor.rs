@@ -4,16 +4,18 @@
 //! using Vfs for file generation.
 
 use morphir_common::vfs::Vfs;
-use morphir_core::ir::literal::Literal as MorphirLiteral;
-use morphir_core::ir::pattern::Pattern as MorphirPattern;
 use morphir_core::ir::v4::{
-    Access as MorphirAccess, AccessControlledModuleDefinition, AccessControlledTypeDefinition,
-    AccessControlledValueDefinition, ModuleDefinition,
+    Access as MorphirAccess, AccessControlled, Literal as MorphirLiteral, ModuleDefinition,
+    Pattern as MorphirPattern, TypeDefinition, ValueDefinition,
 };
-use morphir_core::ir::value_expr::Value;
+use morphir_core::ir::Value;
 use morphir_core::naming::ModuleName;
 use std::io::Result;
 use std::path::PathBuf;
+
+// Type alias for the new V4 generic AccessControlled type
+type AccessControlledModuleDefinition = AccessControlled<ModuleDefinition>;
+type AccessControlledTypeDefinition = AccessControlled<TypeDefinition>;
 
 /// Convert a kebab-case or snake-case name to PascalCase for Gleam type constructors
 fn to_pascal_case(name: &str) -> String {
@@ -98,8 +100,6 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         type_name: &str,
         type_def: &AccessControlledTypeDefinition,
     ) -> Result<()> {
-        use morphir_core::ir::v4::TypeDefinition;
-
         // Access control
         if matches!(type_def.access, MorphirAccess::Public) {
             output.push_str("pub ");
@@ -173,7 +173,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                             if j > 0 {
                                 output.push_str(", ");
                             }
-                            // Generate proper Gleam type syntax from arg_type JSON
+                            // Generate proper Gleam type syntax from arg_type
                             self.generate_type_expr(output, &arg.arg_type)?;
                         }
                         output.push(')');
@@ -195,9 +195,9 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
     fn generate_type_expr(
         &self,
         output: &mut String,
-        type_expr: &morphir_core::ir::type_expr::Type,
+        type_expr: &morphir_core::ir::Type,
     ) -> Result<()> {
-        use morphir_core::ir::type_expr::Type;
+        use morphir_core::ir::Type;
 
         match type_expr {
             Type::Variable(_, name) => {
@@ -270,7 +270,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         &self,
         output: &mut String,
         value_name: &str,
-        value_def: &AccessControlledValueDefinition,
+        value_def: &AccessControlled<ValueDefinition>,
     ) -> Result<()> {
         // Access control
         if matches!(value_def.access, MorphirAccess::Public) {
@@ -293,18 +293,18 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
         // Body - V4 now stores body as actual Value
         match &value_def.value.body {
-            morphir_core::ir::v4::ValueBody::ExpressionBody { body } => {
+            morphir_core::ir::v4::ValueBody::Expression(body) => {
                 self.generate_value_expr(output, body)?;
             }
-            morphir_core::ir::v4::ValueBody::NativeBody { hint, .. } => {
+            morphir_core::ir::v4::ValueBody::Native(info) => {
                 output.push_str("// native: ");
-                output.push_str(&format!("{:?}", hint));
+                output.push_str(&format!("{:?}", info.hint));
             }
-            morphir_core::ir::v4::ValueBody::ExternalBody { external_name, .. } => {
+            morphir_core::ir::v4::ValueBody::External { external_name, .. } => {
                 output.push_str("// external: ");
                 output.push_str(external_name);
             }
-            morphir_core::ir::v4::ValueBody::IncompleteBody { .. } => {
+            morphir_core::ir::v4::ValueBody::Incomplete(_) => {
                 output.push_str("todo // incomplete");
             }
         }
@@ -495,6 +495,9 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             MorphirLiteral::Float(f) => {
                 output.push_str(&f.to_string());
             }
+            MorphirLiteral::Decimal(d) => {
+                output.push_str(d);
+            }
             MorphirLiteral::String(s) => {
                 output.push('"');
                 output.push_str(s);
@@ -504,9 +507,6 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push('\'');
                 output.push(*c);
                 output.push('\'');
-            }
-            MorphirLiteral::Decimal(d) => {
-                output.push_str(d);
             }
         }
         Ok(())
@@ -518,10 +518,10 @@ trait ValueBodyExt {
     fn get_expression(&self) -> Result<&Value>;
 }
 
-impl ValueBodyExt for morphir_core::ir::value_expr::ValueBody {
+impl ValueBodyExt for morphir_core::ir::v4::ValueBody {
     fn get_expression(&self) -> Result<&Value> {
         match self {
-            morphir_core::ir::value_expr::ValueBody::Expression(expr) => Ok(expr),
+            morphir_core::ir::v4::ValueBody::Expression(body) => Ok(body),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Expected expression body",
@@ -536,7 +536,7 @@ mod tests {
     use indexmap::IndexMap;
     use morphir_common::vfs::MemoryVfs;
     use morphir_core::ir::v4::Access as MorphirAccess;
-    use morphir_core::ir::v4::{AccessControlledModuleDefinition, ModuleDefinition};
+    use morphir_core::ir::v4::{AccessControlled, ModuleDefinition};
     use morphir_core::naming::ModuleName;
     use std::path::PathBuf;
 
@@ -548,7 +548,7 @@ mod tests {
         let visitor = MorphirToGleamVisitor::new(vfs, output_dir, package_name);
 
         let module_name = ModuleName::parse("test_module");
-        let module_def = AccessControlledModuleDefinition {
+        let module_def = AccessControlled {
             access: MorphirAccess::Public,
             value: ModuleDefinition {
                 types: IndexMap::new(),

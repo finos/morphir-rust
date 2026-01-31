@@ -14,8 +14,8 @@ use serde::Serialize;
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
 use super::pattern::Pattern;
-use super::type_expr::Type;
-use super::value_expr::{
+use super::types::Type;
+use super::value::{
     HoleReason, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value, ValueDefinition,
 };
 
@@ -648,7 +648,7 @@ where
                 "Hole",
                 &HoleContent {
                     reason,
-                    tpe: tpe.as_ref().map(|t| t.as_ref()),
+                    tpe: tpe.as_ref().map(|t: &Box<_>| t.as_ref()),
                     attrs: Some(attrs),
                 },
             )?;

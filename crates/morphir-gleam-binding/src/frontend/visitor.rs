@@ -8,21 +8,24 @@ use crate::frontend::ast::{
 };
 use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
-use morphir_core::ir::attributes::{TypeAttributes, ValueAttributes};
-use morphir_core::ir::literal::Literal as MorphirLiteral;
-use morphir_core::ir::pattern::Pattern as MorphirPattern;
-use morphir_core::ir::type_expr::{Field, Type};
+use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::ir::v4::{
-    Access as MorphirAccess, AccessControlledConstructors, AccessControlledTypeDefinition,
-    AccessControlledValueDefinition, ConstructorArg, ConstructorDefinition, InputTypeEntry,
-    TypeDefinition as V4TypeDefinition, ValueBody as V4ValueBody,
+    Access as MorphirAccess, AccessControlled, ConstructorDefinition, InputTypeEntry,
+    Literal as MorphirLiteral,
+    Pattern as MorphirPattern,
+    TypeDefinition as V4TypeDefinition,
+    ValueBody as V4ValueBody,
     ValueDefinition as V4ValueDefinition,
 };
-use morphir_core::ir::value_expr::{RecordFieldEntry, Value, ValueBody};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
 use serde_json;
 use std::io::Result;
 use std::path::{Path, PathBuf};
+
+// Type aliases for the new V4 generic types
+type AccessControlledValueDefinition = AccessControlled<V4ValueDefinition>;
+type AccessControlledTypeDefinition = AccessControlled<V4TypeDefinition>;
+type AccessControlledModuleDefinition = AccessControlled<morphir_core::ir::v4::ModuleDefinition>;
 
 
 /// Distribution layout mode
@@ -210,6 +213,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let constructors: Vec<ConstructorDefinition> = variants
                     .iter()
                     .map(|v| {
+                        use morphir_core::ir::v4::ConstructorArg;
                         let args: Vec<ConstructorArg> = v
                             .fields
                             .iter()
@@ -231,7 +235,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
                 let v4_type_def = V4TypeDefinition::CustomTypeDefinition {
                     type_params: type_params.clone(),
-                    constructors: AccessControlledConstructors {
+                    constructors: AccessControlled {
                         access: MorphirAccess::Public,
                         value: constructors,
                     },
@@ -283,7 +287,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         // Convert body expression
         let body_value = self.convert_expr(&value_def.body);
-        let body = V4ValueBody::ExpressionBody { body: body_value };
+        let body = V4ValueBody::Expression(body_value);
 
         let v4_value_def = V4ValueDefinition {
             input_types,
@@ -453,10 +457,10 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             }
             Expr::Let { name, value, body } => {
                 // Convert to LetDefinition
-                let def = morphir_core::ir::value_expr::ValueDefinition {
-                    input_types: vec![],
+                let def = V4ValueDefinition {
+                    input_types: IndexMap::new(),
                     output_type: Type::Unit(TypeAttributes::default()),
-                    body: ValueBody::Expression(self.convert_expr(value)),
+                    body: V4ValueBody::Expression(self.convert_expr(value)),
                 };
 
                 Value::LetDefinition(
@@ -477,6 +481,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Box::new(self.convert_expr(else_branch)),
             ),
             Expr::Record { fields } => {
+                use morphir_core::ir::v4::RecordFieldEntry;
                 let morphir_fields: Vec<RecordFieldEntry> = fields
                     .iter()
                     .map(|(name, expr)| {
@@ -504,16 +509,17 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 )
             }
             Expr::Case { subjects, clauses } => {
+                use morphir_core::ir::v4::PatternCase;
                 // For now, handle single subject case
                 let subject = subjects
                     .first()
                     .map(|s| self.convert_expr(s))
                     .unwrap_or_else(|| Value::Unit(attrs.clone()));
 
-                let morphir_cases: Vec<morphir_core::ir::value_expr::PatternCase> = clauses
+                let morphir_cases: Vec<PatternCase> = clauses
                     .iter()
                     .map(|branch| {
-                        morphir_core::ir::value_expr::PatternCase(
+                        PatternCase(
                             self.convert_pattern(&branch.pattern),
                             self.convert_expr(&branch.body),
                         )
@@ -601,7 +607,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     .as_ref()
                     .map(|m| self.convert_expr(m))
                     .unwrap_or_else(|| {
-                        Value::Literal(attrs.clone(), MorphirLiteral::string("panic"))
+                        Value::Literal(attrs.clone(), MorphirLiteral::String("panic".to_string()))
                     });
                 let _ = msg_expr; // TODO: Use message in panic representation
                 Value::Unit(attrs) // Placeholder - Morphir IR doesn't have panic
@@ -686,7 +692,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 MorphirPattern::TuplePattern(attrs, morphir_elements)
             }
             Pattern::List { elements, tail } => {
-                // Convert to nested HeadTailPattern or EmptyListPattern
+                // Convert to nested HeadTail or EmptyList
                 let morphir_elements: Vec<MorphirPattern> =
                     elements.iter().map(|e| self.convert_pattern(e)).collect();
                 // For now, just convert to tuple pattern (Morphir IR list patterns)

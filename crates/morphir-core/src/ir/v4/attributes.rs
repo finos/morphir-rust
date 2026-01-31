@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::type_expr::Type;
-use super::value_expr::Value;
+use super::types::Type;
+use super::value::Value;
 
 /// Source location information for error messages and tooling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

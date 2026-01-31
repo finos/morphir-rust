@@ -655,9 +655,21 @@ impl Serialize for HoleReason {
                 state.serialize_field("target", target)?;
                 state.end()
             }
-            HoleReason::DeletedDuringRefactor => serializer.serialize_str("DeletedDuringRefactor"),
-            HoleReason::TypeMismatch => serializer.serialize_str("TypeMismatch"),
-            HoleReason::Draft => serializer.serialize_str("Draft"),
+            HoleReason::DeletedDuringRefactor { tx_id } => {
+                use serde::ser::SerializeStruct;
+                let mut state = serializer.serialize_struct("HoleReason", 2)?;
+                state.serialize_field("kind", "DeletedDuringRefactor")?;
+                state.serialize_field("tx-id", tx_id)?;
+                state.end()
+            }
+            HoleReason::TypeMismatch { expected, found } => {
+                use serde::ser::SerializeStruct;
+                let mut state = serializer.serialize_struct("HoleReason", 3)?;
+                state.serialize_field("kind", "TypeMismatch")?;
+                state.serialize_field("expected", expected)?;
+                state.serialize_field("found", found)?;
+                state.end()
+            }
         }
     }
 }
@@ -667,16 +679,21 @@ impl<'de> Deserialize<'de> for HoleReason {
     where
         D: Deserializer<'de>,
     {
-        // Accept either a string or an object
+        // Accept either a string (legacy) or an object
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
             serde_json::Value::String(s) => match s.as_str() {
-                "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
-                "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-                "Draft" => Ok(HoleReason::Draft),
+                // Legacy simple strings - provide default values
+                "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor {
+                    tx_id: "unknown".to_string(),
+                }),
+                "TypeMismatch" => Ok(HoleReason::TypeMismatch {
+                    expected: "unknown".to_string(),
+                    found: "unknown".to_string(),
+                }),
                 _ => Err(de::Error::unknown_variant(
                     &s,
-                    &["DeletedDuringRefactor", "TypeMismatch", "Draft"],
+                    &["DeletedDuringRefactor", "TypeMismatch"],
                 )),
             },
             serde_json::Value::Object(map) => {
@@ -694,7 +711,31 @@ impl<'de> Deserialize<'de> for HoleReason {
                         .map_err(de::Error::custom)?;
                         Ok(HoleReason::UnresolvedReference { target })
                     }
-                    _ => Err(de::Error::unknown_variant(kind, &["UnresolvedReference"])),
+                    "DeletedDuringRefactor" => {
+                        let tx_id = map
+                            .get("tx-id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        Ok(HoleReason::DeletedDuringRefactor { tx_id })
+                    }
+                    "TypeMismatch" => {
+                        let expected = map
+                            .get("expected")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let found = map
+                            .get("found")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        Ok(HoleReason::TypeMismatch { expected, found })
+                    }
+                    _ => Err(de::Error::unknown_variant(
+                        kind,
+                        &["UnresolvedReference", "DeletedDuringRefactor", "TypeMismatch"],
+                    )),
                 }
             }
             _ => Err(de::Error::custom(
@@ -715,7 +756,13 @@ impl Serialize for NativeHint {
             NativeHint::Comparison => serializer.serialize_str("Comparison"),
             NativeHint::StringOp => serializer.serialize_str("StringOp"),
             NativeHint::CollectionOp => serializer.serialize_str("CollectionOp"),
-            NativeHint::PlatformSpecific => serializer.serialize_str("PlatformSpecific"),
+            NativeHint::PlatformSpecific { platform } => {
+                use serde::ser::SerializeStruct;
+                let mut state = serializer.serialize_struct("NativeHint", 2)?;
+                state.serialize_field("kind", "PlatformSpecific")?;
+                state.serialize_field("platform", platform)?;
+                state.end()
+            }
         }
     }
 }
@@ -725,22 +772,59 @@ impl<'de> Deserialize<'de> for NativeHint {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "Arithmetic" => Ok(NativeHint::Arithmetic),
-            "Comparison" => Ok(NativeHint::Comparison),
-            "StringOp" => Ok(NativeHint::StringOp),
-            "CollectionOp" => Ok(NativeHint::CollectionOp),
-            "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
-            _ => Err(de::Error::unknown_variant(
-                &s,
-                &[
-                    "Arithmetic",
-                    "Comparison",
-                    "StringOp",
-                    "CollectionOp",
-                    "PlatformSpecific",
-                ],
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(s) => match s.as_str() {
+                "Arithmetic" => Ok(NativeHint::Arithmetic),
+                "Comparison" => Ok(NativeHint::Comparison),
+                "StringOp" => Ok(NativeHint::StringOp),
+                "CollectionOp" => Ok(NativeHint::CollectionOp),
+                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific {
+                    platform: "unknown".to_string(),
+                }),
+                _ => Err(de::Error::unknown_variant(
+                    &s,
+                    &[
+                        "Arithmetic",
+                        "Comparison",
+                        "StringOp",
+                        "CollectionOp",
+                        "PlatformSpecific",
+                    ],
+                )),
+            },
+            serde_json::Value::Object(map) => {
+                let kind = map
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| de::Error::missing_field("kind"))?;
+                match kind {
+                    "Arithmetic" => Ok(NativeHint::Arithmetic),
+                    "Comparison" => Ok(NativeHint::Comparison),
+                    "StringOp" => Ok(NativeHint::StringOp),
+                    "CollectionOp" => Ok(NativeHint::CollectionOp),
+                    "PlatformSpecific" => {
+                        let platform = map
+                            .get("platform")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        Ok(NativeHint::PlatformSpecific { platform })
+                    }
+                    _ => Err(de::Error::unknown_variant(
+                        kind,
+                        &[
+                            "Arithmetic",
+                            "Comparison",
+                            "StringOp",
+                            "CollectionOp",
+                            "PlatformSpecific",
+                        ],
+                    )),
+                }
+            }
+            _ => Err(de::Error::custom(
+                "expected string or object for NativeHint",
             )),
         }
     }
@@ -1721,12 +1805,28 @@ mod tests {
 
     #[test]
     fn test_hole_reason_serialization() {
-        let reason = HoleReason::Draft;
+        // Test UnresolvedReference variant
+        let target = FQName::from_canonical_string("test:module#func").unwrap();
+        let reason = HoleReason::UnresolvedReference { target };
         let json = serde_json::to_string(&reason).unwrap();
-        assert_eq!(json, "\"Draft\"");
+        assert!(json.contains("UnresolvedReference"));
+        assert!(json.contains("target"));
 
         let parsed: HoleReason = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, HoleReason::Draft));
+        assert!(matches!(parsed, HoleReason::UnresolvedReference { .. }));
+
+        // Test TypeMismatch variant
+        let reason2 = HoleReason::TypeMismatch {
+            expected: "Int".to_string(),
+            found: "String".to_string(),
+        };
+        let json2 = serde_json::to_string(&reason2).unwrap();
+        assert!(json2.contains("TypeMismatch"));
+        assert!(json2.contains("expected"));
+        assert!(json2.contains("found"));
+
+        let parsed2: HoleReason = serde_json::from_str(&json2).unwrap();
+        assert!(matches!(parsed2, HoleReason::TypeMismatch { .. }));
     }
 
     #[test]

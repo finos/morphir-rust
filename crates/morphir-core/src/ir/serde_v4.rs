@@ -1132,26 +1132,27 @@ where
     S: Serializer,
 {
     match reason {
-        HoleReason::Draft => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Draft", &serde_json::json!({}))?;
-            map.end()
-        }
-        HoleReason::TypeMismatch => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("TypeMismatch", &serde_json::json!({}))?;
-            map.end()
-        }
-        HoleReason::DeletedDuringRefactor => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("DeletedDuringRefactor", &serde_json::json!({}))?;
-            map.end()
-        }
         HoleReason::UnresolvedReference { target } => {
             let mut map = serializer.serialize_map(Some(1))?;
             map.serialize_entry(
                 "UnresolvedReference",
                 &serde_json::json!({ "target": target.to_canonical_string() }),
+            )?;
+            map.end()
+        }
+        HoleReason::DeletedDuringRefactor { tx_id } => {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(
+                "DeletedDuringRefactor",
+                &serde_json::json!({ "tx-id": tx_id }),
+            )?;
+            map.end()
+        }
+        HoleReason::TypeMismatch { expected, found } => {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(
+                "TypeMismatch",
+                &serde_json::json!({ "expected": expected, "found": found }),
             )?;
             map.end()
         }
@@ -1165,17 +1166,11 @@ where
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     match &value {
-        // V4 object wrapper format: { "Draft": {} }
+        // V4 object wrapper format: { "UnresolvedReference": { "target": "..." } }
         serde_json::Value::Object(map) => {
-            if let Some((key, _)) = map.iter().next() {
+            if let Some((key, content)) = map.iter().next() {
                 match key.as_str() {
-                    "Draft" => Ok(HoleReason::Draft),
-                    "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-                    "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
                     "UnresolvedReference" => {
-                        let content = map.get("UnresolvedReference").ok_or_else(|| {
-                            de::Error::custom("missing UnresolvedReference content")
-                        })?;
                         let target_str = content
                             .get("target")
                             .and_then(|t| t.as_str())
@@ -1184,13 +1179,33 @@ where
                             FQName::from_canonical_string(target_str).map_err(de::Error::custom)?;
                         Ok(HoleReason::UnresolvedReference { target })
                     }
+                    "DeletedDuringRefactor" => {
+                        let tx_id = content
+                            .get("tx-id")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        Ok(HoleReason::DeletedDuringRefactor { tx_id })
+                    }
+                    "TypeMismatch" => {
+                        let expected = content
+                            .get("expected")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let found = content
+                            .get("found")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        Ok(HoleReason::TypeMismatch { expected, found })
+                    }
                     _ => Err(de::Error::unknown_variant(
                         key,
                         &[
-                            "Draft",
-                            "TypeMismatch",
-                            "DeletedDuringRefactor",
                             "UnresolvedReference",
+                            "DeletedDuringRefactor",
+                            "TypeMismatch",
                         ],
                     )),
                 }
@@ -1198,14 +1213,18 @@ where
                 Err(de::Error::custom("empty object for HoleReason"))
             }
         }
-        // Also accept string format for backward compatibility
+        // Also accept string format for backward compatibility (with defaults)
         serde_json::Value::String(s) => match s.as_str() {
-            "Draft" => Ok(HoleReason::Draft),
-            "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-            "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
+            "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor {
+                tx_id: "unknown".to_string(),
+            }),
+            "TypeMismatch" => Ok(HoleReason::TypeMismatch {
+                expected: "unknown".to_string(),
+                found: "unknown".to_string(),
+            }),
             _ => Err(de::Error::unknown_variant(
                 s,
-                &["Draft", "TypeMismatch", "DeletedDuringRefactor"],
+                &["DeletedDuringRefactor", "TypeMismatch"],
             )),
         },
         _ => Err(de::Error::custom(
@@ -1225,8 +1244,8 @@ where
         NativeHint::Comparison => map.serialize_entry("Comparison", &serde_json::json!({}))?,
         NativeHint::StringOp => map.serialize_entry("StringOp", &serde_json::json!({}))?,
         NativeHint::CollectionOp => map.serialize_entry("CollectionOp", &serde_json::json!({}))?,
-        NativeHint::PlatformSpecific => {
-            map.serialize_entry("PlatformSpecific", &serde_json::json!({}))?
+        NativeHint::PlatformSpecific { platform } => {
+            map.serialize_entry("PlatformSpecific", &serde_json::json!({ "platform": platform }))?
         }
     }
     map.end()
@@ -1241,13 +1260,20 @@ where
     match &value {
         // V4 object wrapper format: { "Arithmetic": {} }
         serde_json::Value::Object(map) => {
-            if let Some((key, _)) = map.iter().next() {
+            if let Some((key, content)) = map.iter().next() {
                 match key.as_str() {
                     "Arithmetic" => Ok(NativeHint::Arithmetic),
                     "Comparison" => Ok(NativeHint::Comparison),
                     "StringOp" => Ok(NativeHint::StringOp),
                     "CollectionOp" => Ok(NativeHint::CollectionOp),
-                    "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
+                    "PlatformSpecific" => {
+                        let platform = content
+                            .get("platform")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        Ok(NativeHint::PlatformSpecific { platform })
+                    }
                     _ => Err(de::Error::unknown_variant(
                         key,
                         &[
@@ -1269,7 +1295,9 @@ where
             "Comparison" => Ok(NativeHint::Comparison),
             "StringOp" => Ok(NativeHint::StringOp),
             "CollectionOp" => Ok(NativeHint::CollectionOp),
-            "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
+            "PlatformSpecific" => Ok(NativeHint::PlatformSpecific {
+                platform: "unknown".to_string(),
+            }),
             _ => Err(de::Error::unknown_variant(
                 s,
                 &[

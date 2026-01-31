@@ -183,7 +183,7 @@ pub enum NativeHint {
 }
 
 /// Information about a native operation (V4 only)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeInfo {
     pub hint: NativeHint,
     pub description: Option<String>,

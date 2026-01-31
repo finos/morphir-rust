@@ -16,9 +16,8 @@ pub mod classic;
 // V4 is the primary format
 pub mod v4;
 
-// Re-export serde_tagged and type_def from v4 for backward compatibility
+// Re-export serde_tagged from v4 for backward compatibility
 pub use v4::serde_tagged;
-pub use v4::type_def;
 
 // Re-exports for V4 types (primary)
 pub use v4::{
@@ -67,7 +66,7 @@ pub use v4::{
     ConstructorDefinition,
     ConstructorSpecification,
     Incompleteness,
-    TypeDefinition as V4TypeDefinition,
+    TypeDefinition,
     TypeSpecification,
     // Value definition types
     HoleReason,
@@ -80,13 +79,3 @@ pub use v4::{
     FormatVersion,
     IRFile,
 };
-
-// Re-export type_def types (still in parent ir module for now)
-pub use type_def::{
-    AccessControlledConstructors, AccessControlledTypeDefinition,
-    ConstructorArg as TypeDefConstructorArg, ConstructorDefinition as TypeDefConstructorDefinition,
-    TypeDefinition as LegacyTypeDefinition, TypeSpecification as LegacyTypeSpecification,
-};
-
-// Re-export classic types for backward compatibility (temporary)
-pub use classic::*;

@@ -198,10 +198,42 @@ pub struct PackageSpecification {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleSpecification {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
     pub types: IndexMap<String, TypeSpecification>,
     pub values: IndexMap<String, ValueSpecification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
+}
+
+/// Annotation on a specification (V4 feature)
+///
+/// Annotations provide structured metadata for types and values.
+/// Can be compact string format "package:module#name" or canonical object format.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Annotation {
+    /// Compact string format: "package:module#name" or "package:module#name:value"
+    Compact(String),
+    /// Canonical object format with name and optional arguments
+    Canonical {
+        name: String, // FQName as canonical string
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arguments: Vec<AnnotationArgument>,
+    },
+}
+
+/// Argument to an annotation
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AnnotationArgument {
+    /// Positional argument (just a value)
+    Positional(serde_json::Value), // TODO: Use Value when serde is complete
+    /// Named argument
+    Named {
+        name: Name,
+        value: serde_json::Value, // TODO: Use Value when serde is complete
+    },
 }
 
 /// Type specification (public API view of a type)
@@ -212,16 +244,34 @@ pub struct ModuleSpecification {
 pub enum TypeSpecification {
     /// Type alias specification
     TypeAliasSpecification {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        annotations: Vec<Annotation>,
         type_params: Vec<Name>,
         #[serde(rename = "typeExp")]
         type_expr: serde_json::Value, // TODO: Use TypeExpr when serde is complete
     },
     /// Opaque type (constructors hidden)
-    OpaqueTypeSpecification { type_params: Vec<Name> },
+    OpaqueTypeSpecification {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        annotations: Vec<Annotation>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        type_params: Vec<Name>,
+    },
     /// Custom type with public constructors
     CustomTypeSpecification {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        annotations: Vec<Annotation>,
         type_params: Vec<Name>,
         constructors: Vec<ConstructorSpecification>,
+    },
+    /// Derived type (opaque with conversion functions)
+    DerivedTypeSpecification {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        annotations: Vec<Annotation>,
+        type_params: Vec<Name>,
+        base_type: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+        from_base_type: String,       // FQName as canonical string
+        to_base_type: String,         // FQName as canonical string
     },
 }
 
@@ -246,8 +296,13 @@ pub struct ConstructorArgSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSpecification {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub inputs: IndexMap<String, serde_json::Value>, // TODO: Use TypeExpr when serde is complete
-    pub output: serde_json::Value,                   // TODO: Use TypeExpr when serde is complete
+    pub output: serde_json::Value, // TODO: Use TypeExpr when serde is complete
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
 }
 
 /// Package definition
@@ -285,6 +340,8 @@ pub struct AccessControlledTypeDefinition {
 }
 
 /// Type definition - uses wrapper object format
+// The variant names include "Definition" suffix as per the Morphir specification
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum TypeDefinition {
     TypeAliasDefinition {
@@ -294,6 +351,13 @@ pub enum TypeDefinition {
     CustomTypeDefinition {
         type_params: Vec<Name>,
         constructors: AccessControlledConstructors,
+    },
+    /// Incomplete type definition (V4 only)
+    IncompleteTypeDefinition {
+        type_params: Vec<Name>,
+        incompleteness: Incompleteness,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial_type_exp: Option<serde_json::Value>,
     },
 }
 
@@ -328,6 +392,20 @@ impl Serialize for TypeDefinition {
                     },
                 )?;
             }
+            TypeDefinition::IncompleteTypeDefinition {
+                type_params,
+                incompleteness,
+                partial_type_exp,
+            } => {
+                map.serialize_entry(
+                    "IncompleteTypeDefinition",
+                    &IncompleteTypeDefContent {
+                        type_params: type_params.clone(),
+                        incompleteness: incompleteness.clone(),
+                        partial_type_exp: partial_type_exp.clone(),
+                    },
+                )?;
+            }
         }
         map.end()
     }
@@ -345,6 +423,15 @@ struct TypeAliasDefContent {
 struct CustomTypeDefContent {
     type_params: Vec<Name>,
     constructors: AccessControlledConstructors,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IncompleteTypeDefContent {
+    type_params: Vec<Name>,
+    incompleteness: Incompleteness,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial_type_exp: Option<serde_json::Value>,
 }
 
 impl<'de> Deserialize<'de> for TypeDefinition {
@@ -370,10 +457,67 @@ impl<'de> Deserialize<'de> for TypeDefinition {
                     constructors: parsed.constructors,
                 });
             }
+            if let Some(content) = map.get("IncompleteTypeDefinition") {
+                let parsed: IncompleteTypeDefContent =
+                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+                return Ok(TypeDefinition::IncompleteTypeDefinition {
+                    type_params: parsed.type_params,
+                    incompleteness: parsed.incompleteness,
+                    partial_type_exp: parsed.partial_type_exp,
+                });
+            }
         }
         Err(de::Error::custom(
-            "expected TypeAliasDefinition or CustomTypeDefinition wrapper",
+            "expected TypeAliasDefinition, CustomTypeDefinition, or IncompleteTypeDefinition wrapper",
         ))
+    }
+}
+
+impl Serialize for Incompleteness {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            Incompleteness::Hole { reason } => {
+                map.serialize_entry("Hole", &serde_json::json!({ "reason": reason }))?;
+            }
+            Incompleteness::Draft => {
+                map.serialize_entry("Draft", &serde_json::json!({}))?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Incompleteness {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match &value {
+            serde_json::Value::Object(map) => {
+                if let Some((key, content)) = map.iter().next() {
+                    match key.as_str() {
+                        "Hole" => {
+                            let reason_val = content
+                                .get("reason")
+                                .ok_or_else(|| de::Error::missing_field("reason"))?;
+                            let reason: HoleReason = serde_json::from_value(reason_val.clone())
+                                .map_err(de::Error::custom)?;
+                            Ok(Incompleteness::Hole { reason })
+                        }
+                        "Draft" => Ok(Incompleteness::Draft),
+                        _ => Err(de::Error::unknown_variant(key, &["Hole", "Draft"])),
+                    }
+                } else {
+                    Err(de::Error::custom("empty object for Incompleteness"))
+                }
+            }
+            _ => Err(de::Error::custom("expected object for Incompleteness")),
+        }
     }
 }
 
@@ -562,13 +706,31 @@ impl<'de> Deserialize<'de> for ValueBody {
 }
 
 /// Native hint (V4 uses wrapper object format)
+///
+/// Categorization hint for native operations used by code generators.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum NativeHint {
+    /// Basic arithmetic/logic operation
     Arithmetic,
+    /// Comparison operation
     Comparison,
+    /// String operation
     StringOp,
+    /// Collection operation
     CollectionOp,
-    PlatformSpecific,
+    /// Platform-specific operation
+    PlatformSpecific { platform: String },
+}
+
+/// Incompleteness reason for type or value definitions (V4 feature)
+///
+/// Used to indicate why a definition couldn't be fully resolved.
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
+pub enum Incompleteness {
+    /// Hole due to unresolved reference or error
+    Hole { reason: HoleReason },
+    /// Author-marked work-in-progress
+    Draft,
 }
 
 impl Serialize for NativeHint {
@@ -584,9 +746,10 @@ impl Serialize for NativeHint {
             NativeHint::CollectionOp => {
                 map.serialize_entry("CollectionOp", &serde_json::json!({}))?
             }
-            NativeHint::PlatformSpecific => {
-                map.serialize_entry("PlatformSpecific", &serde_json::json!({}))?
-            }
+            NativeHint::PlatformSpecific { platform } => map.serialize_entry(
+                "PlatformSpecific",
+                &serde_json::json!({ "platform": platform }),
+            )?,
         }
         map.end()
     }
@@ -600,13 +763,20 @@ impl<'de> Deserialize<'de> for NativeHint {
         let value = serde_json::Value::deserialize(deserializer)?;
         match &value {
             serde_json::Value::Object(map) => {
-                if let Some((key, _)) = map.iter().next() {
+                if let Some((key, content)) = map.iter().next() {
                     match key.as_str() {
                         "Arithmetic" => Ok(NativeHint::Arithmetic),
                         "Comparison" => Ok(NativeHint::Comparison),
                         "StringOp" => Ok(NativeHint::StringOp),
                         "CollectionOp" => Ok(NativeHint::CollectionOp),
-                        "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
+                        "PlatformSpecific" => {
+                            let platform = content
+                                .get("platform")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            Ok(NativeHint::PlatformSpecific { platform })
+                        }
                         _ => Err(de::Error::unknown_variant(
                             key,
                             &[
@@ -622,13 +792,15 @@ impl<'de> Deserialize<'de> for NativeHint {
                     Err(de::Error::custom("empty object for NativeHint"))
                 }
             }
-            // Also accept string format for backward compatibility
+            // Also accept string format for backward compatibility (without platform)
             serde_json::Value::String(s) => match s.as_str() {
                 "Arithmetic" => Ok(NativeHint::Arithmetic),
                 "Comparison" => Ok(NativeHint::Comparison),
                 "StringOp" => Ok(NativeHint::StringOp),
                 "CollectionOp" => Ok(NativeHint::CollectionOp),
-                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
+                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific {
+                    platform: "unknown".to_string(),
+                }),
                 _ => Err(de::Error::unknown_variant(
                     s,
                     &[
@@ -648,12 +820,20 @@ impl<'de> Deserialize<'de> for NativeHint {
 }
 
 /// Hole reason (V4 uses wrapper object format)
+///
+/// Specific reason why a Hole exists in the IR.
+/// Note: Draft is handled separately in Incompleteness, not here.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum HoleReason {
-    Draft,
-    TypeMismatch,
-    DeletedDuringRefactor,
+    /// Reference to something that doesn't exist or was deleted
     UnresolvedReference { target: String },
+    /// Reference was deleted during a refactoring operation
+    DeletedDuringRefactor {
+        #[serde(rename = "tx-id")]
+        tx_id: String,
+    },
+    /// Type mismatch error
+    TypeMismatch { expected: String, found: String },
 }
 
 impl Serialize for HoleReason {
@@ -663,16 +843,17 @@ impl Serialize for HoleReason {
     {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
-            HoleReason::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
-            HoleReason::TypeMismatch => {
-                map.serialize_entry("TypeMismatch", &serde_json::json!({}))?
-            }
-            HoleReason::DeletedDuringRefactor => {
-                map.serialize_entry("DeletedDuringRefactor", &serde_json::json!({}))?
-            }
             HoleReason::UnresolvedReference { target } => map.serialize_entry(
                 "UnresolvedReference",
                 &serde_json::json!({ "target": target }),
+            )?,
+            HoleReason::DeletedDuringRefactor { tx_id } => map.serialize_entry(
+                "DeletedDuringRefactor",
+                &serde_json::json!({ "tx-id": tx_id }),
+            )?,
+            HoleReason::TypeMismatch { expected, found } => map.serialize_entry(
+                "TypeMismatch",
+                &serde_json::json!({ "expected": expected, "found": found }),
             )?,
         }
         map.end()
@@ -689,9 +870,6 @@ impl<'de> Deserialize<'de> for HoleReason {
             serde_json::Value::Object(map) => {
                 if let Some((key, content)) = map.iter().next() {
                     match key.as_str() {
-                        "Draft" => Ok(HoleReason::Draft),
-                        "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-                        "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
                         "UnresolvedReference" => {
                             let target = content
                                 .get("target")
@@ -700,13 +878,33 @@ impl<'de> Deserialize<'de> for HoleReason {
                                 .to_string();
                             Ok(HoleReason::UnresolvedReference { target })
                         }
+                        "DeletedDuringRefactor" => {
+                            let tx_id = content
+                                .get("tx-id")
+                                .and_then(|t| t.as_str())
+                                .ok_or_else(|| de::Error::missing_field("tx-id"))?
+                                .to_string();
+                            Ok(HoleReason::DeletedDuringRefactor { tx_id })
+                        }
+                        "TypeMismatch" => {
+                            let expected = content
+                                .get("expected")
+                                .and_then(|t| t.as_str())
+                                .ok_or_else(|| de::Error::missing_field("expected"))?
+                                .to_string();
+                            let found = content
+                                .get("found")
+                                .and_then(|t| t.as_str())
+                                .ok_or_else(|| de::Error::missing_field("found"))?
+                                .to_string();
+                            Ok(HoleReason::TypeMismatch { expected, found })
+                        }
                         _ => Err(de::Error::unknown_variant(
                             key,
                             &[
-                                "Draft",
-                                "TypeMismatch",
-                                "DeletedDuringRefactor",
                                 "UnresolvedReference",
+                                "DeletedDuringRefactor",
+                                "TypeMismatch",
                             ],
                         )),
                     }
@@ -714,19 +912,7 @@ impl<'de> Deserialize<'de> for HoleReason {
                     Err(de::Error::custom("empty object for HoleReason"))
                 }
             }
-            // Also accept string format for backward compatibility
-            serde_json::Value::String(s) => match s.as_str() {
-                "Draft" => Ok(HoleReason::Draft),
-                "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-                "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
-                _ => Err(de::Error::unknown_variant(
-                    s,
-                    &["Draft", "TypeMismatch", "DeletedDuringRefactor"],
-                )),
-            },
-            _ => Err(de::Error::custom(
-                "expected object or string for HoleReason",
-            )),
+            _ => Err(de::Error::custom("expected object for HoleReason")),
         }
     }
 }
@@ -758,6 +944,8 @@ pub enum EntryPointKind {
     Main,
     Command,
     Handler,
+    Job,
+    Policy,
 }
 
 #[cfg(test)]
@@ -802,10 +990,45 @@ mod tests {
 
     #[test]
     fn test_hole_reason_wrapper_format() {
-        let reason = HoleReason::Draft;
+        let reason = HoleReason::TypeMismatch {
+            expected: "Int".to_string(),
+            found: "String".to_string(),
+        };
         let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("\"TypeMismatch\""));
+        assert!(json.contains("\"expected\""));
+        assert!(json.contains("\"found\""));
+    }
+
+    #[test]
+    fn test_incompleteness_draft() {
+        let incomp = Incompleteness::Draft;
+        let json = serde_json::to_string(&incomp).unwrap();
         assert!(json.contains("\"Draft\""));
         assert!(json.contains("{}"));
+    }
+
+    #[test]
+    fn test_incompleteness_hole() {
+        let incomp = Incompleteness::Hole {
+            reason: HoleReason::UnresolvedReference {
+                target: "my/pkg:mod#func".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&incomp).unwrap();
+        assert!(json.contains("\"Hole\""));
+        assert!(json.contains("\"reason\""));
+    }
+
+    #[test]
+    fn test_native_hint_platform_specific() {
+        let hint = NativeHint::PlatformSpecific {
+            platform: "wasm".to_string(),
+        };
+        let json = serde_json::to_string(&hint).unwrap();
+        assert!(json.contains("\"PlatformSpecific\""));
+        assert!(json.contains("\"platform\""));
+        assert!(json.contains("wasm"));
     }
 
     #[test]

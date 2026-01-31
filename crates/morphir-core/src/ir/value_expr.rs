@@ -158,26 +158,44 @@ pub enum Value<TA: Clone = TypeAttributes, VA: Clone = ValueAttributes> {
 }
 
 /// Reason why a value is incomplete/broken (V4 only)
+///
+/// Note: Draft is handled separately in Incompleteness, not here.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HoleReason {
     /// Reference couldn't be resolved
     UnresolvedReference { target: FQName },
     /// Value was removed during refactoring
-    DeletedDuringRefactor,
+    DeletedDuringRefactor {
+        /// Transaction ID of the refactoring that deleted this reference
+        tx_id: String,
+    },
     /// Type checking failed
-    TypeMismatch,
-    /// Work in progress, not yet implemented
-    Draft,
+    TypeMismatch {
+        /// Expected type description
+        expected: String,
+        /// Actual type description
+        found: String,
+    },
 }
 
 /// Category hint for native operations (V4 only)
+///
+/// Categorization hint for native operations used by code generators.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NativeHint {
+    /// Basic arithmetic/logic operation
     Arithmetic,
+    /// Comparison operation
     Comparison,
+    /// String operation
     StringOp,
+    /// Collection operation
     CollectionOp,
-    PlatformSpecific,
+    /// Platform-specific operation
+    PlatformSpecific {
+        /// Platform identifier (e.g., 'wasm', 'javascript', 'native')
+        platform: String,
+    },
 }
 
 /// Information about a native operation (V4 only)
@@ -505,8 +523,18 @@ mod tests {
 
     #[test]
     fn test_hole_value() {
-        let val: Value<(), ()> = Value::Hole((), HoleReason::Draft, None);
-        assert!(matches!(val, Value::Hole(_, HoleReason::Draft, None)));
+        let val: Value<(), ()> = Value::Hole(
+            (),
+            HoleReason::TypeMismatch {
+                expected: "Int".to_string(),
+                found: "String".to_string(),
+            },
+            None,
+        );
+        assert!(matches!(
+            val,
+            Value::Hole(_, HoleReason::TypeMismatch { .. }, None)
+        ));
     }
 
     #[test]

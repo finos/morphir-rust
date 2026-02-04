@@ -4,6 +4,7 @@
 //! https://morphir.finos.org/docs/spec/ir/schemas/v4/whats-new/
 
 use morphir_core::ir::v4::{HoleReason, Incompleteness};
+use morphir_core::naming::FQName;
 
 #[test]
 fn test_incompleteness_draft_serialize() {
@@ -26,30 +27,25 @@ fn test_incompleteness_draft_deserialize() {
 
 #[test]
 fn test_incompleteness_hole_with_unresolved_reference_serialize() {
-    let incomp = Incompleteness::Hole {
-        reason: HoleReason::UnresolvedReference {
-            target: "acme/finance:ledger#calculate-balance".to_string(),
-        },
-    };
+    let target = FQName::from_canonical_string("acme/finance:ledger#calculate-balance").unwrap();
+    let incomp = Incompleteness::Hole(HoleReason::UnresolvedReference { target });
 
     let json = serde_json::to_string(&incomp).unwrap();
 
     assert!(json.contains("\"Hole\""));
-    assert!(json.contains("\"reason\""));
     assert!(json.contains("\"UnresolvedReference\""));
 }
 
 #[test]
 fn test_incompleteness_hole_with_unresolved_reference_deserialize() {
-    let json =
-        r#"{"Hole": {"reason": {"UnresolvedReference": {"target": "acme/finance:ledger#calc"}}}}"#;
+    let json = r#"{"Hole": {"UnresolvedReference": {"target": "acme/finance:ledger#calc"}}}"#;
 
     let incomp: Incompleteness = serde_json::from_str(json).unwrap();
 
     match incomp {
-        Incompleteness::Hole { reason } => match reason {
+        Incompleteness::Hole(reason) => match reason {
             HoleReason::UnresolvedReference { target } => {
-                assert_eq!(target, "acme/finance:ledger#calc");
+                assert_eq!(target.to_canonical_string(), "acme/finance:ledger#calc");
             }
             _ => panic!("Expected UnresolvedReference reason"),
         },
@@ -59,12 +55,10 @@ fn test_incompleteness_hole_with_unresolved_reference_deserialize() {
 
 #[test]
 fn test_incompleteness_hole_with_type_mismatch() {
-    let incomp = Incompleteness::Hole {
-        reason: HoleReason::TypeMismatch {
-            expected: "Int".to_string(),
-            found: "String".to_string(),
-        },
-    };
+    let incomp = Incompleteness::Hole(HoleReason::TypeMismatch {
+        expected: "Int".to_string(),
+        found: "String".to_string(),
+    });
 
     let json = serde_json::to_string(&incomp).unwrap();
     let parsed: Incompleteness = serde_json::from_str(&json).unwrap();

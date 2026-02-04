@@ -12,21 +12,25 @@
               "types": {
                 "user-id": {
                   "access": "Public",
-                  "TypeAliasDefinition": {
-                    "typeParams": [],
-                    "typeExp": "morphir/sdk:string#string"
+                  "value": {
+                    "TypeAliasDefinition": {
+                      "typeParams": [],
+                      "typeExp": "morphir/sdk:string#string"
+                    }
                   }
                 },
                 "incomplete-user": {
                   "access": "Private",
-                  "IncompleteTypeDefinition": {
-                    "typeParams": [],
-                    "incompleteness": {
-                      "Draft": {}
-                    },
-                    "partialTypeExp": {
-                      "Record": {
-                        "id": "morphir/sdk:string#string"
+                  "value": {
+                    "IncompleteTypeDefinition": {
+                      "typeParams": [],
+                      "incompleteness": {
+                        "Draft": {}
+                      },
+                      "partialTypeExp": {
+                        "Record": {
+                          "id": "morphir/sdk:string#string"
+                        }
                       }
                     }
                   }
@@ -35,23 +39,25 @@
               "values": {
                 "get-user-name": {
                   "access": "Public",
-                  "inputTypes": {
-                    "user": {
-                      "type": "example/v4-test:domain#user-id"
-                    }
-                  },
-                  "outputType": "morphir/sdk:string#string",
-                  "body": {
-                    "ExpressionBody": {
-                      "body": {
-                        "Hole": {
-                          "attributes": {},
-                          "reason": {
-                            "UnresolvedReference": {
-                              "target": "example/v4-test:domain#user-name-lookup"
-                            }
-                          },
-                          "expectedType": "morphir/sdk:string#string"
+                  "value": {
+                    "inputTypes": {
+                      "user": {
+                        "type": "example/v4-test:domain#user-id"
+                      }
+                    },
+                    "outputType": "morphir/sdk:string#string",
+                    "body": {
+                      "ExpressionBody": {
+                        "body": {
+                          "Hole": {
+                            "attributes": {},
+                            "reason": {
+                              "UnresolvedReference": {
+                                "target": "example/v4-test:domain#user-name-lookup"
+                              }
+                            },
+                            "expectedType": "morphir/sdk:string#string"
+                          }
                         }
                       }
                     }
@@ -59,19 +65,21 @@
                 },
                 "native-add": {
                   "access": "Public",
-                  "inputTypes": {
-                    "a": {
-                      "type": "morphir/sdk:basics#int"
+                  "value": {
+                    "inputTypes": {
+                      "a": {
+                        "type": "morphir/sdk:basics#int"
+                      },
+                      "b": {
+                        "type": "morphir/sdk:basics#int"
+                      }
                     },
-                    "b": {
-                      "type": "morphir/sdk:basics#int"
-                    }
-                  },
-                  "outputType": "morphir/sdk:basics#int",
-                  "body": {
-                    "NativeBody": {
-                      "hint": { "Arithmetic": {} },
-                      "description": "Native integer addition"
+                    "outputType": "morphir/sdk:basics#int",
+                    "body": {
+                      "NativeBody": {
+                        "hint": { "Arithmetic": {} },
+                        "description": "Native integer addition"
+                      }
                     }
                   }
                 }

@@ -4,51 +4,78 @@
 //!
 //! # Type Aliases
 //!
-//! For V4 (preferred), use `Type`, `Value`, `Pattern` directly (defaults to V4 attributes).
-//! Or use the convenience aliases `TypeExpr` and `ValueExpr`.
+//! For V4 (preferred), use `Type`, `Value`, `Pattern` directly with `TypeAttributes`
+//! and `ValueAttributes`. Or use the convenience aliases `TypeExpr` and `ValueExpr`.
 //!
-//! For Classic (V1-V3 compatibility), use the `Classic` prefix:
-//! - [`ClassicType`], [`ClassicValue`], [`ClassicPattern`], etc.
-
-// V4 Core Types (Primary)
-pub mod attributes;
-pub mod literal;
-pub mod pattern;
-pub mod serde_tagged;
-pub mod serde_v4;
-pub mod type_def;
-pub mod type_expr;
-pub mod value_expr;
+//! For Classic (V1-V3 compatibility), use the `classic` submodule directly:
+//! - `ir::classic::Type<A>`, `ir::classic::Value<TA, VA>`, etc.
 
 // Legacy support
 pub mod classic;
+
+// V4 is the primary format
 pub mod v4;
 
-// Re-exports for V4 types (primary)
-pub use attributes::{
-    // Classic type aliases (for V1-V3 compatibility)
-    ClassicAttrs,
-    ClassicField,
-    ClassicPattern,
-    ClassicType,
-    ClassicTypeDefinition,
-    ClassicValue,
-    ClassicValueDefinition,
-    SourceLocation,
-    TypeAttributes,
-    // Convenience aliases
-    TypeExpr,
-    ValueAttributes,
-    ValueExpr,
-};
-pub use literal::Literal;
-pub use pattern::Pattern;
-pub use type_def::{AccessControlled, Constructor, ConstructorArg, Incompleteness, TypeDefinition};
-pub use type_expr::{Field, Type};
-pub use value_expr::{
-    HoleReason, InputType, LetBinding, NativeHint, NativeInfo, PatternCase, RecordFieldEntry,
-    Value, ValueBody, ValueDefinition,
-};
+// Re-export serde_tagged from v4 for backward compatibility
+pub use v4::serde_tagged;
 
-// Re-export classic types for backward compatibility (temporary)
-pub use classic::*;
+// Re-exports for V4 types (primary)
+pub use v4::{
+    // Access control
+    Access,
+    AccessControlled,
+    // Distribution types
+    ApplicationContent,
+    // Type definition types
+    ConstructorArg,
+    ConstructorArgSpec,
+    ConstructorDefinition,
+    ConstructorSpecification,
+    Dependencies,
+    Distribution,
+    EntryPoint,
+    EntryPointKind,
+    EntryPoints,
+    // Core expression types
+    Field,
+    // Top-level types
+    FormatVersion,
+    // Value definition types
+    HoleReason,
+    IRFile,
+    Incompleteness,
+    // Value expression types (from value module)
+    InputType,
+    InputTypeEntry,
+    LetBinding,
+    LibraryContent,
+    Literal,
+    // Module types
+    ModuleDefinition,
+    ModuleSpecification,
+    NativeHint,
+    NativeInfo,
+    // Package types
+    PackageDefinition,
+    PackageSpecification,
+    Pattern,
+    PatternCase,
+    RecordFieldEntry,
+    SourceLocation,
+    SpecsContent,
+    Type,
+    TypeAttributes,
+    TypeDefinition,
+    TypeExpr,
+    TypeSpecification,
+    Value,
+    ValueAttributes,
+    ValueBody as ValueDefBody,
+    ValueDefinition,
+    ValueExpr,
+    ValueExprBody as ValueBody,
+    ValueExprDefinition,
+    ValueHoleReason,
+    ValueNativeHint,
+    ValueSpecification,
+};

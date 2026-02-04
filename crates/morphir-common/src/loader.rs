@@ -103,7 +103,7 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
 
     // Scan for module JSON files in src/ directory
     let src_path = path.join("src");
-    let mut modules: IndexMap<String, v4::AccessControlledModuleDefinition> = IndexMap::new();
+    let mut modules: IndexMap<String, v4::AccessControlled<v4::ModuleDefinition>> = IndexMap::new();
 
     if vfs.is_dir(&src_path) {
         // Use glob to find all JSON files under src/
@@ -127,7 +127,7 @@ fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {
                 .to_string_lossy()
                 .replace('/', ".");
 
-            let module_def = v4::AccessControlledModuleDefinition {
+            let module_def = v4::AccessControlled {
                 access: v4::Access::Public,
                 value: v4::ModuleDefinition {
                     types: IndexMap::new(),

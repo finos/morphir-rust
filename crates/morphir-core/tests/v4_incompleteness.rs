@@ -38,8 +38,7 @@ fn test_incompleteness_hole_with_unresolved_reference_serialize() {
 
 #[test]
 fn test_incompleteness_hole_with_unresolved_reference_deserialize() {
-    let json =
-        r#"{"Hole": {"UnresolvedReference": {"target": "acme/finance:ledger#calc"}}}"#;
+    let json = r#"{"Hole": {"UnresolvedReference": {"target": "acme/finance:ledger#calc"}}}"#;
 
     let incomp: Incompleteness = serde_json::from_str(json).unwrap();
 

@@ -150,9 +150,7 @@ fn build_v4_module_from_ir(
     module_name: &ModuleName,
 ) -> std::io::Result<AccessControlledModuleDefinition> {
     use indexmap::IndexMap;
-    use morphir_core::ir::v4::{
-        Access, AccessControlled, TypeDefinition, ValueDefinition,
-    };
+    use morphir_core::ir::v4::{Access, AccessControlled, TypeDefinition, ValueDefinition};
 
     // Try to read the written V4 files and reconstruct the module definition
     let module_dir = output_dir

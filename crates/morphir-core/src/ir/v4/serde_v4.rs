@@ -8,8 +8,8 @@
 //! and Literal using the V4 object wrapper format.
 
 use indexmap::IndexMap;
-use serde::ser::{SerializeMap, Serializer};
 use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
 
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
@@ -480,10 +480,8 @@ where
         }
         Value::Record(attrs, fields) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            let fields_map: IndexMap<String, &Value> = fields
-                .iter()
-                .map(|f| (f.0.to_string(), &f.1))
-                .collect();
+            let fields_map: IndexMap<String, &Value> =
+                fields.iter().map(|f| (f.0.to_string(), &f.1)).collect();
             map.serialize_entry(
                 "Record",
                 &RecordValueContent {

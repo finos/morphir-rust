@@ -4,11 +4,11 @@
 //! using Vfs for file generation.
 
 use morphir_common::vfs::Vfs;
+use morphir_core::ir::Value;
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlled, Literal as MorphirLiteral, ModuleDefinition,
     Pattern as MorphirPattern, TypeDefinition, ValueDefinition,
 };
-use morphir_core::ir::Value;
 use morphir_core::naming::ModuleName;
 use std::io::Result;
 use std::path::PathBuf;

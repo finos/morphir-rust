@@ -224,6 +224,7 @@ pub struct LetBinding(pub Name, pub ValueDefinition);
 ///
 /// V4 format supports Expression, Native, External, and Incomplete body types.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ValueBody {
     /// Normal expression body (all versions)
     Expression(Value),
@@ -622,12 +623,10 @@ impl Serialize for NativeHint {
             NativeHint::CollectionOp => {
                 map.serialize_entry("CollectionOp", &serde_json::json!({}))?
             }
-            NativeHint::PlatformSpecific { platform } => {
-                map.serialize_entry(
-                    "PlatformSpecific",
-                    &serde_json::json!({ "platform": platform }),
-                )?
-            }
+            NativeHint::PlatformSpecific { platform } => map.serialize_entry(
+                "PlatformSpecific",
+                &serde_json::json!({ "platform": platform }),
+            )?,
         }
         map.end()
     }
@@ -709,18 +708,14 @@ impl Serialize for HoleReason {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             HoleReason::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
-            HoleReason::TypeMismatch { expected, found } => {
-                map.serialize_entry(
-                    "TypeMismatch",
-                    &serde_json::json!({ "expected": expected, "found": found }),
-                )?
-            }
-            HoleReason::DeletedDuringRefactor { tx_id } => {
-                map.serialize_entry(
-                    "DeletedDuringRefactor",
-                    &serde_json::json!({ "tx-id": tx_id }),
-                )?
-            }
+            HoleReason::TypeMismatch { expected, found } => map.serialize_entry(
+                "TypeMismatch",
+                &serde_json::json!({ "expected": expected, "found": found }),
+            )?,
+            HoleReason::DeletedDuringRefactor { tx_id } => map.serialize_entry(
+                "DeletedDuringRefactor",
+                &serde_json::json!({ "tx-id": tx_id }),
+            )?,
             HoleReason::UnresolvedReference { target } => map.serialize_entry(
                 "UnresolvedReference",
                 &serde_json::json!({ "target": target.to_canonical_string() }),
@@ -770,7 +765,7 @@ impl<'de> Deserialize<'de> for HoleReason {
                                 .to_string();
                             Ok(HoleReason::UnresolvedReference {
                                 target: FQName::from_canonical_string(&target)
-                                    .map_err(|e| de::Error::custom(e))?,
+                                    .map_err(de::Error::custom)?,
                             })
                         }
                         _ => Err(de::Error::unknown_variant(

@@ -1,7 +1,6 @@
 #![allow(clippy::get_first)]
 use anyhow::Result;
 use cucumber::{World, given, then, when};
-use indexmap::IndexMap;
 use morphir_common::config::MorphirConfig;
 use morphir_common::loader::{self, LoadedDistribution};
 use morphir_common::vfs::{MemoryVfs, OsVfs, Vfs};

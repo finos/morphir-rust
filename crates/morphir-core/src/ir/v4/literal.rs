@@ -107,9 +107,7 @@ impl<'de> Visitor<'de> for LiteralVisitor {
     type Value = Literal;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str(
-            "V4 object { \"IntegerLiteral\": { \"value\": 42 } } or Classic array",
-        )
+        formatter.write_str("V4 object { \"IntegerLiteral\": { \"value\": 42 } } or Classic array")
     }
 
     /// V4 object wrapper format: { "IntegerLiteral": { "value": 42 } }

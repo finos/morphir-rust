@@ -224,8 +224,8 @@ impl<'de> Deserialize<'de> for Incompleteness {
                     match key.as_str() {
                         "Draft" => Ok(Incompleteness::Draft),
                         "Hole" => {
-                            let reason: HoleReason =
-                                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+                            let reason: HoleReason = serde_json::from_value(content.clone())
+                                .map_err(de::Error::custom)?;
                             Ok(Incompleteness::Hole(reason))
                         }
                         _ => Err(de::Error::unknown_variant(key, &["Draft", "Hole"])),
@@ -250,6 +250,7 @@ impl<'de> Deserialize<'de> for Incompleteness {
 ///
 /// V4 adds IncompleteTypeDefinition for incremental compilation and error recovery.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum TypeDefinition {
     /// Type alias definition
     ///

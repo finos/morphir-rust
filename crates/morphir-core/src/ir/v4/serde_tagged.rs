@@ -15,11 +15,11 @@ use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use super::type_def::ConstructorArg;
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::serde_v4;
+use super::type_def::ConstructorArg;
 use super::types::{Field, Type};
 use super::value::{
     HoleReason, InputType, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value,
@@ -83,8 +83,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     name: String,
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let name = Name::from(content.name.as_str());
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Variable(attrs, name))
@@ -97,8 +96,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     args: Option<Vec<Type>>,
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
                 let attrs = content.attrs.unwrap_or_default();
@@ -112,8 +110,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     elements: Vec<Type>,
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Tuple(attrs, content.elements))
             }
@@ -124,8 +121,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     fields: IndexMap<String, Type>,
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let fields = content
                     .fields
@@ -145,8 +141,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     fields: IndexMap<String, Type>,
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let variable = Name::from(content.variable.as_str());
                 let fields = content
@@ -167,8 +162,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     result: Type,
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Function(
                     attrs,
@@ -182,8 +176,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 struct Content {
                     attrs: Option<TypeAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Unit(attrs))
             }
@@ -437,8 +430,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                 struct Content {
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::WildcardPattern(attrs))
             }
@@ -450,8 +442,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                     name: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Pattern::AsPattern(attrs, Box::new(content.pattern), name))
@@ -463,8 +454,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                     elements: Vec<Pattern>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::TuplePattern(attrs, content.elements))
             }
@@ -476,8 +466,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                     args: Vec<Pattern>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
@@ -489,8 +478,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                 struct Content {
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::EmptyListPattern(attrs))
             }
@@ -502,8 +490,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                     tail: Pattern,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::HeadTailPattern(
                     attrs,
@@ -518,8 +505,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                     literal: Literal,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::LiteralPattern(attrs, content.literal))
             }
@@ -529,8 +515,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                 struct Content {
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Pattern::UnitPattern(attrs))
             }
@@ -902,8 +887,6 @@ impl<'de> Deserialize<'de> for ConstructorArg {
     }
 }
 
-
-
 // Deserialize for Value (complex, needs visitor)
 impl<'de> Deserialize<'de> for Value {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -945,8 +928,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     literal: Literal,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Literal(attrs, content.literal))
             }
@@ -957,8 +939,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     fqname: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
@@ -971,8 +952,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     elements: Vec<Value>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Tuple(attrs, content.elements))
             }
@@ -983,8 +963,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     items: Vec<Value>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::List(attrs, content.items))
             }
@@ -995,8 +974,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     fields: IndexMap<String, Value>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let fields = content
                     .fields
@@ -1012,8 +990,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     name: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::Variable(attrs, name))
@@ -1025,8 +1002,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     fqname: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
@@ -1040,8 +1016,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     name: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::Field(attrs, Box::new(content.value), name))
@@ -1053,8 +1028,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     name: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::FieldFunction(attrs, name))
@@ -1067,8 +1041,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     argument: Value,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Apply(
                     attrs,
@@ -1084,10 +1057,13 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     body: Value,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Lambda(attrs, content.pattern, Box::new(content.body)))
+                Ok(Value::Lambda(
+                    attrs,
+                    content.pattern,
+                    Box::new(content.body),
+                ))
             }
             "LetDefinition" => {
                 #[derive(Deserialize)]
@@ -1098,8 +1074,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     body: Value,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let name = Name::from(content.name.as_str());
                 Ok(Value::LetDefinition(
@@ -1117,8 +1092,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     body: Value,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::LetRecursion(
                     attrs,
@@ -1135,8 +1109,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     body: Value,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Destructure(
                     attrs,
@@ -1154,8 +1127,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     else_branch: Value,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::IfThenElse(
                     attrs,
@@ -1172,8 +1144,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     cases: Vec<PatternCase>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::PatternMatch(
                     attrs,
@@ -1189,8 +1160,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     updates: Vec<RecordFieldEntry>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::UpdateRecord(
                     attrs,
@@ -1204,8 +1174,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 struct Content {
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::Unit(attrs))
             }
@@ -1217,10 +1186,13 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     tpe: Option<Type>,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Hole(attrs, content.reason, content.tpe.map(Box::new)))
+                Ok(Value::Hole(
+                    attrs,
+                    content.reason,
+                    content.tpe.map(Box::new),
+                ))
             }
             "Native" => {
                 #[derive(Deserialize)]
@@ -1230,8 +1202,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     info: NativeInfo,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 let fqname = FQName::from_canonical_string(&content.fqname)
                     .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
@@ -1245,8 +1216,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     target_platform: String,
                     attrs: Option<ValueAttributes>,
                 }
-                let content: Content =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Value::External(
                     attrs,
@@ -1338,13 +1308,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
             // Other variants handled by V4 object format
             _ => Err(de::Error::unknown_variant(
                 &tag,
-                &[
-                    "Literal",
-                    "Constructor",
-                    "Variable",
-                    "Reference",
-                    "Unit",
-                ],
+                &["Literal", "Constructor", "Variable", "Reference", "Unit"],
             )),
         }
     }
@@ -1377,10 +1341,8 @@ mod tests {
 
     #[test]
     fn test_pattern_literal_roundtrip() {
-        let pattern: Pattern = Pattern::LiteralPattern(
-            ValueAttributes::default(),
-            Literal::Integer(42),
-        );
+        let pattern: Pattern =
+            Pattern::LiteralPattern(ValueAttributes::default(), Literal::Integer(42));
         let json = serde_json::to_string(&pattern).unwrap();
         assert!(json.contains("LiteralPattern"));
 
@@ -1393,10 +1355,7 @@ mod tests {
 
     #[test]
     fn test_value_literal_serialization() {
-        let val: Value = Value::Literal(
-            ValueAttributes::default(),
-            Literal::Integer(42),
-        );
+        let val: Value = Value::Literal(ValueAttributes::default(), Literal::Integer(42));
         let json = serde_json::to_string(&val).unwrap();
         assert!(json.contains("Literal"));
         assert!(json.contains("IntegerLiteral"));
@@ -1411,10 +1370,7 @@ mod tests {
 
     #[test]
     fn test_value_variable_serialization() {
-        let val: Value = Value::Variable(
-            ValueAttributes::default(),
-            Name::from("x"),
-        );
+        let val: Value = Value::Variable(ValueAttributes::default(), Name::from("x"));
         let json = serde_json::to_string(&val).unwrap();
         assert!(json.contains("Variable"));
     }

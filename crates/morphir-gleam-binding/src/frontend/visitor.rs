@@ -8,14 +8,12 @@ use crate::frontend::ast::{
 };
 use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
-use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlled, ConstructorDefinition, InputTypeEntry,
-    Literal as MorphirLiteral, ModuleDefinition,
-    Pattern as MorphirPattern, TypeDefinition,
-    ValueBody as V4ValueBody,
+    Literal as MorphirLiteral, Pattern as MorphirPattern, TypeDefinition, ValueBody as V4ValueBody,
     ValueDefinition as V4ValueDefinition,
 };
+use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
 use serde_json;
 use std::io::Result;
@@ -24,8 +22,6 @@ use std::path::{Path, PathBuf};
 // Type aliases for the new V4 generic types
 type AccessControlledValueDefinition = AccessControlled<V4ValueDefinition>;
 type AccessControlledTypeDefinition = AccessControlled<TypeDefinition>;
-type AccessControlledModuleDefinition = AccessControlled<ModuleDefinition>;
-
 
 /// Distribution layout mode
 #[derive(Debug, Clone, Copy)]

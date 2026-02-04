@@ -190,12 +190,60 @@ pub struct ConstructorArgSpec {
 /// Reason for an incomplete type (V4 only)
 ///
 /// Used when a type cannot be fully resolved due to errors or work in progress.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Incompleteness {
     /// Type has unresolved dependencies or errors
     Hole(HoleReason),
     /// Type is work in progress
     Draft,
+}
+
+impl Serialize for Incompleteness {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            Incompleteness::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
+            Incompleteness::Hole(reason) => map.serialize_entry("Hole", reason)?,
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Incompleteness {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match &value {
+            serde_json::Value::Object(map) => {
+                if let Some((key, content)) = map.iter().next() {
+                    match key.as_str() {
+                        "Draft" => Ok(Incompleteness::Draft),
+                        "Hole" => {
+                            let reason: HoleReason =
+                                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+                            Ok(Incompleteness::Hole(reason))
+                        }
+                        _ => Err(de::Error::unknown_variant(key, &["Draft", "Hole"])),
+                    }
+                } else {
+                    Err(de::Error::custom("empty object for Incompleteness"))
+                }
+            }
+            // Also accept string format for backward compatibility (Draft only)
+            serde_json::Value::String(s) => match s.as_str() {
+                "Draft" => Ok(Incompleteness::Draft),
+                _ => Err(de::Error::unknown_variant(s, &["Draft"])),
+            },
+            _ => Err(de::Error::custom(
+                "expected object or string for Incompleteness",
+            )),
+        }
+    }
 }
 
 /// Type definition - uses wrapper object format

@@ -165,9 +165,17 @@ pub enum HoleReason {
     /// Reference couldn't be resolved
     UnresolvedReference { target: FQName },
     /// Value was removed during refactoring
-    DeletedDuringRefactor,
+    DeletedDuringRefactor {
+        /// Transaction ID of the refactoring that deleted this reference
+        tx_id: String,
+    },
     /// Type checking failed
-    TypeMismatch,
+    TypeMismatch {
+        /// Expected type description
+        expected: String,
+        /// Actual type found
+        found: String,
+    },
     /// Work in progress, not yet implemented
     Draft,
 }
@@ -179,7 +187,10 @@ pub enum NativeHint {
     Comparison,
     StringOp,
     CollectionOp,
-    PlatformSpecific,
+    PlatformSpecific {
+        /// Platform identifier (e.g., "wasm", "javascript", "native")
+        platform: String,
+    },
 }
 
 /// Information about a native operation (V4 only)
@@ -611,8 +622,11 @@ impl Serialize for NativeHint {
             NativeHint::CollectionOp => {
                 map.serialize_entry("CollectionOp", &serde_json::json!({}))?
             }
-            NativeHint::PlatformSpecific => {
-                map.serialize_entry("PlatformSpecific", &serde_json::json!({}))?
+            NativeHint::PlatformSpecific { platform } => {
+                map.serialize_entry(
+                    "PlatformSpecific",
+                    &serde_json::json!({ "platform": platform }),
+                )?
             }
         }
         map.end()
@@ -627,13 +641,20 @@ impl<'de> Deserialize<'de> for NativeHint {
         let value = serde_json::Value::deserialize(deserializer)?;
         match &value {
             serde_json::Value::Object(map) => {
-                if let Some((key, _)) = map.iter().next() {
+                if let Some((key, content)) = map.iter().next() {
                     match key.as_str() {
                         "Arithmetic" => Ok(NativeHint::Arithmetic),
                         "Comparison" => Ok(NativeHint::Comparison),
                         "StringOp" => Ok(NativeHint::StringOp),
                         "CollectionOp" => Ok(NativeHint::CollectionOp),
-                        "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
+                        "PlatformSpecific" => {
+                            let platform = content
+                                .get("platform")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            Ok(NativeHint::PlatformSpecific { platform })
+                        }
                         _ => Err(de::Error::unknown_variant(
                             key,
                             &[
@@ -655,7 +676,9 @@ impl<'de> Deserialize<'de> for NativeHint {
                 "Comparison" => Ok(NativeHint::Comparison),
                 "StringOp" => Ok(NativeHint::StringOp),
                 "CollectionOp" => Ok(NativeHint::CollectionOp),
-                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific),
+                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific {
+                    platform: "unknown".to_string(),
+                }),
                 _ => Err(de::Error::unknown_variant(
                     s,
                     &[
@@ -686,15 +709,21 @@ impl Serialize for HoleReason {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             HoleReason::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
-            HoleReason::TypeMismatch => {
-                map.serialize_entry("TypeMismatch", &serde_json::json!({}))?
+            HoleReason::TypeMismatch { expected, found } => {
+                map.serialize_entry(
+                    "TypeMismatch",
+                    &serde_json::json!({ "expected": expected, "found": found }),
+                )?
             }
-            HoleReason::DeletedDuringRefactor => {
-                map.serialize_entry("DeletedDuringRefactor", &serde_json::json!({}))?
+            HoleReason::DeletedDuringRefactor { tx_id } => {
+                map.serialize_entry(
+                    "DeletedDuringRefactor",
+                    &serde_json::json!({ "tx-id": tx_id }),
+                )?
             }
             HoleReason::UnresolvedReference { target } => map.serialize_entry(
                 "UnresolvedReference",
-                &serde_json::json!({ "target": target.to_string() }),
+                &serde_json::json!({ "target": target.to_canonical_string() }),
             )?,
         }
         map.end()
@@ -712,8 +741,27 @@ impl<'de> Deserialize<'de> for HoleReason {
                 if let Some((key, content)) = map.iter().next() {
                     match key.as_str() {
                         "Draft" => Ok(HoleReason::Draft),
-                        "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-                        "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
+                        "TypeMismatch" => {
+                            let expected = content
+                                .get("expected")
+                                .and_then(|v| v.as_str())
+                                .ok_or_else(|| de::Error::missing_field("expected"))?
+                                .to_string();
+                            let found = content
+                                .get("found")
+                                .and_then(|v| v.as_str())
+                                .ok_or_else(|| de::Error::missing_field("found"))?
+                                .to_string();
+                            Ok(HoleReason::TypeMismatch { expected, found })
+                        }
+                        "DeletedDuringRefactor" => {
+                            let tx_id = content
+                                .get("tx-id")
+                                .and_then(|v| v.as_str())
+                                .ok_or_else(|| de::Error::missing_field("tx-id"))?
+                                .to_string();
+                            Ok(HoleReason::DeletedDuringRefactor { tx_id })
+                        }
                         "UnresolvedReference" => {
                             let target = content
                                 .get("target")
@@ -739,15 +787,10 @@ impl<'de> Deserialize<'de> for HoleReason {
                     Err(de::Error::custom("empty object for HoleReason"))
                 }
             }
-            // Also accept string format for backward compatibility
+            // Also accept string format for backward compatibility (Draft only)
             serde_json::Value::String(s) => match s.as_str() {
                 "Draft" => Ok(HoleReason::Draft),
-                "TypeMismatch" => Ok(HoleReason::TypeMismatch),
-                "DeletedDuringRefactor" => Ok(HoleReason::DeletedDuringRefactor),
-                _ => Err(de::Error::unknown_variant(
-                    s,
-                    &["Draft", "TypeMismatch", "DeletedDuringRefactor"],
-                )),
+                _ => Err(de::Error::unknown_variant(s, &["Draft"])),
             },
             _ => Err(de::Error::custom(
                 "expected object or string for HoleReason",
@@ -818,8 +861,18 @@ mod tests {
 
     #[test]
     fn test_hole_value() {
-        let val: Value = Value::Hole(ValueAttributes::default(), HoleReason::Draft, None);
-        assert!(matches!(val, Value::Hole(_, HoleReason::Draft, None)));
+        let val: Value = Value::Hole(
+            ValueAttributes::default(),
+            HoleReason::TypeMismatch {
+                expected: "Int".to_string(),
+                found: "String".to_string(),
+            },
+            None,
+        );
+        assert!(matches!(
+            val,
+            Value::Hole(_, HoleReason::TypeMismatch { .. }, None)
+        ));
     }
 
     #[test]
@@ -857,8 +910,8 @@ mod tests {
         let json = serde_json::to_string(&reason).unwrap();
         assert!(json.contains("\"UnresolvedReference\""));
         assert!(json.contains("\"target\""));
-        // FQName serializes to canonical format my/pkg:mod:func
-        assert!(json.contains("my/pkg:mod:func"));
+        // FQName serializes to canonical format with # separator
+        assert!(json.contains("my/pkg:mod#func"));
     }
 
     #[test]

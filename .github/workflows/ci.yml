@@ -103,6 +103,44 @@ jobs:
           path: .morphir/build/bin/morphir
           retention-days: 1
 
+  build-wasm:
+    name: Build (WASM extension)
+    runs-on: ubuntu-latest
+    needs: [lint-rust]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install mise
+        uses: jdx/mise-action@v3
+
+      - name: Install Rust components
+        run: rustup component add clippy
+
+      - name: Cache dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+
+      - name: Lint example extension for wasm32
+        run: mise run check:lint:wasm
+
+      - name: Build example extension for wasm32
+        run: mise run build:wasm release
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: morphir-ext-example-wasm
+          path: .morphir/build/ext/morphir_ext_example.wasm
+          retention-days: 1
+
   test-unit:
     name: Test (Unit)
     runs-on: ubuntu-latest

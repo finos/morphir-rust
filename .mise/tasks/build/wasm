@@ -1,0 +1,36 @@
+#!/bin/sh
+#MISE description="Build the example extension for wasm32-unknown-unknown (arg: debug|release)"
+
+set -e
+
+TARGET="wasm32-unknown-unknown"
+PROFILE="${1:-debug}"
+
+case "$PROFILE" in
+    debug) CARGO_PROFILE_FLAG="" ;;
+    release) CARGO_PROFILE_FLAG="--release" ;;
+    *)
+        echo "Usage: mise run build:wasm [debug|release]" >&2
+        exit 1
+        ;;
+esac
+
+# The example extension has no native build; see crates/morphir-ext-example/src/lib.rs.
+if ! rustup target list --installed | grep -qx "$TARGET"; then
+    echo "Installing Rust target $TARGET..." >&2
+    rustup target add "$TARGET"
+fi
+
+# shellcheck disable=SC2086 # intentional word splitting: empty flag must vanish
+cargo build $CARGO_PROFILE_FLAG -p morphir-ext-example --target "$TARGET"
+
+# cargo emits a core module with component metadata. The runtime loads
+# Component Model components, so componentize before staging -- the same step
+# the extension authoring guide documents in
+# docs/contributors/design/extensions/README.md.
+mkdir -p .morphir/build/ext
+wasm-tools component new \
+    "target/$TARGET/$PROFILE/morphir_ext_example.wasm" \
+    -o .morphir/build/ext/morphir_ext_example.wasm
+
+echo "Extension staged at .morphir/build/ext/morphir_ext_example.wasm ($PROFILE)" >&2

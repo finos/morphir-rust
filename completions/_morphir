@@ -3,6 +3,7 @@
 local curcontext="$curcontext"
 
 _morphir() {
+  emulate -L zsh
   typeset -A opt_args
   local curcontext="$curcontext" cache_policy
 
@@ -13,8 +14,10 @@ _morphir() {
       return 1
   fi
 
-  local spec_file="${TMPDIR:-/tmp}/usage__usage_spec_morphir.spec"
-  cat > "$spec_file" <<'__USAGE_EOF__'
+  local spec_dir="${XDG_CACHE_HOME:-$HOME/.cache}/usage"
+  [[ -d "$spec_dir" ]] || mkdir -p -m 700 "$spec_dir"
+  local spec_file="$spec_dir/usage__usage_spec_morphir.spec"
+  cat >| "$spec_file" <<'__USAGE_EOF__'
 name morphir
 bin morphir
 version "0.2.0"
@@ -132,7 +135,29 @@ cmd extension subcommand_required=#true help="Manage Morphir extensions" {
 }
 cmd ir subcommand_required=#true help="Manage Morphir IR" {
     cmd migrate help="Migrate IR between versions" {
-        long_help "Migrate IR between versions\n\nConverts Morphir IR between Classic (V1-V3) and V4 formats. Supports local files, URLs, and GitHub shorthand sources.\n\n**Examples:**\n\n```bash\n# Migrate to file\nmorphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json --target-version v4\n\n# Migrate from URL\nmorphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json -o ./lcr-v4.json\n\n# Display in console with syntax highlighting (no -o)\nmorphir ir migrate ./morphir-ir.json\n\n# Downgrade V4 to Classic\nmorphir ir migrate ./morphir-ir-v4.json -o ./morphir-ir-classic.json --target-version classic\n```\n\nSee the [IR Migration Guide](/ir-migrate/) for detailed real-world examples including the US Federal Reserve FR 2052a regulation model."
+        long_help #"""
+Migrate IR between versions
+
+Converts Morphir IR between Classic (V1-V3) and V4 formats. Supports local files, URLs, and GitHub shorthand sources.
+
+**Examples:**
+
+```bash
+# Migrate to file
+morphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json --target-version v4
+
+# Migrate from URL
+morphir ir migrate https://lcr-interactive.finos.org/server/morphir-ir.json -o ./lcr-v4.json
+
+# Display in console with syntax highlighting (no -o)
+morphir ir migrate ./morphir-ir.json
+
+# Downgrade V4 to Classic
+morphir ir migrate ./morphir-ir-v4.json -o ./morphir-ir-classic.json --target-version classic
+```
+
+See the [IR Migration Guide](/ir-migrate/) for detailed real-world examples including the US Federal Reserve FR 2052a regulation model.
+"""#
         flag "-o --output" help="Output file or directory (if omitted, displays in console with syntax highlighting)" {
             arg <OUTPUT>
         }
@@ -208,7 +233,32 @@ cmd version help="Print version information" {
 }
 cmd usage hide=#true help="Output usage spec for documentation generation"
 __USAGE_EOF__
-  _arguments "*: :(($(command usage complete-word --shell zsh -f "$spec_file" -- "${words[@]}" )))"
+  local -a values=() descs=() inserts=()
+  local needs_menu=0 line
+  while IFS= read -r line; do
+    local -a parts=("${(@ps:\t:)line}")
+    values+=("${parts[1]}")
+    descs+=("${parts[2]}")
+    inserts+=("${parts[3]}")
+    [[ "${parts[3]}" == "'"* ]] && needs_menu=1
+  done < <(command usage complete-word --shell zsh -f "$spec_file" -- "${(Q)words[@]}")
+  (( needs_menu )) && compstate[insert]=menu
+  if (( ${#inserts[@]} )); then
+    local -a _usage_display=()
+    local _usage_i _usage_max=0 _usage_v _usage_pad
+    for _usage_v in "${values[@]}"; do
+      (( ${#_usage_v} > _usage_max )) && _usage_max=${#_usage_v}
+    done
+    for ((_usage_i=1; _usage_i<=${#values[@]}; _usage_i++)); do
+      if [[ -n "${descs[_usage_i]}" ]]; then
+        _usage_pad=$(( _usage_max - ${#values[_usage_i]} ))
+        _usage_display+=("${values[_usage_i]}${(l:_usage_pad:: :)}  -- ${descs[_usage_i]}")
+      else
+        _usage_display+=("${values[_usage_i]}")
+      fi
+    done
+    compadd -l -d _usage_display -U -Q -S '' -a inserts
+  fi
   return 0
 }
 

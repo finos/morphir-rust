@@ -1,6 +1,23 @@
 //! Example Morphir extension - a simple counter.
 //!
 //! This extension demonstrates the TEA pattern with a counter model.
+//!
+//! # Target
+//!
+//! This crate only has contents on `wasm32-*` targets. `wit_bindgen::export!`
+//! emits canonical-ABI symbols whose names contain `:`, `/`, `@` and `#` --
+//! legal wasm export names, but invalid identifiers in the ELF version script
+//! rustc hands the linker for a `cdylib`, so a native link always fails with
+//! "syntax error in VERSION script". Gating the crate on `wasm32` keeps
+//! workspace-wide commands (`cargo build --workspace`, `cargo clippy
+//! --workspace`) working: on a native host this compiles to an empty library.
+//!
+//! Build it for real with `mise run build:wasm`, or:
+//!
+//! ```text
+//! cargo build -p morphir-ext-example --target wasm32-unknown-unknown
+//! ```
+#![cfg(target_arch = "wasm32")]
 
 // Generate guest bindings from WIT
 wit_bindgen::generate!({

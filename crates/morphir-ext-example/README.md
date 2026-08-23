@@ -9,28 +9,50 @@ This extension is a WebAssembly component meant to be loaded by the Morphir runt
 ### Build as WebAssembly
 
 ```bash
+# From the project root (installs the target if needed, stages the artifact)
+mise run build:wasm            # debug
+mise run build:wasm release    # release
+```
+
+`mise run build:wasm` runs `wasm-tools component new` over cargo's output and stages the resulting **component** at `.morphir/build/ext/morphir_ext_example.wasm`. Cargo alone emits a core module carrying component metadata, which the runtime cannot load. The unconverted core module stays where cargo puts it:
+
+```
+target/wasm32-unknown-unknown/debug/morphir_ext_example.wasm
+```
+
+To drive the steps directly instead:
+
+```bash
+rustup target add wasm32-unknown-unknown
+
 # From the project root
 cargo build --package morphir-ext-example --target wasm32-unknown-unknown
+wasm-tools component new \
+    target/wasm32-unknown-unknown/debug/morphir_ext_example.wasm \
+    -o morphir_ext_example.wasm
 
 # Or from this directory (uses .cargo/config.toml)
 cd crates/morphir-ext-example
 cargo build
 ```
 
-The compiled WebAssembly module will be at:
-```
-target/wasm32-unknown-unknown/debug/morphir_ext_example.wasm
-```
+### Linting
 
-### Release build
+`mise run check:lint:rust` does not cover this crate — it has no native build, so clippy never sees it on the host. Lint it against the wasm target instead:
 
 ```bash
-cargo build --package morphir-ext-example --target wasm32-unknown-unknown --release
+mise run check:lint:wasm
 ```
+
+CI runs both of these in the `Build (WASM extension)` job.
 
 ## Why WebAssembly?
 
-This crate is configured as a `cdylib` (C dynamic library) to be loaded as a WebAssembly component. It cannot be built for native targets like Linux/macOS/Windows. The WebAssembly component model provides:
+This crate is configured as a `cdylib` (C dynamic library) to be loaded as a WebAssembly component. It has no meaningful native build: `wit_bindgen::export!` emits canonical-ABI symbols whose names contain `:`, `/`, `@` and `#`, which are legal wasm export names but invalid identifiers in the ELF version script rustc hands the linker for a `cdylib`. Linking one natively fails with `syntax error in VERSION script`.
+
+So `src/lib.rs` is gated on `#![cfg(target_arch = "wasm32")]`. On a native host the crate compiles to an empty library, which keeps workspace-wide commands (`cargo build --workspace`, `cargo clippy --workspace`) working; on `wasm32-*` it compiles to the real extension.
+
+The WebAssembly component model provides:
 
 - **Sandboxing**: Extensions run in isolated environments
 - **Portability**: Same extension works across all platforms

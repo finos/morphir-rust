@@ -18,23 +18,20 @@ pub struct NotebookVfs {
 
 impl NotebookVfs {
     /// Create a new NotebookVfs from a parsed notebook
+    ///
+    /// Notebooks older than v4.5 are upgraded to v4 so their cells stay
+    /// addressable. If an upgrade fails -- `nbformat` rejects a legacy notebook
+    /// whose cell ids are not unique -- the notebook is treated as empty rather
+    /// than propagating the error, since this constructor is infallible.
     pub fn from_notebook(notebook: Notebook) -> Self {
         // Extract v4 notebook or convert
         let v4_notebook = match notebook {
             Notebook::V4(nb) => nb,
-            Notebook::Legacy(_) => {
-                // For now, create an empty v4 notebook for legacy
-                v4::Notebook {
-                    metadata: v4::Metadata {
-                        kernelspec: None,
-                        language_info: None,
-                        authors: None,
-                        additional: HashMap::new(),
-                    },
-                    nbformat: 4,
-                    nbformat_minor: 5,
-                    cells: vec![],
-                }
+            Notebook::Legacy(nb) => {
+                nbformat::upgrade_legacy_notebook(nb).unwrap_or_else(|_| Self::empty_v4_notebook())
+            }
+            Notebook::V3(nb) => {
+                nbformat::upgrade_v3_notebook(nb).unwrap_or_else(|_| Self::empty_v4_notebook())
             }
         };
 
@@ -71,7 +68,12 @@ impl NotebookVfs {
         // v4::Notebook doesn't implement Clone, so we can't clone it
         // This is a limitation - we'd need to reconstruct it or store the original
         // For now, return an empty notebook as a placeholder
-        Notebook::V4(v4::Notebook {
+        Notebook::V4(Self::empty_v4_notebook())
+    }
+
+    /// Build an empty v4 notebook
+    fn empty_v4_notebook() -> v4::Notebook {
+        v4::Notebook {
             metadata: v4::Metadata {
                 kernelspec: None,
                 language_info: None,
@@ -81,7 +83,7 @@ impl NotebookVfs {
             nbformat: 4,
             nbformat_minor: 5,
             cells: vec![],
-        })
+        }
     }
 
     /// Save the notebook to a file
@@ -333,5 +335,93 @@ impl Vfs for NotebookVfs {
                 created: None,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const V3_NOTEBOOK: &str = r#"{
+        "nbformat": 3,
+        "nbformat_minor": 0,
+        "worksheets": [
+            {
+                "cells": [
+                    {"cell_type": "markdown", "metadata": {}, "source": ["intro"]},
+                    {
+                        "cell_type": "code",
+                        "metadata": {},
+                        "language": "python",
+                        "prompt_number": 1,
+                        "input": ["print(1)"],
+                        "outputs": []
+                    }
+                ]
+            }
+        ]
+    }"#;
+
+    const LEGACY_NOTEBOOK: &str = r#"{
+        "nbformat": 4,
+        "nbformat_minor": 0,
+        "metadata": {},
+        "cells": [
+            {"cell_type": "markdown", "id": "a", "metadata": {}, "source": ["intro"]},
+            {
+                "cell_type": "code",
+                "id": "b",
+                "metadata": {},
+                "execution_count": 1,
+                "source": ["print(1)"],
+                "outputs": []
+            }
+        ]
+    }"#;
+
+    fn cell_sources(vfs: &NotebookVfs) -> Vec<String> {
+        let notebook = vfs.notebook.lock().unwrap();
+        notebook
+            .cells
+            .iter()
+            .map(NotebookVfs::get_cell_source)
+            .collect()
+    }
+
+    // Regression test for finos/morphir-rust#75: nbformat 1.2 added Notebook::V3,
+    // which from_notebook did not handle.
+    #[test]
+    fn v3_notebook_cells_are_upgraded() {
+        let notebook = nbformat::parse_notebook(V3_NOTEBOOK).expect("v3 notebook should parse");
+        assert!(matches!(notebook, Notebook::V3(_)));
+
+        let vfs = NotebookVfs::from_notebook(notebook);
+
+        assert_eq!(cell_sources(&vfs), vec!["intro", "print(1)"]);
+        assert_eq!(vfs.path_index.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn legacy_notebook_cells_are_upgraded() {
+        let notebook =
+            nbformat::parse_notebook(LEGACY_NOTEBOOK).expect("legacy notebook should parse");
+        assert!(matches!(notebook, Notebook::Legacy(_)));
+
+        let vfs = NotebookVfs::from_notebook(notebook);
+
+        assert_eq!(cell_sources(&vfs), vec!["intro", "print(1)"]);
+        assert_eq!(vfs.path_index.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn v4_notebook_cells_are_preserved() {
+        let v4_notebook =
+            LEGACY_NOTEBOOK.replace(r#""nbformat_minor": 0"#, r#""nbformat_minor": 5"#);
+        let notebook = nbformat::parse_notebook(&v4_notebook).expect("v4 notebook should parse");
+        assert!(matches!(notebook, Notebook::V4(_)));
+
+        let vfs = NotebookVfs::from_notebook(notebook);
+
+        assert_eq!(cell_sources(&vfs), vec!["intro", "print(1)"]);
     }
 }

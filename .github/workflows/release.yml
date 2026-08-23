@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Get version from tag
         id: get_version
@@ -70,7 +70,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -97,7 +97,7 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/morphir.exe" -DestinationPath "morphir-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: morphir-${{ matrix.target }}
           path: morphir-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -117,7 +117,7 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           generate_release_notes: true

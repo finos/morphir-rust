@@ -655,19 +655,15 @@ async fn i_visit_expression(w: &mut TestWorld) {
 }
 
 #[then(expr = "the module count should be {int}")]
-async fn module_count_should_be(w: &mut TestWorld, _count: usize) {
-    // Skip assertion since visitor is disabled
-    if w.last_result.as_ref().is_some_and(|r| r.is_err()) {
-        return; // Visitor was disabled, skip
-    }
+async fn module_count_should_be(_w: &mut TestWorld, _count: usize) {
+    // Assertion skipped: the visitor traversal module is pending update, so
+    // last_result is always an Err here and there is no count to check.
 }
 
 #[then(expr = "the variable count should be {int}")]
-async fn variable_count_should_be(w: &mut TestWorld, _count: usize) {
-    // Skip assertion since visitor is disabled
-    if w.last_result.as_ref().is_some_and(|r| r.is_err()) {
-        return; // Visitor was disabled, skip
-    }
+async fn variable_count_should_be(_w: &mut TestWorld, _count: usize) {
+    // Assertion skipped: the visitor traversal module is pending update, so
+    // last_result is always an Err here and there is no count to check.
 }
 
 #[tokio::main]

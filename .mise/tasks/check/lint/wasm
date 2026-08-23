@@ -1,0 +1,18 @@
+#!/bin/sh
+#MISE description="Lint the wasm-only extension crates with clippy"
+
+set -e
+
+TARGET="wasm32-unknown-unknown"
+
+# morphir-ext-example has no native build, so check:lint:rust never sees it;
+# see crates/morphir-ext-example/src/lib.rs.
+if ! rustup target list --installed | grep -qx "$TARGET"; then
+    echo "Installing Rust target $TARGET..."
+    rustup target add "$TARGET"
+fi
+
+echo "Running WASM linter..."
+cargo clippy -p morphir-ext-example --target "$TARGET" --all-targets --all-features -- -D warnings
+
+echo "WASM lint OK"

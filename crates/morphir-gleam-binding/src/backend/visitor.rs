@@ -151,7 +151,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
         output.push_str(" {\n");
 
         match &type_def.value {
-            TypeDefinition::TypeAliasDefinition { type_expr: _, .. } => {
+            TypeDefinition::TypeAliasDefinition { .. } => {
                 // Type alias - generate type expression
                 // For now, simplified - would need to convert type_expr JSON to Gleam syntax
                 output.push_str("  // Type alias\n");

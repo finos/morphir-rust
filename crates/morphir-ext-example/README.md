@@ -14,19 +14,22 @@ mise run build:wasm            # debug
 mise run build:wasm release    # release
 ```
 
-`mise run build:wasm` stages the module at `.morphir/build/ext/morphir_ext_example.wasm`. The raw cargo output stays where cargo puts it:
+`mise run build:wasm` runs `wasm-tools component new` over cargo's output and stages the resulting **component** at `.morphir/build/ext/morphir_ext_example.wasm`. Cargo alone emits a core module carrying component metadata, which the runtime cannot load. The unconverted core module stays where cargo puts it:
 
 ```
 target/wasm32-unknown-unknown/debug/morphir_ext_example.wasm
 ```
 
-To drive cargo directly instead:
+To drive the steps directly instead:
 
 ```bash
 rustup target add wasm32-unknown-unknown
 
 # From the project root
 cargo build --package morphir-ext-example --target wasm32-unknown-unknown
+wasm-tools component new \
+    target/wasm32-unknown-unknown/debug/morphir_ext_example.wasm \
+    -o morphir_ext_example.wasm
 
 # Or from this directory (uses .cargo/config.toml)
 cd crates/morphir-ext-example

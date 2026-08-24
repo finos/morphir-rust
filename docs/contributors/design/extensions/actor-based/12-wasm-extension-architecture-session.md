@@ -874,6 +874,12 @@ Runtime execution semantics (TEA-style runtime extensions):
 
 **Status:** 🔴 Not Started
 
+> **Naming note:** `morphir-design` is no longer available as a crate name. The
+> crate that held it — workspace, configuration, and extension discovery — is now
+> `morphir-devkit`, because "design" was read as domain design rather than
+> design-time. The proposed crate described here is a different thing (design-time
+> extension operations) and needs a name of its own before it is built.
+
 Design-time operations (frontends, backends, transforms):
 
 - Frontend compilation (source → IR)

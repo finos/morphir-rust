@@ -1,7 +1,9 @@
 #![allow(clippy::get_first)]
+mod drivers;
+
 use anyhow::Result;
 use cucumber::{World, given, then, when};
-use morphir_common::config::MorphirConfig;
+use drivers::config_driver::ConfigDriver;
 use morphir_common::loader::{self, LoadedDistribution};
 use morphir_common::vfs::{MemoryVfs, OsVfs, Vfs};
 // Note: converter module is disabled pending update to non-generic V4 types
@@ -18,8 +20,7 @@ pub struct TestWorld {
     memory_vfs: Option<MemoryVfs>,
     glob_results: Vec<PathBuf>,
     visitor_count: usize,
-    temp_dir: Option<tempfile::TempDir>,
-    loaded_config: Option<MorphirConfig>,
+    config: ConfigDriver,
 }
 
 impl Default for TestWorld {
@@ -32,13 +33,20 @@ impl Default for TestWorld {
             memory_vfs: None,
             glob_results: Vec::new(),
             visitor_count: 0,
-            temp_dir: None,
-            loaded_config: None,
+            config: ConfigDriver::default(),
         }
     }
 }
 
 // Configuration Steps
+
+fn docstring(step: &cucumber::gherkin::Step) -> &str {
+    step.docstring.as_deref().expect("Docstring required")
+}
+
+fn docstring_json(step: &cucumber::gherkin::Step) -> serde_json::Value {
+    serde_json::from_str(docstring(step)).expect("Docstring must be valid JSON")
+}
 
 #[given(expr = "I have a {string} file with:")]
 async fn i_have_a_config_file_with(
@@ -46,58 +54,99 @@ async fn i_have_a_config_file_with(
     filename: String,
     step: &cucumber::gherkin::Step,
 ) {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let file_path = dir.path().join(&filename);
-    let content = step.docstring.as_ref().expect("Docstring required").clone();
-    std::fs::write(&file_path, content).expect("Failed to write config file");
-    w.input_path = file_path;
-    w.temp_dir = Some(dir);
+    w.config.given_config_file(&filename, docstring(step));
 }
 
 #[when(expr = "I load the configuration")]
 async fn i_load_configuration(w: &mut TestWorld) {
-    match MorphirConfig::load(&w.input_path) {
-        Ok(c) => {
-            w.loaded_config = Some(c);
-            w.last_result = Some(Ok(()));
-        }
-        Err(e) => {
-            w.last_result = Some(Err(e));
-        }
-    }
+    w.config.when_loading_config();
 }
 
 #[then(expr = "it should be a workspace configuration")]
 async fn it_should_be_workspace(w: &mut TestWorld) {
-    let config = w.loaded_config.as_ref().expect("Config not loaded");
-    assert!(config.is_workspace(), "Expected workspace configuration");
+    assert!(
+        w.config.loaded_config().is_workspace(),
+        "Expected workspace configuration"
+    );
 }
 
 #[then(expr = "it should be a project configuration")]
 async fn it_should_be_project(w: &mut TestWorld) {
-    let config = w.loaded_config.as_ref().expect("Config not loaded");
-    assert!(config.is_project(), "Expected project configuration");
+    assert!(
+        w.config.loaded_config().is_project(),
+        "Expected project configuration"
+    );
 }
 
 #[then(expr = "the workspace should have {int} members")]
 async fn workspace_should_have_members(w: &mut TestWorld, count: usize) {
-    let config = w.loaded_config.as_ref().expect("Config not loaded");
-    let actual = config.workspace.as_ref().unwrap().members.len();
-    assert_eq!(actual, count);
+    let workspace = w.config.loaded_config().workspace.as_ref().unwrap();
+    assert_eq!(workspace.members.len(), count);
 }
 
 #[then(expr = "the project name should be {string}")]
 async fn project_name_should_be(w: &mut TestWorld, name: String) {
-    let config = w.loaded_config.as_ref().expect("Config not loaded");
-    let actual = &config.project.as_ref().unwrap().name;
-    assert_eq!(actual, &name);
+    let project = w.config.loaded_config().project.as_ref().unwrap();
+    assert_eq!(project.name, name);
 }
 
 #[then(expr = "the source directory should be {string}")]
 async fn source_directory_should_be(w: &mut TestWorld, dir: String) {
-    let config = w.loaded_config.as_ref().expect("Config not loaded");
-    let actual = &config.project.as_ref().unwrap().source_directory;
-    assert_eq!(actual, &dir);
+    let project = w.config.loaded_config().project.as_ref().unwrap();
+    assert_eq!(project.source_directory, dir);
+}
+
+// Configuration Merge Steps
+
+#[given(expr = "a base configuration value:")]
+async fn a_base_configuration_value(w: &mut TestWorld, step: &cucumber::gherkin::Step) {
+    w.config.given_base_value(docstring_json(step));
+}
+
+#[given(expr = "an overlay configuration value:")]
+async fn an_overlay_configuration_value(w: &mut TestWorld, step: &cucumber::gherkin::Step) {
+    w.config.given_overlay_value(docstring_json(step));
+}
+
+#[when(expr = "I merge the configuration values")]
+async fn i_merge_the_configuration_values(w: &mut TestWorld) {
+    w.config.when_merging();
+}
+
+#[then(expr = "the base configuration value should be unchanged:")]
+async fn base_value_should_be_unchanged(w: &mut TestWorld, step: &cucumber::gherkin::Step) {
+    assert_eq!(w.config.base_value(), Some(&docstring_json(step)));
+}
+
+#[given(expr = "the environment variable {string} is {string}")]
+async fn the_environment_variable_is(w: &mut TestWorld, name: String, value: String) {
+    w.config.given_env_var(&name, &value);
+}
+
+#[when(expr = "I load the environment configuration")]
+async fn i_load_the_environment_configuration(w: &mut TestWorld) {
+    w.config.when_loading_environment();
+}
+
+#[then(regex = r#"^the merged value at "([^"]+)" should be (.+)$"#)]
+async fn merged_value_at_should_be(w: &mut TestWorld, path: String, expected: String) {
+    let expected: serde_json::Value =
+        serde_json::from_str(&expected).expect("Expected value must be valid JSON");
+    assert_eq!(
+        w.config.merged_value_at(&path),
+        Some(&expected),
+        "Unexpected merged value at {path}: {:?}",
+        w.config.merged_value()
+    );
+}
+
+#[then(expr = "the merged value should not contain {string}")]
+async fn merged_value_should_not_contain(w: &mut TestWorld, path: String) {
+    assert!(
+        w.config.merged_value_at(&path).is_none(),
+        "Expected no value at {path}: {:?}",
+        w.config.merged_value()
+    );
 }
 
 // Existing Steps
@@ -666,7 +715,24 @@ async fn variable_count_should_be(_w: &mut TestWorld, _count: usize) {
     // last_result is always an Err here and there is no count to check.
 }
 
-#[tokio::main]
-async fn main() {
-    TestWorld::run("tests/features").await;
+/// Stack size for the Cucumber runner thread.
+///
+/// The runner drives every scenario from one thread, and parsing the large
+/// legacy IR fixtures recurses deeply enough to overflow the 1 MiB main-thread
+/// stack on Windows. A dedicated thread keeps the suite runnable everywhere.
+const RUNNER_STACK_SIZE: usize = 64 * 1024 * 1024;
+
+fn main() {
+    std::thread::Builder::new()
+        .stack_size(RUNNER_STACK_SIZE)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build Tokio runtime")
+                .block_on(TestWorld::run("tests/features"));
+        })
+        .expect("Failed to spawn Cucumber runner thread")
+        .join()
+        .expect("Cucumber runner thread panicked");
 }

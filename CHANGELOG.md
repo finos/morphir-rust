@@ -10,8 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - YAML project, workspace, and global user configuration with XDG, macOS, and Windows path discovery
+- Layered configuration loading: built-in defaults, system (`/etc/morphir` or `%PROGRAMDATA%\morphir`), global user, project, workspace member, `.morphir/morphir.user.{toml,yaml}` override, and `MORPHIR_*` environment variables are merged in precedence order
+- `morphir_common::config::merge` (`deep_merge`, `merge_all`) implementing the serialization-independent merge rules, and `morphir_common::config::env` for the environment-variable source
+- `morphir_design::load_effective_config` and `ConfigLoadOptions` for selecting sources explicitly; `ConfigContext` now reports the merged value and the sources that were consulted
+- `morphir config path` and `morphir config show` commands (with `--json`) to inspect configuration sources and the effective configuration; `config show` redacts tokens, passwords, secrets, and API keys
+- `morphir_common::config::redact` for hiding credentials before a configuration value is displayed, and `morphir_design::builtin_defaults` exposing the built-in defaults layer
 
 ### Changed
+
+- `load_config_context` now merges every configuration layer instead of only the global user and project files
+- A `null` overlay value no longer overrides a lower-precedence value; legacy `morphir.json` projects keep global settings intact
 
 ### Deprecated
 

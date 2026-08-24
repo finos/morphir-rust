@@ -59,6 +59,20 @@ cmd transform hide=#true help="[Experimental] Transform Morphir IR" {
         arg <OUTPUT>
     }
 }
+cmd config subcommand_required=#true help="Inspect the effective Morphir configuration" {
+    cmd show help="Show the effective configuration after merging every source" {
+        flag --config help="Explicit project config file path" {
+            arg <CONFIG>
+        }
+        flag --json help="Output as JSON"
+    }
+    cmd path help="Show which configuration sources were considered" {
+        flag --config help="Explicit project config file path" {
+            arg <CONFIG>
+        }
+        flag --json help="Output as JSON"
+    }
+}
 cmd tool subcommand_required=#true help="Manage Morphir tools, distributions, and extensions" {
     cmd install help="Install a Morphir tool or extension" {
         flag "-v --version" help="Version to install (defaults to latest)" {

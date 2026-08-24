@@ -1,5 +1,5 @@
 [package]
-name = "morphir-design"
+name = "morphir-devkit"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,6 +9,7 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Workspace, configuration, and extension discovery for tools that work on Morphir projects (CLI, IDEs, build tools)"
 
 [dependencies]
 morphir-common = { path = "../morphir-common" }

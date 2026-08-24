@@ -4200,7 +4200,7 @@ Paths are resolved relative to:
 ### Discovery
 
 ```rust
-// Design-time discovery
+// Devkit extension discovery
 let builtins = morphir_devkit::discover_builtin_extensions();
 
 // Daemon registry
@@ -4314,7 +4314,7 @@ let ctx = load_config_context(&config_path)?;
 use morphir_devkit::{discover_builtin_extensions, get_builtin_extension_path};
 
 let builtins = discover_builtin_extensions();
-let path = get_builtin_extension_path("gleam")?;
+let path = get_builtin_extension_path("gleam").expect("gleam builtin not found");
 ```
 
 ### Path Resolution
@@ -4517,7 +4517,11 @@ Commands are in `crates/morphir/src/commands/`:
 ### Devkit
 
 Devkit functionality in `crates/morphir-devkit/`:
-- `config.rs` - Configuration discovery
+- `config/` - Configuration discovery and layered loading
+  - `discovery.rs` - Locating configuration files (project, global user, system, user override)
+  - `sources.rs` - Source kinds, precedence, and the per-source report
+  - `loader.rs` - Merging sources into the effective configuration and workspace/project context
+  - `paths.rs` - Output-path resolution inside `.morphir/`
 - `extensions.rs` - Extension discovery
 
 ### Common Utilities

@@ -43,7 +43,7 @@ let ctx = load_config_context(&config_path)?;
 use morphir_devkit::{discover_builtin_extensions, get_builtin_extension_path};
 
 let builtins = discover_builtin_extensions();
-let path = get_builtin_extension_path("gleam")?;
+let path = get_builtin_extension_path("gleam").expect("gleam builtin not found");
 ```
 
 ### Path Resolution

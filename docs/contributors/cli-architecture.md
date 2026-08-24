@@ -89,7 +89,7 @@ Paths are resolved relative to:
 ### Discovery
 
 ```rust
-// Design-time discovery
+// Devkit extension discovery
 let builtins = morphir_devkit::discover_builtin_extensions();
 
 // Daemon registry

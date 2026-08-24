@@ -66,7 +66,11 @@ Commands are in `crates/morphir/src/commands/`:
 ### Devkit
 
 Devkit functionality in `crates/morphir-devkit/`:
-- `config.rs` - Configuration discovery
+- `config/` - Configuration discovery and layered loading
+  - `discovery.rs` - Locating configuration files (project, global user, system, user override)
+  - `sources.rs` - Source kinds, precedence, and the per-source report
+  - `loader.rs` - Merging sources into the effective configuration and workspace/project context
+  - `paths.rs` - Output-path resolution inside `.morphir/`
 - `extensions.rs` - Extension discovery
 
 ### Common Utilities

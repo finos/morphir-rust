@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- YAML project, workspace, and global user configuration with XDG, macOS, and Windows path discovery
+
 ### Changed
 
 ### Deprecated

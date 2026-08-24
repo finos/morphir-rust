@@ -2,10 +2,11 @@
 //! Workspace management for multi-project Morphir development
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::Result;
 use morphir_common::config::MorphirConfig;
+use morphir_design::discover_config_at;
 
 /// Workspace state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +82,9 @@ impl Workspace {
 
     /// Open an existing workspace
     pub fn open(root: PathBuf) -> Result<Self> {
-        let config_path = root.join("morphir.toml");
+        let config_path = discover_config_at(&root)?.ok_or_else(|| {
+            anyhow::anyhow!("No Morphir configuration found in {}", root.display())
+        })?;
         let config = MorphirConfig::load(&config_path)?;
 
         let mut workspace = Self {
@@ -131,7 +134,7 @@ impl Workspace {
                 for entry in std::fs::read_dir(&parent_path)? {
                     let entry = entry?;
                     let path = entry.path();
-                    if path.is_dir() && path.join("morphir.toml").exists() {
+                    if path.is_dir() && discover_config_at(&path)?.is_some() {
                         self.load_project(&path)?;
                     }
                 }
@@ -142,15 +145,17 @@ impl Workspace {
     }
 
     /// Load a project from a directory
-    fn load_project(&mut self, path: &PathBuf) -> Result<()> {
-        let config_path = path.join("morphir.toml");
+    fn load_project(&mut self, path: &Path) -> Result<()> {
+        let config_path = discover_config_at(path)?.ok_or_else(|| {
+            anyhow::anyhow!("No Morphir configuration found in {}", path.display())
+        })?;
         let config = MorphirConfig::load(&config_path)?;
 
         if let Some(ref project_config) = config.project {
             let project = Project {
                 name: project_config.name.clone(),
                 version: project_config.version.clone(),
-                path: path.clone(),
+                path: path.to_path_buf(),
                 state: ProjectState::Unloaded,
                 source_dir: project_config.source_directory.clone(),
                 config,
@@ -180,5 +185,46 @@ impl Workspace {
     pub fn close(&mut self) {
         self.state = WorkspaceState::Closed;
         self.projects.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opens_a_yaml_project() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.yaml"),
+            "project:\n  name: acme/orders\n  version: 1.0.0\n",
+        )
+        .unwrap();
+
+        let workspace = Workspace::open(root.path().to_path_buf()).unwrap();
+
+        assert_eq!(workspace.state, WorkspaceState::Open);
+        assert!(workspace.get_project("acme/orders").is_some());
+    }
+
+    #[test]
+    fn discovers_yaml_workspace_members() {
+        let root = tempfile::tempdir().unwrap();
+        let member = root.path().join("packages").join("orders");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            root.path().join("morphir.yaml"),
+            "workspace:\n  members:\n    - packages/*\n",
+        )
+        .unwrap();
+        std::fs::write(
+            member.join("morphir.yaml"),
+            "project:\n  name: acme/orders\n  version: 1.0.0\n",
+        )
+        .unwrap();
+
+        let workspace = Workspace::open(root.path().to_path_buf()).unwrap();
+
+        assert!(workspace.get_project("acme/orders").is_some());
     }
 }

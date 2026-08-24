@@ -3,6 +3,9 @@ layout: default
 title: Devkit Crate
 nav_order: 4
 parent: For Contributors
+redirect_from:
+  - /contributors/design-time-crate/
+  - /contributors/design-time-crate.html
 ---
 
 # Devkit Crate

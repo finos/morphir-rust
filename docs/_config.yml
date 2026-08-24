@@ -14,6 +14,8 @@ favicon_ico: "/assets/images/favicon.ico"
 remote_theme: just-the-docs/just-the-docs@v0.10.0
 plugins:
   - jekyll-remote-theme
+  # Serves the retired URLs listed in a page's redirect_from front matter.
+  - jekyll-redirect-from
 
 # Color scheme - light (default) with dark toggle support
 color_scheme: light

@@ -4,7 +4,7 @@ rust = "1.98.0"
 # Documentation job fails when a new usage release changes that output.
 usage = "6.1.1"
 # Componentizes the example extension in build:wasm.
-wasm-tools = "1.257.1"
+wasm-tools = "1.258.0"
 shellcheck = "latest"
 shfmt = "latest"
 yamllint = "latest"

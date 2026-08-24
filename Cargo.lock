@@ -3187,6 +3187,7 @@ dependencies = [
  "jsonrpsee",
  "morphir-common",
  "morphir-core",
+ "morphir-design",
  "morphir-extension-sdk",
  "notify",
  "reqwest",

@@ -21,6 +21,17 @@ impl MorphirConfig {
 }
 
 /// Parse a Morphir configuration file into its serialization-independent value.
+///
+/// ```no_run
+/// use morphir_common::config::load_config_value;
+/// use std::path::Path;
+///
+/// # fn main() -> morphir_common::Result<()> {
+/// let value = load_config_value(Path::new("morphir.yaml"))?;
+/// assert_eq!(value["project"]["name"], "acme/orders");
+/// # Ok(())
+/// # }
+/// ```
 pub fn load_config_value(path: &Path) -> crate::Result<Value> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read Morphir config: {}", path.display()))?;

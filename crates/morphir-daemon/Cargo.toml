@@ -58,6 +58,7 @@ dirs = "6"
 # Internal crates
 morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
+morphir-design = { path = "../morphir-design" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk", features = [
     "host",
 ] }

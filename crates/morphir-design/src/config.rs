@@ -67,7 +67,8 @@ pub fn discover_config_candidates(candidates: &[PathBuf]) -> Result<Option<PathB
     }
 }
 
-fn discover_config_in_directory(directory: &Path) -> Result<Option<PathBuf>> {
+/// Find one configuration directly inside a project or workspace directory.
+pub fn discover_config_at(directory: &Path) -> Result<Option<PathBuf>> {
     let modern = discover_config_candidates(&project_config_candidates(directory))?;
     Ok(modern.or_else(|| {
         let legacy = directory.join("morphir.json");
@@ -80,7 +81,7 @@ pub fn discover_config(start_dir: &Path) -> Result<Option<PathBuf>> {
     let mut current = start_dir.to_path_buf();
 
     loop {
-        if let Some(config) = discover_config_in_directory(&current)? {
+        if let Some(config) = discover_config_at(&current)? {
             return Ok(Some(config));
         }
 
@@ -158,6 +159,22 @@ pub fn discover_global_config() -> Result<Option<PathBuf>> {
     discover_config_candidates(&candidates)
 }
 
+/// Return the project or workspace root represented by a configuration path.
+pub fn config_root(config_path: &Path) -> Option<&Path> {
+    let parent = config_path.parent()?;
+    let is_hidden_config = parent.file_name().and_then(|name| name.to_str()) == Some(".morphir")
+        && matches!(
+            config_path.file_name().and_then(|name| name.to_str()),
+            Some("morphir.toml" | "morphir.yaml")
+        );
+
+    if is_hidden_config {
+        parent.parent()
+    } else {
+        Some(parent)
+    }
+}
+
 /// Walk up directory tree to find `.morphir/` directory
 pub fn discover_morphir_dir(start_dir: &Path) -> Option<PathBuf> {
     let mut current = start_dir.to_path_buf();
@@ -217,8 +234,7 @@ pub fn load_config_context_with_global(
         )
     })?;
 
-    let config_dir = config_path
-        .parent()
+    let config_dir = config_root(config_path)
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
 
     // Check if this is a workspace config
@@ -237,7 +253,7 @@ pub fn load_config_context_with_global(
             if let Some(member) = default_member {
                 // Resolve member path (could be a glob pattern, for now treat as literal)
                 let member_path = ws_root.join(member);
-                let project_config_path = discover_config_in_directory(&member_path)?;
+                let project_config_path = discover_config_at(&member_path)?;
 
                 if let Some(project_config_path) = project_config_path {
                     let mut merged_value = serde_json::to_value(&config)
@@ -337,7 +353,9 @@ pub fn resolve_path_relative_to_config(path: &Path, config_path: &Path) -> PathB
     if path.is_absolute() {
         path.to_path_buf()
     } else {
-        config_path.parent().unwrap_or(Path::new(".")).join(path)
+        config_root(config_path)
+            .unwrap_or(Path::new("."))
+            .join(path)
     }
 }
 
@@ -388,6 +406,22 @@ mod tests {
         write_project_config(&expected);
 
         assert_eq!(discover_config(root.path()).unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn resolves_hidden_config_paths_from_the_project_root() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join(".morphir").join("morphir.yaml");
+        write_project_config(&config_path);
+
+        let context = load_config_context_with_global(&config_path, None).unwrap();
+
+        assert_eq!(context.project_root.as_deref(), Some(root.path()));
+        assert_eq!(context.morphir_dir, root.path().join(".morphir"));
+        assert_eq!(
+            resolve_path_relative_to_config(Path::new("src"), &config_path),
+            root.path().join("src")
+        );
     }
 
     #[test]

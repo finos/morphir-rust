@@ -32,11 +32,11 @@ morphir
 
 ```
 1. Parse CLI arguments
-2. Discover configuration (morphir-design)
+2. Discover configuration (morphir-devkit)
 3. Load config context (workspace/project detection)
 4. Merge CLI args with config (CLI overrides)
 5. Resolve paths (.morphir/out/<project>/compile/<language>/)
-6. Discover extension by language (morphir-design → morphir-daemon)
+6. Discover extension by language (morphir-devkit → morphir-daemon)
 7. Load extension WASM (morphir-daemon)
 8. Collect source files
 9. Call extension.frontend.compile()
@@ -51,7 +51,7 @@ morphir
 2. Discover configuration
 3. Load config context
 4. Resolve IR input path
-5. Discover extension by target (morphir-design → morphir-daemon)
+5. Discover extension by target (morphir-devkit → morphir-daemon)
 6. Load extension WASM
 7. Load Morphir IR (detect format)
 8. Call extension.backend.generate()
@@ -90,7 +90,7 @@ Paths are resolved relative to:
 
 ```rust
 // Design-time discovery
-let builtins = morphir_design::discover_builtin_extensions();
+let builtins = morphir_devkit::discover_builtin_extensions();
 
 // Daemon registry
 let registry = ExtensionRegistry::new(workspace_root, output_dir)?;
@@ -156,6 +156,6 @@ Errors are handled using `miette` for rich diagnostics:
 
 ## Next Steps
 
-- See [Design-Time Crate](design-time-crate)
+- See [Devkit Crate](devkit-crate)
 - Read [Extension System Design](extension-system)
 - Check [Development Guide](development)

@@ -102,7 +102,7 @@ features:
       category: "cli"
       scenarios: ["@cli", "@config"]
       status: "implemented"
-      implementation_path: "crates/morphir-design/src/config.rs"
+      implementation_path: "crates/morphir-devkit/src/config/mod.rs"
       test_path: "tests/features/cli.feature"
 
     - id: cli-json-output

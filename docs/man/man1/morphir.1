@@ -21,6 +21,15 @@ Compile source code to Morphir IR
 \fBgenerate\fR
 Generate code from Morphir IR
 .TP
+\fBconfig\fR
+Inspect the effective Morphir configuration
+.TP
+\fBconfig show\fR
+Show the effective configuration after merging every source
+.TP
+\fBconfig path\fR
+Show which configuration sources were considered
+.TP
 \fBtool\fR
 Manage Morphir tools, distributions, and extensions
 .TP
@@ -148,6 +157,32 @@ Output as JSON
 .TP
 \fB\-\-json\-lines\fR
 Output as JSON Lines (streaming)
+.SH "MORPHIR CONFIG SHOW"
+Show the effective configuration after merging every source
+.PP
+\fBUsage:\fR morphir config show [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-config\fR \fI<CONFIG>\fR
+Explicit project config file path
+.TP
+\fB\-\-json\fR
+Output as JSON
+.SH "MORPHIR CONFIG PATH"
+Show which configuration sources were considered
+.PP
+\fBUsage:\fR morphir config path [OPTIONS]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-config\fR \fI<CONFIG>\fR
+Explicit project config file path
+.TP
+\fB\-\-json\fR
+Output as JSON
 .SH "MORPHIR TOOL INSTALL"
 Install a Morphir tool or extension
 .PP

@@ -38,7 +38,7 @@ FRONTMATTER
 
     # Process subcommand pages
     # Note: 'self' is excluded as it has manually-maintained documentation
-    for cmd in compile generate gleam ir schema version tool dist extension; do
+    for cmd in compile config generate gleam ir schema version tool dist extension; do
         if [ -f "docs/cli/${cmd}.md" ]; then
             CONTENT=$(cat "docs/cli/${cmd}.md")
 

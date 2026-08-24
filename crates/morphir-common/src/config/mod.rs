@@ -2,13 +2,15 @@
 //!
 //! Handles loading and parsing of Morphir configuration files, plus the
 //! serialization-independent pieces of the effective-configuration algorithm:
-//! [`merge`] implements the deep-merge rules and [`env`] maps `MORPHIR_*`
-//! environment variables onto the configuration model.
+//! [`merge`] implements the deep-merge rules, [`env`] maps `MORPHIR_*`
+//! environment variables onto the configuration model, and [`redact`] hides
+//! credentials before a configuration value is displayed.
 
 pub mod env;
 pub mod legacy;
 pub mod merge;
 pub mod model;
+pub mod redact;
 
 use self::legacy::LegacyProjectConfig;
 use anyhow::{Context, anyhow};
@@ -17,6 +19,7 @@ use std::path::Path;
 
 pub use self::merge::{deep_merge, merge_all};
 pub use self::model::*;
+pub use self::redact::redact_secrets;
 
 impl MorphirConfig {
     /// Load configuration from a file path

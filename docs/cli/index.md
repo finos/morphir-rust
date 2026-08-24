@@ -29,6 +29,9 @@ Print version
 
 - [`morphir compile [FLAGS]`](/compile.md)
 - [`morphir generate [FLAGS]`](/generate.md)
+- [`morphir config <SUBCOMMAND>`](/config.md)
+- [`morphir config show [--config <CONFIG>] [--json]`](/config/show.md)
+- [`morphir config path [--config <CONFIG>] [--json]`](/config/path.md)
 - [`morphir tool <SUBCOMMAND>`](/tool.md)
 - [`morphir tool install [-v --version <VERSION>] <NAME>`](/tool/install.md)
 - [`morphir tool list`](/tool/list.md)

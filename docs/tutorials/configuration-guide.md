@@ -71,6 +71,8 @@ morphir config path --json
 morphir config show --json
 ```
 
+`config show` redacts credentials before printing: any key containing `token`, `password`, `secret`, `credential`, or `api_key` is shown as `<redacted>`.
+
 ## Next Steps
 
 - See [Complete Workflow](complete-workflow)

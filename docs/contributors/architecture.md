@@ -13,7 +13,7 @@ This document provides an overview of the Morphir Rust architecture.
 
 The system consists of:
 - **CLI (morphir)**: User-facing commands
-- **Design-Time (morphir-design)**: Configuration and extension discovery
+- **Devkit (morphir-devkit)**: Configuration and extension discovery
 - **Common (morphir-common)**: Shared infrastructure
 - **Daemon (morphir-daemon)**: Runtime extension execution
 - **Extensions**: Language-specific implementations

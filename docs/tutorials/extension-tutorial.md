@@ -128,7 +128,7 @@ Builtin extensions (like Gleam) are:
 - Automatically discovered
 
 To make an extension builtin:
-1. Add to `morphir-design/src/extensions.rs`
+1. Add to `morphir-devkit/src/extensions.rs`
 2. Bundle WASM in build process
 3. Update extension discovery
 

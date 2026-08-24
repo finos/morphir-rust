@@ -19,8 +19,11 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 - [generate](https://finos.github.io/morphir-rust/cli/generate): - **Usage**: `morphir generate [FLAGS]`
 - [gleam](https://finos.github.io/morphir-rust/cli/gleam): - **Usage**: `morphir gleam [--json] [--json-lines] <SUBCOMMAND>`
 - [schema](https://finos.github.io/morphir-rust/cli/schema): - **Usage**: `morphir schema [-o --output <OUTPUT>]`
+- [config](https://finos.github.io/morphir-rust/cli/config): - **Usage**: `morphir config <SUBCOMMAND>`
 - [version](https://finos.github.io/morphir-rust/cli/version): - **Usage**: `morphir version [--json]`
 - [dist](https://finos.github.io/morphir-rust/cli/dist): - **Usage**: `morphir dist <SUBCOMMAND>`
+- [config path](https://finos.github.io/morphir-rust/cli/config/path): - **Usage**: `morphir config path [--config <CONFIG>] [--json]`
+- [config show](https://finos.github.io/morphir-rust/cli/config/show): - **Usage**: `morphir config show [--config <CONFIG>] [--json]`
 - [dist install](https://finos.github.io/morphir-rust/cli/dist/install): - **Usage**: `morphir dist install [-v --version <VERSION>] <NAME>`
 - [dist list](https://finos.github.io/morphir-rust/cli/dist/list): - **Usage**: `morphir dist list`
 - [dist uninstall](https://finos.github.io/morphir-rust/cli/dist/uninstall): - **Usage**: `morphir dist uninstall <NAME>`
@@ -42,7 +45,7 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 
 - [Getting Started Tutorial](https://finos.github.io/morphir-rust/tutorials/getting-started-tutorial): This tutorial will walk you through setting up your first Morphir project and using the CLI to compile and generate code.
 - [Gleam Language Binding Tutorial](https://finos.github.io/morphir-rust/tutorials/gleam-tutorial): This tutorial covers using Morphir with Gleam, including compilation, code generation, and roundtrip testing.
-- [Configuration Guide](https://finos.github.io/morphir-rust/tutorials/configuration-guide): Morphir uses `morphir.toml` (or `morphir.json`) for project and workspace configuration.
+- [Configuration Guide](https://finos.github.io/morphir-rust/tutorials/configuration-guide): Morphir uses `morphir.toml` or `morphir.yaml` (or the legacy `morphir.json`) for project and workspace configuration. Both serializations describe the same configuration model.
 - [Complete Workflow](https://finos.github.io/morphir-rust/tutorials/complete-workflow): This guide walks through a complete end-to-end workflow using Morphir with Gleam.
 - [Tutorials](https://finos.github.io/morphir-rust/tutorials/): Step-by-step guides for using Morphir Rust.
 - [Extension Development Tutorial](https://finos.github.io/morphir-rust/tutorials/extension-tutorial): Learn how to create Morphir extensions for new languages or targets.
@@ -54,7 +57,7 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 - [Morphir Extensions](https://finos.github.io/morphir-rust/contributors/design/extensions/README): The extension architecture for adding capabilities to Morphir via WASM components and the task system.
 - [Extension System Design](https://finos.github.io/morphir-rust/contributors/extension-system): This document describes the Morphir extension system, including current implementation and future vision.
 - [CLI Architecture](https://finos.github.io/morphir-rust/contributors/cli-architecture): This document describes the architecture of the Morphir CLI, including command structure, configuration handling, and extension integration.
-- [Design-Time Crate](https://finos.github.io/morphir-rust/contributors/design-time-crate): The `morphir-design` crate provides reusable design-time tooling that can be used by the CLI, IDEs, build tools, and other Morphir tooling.
+- [Devkit Crate](https://finos.github.io/morphir-rust/contributors/devkit-crate): The `morphir-devkit` crate provides workspace, configuration, and extension discovery for tools that work on Morphir projects: the CLI, IDEs, build tools, and other Morphir tooling.
 - [Design Documents](https://finos.github.io/morphir-rust/contributors/design/README): This directory contains design documents for the Morphir daemon and extension system, covering architecture, protocols, and implementation details.
 - [Development Guide](https://finos.github.io/morphir-rust/contributors/development): This guide helps developers contribute to Morphir Rust.
 - [For Contributors](https://finos.github.io/morphir-rust/contributors/): Documentation for developers contributing to Morphir Rust.

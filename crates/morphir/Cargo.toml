@@ -32,7 +32,7 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
-morphir-design = { path = "../morphir-design" }
+morphir-devkit = { path = "../morphir-devkit" }
 morphir-daemon = { path = "../morphir-daemon" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 walkdir = "2"

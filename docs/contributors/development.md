@@ -45,7 +45,7 @@ cargo test --test acceptance
 morphir-rust/
 ├── crates/
 │   ├── morphir/              # CLI
-│   ├── morphir-design/       # Design-time tooling
+│   ├── morphir-devkit/       # Devkit: workspace, config, and extension discovery
 │   ├── morphir-common/       # Shared infrastructure
 │   ├── morphir-daemon/       # Runtime services
 │   ├── morphir-gleam-binding/ # Gleam extension
@@ -63,10 +63,14 @@ Commands are in `crates/morphir/src/commands/`:
 - `generate.rs` - Generate command
 - `gleam.rs` - Gleam subcommands
 
-### Design-Time
+### Devkit
 
-Design-time functionality in `crates/morphir-design/`:
-- `config.rs` - Configuration discovery
+Devkit functionality in `crates/morphir-devkit/`:
+- `config/` - Configuration discovery and layered loading
+  - `discovery.rs` - Locating configuration files (project, global user, system, user override)
+  - `sources.rs` - Source kinds, precedence, and the per-source report
+  - `loader.rs` - Merging sources into the effective configuration and workspace/project context
+  - `paths.rs` - Output-path resolution inside `.morphir/`
 - `extensions.rs` - Extension discovery
 
 ### Common Utilities

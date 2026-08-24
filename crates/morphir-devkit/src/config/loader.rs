@@ -198,7 +198,7 @@ fn merge_user_overrides(
 /// layers alone.
 ///
 /// ```no_run
-/// use morphir_design::{ConfigLoadOptions, discover_config, load_effective_config};
+/// use morphir_devkit::{ConfigLoadOptions, discover_config, load_effective_config};
 /// use std::path::Path;
 ///
 /// # fn main() -> anyhow::Result<()> {

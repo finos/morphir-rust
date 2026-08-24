@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use morphir_common::config::MorphirConfig;
-use morphir_design::discover_config_at;
+use morphir_devkit::discover_config_at;
 
 /// Workspace state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

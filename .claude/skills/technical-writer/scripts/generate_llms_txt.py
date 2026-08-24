@@ -21,7 +21,7 @@ from typing import NamedTuple
 class DocPage(NamedTuple):
     """Represents a documentation page."""
     title: str
-    path: Path
+    path: str  # POSIX-style relative path, for stable URL construction on any platform
     description: str
     nav_order: int
     parent: str | None
@@ -123,7 +123,7 @@ def parse_doc_file(path: Path, docs_dir: Path) -> DocPage | None:
 
     return DocPage(
         title=title,
-        path=path.relative_to(docs_dir),
+        path=path.relative_to(docs_dir).as_posix(),
         description=description,
         nav_order=nav_order,
         parent=parent,

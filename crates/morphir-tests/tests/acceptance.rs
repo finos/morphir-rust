@@ -20,6 +20,10 @@ pub struct TestWorld {
     visitor_count: usize,
     temp_dir: Option<tempfile::TempDir>,
     loaded_config: Option<MorphirConfig>,
+    base_value: Option<serde_json::Value>,
+    overlay_value: Option<serde_json::Value>,
+    merged_value: Option<serde_json::Value>,
+    env_vars: Vec<(String, String)>,
 }
 
 impl Default for TestWorld {
@@ -34,6 +38,10 @@ impl Default for TestWorld {
             visitor_count: 0,
             temp_dir: None,
             loaded_config: None,
+            base_value: None,
+            overlay_value: None,
+            merged_value: None,
+            env_vars: Vec::new(),
         }
     }
 }
@@ -98,6 +106,77 @@ async fn source_directory_should_be(w: &mut TestWorld, dir: String) {
     let config = w.loaded_config.as_ref().expect("Config not loaded");
     let actual = &config.project.as_ref().unwrap().source_directory;
     assert_eq!(actual, &dir);
+}
+
+// Configuration Merge Steps
+
+fn docstring_json(step: &cucumber::gherkin::Step) -> serde_json::Value {
+    let content = step.docstring.as_ref().expect("Docstring required");
+    serde_json::from_str(content).expect("Docstring must be valid JSON")
+}
+
+#[given(expr = "a base configuration value:")]
+async fn a_base_configuration_value(w: &mut TestWorld, step: &cucumber::gherkin::Step) {
+    w.base_value = Some(docstring_json(step));
+}
+
+#[given(expr = "an overlay configuration value:")]
+async fn an_overlay_configuration_value(w: &mut TestWorld, step: &cucumber::gherkin::Step) {
+    w.overlay_value = Some(docstring_json(step));
+}
+
+#[when(expr = "I merge the configuration values")]
+async fn i_merge_the_configuration_values(w: &mut TestWorld) {
+    let base = w.base_value.as_ref().expect("Base value required");
+    let overlay = w.overlay_value.as_ref().expect("Overlay value required");
+    w.merged_value = Some(morphir_common::config::deep_merge(base, overlay));
+}
+
+#[then(expr = "the base configuration value should be unchanged:")]
+async fn base_value_should_be_unchanged(w: &mut TestWorld, step: &cucumber::gherkin::Step) {
+    assert_eq!(w.base_value.as_ref(), Some(&docstring_json(step)));
+}
+
+#[given(expr = "the environment variable {string} is {string}")]
+async fn the_environment_variable_is(w: &mut TestWorld, name: String, value: String) {
+    w.env_vars.push((name, value));
+}
+
+#[when(expr = "I load the environment configuration")]
+async fn i_load_the_environment_configuration(w: &mut TestWorld) {
+    w.merged_value = Some(morphir_common::config::env::env_config_value(
+        "MORPHIR",
+        w.env_vars.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+    ));
+}
+
+fn merged_pointer<'a>(w: &'a TestWorld, path: &str) -> Option<&'a serde_json::Value> {
+    let pointer = format!("/{}", path.replace('.', "/"));
+    w.merged_value
+        .as_ref()
+        .expect("Merged value required")
+        .pointer(&pointer)
+}
+
+#[then(regex = r#"^the merged value at "([^"]+)" should be (.+)$"#)]
+async fn merged_value_at_should_be(w: &mut TestWorld, path: String, expected: String) {
+    let expected: serde_json::Value =
+        serde_json::from_str(&expected).expect("Expected value must be valid JSON");
+    assert_eq!(
+        merged_pointer(w, &path),
+        Some(&expected),
+        "Unexpected merged value at {path}: {:?}",
+        w.merged_value
+    );
+}
+
+#[then(expr = "the merged value should not contain {string}")]
+async fn merged_value_should_not_contain(w: &mut TestWorld, path: String) {
+    assert!(
+        merged_pointer(w, &path).is_none(),
+        "Expected no value at {path}: {:?}",
+        w.merged_value
+    );
 }
 
 // Existing Steps
@@ -666,7 +745,24 @@ async fn variable_count_should_be(_w: &mut TestWorld, _count: usize) {
     // last_result is always an Err here and there is no count to check.
 }
 
-#[tokio::main]
-async fn main() {
-    TestWorld::run("tests/features").await;
+/// Stack size for the Cucumber runner thread.
+///
+/// The runner drives every scenario from one thread, and parsing the large
+/// legacy IR fixtures recurses deeply enough to overflow the 1 MiB main-thread
+/// stack on Windows. A dedicated thread keeps the suite runnable everywhere.
+const RUNNER_STACK_SIZE: usize = 64 * 1024 * 1024;
+
+fn main() {
+    std::thread::Builder::new()
+        .stack_size(RUNNER_STACK_SIZE)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build Tokio runtime")
+                .block_on(TestWorld::run("tests/features"));
+        })
+        .expect("Failed to spawn Cucumber runner thread")
+        .join()
+        .expect("Cucumber runner thread panicked");
 }

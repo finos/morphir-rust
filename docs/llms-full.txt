@@ -4278,7 +4278,7 @@ Source: https://finos.github.io/morphir-rust/contributors/devkit-crate
 
 # Devkit Crate
 
-The `morphir-devkit` crate provides workspace, configuration, and extension discovery for tools that work on Morphir projects: the CLI, IDEs, build tools, and other Morphir tooling. It is the "design-time" counterpart of `morphir-runtime`.
+The `morphir-devkit` crate provides workspace, configuration, and extension discovery for tools that work on Morphir projects: the CLI, IDEs, build tools, and other Morphir tooling.
 
 It is distinct from `morphir-extension-sdk`, which is the SDK for *building* extensions. `morphir-devkit` is for tools that *use* a Morphir workspace.
 
@@ -4615,7 +4615,7 @@ Documentation for developers contributing to Morphir Rust.
 - [Architecture Overview](architecture) - System architecture and crate responsibilities
 - [Extension System Design](extension-system) - Extension system architecture
 - [CLI Architecture](cli-architecture) - CLI command structure and execution flow
-- [Devkit Crate](devkit-crate) - Reusable design-time tooling
+- [Devkit Crate](devkit-crate) - Workspace, configuration, and extension discovery for tools
 
 ## Development
 

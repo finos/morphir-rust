@@ -14,7 +14,7 @@ Documentation for developers contributing to Morphir Rust.
 - [Architecture Overview](architecture) - System architecture and crate responsibilities
 - [Extension System Design](extension-system) - Extension system architecture
 - [CLI Architecture](cli-architecture) - CLI command structure and execution flow
-- [Devkit Crate](devkit-crate) - Reusable design-time tooling
+- [Devkit Crate](devkit-crate) - Workspace, configuration, and extension discovery for tools
 
 ## Development
 

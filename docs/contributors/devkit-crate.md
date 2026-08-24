@@ -7,7 +7,7 @@ parent: For Contributors
 
 # Devkit Crate
 
-The `morphir-devkit` crate provides workspace, configuration, and extension discovery for tools that work on Morphir projects: the CLI, IDEs, build tools, and other Morphir tooling. It is the "design-time" counterpart of `morphir-runtime`.
+The `morphir-devkit` crate provides workspace, configuration, and extension discovery for tools that work on Morphir projects: the CLI, IDEs, build tools, and other Morphir tooling.
 
 It is distinct from `morphir-extension-sdk`, which is the SDK for *building* extensions. `morphir-devkit` is for tools that *use* a Morphir workspace.
 

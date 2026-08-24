@@ -3152,11 +3152,13 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
  "toml 1.1.0+spec-1.1.0",
  "uuid",
+ "yaml-rust",
  "zip",
 ]
 
@@ -3202,10 +3204,10 @@ name = "morphir-design"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "morphir-common",
- "serde",
  "serde_json",
- "toml 1.1.0+spec-1.1.0",
+ "tempfile",
 ]
 
 [[package]]

@@ -2,8 +2,10 @@ pub mod config;
 pub mod extensions;
 
 pub use config::{
-    ConfigContext, discover_config, discover_morphir_dir, ensure_morphir_structure,
-    load_config_context, resolve_compile_output, resolve_dist_output, resolve_generate_output,
+    ConfigContext, ConfigPlatform, discover_config, discover_config_candidates,
+    discover_global_config, discover_morphir_dir, ensure_morphir_structure,
+    global_config_candidates, load_config_context, load_config_context_with_global,
+    resolve_compile_output, resolve_dist_output, resolve_generate_output,
     resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
     resolve_test_scenario, sanitize_project_name,
 };

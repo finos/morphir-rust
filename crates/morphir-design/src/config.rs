@@ -1,5 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use morphir_common::config::load_config_value;
 use morphir_common::config::model::{MorphirConfig, ProjectSection};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// Configuration context containing loaded config and resolved paths
@@ -19,31 +21,141 @@ pub struct ConfigContext {
     pub current_project: Option<ProjectSection>,
 }
 
-/// Walk up directory tree to find morphir.toml or morphir.json
-pub fn discover_config(start_dir: &Path) -> Option<PathBuf> {
+/// Operating-system path conventions used for global user configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigPlatform {
+    /// Linux and other systems that follow the XDG Base Directory specification.
+    Xdg,
+    /// macOS application-support path conventions, with XDG override support.
+    MacOs,
+    /// Windows Known Folder path conventions.
+    Windows,
+}
+
+fn project_config_candidates(directory: &Path) -> [PathBuf; 4] {
+    [
+        directory.join("morphir.toml"),
+        directory.join("morphir.yaml"),
+        directory.join(".morphir").join("morphir.toml"),
+        directory.join(".morphir").join("morphir.yaml"),
+    ]
+}
+
+/// Return the only existing candidate, or report all conflicting candidates.
+pub fn discover_config_candidates(candidates: &[PathBuf]) -> Result<Option<PathBuf>> {
+    let found = candidates
+        .iter()
+        .filter(|candidate| candidate.is_file())
+        .fold(Vec::new(), |mut found, candidate| {
+            if !found.contains(candidate) {
+                found.push(candidate.clone());
+            }
+            found
+        });
+
+    match found.as_slice() {
+        [] => Ok(None),
+        [config] => Ok(Some(config.clone())),
+        configs => {
+            let paths = configs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("Ambiguous Morphir configuration; found: {paths}")
+        }
+    }
+}
+
+fn discover_config_in_directory(directory: &Path) -> Result<Option<PathBuf>> {
+    let modern = discover_config_candidates(&project_config_candidates(directory))?;
+    Ok(modern.or_else(|| {
+        let legacy = directory.join("morphir.json");
+        legacy.is_file().then_some(legacy)
+    }))
+}
+
+/// Walk up the directory tree to find one project or workspace configuration.
+pub fn discover_config(start_dir: &Path) -> Result<Option<PathBuf>> {
     let mut current = start_dir.to_path_buf();
 
     loop {
-        // Check for morphir.toml
-        let toml_path = current.join("morphir.toml");
-        if toml_path.exists() {
-            return Some(toml_path);
+        if let Some(config) = discover_config_in_directory(&current)? {
+            return Ok(Some(config));
         }
 
-        // Check for morphir.json
-        let json_path = current.join("morphir.json");
-        if json_path.exists() {
-            return Some(json_path);
-        }
-
-        // Move up one directory
         match current.parent() {
             Some(parent) => current = parent.to_path_buf(),
             None => break,
         }
     }
 
-    None
+    Ok(None)
+}
+
+/// Build all global user configuration candidates for resolved platform roots.
+pub fn global_config_candidates(
+    platform: ConfigPlatform,
+    home_dir: Option<&Path>,
+    platform_config_dir: Option<&Path>,
+    xdg_config_home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let valid_xdg = xdg_config_home.filter(|path| is_absolute_for(platform, path));
+    let config_dir = match platform {
+        ConfigPlatform::Xdg | ConfigPlatform::MacOs => valid_xdg.or(platform_config_dir),
+        ConfigPlatform::Windows => platform_config_dir,
+    };
+
+    config_dir
+        .into_iter()
+        .map(|root| root.join("morphir"))
+        .chain(home_dir.into_iter().map(|root| root.join(".morphir")))
+        .flat_map(|root| [root.join("morphir.toml"), root.join("morphir.yaml")])
+        .collect()
+}
+
+fn is_absolute_for(platform: ConfigPlatform, path: &Path) -> bool {
+    let value = path.to_string_lossy();
+    match platform {
+        ConfigPlatform::Xdg | ConfigPlatform::MacOs => value.starts_with('/'),
+        ConfigPlatform::Windows => {
+            value.starts_with(r"\\")
+                || (value.as_bytes().get(1) == Some(&b':')
+                    && matches!(value.as_bytes().get(2), Some(b'\\' | b'/')))
+        }
+    }
+}
+
+fn current_platform() -> ConfigPlatform {
+    #[cfg(target_os = "windows")]
+    return ConfigPlatform::Windows;
+    #[cfg(target_os = "macos")]
+    return ConfigPlatform::MacOs;
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    ConfigPlatform::Xdg
+}
+
+/// Discover the global user configuration using native platform directories.
+pub fn discover_global_config() -> Result<Option<PathBuf>> {
+    let platform = current_platform();
+    let home_dir = dirs::home_dir();
+    let platform_config_dir = match platform {
+        ConfigPlatform::Xdg => home_dir.as_ref().map(|home| home.join(".config")),
+        ConfigPlatform::MacOs | ConfigPlatform::Windows => dirs::config_dir(),
+    };
+    let xdg_config_home = match platform {
+        ConfigPlatform::Xdg | ConfigPlatform::MacOs => {
+            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+        }
+        ConfigPlatform::Windows => None,
+    };
+    let candidates = global_config_candidates(
+        platform,
+        home_dir.as_deref(),
+        platform_config_dir.as_deref(),
+        xdg_config_home.as_deref(),
+    );
+    discover_config_candidates(&candidates)
 }
 
 /// Walk up directory tree to find `.morphir/` directory
@@ -66,56 +178,44 @@ pub fn discover_morphir_dir(start_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Merge workspace and project configurations
-fn merge_configs(workspace: Option<&MorphirConfig>, project: &MorphirConfig) -> MorphirConfig {
-    let mut merged = if let Some(ws) = workspace {
-        ws.clone()
-    } else {
-        MorphirConfig::default()
-    };
-
-    // Project config overrides workspace
-    if let Some(proj) = &project.project {
-        merged.project = Some(proj.clone());
+fn deep_merge(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Object(base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(base_value) => deep_merge(base_value, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
     }
-
-    // Merge frontend config
-    if let Some(frontend) = &project.frontend {
-        merged.frontend = Some(frontend.clone());
-    }
-
-    // Merge codegen config
-    if let Some(codegen) = &project.codegen {
-        merged.codegen = Some(codegen.clone());
-    }
-
-    // Merge IR config
-    if let Some(ir) = &project.ir {
-        merged.ir = Some(ir.clone());
-    }
-
-    // Merge extensions (project extensions override workspace)
-    for (key, value) in &project.extensions {
-        merged.extensions.insert(key.clone(), value.clone());
-    }
-
-    merged
 }
 
 /// Load configuration and determine workspace/project context
 pub fn load_config_context(config_path: &Path) -> Result<ConfigContext> {
-    // Load config file
-    let config_content = std::fs::read_to_string(config_path)
-        .with_context(|| format!("Failed to read config file: {:?}", config_path))?;
+    let global_config_path = discover_global_config()?;
+    load_config_context_with_global(config_path, global_config_path.as_deref())
+}
 
-    let config: MorphirConfig = if config_path.extension().and_then(|s| s.to_str()) == Some("json")
-    {
-        serde_json::from_str(&config_content)
-            .with_context(|| format!("Failed to parse JSON config: {:?}", config_path))?
-    } else {
-        toml::from_str(&config_content)
-            .with_context(|| format!("Failed to parse TOML config: {:?}", config_path))?
+/// Load configuration with an explicitly selected global source.
+pub fn load_config_context_with_global(
+    config_path: &Path,
+    global_config_path: Option<&Path>,
+) -> Result<ConfigContext> {
+    let mut config_value = match global_config_path {
+        Some(path) => load_config_value(path)?,
+        None => Value::Object(Default::default()),
     };
+    deep_merge(&mut config_value, load_config_value(config_path)?);
+    let config: MorphirConfig = serde_json::from_value(config_value).with_context(|| {
+        format!(
+            "Failed to decode merged Morphir config: {}",
+            config_path.display()
+        )
+    })?;
 
     let config_dir = config_path
         .parent()
@@ -137,22 +237,19 @@ pub fn load_config_context(config_path: &Path) -> Result<ConfigContext> {
             if let Some(member) = default_member {
                 // Resolve member path (could be a glob pattern, for now treat as literal)
                 let member_path = ws_root.join(member);
-                let project_config_path = member_path.join("morphir.toml");
+                let project_config_path = discover_config_in_directory(&member_path)?;
 
-                if project_config_path.exists() {
-                    // Load project config
-                    let project_content = std::fs::read_to_string(&project_config_path)
-                        .with_context(|| {
-                            format!("Failed to read project config: {:?}", project_config_path)
+                if let Some(project_config_path) = project_config_path {
+                    let mut merged_value = serde_json::to_value(&config)
+                        .context("Failed to normalize workspace config")?;
+                    deep_merge(&mut merged_value, load_config_value(&project_config_path)?);
+                    let merged: MorphirConfig =
+                        serde_json::from_value(merged_value).with_context(|| {
+                            format!(
+                                "Failed to decode project config: {}",
+                                project_config_path.display()
+                            )
                         })?;
-
-                    let project_config: MorphirConfig = toml::from_str(&project_content)
-                        .with_context(|| {
-                            format!("Failed to parse project config: {:?}", project_config_path)
-                        })?;
-
-                    // Merge workspace and project configs
-                    let merged = merge_configs(Some(&config), &project_config);
 
                     (Some(member_path), merged.project.clone(), merged)
                 } else {
@@ -262,4 +359,178 @@ pub fn ensure_morphir_structure(morphir_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(morphir_dir.join("logs"))?;
     std::fs::create_dir_all(morphir_dir.join("cache"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_project_config(path: &Path) {
+        std::fs::create_dir_all(path.parent().expect("config parent")).unwrap();
+        std::fs::write(path, "project:\n  name: Acme.Project\n  version: 1.0.0\n").unwrap();
+    }
+
+    #[test]
+    fn discovers_yaml_while_walking_parent_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("src").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let expected = root.path().join("morphir.yaml");
+        write_project_config(&expected);
+
+        assert_eq!(discover_config(&nested).unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn discovers_hidden_project_config() {
+        let root = tempfile::tempdir().unwrap();
+        let expected = root.path().join(".morphir").join("morphir.yaml");
+        write_project_config(&expected);
+
+        assert_eq!(discover_config(root.path()).unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn rejects_ambiguous_project_configs() {
+        let root = tempfile::tempdir().unwrap();
+        let toml = root.path().join("morphir.toml");
+        let yaml = root.path().join("morphir.yaml");
+        std::fs::write(&toml, "[project]\nname = \"Acme.Project\"\nversion = \"1\"").unwrap();
+        write_project_config(&yaml);
+
+        let error = discover_config(root.path()).expect_err("ambiguous config");
+        let message = error.to_string();
+        assert!(message.contains(toml.to_str().unwrap()));
+        assert!(message.contains(yaml.to_str().unwrap()));
+    }
+
+    #[test]
+    fn does_not_implicitly_discover_yml() {
+        let root = tempfile::tempdir().unwrap();
+        write_project_config(&root.path().join("morphir.yml"));
+
+        assert_eq!(discover_config(root.path()).unwrap(), None);
+    }
+
+    #[test]
+    fn resolves_linux_xdg_and_home_candidates() {
+        let candidates = global_config_candidates(
+            ConfigPlatform::Xdg,
+            Some(Path::new("/home/alice")),
+            Some(Path::new("/ignored/platform")),
+            Some(Path::new("/srv/alice/config")),
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/srv/alice/config/morphir/morphir.toml"),
+                PathBuf::from("/srv/alice/config/morphir/morphir.yaml"),
+                PathBuf::from("/home/alice/.morphir/morphir.toml"),
+                PathBuf::from("/home/alice/.morphir/morphir.yaml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_relative_xdg_config_home() {
+        let candidates = global_config_candidates(
+            ConfigPlatform::Xdg,
+            Some(Path::new("/home/alice")),
+            Some(Path::new("/home/alice/.config")),
+            Some(Path::new("relative/config")),
+        );
+
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("/home/alice/.config/morphir/morphir.toml")
+        );
+    }
+
+    #[test]
+    fn uses_macos_application_support_and_home_candidates() {
+        let candidates = global_config_candidates(
+            ConfigPlatform::MacOs,
+            Some(Path::new("/Users/Alice")),
+            Some(Path::new("/Users/Alice/Library/Application Support")),
+            None,
+        );
+
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("/Users/Alice/Library/Application Support/morphir/morphir.toml")
+        );
+        assert_eq!(
+            candidates[2],
+            PathBuf::from("/Users/Alice/.morphir/morphir.toml")
+        );
+    }
+
+    #[test]
+    fn uses_windows_known_folder_candidates() {
+        let candidates = global_config_candidates(
+            ConfigPlatform::Windows,
+            Some(Path::new(r"D:\Profiles\Alice")),
+            Some(Path::new(r"D:\Profiles\Alice\Roaming")),
+            Some(Path::new(r"D:\ignored-xdg")),
+        );
+
+        assert_eq!(
+            candidates[0],
+            PathBuf::from(r"D:\Profiles\Alice\Roaming").join("morphir/morphir.toml")
+        );
+        assert_eq!(
+            candidates[2],
+            PathBuf::from(r"D:\Profiles\Alice").join(".morphir/morphir.toml")
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_global_configs() {
+        let root = tempfile::tempdir().unwrap();
+        let config_dir = root.path().join("config");
+        let home_dir = root.path().join("home");
+        let candidates = global_config_candidates(
+            ConfigPlatform::Xdg,
+            Some(&home_dir),
+            Some(&config_dir),
+            None,
+        );
+        std::fs::create_dir_all(candidates[0].parent().unwrap()).unwrap();
+        std::fs::create_dir_all(candidates[3].parent().unwrap()).unwrap();
+        std::fs::write(&candidates[0], "[morphir]\nversion = \"1\"").unwrap();
+        std::fs::write(&candidates[3], "morphir:\n  version: '1'\n").unwrap();
+
+        let error = discover_config_candidates(&candidates).expect_err("ambiguous config");
+        let message = error.to_string();
+        assert!(message.contains(candidates[0].to_str().unwrap()));
+        assert!(message.contains(candidates[3].to_str().unwrap()));
+    }
+
+    #[test]
+    fn merges_yaml_global_config_below_toml_project_config() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("global").join("morphir.yaml");
+        let project = root.path().join("project").join("morphir.toml");
+        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+        std::fs::write(
+            &global,
+            "frontend:\n  language: elm\nir:\n  strict_mode: true\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &project,
+            "[project]\nname = \"Acme.Project\"\nversion = \"1.0.0\"\n\n[ir]\nstrict_mode = false\n",
+        )
+        .unwrap();
+
+        let context = load_config_context_with_global(&project, Some(&global)).unwrap();
+
+        assert_eq!(
+            context.config.frontend.unwrap().language.as_deref(),
+            Some("elm")
+        );
+        assert!(!context.config.ir.unwrap().strict_mode);
+    }
 }

@@ -165,10 +165,11 @@ pub struct IrSection {
 
 /// IR format version used when a configuration does not set one.
 ///
-/// Version 3 is the current default. Version 4 is under active development,
-/// so a project opts into it explicitly with `ir.format_version = 4`.
+/// Version 4 is the default and where active development happens. Version 3
+/// remains supported: a project pins it with `ir.format_version = 3`, and the
+/// tests below cover that path so it does not rot while v4 moves.
 fn default_format_version() -> u32 {
-    3
+    4
 }
 
 fn default_ir_mode() -> String {
@@ -271,4 +272,61 @@ pub struct DetailedTask {
     /// Environment variables
     #[serde(default)]
     pub env: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Version 4 is the default, so a config that says nothing about the IR
+    /// gets 4. This is the pin: changing the default fails here first.
+    #[test]
+    fn ir_format_version_defaults_to_4() {
+        let ir: IrSection = serde_json::from_value(json!({})).expect("empty ir section");
+        assert_eq!(ir.format_version, 4);
+    }
+
+    /// Version 3 stays selectable while v4 is under development. A project
+    /// that pins 3 must get 3 — not the default, and not a coerced 4.
+    #[test]
+    fn ir_format_version_3_is_honoured_when_pinned() {
+        let ir: IrSection =
+            serde_json::from_value(json!({"format_version": 3})).expect("v3 ir section");
+        assert_eq!(ir.format_version, 3);
+
+        let config: MorphirConfig =
+            serde_json::from_value(json!({"ir": {"format_version": 3, "strict_mode": true}}))
+                .expect("v3 config");
+        let ir = config.ir.expect("ir section");
+        assert_eq!(ir.format_version, 3);
+        assert!(ir.strict_mode);
+        // Pinning the version must not disturb the other IR settings.
+        assert_eq!(ir.mode, default_ir_mode());
+    }
+
+    /// Every version in the supported range decodes, so v3 is not a special
+    /// case that happens to work: v1 and v2 configs remain loadable too.
+    #[test]
+    fn every_supported_ir_format_version_decodes() {
+        for version in 1..=10u32 {
+            let ir: IrSection = serde_json::from_value(json!({"format_version": version}))
+                .unwrap_or_else(|error| panic!("format_version {version}: {error}"));
+            assert_eq!(ir.format_version, version);
+        }
+    }
+
+    /// The IR section round-trips, so a pinned v3 survives being written back
+    /// out — the path `morphir config show` and workspace tooling depend on.
+    #[test]
+    fn ir_section_round_trips_through_serde() {
+        let original: IrSection =
+            serde_json::from_value(json!({"format_version": 3, "mode": "classic"}))
+                .expect("v3 ir section");
+        let reparsed: IrSection =
+            serde_json::from_value(serde_json::to_value(&original).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(reparsed.format_version, 3);
+        assert_eq!(reparsed.mode, "classic");
+    }
 }

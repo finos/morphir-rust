@@ -52,7 +52,7 @@ pub fn builtin_defaults() -> Value {
             "emit_parse_stage_fatal": false,
         },
         "ir": {
-            "format_version": 4,
+            "format_version": 3,
             "mode": "vfs",
             "strict_mode": false,
         },
@@ -556,7 +556,7 @@ mod tests {
         );
         assert_eq!(context.config.project.unwrap().name, "Acme.Project");
         // Built-in defaults are visible in the effective value.
-        assert_eq!(context.effective["ir"]["format_version"], json!(4));
+        assert_eq!(context.effective["ir"]["format_version"], json!(3));
     }
 
     #[test]

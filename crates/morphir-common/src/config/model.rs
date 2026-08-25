@@ -163,8 +163,12 @@ pub struct IrSection {
     pub strict_mode: bool,
 }
 
+/// IR format version used when a configuration does not set one.
+///
+/// Version 3 is the current default. Version 4 is under active development,
+/// so a project opts into it explicitly with `ir.format_version = 4`.
 fn default_format_version() -> u32 {
-    4
+    3
 }
 
 fn default_ir_mode() -> String {

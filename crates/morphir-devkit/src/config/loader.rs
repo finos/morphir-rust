@@ -52,7 +52,7 @@ pub fn builtin_defaults() -> Value {
             "emit_parse_stage_fatal": false,
         },
         "ir": {
-            "format_version": 3,
+            "format_version": 4,
             "mode": "vfs",
             "strict_mode": false,
         },
@@ -556,7 +556,55 @@ mod tests {
         );
         assert_eq!(context.config.project.unwrap().name, "Acme.Project");
         // Built-in defaults are visible in the effective value.
+        assert_eq!(context.effective["ir"]["format_version"], json!(4));
+    }
+
+    /// Version 4 is the default, but a project pinning version 3 must keep it
+    /// through the whole merge chain — the defaults layer below it and a global
+    /// layer that says 4 above it. This is what keeps v3 usable while v4 moves.
+    #[test]
+    fn a_project_can_pin_ir_format_version_3() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("global").join("morphir.toml");
+        let project = root.path().join("project").join("morphir.toml");
+        write_file(&global, "[ir]\nformat_version = 4\n");
+        write_file(
+            &project,
+            "[project]\nname = \"Legacy.Project\"\nversion = \"1\"\n\n[ir]\nformat_version = 3\nmode = \"classic\"\n",
+        );
+
+        let context = load_config_context_with_global(&project, Some(&global)).unwrap();
+
+        let ir = context.config.ir.expect("ir section");
+        assert_eq!(ir.format_version, 3);
+        assert_eq!(ir.mode, "classic");
         assert_eq!(context.effective["ir"]["format_version"], json!(3));
+        assert_eq!(
+            context
+                .effective
+                .get("ir")
+                .and_then(|ir| ir.get("strict_mode")),
+            Some(&json!(false)),
+            "the defaults layer still supplies the settings the project left alone"
+        );
+    }
+
+    /// The environment layer sits above every file, so it can move a project
+    /// off its pinned version — deliberately, and only when asked.
+    #[test]
+    fn the_environment_can_override_a_pinned_ir_format_version() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("morphir.toml");
+        write_file(&project, "[ir]\nformat_version = 3\n");
+
+        let options = ConfigLoadOptions {
+            env: env(&[("MORPHIR_IR__FORMAT_VERSION", "4")]),
+            ..ConfigLoadOptions::project_only()
+        };
+        let context = load_config_context_with(&project, &options).unwrap();
+
+        assert_eq!(context.config.ir.unwrap().format_version, 4);
+        assert_eq!(context.effective["ir"]["format_version"], json!(4));
     }
 
     #[test]

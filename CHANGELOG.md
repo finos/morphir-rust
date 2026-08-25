@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `ir.format_version` defaults to 3 again. The configuration model and the built-in defaults layer had drifted to 4, which silently opted every project that does not set the field into the IR format still under active development.
+- `ir.format_version` defaults to 4, and the configuration model, the built-in defaults layer, and the specification now agree on it. Version 3 remains supported and is covered by tests that pin it through the whole merge chain, so a project can stay on 3 with `ir.format_version = 3`.
 
 ### Security
 

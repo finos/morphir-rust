@@ -14,9 +14,9 @@ pub mod paths;
 pub mod sources;
 
 pub use discovery::{
-    ConfigPlatform, config_root, default_system_config_dir, discover_config, discover_config_at,
-    discover_config_candidates, discover_global_config, discover_morphir_dir,
-    discover_system_config, discover_user_override, global_config_candidates,
+    ConfigLayout, ConfigPlatform, config_layout, config_root, default_system_config_dir,
+    discover_config, discover_config_at, discover_config_candidates, discover_global_config,
+    discover_morphir_dir, discover_system_config, discover_user_override, global_config_candidates,
     system_config_candidates, user_override_candidates,
 };
 pub use loader::{

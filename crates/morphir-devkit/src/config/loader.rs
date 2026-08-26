@@ -120,13 +120,18 @@ fn env_source(effective: &mut Value, options: &ConfigLoadOptions) -> ConfigSourc
     ConfigSource::new(ConfigSourceKind::Environment, None, Vec::new(), status)
 }
 
-/// Merge the selected workspace member's configuration, returning the member root.
+struct WorkspaceMemberConfig {
+    root: PathBuf,
+    config_path: PathBuf,
+}
+
+/// Merge the selected workspace member's configuration, returning its root and primary path.
 fn merge_workspace_member(
     effective: &mut Value,
     sources: &mut Vec<ConfigSource>,
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<WorkspaceMemberConfig>> {
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
         return Ok(None);
     };
@@ -138,10 +143,14 @@ fn merge_workspace_member(
     let member_path = ws_root.join(member);
     match discover_config_at(&member_path)? {
         Some(member_config) => {
-            let source = ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config);
+            let source =
+                ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config.clone());
             merge_source(effective, &source)?;
             sources.push(source);
-            Ok(Some(member_path))
+            Ok(Some(WorkspaceMemberConfig {
+                root: member_path,
+                config_path: member_config,
+            }))
         }
         None => {
             sources.push(ConfigSource::not_found(
@@ -153,31 +162,39 @@ fn merge_workspace_member(
     }
 }
 
-/// Merge the user override(s): the project root's, then the member root's.
+/// Merge user overrides adjacent to the project primary path, then the member primary path.
 fn merge_user_overrides(
     effective: &mut Value,
     sources: &mut Vec<ConfigSource>,
     options: &ConfigLoadOptions,
-    project_root: Option<&Path>,
-    member_root: Option<&Path>,
+    project_config: Option<&Path>,
+    member_config: Option<&Path>,
 ) -> Result<()> {
     match &options.user_override {
         SourceSelection::Discover => {
-            let roots = project_root
+            let primary_paths = project_config
                 .into_iter()
-                .chain(member_root.filter(|member| Some(*member) != project_root))
+                .chain(member_config.filter(|member| Some(*member) != project_config))
                 .collect::<Vec<_>>();
-            if roots.is_empty() {
+            if primary_paths.is_empty() {
                 sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
             }
-            for root in roots {
+            let mut found_layout = false;
+            for primary_path in primary_paths {
+                let Some(candidates) = user_override_candidates(primary_path) else {
+                    continue;
+                };
+                found_layout = true;
                 let source = resolve_file_source(
                     ConfigSourceKind::UserOverride,
                     &SourceSelection::Discover,
-                    || user_override_candidates(root).to_vec(),
+                    || candidates.to_vec(),
                 )?;
                 merge_source(effective, &source)?;
                 sources.push(source);
+            }
+            if !found_layout {
+                sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
             }
         }
         selection => {
@@ -250,7 +267,7 @@ pub fn load_effective_config(
         .then(|| project_root.clone())
         .flatten();
 
-    let member_root = merge_workspace_member(
+    let member_config = merge_workspace_member(
         &mut effective,
         &mut sources,
         workspace_root.as_deref(),
@@ -261,8 +278,10 @@ pub fn load_effective_config(
         &mut effective,
         &mut sources,
         options,
-        project_root.as_deref(),
-        member_root.as_deref(),
+        project_config,
+        member_config
+            .as_ref()
+            .map(|member| member.config_path.as_path()),
     )?;
 
     sources.push(env_source(&mut effective, options));
@@ -271,7 +290,7 @@ pub fn load_effective_config(
         value: effective,
         sources,
         workspace_root,
-        member_root,
+        member_root: member_config.map(|member| member.root),
     })
 }
 
@@ -451,11 +470,7 @@ mod tests {
             .join(".morphir")
             .join("morphir.yaml");
         let project = root.path().join("project").join("morphir.yaml");
-        let user = root
-            .path()
-            .join("project")
-            .join(".morphir")
-            .join("morphir.user.toml");
+        let user = root.path().join("project").join("morphir.user.toml");
         write_file(
             &system,
             "[logging]\nlevel = \"warn\"\nformat = \"json\"\n\n[ui]\ncolor = false\n\n[cache]\nenabled = false\n",
@@ -467,7 +482,7 @@ mod tests {
         );
         write_file(
             &user,
-            "[logging]\nfile = \"debug.log\"\n\n[codegen]\ntargets = [\"typescript\"]\n",
+            "[logging]\noutput = \"debug.log\"\n\n[codegen]\ntargets = [\"typescript\"]\n",
         );
 
         let options = ConfigLoadOptions {
@@ -487,7 +502,7 @@ mod tests {
             context.effective,
             with_defaults(json!({
                 "project": {"name": "Acme.Project", "version": "1.0.0"},
-                "logging": {"level": "error", "format": "json", "file": "debug.log"},
+                "logging": {"level": "error", "format": "json", "output": "debug.log"},
                 "ui": {"color": false, "theme": "dark"},
                 "cache": {"enabled": false},
                 "codegen": {"targets": ["typescript"]},
@@ -549,7 +564,10 @@ mod tests {
         );
         let user = source(&context.sources, ConfigSourceKind::UserOverride);
         assert_eq!(user.status, ConfigSourceStatus::NotFound);
-        assert_eq!(user.candidates, user_override_candidates(root.path()));
+        assert_eq!(
+            user.candidates,
+            user_override_candidates(&project).expect("standard layout")
+        );
         assert_eq!(
             source(&context.sources, ConfigSourceKind::Environment).status,
             ConfigSourceStatus::NotFound
@@ -666,12 +684,11 @@ mod tests {
             .join("packages")
             .join("orders")
             .join("morphir.yaml");
-        let workspace_user = root.path().join(".morphir").join("morphir.user.yaml");
+        let workspace_user = root.path().join("morphir.user.yaml");
         let member_user = root
             .path()
             .join("packages")
             .join("orders")
-            .join(".morphir")
             .join("morphir.user.yaml");
         write_file(
             &workspace,
@@ -720,6 +737,83 @@ mod tests {
     }
 
     #[test]
+    fn workspace_layouts_merge_adjacent_overrides_in_precedence_order() {
+        let root = tempfile::tempdir().unwrap();
+        let layouts = [
+            (
+                "root",
+                PathBuf::from("morphir.toml"),
+                PathBuf::from("packages/orders/morphir.yaml"),
+                PathBuf::from("morphir.user.toml"),
+                PathBuf::from("packages/orders/morphir.user.yaml"),
+            ),
+            (
+                "morphir directory",
+                PathBuf::from(".morphir/morphir.toml"),
+                PathBuf::from("packages/orders/.morphir/morphir.yaml"),
+                PathBuf::from(".morphir/morphir.user.toml"),
+                PathBuf::from("packages/orders/.morphir/morphir.user.yaml"),
+            ),
+            (
+                "dot config directory",
+                PathBuf::from(".config/morphir/config.toml"),
+                PathBuf::from("packages/orders/.config/morphir/config.yaml"),
+                PathBuf::from(".config/morphir/config.user.toml"),
+                PathBuf::from("packages/orders/.config/morphir/config.user.yaml"),
+            ),
+        ];
+
+        for (name, workspace_primary, member_primary, workspace_user, member_user) in layouts {
+            let case_root = root.path().join(name.replace(' ', "-"));
+            let workspace = case_root.join(workspace_primary);
+            let member = case_root.join(member_primary);
+            let workspace_user = case_root.join(workspace_user);
+            let member_user = case_root.join(member_user);
+            write_file(
+                &workspace,
+                "[workspace]\nmembers = [\"packages/orders\"]\n\n[ir]\nmode = \"classic\"\n",
+            );
+            write_file(
+                &member,
+                "project:\n  name: acme/orders\n  version: 1.0.0\nir:\n  strict_mode: true\n",
+            );
+            write_file(&workspace_user, "[ir]\nformat_version = 3\n");
+            write_file(&member_user, "ir:\n  format_version: 4\n");
+
+            let context = load_config_context_with(
+                &workspace,
+                &ConfigLoadOptions {
+                    user_override: SourceSelection::Discover,
+                    ..ConfigLoadOptions::project_only()
+                },
+            )
+            .unwrap();
+
+            assert_eq!(
+                context
+                    .sources
+                    .iter()
+                    .filter(|source| source.status == ConfigSourceStatus::Loaded)
+                    .map(|source| source.kind)
+                    .collect::<Vec<_>>(),
+                vec![
+                    ConfigSourceKind::Defaults,
+                    ConfigSourceKind::Project,
+                    ConfigSourceKind::WorkspaceMember,
+                    ConfigSourceKind::UserOverride,
+                    ConfigSourceKind::UserOverride,
+                ],
+                "{name} layout"
+            );
+            assert_eq!(
+                context.config.ir.expect("ir section").format_version,
+                4,
+                "the member override must win for the {name} layout"
+            );
+        }
+    }
+
+    #[test]
     fn missing_workspace_member_is_reported_not_fatal() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("morphir.toml");
@@ -735,6 +829,6 @@ mod tests {
         assert!(context.project_root.is_none());
         let member = source(&context.sources, ConfigSourceKind::WorkspaceMember);
         assert_eq!(member.status, ConfigSourceStatus::NotFound);
-        assert_eq!(member.candidates.len(), 4);
+        assert_eq!(member.candidates.len(), 6);
     }
 }

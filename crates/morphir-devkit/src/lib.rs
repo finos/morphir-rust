@@ -2,9 +2,9 @@ pub mod config;
 pub mod extensions;
 
 pub use config::{
-    ConfigContext, ConfigLoadOptions, ConfigPlatform, ConfigSource, ConfigSourceKind,
+    ConfigContext, ConfigLayout, ConfigLoadOptions, ConfigPlatform, ConfigSource, ConfigSourceKind,
     ConfigSourceStatus, EffectiveConfig, EnvSelection, SourceSelection, builtin_defaults,
-    config_root, default_system_config_dir, discover_config, discover_config_at,
+    config_layout, config_root, default_system_config_dir, discover_config, discover_config_at,
     discover_config_candidates, discover_global_config, discover_morphir_dir,
     discover_system_config, discover_user_override, ensure_morphir_structure,
     global_config_candidates, load_config_context, load_config_context_with,

@@ -1,0 +1,925 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://morphir.finos.org/schemas/morphir-config-v1.json",
+  "title": "Morphir Configuration",
+  "description": "JSON Schema for the serialization-independent Morphir configuration model underlying morphir.toml and morphir.yaml.",
+  "type": "object",
+  "additionalProperties": true,
+  "definitions": {
+    "secretReference": {
+      "description": "Where to obtain a secret. Exactly one of env, file, command, or keyring.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ],
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of the environment variable that holds the secret."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to a file whose contents are the secret. Relative paths resolve against the declaring configuration file; ~ expands to the home directory."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Program and arguments executed directly without a shell."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keyring"
+          ],
+          "properties": {
+            "keyring": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "service",
+                "account"
+              ],
+              "properties": {
+                "service": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "account": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "secretValue": {
+      "description": "A credential. Either a literal string or one secret reference.",
+      "x-secret": true,
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/secretReference"
+        }
+      ]
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "taskCommon": {
+      "type": "object",
+      "additionalProperties": true,
+      "not": {
+        "description": "depends is an alternative spelling of depends_on (not both); run is the string form of a command task and is incompatible with cmd and with action (see the TOML specification's Tasks and workflows section).",
+        "anyOf": [
+          {
+            "required": [
+              "depends_on",
+              "depends"
+            ]
+          },
+          {
+            "required": [
+              "run",
+              "cmd"
+            ]
+          },
+          {
+            "required": [
+              "run",
+              "action"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "intrinsic",
+            "command"
+          ]
+        },
+        "action": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pre": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "post": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "env": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "mounts": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "description": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string",
+          "description": "Shell command to run (alternative to cmd)."
+        },
+        "depends": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        }
+      }
+    },
+    "intrinsicTask": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/taskCommon"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "not": {
+            "required": [
+              "cmd"
+            ]
+          },
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "intrinsic"
+              ]
+            },
+            "action": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "commandTask": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/taskCommon"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "kind"
+          ],
+          "not": {
+            "required": [
+              "action"
+            ]
+          },
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "command"
+              ]
+            },
+            "cmd": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "task": {
+      "description": "Project task definition. A string is shorthand for a command task run through the shell; with kind omitted, a table that sets run is a command task, and any other table is intrinsic.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/commandTask"
+        },
+        {
+          "$ref": "#/definitions/intrinsicTask"
+        }
+      ]
+    },
+    "workflowStage": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "parallel": {
+          "type": "boolean"
+        },
+        "condition": {
+          "type": "string"
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "extends": {
+          "type": "string"
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/workflowStage"
+          }
+        }
+      }
+    },
+    "typeMappingPrimitive": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "external": {
+          "type": "string"
+        },
+        "morphir": {
+          "type": "string"
+        },
+        "bidirectional": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "integer"
+        }
+      }
+    },
+    "typeMappingContainer": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "external_pattern": {
+          "type": "string"
+        },
+        "morphir_pattern": {
+          "type": "string"
+        },
+        "type_params": {
+          "type": "integer"
+        },
+        "bidirectional": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "integer"
+        }
+      }
+    },
+    "typeMappingConfig": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "primitives": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/typeMappingPrimitive"
+          }
+        },
+        "containers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/typeMappingContainer"
+          }
+        }
+      }
+    },
+    "toolchainAcquire": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "executable": {
+          "type": "string"
+        }
+      }
+    },
+    "toolchainInputs": {
+      "description": "Inputs may be an array (files) or an object with files/artifacts.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "artifacts": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "toolchainOutput": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "toolchainTask": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "exec": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputs": {
+          "$ref": "#/definitions/toolchainInputs"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/toolchainOutput"
+          }
+        },
+        "fulfills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "$ref": "#/definitions/stringMap"
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        },
+        "working_dir": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "acquire": {
+          "$ref": "#/definitions/toolchainAcquire"
+        },
+        "tasks": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/toolchainTask"
+          }
+        }
+      }
+    },
+    "decoration": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "ir": {
+          "type": "string"
+        },
+        "entry_point": {
+          "type": "string"
+        },
+        "storage_location": {
+          "type": "string"
+        }
+      }
+    },
+    "dependency": {
+      "description": "A dependency: a version string, or a detailed table.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "version": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "git": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "rev": {
+              "type": "string"
+            },
+            "workspace": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "extension": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "sourcesCache": {
+      "description": "morphir_common::remote::config::CacheConfig. Fields serialize in camelCase.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "maxSizeMb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ttlSecs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "sourcesNetwork": {
+      "description": "morphir_common::remote::config::NetworkConfig. Fields serialize in camelCase.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "timeoutSecs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "httpProxy": {
+          "type": "string"
+        },
+        "httpsProxy": {
+          "type": "string"
+        },
+        "maxRedirects": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "userAgent": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "properties": {
+    "morphir": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "min_cli_version": {
+          "type": "string"
+        },
+        "dev_mode": {
+          "type": "boolean"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "output_dir": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_member": {
+          "type": "string"
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "source_directory": {
+          "type": "string"
+        },
+        "exposed_modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "module_prefix": {
+          "type": "string"
+        },
+        "decorations": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/decoration"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "license": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "output_directory": {
+          "type": "string"
+        }
+      }
+    },
+    "ir": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "format_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "strict_mode": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "classic",
+            "vfs"
+          ]
+        }
+      }
+    },
+    "codegen": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "template_dir": {
+          "type": "string"
+        },
+        "output_format": {
+          "type": "string",
+          "enum": [
+            "pretty",
+            "compact",
+            "minified"
+          ]
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "dir": {
+          "type": "string"
+        },
+        "max_size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "text",
+            "json"
+          ]
+        },
+        "file": {
+          "type": "string"
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "color": {
+          "type": "boolean"
+        },
+        "interactive": {
+          "type": "boolean"
+        },
+        "theme": {
+          "type": "string",
+          "enum": [
+            "default",
+            "light",
+            "dark"
+          ]
+        }
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/task"
+      }
+    },
+    "workflows": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/workflow"
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "wit": {
+          "$ref": "#/definitions/typeMappingConfig"
+        },
+        "protobuf": {
+          "$ref": "#/definitions/typeMappingConfig"
+        },
+        "json": {
+          "$ref": "#/definitions/typeMappingConfig"
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/toolchain"
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "emit_parse_stage": {
+          "type": "boolean"
+        },
+        "emit_parse_stage_fatal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sources": {
+      "description": "Remote source settings (morphir_common::remote::config::RemoteSourceConfig). Fields serialize in camelCase.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trustedGithubOrgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cache": {
+          "$ref": "#/definitions/sourcesCache"
+        },
+        "network": {
+          "$ref": "#/definitions/sourcesNetwork"
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/dependency"
+      }
+    },
+    "dev-dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/dependency"
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/extension"
+      }
+    }
+  }
+}

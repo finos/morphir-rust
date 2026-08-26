@@ -10,9 +10,19 @@
 //! 3. **Arrays replace**: an overlay array replaces the base array entirely.
 //! 4. **Null overlay is ignored**: a `null` overlay value never overrides the
 //!    base value.
-//! 5. **No mutation**: inputs are left untouched and a new value is returned.
+//! 5. **Secret references replace atomically**: exact secret-reference objects
+//!    never merge with another object.
+//! 6. **No mutation**: inputs are left untouched and a new value is returned.
 
+use super::is_secret_reference;
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+
+/// A path to a value within a configuration tree.
+pub type ValuePath = Vec<String>;
+
+/// Maps configuration leaves to their source values.
+pub type ProvenanceMap<T> = BTreeMap<ValuePath, T>;
 
 /// Deep-merge `overlay` onto `base`, returning a new value.
 ///
@@ -29,27 +39,33 @@ use serde_json::{Map, Value};
 /// );
 /// ```
 pub fn deep_merge(base: &Value, overlay: &Value) -> Value {
-    match (base, overlay) {
-        // Rule 4: a null overlay never overrides the base value.
-        (base, Value::Null) => base.clone(),
-        // Rule 2: objects merge key by key.
-        (Value::Object(base), Value::Object(overlay)) => {
-            let merged = overlay.iter().filter(|(_, value)| !value.is_null()).fold(
-                base.clone(),
-                |mut merged, (key, overlay_value)| {
-                    let value = match merged.get(key) {
-                        Some(base_value) => deep_merge(base_value, overlay_value),
-                        None => overlay_value.clone(),
-                    };
-                    merged.insert(key.clone(), value);
-                    merged
-                },
-            );
-            Value::Object(merged)
-        }
-        // Rules 1 and 3: scalars and arrays in the overlay replace the base.
-        (_, overlay) => overlay.clone(),
-    }
+    merge_at_path(
+        base,
+        overlay,
+        &mut Vec::new(),
+        None::<&mut Provenance<'_, ()>>,
+    )
+}
+
+/// Deep-merge configuration values while tracking the source of each winning leaf.
+pub fn deep_merge_with_provenance<T: Clone>(
+    base: &Value,
+    base_origins: &ProvenanceMap<T>,
+    overlay: &Value,
+    overlay_origin: &T,
+) -> (Value, ProvenanceMap<T>) {
+    let mut origins = base_origins.clone();
+    let value = merge_at_path(
+        base,
+        overlay,
+        &mut Vec::new(),
+        Some(&mut Provenance {
+            origins: &mut origins,
+            overlay_origin,
+        }),
+    );
+
+    (value, origins)
 }
 
 /// Merge configuration values in order; later values take precedence.
@@ -63,10 +79,90 @@ pub fn merge_all<'a>(values: impl IntoIterator<Item = &'a Value>) -> Value {
         })
 }
 
+struct Provenance<'a, T> {
+    origins: &'a mut ProvenanceMap<T>,
+    overlay_origin: &'a T,
+}
+
+fn merge_at_path<T: Clone>(
+    base: &Value,
+    overlay: &Value,
+    path: &mut ValuePath,
+    mut provenance: Option<&mut Provenance<'_, T>>,
+) -> Value {
+    if overlay.is_null() {
+        return base.clone();
+    }
+
+    if !is_secret_reference(base)
+        && !is_secret_reference(overlay)
+        && let (Value::Object(base), Value::Object(overlay)) = (base, overlay)
+    {
+        let mut merged = base.clone();
+        for (key, overlay_value) in overlay {
+            if overlay_value.is_null() {
+                continue;
+            }
+
+            path.push(key.clone());
+            let value = match merged.get(key) {
+                Some(base_value) => {
+                    merge_at_path(base_value, overlay_value, path, provenance.as_deref_mut())
+                }
+                None => overlay_value.clone(),
+            };
+            if let Some(provenance) = provenance.as_deref_mut()
+                && !merged.contains_key(key)
+            {
+                replace_provenance(
+                    provenance.origins,
+                    overlay_value,
+                    path,
+                    provenance.overlay_origin,
+                );
+            }
+            merged.insert(key.clone(), value);
+            path.pop();
+        }
+        return Value::Object(merged);
+    }
+
+    if let Some(provenance) = provenance {
+        replace_provenance(provenance.origins, overlay, path, provenance.overlay_origin);
+    }
+    overlay.clone()
+}
+
+fn replace_provenance<T: Clone>(
+    origins: &mut ProvenanceMap<T>,
+    overlay: &Value,
+    path: &ValuePath,
+    overlay_origin: &T,
+) {
+    origins.retain(|existing_path, _| !existing_path.starts_with(path));
+
+    let mut pending = vec![(path.clone(), overlay)];
+    while let Some((path, value)) = pending.pop() {
+        if is_secret_reference(value) || !value.is_object() {
+            origins.insert(path, overlay_origin.clone());
+            continue;
+        }
+
+        if let Some(object) = value.as_object() {
+            for (key, child) in object {
+                let mut child_path = path.clone();
+                child_path.push(key.clone());
+                pending.push((child_path, child));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn overlay_scalar_wins() {
@@ -143,5 +239,64 @@ mod tests {
             json!({"logging": {"level": "warn", "format": "json"}})
         );
         assert_eq!(merge_all([]), json!({}));
+    }
+
+    #[test]
+    fn secret_references_are_indivisible_merge_leaves() {
+        assert_eq!(
+            deep_merge(
+                &json!({"token": {"keyring": {"service": "github.com", "account": "alice"}}}),
+                &json!({"token": {"env": "GITHUB_TOKEN"}}),
+            ),
+            json!({"token": {"env": "GITHUB_TOKEN"}}),
+        );
+        assert_eq!(
+            deep_merge(
+                &json!({"token": {"env": "OLD"}}),
+                &json!({"token": {"description": "ordinary"}}),
+            ),
+            json!({"token": {"description": "ordinary"}}),
+        );
+    }
+
+    #[test]
+    fn provenance_follows_winning_leaves_and_preserves_untouched_children() {
+        let base = json!({"registry": {"endpoint": "https://old", "token": {"env": "OLD"}}});
+        let base_origins = BTreeMap::from([
+            (vec!["registry".into(), "endpoint".into()], "base"),
+            (vec!["registry".into(), "token".into()], "base"),
+        ]);
+        let overlay = json!({"registry": {"token": {"command": ["gh", "auth", "token"]}}});
+        let (value, origins) = deep_merge_with_provenance(&base, &base_origins, &overlay, &"user");
+        assert_eq!(value["registry"]["endpoint"], "https://old");
+        assert_eq!(origins[&vec!["registry".into(), "endpoint".into()]], "base");
+        assert_eq!(origins[&vec!["registry".into(), "token".into()]], "user");
+    }
+
+    #[test]
+    fn arrays_are_leaves_with_overlay_provenance() {
+        let base = json!({"registries": ["https://old"]});
+        let base_origins = BTreeMap::from([(vec!["registries".into()], "base")]);
+        let overlay = json!({"registries": ["https://new"]});
+
+        let (value, origins) = deep_merge_with_provenance(&base, &base_origins, &overlay, &"user");
+
+        assert_eq!(value, json!({"registries": ["https://new"]}));
+        assert_eq!(
+            origins,
+            BTreeMap::from([(vec!["registries".into()], "user")])
+        );
+    }
+
+    #[test]
+    fn replacing_an_object_removes_stale_descendant_origins() {
+        let base = json!({"token": {"env": "OLD"}});
+        let base_origins = BTreeMap::from([(vec!["token".into(), "env".into()], "base")]);
+        let overlay = json!({"token": "literal"});
+
+        let (value, origins) = deep_merge_with_provenance(&base, &base_origins, &overlay, &"user");
+
+        assert_eq!(value, json!({"token": "literal"}));
+        assert_eq!(origins, BTreeMap::from([(vec!["token".into()], "user")]));
     }
 }

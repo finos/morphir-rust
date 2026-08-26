@@ -6,15 +6,33 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeyringReadFailure;
+
+trait KeyringReader: Send + Sync {
+    fn read(&self, service: &str, account: &str) -> Result<String, KeyringReadFailure>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct NativeKeyringReader;
+
+impl KeyringReader for NativeKeyringReader {
+    fn read(&self, service: &str, account: &str) -> Result<String, KeyringReadFailure> {
+        let entry = keyring::Entry::new(service, account).map_err(|_| KeyringReadFailure)?;
+        entry.get_password().map_err(|_| KeyringReadFailure)
+    }
+}
+
 /// Resolver for secret sources provided by the local operating system.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemSecretResolver;
 
-impl SecretResolver for SystemSecretResolver {
-    fn resolve(
+impl SystemSecretResolver {
+    fn resolve_with_keyring_reader(
         &self,
         reference: &SecretReference,
         context: SecretResolutionContext<'_>,
+        keyring_reader: &dyn KeyringReader,
     ) -> Result<SecretString, SecretResolutionError> {
         match reference {
             SecretReference::Environment { variable } => {
@@ -29,11 +47,26 @@ impl SecretResolver for SystemSecretResolver {
             SecretReference::Command { program, args } => {
                 run_secret_command(program, args, context)
             }
-            SecretReference::Keyring { .. } => Err(SecretResolutionError::UnsupportedReference {
-                config_key: context.config_key.to_owned(),
-                reference_kind: "keyring",
-            }),
+            SecretReference::Keyring { service, account } => keyring_reader
+                .read(service, account)
+                .map_err(|_| SecretResolutionError::KeyringLookupFailed {
+                    config_key: context.config_key.to_owned(),
+                    service: service.to_owned(),
+                    account: account.to_owned(),
+                })
+                .and_then(|value| require_non_empty(value, "keyring"))
+                .map(SecretString::from),
         }
+    }
+}
+
+impl SecretResolver for SystemSecretResolver {
+    fn resolve(
+        &self,
+        reference: &SecretReference,
+        context: SecretResolutionContext<'_>,
+    ) -> Result<SecretString, SecretResolutionError> {
+        self.resolve_with_keyring_reader(reference, context, &NativeKeyringReader)
     }
 }
 
@@ -205,6 +238,46 @@ mod tests {
     use crate::config::secret::ExposeSecret;
     use std::io::{Read, Write};
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    struct ReturningKeyringReader {
+        password: &'static str,
+        calls: Mutex<Vec<(String, String)>>,
+    }
+
+    impl ReturningKeyringReader {
+        fn new(password: &'static str) -> Self {
+            Self {
+                password,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, String)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl KeyringReader for ReturningKeyringReader {
+        fn read(&self, service: &str, account: &str) -> Result<String, KeyringReadFailure> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((service.to_owned(), account.to_owned()));
+            Ok(self.password.to_owned())
+        }
+    }
+
+    struct FailingKeyringReader {
+        private_diagnostic: &'static str,
+    }
+
+    impl KeyringReader for FailingKeyringReader {
+        fn read(&self, _service: &str, _account: &str) -> Result<String, KeyringReadFailure> {
+            let _ = self.private_diagnostic;
+            Err(KeyringReadFailure)
+        }
+    }
 
     fn write_file(path: &Path, value: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -393,6 +466,68 @@ mod tests {
             config_key: "registry.token",
             declaring_file,
         }
+    }
+
+    fn a_keyring_reference() -> SecretReference {
+        SecretReference::Keyring {
+            service: "morphir.registry".to_owned(),
+            account: "build-user".to_owned(),
+        }
+    }
+
+    #[test]
+    fn keyring_dispatch_passes_identifiers_and_protects_the_password() {
+        let reader = ReturningKeyringReader::new("native-keyring-password");
+
+        let secret = SystemSecretResolver
+            .resolve_with_keyring_reader(&a_keyring_reference(), context(None), &reader)
+            .unwrap();
+
+        assert_eq!(
+            reader.calls(),
+            vec![("morphir.registry".to_owned(), "build-user".to_owned())]
+        );
+        assert_eq!(secret.expose_secret(), "native-keyring-password");
+        assert!(!format!("{secret:?}").contains("native-keyring-password"));
+    }
+
+    #[test]
+    fn keyring_dispatch_rejects_an_empty_password() {
+        let reader = ReturningKeyringReader::new("");
+
+        let error = SystemSecretResolver
+            .resolve_with_keyring_reader(&a_keyring_reference(), context(None), &reader)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SecretResolutionError::EmptySecret { backend: "keyring" }
+        ));
+    }
+
+    #[test]
+    fn keyring_dispatch_maps_failures_without_private_diagnostics() {
+        let private_sentinel = "private-keyring-error-sentinel";
+        let reader = FailingKeyringReader {
+            private_diagnostic: private_sentinel,
+        };
+
+        let error = SystemSecretResolver
+            .resolve_with_keyring_reader(&a_keyring_reference(), context(None), &reader)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SecretResolutionError::KeyringLookupFailed {
+                ref config_key,
+                ref service,
+                ref account,
+            } if config_key == "registry.token"
+                && service == "morphir.registry"
+                && account == "build-user"
+        ));
+        assert!(!format!("{error}").contains(private_sentinel));
+        assert!(!format!("{error:?}").contains(private_sentinel));
     }
 
     #[test]

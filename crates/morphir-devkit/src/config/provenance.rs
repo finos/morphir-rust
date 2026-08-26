@@ -34,7 +34,8 @@ impl ProvenanceState {
         self.provenance.origins = origins;
     }
 
-    pub(crate) fn origin(&self, path: &[String]) -> Option<&ConfigOrigin> {
+    #[cfg(test)]
+    fn origin(&self, path: &[String]) -> Option<&ConfigOrigin> {
         self.provenance.origin(path)
     }
 

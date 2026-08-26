@@ -12,6 +12,7 @@ use super::sources::{
     EnvSelection, SourceSelection,
 };
 use anyhow::{Context, Result};
+#[cfg(test)]
 use morphir_common::config::deep_merge;
 use morphir_common::config::env::{env_config_value, process_env_config_value};
 use morphir_common::config::load_config_value;

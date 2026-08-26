@@ -150,6 +150,18 @@ pub enum SecretResolutionError {
         /// Executable named by the reference.
         program: String,
     },
+    /// The selected native credential could not be read.
+    #[error(
+        "native keyring credential for service `{service}` and account `{account}` could not be read for `{config_key}`"
+    )]
+    KeyringLookupFailed {
+        /// Dotted configuration key being resolved.
+        config_key: String,
+        /// Keyring service named by the reference.
+        service: String,
+        /// Keyring account named by the reference.
+        account: String,
+    },
 }
 
 impl EffectiveConfig {

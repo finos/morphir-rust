@@ -18,7 +18,10 @@ impl SecretResolver for SystemSecretResolver {
     ) -> Result<SecretString, SecretResolutionError> {
         match reference {
             SecretReference::Environment { variable } => {
-                read_environment_value(variable, std::env::var_os(variable)).map(SecretString::from)
+                read_process_environment_value(variable, context.config_key, |name| {
+                    std::env::var_os(name)
+                })
+                .map(SecretString::from)
             }
             SecretReference::File { path } => {
                 read_secret_file(path, context.declaring_file).map(SecretString::from)
@@ -32,6 +35,20 @@ impl SecretResolver for SystemSecretResolver {
             }),
         }
     }
+}
+
+fn read_process_environment_value(
+    variable: &str,
+    config_key: &str,
+    lookup: impl FnOnce(&str) -> Option<OsString>,
+) -> Result<String, SecretResolutionError> {
+    if variable.contains(['=', '\0']) {
+        return Err(SecretResolutionError::InvalidEnvironmentName {
+            config_key: config_key.to_owned(),
+        });
+    }
+
+    read_environment_value(variable, lookup(variable))
 }
 
 fn read_environment_value(

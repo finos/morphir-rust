@@ -73,6 +73,12 @@ pub enum SecretResolutionError {
         /// Environment variable named by the reference.
         variable: String,
     },
+    /// The referenced environment name cannot be passed to the operating system.
+    #[error("environment variable name for `{config_key}` is invalid")]
+    InvalidEnvironmentName {
+        /// Dotted configuration key being resolved.
+        config_key: String,
+    },
     /// A backend returned no secret text.
     #[error("{backend} secret source returned empty text")]
     EmptySecret {
@@ -443,5 +449,39 @@ mod tests {
                 Err(SecretResolutionError::InvalidConfigKey { .. })
             ));
         }
+    }
+
+    #[test]
+    fn environment_reference_with_equals_returns_a_redacted_error() {
+        let invalid_name = "INVALID=must-not-appear";
+        let effective = an_effective_config(
+            json!({"registry": {"token": {"env": invalid_name}}}),
+            "/work/morphir.user.toml",
+        );
+
+        let error = effective.resolve_secret("registry.token").unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "environment variable name for `registry.token` is invalid"
+        );
+        assert!(!format!("{error:?}").contains(invalid_name));
+    }
+
+    #[test]
+    fn environment_reference_with_nul_returns_a_redacted_error() {
+        let invalid_name = "INVALID\0must-not-appear";
+        let effective = an_effective_config(
+            json!({"registry": {"token": {"env": invalid_name}}}),
+            "/work/morphir.user.toml",
+        );
+
+        let error = effective.resolve_secret("registry.token").unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "environment variable name for `registry.token` is invalid"
+        );
+        assert!(!format!("{error:?}").contains(invalid_name));
     }
 }

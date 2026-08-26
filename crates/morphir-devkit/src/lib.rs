@@ -3,10 +3,11 @@ pub mod extensions;
 
 pub use config::{
     ConfigContext, ConfigLayout, ConfigLoadOptions, ConfigPlatform, ConfigSource, ConfigSourceKind,
-    ConfigSourceStatus, EffectiveConfig, EnvSelection, SourceSelection, builtin_defaults,
-    config_layout, config_root, default_system_config_dir, discover_config, discover_config_at,
-    discover_config_candidates, discover_global_config, discover_morphir_dir,
-    discover_system_config, discover_user_override, ensure_morphir_structure,
+    ConfigSourceStatus, EffectiveConfig, EnvSelection, ExposeSecret, SecretReference,
+    SecretResolutionContext, SecretResolutionError, SecretResolver, SecretString, SourceSelection,
+    SystemSecretResolver, builtin_defaults, config_layout, config_root, default_system_config_dir,
+    discover_config, discover_config_at, discover_config_candidates, discover_global_config,
+    discover_morphir_dir, discover_system_config, discover_user_override, ensure_morphir_structure,
     global_config_candidates, load_config_context, load_config_context_with,
     load_config_context_with_global, load_effective_config, resolve_compile_output,
     resolve_dist_output, resolve_generate_output, resolve_path_relative_to_config,

@@ -12,6 +12,7 @@ pub mod discovery;
 pub mod loader;
 pub mod paths;
 mod provenance;
+pub mod secret;
 pub mod sources;
 
 pub use discovery::{
@@ -28,6 +29,10 @@ pub use paths::{
     ensure_morphir_structure, resolve_compile_output, resolve_dist_output, resolve_generate_output,
     resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
     resolve_test_scenario, sanitize_project_name,
+};
+pub use secret::{
+    ExposeSecret, SecretReference, SecretResolutionContext, SecretResolutionError, SecretResolver,
+    SecretString, SystemSecretResolver,
 };
 pub use sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,

@@ -21,7 +21,7 @@ pub enum ConfigSourceKind {
     Project,
     /// Configuration of the selected workspace member.
     WorkspaceMember,
-    /// Personal override stored in a project's `.morphir` directory.
+    /// Personal override adjacent to a selected standard primary configuration.
     UserOverride,
     /// `MORPHIR_*` environment variables.
     Environment,
@@ -173,8 +173,8 @@ pub struct ConfigLoadOptions {
     pub system: SourceSelection,
     /// Global user configuration selection.
     pub global: SourceSelection,
-    /// User override selection. `Discover` looks in the project root and, when
-    /// a workspace member is selected, in the member root as well.
+    /// User override selection. `Discover` looks beside the selected project
+    /// primary and, when selected, beside the workspace-member primary.
     pub user_override: SourceSelection,
     /// Environment variable selection.
     pub env: EnvSelection,

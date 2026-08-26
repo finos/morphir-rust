@@ -11,6 +11,7 @@
 pub mod discovery;
 pub mod loader;
 pub mod paths;
+mod provenance;
 pub mod sources;
 
 pub use discovery::{

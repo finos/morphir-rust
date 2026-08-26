@@ -1,6 +1,7 @@
 //! Configuration sources: the layers that make up the effective configuration,
 //! how callers select them, and what the loader reports about each one.
 
+use super::provenance::{ConfigOrigin, ConfigProvenance};
 use morphir_common::config::env::DEFAULT_ENV_PREFIX;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -217,6 +218,18 @@ pub struct EffectiveConfig {
     pub workspace_root: Option<PathBuf>,
     /// Root of the selected workspace member, when one was found.
     pub member_root: Option<PathBuf>,
+    /// Origins of the winning configuration values.
+    pub(crate) provenance: ConfigProvenance,
+}
+
+impl EffectiveConfig {
+    pub(crate) fn origin_for_key(&self, key: &str) -> Option<&ConfigOrigin> {
+        self.provenance.origin(&key_path(key))
+    }
+}
+
+pub(crate) fn key_path(key: &str) -> Vec<String> {
+    key.split('.').map(str::to_owned).collect()
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use super::discovery::{
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
     user_override_candidates,
 };
+use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
     EnvSelection, SourceSelection,
@@ -83,7 +84,7 @@ fn resolve_file_source(
     }
 }
 
-fn merge_source(effective: &mut Value, source: &ConfigSource) -> Result<()> {
+fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
         let layer = load_config_value(path).with_context(|| {
             format!(
@@ -92,7 +93,13 @@ fn merge_source(effective: &mut Value, source: &ConfigSource) -> Result<()> {
                 path.display()
             )
         })?;
-        *effective = deep_merge(effective, &layer);
+        state.merge(
+            &layer,
+            ConfigOrigin {
+                kind: source.kind,
+                path: source.path.clone(),
+            },
+        );
     }
     Ok(())
 }
@@ -102,7 +109,7 @@ fn decode_config(value: &Value, what: &str) -> Result<MorphirConfig> {
         .with_context(|| format!("Failed to decode {what} Morphir config"))
 }
 
-fn env_source(effective: &mut Value, options: &ConfigLoadOptions) -> ConfigSource {
+fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> ConfigSource {
     let layer = match &options.env {
         EnvSelection::Skip => return ConfigSource::skipped(ConfigSourceKind::Environment),
         EnvSelection::Process => process_env_config_value(&options.env_prefix),
@@ -116,7 +123,13 @@ fn env_source(effective: &mut Value, options: &ConfigLoadOptions) -> ConfigSourc
         Some(map) if !map.is_empty() => ConfigSourceStatus::Loaded,
         _ => ConfigSourceStatus::NotFound,
     };
-    *effective = deep_merge(effective, &layer);
+    state.merge(
+        &layer,
+        ConfigOrigin {
+            kind: ConfigSourceKind::Environment,
+            path: None,
+        },
+    );
     ConfigSource::new(ConfigSourceKind::Environment, None, Vec::new(), status)
 }
 
@@ -127,7 +140,7 @@ struct WorkspaceMemberConfig {
 
 /// Merge the selected workspace member's configuration, returning its root and primary path.
 fn merge_workspace_member(
-    effective: &mut Value,
+    state: &mut ProvenanceState,
     sources: &mut Vec<ConfigSource>,
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
@@ -145,7 +158,7 @@ fn merge_workspace_member(
         Some(member_config) => {
             let source =
                 ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config.clone());
-            merge_source(effective, &source)?;
+            merge_source(state, &source)?;
             sources.push(source);
             Ok(Some(WorkspaceMemberConfig {
                 root: member_path,
@@ -164,7 +177,7 @@ fn merge_workspace_member(
 
 /// Merge user overrides adjacent to the project primary path, then the member primary path.
 fn merge_user_overrides(
-    effective: &mut Value,
+    state: &mut ProvenanceState,
     sources: &mut Vec<ConfigSource>,
     options: &ConfigLoadOptions,
     project_config: Option<&Path>,
@@ -190,7 +203,7 @@ fn merge_user_overrides(
                     &SourceSelection::Discover,
                     || candidates.to_vec(),
                 )?;
-                merge_source(effective, &source)?;
+                merge_source(state, &source)?;
                 sources.push(source);
             }
             if !found_layout {
@@ -199,7 +212,7 @@ fn merge_user_overrides(
         }
         selection => {
             let source = resolve_file_source(ConfigSourceKind::UserOverride, selection, Vec::new)?;
-            merge_source(effective, &source)?;
+            merge_source(state, &source)?;
             sources.push(source);
         }
     }
@@ -231,7 +244,14 @@ pub fn load_effective_config(
     project_config: Option<&Path>,
     options: &ConfigLoadOptions,
 ) -> Result<EffectiveConfig> {
-    let mut effective = builtin_defaults();
+    let mut state = ProvenanceState::default();
+    state.merge(
+        &builtin_defaults(),
+        ConfigOrigin {
+            kind: ConfigSourceKind::Defaults,
+            path: None,
+        },
+    );
     let mut sources = vec![ConfigSource::new(
         ConfigSourceKind::Defaults,
         None,
@@ -242,7 +262,7 @@ pub fn load_effective_config(
     let system = resolve_file_source(ConfigSourceKind::System, &options.system, || {
         native_system_config_candidates().to_vec()
     })?;
-    merge_source(&mut effective, &system)?;
+    merge_source(&mut state, &system)?;
     sources.push(system);
 
     let global = resolve_file_source(
@@ -250,32 +270,32 @@ pub fn load_effective_config(
         &options.global,
         native_global_config_candidates,
     )?;
-    merge_source(&mut effective, &global)?;
+    merge_source(&mut state, &global)?;
     sources.push(global);
 
     let project = match project_config {
         Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.to_path_buf()),
         None => ConfigSource::not_found(ConfigSourceKind::Project, Vec::new()),
     };
-    merge_source(&mut effective, &project)?;
+    merge_source(&mut state, &project)?;
     sources.push(project);
 
     let project_root = project_config.and_then(config_root).map(Path::to_path_buf);
-    let root_config = decode_config(&effective, "project")?;
+    let root_config = decode_config(state.value(), "project")?;
     let workspace_root = root_config
         .is_workspace()
         .then(|| project_root.clone())
         .flatten();
 
     let member_config = merge_workspace_member(
-        &mut effective,
+        &mut state,
         &mut sources,
         workspace_root.as_deref(),
         &root_config,
     )?;
 
     merge_user_overrides(
-        &mut effective,
+        &mut state,
         &mut sources,
         options,
         project_config,
@@ -284,13 +304,16 @@ pub fn load_effective_config(
             .map(|member| member.config_path.as_path()),
     )?;
 
-    sources.push(env_source(&mut effective, options));
+    sources.push(env_source(&mut state, options));
+
+    let (value, provenance) = state.into_parts();
 
     Ok(EffectiveConfig {
-        value: effective,
+        value,
         sources,
         workspace_root,
         member_root: member_config.map(|member| member.root),
+        provenance,
     })
 }
 
@@ -326,6 +349,7 @@ pub fn load_config_context_with(
         sources,
         workspace_root,
         member_root,
+        ..
     } = load_effective_config(Some(config_path), options)?;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
@@ -733,6 +757,57 @@ mod tests {
                 ConfigSourceKind::UserOverride,
                 ConfigSourceKind::UserOverride,
             ]
+        );
+    }
+
+    #[test]
+    fn tracks_origins_through_workspace_user_and_environment_layers() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.yaml");
+        let user_path = root.path().join("morphir.user.toml");
+        write_file(
+            &workspace,
+            "[workspace]\nmembers = [\"packages/orders\"]\n\n[registry]\nendpoint = \"https://project\"\n",
+        );
+        write_file(
+            &member,
+            "project:\n  name: acme/orders\n  version: 1.0.0\nregistry:\n  member_only: true\n",
+        );
+        write_file(
+            &user_path,
+            "[registry]\ntoken = { env = \"REGISTRY_TOKEN\" }\n",
+        );
+
+        let effective = load_effective_config(
+            Some(&workspace),
+            &ConfigLoadOptions {
+                user_override: SourceSelection::Explicit(user_path.clone()),
+                env: env(&[("MORPHIR_REGISTRY__TIMEOUT", "30")]),
+                ..ConfigLoadOptions::project_only()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            effective
+                .origin_for_key("registry.token")
+                .unwrap()
+                .path
+                .as_deref(),
+            Some(user_path.as_path())
+        );
+        assert_eq!(
+            effective.origin_for_key("registry.endpoint").unwrap().kind,
+            ConfigSourceKind::Project
+        );
+        assert_eq!(
+            effective.origin_for_key("registry.timeout").unwrap().kind,
+            ConfigSourceKind::Environment
         );
     }
 

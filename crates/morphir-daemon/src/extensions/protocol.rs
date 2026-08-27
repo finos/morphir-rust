@@ -2,6 +2,9 @@
 
 pub use morphir_extension_sdk::protocol::*;
 
+/// Maximum request or response payload accepted by built-in MEP transports.
+pub const MAX_MEP_PAYLOAD_BYTES: u32 = 64 * 1024 * 1024;
+
 /// Host-side conversion from a JSON-RPC response to its typed result.
 pub trait ExtensionResponseExt {
     /// Deserialize a successful result or return the extension error.

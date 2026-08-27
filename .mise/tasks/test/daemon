@@ -1,0 +1,14 @@
+#!/bin/sh
+#MISE description="Build a real HTTP extension daemon and run its MEP conformance tests"
+
+set -e
+
+cargo build -p morphir-daemon --example mep-http-backend
+
+FIXTURE="target/debug/examples/mep-http-backend"
+if [ -f "$FIXTURE.exe" ]; then
+    FIXTURE="$FIXTURE.exe"
+fi
+
+MEP_HTTP_FIXTURE="$FIXTURE" \
+    cargo test -p morphir-daemon --test connected_daemon_extension -- --ignored

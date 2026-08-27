@@ -2,7 +2,7 @@
 
 use crate::extensions::protocol::{
     ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, JSONRPC_VERSION,
-    error_codes, methods,
+    MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
 use crate::extensions::session::{ExtensionSession, ExtensionSessionState};
 use crate::{DaemonError, Result};
@@ -21,7 +21,6 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 256 * 1024;
 
 /// A native extension command with an explicit identity and working directory.
@@ -467,10 +466,10 @@ where
             let length = value.trim().parse::<usize>().map_err(|error| {
                 DaemonError::Extension(format!("Invalid Content-Length: {error}"))
             })?;
-            if length > MAX_FRAME_BYTES {
+            if length > MAX_MEP_PAYLOAD_BYTES as usize {
                 return Err(DaemonError::Extension(format!(
                     "Extension frame exceeds the {} byte limit",
-                    MAX_FRAME_BYTES
+                    MAX_MEP_PAYLOAD_BYTES
                 )));
             }
             content_length = Some(length);

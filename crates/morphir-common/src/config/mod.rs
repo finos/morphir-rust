@@ -11,15 +11,20 @@ pub mod legacy;
 pub mod merge;
 pub mod model;
 pub mod redact;
+pub mod secret;
 
 use self::legacy::LegacyProjectConfig;
 use anyhow::{Context, anyhow};
 use serde_json::Value;
 use std::path::Path;
 
-pub use self::merge::{deep_merge, merge_all};
+pub use self::merge::{
+    ProvenanceMap, ValuePath, deep_merge, deep_merge_with_provenance, merge_all,
+};
 pub use self::model::*;
 pub use self::redact::redact_secrets;
+pub use self::secret::{SecretReference, SecretReferenceError, is_secret_reference};
+pub use secrecy::{ExposeSecret, SecretString};
 
 impl MorphirConfig {
     /// Load configuration from a file path

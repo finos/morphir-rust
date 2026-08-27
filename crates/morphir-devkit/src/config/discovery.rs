@@ -15,12 +15,14 @@ pub enum ConfigPlatform {
     Windows,
 }
 
-pub(crate) fn project_config_candidates(directory: &Path) -> [PathBuf; 4] {
+pub(crate) fn project_config_candidates(directory: &Path) -> [PathBuf; 6] {
     [
         directory.join("morphir.toml"),
         directory.join("morphir.yaml"),
         directory.join(".morphir").join("morphir.toml"),
         directory.join(".morphir").join("morphir.yaml"),
+        directory.join(".config/morphir/config.toml"),
+        directory.join(".config/morphir/config.yaml"),
     ]
 }
 
@@ -181,33 +183,74 @@ pub fn discover_system_config() -> Result<Option<PathBuf>> {
     discover_config_candidates(&native_system_config_candidates())
 }
 
-/// Build the user override candidates for a project root.
-pub fn user_override_candidates(project_root: &Path) -> [PathBuf; 2] {
-    let root = project_root.join(".morphir");
-    [
-        root.join("morphir.user.toml"),
-        root.join("morphir.user.yaml"),
-    ]
+/// The standard location of a primary Morphir configuration file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigLayout {
+    /// `morphir.toml` or `morphir.yaml` directly in the project root.
+    Root,
+    /// `.morphir/morphir.toml` or `.morphir/morphir.yaml`.
+    MorphirDirectory,
+    /// `.config/morphir/config.toml` or `.config/morphir/config.yaml`.
+    DotConfigDirectory,
 }
 
-/// Find the user override for a project root, rejecting sibling TOML and YAML files.
-pub fn discover_user_override(project_root: &Path) -> Result<Option<PathBuf>> {
-    discover_config_candidates(&user_override_candidates(project_root))
+/// Identify the standard layout used by a primary configuration path.
+pub fn config_layout(config_path: &Path) -> Option<ConfigLayout> {
+    let file_name = config_path.file_name()?.to_str()?;
+    let parent = config_path.parent()?;
+
+    match file_name {
+        "morphir.toml" | "morphir.yaml" => {
+            if parent.file_name().and_then(|name| name.to_str()) == Some(".morphir") {
+                Some(ConfigLayout::MorphirDirectory)
+            } else {
+                Some(ConfigLayout::Root)
+            }
+        }
+        "config.toml" | "config.yaml"
+            if parent.file_name().and_then(|name| name.to_str()) == Some("morphir")
+                && parent
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some(".config") =>
+        {
+            Some(ConfigLayout::DotConfigDirectory)
+        }
+        _ => None,
+    }
+}
+
+/// Build the adjacent user override candidates for a standard primary configuration path.
+pub fn user_override_candidates(config_path: &Path) -> Option<[PathBuf; 2]> {
+    let parent = config_path.parent()?;
+    match config_layout(config_path)? {
+        ConfigLayout::Root | ConfigLayout::MorphirDirectory => Some([
+            parent.join("morphir.user.toml"),
+            parent.join("morphir.user.yaml"),
+        ]),
+        ConfigLayout::DotConfigDirectory => Some([
+            parent.join("config.user.toml"),
+            parent.join("config.user.yaml"),
+        ]),
+    }
+}
+
+/// Find the adjacent user override, rejecting sibling TOML and YAML files.
+pub fn discover_user_override(config_path: &Path) -> Result<Option<PathBuf>> {
+    match user_override_candidates(config_path) {
+        Some(candidates) => discover_config_candidates(&candidates),
+        None => Ok(None),
+    }
 }
 
 /// Return the project or workspace root represented by a configuration path.
 pub fn config_root(config_path: &Path) -> Option<&Path> {
     let parent = config_path.parent()?;
-    let is_hidden_config = parent.file_name().and_then(|name| name.to_str()) == Some(".morphir")
-        && matches!(
-            config_path.file_name().and_then(|name| name.to_str()),
-            Some("morphir.toml" | "morphir.yaml")
-        );
-
-    if is_hidden_config {
-        parent.parent()
-    } else {
-        Some(parent)
+    match config_layout(config_path) {
+        Some(ConfigLayout::MorphirDirectory) => parent.parent(),
+        Some(ConfigLayout::DotConfigDirectory) => parent.parent()?.parent(),
+        Some(ConfigLayout::Root) | None => Some(parent),
     }
 }
 
@@ -262,6 +305,82 @@ mod tests {
         write_project_config(&expected);
 
         assert_eq!(discover_config(root.path()).unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn discovers_dot_config_morphir_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let expected = root.path().join(".config/morphir/config.toml");
+        write_project_config(&expected);
+
+        assert_eq!(
+            discover_config(root.path()).unwrap(),
+            Some(expected.clone())
+        );
+        assert_eq!(config_root(&expected), Some(root.path()));
+        assert_eq!(
+            user_override_candidates(&expected).unwrap(),
+            [
+                root.path().join(".config/morphir/config.user.toml"),
+                root.path().join(".config/morphir/config.user.yaml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn user_override_is_adjacent_to_each_standard_layout() {
+        let root = Path::new("/work");
+
+        assert_eq!(
+            user_override_candidates(&root.join("morphir.toml")).unwrap(),
+            [
+                root.join("morphir.user.toml"),
+                root.join("morphir.user.yaml")
+            ]
+        );
+        assert_eq!(
+            user_override_candidates(&root.join(".morphir/morphir.yaml")).unwrap(),
+            [
+                root.join(".morphir/morphir.user.toml"),
+                root.join(".morphir/morphir.user.yaml")
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_root_primary_and_dot_config_primary_together() {
+        let root = tempfile::tempdir().unwrap();
+        let root_primary = root.path().join("morphir.toml");
+        let dot_config_primary = root.path().join(".config/morphir/config.yaml");
+        write_project_config(&root_primary);
+        write_project_config(&dot_config_primary);
+
+        let error = discover_config(root.path()).expect_err("ambiguous config");
+        let message = error.to_string();
+        assert!(message.contains(root_primary.to_str().unwrap()));
+        assert!(message.contains(dot_config_primary.to_str().unwrap()));
+    }
+
+    #[test]
+    fn rejects_sibling_adjacent_user_override_serializations() {
+        let root = tempfile::tempdir().unwrap();
+        let primary = root.path().join(".config/morphir/config.toml");
+        let [toml, yaml] = user_override_candidates(&primary).expect("standard layout");
+        write_file(&toml, "[ui]\ntheme = \"light\"\n");
+        write_file(&yaml, "ui:\n  theme: dark\n");
+
+        let error = discover_user_override(&primary).expect_err("ambiguous override");
+        let message = error.to_string();
+        assert!(message.contains(toml.to_str().unwrap()));
+        assert!(message.contains(yaml.to_str().unwrap()));
+    }
+
+    #[test]
+    fn nonstandard_primary_has_no_implicit_user_override() {
+        assert_eq!(
+            user_override_candidates(Path::new("configs/project.yaml")),
+            None
+        );
     }
 
     #[test]
@@ -431,19 +550,19 @@ mod tests {
     #[test]
     fn discovers_user_override_and_rejects_sibling_serializations() {
         let root = tempfile::tempdir().unwrap();
-        let toml = root.path().join(".morphir").join("morphir.user.toml");
-        let yaml = root.path().join(".morphir").join("morphir.user.yaml");
+        let primary = root.path().join(".morphir").join("morphir.toml");
+        let [toml, yaml] = user_override_candidates(&primary).expect("standard layout");
 
-        assert_eq!(discover_user_override(root.path()).unwrap(), None);
+        assert_eq!(discover_user_override(&primary).unwrap(), None);
 
         write_file(&yaml, "ui:\n  theme: dark\n");
         assert_eq!(
-            discover_user_override(root.path()).unwrap(),
+            discover_user_override(&primary).unwrap(),
             Some(yaml.clone())
         );
 
         write_file(&toml, "[ui]\ntheme = \"light\"\n");
-        let error = discover_user_override(root.path()).expect_err("ambiguous override");
+        let error = discover_user_override(&primary).expect_err("ambiguous override");
         let message = error.to_string();
         assert!(message.contains(toml.to_str().unwrap()));
         assert!(message.contains(yaml.to_str().unwrap()));

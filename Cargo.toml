@@ -23,7 +23,7 @@ default-members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["FINOS <info@finos.org>"]
 license = "Apache-2.0"
 repository = "https://github.com/finos/morphir-rust"
@@ -63,4 +63,3 @@ codegen-units = 1
 [profile.dev]
 opt-level = 0
 debug = true
-

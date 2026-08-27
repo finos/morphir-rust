@@ -11,12 +11,14 @@
 pub mod discovery;
 pub mod loader;
 pub mod paths;
+mod provenance;
+pub mod secret;
 pub mod sources;
 
 pub use discovery::{
-    ConfigPlatform, config_root, default_system_config_dir, discover_config, discover_config_at,
-    discover_config_candidates, discover_global_config, discover_morphir_dir,
-    discover_system_config, discover_user_override, global_config_candidates,
+    ConfigLayout, ConfigPlatform, config_layout, config_root, default_system_config_dir,
+    discover_config, discover_config_at, discover_config_candidates, discover_global_config,
+    discover_morphir_dir, discover_system_config, discover_user_override, global_config_candidates,
     system_config_candidates, user_override_candidates,
 };
 pub use loader::{
@@ -27,6 +29,10 @@ pub use paths::{
     ensure_morphir_structure, resolve_compile_output, resolve_dist_output, resolve_generate_output,
     resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
     resolve_test_scenario, sanitize_project_name,
+};
+pub use secret::{
+    ExposeSecret, SecretReference, SecretResolutionContext, SecretResolutionError, SecretResolver,
+    SecretString, SystemSecretResolver,
 };
 pub use sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,

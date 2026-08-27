@@ -1,6 +1,7 @@
 //! Configuration sources: the layers that make up the effective configuration,
 //! how callers select them, and what the loader reports about each one.
 
+use super::provenance::{ConfigOrigin, ConfigProvenance};
 use morphir_common::config::env::DEFAULT_ENV_PREFIX;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,7 +21,7 @@ pub enum ConfigSourceKind {
     Project,
     /// Configuration of the selected workspace member.
     WorkspaceMember,
-    /// Personal override stored in a project's `.morphir` directory.
+    /// Personal override adjacent to a selected standard primary configuration.
     UserOverride,
     /// `MORPHIR_*` environment variables.
     Environment,
@@ -172,8 +173,8 @@ pub struct ConfigLoadOptions {
     pub system: SourceSelection,
     /// Global user configuration selection.
     pub global: SourceSelection,
-    /// User override selection. `Discover` looks in the project root and, when
-    /// a workspace member is selected, in the member root as well.
+    /// User override selection. `Discover` looks beside the selected project
+    /// primary and, when selected, beside the workspace-member primary.
     pub user_override: SourceSelection,
     /// Environment variable selection.
     pub env: EnvSelection,
@@ -217,6 +218,18 @@ pub struct EffectiveConfig {
     pub workspace_root: Option<PathBuf>,
     /// Root of the selected workspace member, when one was found.
     pub member_root: Option<PathBuf>,
+    /// Origins of the winning configuration values.
+    pub(crate) provenance: ConfigProvenance,
+}
+
+impl EffectiveConfig {
+    pub(crate) fn origin_for_key(&self, key: &str) -> Option<&ConfigOrigin> {
+        self.provenance.origin(&key_path(key))
+    }
+}
+
+pub(crate) fn key_path(key: &str) -> Vec<String> {
+    key.split('.').map(str::to_owned).collect()
 }
 
 #[cfg(test)]

@@ -15,12 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `morphir_devkit::load_effective_config` and `ConfigLoadOptions` for selecting sources explicitly; `ConfigContext` now reports the merged value and the sources that were consulted
 - `morphir config path` and `morphir config show` commands (with `--json`) to inspect configuration sources and the effective configuration; `config show` redacts tokens, passwords, secrets, and API keys
 - `morphir_common::config::redact` for hiding credentials before a configuration value is displayed, and `morphir_devkit::builtin_defaults` exposing the built-in defaults layer
+- Secret references for environment variables, files, direct commands, and native operating-system keyrings, with provenance-aware resolution and protected diagnostic output
+- Layout-derived adjacent user overrides for root `morphir.{toml,yaml}` primaries (`morphir.user.{toml,yaml}`), hidden `.morphir/morphir.{toml,yaml}` primaries (`.morphir/morphir.user.{toml,yaml}`), and dot-config `.config/morphir/config.{toml,yaml}` primaries (`.config/morphir/config.user.{toml,yaml}`), including project, workspace, and member configurations
 
 ### Changed
 
 - Renamed the `morphir-design` crate to `morphir-devkit`; import it as `morphir_devkit` (the public API is unchanged)
 - `load_config_context` now merges every configuration layer instead of only the global user and project files
 - A `null` overlay value no longer overrides a lower-precedence value; legacy `morphir.json` projects keep global settings intact
+- The workspace minimum supported Rust version is now 1.88 because the native keyring integration requires Rust 1.88 or newer
 
 ### Deprecated
 

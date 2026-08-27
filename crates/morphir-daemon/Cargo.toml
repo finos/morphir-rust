@@ -23,8 +23,11 @@ tokio = { version = "1", features = [
     "macros",
     "sync",
     "fs",
+    "io-util",
     "net",
+    "process",
     "signal",
+    "time",
 ] }
 async-trait = "0.1"
 

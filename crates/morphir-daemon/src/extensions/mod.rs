@@ -6,6 +6,7 @@
 pub mod container;
 pub mod host_functions;
 pub mod loader;
+pub mod process;
 pub mod protocol;
 pub mod registry;
 pub mod session;
@@ -13,6 +14,7 @@ pub mod virtual_paths;
 
 pub use container::ExtensionContainer;
 pub use loader::ExtensionLoader;
+pub use process::{ProcessLaunch, SpawnedProcessSession};
 pub use protocol::{ExtensionRequest, ExtensionResponse};
 pub use registry::ExtensionRegistry;
 pub use session::{ExtensionSession, ExtensionSessionState, ExtismSession};

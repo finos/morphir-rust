@@ -1,10 +1,13 @@
 //! Native child-process transport for the Morphir Extension Protocol.
 
 use crate::extensions::protocol::{
-    ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, JSONRPC_VERSION,
+    ExtensionRequest, ExtensionResponse, ExtensionResponseExt, InitializeParams, InitializeResult,
     MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
-use crate::extensions::session::{ExtensionSession, ExtensionSessionState};
+use crate::extensions::session::{
+    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
+    TransportError, TransportState,
+};
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
 use morphir_extension_sdk::ExtensionType;
@@ -135,6 +138,13 @@ impl SpawnedProcessSession {
         })
     }
 
+    /// Start a native extension behind the shared typestate session controller.
+    pub async fn spawn_typestate(
+        launch: ProcessLaunch,
+    ) -> Result<Session<SpawnedProcessSession, Loaded>> {
+        Ok(Session::loaded(Self::spawn(launch).await?))
+    }
+
     /// Return captured standard error after the process exits.
     pub fn stderr_output(&self) -> &str {
         &self.stderr_output
@@ -190,19 +200,7 @@ impl SpawnedProcessSession {
             }
         };
 
-        if let Err(error) = validate_response(&response, request_id) {
-            return Err(self.abort_with_error(error).await);
-        }
-        if let Some(error) = response.error {
-            return Err(DaemonError::Extension(format!(
-                "RPC error {}: {}",
-                error.code, error.message
-            )));
-        }
-        let result = response.result.ok_or_else(|| {
-            DaemonError::Extension("Extension response did not contain a result".to_string())
-        })?;
-        serde_json::from_value(result).map_err(DaemonError::from)
+        response.into_result(request_id)
     }
 
     async fn collect_stderr(&mut self) -> Result<()> {
@@ -245,6 +243,82 @@ impl SpawnedProcessSession {
         self.collect_stderr().await?;
         self.state = ProcessSessionData::Stopped;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl MepTransport for SpawnedProcessSession {
+    fn expected_extension(&self) -> ExpectedExtension {
+        ExpectedExtension::identified(self.expected_extension_id.clone())
+    }
+
+    async fn exchange(
+        &mut self,
+        request: ExtensionRequest,
+    ) -> std::result::Result<ExtensionResponse, TransportError> {
+        let method = request.method.clone();
+        let exchange = async {
+            let stdin = self.stdin.as_mut().ok_or_else(|| {
+                DaemonError::Extension("Extension process stdin is closed".to_string())
+            })?;
+            write_frame(stdin, &request).await?;
+            let frame = read_frame(&mut self.stdout).await?;
+            serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
+        };
+        let result = match timeout(self.request_timeout, exchange).await {
+            Ok(result) => result,
+            Err(_) => Err(DaemonError::Extension(format!(
+                "Extension request '{}' timed out after {:?}",
+                method, self.request_timeout
+            ))),
+        };
+        match result {
+            Ok(response) => Ok(response),
+            Err(error) => Err(match self.abort_process().await {
+                Ok(()) => TransportError::new(error, TransportState::Stopped),
+                Err(cleanup) => TransportError::new(
+                    DaemonError::Extension(format!(
+                        "{error}; process cleanup also failed: {cleanup}"
+                    )),
+                    TransportState::Indeterminate,
+                ),
+            }),
+        }
+    }
+
+    async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
+        self.stdin.take();
+        let status = match timeout(self.request_timeout, self.child.wait()).await {
+            Ok(status) => status.map_err(|error| {
+                TransportError::new(error.into(), TransportState::Indeterminate)
+            })?,
+            Err(_) => {
+                let error = DaemonError::Extension(format!(
+                    "Extension process did not exit after {:?}",
+                    self.request_timeout
+                ));
+                return Err(match self.abort_process().await {
+                    Ok(()) => TransportError::new(error, TransportState::Stopped),
+                    Err(cleanup) => TransportError::new(
+                        DaemonError::Extension(format!(
+                            "{error}; process cleanup also failed: {cleanup}"
+                        )),
+                        TransportState::Indeterminate,
+                    ),
+                });
+            }
+        };
+        self.collect_stderr()
+            .await
+            .map_err(|error| TransportError::new(error, TransportState::Stopped))?;
+        self.state = ProcessSessionData::Stopped;
+        if !status.success() {
+            return Err(TransportError::new(
+                DaemonError::Extension(format!("Extension process exited with status {status}")),
+                TransportState::Stopped,
+            ));
+        }
+        Ok(TransportState::Stopped)
     }
 }
 
@@ -387,27 +461,6 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
             "Extension working directory does not exist: {}",
             launch.working_directory.display()
         )));
-    }
-    Ok(())
-}
-
-fn validate_response(response: &ExtensionResponse, expected_id: u64) -> Result<()> {
-    if response.jsonrpc != JSONRPC_VERSION {
-        return Err(DaemonError::Extension(format!(
-            "Extension response used unsupported JSON-RPC version '{}'",
-            response.jsonrpc
-        )));
-    }
-    if response.id != expected_id {
-        return Err(DaemonError::Extension(format!(
-            "Extension response ID {} did not match request ID {}",
-            response.id, expected_id
-        )));
-    }
-    if response.result.is_some() == response.error.is_some() {
-        return Err(DaemonError::Extension(
-            "Extension response must contain exactly one of result or error".to_string(),
-        ));
     }
     Ok(())
 }

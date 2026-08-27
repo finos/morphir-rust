@@ -19,4 +19,8 @@ pub use loader::ExtensionLoader;
 pub use process::{ProcessLaunch, SpawnedProcessSession};
 pub use protocol::{ExtensionRequest, ExtensionResponse};
 pub use registry::ExtensionRegistry;
-pub use session::{ExtensionSession, ExtensionSessionState, ExtismSession};
+pub use session::{
+    ExpectedExtension, ExtensionSession, ExtensionSessionState, ExtismSession, FailedSession,
+    Indeterminate, InvokeOutcome, Loaded, MepTransport, NegotiatedSession, Ready, Session, Stopped,
+    TransportError, TransportState,
+};

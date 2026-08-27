@@ -5,6 +5,81 @@ use morphir_extension_sdk::{
 };
 use serde_json::json;
 
+#[allow(dead_code)]
+pub async fn assert_backend_typestate_conformance<T>(
+    session: morphir_daemon::extensions::Session<T, morphir_daemon::extensions::Loaded>,
+    valid_ir: serde_json::Value,
+    invalid_ir: serde_json::Value,
+) -> morphir_daemon::extensions::Session<T, morphir_daemon::extensions::Stopped>
+where
+    T: morphir_daemon::extensions::MepTransport,
+{
+    use morphir_daemon::extensions::InvokeOutcome;
+
+    let session = session
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "morphir-conformance".into(),
+                version: "0.1.0".into(),
+            },
+        })
+        .await
+        .unwrap_or_else(|failure| panic!("MEP negotiation failed: {}", failure.error()));
+    assert_eq!(session.negotiated().protocol_version(), "0.1");
+    assert!(
+        session
+            .negotiated()
+            .extension()
+            .types
+            .contains(&ExtensionType::Backend)
+    );
+
+    let session = match session
+        .invoke::<GenerateResult>(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: valid_ir,
+                options: Default::default(),
+            },
+        )
+        .await
+    {
+        InvokeOutcome::Success(session, generated) => {
+            assert!(generated.success);
+            assert!(!generated.artifacts.is_empty());
+            session
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("generation was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => panic!("generation failed: {}", failure.error()),
+    };
+
+    let session = match session
+        .invoke::<GenerateResult>(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: invalid_ir,
+                options: Default::default(),
+            },
+        )
+        .await
+    {
+        InvokeOutcome::Success(session, generated) => {
+            assert!(!generated.success);
+            assert!(!generated.diagnostics.is_empty());
+            session
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("generation was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => panic!("generation failed: {}", failure.error()),
+    };
+
+    session
+        .shutdown()
+        .await
+        .unwrap_or_else(|failure| panic!("MEP shutdown failed: {}", failure.error()))
+}
+
+#[allow(dead_code)]
 pub async fn assert_backend_session_conformance<S>(
     mut session: S,
     valid_ir: serde_json::Value,

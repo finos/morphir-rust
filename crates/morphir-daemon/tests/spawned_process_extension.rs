@@ -7,7 +7,9 @@
 
 mod support;
 
-use morphir_daemon::extensions::{ExtensionSession, ProcessLaunch, SpawnedProcessSession};
+use morphir_daemon::extensions::{
+    FailedSession, InvokeOutcome, ProcessLaunch, SpawnedProcessSession,
+};
 use morphir_extension_sdk::{
     GenerateRequest,
     protocol::{InitializeParams, PeerInfo, methods},
@@ -53,11 +55,11 @@ async fn completes_mep_through_a_real_child_process() {
         native_fixture_path(),
         std::env::current_dir().expect("the test working directory should exist"),
     );
-    let session = SpawnedProcessSession::spawn(launch)
+    let session = SpawnedProcessSession::spawn_typestate(launch)
         .await
         .expect("the host should start the native extension fixture");
 
-    let mut session = support::mep::assert_backend_session_conformance(
+    let mut session = support::mep::assert_backend_typestate_conformance(
         session,
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
@@ -66,11 +68,13 @@ async fn completes_mep_through_a_real_child_process() {
 
     assert!(
         !session
+            .transport_mut()
             .is_running()
             .expect("process status should be readable")
     );
     assert!(
         session
+            .transport()
             .stderr_output()
             .contains("native MEP fixture started")
     );
@@ -86,10 +90,10 @@ async fn kills_a_child_that_exceeds_the_request_timeout() {
     )
     .env("MEP_FIXTURE_HANG_GENERATE", "1")
     .request_timeout(Duration::from_millis(100));
-    let mut session = SpawnedProcessSession::spawn(launch)
+    let session = SpawnedProcessSession::spawn_typestate(launch)
         .await
         .expect("the host should start the native extension fixture");
-    session
+    let session = session
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
@@ -98,10 +102,10 @@ async fn kills_a_child_that_exceeds_the_request_timeout() {
             },
         })
         .await
-        .expect("the fixture should initialize before the timeout case");
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
-    let error = session
-        .invoke(
+    let failure = match session
+        .invoke::<serde_json::Value>(
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: a_distribution_with_one_value(),
@@ -110,11 +114,20 @@ async fn kills_a_child_that_exceeds_the_request_timeout() {
             .expect("the generation request should serialize"),
         )
         .await
-        .expect_err("the hung request should time out");
+    {
+        InvokeOutcome::Failed(failure) => failure,
+        InvokeOutcome::Success(_, _) => panic!("the hung request should time out"),
+        InvokeOutcome::Rejected(_, error) => panic!("the request was rejected: {error}"),
+    };
 
-    assert!(error.to_string().contains("timed out"));
+    assert!(failure.error().to_string().contains("timed out"));
+    let mut session = match failure {
+        FailedSession::Stopped(session, _) => session,
+        FailedSession::Indeterminate(_, _) => panic!("the killed child should be stopped"),
+    };
     assert!(
         !session
+            .transport_mut()
             .is_running()
             .expect("process status should be readable")
     );
@@ -130,10 +143,10 @@ async fn kills_a_child_that_does_not_exit_after_shutdown() {
     )
     .env("MEP_FIXTURE_IGNORE_SHUTDOWN", "1")
     .request_timeout(Duration::from_millis(100));
-    let mut session = SpawnedProcessSession::spawn(launch)
+    let session = SpawnedProcessSession::spawn_typestate(launch)
         .await
         .expect("the host should start the native extension fixture");
-    session
+    let session = session
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
@@ -142,16 +155,22 @@ async fn kills_a_child_that_does_not_exit_after_shutdown() {
             },
         })
         .await
-        .expect("the fixture should initialize before the shutdown timeout case");
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
-    let error = session
+    let failure = session
         .shutdown()
         .await
-        .expect_err("the child should exceed the shutdown grace period");
+        .err()
+        .expect("the child should exceed the shutdown grace period");
 
-    assert!(error.to_string().contains("did not exit"));
+    assert!(failure.error().to_string().contains("did not exit"));
+    let mut session = match failure {
+        FailedSession::Stopped(session, _) => session,
+        FailedSession::Indeterminate(_, _) => panic!("the killed child should be stopped"),
+    };
     assert!(
         !session
+            .transport_mut()
             .is_running()
             .expect("process status should be readable")
     );
@@ -167,11 +186,11 @@ async fn kills_a_child_after_failed_protocol_negotiation() {
     )
     .env("MEP_FIXTURE_UNSUPPORTED_PROTOCOL", "1")
     .request_timeout(Duration::from_millis(100));
-    let mut session = SpawnedProcessSession::spawn(launch)
+    let session = SpawnedProcessSession::spawn_typestate(launch)
         .await
         .expect("the host should start the native extension fixture");
 
-    let error = session
+    let failure = session
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
@@ -180,11 +199,17 @@ async fn kills_a_child_after_failed_protocol_negotiation() {
             },
         })
         .await
-        .expect_err("the extension should not select an unsupported protocol");
+        .err()
+        .expect("the extension should not select an unsupported protocol");
 
-    assert!(error.to_string().contains("did not offer"));
+    assert!(failure.error().to_string().contains("did not offer"));
+    let mut session = match failure {
+        FailedSession::Stopped(session, _) => session,
+        FailedSession::Indeterminate(_, _) => panic!("the killed child should be stopped"),
+    };
     assert!(
         !session
+            .transport_mut()
             .is_running()
             .expect("process status should be readable")
     );
@@ -200,11 +225,11 @@ async fn shutdown_does_not_wait_for_a_descendant_holding_stderr_open() {
     )
     .env("MEP_FIXTURE_HOLD_STDERR_OPEN", "1")
     .request_timeout(Duration::from_millis(100));
-    let session = SpawnedProcessSession::spawn(launch)
+    let session = SpawnedProcessSession::spawn_typestate(launch)
         .await
         .expect("the host should start the native extension fixture");
 
-    let mut session = support::mep::assert_backend_session_conformance(
+    let mut session = support::mep::assert_backend_typestate_conformance(
         session,
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
@@ -213,6 +238,7 @@ async fn shutdown_does_not_wait_for_a_descendant_holding_stderr_open() {
 
     assert!(
         !session
+            .transport_mut()
             .is_running()
             .expect("process status should be readable")
     );

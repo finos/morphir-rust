@@ -39,10 +39,9 @@ impl ExtensionLoader {
 
     /// Default extension cache directory (honors `MORPHIR_HOME`)
     pub fn default_cache_dir() -> Result<PathBuf> {
-        let home = morphir_common::home::MorphirHome::resolve().map_err(|error| {
-            DaemonError::Extension(format!("Could not determine cache directory: {error}"))
-        })?;
-        Ok(home.cache_root().join("extensions"))
+        morphir_common::home::cache_root()
+            .map(|root| root.join("extensions"))
+            .ok_or_else(|| DaemonError::Extension("Could not determine cache directory".into()))
     }
 
     /// Load extension from a local file path

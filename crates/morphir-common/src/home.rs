@@ -88,24 +88,28 @@ impl MorphirHome {
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
     }
+}
 
-    /// Root directory for Morphir caches.
-    ///
-    /// Uses the OS cache directory by default; a relocated home keeps caches
-    /// under `<home>/cache` so sandboxed environments stay hermetic.
-    pub fn cache_root(&self) -> PathBuf {
-        self.cache_root_from(dirs::cache_dir())
-    }
+/// Root directory for Morphir caches.
+///
+/// A relocated home keeps caches under `<home>/cache` so sandboxed
+/// environments stay hermetic; otherwise the OS cache directory is used.
+/// Returns `None` only when neither `MORPHIR_HOME` nor an OS cache directory
+/// is available — callers keep their own fallback so environments without a
+/// user home (e.g. service accounts with only `XDG_CACHE_HOME`) still work.
+pub fn cache_root() -> Option<PathBuf> {
+    cache_root_from(
+        std::env::var_os(MORPHIR_HOME_ENV).as_deref(),
+        dirs::cache_dir(),
+    )
+}
 
-    /// Pure form of [`Self::cache_root`] taking the OS cache directory.
-    pub fn cache_root_from(&self, os_cache: Option<PathBuf>) -> PathBuf {
-        if self.relocated {
-            self.root.join("cache")
-        } else {
-            os_cache
-                .map(|cache| cache.join("morphir"))
-                .unwrap_or_else(|| self.root.join("cache"))
-        }
+/// Pure form of [`cache_root`] taking the raw `MORPHIR_HOME` value (if set)
+/// and the OS cache directory (if known).
+pub fn cache_root_from(env_value: Option<&OsStr>, os_cache: Option<PathBuf>) -> Option<PathBuf> {
+    match env_value.filter(|value| !value.is_empty()) {
+        Some(value) => Some(PathBuf::from(value).join("cache")),
+        None => os_cache.map(|cache| cache.join("morphir")),
     }
 }
 
@@ -172,29 +176,44 @@ mod tests {
     }
 
     #[test]
-    fn default_home_keeps_caches_in_os_cache_dir() {
-        let home = MorphirHome::resolve_from(None, Some("/home/u".into())).unwrap();
+    fn default_caches_stay_in_os_cache_dir() {
         assert_eq!(
-            home.cache_root_from(Some("/home/u/.cache".into())),
-            Path::new("/home/u/.cache/morphir")
+            cache_root_from(None, Some("/home/u/.cache".into())),
+            Some(PathBuf::from("/home/u/.cache/morphir"))
         );
     }
 
     #[test]
     fn relocated_home_keeps_caches_under_home() {
-        let home = MorphirHome::resolve_from(Some(os("/sandbox/mh").as_os_str()), None).unwrap();
         assert_eq!(
-            home.cache_root_from(Some("/home/u/.cache".into())),
-            Path::new("/sandbox/mh/cache")
+            cache_root_from(
+                Some(os("/sandbox/mh").as_os_str()),
+                Some("/home/u/.cache".into())
+            ),
+            Some(PathBuf::from("/sandbox/mh/cache"))
         );
     }
 
     #[test]
-    fn missing_os_cache_dir_falls_back_under_home() {
-        let home = MorphirHome::resolve_from(None, Some("/home/u".into())).unwrap();
+    fn empty_env_var_keeps_caches_in_os_cache_dir() {
         assert_eq!(
-            home.cache_root_from(None),
-            Path::new("/home/u/.morphir/cache")
+            cache_root_from(Some(os("").as_os_str()), Some("/home/u/.cache".into())),
+            Some(PathBuf::from("/home/u/.cache/morphir"))
         );
+    }
+
+    #[test]
+    fn caches_resolve_without_a_user_home() {
+        // A service account may have an OS cache dir but no home; no MorphirHome
+        // resolution is required for caches.
+        assert_eq!(
+            cache_root_from(None, Some("/var/cache/svc".into())),
+            Some(PathBuf::from("/var/cache/svc/morphir"))
+        );
+    }
+
+    #[test]
+    fn no_env_var_and_no_os_cache_dir_yields_none() {
+        assert_eq!(cache_root_from(None, None), None);
     }
 }

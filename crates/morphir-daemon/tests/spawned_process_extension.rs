@@ -68,14 +68,12 @@ async fn completes_mep_through_a_real_child_process() {
 
     assert!(
         !session
-            .transport_mut()
-            .is_running()
+            .process_is_running()
             .expect("process status should be readable")
     );
     assert!(
         session
-            .transport()
-            .stderr_output()
+            .process_stderr_output()
             .contains("native MEP fixture started")
     );
 }
@@ -127,8 +125,7 @@ async fn kills_a_child_that_exceeds_the_request_timeout() {
     };
     assert!(
         !session
-            .transport_mut()
-            .is_running()
+            .process_is_running()
             .expect("process status should be readable")
     );
 }
@@ -170,8 +167,7 @@ async fn kills_a_child_that_does_not_exit_after_shutdown() {
     };
     assert!(
         !session
-            .transport_mut()
-            .is_running()
+            .process_is_running()
             .expect("process status should be readable")
     );
 }
@@ -209,7 +205,42 @@ async fn kills_a_child_after_failed_protocol_negotiation() {
     };
     assert!(
         !session
-            .transport_mut()
+            .process_is_running()
+            .expect("process status should be readable")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn compatibility_session_kills_a_child_after_a_malformed_envelope() {
+    use morphir_daemon::extensions::{ExtensionSession, ExtensionSessionState};
+
+    let launch = ProcessLaunch::new(
+        "mep-native-backend",
+        native_fixture_path(),
+        std::env::current_dir().expect("the test working directory should exist"),
+    )
+    .env("MEP_FIXTURE_INVALID_ENVELOPE", "1")
+    .request_timeout(Duration::from_millis(100));
+    let mut session = SpawnedProcessSession::spawn(launch)
+        .await
+        .expect("the host should start the native extension fixture");
+
+    let error = session
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "invalid-envelope-test".into(),
+                version: "0.1.0".into(),
+            },
+        })
+        .await
+        .expect_err("the malformed envelope should fail closed");
+
+    assert!(error.to_string().contains("JSON-RPC version"));
+    assert_eq!(session.state(), ExtensionSessionState::Stopped);
+    assert!(
+        !session
             .is_running()
             .expect("process status should be readable")
     );
@@ -238,8 +269,7 @@ async fn shutdown_does_not_wait_for_a_descendant_holding_stderr_open() {
 
     assert!(
         !session
-            .transport_mut()
-            .is_running()
+            .process_is_running()
             .expect("process status should be readable")
     );
 }

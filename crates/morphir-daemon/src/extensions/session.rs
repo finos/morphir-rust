@@ -156,7 +156,9 @@ impl<T: MepTransport> Session<T, Loaded> {
         let expected = self.transport.expected_extension();
         let result: InitializeResult = match self.call(methods::INITIALIZE, params).await {
             CallOutcome::Success(value) => value,
-            CallOutcome::RpcError(error) | CallOutcome::Invalid(error) => {
+            CallOutcome::RpcError(error)
+            | CallOutcome::Invalid(error)
+            | CallOutcome::Local(error) => {
                 return Err(self.fail_after_termination(error).await);
             }
             CallOutcome::Transport(error) => return Err(self.failed(error)),
@@ -221,7 +223,9 @@ impl<T: MepTransport> Session<T, Ready> {
         }
         match self.call(method, params).await {
             CallOutcome::Success(value) => InvokeOutcome::Success(self, value),
-            CallOutcome::RpcError(error) => InvokeOutcome::Rejected(self, error),
+            CallOutcome::RpcError(error) | CallOutcome::Local(error) => {
+                InvokeOutcome::Rejected(self, error)
+            }
             CallOutcome::Invalid(error) => {
                 InvokeOutcome::Failed(self.fail_after_termination(error).await)
             }
@@ -243,21 +247,19 @@ impl<T: MepTransport> Session<T, Ready> {
                 )),
                 Err(error) => Err(self.failed(error)),
             },
-            CallOutcome::RpcError(error) | CallOutcome::Invalid(error) => {
-                Err(self.fail_after_termination(error).await)
-            }
+            CallOutcome::RpcError(error)
+            | CallOutcome::Invalid(error)
+            | CallOutcome::Local(error) => Err(self.fail_after_termination(error).await),
             CallOutcome::Transport(error) => Err(self.failed(error)),
         }
     }
 }
 
 impl<T, S> Session<T, S> {
-    /// Borrow the underlying transport for transport-specific observations.
-    pub fn transport(&self) -> &T {
+    pub(crate) fn transport_internal(&self) -> &T {
         &self.transport
     }
-    /// Mutably borrow the underlying transport for transport-specific observations.
-    pub fn transport_mut(&mut self) -> &mut T {
+    pub(crate) fn transport_mut_internal(&mut self) -> &mut T {
         &mut self.transport
     }
     fn transition<N>(self, negotiated: Option<NegotiatedSession>) -> Session<T, N> {
@@ -280,14 +282,14 @@ impl<T: MepTransport, S> Session<T, S> {
         self.next_request_id = match id.checked_add(1) {
             Some(next) => next,
             None => {
-                return CallOutcome::Invalid(DaemonError::Extension(
+                return CallOutcome::Local(DaemonError::Extension(
                     "Extension request identifier overflowed".into(),
                 ));
             }
         };
         let request = match ExtensionRequest::new(method, params, id) {
             Ok(request) => request,
-            Err(error) => return CallOutcome::Invalid(error.into()),
+            Err(error) => return CallOutcome::Local(error.into()),
         };
         let response = match self.transport.exchange(request).await {
             Ok(response) => response,
@@ -352,6 +354,7 @@ impl<T> FailedSession<T> {
 enum CallOutcome<R> {
     Success(R),
     RpcError(DaemonError),
+    Local(DaemonError),
     Invalid(DaemonError),
     Transport(TransportError),
 }
@@ -632,6 +635,44 @@ mod tests {
             ExpectedExtension::identified("example"),
             response,
         )));
+    }
+
+    #[tokio::test]
+    async fn local_serialization_failure_preserves_the_ready_session() {
+        struct InvalidParams;
+        impl Serialize for InvalidParams {
+            fn serialize<S>(&self, _: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("cannot serialize request"))
+            }
+        }
+
+        let initialized =
+            ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
+                .unwrap();
+        let session = Session::loaded(transport(
+            ExpectedExtension::identified("example"),
+            initialized,
+        ))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+        match session
+            .invoke::<serde_json::Value>(methods::GENERATE, InvalidParams)
+            .await
+        {
+            InvokeOutcome::Rejected(session, error) => {
+                assert!(error.to_string().contains("cannot serialize request"));
+                assert_eq!(session.negotiated().extension().id, "example");
+            }
+            InvokeOutcome::Success(_, _) => panic!("invalid parameters should not be sent"),
+            InvokeOutcome::Failed(failure) => {
+                panic!("a local error should preserve Ready: {}", failure.error())
+            }
+        }
     }
 }
 

@@ -7,12 +7,15 @@ pub const MAX_MEP_PAYLOAD_BYTES: u32 = 64 * 1024 * 1024;
 
 /// Host-side conversion from a JSON-RPC response to its typed result.
 pub trait ExtensionResponseExt {
+    /// Validate the JSON-RPC envelope without interpreting its payload.
+    fn validate_envelope(&self, expected_id: u64) -> crate::Result<()>;
+
     /// Deserialize a successful result or return the extension error.
     fn into_result<T: serde::de::DeserializeOwned>(self, expected_id: u64) -> crate::Result<T>;
 }
 
 impl ExtensionResponseExt for ExtensionResponse {
-    fn into_result<T: serde::de::DeserializeOwned>(self, expected_id: u64) -> crate::Result<T> {
+    fn validate_envelope(&self, expected_id: u64) -> crate::Result<()> {
         if self.jsonrpc != JSONRPC_VERSION {
             return Err(crate::DaemonError::Extension(format!(
                 "Extension response used unsupported JSON-RPC version '{}'",
@@ -25,6 +28,16 @@ impl ExtensionResponseExt for ExtensionResponse {
                 self.id
             )));
         }
+        if self.result.is_some() == self.error.is_some() {
+            return Err(crate::DaemonError::Extension(
+                "Extension response must contain exactly one of result or error".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn into_result<T: serde::de::DeserializeOwned>(self, expected_id: u64) -> crate::Result<T> {
+        self.validate_envelope(expected_id)?;
 
         match (self.result, self.error) {
             (Some(value), None) => serde_json::from_value(value).map_err(crate::DaemonError::from),
@@ -32,9 +45,7 @@ impl ExtensionResponseExt for ExtensionResponse {
                 "RPC error {}: {}",
                 error.code, error.message
             ))),
-            _ => Err(crate::DaemonError::Extension(
-                "Extension response must contain exactly one of result or error".to_string(),
-            )),
+            _ => unreachable!("the response envelope was validated"),
         }
     }
 }

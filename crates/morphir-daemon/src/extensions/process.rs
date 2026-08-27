@@ -200,6 +200,9 @@ impl SpawnedProcessSession {
             }
         };
 
+        if let Err(error) = response.validate_envelope(request_id) {
+            return Err(self.abort_with_error(error).await);
+        }
         response.into_result(request_id)
     }
 
@@ -319,6 +322,18 @@ impl MepTransport for SpawnedProcessSession {
             ));
         }
         Ok(TransportState::Stopped)
+    }
+}
+
+impl<S> Session<SpawnedProcessSession, S> {
+    /// Report whether the child process is still running without exposing transport I/O.
+    pub fn process_is_running(&mut self) -> Result<bool> {
+        self.transport_mut_internal().is_running()
+    }
+
+    /// Return captured child-process diagnostics without exposing transport I/O.
+    pub fn process_stderr_output(&self) -> &str {
+        self.transport_internal().stderr_output()
     }
 }
 

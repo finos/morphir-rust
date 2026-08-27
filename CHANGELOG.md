@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MEP 0.1 lifecycle negotiation and reusable conformance tests that build `morphir-wasm-binding` as an independent guest, load it through the native Extism host, invoke real backend generation, verify diagnostics and capability rejection, and complete shutdown
 - YAML project, workspace, and global user configuration with XDG, macOS, and Windows path discovery
 - Layered configuration loading: built-in defaults, system (`/etc/morphir` or `%PROGRAMDATA%\morphir`), global user, project, workspace member, `.morphir/morphir.user.{toml,yaml}` override, and `MORPHIR_*` environment variables are merged in precedence order
 - `morphir_common::config::merge` (`deep_merge`, `merge_all`) implementing the serialization-independent merge rules, and `morphir_common::config::env` for the environment-variable source

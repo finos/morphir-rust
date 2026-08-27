@@ -4,47 +4,15 @@
 
 use crate::error::{DaemonError, Result};
 use crate::extensions::host_functions::MorphirHostFunctions;
-use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
+use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse, ExtensionResponseExt};
 use extism::{Manifest, Plugin, Wasm};
+pub use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
-
-/// Information about a loaded extension
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExtensionInfo {
-    /// Extension identifier
-    pub id: String,
-    /// Human-readable name
-    pub name: String,
-    /// Version
-    pub version: String,
-    /// Description
-    #[serde(default)]
-    pub description: Option<String>,
-    /// Extension types/capabilities
-    #[serde(default)]
-    pub types: Vec<ExtensionType>,
-    /// Author
-    #[serde(default)]
-    pub author: Option<String>,
-    /// License
-    #[serde(default)]
-    pub license: Option<String>,
-}
-
-/// Type of extension capability
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExtensionType {
-    Frontend,
-    Backend,
-    Transform,
-    Validator,
-}
 
 /// Container for a loaded extension plugin
 pub struct ExtensionContainer {

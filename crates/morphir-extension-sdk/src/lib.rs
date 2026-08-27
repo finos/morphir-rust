@@ -49,7 +49,7 @@
 //!     }
 //! }
 //!
-//! morphir_extension_sdk::export_extension!(MyExtension);
+//! morphir_extension_sdk::export_extension!(MyExtension, frontend);
 //! ```
 
 pub mod error;
@@ -72,7 +72,7 @@ pub use types::*;
 /// - `handle`: Main JSON-RPC request handler
 #[macro_export]
 macro_rules! export_extension {
-    ($impl:ty) => {
+    ($impl:ty, $($capability:ident),+ $(,)?) => {
         #[cfg(target_arch = "wasm32")]
         use $crate::extism_pdk::*;
 
@@ -96,10 +96,35 @@ macro_rules! export_extension {
         pub fn handle(
             Json(request): Json<$crate::protocol::ExtensionRequest>,
         ) -> FnResult<Json<$crate::protocol::ExtensionResponse>> {
-            let result = $crate::__dispatch_request::<$impl>(&request);
+            let mut dispatchers: Vec<$crate::DispatchFn<$impl>> = Vec::new();
+            $crate::__push_extension_dispatchers!(dispatchers, $impl, $($capability),+);
+            let result = $crate::__dispatch_request::<$impl>(&request, &dispatchers);
             Ok(Json(result))
         }
     };
+}
+
+/// Add declared extension capabilities to the generated guest dispatcher.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __push_extension_dispatchers {
+    ($dispatchers:ident, $impl:ty, backend $(, $remaining:ident)*) => {
+        $dispatchers.push($crate::__dispatch_backend::<$impl>);
+        $crate::__push_extension_dispatchers!($dispatchers, $impl $(, $remaining)*);
+    };
+    ($dispatchers:ident, $impl:ty, frontend $(, $remaining:ident)*) => {
+        $dispatchers.push($crate::__dispatch_frontend::<$impl>);
+        $crate::__push_extension_dispatchers!($dispatchers, $impl $(, $remaining)*);
+    };
+    ($dispatchers:ident, $impl:ty, validator $(, $remaining:ident)*) => {
+        $dispatchers.push($crate::__dispatch_validator::<$impl>);
+        $crate::__push_extension_dispatchers!($dispatchers, $impl $(, $remaining)*);
+    };
+    ($dispatchers:ident, $impl:ty, transform $(, $remaining:ident)*) => {
+        $dispatchers.push($crate::__dispatch_transform::<$impl>);
+        $crate::__push_extension_dispatchers!($dispatchers, $impl $(, $remaining)*);
+    };
+    ($dispatchers:ident, $impl:ty) => {};
 }
 
 // Native builds exercise extension implementations without importing guest PDK symbols.
@@ -127,31 +152,41 @@ macro_rules! host_error {
     ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
 }
 
-/// Internal dispatch function used by export_extension! macro
+/// A capability-specific request dispatcher used by [`export_extension!`].
+#[doc(hidden)]
+pub type DispatchFn<E> = fn(
+    &E,
+    &protocol::ExtensionRequest,
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>>;
+
+/// Internal dispatch function used by export_extension! macro.
 #[doc(hidden)]
 pub fn __dispatch_request<E: Extension + Default>(
     request: &protocol::ExtensionRequest,
+    dispatchers: &[DispatchFn<E>],
 ) -> protocol::ExtensionResponse {
     use protocol::methods;
 
     let result = match request.method.as_str() {
-        methods::INFO => serde_json::to_value(E::info()),
-
-        methods::CAPABILITIES => serde_json::to_value(E::capabilities()),
-
-        methods::COMPILE => dispatch_compile(request),
-
-        methods::GENERATE => dispatch_generate(request),
-
-        methods::VALIDATE => dispatch_validate(request),
-
-        methods::TRANSFORM => dispatch_transform(request),
-
-        method => {
-            return protocol::ExtensionResponse::error(
-                request.id,
-                protocol::RpcError::method_not_found(method),
-            );
+        methods::INITIALIZE => dispatch_initialize::<E>(request),
+        methods::PING => Ok(serde_json::json!({ "ok": true })),
+        methods::INFO => serde_json::to_value(E::info()).map_err(ExtensionError::from),
+        methods::CAPABILITIES => {
+            serde_json::to_value(E::capabilities()).map_err(ExtensionError::from)
+        }
+        methods::SHUTDOWN => Ok(serde_json::json!({})),
+        _ => {
+            let extension = E::default();
+            let Some(result) = dispatchers
+                .iter()
+                .find_map(|dispatch| dispatch(&extension, request))
+            else {
+                return protocol::ExtensionResponse::error(
+                    request.id,
+                    protocol::RpcError::method_not_found(&request.method),
+                );
+            };
+            result
         }
     };
 
@@ -162,99 +197,192 @@ pub fn __dispatch_request<E: Extension + Default>(
             error: None,
             id: request.id,
         },
-        Err(e) => protocol::ExtensionResponse {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: Some(protocol::RpcError::internal_error(e.to_string())),
-            id: request.id,
-        },
+        Err(error) => protocol::ExtensionResponse::from_extension_error(request.id, &error),
     }
 }
 
-#[doc(hidden)]
-fn dispatch_compile(
+fn dispatch_initialize<E: Extension>(
     request: &protocol::ExtensionRequest,
-) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    let _params: types::CompileRequest = serde_json::from_value(request.params.clone())?;
+) -> std::result::Result<serde_json::Value, ExtensionError> {
+    let params: protocol::InitializeParams = serde_json::from_value(request.params.clone())?;
+    if !params
+        .protocol_versions
+        .iter()
+        .any(|version| version == protocol::MEP_VERSION)
+    {
+        return Err(ExtensionError::ProtocolVersionMismatch {
+            host_versions: params.protocol_versions,
+            extension_versions: vec![protocol::MEP_VERSION.to_string()],
+        });
+    }
 
-    let result = types::CompileResult {
-        success: false,
-        ir: None,
-        diagnostics: vec![types::Diagnostic {
-            severity: types::DiagnosticSeverity::Error,
-            code: None,
-            message: "Frontend not implemented".to_string(),
-            location: None,
-            related: vec![],
-        }],
-    };
-
-    serde_json::to_value(result)
+    serde_json::to_value(protocol::InitializeResult {
+        protocol_version: protocol::MEP_VERSION.to_string(),
+        extension: E::info(),
+        capabilities: E::capabilities(),
+    })
+    .map_err(ExtensionError::from)
 }
 
 #[doc(hidden)]
-fn dispatch_generate(
+pub fn __dispatch_frontend<E: Frontend>(
+    extension: &E,
     request: &protocol::ExtensionRequest,
-) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    let _params: types::GenerateRequest = serde_json::from_value(request.params.clone())?;
-
-    let result = types::GenerateResult {
-        success: false,
-        artifacts: vec![],
-        diagnostics: vec![types::Diagnostic {
-            severity: types::DiagnosticSeverity::Error,
-            code: None,
-            message: "Backend not implemented".to_string(),
-            location: None,
-            related: vec![],
-        }],
-    };
-
-    serde_json::to_value(result)
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
+    (request.method == protocol::methods::COMPILE).then(|| {
+        let params: types::CompileRequest = serde_json::from_value(request.params.clone())?;
+        serde_json::to_value(extension.compile(params)?).map_err(ExtensionError::from)
+    })
 }
 
 #[doc(hidden)]
-fn dispatch_validate(
+pub fn __dispatch_backend<E: Backend>(
+    extension: &E,
     request: &protocol::ExtensionRequest,
-) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    let _params: types::ValidateRequest = serde_json::from_value(request.params.clone())?;
-
-    let result = types::ValidateResult {
-        valid: false,
-        diagnostics: vec![types::Diagnostic {
-            severity: types::DiagnosticSeverity::Error,
-            code: None,
-            message: "Validator not implemented".to_string(),
-            location: None,
-            related: vec![],
-        }],
-    };
-
-    serde_json::to_value(result)
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
+    (request.method == protocol::methods::GENERATE).then(|| {
+        let params: types::GenerateRequest = serde_json::from_value(request.params.clone())?;
+        serde_json::to_value(extension.generate(params)?).map_err(ExtensionError::from)
+    })
 }
 
 #[doc(hidden)]
-fn dispatch_transform(
+pub fn __dispatch_validator<E: Validator>(
+    extension: &E,
     request: &protocol::ExtensionRequest,
-) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    let _params: types::TransformRequest = serde_json::from_value(request.params.clone())?;
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
+    (request.method == protocol::methods::VALIDATE).then(|| {
+        let params: types::ValidateRequest = serde_json::from_value(request.params.clone())?;
+        serde_json::to_value(extension.validate(params)?).map_err(ExtensionError::from)
+    })
+}
 
-    let result = types::TransformResult {
-        success: false,
-        ir: None,
-        diagnostics: vec![types::Diagnostic {
-            severity: types::DiagnosticSeverity::Error,
-            code: None,
-            message: "Transform not implemented".to_string(),
-            location: None,
-            related: vec![],
-        }],
-    };
-
-    serde_json::to_value(result)
+#[doc(hidden)]
+pub fn __dispatch_transform<E: Transform>(
+    extension: &E,
+    request: &protocol::ExtensionRequest,
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
+    (request.method == protocol::methods::TRANSFORM).then(|| {
+        let params: types::TransformRequest = serde_json::from_value(request.params.clone())?;
+        serde_json::to_value(extension.transform(params)?).map_err(ExtensionError::from)
+    })
 }
 
 // Re-export extism_pdk for use in macro
 #[doc(hidden)]
 #[cfg(target_arch = "wasm32")]
 pub use extism_pdk;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{ExtensionRequest, methods};
+
+    #[derive(Default)]
+    struct RecordingBackend;
+
+    impl Extension for RecordingBackend {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo {
+                id: "recording-backend".into(),
+                name: "Recording backend".into(),
+                types: vec![ExtensionType::Backend],
+                ..ExtensionInfo::default()
+            }
+        }
+    }
+
+    impl Backend for RecordingBackend {
+        fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
+            Ok(GenerateResult {
+                success: true,
+                artifacts: vec![Artifact {
+                    path: "observed.json".into(),
+                    content: request.ir.to_string(),
+                    binary: false,
+                }],
+                diagnostics: vec![],
+            })
+        }
+
+        fn target_languages() -> Vec<String> {
+            vec!["recording".into()]
+        }
+    }
+
+    fn a_generate_request() -> ExtensionRequest {
+        ExtensionRequest::new(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: serde_json::json!({ "observed": true }),
+                options: Default::default(),
+            },
+            7,
+        )
+        .expect("the request fixture should serialize")
+    }
+
+    fn an_initialize_request(protocol_versions: Vec<&str>) -> ExtensionRequest {
+        ExtensionRequest::new(
+            methods::INITIALIZE,
+            protocol::InitializeParams {
+                protocol_versions: protocol_versions.into_iter().map(str::to_string).collect(),
+                host: protocol::PeerInfo {
+                    name: "conformance-host".into(),
+                    version: "0.1.0".into(),
+                },
+            },
+            1,
+        )
+        .expect("the initialization fixture should serialize")
+    }
+
+    #[test]
+    fn backend_requests_reach_the_backend_implementation() {
+        let response = __dispatch_request::<RecordingBackend>(
+            &a_generate_request(),
+            &[__dispatch_backend::<RecordingBackend>],
+        );
+        let result: GenerateResult = serde_json::from_value(
+            response
+                .result
+                .expect("backend dispatch should return a successful result"),
+        )
+        .expect("backend dispatch should return a GenerateResult");
+
+        assert!(result.success);
+        assert_eq!(result.artifacts.len(), 1);
+        assert_eq!(result.artifacts[0].path, "observed.json");
+        assert_eq!(result.artifacts[0].content, r#"{"observed":true}"#);
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn initialization_negotiates_mep_0_1_and_reports_the_extension() {
+        let response = __dispatch_request::<RecordingBackend>(
+            &an_initialize_request(vec!["0.1"]),
+            &[__dispatch_backend::<RecordingBackend>],
+        );
+        let result: protocol::InitializeResult =
+            serde_json::from_value(response.result.expect("compatible peers should initialize"))
+                .expect("initialization should return the negotiated session");
+
+        assert_eq!(result.protocol_version, protocol::MEP_VERSION);
+        assert_eq!(result.extension.id, "recording-backend");
+        assert_eq!(result.extension.types, vec![ExtensionType::Backend]);
+    }
+
+    #[test]
+    fn initialization_rejects_incompatible_protocol_versions() {
+        let response = __dispatch_request::<RecordingBackend>(
+            &an_initialize_request(vec!["9.0"]),
+            &[__dispatch_backend::<RecordingBackend>],
+        );
+
+        assert!(response.result.is_none());
+        assert_eq!(
+            response.error.expect("initialization should fail").code,
+            protocol::error_codes::PROTOCOL_VERSION_MISMATCH
+        );
+    }
+}

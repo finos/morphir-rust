@@ -83,4 +83,4 @@ impl Backend for WasmExtension {
 }
 
 // Export the extension
-morphir_extension_sdk::export_extension!(WasmExtension);
+morphir_extension_sdk::export_extension!(WasmExtension, backend);

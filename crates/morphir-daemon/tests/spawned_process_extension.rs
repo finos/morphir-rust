@@ -221,6 +221,7 @@ async fn aborts_promptly_after_failed_protocol_negotiation() {
     )
     .env("MEP_FIXTURE_UNSUPPORTED_PROTOCOL", "1")
     .env("MEP_FIXTURE_HANG_AFTER_INITIALIZE", "1")
+    .env("MEP_FIXTURE_HOLD_STDERR_OPEN", "1")
     .request_timeout(request_timeout);
     let session = SpawnedProcessSession::spawn_typestate(launch)
         .await

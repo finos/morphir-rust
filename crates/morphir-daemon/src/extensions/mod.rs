@@ -16,7 +16,7 @@ pub mod virtual_paths;
 pub use connected::{ConnectedDaemonSession, ConnectedDaemonTransport, DaemonConnection};
 pub use container::ExtensionContainer;
 pub use loader::ExtensionLoader;
-pub use process::{ProcessLaunch, SpawnedProcessSession};
+pub use process::{ProcessLaunch, SpawnedProcessSession, SpawnedProcessTransport};
 pub use protocol::{ExtensionRequest, ExtensionResponse};
 pub use registry::ExtensionRegistry;
 pub use session::{

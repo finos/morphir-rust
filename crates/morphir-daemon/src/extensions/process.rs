@@ -79,7 +79,18 @@ enum ProcessSessionData {
     Stopped,
 }
 
-/// A MEP session carried over a child process's standard streams.
+/// A runtime-erased MEP session carried over a child process's standard streams.
+///
+/// Compatibility sessions cannot be reused as typestate transports after their
+/// lifecycle has started.
+///
+/// ```compile_fail
+/// use morphir_daemon::extensions::{Session, SpawnedProcessSession};
+/// use morphir_extension_sdk::protocol::InitializeParams;
+/// fn cannot_rewrap(session: SpawnedProcessSession, params: InitializeParams) {
+///     let _initialization = Session::loaded(session).initialize(params);
+/// }
+/// ```
 pub struct SpawnedProcessSession {
     expected_extension_id: String,
     child: Child,
@@ -141,8 +152,10 @@ impl SpawnedProcessSession {
     /// Start a native extension behind the shared typestate session controller.
     pub async fn spawn_typestate(
         launch: ProcessLaunch,
-    ) -> Result<Session<SpawnedProcessSession, Loaded>> {
-        Ok(Session::loaded(Self::spawn(launch).await?))
+    ) -> Result<Session<SpawnedProcessTransport, Loaded>> {
+        Ok(Session::loaded(SpawnedProcessTransport {
+            session: Self::spawn(launch).await?,
+        }))
     }
 
     /// Return captured standard error after the process exits.
@@ -243,16 +256,30 @@ impl SpawnedProcessSession {
             self.child.kill().await?;
         }
         let _ = self.child.wait().await?;
-        self.collect_stderr().await?;
+        self.cancel_stderr();
         self.state = ProcessSessionData::Stopped;
         Ok(())
     }
+
+    fn cancel_stderr(&mut self) {
+        if let Some(stderr_task) = self.stderr_task.take() {
+            stderr_task.abort();
+        }
+    }
+}
+
+/// Fresh child-process transport owned by a typestate session.
+///
+/// Only [`SpawnedProcessSession::spawn_typestate`] constructs this type, so a
+/// runtime-erased compatibility session cannot be reintroduced as loaded.
+pub struct SpawnedProcessTransport {
+    session: SpawnedProcessSession,
 }
 
 #[async_trait]
-impl MepTransport for SpawnedProcessSession {
+impl MepTransport for SpawnedProcessTransport {
     fn expected_extension(&self) -> ExpectedExtension {
-        ExpectedExtension::identified(self.expected_extension_id.clone())
+        ExpectedExtension::identified(self.session.expected_extension_id.clone())
     }
 
     async fn exchange(
@@ -261,23 +288,23 @@ impl MepTransport for SpawnedProcessSession {
     ) -> std::result::Result<ExtensionResponse, TransportError> {
         let method = request.method.clone();
         let exchange = async {
-            let stdin = self.stdin.as_mut().ok_or_else(|| {
+            let stdin = self.session.stdin.as_mut().ok_or_else(|| {
                 DaemonError::Extension("Extension process stdin is closed".to_string())
             })?;
             write_frame(stdin, &request).await?;
-            let frame = read_frame(&mut self.stdout).await?;
+            let frame = read_frame(&mut self.session.stdout).await?;
             serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
         };
-        let result = match timeout(self.request_timeout, exchange).await {
+        let result = match timeout(self.session.request_timeout, exchange).await {
             Ok(result) => result,
             Err(_) => Err(DaemonError::Extension(format!(
                 "Extension request '{}' timed out after {:?}",
-                method, self.request_timeout
+                method, self.session.request_timeout
             ))),
         };
         match result {
             Ok(response) => Ok(response),
-            Err(error) => Err(match self.abort_process().await {
+            Err(error) => Err(match self.session.abort_process().await {
                 Ok(()) => TransportError::new(error, TransportState::Stopped),
                 Err(cleanup) => TransportError::new(
                     DaemonError::Extension(format!(
@@ -290,24 +317,25 @@ impl MepTransport for SpawnedProcessSession {
     }
 
     async fn abort(&mut self) -> std::result::Result<TransportState, TransportError> {
-        self.abort_process()
+        self.session
+            .abort_process()
             .await
             .map(|()| TransportState::Stopped)
             .map_err(|error| TransportError::new(error, TransportState::Indeterminate))
     }
 
     async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
-        self.stdin.take();
-        let status = match timeout(self.request_timeout, self.child.wait()).await {
+        self.session.stdin.take();
+        let status = match timeout(self.session.request_timeout, self.session.child.wait()).await {
             Ok(status) => status.map_err(|error| {
                 TransportError::new(error.into(), TransportState::Indeterminate)
             })?,
             Err(_) => {
                 let error = DaemonError::Extension(format!(
                     "Extension process did not exit after {:?}",
-                    self.request_timeout
+                    self.session.request_timeout
                 ));
-                return Err(match self.abort_process().await {
+                return Err(match self.session.abort_process().await {
                     Ok(()) => TransportError::new(error, TransportState::Stopped),
                     Err(cleanup) => TransportError::new(
                         DaemonError::Extension(format!(
@@ -318,10 +346,11 @@ impl MepTransport for SpawnedProcessSession {
                 });
             }
         };
-        self.collect_stderr()
+        self.session
+            .collect_stderr()
             .await
             .map_err(|error| TransportError::new(error, TransportState::Stopped))?;
-        self.state = ProcessSessionData::Stopped;
+        self.session.state = ProcessSessionData::Stopped;
         if !status.success() {
             return Err(TransportError::new(
                 DaemonError::Extension(format!("Extension process exited with status {status}")),
@@ -332,15 +361,15 @@ impl MepTransport for SpawnedProcessSession {
     }
 }
 
-impl<S> Session<SpawnedProcessSession, S> {
+impl<S> Session<SpawnedProcessTransport, S> {
     /// Report whether the child process is still running without exposing transport I/O.
     pub fn process_is_running(&mut self) -> Result<bool> {
-        self.transport_mut_internal().is_running()
+        self.transport_mut_internal().session.is_running()
     }
 
     /// Return captured child-process diagnostics without exposing transport I/O.
     pub fn process_stderr_output(&self) -> &str {
-        self.transport_internal().stderr_output()
+        self.transport_internal().session.stderr_output()
     }
 }
 

@@ -1,8 +1,9 @@
 //! A standalone MEP backend daemon used to prove JSON-RPC HTTP hosting.
 
 use jsonrpsee::core::RpcResult;
-use jsonrpsee::server::{RpcModule, ServerBuilder};
+use jsonrpsee::server::{RpcModule, ServerBuilder, ServerConfig};
 use jsonrpsee::types::ErrorObjectOwned;
+use morphir_daemon::extensions::protocol::MAX_MEP_PAYLOAD_BYTES;
 use morphir_extension_sdk::protocol::{ExtensionRequest, methods};
 use morphir_extension_sdk::{
     Artifact, Backend, Diagnostic, DiagnosticSeverity, Extension, ExtensionCapabilities,
@@ -99,7 +100,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         RpcResult::Ok(result)
     })?;
 
-    let server = ServerBuilder::default().build("127.0.0.1:0").await?;
+    let server_config = ServerConfig::builder()
+        .max_request_body_size(MAX_MEP_PAYLOAD_BYTES)
+        .max_response_body_size(MAX_MEP_PAYLOAD_BYTES)
+        .build();
+    let server = ServerBuilder::with_config(server_config)
+        .build("127.0.0.1:0")
+        .await?;
     let address = server.local_addr()?;
     let handle = server.start(module);
     println!("http://{address}");

@@ -115,6 +115,49 @@ async fn completes_mep_through_a_real_http_daemon() {
 
 #[tokio::test]
 #[ignore = "requires the independently built mep-http-backend executable"]
+async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
+    let mut daemon = FixtureDaemon::start(&[]).await;
+    let connection = DaemonConnection::new("mep-http-backend", &daemon.endpoint)
+        .request_timeout(Duration::from_secs(5));
+    let mut session = ConnectedDaemonSession::connect(connection)
+        .expect("the HTTP extension client should be configured");
+    session
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "large-payload-test".into(),
+                version: "0.1.0".into(),
+            },
+        })
+        .await
+        .expect("the daemon should initialize before the large request");
+    let large_ir = json!({ "padding": "x".repeat(11 * 1024 * 1024) });
+
+    let generated = session
+        .invoke(
+            methods::GENERATE,
+            serde_json::to_value(GenerateRequest {
+                ir: large_ir,
+                options: Default::default(),
+            })
+            .expect("the generation request should serialize"),
+        )
+        .await
+        .expect("the HTTP transport should carry a request and response above 10 MiB");
+
+    assert_eq!(
+        generated["artifacts"][0]["content"]
+            .as_str()
+            .expect("the backend should return the observed IR")
+            .len(),
+        11 * 1024 * 1024 + 14
+    );
+    session.shutdown().await.expect("the session should stop");
+    daemon.wait_for_exit().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-http-backend executable"]
 async fn reports_connection_refusal_during_initialization() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("an isolated loopback port should be available");

@@ -1,6 +1,8 @@
 //! JSON-RPC HTTP transport for independently hosted extension daemons.
 
-use crate::extensions::protocol::{InitializeParams, InitializeResult, error_codes, methods};
+use crate::extensions::protocol::{
+    InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
+};
 use crate::extensions::session::{ExtensionSession, ExtensionSessionState};
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
@@ -88,6 +90,8 @@ impl ConnectedDaemonSession {
         }
         let client = HttpClientBuilder::default()
             .request_timeout(connection.request_timeout)
+            .max_request_size(MAX_MEP_PAYLOAD_BYTES)
+            .max_response_size(MAX_MEP_PAYLOAD_BYTES)
             .build(&connection.endpoint)
             .map_err(|error| {
                 DaemonError::Extension(format!(

@@ -37,9 +37,9 @@ impl VirtualPathConfig {
         // /output -> build output directory
         config.add_mapping("/output", output_dir);
 
-        // /cache -> extension cache directory
-        if let Some(cache_dir) = dirs::cache_dir() {
-            config.add_mapping("/cache", cache_dir.join("morphir"));
+        // /cache -> extension cache directory (honors MORPHIR_HOME)
+        if let Ok(home) = morphir_common::home::MorphirHome::resolve() {
+            config.add_mapping("/cache", home.cache_root());
         }
 
         config

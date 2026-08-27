@@ -96,6 +96,14 @@ impl Default for NetworkConfig {
     }
 }
 
+/// Default location of the remote sources cache (honors `MORPHIR_HOME`).
+pub(crate) fn default_sources_cache_dir() -> PathBuf {
+    crate::home::MorphirHome::resolve()
+        .map(|home| home.cache_root())
+        .unwrap_or_else(|_| PathBuf::from(".cache").join("morphir"))
+        .join("sources")
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -177,12 +185,10 @@ impl RemoteSourceConfig {
 
     /// Get the cache directory, using default if not specified.
     pub fn cache_directory(&self) -> PathBuf {
-        self.cache.directory.clone().unwrap_or_else(|| {
-            dirs::cache_dir()
-                .unwrap_or_else(|| PathBuf::from(".cache"))
-                .join("morphir")
-                .join("sources")
-        })
+        self.cache
+            .directory
+            .clone()
+            .unwrap_or_else(default_sources_cache_dir)
     }
 }
 

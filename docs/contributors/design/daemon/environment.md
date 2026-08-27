@@ -25,11 +25,14 @@ See [Merge Rules](./merge-rules.md) for details on how environment overrides wor
 
 The Morphir home directory for user-level data.
 
-| Aspect                | Value                                                |
-| --------------------- | ---------------------------------------------------- |
-| Default (Linux/macOS) | `$XDG_DATA_HOME/morphir` or `~/.local/share/morphir` |
-| Default (Windows)     | `%LOCALAPPDATA%\morphir`                             |
-| Contains              | User extensions, cache, global config                |
+| Aspect                | Value                                 |
+| --------------------- | ------------------------------------- |
+| Default (Linux/macOS) | `~/.morphir`                          |
+| Default (Windows)     | `%USERPROFILE%\.morphir`              |
+| Contains              | User extensions, cache, global config |
+
+When set, caches also relocate under `$MORPHIR_HOME/cache` so sandboxed and
+hermetic environments never touch the real user directories.
 
 ```bash
 export MORPHIR_HOME="/opt/morphir"
@@ -461,7 +464,7 @@ export MORPHIR_ENV="production"
 
 | Variable                          | Type   | Default       | Description                |
 | --------------------------------- | ------ | ------------- | -------------------------- |
-| `MORPHIR_HOME`                    | path   | XDG default   | Morphir data directory     |
+| `MORPHIR_HOME`                    | path   | `~/.morphir`  | Morphir home directory     |
 | `MORPHIR_CONFIG_HOME`             | path   | XDG default   | Configuration directory    |
 | `MORPHIR_CACHE_HOME`              | path   | XDG default   | Cache directory            |
 | `MORPHIR_DAEMON_URL`              | url    | None          | Daemon connection URL      |

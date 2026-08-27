@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Connected extension-daemon hosting over JSON-RPC HTTP, with an independently launched daemon conformance fixture and coverage for clean shutdown, connection refusal, and request timeout
 - Native MEP process hosting with `Content-Length` framed standard streams, explicit working directory and environment, response validation, timeouts, separate stderr capture, and real child-process conformance tests
 - MEP 0.1 lifecycle negotiation and reusable conformance tests that build `morphir-wasm-binding` as an independent guest, load it through the native Extism host, invoke real backend generation, verify diagnostics and capability rejection, and complete shutdown
 - YAML project, workspace, and global user configuration with XDG, macOS, and Windows path discovery

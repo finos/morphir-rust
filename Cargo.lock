@@ -3458,7 +3458,6 @@ dependencies = [
  "morphir-common",
  "morphir-core",
  "morphir-devkit",
- "morphir-extension-sdk",
  "notify",
  "reqwest",
  "serde",

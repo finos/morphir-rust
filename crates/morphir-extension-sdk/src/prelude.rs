@@ -21,8 +21,9 @@ pub use crate::error::{ExtensionError, Result};
 // Re-export protocol types
 pub use crate::protocol::{ExtensionRequest, ExtensionResponse, RpcError};
 
-// Re-export macros
+// Re-export guest macros and host functions only for WASM extensions.
+#[cfg(target_arch = "wasm32")]
 pub use crate::{export_extension, host_debug, host_error, host_info, host_warn};
 
-// Re-export host functions
+#[cfg(target_arch = "wasm32")]
 pub use crate::host::{cache_ir, get_cached_ir, get_config, get_var, get_workspace_info, set_var};

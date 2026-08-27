@@ -3,6 +3,13 @@
 //! This crate provides the SDK for building Morphir extensions as WASM plugins.
 //! Extensions communicate with the host daemon via JSON-RPC 2.0 payloads.
 //!
+//! # Platform boundary
+//!
+//! Protocol types and extension traits compile on native and WASM targets. The
+//! Extism PDK, guest exports, and imported host functions compile only for
+//! `wasm32`. Native hosts must use the Extism runtime crate and must not link
+//! guest PDK imports.
+//!
 //! # Quick Start
 //!
 //! ```rust,ignore
@@ -46,6 +53,7 @@
 //! ```
 
 pub mod error;
+#[cfg(target_arch = "wasm32")]
 pub mod host;
 pub mod prelude;
 pub mod protocol;
@@ -63,6 +71,7 @@ pub use types::*;
 /// - `morphir_extension_info`: Returns extension metadata
 /// - `handle`: Main JSON-RPC request handler
 #[macro_export]
+#[cfg(target_arch = "wasm32")]
 macro_rules! export_extension {
     ($impl:ty) => {
         use $crate::extism_pdk::*;
@@ -219,4 +228,5 @@ fn dispatch_transform(
 
 // Re-export extism_pdk for use in macro
 #[doc(hidden)]
+#[cfg(target_arch = "wasm32")]
 pub use extism_pdk;

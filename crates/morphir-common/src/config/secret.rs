@@ -67,8 +67,10 @@ pub enum SecretReferenceError {
         /// The field with the invalid value.
         field: &'static str,
     },
-    /// The command was not a non-empty array of non-empty strings.
-    #[error("secret reference command must be a non-empty array of non-empty strings")]
+    /// The command was not a string array beginning with a non-empty executable.
+    #[error(
+        "secret reference command must be a string array beginning with a non-empty executable"
+    )]
     ExpectedCommand,
     /// The keyring value was not an object with exactly service and account.
     #[error("secret reference keyring must contain exactly service and account")]
@@ -124,17 +126,18 @@ fn parse_command(value: &Value) -> Result<SecretReference, SecretReferenceError>
         .as_array()
         .filter(|command| !command.is_empty())
         .ok_or(SecretReferenceError::ExpectedCommand)?;
-    let mut parts = command
-        .iter()
-        .map(|part| required_string(part, "command"))
-        .collect::<Result<Vec<_>, _>>()
+    let program = required_string(&command[0], "command")
         .map_err(|_| SecretReferenceError::ExpectedCommand)?;
-    let program = parts.remove(0);
+    let args = command[1..]
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<Vec<_>>>()
+        .ok_or(SecretReferenceError::ExpectedCommand)?
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
 
-    Ok(SecretReference::Command {
-        program,
-        args: parts,
-    })
+    Ok(SecretReference::Command { program, args })
 }
 
 fn parse_keyring(value: &Value) -> Result<SecretReference, SecretReferenceError> {
@@ -205,6 +208,24 @@ mod tests {
         assert!(debug.contains("2 arguments"));
         assert!(!debug.contains("private-command-argument"));
         assert!(!debug.contains("second"));
+    }
+
+    #[test]
+    fn command_arguments_may_be_empty_after_a_non_empty_program() {
+        assert_eq!(
+            SecretReference::try_from(&json!({"command": ["helper", "", "tail"]})).unwrap(),
+            SecretReference::Command {
+                program: "helper".into(),
+                args: vec!["".into(), "tail".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn command_still_rejects_an_empty_program_and_an_empty_array() {
+        for value in [json!({"command": [""]}), json!({"command": []})] {
+            assert!(SecretReference::try_from(&value).is_err());
+        }
     }
 
     #[test]

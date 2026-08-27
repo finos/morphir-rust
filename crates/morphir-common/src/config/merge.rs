@@ -48,6 +48,26 @@ pub fn deep_merge(base: &Value, overlay: &Value) -> Value {
 }
 
 /// Deep-merge configuration values while tracking the source of each winning leaf.
+///
+/// ```
+/// use morphir_common::config::{ProvenanceMap, deep_merge_with_provenance};
+/// use serde_json::json;
+///
+/// let base = json!({"registry": {"endpoint": "https://old", "token": "old"}});
+/// let base_origins = ProvenanceMap::from([
+///     (vec!["registry".into(), "endpoint".into()], "defaults"),
+///     (vec!["registry".into(), "token".into()], "defaults"),
+/// ]);
+/// let overlay = json!({"registry": {"token": {"env": "REGISTRY_TOKEN"}}});
+///
+/// let (merged, origins) =
+///     deep_merge_with_provenance(&base, &base_origins, &overlay, &"project");
+///
+/// assert_eq!(merged["registry"]["endpoint"], "https://old");
+/// assert_eq!(merged["registry"]["token"], json!({"env": "REGISTRY_TOKEN"}));
+/// assert_eq!(origins[&vec!["registry".into(), "endpoint".into()]], "defaults");
+/// assert_eq!(origins[&vec!["registry".into(), "token".into()]], "project");
+/// ```
 pub fn deep_merge_with_provenance<T: Clone>(
     base: &Value,
     base_origins: &ProvenanceMap<T>,

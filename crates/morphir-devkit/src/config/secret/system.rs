@@ -190,7 +190,8 @@ fn run_secret_command(
             kind,
         }
     })?;
-    let output = Command::new(program)
+    let executable = command_program(Path::new(program), &cwd);
+    let output = Command::new(executable)
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -219,6 +220,14 @@ fn run_secret_command(
     })?;
     strip_one_line_ending(&mut value);
     require_non_empty(value, "command").map(SecretString::from)
+}
+
+fn command_program(program: &Path, working_directory: &Path) -> PathBuf {
+    if program.is_relative() && program.components().count() > 1 {
+        working_directory.join(program)
+    } else {
+        program.to_path_buf()
+    }
 }
 
 fn command_working_directory(declaring_file: Option<&Path>) -> Result<PathBuf, std::io::ErrorKind> {
@@ -564,6 +573,24 @@ mod tests {
         assert_eq!(
             secret.expose_secret(),
             "config::secret::system::tests::secret_process_listing_token: test"
+        );
+    }
+
+    #[test]
+    fn relative_path_like_programs_resolve_against_the_command_directory() {
+        let directory = Path::new("config/project");
+
+        assert_eq!(
+            command_program(Path::new("./helper"), directory),
+            directory.join("./helper")
+        );
+        assert_eq!(
+            command_program(Path::new("../bin/helper"), directory),
+            directory.join("../bin/helper")
+        );
+        assert_eq!(
+            command_program(Path::new("helper"), directory),
+            Path::new("helper")
         );
     }
 

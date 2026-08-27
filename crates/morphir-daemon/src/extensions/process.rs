@@ -289,6 +289,13 @@ impl MepTransport for SpawnedProcessSession {
         }
     }
 
+    async fn abort(&mut self) -> std::result::Result<TransportState, TransportError> {
+        self.abort_process()
+            .await
+            .map(|()| TransportState::Stopped)
+            .map_err(|error| TransportError::new(error, TransportState::Indeterminate))
+    }
+
     async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
         self.stdin.take();
         let status = match timeout(self.request_timeout, self.child.wait()).await {

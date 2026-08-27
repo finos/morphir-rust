@@ -16,7 +16,7 @@ use morphir_extension_sdk::{
 };
 use serde_json::json;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn native_fixture_path() -> PathBuf {
     let path = std::env::var_os("MEP_NATIVE_FIXTURE")
@@ -198,6 +198,51 @@ async fn kills_a_child_after_failed_protocol_negotiation() {
         .err()
         .expect("the extension should not select an unsupported protocol");
 
+    assert!(failure.error().to_string().contains("did not offer"));
+    let mut session = match failure {
+        FailedSession::Stopped(session, _) => session,
+        FailedSession::Indeterminate(_, _) => panic!("the killed child should be stopped"),
+    };
+    assert!(
+        !session
+            .process_is_running()
+            .expect("process status should be readable")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn aborts_promptly_after_failed_protocol_negotiation() {
+    let request_timeout = Duration::from_secs(5);
+    let launch = ProcessLaunch::new(
+        "mep-native-backend",
+        native_fixture_path(),
+        std::env::current_dir().expect("the test working directory should exist"),
+    )
+    .env("MEP_FIXTURE_UNSUPPORTED_PROTOCOL", "1")
+    .env("MEP_FIXTURE_HANG_AFTER_INITIALIZE", "1")
+    .request_timeout(request_timeout);
+    let session = SpawnedProcessSession::spawn_typestate(launch)
+        .await
+        .expect("the host should start the native extension fixture");
+
+    let started = Instant::now();
+    let failure = tokio::time::timeout(
+        Duration::from_secs(1),
+        session.initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "prompt-abort-test".into(),
+                version: "0.1.0".into(),
+            },
+        }),
+    )
+    .await
+    .expect("failed negotiation cleanup should not use the request timeout")
+    .err()
+    .expect("the extension should not select an unsupported protocol");
+
+    assert!(started.elapsed() < request_timeout);
     assert!(failure.error().to_string().contains("did not offer"));
     let mut session = match failure {
         FailedSession::Stopped(session, _) => session,

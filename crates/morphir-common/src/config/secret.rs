@@ -1,11 +1,12 @@
 //! References to secrets stored outside a Morphir configuration file.
 
 use serde_json::Value;
+use std::fmt;
 use std::path::PathBuf;
 use thiserror::Error;
 
 /// An external source for a secret value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SecretReference {
     /// A secret read from an environment variable.
     Environment { variable: String },
@@ -15,6 +16,37 @@ pub enum SecretReference {
     Command { program: String, args: Vec<String> },
     /// A secret stored in an operating system keyring.
     Keyring { service: String, account: String },
+}
+
+impl fmt::Debug for SecretReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Environment { variable } => formatter
+                .debug_struct("Environment")
+                .field("variable", variable)
+                .finish(),
+            Self::File { path } => formatter.debug_struct("File").field("path", path).finish(),
+            Self::Command { program, args } => formatter
+                .debug_struct("Command")
+                .field("program", program)
+                .field("args", &RedactedCommandArguments(args.len()))
+                .finish(),
+            Self::Keyring { service, account } => formatter
+                .debug_struct("Keyring")
+                .field("service", service)
+                .field("account", account)
+                .finish(),
+        }
+    }
+}
+
+struct RedactedCommandArguments(usize);
+
+impl fmt::Debug for RedactedCommandArguments {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let noun = if self.0 == 1 { "argument" } else { "arguments" };
+        write!(formatter, "<redacted: {} {noun}>", self.0)
+    }
 }
 
 /// The structural reason a JSON value cannot represent a [`SecretReference`].
@@ -161,6 +193,21 @@ mod tests {
     }
 
     #[test]
+    fn command_debug_redacts_arguments_but_keeps_the_program_and_count() {
+        let reference = SecretReference::Command {
+            program: "secret-helper".into(),
+            args: vec!["private-command-argument".into(), "second".into()],
+        };
+
+        let debug = format!("{reference:?}");
+
+        assert!(debug.contains("secret-helper"));
+        assert!(debug.contains("2 arguments"));
+        assert!(!debug.contains("private-command-argument"));
+        assert!(!debug.contains("second"));
+    }
+
+    #[test]
     fn rejects_mixed_extra_empty_and_wrong_typed_reference_shapes() {
         for value in [
             json!({"env": "A", "file": "b"}),
@@ -172,7 +219,7 @@ mod tests {
         ] {
             assert!(
                 SecretReference::try_from(&value).is_err(),
-                "accepted {value}"
+                "invalid secret reference shape was accepted"
             );
             assert!(!is_secret_reference(&value));
         }

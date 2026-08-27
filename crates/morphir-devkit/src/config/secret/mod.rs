@@ -172,6 +172,62 @@ impl EffectiveConfig {
     }
 
     /// Resolve one secret value using an explicitly supplied backend.
+    ///
+    /// The resolver receives only the requested reference. Literal values do
+    /// not call it, and the returned text remains protected until explicitly
+    /// exposed at its final use site.
+    ///
+    /// ```
+    /// use morphir_devkit::{
+    ///     ConfigLoadOptions, ExposeSecret, SecretReference, SecretResolutionContext,
+    ///     SecretResolutionError, SecretResolver, SecretString, load_effective_config,
+    /// };
+    ///
+    /// struct FixtureResolver;
+    ///
+    /// impl SecretResolver for FixtureResolver {
+    ///     fn resolve(
+    ///         &self,
+    ///         reference: &SecretReference,
+    ///         context: SecretResolutionContext<'_>,
+    ///     ) -> Result<SecretString, SecretResolutionError> {
+    ///         match reference {
+    ///             SecretReference::Environment { variable } if variable == "REGISTRY_TOKEN" => {
+    ///                 Ok(SecretString::from("injected-token".to_owned()))
+    ///             }
+    ///             _ => Err(SecretResolutionError::UnsupportedReference {
+    ///                 config_key: context.config_key.to_owned(),
+    ///                 reference_kind: "fixture",
+    ///             }),
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let config_path = directory.path().join("morphir.toml");
+    /// std::fs::write(
+    ///     &config_path,
+    ///     "[registry]\nliteral = \"literal-token\"\ninjected = { env = \"REGISTRY_TOKEN\" }\n",
+    /// )?;
+    /// let effective = load_effective_config(
+    ///     Some(&config_path),
+    ///     &ConfigLoadOptions::project_only(),
+    /// )?;
+    ///
+    /// let literal = effective.resolve_secret("registry.literal")?;
+    /// let injected = effective.resolve_secret_with("registry.injected", &FixtureResolver)?;
+    /// assert!(
+    ///     literal.expose_secret() == "literal-token",
+    ///     "literal secret did not match"
+    /// );
+    /// assert!(
+    ///     injected.expose_secret() == "injected-token",
+    ///     "injected secret did not match"
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn resolve_secret_with(
         &self,
         key: &str,
@@ -250,7 +306,7 @@ mod tests {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Clone)]
     struct RecordedCall {
         reference: SecretReference,
         config_key: String,
@@ -347,16 +403,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(secret.expose_secret(), "resolved-token");
+        let calls = resolver.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            matches!(
+                &calls[0].reference,
+                SecretReference::Command { program, args }
+                    if program == "gh" && args == &["auth", "token"]
+            ),
+            "resolver did not receive the expected command structure"
+        );
+        assert_eq!(calls[0].config_key, "registry.token");
         assert_eq!(
-            resolver.calls(),
-            vec![RecordedCall {
-                reference: SecretReference::Command {
-                    program: "gh".into(),
-                    args: vec!["auth".into(), "token".into()],
-                },
-                config_key: "registry.token".into(),
-                declaring_file: Some(PathBuf::from("/work/morphir.user.toml")),
-            }]
+            calls[0].declaring_file,
+            Some(PathBuf::from("/work/morphir.user.toml"))
         );
     }
 

@@ -87,7 +87,14 @@ fn resolve_file_source(
 
 fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
-        let layer = load_config_value(path).with_context(|| {
+        let declaring_path = std::path::absolute(path).with_context(|| {
+            format!(
+                "Failed to stabilize {} configuration path: {}",
+                source.kind.name(),
+                path.display()
+            )
+        })?;
+        let layer = load_config_value(&declaring_path).with_context(|| {
             format!(
                 "Failed to load {} configuration: {}",
                 source.kind.name(),
@@ -98,7 +105,7 @@ fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()
             &layer,
             ConfigOrigin {
                 kind: source.kind,
-                path: source.path.clone(),
+                path: Some(declaring_path),
             },
         );
     }
@@ -192,6 +199,7 @@ fn merge_user_overrides(
                 .collect::<Vec<_>>();
             if primary_paths.is_empty() {
                 sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
+                return Ok(());
             }
             let mut found_layout = false;
             for primary_path in primary_paths {
@@ -388,10 +396,12 @@ pub fn load_config_context_with(
 mod tests {
     use super::*;
     use crate::config::paths::resolve_path_relative_to_config;
+    use morphir_common::config::ExposeSecret;
     use morphir_common::config::env::DEFAULT_ENV_PREFIX;
     use morphir_common::config::model::{CodegenSection, FrontendSection, IrSection};
     use serde::Serialize;
     use serde::de::DeserializeOwned;
+    use std::process::Command;
 
     fn write_file(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().expect("config parent")).unwrap();
@@ -429,6 +439,23 @@ mod tests {
             serde_json::to_value(from_seed).unwrap(),
             serde_json::to_value(from_empty).unwrap(),
         )
+    }
+
+    fn run_isolated_cwd_helper(test_name: &str, declaring_dir: &Path, changed_dir: &Path) {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg(test_name)
+            .arg("--exact")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .current_dir(declaring_dir)
+            .env("MORPHIR_TEST_CHANGED_CWD", changed_dir)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "isolated working-directory regression helper failed"
+        );
     }
 
     #[test]
@@ -697,6 +724,15 @@ mod tests {
             source(&effective.sources, ConfigSourceKind::UserOverride).status,
             ConfigSourceStatus::Skipped
         );
+        assert_eq!(
+            effective
+                .sources
+                .iter()
+                .filter(|source| source.kind == ConfigSourceKind::UserOverride)
+                .count(),
+            1,
+            "a missing project records one skipped user-override source"
+        );
         assert!(effective.workspace_root.is_none());
     }
 
@@ -810,6 +846,96 @@ mod tests {
             effective.origin_for_key("registry.timeout").unwrap().kind,
             ConfigSourceKind::Environment
         );
+    }
+
+    #[test]
+    fn loaded_relative_file_origin_survives_a_working_directory_change() {
+        let root = tempfile::tempdir().unwrap();
+        let declaring_dir = root.path().join("declaring");
+        let changed_dir = root.path().join("changed");
+        write_file(
+            &declaring_dir.join("morphir.toml"),
+            "[registry]\ntoken = { file = \"secrets/token\" }\n",
+        );
+        write_file(&declaring_dir.join("secrets/token"), "declaring-file-token");
+        write_file(&changed_dir.join("secrets/token"), "changed-file-token");
+
+        run_isolated_cwd_helper(
+            "config::loader::tests::resolve_relative_file_after_cwd_change_helper",
+            &declaring_dir,
+            &changed_dir,
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn resolve_relative_file_after_cwd_change_helper() {
+        let changed_dir = PathBuf::from(std::env::var_os("MORPHIR_TEST_CHANGED_CWD").unwrap());
+        let effective = load_effective_config(
+            Some(Path::new("morphir.toml")),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+
+        std::env::set_current_dir(changed_dir).unwrap();
+        let secret = effective.resolve_secret("registry.token").unwrap();
+
+        assert!(
+            secret.expose_secret() == "declaring-file-token",
+            "relative file resolution changed after the process working directory changed"
+        );
+    }
+
+    #[test]
+    fn loaded_relative_command_origin_survives_a_working_directory_change() {
+        let root = tempfile::tempdir().unwrap();
+        let declaring_dir = root.path().join("declaring");
+        let changed_dir = root.path().join("changed");
+        let helper_name = format!("secret-helper{}", std::env::consts::EXE_SUFFIX);
+        let command = format!(
+            "[registry]\ntoken = {{ command = [\"./{helper_name}\", \"config::loader::tests::relative_command_writes_marker_helper\", \"--exact\", \"--ignored\", \"--nocapture\"] }}\n"
+        );
+        write_file(&declaring_dir.join("morphir.toml"), &command);
+        std::fs::create_dir_all(&changed_dir).unwrap();
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            declaring_dir.join(&helper_name),
+        )
+        .unwrap();
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            changed_dir.join(&helper_name),
+        )
+        .unwrap();
+
+        run_isolated_cwd_helper(
+            "config::loader::tests::resolve_relative_command_after_cwd_change_helper",
+            &declaring_dir,
+            &changed_dir,
+        );
+
+        assert!(declaring_dir.join("command-marker").is_file());
+        assert!(!changed_dir.join("command-marker").exists());
+    }
+
+    #[test]
+    #[ignore]
+    fn resolve_relative_command_after_cwd_change_helper() {
+        let changed_dir = PathBuf::from(std::env::var_os("MORPHIR_TEST_CHANGED_CWD").unwrap());
+        let effective = load_effective_config(
+            Some(Path::new("morphir.toml")),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+
+        std::env::set_current_dir(changed_dir).unwrap();
+        assert!(effective.resolve_secret("registry.token").is_ok());
+    }
+
+    #[test]
+    #[ignore]
+    fn relative_command_writes_marker_helper() {
+        std::fs::write("command-marker", b"executed").unwrap();
     }
 
     #[test]

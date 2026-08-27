@@ -9,7 +9,8 @@ pub async fn assert_backend_session_conformance<S>(
     mut session: S,
     valid_ir: serde_json::Value,
     invalid_ir: serde_json::Value,
-) where
+) -> S
+where
     S: ExtensionSession,
 {
     assert_eq!(session.state(), ExtensionSessionState::Starting);
@@ -108,4 +109,6 @@ pub async fn assert_backend_session_conformance<S>(
         .await
         .expect_err("operations should be rejected after shutdown");
     assert!(error.to_string().contains("not ready"));
+
+    session
 }

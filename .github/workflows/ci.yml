@@ -151,6 +151,31 @@ jobs:
           path: target/wasm32-unknown-unknown/release/morphir_wasm_binding.wasm
           retention-days: 1
 
+  test-native-extension:
+    name: Test (native process extension)
+    runs-on: ubuntu-latest
+    needs: [lint-rust]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install mise
+        uses: jdx/mise-action@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-native-extension-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-native-extension-
+
+      - name: Test real native extension through MEP
+        run: mise run test:process
+
   test-unit:
     name: Test (Unit)
     runs-on: ubuntu-latest

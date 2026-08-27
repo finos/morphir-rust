@@ -1,0 +1,14 @@
+#!/bin/sh
+#MISE description="Build a real Extism guest and run its MEP conformance tests"
+
+set -e
+
+TARGET="wasm32-unknown-unknown"
+
+if ! rustup target list --installed | grep -qx "$TARGET"; then
+    echo "Installing Rust target $TARGET..." >&2
+    rustup target add "$TARGET"
+fi
+
+cargo build --release -p morphir-wasm-binding --target "$TARGET"
+cargo test -p morphir-daemon --test extism_extension -- --ignored

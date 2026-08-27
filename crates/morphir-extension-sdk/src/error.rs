@@ -27,6 +27,15 @@ pub enum ExtensionError {
         capability: String,
     },
 
+    /// Host and extension do not share a Morphir Extension Protocol version.
+    #[error("No compatible Morphir Extension Protocol version")]
+    ProtocolVersionMismatch {
+        /// Versions offered by the host.
+        host_versions: Vec<String>,
+        /// Versions implemented by the extension.
+        extension_versions: Vec<String>,
+    },
+
     /// Extension execution failed
     #[error("Extension execution failed: {0}")]
     ExecutionFailed(String),
@@ -34,6 +43,10 @@ pub enum ExtensionError {
     /// Invalid response from extension
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
+
+    /// JSON-RPC method parameters do not match the method schema.
+    #[error("Invalid method parameters: {0}")]
+    InvalidParams(String),
 
     /// IO error
     #[error("IO error: {0}")]

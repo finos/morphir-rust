@@ -7,8 +7,15 @@ use serde::{Deserialize, Serialize};
 /// JSON-RPC version string
 pub const JSONRPC_VERSION: &str = "2.0";
 
+/// Morphir Extension Protocol version implemented by this SDK.
+pub const MEP_VERSION: &str = "0.1";
+
 /// Standard extension method names
 pub mod methods {
+    /// Negotiate a Morphir Extension Protocol session.
+    pub const INITIALIZE: &str = "morphir.initialize";
+    /// Check whether an extension can respond.
+    pub const PING: &str = "morphir.ping";
     /// Get extension info
     pub const INFO: &str = "morphir.extension.info";
     /// Get extension capabilities
@@ -21,6 +28,39 @@ pub mod methods {
     pub const VALIDATE: &str = "morphir.validator.validate";
     /// Transform: transform IR to IR
     pub const TRANSFORM: &str = "morphir.transform.transform";
+    /// Stop accepting extension operations.
+    pub const SHUTDOWN: &str = "morphir.shutdown";
+}
+
+/// Identifies one side of a Morphir Extension Protocol session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerInfo {
+    /// Peer name.
+    pub name: String,
+    /// Peer version.
+    pub version: String,
+}
+
+/// Parameters offered by a host when it initializes an extension.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeParams {
+    /// Protocol versions supported by the host, in preference order.
+    pub protocol_versions: Vec<String>,
+    /// Identity of the host opening the session.
+    pub host: PeerInfo,
+}
+
+/// Result returned after the extension accepts a protocol version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResult {
+    /// Selected Morphir Extension Protocol version.
+    pub protocol_version: String,
+    /// Extension identity and declared capability kinds.
+    pub extension: crate::ExtensionInfo,
+    /// Features available in the initialized session.
+    pub capabilities: crate::ExtensionCapabilities,
 }
 
 /// JSON-RPC 2.0 Request to extension
@@ -126,6 +166,14 @@ pub mod error_codes {
     pub const VALIDATION_ERROR: i32 = -32003;
     /// Transformation error
     pub const TRANSFORMATION_ERROR: i32 = -32004;
+    /// Extension runtime failure.
+    pub const EXTENSION_FAILURE: i32 = -32010;
+    /// Host and extension do not share a protocol version.
+    pub const PROTOCOL_VERSION_MISMATCH: i32 = -32011;
+    /// Host did not grant a required permission.
+    pub const PERMISSION_DENIED: i32 = -32012;
+    /// Extension did not advertise the requested capability.
+    pub const CAPABILITY_UNAVAILABLE: i32 = -32013;
 }
 
 impl RpcError {
@@ -198,19 +246,42 @@ impl RpcError {
                 extension,
                 capability,
             } => (
-                error_codes::EXTENSION_ERROR,
+                error_codes::CAPABILITY_UNAVAILABLE,
                 format!("Extension '{}' does not support: {}", extension, capability),
+            ),
+            ExtensionError::ProtocolVersionMismatch {
+                host_versions,
+                extension_versions,
+            } => (
+                error_codes::PROTOCOL_VERSION_MISMATCH,
+                format!(
+                    "No compatible Morphir Extension Protocol version. Host supports {}; extension supports {}",
+                    host_versions.join(", "),
+                    extension_versions.join(", ")
+                ),
             ),
             ExtensionError::ExecutionFailed(msg) => (error_codes::INTERNAL_ERROR, msg.clone()),
             ExtensionError::InvalidResponse(msg) => (error_codes::INTERNAL_ERROR, msg.clone()),
+            ExtensionError::InvalidParams(msg) => (error_codes::INVALID_PARAMS, msg.clone()),
             ExtensionError::Io(e) => (error_codes::INTERNAL_ERROR, e.to_string()),
             ExtensionError::Json(e) => (error_codes::PARSE_ERROR, e.to_string()),
+        };
+
+        let data = match err {
+            ExtensionError::ProtocolVersionMismatch {
+                host_versions,
+                extension_versions,
+            } => Some(serde_json::json!({
+                "hostVersions": host_versions,
+                "extensionVersions": extension_versions,
+            })),
+            _ => None,
         };
 
         Self {
             code,
             message,
-            data: None,
+            data,
         }
     }
 }

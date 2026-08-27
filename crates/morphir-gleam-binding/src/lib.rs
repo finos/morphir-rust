@@ -236,4 +236,4 @@ fn emit_parse_stage_json(
 }
 
 // Export the extension
-morphir_extension_sdk::export_extension!(GleamExtension);
+morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);

@@ -134,11 +134,21 @@ jobs:
       - name: Build example extension for wasm32
         run: mise run build:wasm release
 
+      - name: Test real Extism extension through MEP
+        run: mise run test:extism
+
       - name: Upload extension artifact
         uses: actions/upload-artifact@v7
         with:
           name: morphir-ext-example-wasm
           path: .morphir/build/ext/morphir_ext_example.wasm
+          retention-days: 1
+
+      - name: Upload MEP conformance extension artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: morphir-wasm-binding-wasm
+          path: target/wasm32-unknown-unknown/release/morphir_wasm_binding.wasm
           retention-days: 1
 
   test-unit:

@@ -60,9 +60,6 @@ dirs = "6"
 morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
 morphir-devkit = { path = "../morphir-devkit" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk", features = [
-    "host",
-] }
 
 [dev-dependencies]
 tempfile = "3"

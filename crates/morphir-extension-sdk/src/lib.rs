@@ -3,6 +3,13 @@
 //! This crate provides the SDK for building Morphir extensions as WASM plugins.
 //! Extensions communicate with the host daemon via JSON-RPC 2.0 payloads.
 //!
+//! # Platform boundary
+//!
+//! Protocol types and extension traits compile on native and WASM targets. The
+//! Extism PDK, guest exports, and imported host functions compile only for
+//! `wasm32`. Native hosts must use the Extism runtime crate and must not link
+//! guest PDK imports.
+//!
 //! # Quick Start
 //!
 //! ```rust,ignore
@@ -46,6 +53,7 @@
 //! ```
 
 pub mod error;
+#[cfg(target_arch = "wasm32")]
 pub mod host;
 pub mod prelude;
 pub mod protocol;
@@ -65,21 +73,25 @@ pub use types::*;
 #[macro_export]
 macro_rules! export_extension {
     ($impl:ty) => {
+        #[cfg(target_arch = "wasm32")]
         use $crate::extism_pdk::*;
 
         /// Extension info function (required by host)
+        #[cfg(target_arch = "wasm32")]
         #[plugin_fn]
         pub fn morphir_extension_info() -> FnResult<Json<$crate::ExtensionInfo>> {
             Ok(Json(<$impl as $crate::Extension>::info()))
         }
 
         /// Extension capabilities function
+        #[cfg(target_arch = "wasm32")]
         #[plugin_fn]
         pub fn morphir_extension_capabilities() -> FnResult<Json<$crate::ExtensionCapabilities>> {
             Ok(Json(<$impl as $crate::Extension>::capabilities()))
         }
 
         /// Main JSON-RPC handler
+        #[cfg(target_arch = "wasm32")]
         #[plugin_fn]
         pub fn handle(
             Json(request): Json<$crate::protocol::ExtensionRequest>,
@@ -88,6 +100,31 @@ macro_rules! export_extension {
             Ok(Json(result))
         }
     };
+}
+
+// Native builds exercise extension implementations without importing guest PDK symbols.
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_debug {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_info {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_warn {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_error {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
 }
 
 /// Internal dispatch function used by export_extension! macro
@@ -219,4 +256,5 @@ fn dispatch_transform(
 
 // Re-export extism_pdk for use in macro
 #[doc(hidden)]
+#[cfg(target_arch = "wasm32")]
 pub use extism_pdk;

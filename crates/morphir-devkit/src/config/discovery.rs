@@ -80,11 +80,15 @@ pub fn discover_config(start_dir: &Path) -> Result<Option<PathBuf>> {
 }
 
 /// Build all global user configuration candidates for resolved platform roots.
+///
+/// `morphir_home` is the relocated Morphir home directory (from `MORPHIR_HOME`);
+/// when present it replaces the `<home>/.morphir` candidate root.
 pub fn global_config_candidates(
     platform: ConfigPlatform,
     home_dir: Option<&Path>,
     platform_config_dir: Option<&Path>,
     xdg_config_home: Option<&Path>,
+    morphir_home: Option<&Path>,
 ) -> Vec<PathBuf> {
     let valid_xdg = xdg_config_home.filter(|path| is_absolute_for(platform, path));
     let config_dir = match platform {
@@ -92,10 +96,15 @@ pub fn global_config_candidates(
         ConfigPlatform::Windows => platform_config_dir,
     };
 
+    let home_root = match morphir_home {
+        Some(relocated) => Some(relocated.to_path_buf()),
+        None => home_dir.map(|root| root.join(".morphir")),
+    };
+
     config_dir
         .into_iter()
         .map(|root| root.join("morphir"))
-        .chain(home_dir.into_iter().map(|root| root.join(".morphir")))
+        .chain(home_root)
         .flat_map(|root| [root.join("morphir.toml"), root.join("morphir.yaml")])
         .collect()
 }
@@ -134,11 +143,16 @@ pub(crate) fn native_global_config_candidates() -> Vec<PathBuf> {
         }
         ConfigPlatform::Windows => None,
     };
+    let morphir_home = morphir_common::home::MorphirHome::resolve()
+        .ok()
+        .filter(|home| home.is_relocated())
+        .map(|home| home.root().to_path_buf());
     global_config_candidates(
         platform,
         home_dir.as_deref(),
         platform_config_dir.as_deref(),
         xdg_config_home.as_deref(),
+        morphir_home.as_deref(),
     )
 }
 
@@ -435,6 +449,7 @@ mod tests {
             Some(Path::new("/home/alice")),
             Some(Path::new("/ignored/platform")),
             Some(Path::new("/srv/alice/config")),
+            None,
         );
 
         assert_eq!(
@@ -449,12 +464,34 @@ mod tests {
     }
 
     #[test]
+    fn relocated_morphir_home_replaces_home_candidates() {
+        let candidates = global_config_candidates(
+            ConfigPlatform::Xdg,
+            Some(Path::new("/home/alice")),
+            Some(Path::new("/home/alice/.config")),
+            None,
+            Some(Path::new("/sandbox/mh")),
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/home/alice/.config/morphir/morphir.toml"),
+                PathBuf::from("/home/alice/.config/morphir/morphir.yaml"),
+                PathBuf::from("/sandbox/mh/morphir.toml"),
+                PathBuf::from("/sandbox/mh/morphir.yaml"),
+            ]
+        );
+    }
+
+    #[test]
     fn ignores_relative_xdg_config_home() {
         let candidates = global_config_candidates(
             ConfigPlatform::Xdg,
             Some(Path::new("/home/alice")),
             Some(Path::new("/home/alice/.config")),
             Some(Path::new("relative/config")),
+            None,
         );
 
         assert_eq!(
@@ -469,6 +506,7 @@ mod tests {
             ConfigPlatform::MacOs,
             Some(Path::new("/Users/Alice")),
             Some(Path::new("/Users/Alice/Library/Application Support")),
+            None,
             None,
         );
 
@@ -489,6 +527,7 @@ mod tests {
             Some(Path::new(r"D:\Profiles\Alice")),
             Some(Path::new(r"D:\Profiles\Alice\Roaming")),
             Some(Path::new(r"D:\ignored-xdg")),
+            None,
         );
 
         assert_eq!(
@@ -510,6 +549,7 @@ mod tests {
             ConfigPlatform::Xdg,
             Some(&home_dir),
             Some(&config_dir),
+            None,
             None,
         );
         write_file(&candidates[0], "[morphir]\nversion = \"1\"");

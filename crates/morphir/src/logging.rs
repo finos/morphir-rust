@@ -73,11 +73,10 @@ fn default_log_dir() -> PathBuf {
         return workspace_dir.join(".morphir").join("logs");
     }
 
-    // Global fallback
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".morphir")
-        .join("logs")
+    // Global fallback (honors MORPHIR_HOME)
+    morphir_common::home::MorphirHome::resolve()
+        .map(|home| home.logs_dir())
+        .unwrap_or_else(|_| PathBuf::from(".morphir").join("logs"))
 }
 
 /// Find the workspace root by looking for morphir.toml or .morphir directory.

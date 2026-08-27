@@ -53,12 +53,10 @@ pub struct SourceCache {
 impl SourceCache {
     /// Create a new source cache with the given configuration.
     pub fn new(config: CacheConfig) -> Result<Self> {
-        let root = config.directory.clone().unwrap_or_else(|| {
-            dirs::cache_dir()
-                .unwrap_or_else(|| PathBuf::from(".cache"))
-                .join("morphir")
-                .join("sources")
-        });
+        let root = config
+            .directory
+            .clone()
+            .unwrap_or_else(crate::remote::config::default_sources_cache_dir);
 
         fs::create_dir_all(&root)
             .map_err(|_| RemoteSourceError::CacheDirectoryError { path: root.clone() })?;

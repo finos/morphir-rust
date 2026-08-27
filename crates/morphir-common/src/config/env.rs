@@ -19,6 +19,10 @@ use serde_json::{Map, Value};
 /// Default environment-variable prefix, without the trailing underscore.
 pub const DEFAULT_ENV_PREFIX: &str = "MORPHIR";
 
+/// Operational variables that control Morphir itself and are therefore never
+/// interpreted as configuration keys, even though they carry the prefix.
+pub const RESERVED_ENV_VARS: &[&str] = &[crate::home::MORPHIR_HOME_ENV, "MORPHIR_LOG_DIR"];
+
 /// Convert prefixed environment variables into a configuration value.
 ///
 /// Entries are processed in sorted key order so the result does not depend on
@@ -60,6 +64,9 @@ where
         .into_iter()
         .filter_map(|(key, value)| {
             let key = key.as_ref().to_ascii_uppercase();
+            if RESERVED_ENV_VARS.contains(&key.as_str()) {
+                return None;
+            }
             let path = env_key_to_path(key.strip_prefix(&prefix)?);
             (!path.is_empty()).then(|| (path, parse_env_value(value.as_ref())))
         })
@@ -164,6 +171,19 @@ mod tests {
     fn ignores_variables_without_prefix() {
         let value = env_config_value("MORPHIR", [("HOME", "/home/alice"), ("MORPHIRX", "1")]);
         assert_eq!(value, json!({}));
+    }
+
+    #[test]
+    fn reserved_operational_variables_are_not_configuration() {
+        let value = env_config_value(
+            "MORPHIR",
+            [
+                ("MORPHIR_HOME", "/sandbox/mh"),
+                ("MORPHIR_LOG_DIR", "/tmp/logs"),
+                ("MORPHIR_LOGGING__LEVEL", "debug"),
+            ],
+        );
+        assert_eq!(value, json!({"logging": {"level": "debug"}}));
     }
 
     #[test]

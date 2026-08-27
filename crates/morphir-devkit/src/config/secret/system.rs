@@ -559,7 +559,9 @@ mod tests {
         fs::create_dir_all(&config_directory).unwrap();
         let config_file = config_directory.join("morphir.user.toml");
         let helper_name = format!("secret-helper{}", std::env::consts::EXE_SUFFIX);
-        fs::copy(test_executable(), config_directory.join(&helper_name)).unwrap();
+        crate::config::test_support::install_helper_executable(
+            &config_directory.join(&helper_name),
+        );
         let relative_program = Path::new(".").join(helper_name);
         let args = listed_test_args("config::secret::system::tests::secret_process_listing_token");
 

@@ -897,16 +897,8 @@ mod tests {
         );
         write_file(&declaring_dir.join("morphir.toml"), &command);
         std::fs::create_dir_all(&changed_dir).unwrap();
-        std::fs::copy(
-            std::env::current_exe().unwrap(),
-            declaring_dir.join(&helper_name),
-        )
-        .unwrap();
-        std::fs::copy(
-            std::env::current_exe().unwrap(),
-            changed_dir.join(&helper_name),
-        )
-        .unwrap();
+        crate::config::test_support::install_helper_executable(&declaring_dir.join(&helper_name));
+        crate::config::test_support::install_helper_executable(&changed_dir.join(&helper_name));
 
         run_isolated_cwd_helper(
             "config::loader::tests::resolve_relative_command_after_cwd_change_helper",

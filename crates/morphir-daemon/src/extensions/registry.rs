@@ -74,10 +74,7 @@ pub struct ExtensionRegistry {
 impl ExtensionRegistry {
     /// Create a new extension registry
     pub fn new(workspace_root: PathBuf, output_dir: PathBuf) -> Result<Self> {
-        let cache_dir = dirs::cache_dir()
-            .ok_or_else(|| DaemonError::Extension("Could not determine cache directory".into()))?
-            .join("morphir")
-            .join("extensions");
+        let cache_dir = ExtensionLoader::default_cache_dir()?;
 
         Ok(Self {
             loader: ExtensionLoader::new(cache_dir)?,

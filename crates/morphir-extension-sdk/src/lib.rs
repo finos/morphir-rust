@@ -71,24 +71,27 @@ pub use types::*;
 /// - `morphir_extension_info`: Returns extension metadata
 /// - `handle`: Main JSON-RPC request handler
 #[macro_export]
-#[cfg(target_arch = "wasm32")]
 macro_rules! export_extension {
     ($impl:ty) => {
+        #[cfg(target_arch = "wasm32")]
         use $crate::extism_pdk::*;
 
         /// Extension info function (required by host)
+        #[cfg(target_arch = "wasm32")]
         #[plugin_fn]
         pub fn morphir_extension_info() -> FnResult<Json<$crate::ExtensionInfo>> {
             Ok(Json(<$impl as $crate::Extension>::info()))
         }
 
         /// Extension capabilities function
+        #[cfg(target_arch = "wasm32")]
         #[plugin_fn]
         pub fn morphir_extension_capabilities() -> FnResult<Json<$crate::ExtensionCapabilities>> {
             Ok(Json(<$impl as $crate::Extension>::capabilities()))
         }
 
         /// Main JSON-RPC handler
+        #[cfg(target_arch = "wasm32")]
         #[plugin_fn]
         pub fn handle(
             Json(request): Json<$crate::protocol::ExtensionRequest>,
@@ -97,6 +100,31 @@ macro_rules! export_extension {
             Ok(Json(result))
         }
     };
+}
+
+// Native builds exercise extension implementations without importing guest PDK symbols.
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_debug {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_info {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_warn {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! host_error {
+    ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }};
 }
 
 /// Internal dispatch function used by export_extension! macro

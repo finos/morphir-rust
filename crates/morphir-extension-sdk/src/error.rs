@@ -44,6 +44,10 @@ pub enum ExtensionError {
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
+    /// JSON-RPC method parameters do not match the method schema.
+    #[error("Invalid method parameters: {0}")]
+    InvalidParams(String),
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

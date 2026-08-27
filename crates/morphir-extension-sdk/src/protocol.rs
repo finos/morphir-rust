@@ -262,6 +262,7 @@ impl RpcError {
             ),
             ExtensionError::ExecutionFailed(msg) => (error_codes::INTERNAL_ERROR, msg.clone()),
             ExtensionError::InvalidResponse(msg) => (error_codes::INTERNAL_ERROR, msg.clone()),
+            ExtensionError::InvalidParams(msg) => (error_codes::INVALID_PARAMS, msg.clone()),
             ExtensionError::Io(e) => (error_codes::INTERNAL_ERROR, e.to_string()),
             ExtensionError::Json(e) => (error_codes::PARSE_ERROR, e.to_string()),
         };

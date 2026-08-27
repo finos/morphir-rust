@@ -136,6 +136,12 @@ impl ExtensionSession for ExtismSession {
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
         let initialized = self.ready_session()?;
+        if matches!(method, methods::INITIALIZE | methods::SHUTDOWN) {
+            return Err(DaemonError::Extension(format!(
+                "Protocol lifecycle method '{}' must use its dedicated session operation",
+                method
+            )));
+        }
         if let Some(required) = required_capability(method)
             && !initialized.extension.types.contains(&required)
         {

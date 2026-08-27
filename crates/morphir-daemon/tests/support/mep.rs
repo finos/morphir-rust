@@ -38,6 +38,15 @@ pub async fn assert_backend_session_conformance<S>(
     );
     assert_eq!(session.state(), ExtensionSessionState::Ready);
 
+    for lifecycle_method in [methods::INITIALIZE, methods::SHUTDOWN] {
+        let error = session
+            .invoke(lifecycle_method, json!({}))
+            .await
+            .expect_err("lifecycle methods should use their dedicated session operations");
+        assert!(error.to_string().contains("lifecycle method"));
+        assert_eq!(session.state(), ExtensionSessionState::Ready);
+    }
+
     let generated = session
         .invoke(
             methods::GENERATE,

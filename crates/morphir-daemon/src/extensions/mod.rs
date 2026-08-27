@@ -13,7 +13,7 @@ pub mod registry;
 pub mod session;
 pub mod virtual_paths;
 
-pub use connected::{ConnectedDaemonSession, DaemonConnection};
+pub use connected::{ConnectedDaemonSession, ConnectedDaemonTransport, DaemonConnection};
 pub use container::ExtensionContainer;
 pub use loader::ExtensionLoader;
 pub use process::{ProcessLaunch, SpawnedProcessSession};

@@ -8,7 +8,7 @@
 mod support;
 
 use morphir_daemon::extensions::{
-    ConnectedDaemonSession, DaemonConnection, ExtensionSession, ExtensionSessionState,
+    ConnectedDaemonSession, DaemonConnection, FailedSession, InvokeOutcome,
 };
 use morphir_extension_sdk::{
     GenerateRequest,
@@ -102,7 +102,7 @@ async fn completes_mep_through_a_real_http_daemon() {
     let session = ConnectedDaemonSession::connect(connection)
         .expect("the HTTP extension client should be configured");
 
-    let session = support::mep::assert_backend_session_conformance(
+    support::mep::assert_backend_typestate_conformance(
         session,
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
@@ -110,7 +110,6 @@ async fn completes_mep_through_a_real_http_daemon() {
     .await;
 
     daemon.wait_for_exit().await;
-    assert_eq!(session.state(), ExtensionSessionState::Stopped);
 }
 
 #[tokio::test]
@@ -119,9 +118,9 @@ async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
     let mut daemon = FixtureDaemon::start(&[]).await;
     let connection = DaemonConnection::new("mep-http-backend", &daemon.endpoint)
         .request_timeout(Duration::from_secs(5));
-    let mut session = ConnectedDaemonSession::connect(connection)
+    let session = ConnectedDaemonSession::connect(connection)
         .expect("the HTTP extension client should be configured");
-    session
+    let session = session
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
@@ -130,11 +129,11 @@ async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
             },
         })
         .await
-        .expect("the daemon should initialize before the large request");
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
     let large_ir = json!({ "padding": "x".repeat(11 * 1024 * 1024) });
 
-    let generated = session
-        .invoke(
+    let (session, generated) = match session
+        .invoke::<serde_json::Value>(
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: large_ir,
@@ -143,7 +142,11 @@ async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
             .expect("the generation request should serialize"),
         )
         .await
-        .expect("the HTTP transport should carry a request and response above 10 MiB");
+    {
+        InvokeOutcome::Success(session, generated) => (session, generated),
+        InvokeOutcome::Rejected(_, error) => panic!("generation was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => panic!("generation failed: {}", failure.error()),
+    };
 
     assert_eq!(
         generated["artifacts"][0]["content"]
@@ -152,7 +155,10 @@ async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
             .len(),
         11 * 1024 * 1024 + 14
     );
-    session.shutdown().await.expect("the session should stop");
+    session
+        .shutdown()
+        .await
+        .unwrap_or_else(|failure| panic!("shutdown failed: {}", failure.error()));
     daemon.wait_for_exit().await;
 }
 
@@ -170,10 +176,10 @@ async fn reports_connection_refusal_during_initialization() {
     drop(listener);
     let connection = DaemonConnection::new("missing-http-backend", endpoint)
         .request_timeout(Duration::from_millis(250));
-    let mut session = ConnectedDaemonSession::connect(connection)
+    let session = ConnectedDaemonSession::connect(connection)
         .expect("the endpoint URL should be valid even when nothing is listening");
 
-    let error = session
+    let failure = session
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
@@ -182,21 +188,27 @@ async fn reports_connection_refusal_during_initialization() {
             },
         })
         .await
-        .expect_err("initialization should report the refused connection");
+        .err()
+        .expect("initialization should report the refused connection");
 
-    assert!(error.to_string().contains("HTTP extension request"));
-    assert_eq!(session.state(), ExtensionSessionState::Stopped);
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("HTTP extension request")
+    );
+    assert!(matches!(failure, FailedSession::Indeterminate(_, _)));
 }
 
 #[tokio::test]
 #[ignore = "requires the independently built mep-http-backend executable"]
-async fn stops_the_session_when_the_daemon_exceeds_the_request_timeout() {
+async fn marks_the_session_indeterminate_when_the_daemon_exceeds_the_request_timeout() {
     let mut daemon = FixtureDaemon::start(&["--hang-generate"]).await;
     let connection = DaemonConnection::new("mep-http-backend", &daemon.endpoint)
         .request_timeout(Duration::from_millis(100));
-    let mut session = ConnectedDaemonSession::connect(connection)
+    let session = ConnectedDaemonSession::connect(connection)
         .expect("the HTTP extension client should be configured");
-    session
+    let session = session
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
@@ -205,10 +217,10 @@ async fn stops_the_session_when_the_daemon_exceeds_the_request_timeout() {
             },
         })
         .await
-        .expect("the daemon should initialize before the timeout case");
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
-    let error = session
-        .invoke(
+    let failure = match session
+        .invoke::<serde_json::Value>(
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: a_distribution_with_one_value(),
@@ -217,10 +229,19 @@ async fn stops_the_session_when_the_daemon_exceeds_the_request_timeout() {
             .expect("the generation request should serialize"),
         )
         .await
-        .expect_err("the hung HTTP request should time out");
+    {
+        InvokeOutcome::Failed(failure) => failure,
+        InvokeOutcome::Success(_, _) => panic!("the hung request should time out"),
+        InvokeOutcome::Rejected(_, error) => panic!("the request was rejected: {error}"),
+    };
 
-    assert!(error.to_string().contains("HTTP extension request"));
-    assert_eq!(session.state(), ExtensionSessionState::Stopped);
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("HTTP extension request")
+    );
+    assert!(matches!(failure, FailedSession::Indeterminate(_, _)));
     daemon
         .child
         .kill()

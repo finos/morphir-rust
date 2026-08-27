@@ -38,3 +38,27 @@ pub use sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
     EnvSelection, SourceSelection,
 };
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::Path;
+
+    /// Make the current test executable available at `destination` so a test
+    /// can exec it as a helper program.
+    ///
+    /// On Unix this must NOT copy: a copy opens the destination for writing,
+    /// and any concurrently spawning test forks a child that briefly inherits
+    /// that write descriptor, making a subsequent exec of the helper fail
+    /// with `ETXTBSY`. A symlink never opens the file, so no such window
+    /// exists. Windows has no `ETXTBSY` and restricts symlink creation, so a
+    /// copy is used there.
+    pub(crate) fn install_helper_executable(destination: &Path) {
+        let source = std::env::current_exe().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source, destination).unwrap();
+        #[cfg(not(unix))]
+        {
+            std::fs::copy(&source, destination).unwrap();
+        }
+    }
+}

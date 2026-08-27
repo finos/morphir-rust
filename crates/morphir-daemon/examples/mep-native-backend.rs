@@ -64,7 +64,19 @@ impl Backend for NativeBackend {
 }
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|arg| arg == "--stderr-holder") {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        return Ok(());
+    }
+
     eprintln!("native MEP fixture started");
+    if std::env::var_os("MEP_FIXTURE_HOLD_STDERR_OPEN").is_some() {
+        std::process::Command::new(std::env::current_exe()?)
+            .arg("--stderr-holder")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn()?;
+    }
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();
@@ -73,11 +85,20 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     while let Some(body) = read_frame(&mut reader)? {
         let request: ExtensionRequest = serde_json::from_slice(&body)?;
         let shutdown = request.method == methods::SHUTDOWN;
-        let response = morphir_extension_sdk::__dispatch_request::<NativeBackend>(
+        let mut response = morphir_extension_sdk::__dispatch_request::<NativeBackend>(
             &request,
             &[morphir_extension_sdk::__dispatch_backend::<NativeBackend>],
             &[ExtensionType::Backend],
         );
+        if request.method == methods::INITIALIZE
+            && std::env::var_os("MEP_FIXTURE_UNSUPPORTED_PROTOCOL").is_some()
+            && let Some(result) = response
+                .result
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            result.insert("protocolVersion".into(), "unsupported".into());
+        }
         write_frame(&mut writer, &response)?;
         if shutdown {
             if std::env::var_os("MEP_FIXTURE_IGNORE_SHUTDOWN").is_some() {

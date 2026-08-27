@@ -156,3 +156,64 @@ async fn kills_a_child_that_does_not_exit_after_shutdown() {
             .expect("process status should be readable")
     );
 }
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn kills_a_child_after_failed_protocol_negotiation() {
+    let launch = ProcessLaunch::new(
+        "mep-native-backend",
+        native_fixture_path(),
+        std::env::current_dir().expect("the test working directory should exist"),
+    )
+    .env("MEP_FIXTURE_UNSUPPORTED_PROTOCOL", "1")
+    .request_timeout(Duration::from_millis(100));
+    let mut session = SpawnedProcessSession::spawn(launch)
+        .await
+        .expect("the host should start the native extension fixture");
+
+    let error = session
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "negotiation-test".into(),
+                version: "0.1.0".into(),
+            },
+        })
+        .await
+        .expect_err("the extension should not select an unsupported protocol");
+
+    assert!(error.to_string().contains("did not offer"));
+    assert!(
+        !session
+            .is_running()
+            .expect("process status should be readable")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn shutdown_does_not_wait_for_a_descendant_holding_stderr_open() {
+    let launch = ProcessLaunch::new(
+        "mep-native-backend",
+        native_fixture_path(),
+        std::env::current_dir().expect("the test working directory should exist"),
+    )
+    .env("MEP_FIXTURE_HOLD_STDERR_OPEN", "1")
+    .request_timeout(Duration::from_millis(100));
+    let session = SpawnedProcessSession::spawn(launch)
+        .await
+        .expect("the host should start the native extension fixture");
+
+    let mut session = support::mep::assert_backend_session_conformance(
+        session,
+        a_distribution_with_one_value(),
+        json!("not Morphir IR"),
+    )
+    .await;
+
+    assert!(
+        !session
+            .is_running()
+            .expect("process status should be readable")
+    );
+}

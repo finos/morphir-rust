@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{
-    AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
@@ -22,6 +22,7 @@ use tokio::time::timeout;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const MAX_STDERR_BYTES: usize = 256 * 1024;
 
 /// A native extension command with an explicit identity and working directory.
 #[derive(Debug, Clone)]
@@ -120,11 +121,7 @@ impl SpawnedProcessSession {
         let mut stderr = child.stderr.take().ok_or_else(|| {
             DaemonError::Extension("Extension process stderr was not captured".to_string())
         })?;
-        let stderr_task = tokio::spawn(async move {
-            let mut output = Vec::new();
-            stderr.read_to_end(&mut output).await?;
-            Ok(output)
-        });
+        let stderr_task = tokio::spawn(async move { read_bounded_tail(&mut stderr).await });
 
         Ok(Self {
             expected_extension_id: launch.extension_id,
@@ -210,13 +207,23 @@ impl SpawnedProcessSession {
     }
 
     async fn collect_stderr(&mut self) -> Result<()> {
-        let Some(stderr_task) = self.stderr_task.take() else {
+        let Some(mut stderr_task) = self.stderr_task.take() else {
             return Ok(());
         };
-        let output = stderr_task.await.map_err(|error| {
-            DaemonError::Extension(format!("Failed to join extension stderr reader: {error}"))
-        })??;
-        self.stderr_output = String::from_utf8_lossy(&output).into_owned();
+        match timeout(self.request_timeout, &mut stderr_task).await {
+            Ok(result) => {
+                let output = result.map_err(|error| {
+                    DaemonError::Extension(format!(
+                        "Failed to join extension stderr reader: {error}"
+                    ))
+                })??;
+                self.stderr_output = String::from_utf8_lossy(&output).into_owned();
+            }
+            Err(_) => {
+                stderr_task.abort();
+                let _ = stderr_task.await;
+            }
+        }
         Ok(())
     }
 
@@ -261,17 +268,21 @@ impl ExtensionSession for SpawnedProcessSession {
 
         let offered_versions = params.protocol_versions.clone();
         let initialized: InitializeResult = self.call(methods::INITIALIZE, params).await?;
-        if !offered_versions.contains(&initialized.protocol_version) {
-            return Err(DaemonError::Extension(format!(
+        let validation = if !offered_versions.contains(&initialized.protocol_version) {
+            Err(DaemonError::Extension(format!(
                 "Extension selected protocol version '{}' that the host did not offer",
                 initialized.protocol_version
-            )));
-        }
-        if initialized.extension.id != self.expected_extension_id {
-            return Err(DaemonError::Extension(format!(
+            )))
+        } else if initialized.extension.id != self.expected_extension_id {
+            Err(DaemonError::Extension(format!(
                 "Extension identity changed during initialization: expected '{}', initialized '{}'",
                 self.expected_extension_id, initialized.extension.id
-            )));
+            )))
+        } else {
+            Ok(())
+        };
+        if let Err(error) = validation {
+            return Err(self.abort_with_error(error).await);
         }
 
         self.state = ProcessSessionData::Ready(Box::new(initialized.clone()));
@@ -329,6 +340,35 @@ impl ExtensionSession for SpawnedProcessSession {
 
         Ok(())
     }
+}
+
+async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut chunk = [0; 8 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(output);
+        }
+        append_bounded_tail(&mut output, &chunk[..read], MAX_STDERR_BYTES);
+    }
+}
+
+fn append_bounded_tail(output: &mut Vec<u8>, chunk: &[u8], limit: usize) {
+    if chunk.len() >= limit {
+        output.clear();
+        output.extend_from_slice(&chunk[chunk.len() - limit..]);
+        return;
+    }
+
+    let excess = output
+        .len()
+        .saturating_add(chunk.len())
+        .saturating_sub(limit);
+    if excess > 0 {
+        output.drain(..excess);
+    }
+    output.extend_from_slice(chunk);
 }
 
 fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
@@ -481,5 +521,16 @@ mod tests {
                 .to_string()
                 .contains("Invalid extension protocol header")
         );
+    }
+
+    #[test]
+    fn stderr_capture_retains_only_the_bounded_tail() {
+        let mut output = b"old diagnostics".to_vec();
+        append_bounded_tail(&mut output, b"new diagnostics", 16);
+
+        assert_eq!(output, b"snew diagnostics");
+
+        append_bounded_tail(&mut output, b"0123456789abcdefghijkl", 16);
+        assert_eq!(output, b"6789abcdefghijkl");
     }
 }

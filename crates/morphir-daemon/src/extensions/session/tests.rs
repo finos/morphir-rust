@@ -1,5 +1,6 @@
 use super::*;
 use crate::DaemonError;
+use crate::extensions::ConnectedDaemonTransport;
 use crate::extensions::protocol::{
     ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, methods,
 };
@@ -7,6 +8,7 @@ use async_trait::async_trait;
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::mem::size_of;
 
 struct FakeTransport {
     expected: ExpectedExtension,
@@ -161,6 +163,11 @@ fn transport_trait_remains_object_safe() {
         ExpectedExtension::identified("example"),
         response,
     )));
+}
+
+#[test]
+fn failed_session_size_is_bounded_for_large_transports() {
+    assert!(size_of::<FailedSession<ConnectedDaemonTransport>>() <= 128);
 }
 
 #[tokio::test]

@@ -164,7 +164,7 @@ impl<T: MepTransport> Session<T, Ready> {
             CallOutcome::Success(_) => match self.transport.terminate().await {
                 Ok(TransportState::Stopped) => Ok(self.transition(None)),
                 Ok(TransportState::Indeterminate) => Err(FailedSession::Indeterminate(
-                    self.transition(None),
+                    Box::new(self.transition(None)),
                     DaemonError::Extension("Extension shutdown outcome is indeterminate".into()),
                 )),
                 Err(error) => Err(self.failed(error)),
@@ -231,9 +231,11 @@ impl<T: MepTransport, S> Session<T, S> {
 
     async fn fail_after_abort(mut self, error: DaemonError) -> FailedSession<T> {
         match self.transport.abort().await {
-            Ok(TransportState::Stopped) => FailedSession::Stopped(self.transition(None), error),
+            Ok(TransportState::Stopped) => {
+                FailedSession::Stopped(Box::new(self.transition(None)), error)
+            }
             Ok(TransportState::Indeterminate) => {
-                FailedSession::Indeterminate(self.transition(None), error)
+                FailedSession::Indeterminate(Box::new(self.transition(None)), error)
             }
             Err(abort) => {
                 let state = abort.state;
@@ -250,9 +252,11 @@ impl<T: MepTransport, S> Session<T, S> {
 
     fn failed(self, failure: TransportError) -> FailedSession<T> {
         match failure.state {
-            TransportState::Stopped => FailedSession::Stopped(self.transition(None), failure.error),
+            TransportState::Stopped => {
+                FailedSession::Stopped(Box::new(self.transition(None)), failure.error)
+            }
             TransportState::Indeterminate => {
-                FailedSession::Indeterminate(self.transition(None), failure.error)
+                FailedSession::Indeterminate(Box::new(self.transition(None)), failure.error)
             }
         }
     }
@@ -261,9 +265,9 @@ impl<T: MepTransport, S> Session<T, S> {
 /// A failed transition paired with the only state the host can prove.
 pub enum FailedSession<T> {
     /// The transport proved that the peer stopped.
-    Stopped(Session<T, Stopped>, DaemonError),
+    Stopped(Box<Session<T, Stopped>>, DaemonError),
     /// The transport could not prove the peer's state.
-    Indeterminate(Session<T, Indeterminate>, DaemonError),
+    Indeterminate(Box<Session<T, Indeterminate>>, DaemonError),
 }
 
 impl<T> FailedSession<T> {

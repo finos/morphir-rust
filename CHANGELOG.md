@@ -18,6 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports `intent-duplicate-id`, which the Scala tool lacks
 - Open native JSON/YAML IR codecs, cursor-based semantic events, module-bounded v3-to-v4 migration
   pipelines, and streaming single-file and document-tree transports
+- `kb search --index` now applies `--type`, `--tag`, `--status` and `--bundle`, with the same
+  semantics the scanning search uses: case-insensitive type and status, every supplied tag required,
+  and a bundle matched by label or bare name. They were previously accepted and ignored
+- `kb sync diff` gained `--json` and `--raw`. `--json` reports `{path, identical, diff, patch}`;
+  `--raw` prints the patch alone, with headers relative to the upstream repository root so it can be
+  piped into `git apply`, and prints nothing when the two sides are identical
+- `kb sync diff` covers more than one file. Its path argument is now a list, each element either a
+  mirrored path or a glob in the dialect `sync.yaml` mappings already use (`*`, `?`, `**`, and
+  `**/` matching zero directories); no argument at all means every file the mirror knows about,
+  which is the same set `kb sync status` reports on. Only differing files are shown, sorted by
+  mirrored path, so `--raw` is a multi-file patch `git apply` takes in one go and `--json` carries
+  the per-file records as `{files, summary: {differing, matched}}`. A pattern matching nothing is
+  refused by name, and every such pattern is named in one refusal rather than one per run. A
+  single mirrored path still renders exactly as it did, in all three forms. A lockfile entry
+  absent on both sides is passed over rather than compared, and counted as `absent` in the
+  summary instead of being reported as a comparison that never happened
 - Atomic, validated installed-extension snapshots that pair each catalog entry with the requested selection from its exact lock
 - Transactional extension uninstall that removes active catalog and exact-lock state while retaining verified content-addressed artifact bytes
 - `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation
@@ -51,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `kb sync diff` compares an asset as bytes rather than as text. Every mirrored file was decoded as
+  UTF-8 first, so an asset holding bytes that are not valid UTF-8 — an image, an archive — came back
+  with U+FFFD where those bytes had been and diffed against itself as a change. Concepts are still
+  projected as text, which is the only form a frontmatter fence can be removed from. `--raw` now
+  emits a real binary patch for such a file, rather than a `Binary files ... differ` line that
+  `git apply` refuses — and that would take every other file in a multi-file patch down with it
 - Canonical constructor names in v4 custom types now round-trip (#103). An acronym constructor such
   as `GC` serializes to the canonical `"(gc)"`, which the decoders read back as a single literal
   word, leaving a constructor named `(gc)`; the Gleam backend then emitted that into source that
@@ -70,6 +92,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   index through a documented read-only API
 - `kb intent` transitions preserve CRLF line endings. Frontmatter normalization meant every
   transition on a CRLF document rewrote the whole file instead of the keys it edits
+- `kb sync diff` refuses a path that leaves the mirror. The argument went unchecked, unlike the
+  paths `pull` and `push` act on, and a mirror `root` a few directories deep absorbs enough `..`
+  segments for the containment check to pass — while the diff's own scratch directory, one level
+  above its staging roots, does not. The staging copy and write then landed outside the scratch tree,
+  creating directories as they went
+- `kb sync diff` no longer calls a file deleted upstream identical. A file edited here and gone from
+  the checkout made git fail onto a stderr that was discarded, leaving an empty diff that read as
+  "identical" in every output form. Each side is now modelled when it is absent: the file diffs as an
+  addition and carries a patch that restores it upstream, and one deleted here diffs as a removal
+  instead of dying on an unattributed `No such file or directory`. A path neither side holds is
+  refused by name
+- `kb search --index --bundle` no longer reaches past the bundle the scan would pick. A bare name
+  shared by two bundles — `public/foo` and `private/foo` — matched both, so the indexed search
+  returned documents the scanning search excluded, which in a public/private split discloses them
 
 - Classic IR value arguments and parameters now serialize as canonical arrays, matching their strict deserializers and Morphir IR v3 JSON
 - Classic IR module definition and specification entries now serialize as canonical two-element arrays, matching their strict deserializers and Morphir IR v3 JSON

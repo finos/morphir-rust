@@ -1661,13 +1661,864 @@ fn diff_compares_the_upstream_copy_against_the_projected_local_copy() {
     let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
     let sb = seeded(&kb_root, &upstream);
     let identical = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
-    assert!(identical.trim().is_empty(), "got: {identical}");
+    assert_eq!(identical.path, "docs/types.md");
+    assert!(identical.identical, "got: {}", identical.diff);
+    assert!(identical.diff.trim().is_empty(), "got: {}", identical.diff);
     let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
     fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
     let changed = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
-    assert!(changed.contains("+An addition."), "got: {changed}");
+    assert!(!changed.identical);
     assert!(
-        !changed.contains("kb:begin"),
-        "the diff shows the upstream form, never the fence: {changed}"
+        changed.diff.contains("+An addition."),
+        "got: {}",
+        changed.diff
+    );
+    assert!(
+        !changed.diff.contains("kb:begin"),
+        "the diff shows the upstream form, never the fence: {}",
+        changed.diff
+    );
+}
+
+/// The same fixture, diffed twice: once unchanged, once after a local edit.
+fn diff_both_ways() -> (TempDir, sync::DiffResult, sync::DiffResult) {
+    let (dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let identical = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let changed = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    (dir, identical, changed)
+}
+
+#[test]
+fn render_diff_text_form_is_unchanged() {
+    let (_dir, identical, changed) = diff_both_ways();
+    assert_eq!(
+        sync::render_diff_text(&identical),
+        "docs/types.md: identical\n",
+        "the identical line is byte-for-byte what the CLI printed before"
+    );
+    assert_eq!(
+        sync::render_diff_text(&changed),
+        changed.diff,
+        "a changed file renders git's output verbatim, as `print!` did"
+    );
+}
+
+#[test]
+fn render_diff_json_is_machine_readable_in_both_cases() {
+    let (_dir, identical, changed) = diff_both_ways();
+
+    let text = sync::render_diff_json(&identical);
+    assert!(
+        text.ends_with('\n'),
+        "payloads end in a newline like the rest"
+    );
+    let v: serde_json::Value = serde_json::from_str(&text).expect("identical case parses");
+    assert_eq!(v["path"], "docs/types.md");
+    assert_eq!(v["identical"], true);
+    assert_eq!(v["diff"], "");
+    assert_eq!(v["patch"], "");
+
+    let v: serde_json::Value =
+        serde_json::from_str(&sync::render_diff_json(&changed)).expect("changed case parses");
+    assert_eq!(v["path"], "docs/types.md");
+    assert_eq!(v["identical"], false);
+    assert!(
+        v["diff"].as_str().unwrap().contains("+An addition."),
+        "the unified diff travels in the payload: {v}"
+    );
+    assert!(
+        v["patch"]
+            .as_str()
+            .unwrap()
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "and so does the applicable patch: {v}"
+    );
+}
+
+#[test]
+fn render_diff_raw_emits_git_bytes_and_nothing_else() {
+    let (_dir, identical, changed) = diff_both_ways();
+    assert_eq!(
+        sync::render_diff_raw(&identical),
+        "",
+        "an identical pair is an empty patch — any decoration would corrupt the pipe"
+    );
+    let raw = sync::render_diff_raw(&changed);
+    assert_eq!(raw, changed.patch, "git's bytes, unwrapped and unpadded");
+    assert!(raw.contains("+An addition."));
+    assert!(
+        !raw.contains("docs/types.md: identical"),
+        "the human line never leaks into the raw form"
+    );
+}
+
+#[test]
+fn render_diff_raw_headers_are_relative_to_the_upstream_root() {
+    let (_dir, _identical, changed) = diff_both_ways();
+    let raw = sync::render_diff_raw(&changed);
+    assert!(
+        raw.starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "the headers name the mirrored path, not a checkout or a temp file: {raw}"
+    );
+    assert!(raw.contains("\n--- a/docs/types.md\n"), "got: {raw}");
+    assert!(raw.contains("\n+++ b/docs/types.md\n"), "got: {raw}");
+    assert!(
+        !raw.contains("kb-sync-"),
+        "no scratch path survives into the patch: {raw}"
+    );
+    assert!(
+        sync::render_diff_text(&changed).contains("kb-sync-"),
+        "while the human form keeps the real paths it always showed"
+    );
+}
+
+#[test]
+fn render_diff_raw_produces_a_patch_that_git_apply_lands_upstream() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let changed = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+
+    // A scratch checkout holding upstream's copy at the mirrored path — the
+    // only place the patch claims to fit.
+    let repo = TempDir::new().unwrap();
+    run_git(repo.path(), &["init", "-q"]);
+    let target = repo.path().join("docs").join("types.md");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::copy(upstream.join("docs").join("types.md"), &target).unwrap();
+    run_git(repo.path(), &["add", "-A"]);
+
+    let patch_file = repo.path().join("kb.patch");
+    fs::write(&patch_file, sync::render_diff_raw(&changed)).unwrap();
+    let checked = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["apply", "--check", "kb.patch"])
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "git apply --check refused the patch: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    run_git(repo.path(), &["apply", "kb.patch"]);
+
+    // And what it lands is our projected form, byte for byte.
+    let projected =
+        sync::project(&fs::read_to_string(sb.local_file("docs/types.md")).unwrap()).unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), projected);
+}
+
+/// Runs git in `dir` and insists it succeeded.
+fn run_git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// ------------------------------------------------- diff: containment and gaps
+
+/// A bundle whose mirror root is two directories deep.
+///
+/// The depth is the point. `mirror_file` judges containment against the bundle
+/// root, which sits that far above the resolved path, so it absorbs two `..`
+/// segments and calls the result contained. The diff's own scratch tree is only
+/// one directory above `scratch/a` and `scratch/b`, so the very same `rel`
+/// climbs out of it — the two containment roots cannot be made to agree.
+fn deep_mirror_fixture() -> (TempDir, PathBuf, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let kb_root = dir.path().join("kb");
+    let bundle_root = kb_root.join("bundles").join("vendored");
+    write_file(
+        &bundle_root.join("index.md"),
+        "---\nokf_version: \"0.2\"\ntitle: Vendored\ndescription: Mirrored upstream material.\nsync: true\n---\n\n# Vendored\n\nMirrored upstream material.\n\n## Orientation\n",
+    );
+    write_file(
+        &bundle_root.join("sync.yaml"),
+        "upstream:\n  repo: acme/spec\n  refs_path: acme/spec\nroot: mirror/sources\nmappings:\n  - \"docs/**\"\n",
+    );
+    // Real directories, so the `..` segments below are resolvable by the OS
+    // rather than failing before anything is written.
+    fs::create_dir_all(bundle_root.join("mirror").join("sources")).unwrap();
+    (dir, kb_root, bundle_root)
+}
+
+#[test]
+fn diff_refuses_a_rel_that_climbs_out_of_the_scratch_directory() {
+    let (dir, kb_root, bundle_root) = deep_mirror_fixture();
+
+    // The scratch directory lives directly under the system temp directory, and
+    // so does the fixture, so two `..` segments from `scratch/a` land on a
+    // sentinel that has nothing to do with either.
+    let victim = std::env::temp_dir().join(format!("kb-diff-victim-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&victim);
+    fs::create_dir_all(&victim).unwrap();
+    let sentinel = victim.join("evil.md");
+    fs::write(&sentinel, "SENTINEL\n").unwrap();
+    let name = victim.file_name().unwrap().to_str().unwrap().to_string();
+    let rel = format!("../../{name}/evil.md");
+
+    // Both sides of the comparison exist, so nothing short of the guard stops
+    // the staging writes: the mirrored file where the rel really lands inside
+    // the bundle, and an upstream copy where it lands from the checkout root.
+    write_file(
+        &bundle_root.join(&name).join("evil.md"),
+        "---\ntitle: Evil\n---\n\n# Evil\n",
+    );
+    let upstream = dir.path().join("nested").join("upstream");
+    fs::create_dir_all(&upstream).unwrap();
+    write_file(
+        &dir.path().join(&name).join("evil.md"),
+        "---\ntitle: Upstream\n---\n\n# Upstream\n",
+    );
+
+    let (_, sb) = load_sync(&kb_root);
+    let outcome = sync::diff(&sb, &upstream, &rel);
+    let survived = fs::read_to_string(&sentinel).unwrap();
+    let _ = fs::remove_dir_all(&victim);
+    assert_eq!(
+        survived, "SENTINEL\n",
+        "a diff writes inside its own scratch directory and nowhere else"
+    );
+    let err = outcome.unwrap_err();
+    assert!(
+        err.to_string().contains(&rel),
+        "the refusal names the path it refused: {err}"
+    );
+}
+
+/// A scratch checkout of `upstream`, minus `absent`, as a git repository — the
+/// only place a patch from `diff` claims to fit.
+fn checkout_of(upstream: &Path, absent: Option<&str>) -> TempDir {
+    let repo = TempDir::new().unwrap();
+    run_git(repo.path(), &["init", "-q"]);
+    for rel in sync::relative_files_under(upstream).unwrap() {
+        if Some(rel.as_str()) == absent {
+            continue;
+        }
+        let target = sync::resolve(repo.path(), &rel);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::copy(upstream.join(&rel), &target).unwrap();
+    }
+    run_git(repo.path(), &["add", "-A"]);
+    repo
+}
+
+/// `git apply` in `repo`, insisting the patch both checks and lands.
+fn apply_patch(repo: &Path, patch: &str) {
+    let patch_file = repo.join("kb.patch");
+    fs::write(&patch_file, patch).unwrap();
+    let checked = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["apply", "--check", "kb.patch"])
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "git apply --check refused the patch:\n{patch}\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    run_git(repo, &["apply", "kb.patch"]);
+}
+
+#[test]
+fn diff_of_a_file_deleted_upstream_but_edited_here_is_not_identical() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nA local edit.\n").unwrap();
+    fs::remove_file(upstream.join("docs").join("types.md")).unwrap();
+
+    let d = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    assert!(
+        !d.identical,
+        "a file that exists here and is gone upstream is not identical: {d:?}"
+    );
+    assert!(
+        d.diff.contains("A local edit."),
+        "the human diff shows what would go upstream: {}",
+        d.diff
+    );
+    assert!(
+        d.patch
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "the patch still names the mirrored path: {}",
+        d.patch
+    );
+    assert_eq!(sync::render_diff_raw(&d), d.patch);
+    assert_ne!(sync::render_diff_text(&d), "docs/types.md: identical\n");
+
+    // And it lands in a checkout where the file is gone, which is the only
+    // state the upstream repository can be in for this to have happened.
+    let repo = checkout_of(&upstream, Some("docs/types.md"));
+    apply_patch(repo.path(), &d.patch);
+    let projected =
+        sync::project(&fs::read_to_string(sb.local_file("docs/types.md")).unwrap()).unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.path().join("docs").join("types.md")).unwrap(),
+        projected
+    );
+}
+
+#[test]
+fn diff_of_a_file_missing_locally_is_a_deletion_rather_than_an_unattributed_io_error() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    fs::remove_file(sb.local_file("docs/types.md")).unwrap();
+
+    let d = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    assert!(!d.identical, "got: {d:?}");
+    assert!(
+        d.patch
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "got: {}",
+        d.patch
+    );
+
+    let repo = checkout_of(&upstream, None);
+    apply_patch(repo.path(), &d.patch);
+    assert!(
+        !repo.path().join("docs").join("types.md").exists(),
+        "the patch takes the file away, which is what the mirror now says"
+    );
+}
+
+#[test]
+fn diff_of_a_path_on_neither_side_names_the_path_and_the_situation() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let err = sync::diff(&sb, &upstream, "docs/never-existed.md").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("docs/never-existed.md"), "got: {msg}");
+    assert!(
+        !msg.contains("os error"),
+        "a bare IO error attributes nothing: {msg}"
+    );
+}
+
+// ------------------------------------------------------- diff: many at once
+
+/// The seeded fixture with `docs/types.md` and `schemas/thing.yaml` edited here,
+/// leaving `docs/index.md` agreeing with upstream.
+/// A fixture whose lockfile lists a path that neither side still holds — the
+/// ghost the sweep passes over.
+fn with_a_ghost() -> (TempDir, sync::SyncBundle, PathBuf) {
+    let (dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let _ = seeded(&kb_root, &upstream);
+    fs::remove_file(upstream.join("docs").join("types.md")).unwrap();
+    let (_, sb) = load_sync(&kb_root);
+    fs::remove_file(sb.local_file("docs/types.md")).unwrap();
+    let (_, sb) = load_sync(&kb_root);
+    (dir, sb, upstream)
+}
+
+#[test]
+fn a_ghost_in_the_lockfile_is_counted_absent_not_compared() {
+    let (_dir, sb, upstream) = with_a_ghost();
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert!(set.absent >= 1, "the ghost is counted");
+    assert_eq!(set.compared(), set.matched - set.absent);
+    let sel = sync::DiffSelection::Many(set);
+    let v: serde_json::Value = serde_json::from_str(&sync::render_diffs_json(&sel)).unwrap();
+    assert_eq!(v["summary"]["absent"], 1);
+    // The tally never claims the ghost was compared, and it points the reader
+    // at the tool whose job the ghost is.
+    let text = sync::render_diffs_text(&sel);
+    assert!(
+        text.contains("listed in the lockfile absent on both sides — see `kb sync status`"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn a_selection_reaching_only_ghosts_says_so_rather_than_claiming_agreement() {
+    let (_dir, sb, upstream) = with_a_ghost();
+    let set = sync::diff_many(&sb, &upstream, &select(&["docs/types.md"])).unwrap();
+    assert_eq!((set.compared(), set.absent), (0, 1));
+    let sel = sync::DiffSelection::Many(set);
+    assert_eq!(
+        sync::render_diffs_text(&sel),
+        "1 path(s) matched, none present on either side — see `kb sync status`\n"
+    );
+    assert_eq!(sync::render_diffs_raw(&sel), "", "still nothing to apply");
+}
+
+fn two_of_three_differ() -> (TempDir, sync::SyncBundle, PathBuf) {
+    let (dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let before = fs::read_to_string(sb.local_file("schemas/thing.yaml")).unwrap();
+    fs::write(
+        sb.local_file("schemas/thing.yaml"),
+        before + "extra: true\n",
+    )
+    .unwrap();
+    (dir, sb, upstream)
+}
+
+/// A selection list, as the CLI will hand one over.
+fn select(patterns: &[&str]) -> Vec<String> {
+    patterns.iter().map(|p| p.to_string()).collect()
+}
+
+fn paths_of(files: &[sync::DiffResult]) -> Vec<&str> {
+    files.iter().map(|d| d.path.as_str()).collect()
+}
+
+#[test]
+fn diff_without_a_pattern_covers_every_differing_file_and_omits_the_rest() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert_eq!(
+        paths_of(&set.files),
+        vec!["docs/types.md", "schemas/thing.yaml"],
+        "docs/index.md agrees with upstream, so it is not part of the diff"
+    );
+    assert_eq!(set.matched, 3, "all three mirrored files were considered");
+    assert!(
+        set.files.iter().all(|d| !d.identical),
+        "an identical file never reaches the output: {:?}",
+        paths_of(&set.files)
+    );
+}
+
+#[test]
+fn diff_with_a_glob_covers_the_subset_it_matches() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let set = sync::diff_many(&sb, &upstream, &select(&["docs/**"])).unwrap();
+    assert_eq!(paths_of(&set.files), vec!["docs/types.md"]);
+    assert_eq!(set.matched, 2, "both files under docs/ were considered");
+}
+
+#[test]
+fn diff_glob_uses_the_manifest_glob_dialect() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    // `**/` also matches zero directories, exactly as a `sync.yaml` mapping does.
+    let set = sync::diff_many(&sb, &upstream, &select(&["**/*.yaml"])).unwrap();
+    assert_eq!(paths_of(&set.files), vec!["schemas/thing.yaml"]);
+    // `?` is one character and never a separator.
+    let set = sync::diff_many(&sb, &upstream, &select(&["docs/type?.md"])).unwrap();
+    assert_eq!(paths_of(&set.files), vec!["docs/types.md"]);
+}
+
+#[test]
+fn several_patterns_are_a_union_taken_once_and_in_path_order() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    // Overlapping, and in the wrong order: `docs/types.md` is selected twice.
+    let set = sync::diff_many(
+        &sb,
+        &upstream,
+        &select(&["schemas/**", "docs/types.md", "docs/**"]),
+    )
+    .unwrap();
+    assert_eq!(
+        paths_of(&set.files),
+        vec!["docs/types.md", "schemas/thing.yaml"],
+        "a file selected twice appears once, in mirrored-path order"
+    );
+    assert_eq!(set.matched, 3);
+    // The same union, however the patterns arrive.
+    let same = sync::diff_many(
+        &sb,
+        &upstream,
+        &select(&["docs/**", "docs/types.md", "schemas/**"]),
+    )
+    .unwrap();
+    assert_eq!(paths_of(&same.files), paths_of(&set.files));
+    assert_eq!(
+        sync::render_diffs_raw(&sync::DiffSelection::Many(same)),
+        sync::render_diffs_raw(&sync::DiffSelection::Many(set)),
+        "so the patch is byte-reproducible whatever order the pipe delivered"
+    );
+}
+
+#[test]
+fn a_glob_matching_one_file_reports_what_the_literal_path_reports() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let literal = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    let set = sync::diff_many(&sb, &upstream, &select(&["docs/typ*.md"])).unwrap();
+    assert_eq!(set.files.len(), 1);
+    let matched = &set.files[0];
+    assert_eq!(matched.path, literal.path);
+    assert_eq!(matched.identical, literal.identical);
+    // The patch is the byte-for-byte comparison; the human diff names a scratch
+    // file whose name is unique per call, so only the patch can be compared.
+    assert_eq!(matched.patch, literal.patch);
+    assert_eq!(
+        sync::render_diffs_raw(&sync::DiffSelection::Many(set)),
+        sync::render_diff_raw(&literal),
+        "one differing file makes the same patch either way"
+    );
+}
+
+#[test]
+fn a_pattern_matching_nothing_is_refused_by_name() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    for pattern in ["docs/nowhere/*.md", "docs/never-existed.md"] {
+        let err = sync::diff_many(&sb, &upstream, &select(&[pattern]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(pattern),
+            "the refusal names the pattern it refused: {err}"
+        );
+        assert!(
+            err.contains("kb sync status"),
+            "and says where the known paths are listed: {err}"
+        );
+    }
+}
+
+#[test]
+fn every_pattern_that_matched_nothing_is_named_in_one_refusal() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let err = sync::diff_many(
+        &sb,
+        &upstream,
+        &select(&["docs/**", "docs/nowhere/*.md", "schemas/nope.yaml"]),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("docs/nowhere/*.md"), "got: {err}");
+    assert!(
+        err.contains("schemas/nope.yaml"),
+        "the second failure is named too, rather than waiting for another run: {err}"
+    );
+    assert!(
+        !err.contains("`docs/**`"),
+        "and the pattern that did match is not accused: {err}"
+    );
+}
+
+#[test]
+fn a_mirror_that_agrees_with_upstream_everywhere_is_not_an_error() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert!(set.files.is_empty(), "got: {:?}", paths_of(&set.files));
+    assert_eq!(set.matched, 3);
+    let sel = sync::DiffSelection::Many(set);
+    assert_eq!(
+        sync::render_diffs_raw(&sel),
+        "",
+        "nothing to apply, so nothing is printed"
+    );
+    assert_eq!(
+        sync::render_diffs_text(&sel),
+        "3 file(s) compared, no differences\n"
+    );
+    let v: serde_json::Value = serde_json::from_str(&sync::render_diffs_json(&sel)).unwrap();
+    assert_eq!(v["files"].as_array().unwrap().len(), 0);
+    assert_eq!(v["summary"]["differing"], 0);
+    assert_eq!(v["summary"]["compared"], 3);
+    assert_eq!(v["summary"]["absent"], 0);
+}
+
+#[test]
+fn a_binary_asset_that_matches_upstream_is_not_reported_as_differing() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    // Bytes that are not valid UTF-8: decoding them would substitute U+FFFD and
+    // make a freshly pulled file look locally modified.
+    write_bin(
+        &upstream.join("schemas").join("logo.png"),
+        &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0xff, 0xfe, 0x0a],
+    );
+    let sb = seeded(&kb_root, &upstream);
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert!(
+        set.files.is_empty(),
+        "a byte-identical asset differs from nothing: {:?}",
+        paths_of(&set.files)
+    );
+    assert_eq!(set.matched, 4);
+}
+
+#[test]
+fn the_order_of_a_multi_file_diff_is_stable_across_runs() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let first = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    let second = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert_eq!(paths_of(&first.files), paths_of(&second.files));
+    let mut sorted = paths_of(&first.files);
+    sorted.sort_unstable();
+    assert_eq!(
+        paths_of(&first.files),
+        sorted,
+        "mirrored path order, so the patch is byte-reproducible"
+    );
+    assert_eq!(
+        sync::render_diffs_raw(&sync::DiffSelection::Many(first)),
+        sync::render_diffs_raw(&sync::DiffSelection::Many(second))
+    );
+}
+
+#[test]
+fn the_multi_file_raw_patch_applies_as_one_patch() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let before = fs::read_to_string(sb.local_file("schemas/thing.yaml")).unwrap();
+    fs::write(
+        sb.local_file("schemas/thing.yaml"),
+        before + "extra: true\n",
+    )
+    .unwrap();
+    // A modification, an edited asset, and a deletion in one patch.
+    fs::remove_file(sb.local_file("docs/index.md")).unwrap();
+
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert_eq!(
+        paths_of(&set.files),
+        vec!["docs/index.md", "docs/types.md", "schemas/thing.yaml"]
+    );
+    let raw = sync::render_diffs_raw(&sync::DiffSelection::Many(set));
+
+    let repo = checkout_of(&upstream, None);
+    apply_patch(repo.path(), &raw);
+
+    for rel in ["docs/types.md", "schemas/thing.yaml"] {
+        let projected = sync::project(&fs::read_to_string(sb.local_file(rel)).unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(sync::resolve(repo.path(), rel)).unwrap(),
+            projected,
+            "{rel} lands as the mirror's own form"
+        );
+    }
+    assert!(
+        !repo.path().join("docs").join("index.md").exists(),
+        "and the deletion lands too"
+    );
+}
+
+#[test]
+fn a_glob_cannot_smuggle_a_parent_segment_past_the_guard() {
+    let (dir, kb_root, bundle_root) = deep_mirror_fixture();
+    let victim = std::env::temp_dir().join(format!("kb-glob-victim-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&victim);
+    fs::create_dir_all(&victim).unwrap();
+    let sentinel = victim.join("evil.md");
+    fs::write(&sentinel, "SENTINEL\n").unwrap();
+    let name = victim.file_name().unwrap().to_str().unwrap().to_string();
+    write_file(
+        &bundle_root.join(&name).join("evil.md"),
+        "---\ntitle: Evil\n---\n\n# Evil\n",
+    );
+    let upstream = dir.path().join("nested").join("upstream");
+    fs::create_dir_all(&upstream).unwrap();
+    write_file(
+        &dir.path().join(&name).join("evil.md"),
+        "---\ntitle: Upstream\n---\n\n# Upstream\n",
+    );
+
+    let (_, sb) = load_sync(&kb_root);
+    let pattern = format!("../../{name}/*.md");
+    // Refused whether it arrives alone or hidden among patterns that are fine.
+    for patterns in [
+        select(&[&pattern]),
+        select(&["docs/**", &pattern, "schemas/**"]),
+    ] {
+        let outcome = sync::diff_many(&sb, &upstream, &patterns);
+        let survived = fs::read_to_string(&sentinel).unwrap();
+        assert_eq!(
+            survived, "SENTINEL\n",
+            "a glob writes inside the scratch directory and nowhere else"
+        );
+        let err = outcome.unwrap_err().to_string();
+        assert!(
+            err.contains(&pattern),
+            "the refusal names the pattern it refused: {err}"
+        );
+        assert!(
+            err.contains("the mirror"),
+            "and refuses it on containment, not on having matched nothing: {err}"
+        );
+    }
+    let _ = fs::remove_dir_all(&victim);
+
+    // And on a mirror that does hold files, so what refuses the pattern is the
+    // guard rather than its having matched nothing.
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let err = sync::diff_many(&sb, &upstream, &select(&["docs/**", "../*/*.md"]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("`../*/*.md` leaves the mirror"), "got: {err}");
+}
+
+#[test]
+fn a_mirror_holding_nothing_says_so_rather_than_matching_nothing() {
+    let (dir, kb_root, _bundle_root) = deep_mirror_fixture();
+    let upstream = dir.path().join("empty-upstream");
+    fs::create_dir_all(&upstream).unwrap();
+    let (_, sb) = load_sync(&kb_root);
+    let err = sync::diff_many(&sb, &upstream, &[])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("kb sync pull"), "got: {err}");
+}
+
+#[test]
+fn the_diff_file_set_is_the_one_status_reports_on() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let from_status: Vec<String> = sync::status(&sb, Some(&upstream))
+        .unwrap()
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
+    assert_eq!(
+        sync::known_paths(&sb, Some(&upstream)).unwrap(),
+        from_status
+    );
+    assert_eq!(
+        sync::diff_many(&sb, &upstream, &[]).unwrap().matched,
+        from_status.len()
+    );
+}
+
+// --------------------------------------------- diff: selecting and rendering
+
+#[test]
+fn one_literal_path_is_a_single_diff_and_everything_else_is_not() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let single = sync::diff_selected(&sb, &upstream, &select(&["docs/types.md"])).unwrap();
+    assert!(matches!(single, sync::DiffSelection::Single(_)));
+    for patterns in [
+        select(&[]),
+        select(&["docs/**"]),
+        select(&["docs/type?.md"]),
+        // Two literals are still a set of files, not the single-file case.
+        select(&["docs/types.md", "schemas/thing.yaml"]),
+    ] {
+        let many = sync::diff_selected(&sb, &upstream, &patterns).unwrap();
+        assert!(
+            matches!(many, sync::DiffSelection::Many(_)),
+            "got a single diff for {patterns:?}"
+        );
+    }
+    assert!(sync::is_glob("docs/**"));
+    assert!(sync::is_glob("docs/type?.md"));
+    assert!(!sync::is_glob("docs/types.md"));
+}
+
+#[test]
+fn a_single_file_selection_renders_exactly_as_it_did_before() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let one = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    let sel = sync::DiffSelection::Single(one.clone());
+    assert_eq!(sync::render_diffs_text(&sel), sync::render_diff_text(&one));
+    assert_eq!(sync::render_diffs_json(&sel), sync::render_diff_json(&one));
+    assert_eq!(sync::render_diffs_raw(&sel), sync::render_diff_raw(&one));
+    // Including the identical case, whose one line the CLI has always printed.
+    let same = sync::diff(&sb, &upstream, "docs/index.md").unwrap();
+    assert_eq!(
+        sync::render_diffs_text(&sync::DiffSelection::Single(same)),
+        "docs/index.md: identical\n"
+    );
+}
+
+#[test]
+fn multi_file_text_names_every_file_it_shows() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let sel = sync::DiffSelection::Many(sync::diff_many(&sb, &upstream, &[]).unwrap());
+    let text = sync::render_diffs_text(&sel);
+    assert!(text.contains("=== docs/types.md ===\n"), "got: {text}");
+    assert!(text.contains("=== schemas/thing.yaml ===\n"), "got: {text}");
+    assert!(
+        !text.contains("=== docs/index.md ==="),
+        "an identical file has no section: {text}"
+    );
+    assert!(text.contains("+An addition."), "got: {text}");
+    assert!(
+        text.ends_with("\n2 of 3 file(s) differ\n"),
+        "and it closes with the tally: {text}"
+    );
+}
+
+#[test]
+fn multi_file_json_is_an_object_carrying_the_records_and_a_count() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let sel = sync::DiffSelection::Many(sync::diff_many(&sb, &upstream, &[]).unwrap());
+    let text = sync::render_diffs_json(&sel);
+    assert!(
+        text.ends_with('\n'),
+        "payloads end in a newline like the rest"
+    );
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let files = v["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    // Each record is the shape the single-file payload has, so one parser reads both.
+    assert_eq!(files[0]["path"], "docs/types.md");
+    assert_eq!(files[0]["identical"], false);
+    assert!(
+        files[0]["patch"]
+            .as_str()
+            .unwrap()
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "got: {v}"
+    );
+    assert_eq!(files[1]["path"], "schemas/thing.yaml");
+    assert_eq!(v["summary"]["differing"], 2);
+    assert_eq!(v["summary"]["compared"], 3);
+    assert_eq!(v["summary"]["absent"], 0);
+}
+
+#[test]
+fn multi_file_raw_is_the_patches_in_path_order_and_nothing_else() {
+    let (_dir, sb, upstream) = two_of_three_differ();
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    let joined: String = set.files.iter().map(|d| d.patch.clone()).collect();
+    let raw = sync::render_diffs_raw(&sync::DiffSelection::Many(set));
+    assert_eq!(raw, joined, "git's bytes, concatenated, undecorated");
+    assert!(!raw.contains("==="), "no section headers in the raw form");
+    assert!(!raw.contains("kb-sync-"), "no scratch path survives: {raw}");
+    assert_eq!(
+        raw.matches("diff --git ").count(),
+        2,
+        "one file header per differing file"
+    );
+}
+
+#[test]
+fn a_changed_binary_asset_makes_a_patch_that_lands_like_any_other() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    write_bin(
+        &upstream.join("schemas").join("logo.png"),
+        &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0xff, 0xfe, 0x0a],
+    );
+    let sb = seeded(&kb_root, &upstream);
+    write_bin(
+        &sb.local_file("schemas/logo.png"),
+        &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x00, 0x01, 0x0a],
+    );
+    // A file the mirror changed sits in the same patch as everything else, so a
+    // patch git refuses to apply would take the whole multi-file patch with it.
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert_eq!(
+        paths_of(&set.files),
+        vec!["docs/types.md", "schemas/logo.png"]
+    );
+
+    let repo = checkout_of(&upstream, None);
+    apply_patch(
+        repo.path(),
+        &sync::render_diffs_raw(&sync::DiffSelection::Many(set)),
+    );
+    assert_eq!(
+        fs::read(repo.path().join("schemas").join("logo.png")).unwrap(),
+        fs::read(sb.local_file("schemas/logo.png")).unwrap(),
+        "the bytes the mirror holds are the bytes that land"
     );
 }

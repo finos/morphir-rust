@@ -10,8 +10,8 @@ use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlled, ConstructorDefinition, InputTypeEntry,
-    Literal as MorphirLiteral, Pattern as MorphirPattern, TypeDefinition, ValueBody as V4ValueBody,
-    ValueDefinition as V4ValueDefinition,
+    Literal as MorphirLiteral, ModuleDefinition, Pattern as MorphirPattern, TypeDefinition,
+    ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
 };
 use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
@@ -73,6 +73,41 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             "distribution": "Library",
             "packageName": self.package_name.to_string(),
             "layout": "VfsMode"
+        })
+    }
+
+    /// Convert a parsed Gleam module into an in-memory V4 module definition.
+    ///
+    /// This method performs no VFS operations and is suitable for MEP compile results.
+    pub fn build_module_definition(
+        &self,
+        module_ir: &ModuleIR,
+        access: MorphirAccess,
+    ) -> Result<AccessControlled<ModuleDefinition>> {
+        let types = module_ir
+            .types
+            .iter()
+            .map(|definition| {
+                self.convert_type_def(definition)
+                    .map(|converted| (Name::from(&definition.name).to_string(), converted))
+            })
+            .collect::<Result<IndexMap<_, _>>>()?;
+        let values = module_ir
+            .values
+            .iter()
+            .map(|definition| {
+                self.convert_value_def(definition)
+                    .map(|converted| (Name::from(&definition.name).to_string(), converted))
+            })
+            .collect::<Result<IndexMap<_, _>>>()?;
+
+        Ok(AccessControlled {
+            access,
+            value: ModuleDefinition {
+                types,
+                values,
+                doc: module_ir.doc.clone(),
+            },
         })
     }
 

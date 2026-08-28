@@ -4,6 +4,11 @@ pub mod ast;
 pub mod compare;
 pub mod errors;
 pub mod lexer;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod parse_stage;
+#[cfg(target_arch = "wasm32")]
+#[path = "parse_stage_wasm.rs"]
+pub(crate) mod parse_stage;
 pub mod parser;
 pub mod visitor;
 

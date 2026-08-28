@@ -3565,7 +3565,7 @@ This guide helps developers contribute to Morphir Rust.
 
 ### Prerequisites
 
-- Rust toolchain (1.70+)
+- Rust toolchain (1.98+)
 - `wasm32-unknown-unknown` target for extension development
 - Git
 

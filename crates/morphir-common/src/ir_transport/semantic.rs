@@ -7,11 +7,91 @@ use morphir_core::traversal::{
     SemanticEventKind,
 };
 
+use super::ClassicV3ModuleVisitor;
 use super::{EventSink, EventSource, IrVersion, Stage, TransportDiagnostic};
 
 pub(crate) enum SemanticFile {
     ClassicV3(classic::Distribution),
     V4(v4::IRFile),
+}
+
+pub(crate) struct ClassicEventVisitor<'sink> {
+    sink: &'sink mut dyn EventSink,
+    cursor: IrCursor,
+    failure: Option<TransportDiagnostic>,
+}
+
+impl<'sink> ClassicEventVisitor<'sink> {
+    pub(crate) fn new(sink: &'sink mut dyn EventSink) -> Self {
+        Self {
+            sink,
+            cursor: IrCursor::root().child(CursorSegment::Distribution),
+            failure: None,
+        }
+    }
+
+    pub(crate) fn take_failure(&mut self) -> Option<TransportDiagnostic> {
+        self.failure.take()
+    }
+
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), String> {
+        self.sink.accept(event).map_err(|diagnostic| {
+            let message = diagnostic.message().to_owned();
+            self.failure = Some(diagnostic);
+            message
+        })
+    }
+}
+
+impl ClassicV3ModuleVisitor for ClassicEventVisitor<'_> {
+    type Output = Result<(), TransportDiagnostic>;
+
+    fn begin(
+        &mut self,
+        package: &classic::Path,
+        dependencies: &[(classic::Path, classic::PackageSpecification<classic::Attrs>)],
+    ) -> Result<(), String> {
+        self.accept(SemanticEvent::new(
+            self.cursor.clone(),
+            SemanticEventKind::Begin(DistributionHeader::ClassicV3Library {
+                package: package.clone(),
+            }),
+        ))?;
+        for (package, specification) in dependencies {
+            self.accept(SemanticEvent::new(
+                self.cursor
+                    .clone()
+                    .child(CursorSegment::Dependency(package.to_string())),
+                SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
+                    package: package.clone(),
+                    specification: specification.clone(),
+                }),
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn visit_module(
+        &mut self,
+        module: classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>,
+    ) -> Result<(), String> {
+        self.accept(SemanticEvent::new(
+            self.cursor
+                .clone()
+                .child(CursorSegment::Module(module.path.to_string())),
+            SemanticEventKind::Module(ModuleEvent::ClassicV3(module)),
+        ))
+    }
+
+    fn finish(self) -> Result<Self::Output, String> {
+        if let Some(diagnostic) = self.failure {
+            return Ok(Err(diagnostic));
+        }
+        Ok(self
+            .sink
+            .accept(SemanticEvent::new(self.cursor, SemanticEventKind::End))
+            .and_then(|()| self.sink.finish()))
+    }
 }
 
 fn event_error(

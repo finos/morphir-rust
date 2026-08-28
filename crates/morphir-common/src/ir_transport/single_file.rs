@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail};
 use morphir_core::ir::classic;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
+use super::IR_RECURSION_STACK_BYTES;
+
 type ClassicDependencies = Vec<(classic::Path, classic::PackageSpecification<classic::Attrs>)>;
 type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
 
@@ -206,12 +208,19 @@ where
     D: de::Deserializer<'de>,
     V: ClassicV3ModuleVisitor,
 {
-    DistributionSeed {
-        visitor: &mut visitor,
-    }
-    .deserialize(deserializer)
-    .map_err(|error| error.to_string())?;
+    deserialize_classic_v3(deserializer, &mut visitor).map_err(|error| error.to_string())?;
     visitor.finish()
+}
+
+pub(crate) fn deserialize_classic_v3<'de, D, V>(
+    deserializer: D,
+    visitor: &mut V,
+) -> std::result::Result<u32, D::Error>
+where
+    D: de::Deserializer<'de>,
+    V: ClassicV3ModuleVisitor,
+{
+    DistributionSeed { visitor }.deserialize(deserializer)
 }
 
 struct DistributionBodySeed<'visitor, V> {
@@ -360,10 +369,19 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
     where
         A: SeqAccess<'de>,
     {
-        while let Some(module) = sequence.next_element::<ClassicModule>()? {
-            self.visitor
-                .visit_module(module)
-                .map_err(de::Error::custom)?;
+        loop {
+            let visited = stacker::grow(IR_RECURSION_STACK_BYTES, || {
+                let Some(module) = sequence.next_element::<ClassicModule>()? else {
+                    return Ok(false);
+                };
+                self.visitor
+                    .visit_module(module)
+                    .map_err(de::Error::custom)?;
+                Ok(true)
+            })?;
+            if !visited {
+                break;
+            }
         }
         Ok(())
     }

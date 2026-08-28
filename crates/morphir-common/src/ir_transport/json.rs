@@ -1,14 +1,18 @@
 //! JSON codec entry point.
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 
-use morphir_core::ir::{classic, v4};
-use morphir_core::traversal::IrCursor;
+use morphir_core::ir::v4;
+use morphir_core::traversal::{
+    DependencyEvent, DistributionHeader, IrCursor, ModuleEvent, SemanticEvent, SemanticEventKind,
+};
 
-use super::semantic::{self, SemanticFile};
+use super::semantic::{self, ClassicEventVisitor, SemanticFile};
+use super::single_file::deserialize_classic_v3;
 use super::{
-    CodecOptions, EventSink, EventSource, FormatId, IrCodec, IrVersion, SourceSpan, Stage,
-    TransportDiagnostic,
+    ClassicV3ModuleVisitor, CodecOptions, EventSink, EventSource, FormatId, IrCodec, IrVersion,
+    SourceSpan, Stage, TransportDiagnostic,
 };
 
 /// Built-in JSON IR codec.
@@ -70,9 +74,24 @@ impl IrCodec for JsonCodec {
     ) -> Result<(), TransportDiagnostic> {
         match options.version() {
             IrVersion::V3 => {
-                let file: classic::Distribution =
-                    serde_json::from_reader(reader).map_err(Self::decode_error)?;
-                semantic::emit_classic_v3(file, sink)
+                let mut deserializer = serde_json::Deserializer::from_reader(reader);
+                let mut visitor = ClassicEventVisitor::new(sink);
+                if let Err(error) = deserialize_classic_v3(&mut deserializer, &mut visitor) {
+                    if let Some(diagnostic) = visitor.take_failure() {
+                        return Err(diagnostic);
+                    }
+                    return Err(Self::decode_error(error));
+                }
+                deserializer.end().map_err(Self::decode_error)?;
+                visitor.finish().map_err(|message| {
+                    TransportDiagnostic::error(
+                        "morphir::ir::json::visitor_failed",
+                        Stage::Normalization,
+                        IrCursor::root(),
+                        message,
+                    )
+                    .with_guidance("verify the semantic sink and concrete v3 event order")
+                })?
             }
             IrVersion::V4 => {
                 let file: v4::IRFile =
@@ -80,6 +99,23 @@ impl IrCodec for JsonCodec {
                 semantic::emit_v4(file, sink)
             }
         }
+    }
+
+    fn encoder<'writer>(
+        &self,
+        writer: &'writer mut dyn Write,
+        options: &CodecOptions,
+    ) -> Result<Box<dyn EventSink + 'writer>, TransportDiagnostic> {
+        if options.version() != IrVersion::V4 {
+            return Err(TransportDiagnostic::error(
+                "morphir::ir::json::streaming_v3_encoder_unsupported",
+                Stage::Encoding,
+                IrCursor::root(),
+                "the push-based JSON encoder currently targets concrete IR v4",
+            )
+            .with_guidance("use the pull-based v3 encoder or select v4 output"));
+        }
+        Ok(Box::new(V4JsonEventEncoder::new(writer)))
     }
 
     fn encode(
@@ -99,4 +135,296 @@ impl IrCodec for JsonCodec {
         }
         writer.write_all(b"\n").map_err(Self::encode_error)
     }
+}
+
+enum V4JsonDistribution {
+    Library,
+    Specs,
+    Application(v4::EntryPoints),
+}
+
+struct V4JsonEventEncoder<'writer> {
+    writer: &'writer mut dyn Write,
+    distribution: Option<V4JsonDistribution>,
+    dependencies_started: bool,
+    first_dependency: bool,
+    modules_started: bool,
+    first_module: bool,
+    dependency_names: HashSet<String>,
+    module_names: HashSet<String>,
+    ended: bool,
+}
+
+impl<'writer> V4JsonEventEncoder<'writer> {
+    fn new(writer: &'writer mut dyn Write) -> Self {
+        Self {
+            writer,
+            distribution: None,
+            dependencies_started: false,
+            first_dependency: true,
+            modules_started: false,
+            first_module: true,
+            dependency_names: HashSet::new(),
+            module_names: HashSet::new(),
+            ended: false,
+        }
+    }
+
+    fn write(&mut self, value: impl AsRef<[u8]>) -> Result<(), TransportDiagnostic> {
+        self.writer
+            .write_all(value.as_ref())
+            .map_err(JsonCodec::encode_error)
+    }
+
+    fn write_json(&mut self, value: &impl serde::Serialize) -> Result<(), TransportDiagnostic> {
+        serde_json::to_writer(&mut self.writer, value).map_err(JsonCodec::encode_error)
+    }
+
+    fn begin(
+        &mut self,
+        header: DistributionHeader,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if self.distribution.is_some() {
+            return Err(json_stream_error(
+                "duplicate_begin",
+                cursor,
+                "the JSON encoder received more than one distribution header",
+            ));
+        }
+        let (format_version, package, tag, distribution) = match header {
+            DistributionHeader::V4Library {
+                format_version,
+                package,
+            } => (
+                format_version,
+                package,
+                "Library",
+                V4JsonDistribution::Library,
+            ),
+            DistributionHeader::V4Specs {
+                format_version,
+                package,
+            } => (format_version, package, "Specs", V4JsonDistribution::Specs),
+            DistributionHeader::V4Application {
+                format_version,
+                package,
+                entry_points,
+            } => (
+                format_version,
+                package,
+                "Application",
+                V4JsonDistribution::Application(entry_points),
+            ),
+            _ => {
+                return Err(json_stream_error(
+                    "version_mismatch",
+                    cursor,
+                    "the v4 JSON encoder received a Classic v3 header",
+                ));
+            }
+        };
+        self.write(b"{\"formatVersion\":")?;
+        self.write_json(&format_version)?;
+        self.write(format!(",\"distribution\":{{\"{tag}\":{{\"packageName\":"))?;
+        self.write_json(&package)?;
+        self.distribution = Some(distribution);
+        Ok(())
+    }
+
+    fn dependency(
+        &mut self,
+        dependency: DependencyEvent,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if self.modules_started {
+            return Err(json_stream_error(
+                "dependency_after_module",
+                cursor,
+                "a dependency appeared after the first module",
+            ));
+        }
+        let DependencyEvent::V4 {
+            package,
+            specification,
+        } = dependency
+        else {
+            return Err(json_stream_error(
+                "version_mismatch",
+                cursor,
+                "the v4 JSON encoder received a Classic v3 dependency",
+            ));
+        };
+        if !self.dependency_names.insert(package.clone()) {
+            return Err(json_stream_error(
+                "duplicate_dependency",
+                cursor,
+                "the event stream contains a duplicate dependency name",
+            ));
+        }
+        if !self.dependencies_started {
+            self.write(b",\"dependencies\":{")?;
+            self.dependencies_started = true;
+        }
+        if !self.first_dependency {
+            self.write(b",")?;
+        }
+        self.write_json(&package)?;
+        self.write(b":")?;
+        self.write_json(&specification)?;
+        self.first_dependency = false;
+        Ok(())
+    }
+
+    fn start_modules(&mut self) -> Result<(), TransportDiagnostic> {
+        if !self.dependencies_started {
+            self.write(b",\"dependencies\":{}")?;
+            self.dependencies_started = true;
+        } else {
+            self.write(b"}")?;
+        }
+        if !self.modules_started {
+            let field = match self.distribution {
+                Some(V4JsonDistribution::Library | V4JsonDistribution::Application(_)) => "def",
+                Some(V4JsonDistribution::Specs) => "spec",
+                None => {
+                    return Err(json_stream_error(
+                        "missing_begin",
+                        &IrCursor::root(),
+                        "a module appeared before the distribution header",
+                    ));
+                }
+            };
+            self.write(format!(",\"{field}\":{{\"modules\":{{"))?;
+            self.modules_started = true;
+        }
+        Ok(())
+    }
+
+    fn module(
+        &mut self,
+        module: ModuleEvent,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if !self.modules_started {
+            self.start_modules()?;
+        }
+        let (path, value, specification) = match module {
+            ModuleEvent::V4Definition { path, module } => (path, Some(module), None),
+            ModuleEvent::V4Specification { path, module } => (path, None, Some(module)),
+            ModuleEvent::ClassicV3(_) => {
+                return Err(json_stream_error(
+                    "version_mismatch",
+                    cursor,
+                    "the v4 JSON encoder received a Classic v3 module",
+                ));
+            }
+        };
+        let matches_distribution = matches!(
+            (&self.distribution, &value, &specification),
+            (
+                Some(V4JsonDistribution::Library | V4JsonDistribution::Application(_)),
+                Some(_),
+                None
+            ) | (Some(V4JsonDistribution::Specs), None, Some(_))
+        );
+        if !matches_distribution {
+            return Err(json_stream_error(
+                "module_kind_mismatch",
+                cursor,
+                "the module event does not match the v4 distribution kind",
+            ));
+        }
+        if !self.module_names.insert(path.clone()) {
+            return Err(json_stream_error(
+                "duplicate_module",
+                cursor,
+                "the event stream contains a duplicate module name",
+            ));
+        }
+        if !self.first_module {
+            self.write(b",")?;
+        }
+        self.write_json(&path)?;
+        self.write(b":")?;
+        match (value, specification) {
+            (Some(value), None) => self.write_json(&value)?,
+            (None, Some(value)) => self.write_json(&value)?,
+            _ => unreachable!("module kind was validated above"),
+        }
+        self.first_module = false;
+        Ok(())
+    }
+
+    fn end(&mut self, cursor: &IrCursor) -> Result<(), TransportDiagnostic> {
+        if self.ended {
+            return Err(json_stream_error(
+                "duplicate_end",
+                cursor,
+                "the JSON encoder received more than one distribution end",
+            ));
+        }
+        if self.distribution.is_none() {
+            return Err(json_stream_error(
+                "missing_begin",
+                cursor,
+                "the distribution ended before its header",
+            ));
+        }
+        if !self.modules_started {
+            self.start_modules()?;
+        }
+        self.write(b"}}")?;
+        if let Some(V4JsonDistribution::Application(entry_points)) = self.distribution.take() {
+            self.write(b",\"entryPoints\":")?;
+            self.write_json(&entry_points)?;
+        }
+        self.write(b"}}}\n")?;
+        self.ended = true;
+        Ok(())
+    }
+}
+
+impl EventSink for V4JsonEventEncoder<'_> {
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
+        if self.ended {
+            return Err(json_stream_error(
+                "event_after_end",
+                event.cursor(),
+                "an event appeared after the distribution end",
+            ));
+        }
+        let (cursor, kind) = event.into_parts();
+        match kind {
+            SemanticEventKind::Begin(header) => self.begin(header, &cursor),
+            SemanticEventKind::Dependency(dependency) => self.dependency(dependency, &cursor),
+            SemanticEventKind::Module(module) => self.module(module, &cursor),
+            SemanticEventKind::End => self.end(&cursor),
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), TransportDiagnostic> {
+        if !self.ended {
+            return Err(json_stream_error(
+                "missing_end",
+                &IrCursor::root(),
+                "the event source ended before the distribution end",
+            ));
+        }
+        self.writer.flush().map_err(JsonCodec::encode_error)
+    }
+}
+
+fn json_stream_error(
+    suffix: &'static str,
+    cursor: &IrCursor,
+    message: &'static str,
+) -> TransportDiagnostic {
+    TransportDiagnostic::error(
+        format!("morphir::ir::json::{suffix}"),
+        Stage::Encoding,
+        cursor.clone(),
+        message,
+    )
+    .with_guidance("verify the semantic event order and selected concrete IR version")
 }

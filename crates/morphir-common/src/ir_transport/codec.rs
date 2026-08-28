@@ -4,9 +4,10 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 
+use morphir_core::traversal::IrCursor;
 use morphir_core::traversal::SemanticEvent;
 
-use super::{CodecOptions, FormatId, TransportDiagnostic};
+use super::{CodecOptions, FormatId, Stage, TransportDiagnostic};
 use crate::ir_transport::{JsonCodec, YamlCodec};
 
 /// Pull-based source of semantic IR events.
@@ -38,6 +39,24 @@ pub trait IrCodec: Send + Sync {
         options: &CodecOptions,
         sink: &mut dyn EventSink,
     ) -> Result<(), TransportDiagnostic>;
+
+    /// Create a push-based encoder sink for a streaming decoder pipeline.
+    fn encoder<'writer>(
+        &self,
+        _writer: &'writer mut dyn Write,
+        _options: &CodecOptions,
+    ) -> Result<Box<dyn EventSink + 'writer>, TransportDiagnostic> {
+        Err(TransportDiagnostic::error(
+            "morphir::ir::codec::streaming_encoder_unsupported",
+            Stage::Encoding,
+            IrCursor::root(),
+            format!(
+                "the '{}' codec does not provide a push-based encoder",
+                self.format()
+            ),
+        )
+        .with_guidance("use the pull-based encode method or register a streaming codec"))
+    }
 
     /// Encode semantic events as one artifact.
     fn encode(

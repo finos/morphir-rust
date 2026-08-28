@@ -12,7 +12,7 @@
 //!
 //! # Quick Start
 //!
-//! ```rust,ignore
+//! ```rust
 //! use morphir_extension_sdk::prelude::*;
 //!
 //! #[derive(Default)]
@@ -28,15 +28,32 @@
 //!             ..Default::default()
 //!         }
 //!     }
+//!
+//!     fn capabilities() -> ExtensionCapabilities {
+//!         ExtensionCapabilities {
+//!             frontend: Some(FrontendCapability {
+//!                 languages: vec![LanguageCapability {
+//!                     id: "my-lang".into(),
+//!                     file_extensions: vec![".ml".into()],
+//!                 }],
+//!                 ir_versions: vec!["3".into()],
+//!                 compile: true,
+//!                 incremental: false,
+//!                 fragments: false,
+//!             }),
+//!             ..ExtensionCapabilities::default()
+//!         }
+//!     }
 //! }
 //!
 //! impl Frontend for MyExtension {
 //!     fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
-//!         // Compile source files to IR
 //!         Ok(CompileResult {
 //!             success: true,
+//!             ir_version: Some(request.options.ir_version),
 //!             ir: Some(serde_json::json!({})),
 //!             diagnostics: vec![],
+//!             modules: request.package.exposed_modules,
 //!         })
 //!     }
 //!
@@ -48,6 +65,28 @@
 //!         vec![".ml".into()]
 //!     }
 //! }
+//!
+//! let request = CompileRequest {
+//!     language_id: "my-lang".into(),
+//!     documents: vec![SourceDocument {
+//!         uri: "file:///workspace/Example.ml".into(),
+//!         language_id: "my-lang".into(),
+//!         version: 1,
+//!         text: "module Example".into(),
+//!     }],
+//!     package: CompilePackage {
+//!         name: "local/example".into(),
+//!         exposed_modules: vec!["Example".into()],
+//!     },
+//!     dependencies: vec![],
+//!     options: CompileOptions {
+//!         types_only: false,
+//!         ir_version: "3".into(),
+//!         extra: Default::default(),
+//!     },
+//! };
+//! let result = MyExtension.compile(request).expect("frontend should compile");
+//! assert!(result.success);
 //!
 //! morphir_extension_sdk::export_extension!(MyExtension, frontend);
 //! ```

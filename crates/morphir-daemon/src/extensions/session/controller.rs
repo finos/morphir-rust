@@ -2,7 +2,7 @@
 
 use super::transport::{MepTransport, TransportError, TransportState};
 use super::validation::{
-    ResponseFailure, required_capability, validate_negotiation, validate_response,
+    ResponseFailure, validate_method_result, validate_negotiation, validate_response,
 };
 use crate::DaemonError;
 use crate::extensions::protocol::{
@@ -45,8 +45,21 @@ impl NegotiatedSession {
         &self.capabilities
     }
 
-    fn supports(&self, capability: ExtensionType) -> bool {
-        self.extension.types.contains(&capability)
+    fn supports_method(&self, method: &str) -> bool {
+        match method {
+            methods::COMPILE => {
+                self.extension.types.contains(&ExtensionType::Frontend)
+                    && self
+                        .capabilities
+                        .frontend
+                        .as_ref()
+                        .is_some_and(|frontend| frontend.compile)
+            }
+            methods::GENERATE => self.extension.types.contains(&ExtensionType::Backend),
+            methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
+            methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),
+            _ => true,
+        }
     }
 }
 
@@ -132,9 +145,7 @@ impl<T: MepTransport> Session<T, Ready> {
                 )),
             );
         }
-        if let Some(required) = required_capability(method)
-            && !self.negotiated().supports(required)
-        {
+        if !self.negotiated().supports_method(method) {
             return InvokeOutcome::Rejected(
                 self,
                 DaemonError::Extension(format!(
@@ -215,14 +226,17 @@ impl<T: MepTransport, S> Session<T, S> {
             Ok(request) => request,
             Err(error) => return CallOutcome::Local(error.into()),
         };
+        let request_params = request.params.clone();
         let response = match self.transport.exchange(request).await {
             Ok(response) => response,
             Err(error) => return CallOutcome::Transport(error),
         };
         match validate_response(response, id) {
-            Ok(value) => match serde_json::from_value(value) {
+            Ok(value) => match validate_method_result(method, &request_params, value)
+                .and_then(|value| serde_json::from_value(value).map_err(Into::into))
+            {
                 Ok(value) => CallOutcome::Success(value),
-                Err(error) => CallOutcome::Invalid(error.into()),
+                Err(error) => CallOutcome::Invalid(error),
             },
             Err(ResponseFailure::Rpc(error)) => CallOutcome::RpcError(error),
             Err(ResponseFailure::Invalid(error)) => CallOutcome::Invalid(error),

@@ -43,6 +43,11 @@ pub struct IrCursor {
 }
 
 impl IrCursor {
+    /// Create a cursor at the root of an IR artifact.
+    pub fn root() -> Self {
+        Self::default()
+    }
+
     pub fn from_segments(segments: impl IntoIterator<Item = CursorSegment>) -> Self {
         Self {
             segments: segments.into_iter().collect(),
@@ -55,6 +60,12 @@ impl IrCursor {
 
     pub fn segments(&self) -> &[CursorSegment] {
         &self.segments
+    }
+
+    /// Return a cursor extended with one child segment.
+    pub fn child(mut self, segment: CursorSegment) -> Self {
+        self.segments.push(segment);
+        self
     }
 
     /// Run an operation under a child segment and restore the parent cursor.

@@ -26,6 +26,27 @@ fn test_module_empty() {
 }
 
 #[test]
+fn module_entry_serialization_matches_its_classic_sequence_decoder() {
+    let json = r#"[
+        [["my"],["mod"]],
+        {
+            "access": "Public",
+            "value": { "types": [], "values": [], "doc": null }
+        }
+    ]"#;
+    let entry: ModuleEntry<serde_json::Value, serde_json::Value> =
+        serde_json::from_str(json).unwrap();
+
+    let encoded = serde_json::to_value(&entry).unwrap();
+    assert!(encoded.is_array());
+    assert_eq!(
+        serde_json::from_value::<ModuleEntry<serde_json::Value, serde_json::Value>>(encoded)
+            .unwrap(),
+        entry
+    );
+}
+
+#[test]
 fn test_module_with_type() {
     // A module with one type alias
     // types: [ [ ["MyType"], { "access": "Public", "value": { "doc": "mydoc", "value": TypeAliasDef(...) } } ] ]

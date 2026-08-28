@@ -33,45 +33,58 @@ pub struct MigrationDiagnostic {
     pub help: Option<String>,
     #[serde(skip)]
     pub recoverable: bool,
+    #[serde(skip)]
+    cursor: IrCursor,
 }
 
 impl MigrationDiagnostic {
     pub fn error(code: &'static str, cursor: IrCursor, message: impl Into<String>) -> Self {
+        let path = cursor.to_string();
         Self {
             severity: Severity::Error,
             code,
-            path: cursor.to_string(),
+            path,
             message: message.into(),
             help: None,
             recoverable: false,
+            cursor,
         }
     }
 
     pub fn recoverable(code: &'static str, cursor: IrCursor, message: impl Into<String>) -> Self {
+        let path = cursor.to_string();
         Self {
             severity: Severity::Error,
             code,
-            path: cursor.to_string(),
+            path,
             message: message.into(),
             help: None,
             recoverable: true,
+            cursor,
         }
     }
 
     pub fn warning(code: &'static str, cursor: IrCursor, message: impl Into<String>) -> Self {
+        let path = cursor.to_string();
         Self {
             severity: Severity::Warning,
             code,
-            path: cursor.to_string(),
+            path,
             message: message.into(),
             help: None,
             recoverable: true,
+            cursor,
         }
     }
 
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
+    }
+
+    /// Return the typed semantic cursor retained by this diagnostic.
+    pub fn cursor(&self) -> &IrCursor {
+        &self.cursor
     }
 }
 

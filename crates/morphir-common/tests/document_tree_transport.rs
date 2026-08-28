@@ -1,4 +1,9 @@
-use morphir_common::ir_transport::{read_document_tree, write_document_tree};
+use std::io::Write;
+
+use morphir_common::ir_transport::{
+    CodecOptions, FormatId, IrVersion, Layout, discover_document_tree_format, read_document_tree,
+    read_document_tree_with_options, write_document_tree, write_document_tree_with_options,
+};
 use morphir_common::vfs::{memory_root, physical_root};
 use morphir_core::ir::classic;
 use morphir_core::ir::v4::Distribution;
@@ -45,6 +50,13 @@ fn fixture() -> morphir_core::ir::v4::IRFile {
         .unwrap()
         .value;
     serde_json::from_value(serde_json::to_value(migrated).unwrap()).unwrap()
+}
+
+fn granular_fixture() -> morphir_core::ir::v4::IRFile {
+    serde_json::from_str(include_str!(
+        "../../morphir-core/tests/fixtures/ir/v4/complete-example.json"
+    ))
+    .unwrap()
 }
 
 fn assert_round_trip(root: vfs::VfsPath) {
@@ -116,4 +128,60 @@ fn reading_a_tree_ignores_modules_from_other_packages() {
     write_document_tree(&root, &current).unwrap();
 
     assert_eq!(read_document_tree(&root).unwrap(), current);
+}
+
+#[test]
+fn yaml_tree_uses_only_yaml_physical_names() {
+    let root = memory_root();
+    let expected = granular_fixture();
+    let options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::yaml());
+
+    write_document_tree_with_options(&root, &expected, &options).unwrap();
+
+    assert!(root.join("manifest.yaml").unwrap().is_file().unwrap());
+    let module = root
+        .join("pkg/regulation/u-s/f-r-2052-a/data-tables")
+        .unwrap();
+    assert!(module.join("module.yaml").unwrap().is_file().unwrap());
+    assert!(
+        module
+            .join("data-tables.type.yaml")
+            .unwrap()
+            .is_file()
+            .unwrap()
+    );
+    assert!(
+        module
+            .join("calculate-total.value.yaml")
+            .unwrap()
+            .is_file()
+            .unwrap()
+    );
+    assert!(
+        root.walk_dir()
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|path| !path.filename().ends_with(".json"))
+    );
+    assert_eq!(
+        read_document_tree_with_options(&root, &options).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn discovery_rejects_ambiguous_tree_manifests() {
+    let root = memory_root();
+    root.create_dir_all().unwrap();
+    for name in ["manifest.json", "manifest.yaml"] {
+        let mut writer = root.join(name).unwrap().create_file().unwrap();
+        writer.write_all(b"{}").unwrap();
+    }
+
+    let diagnostic = discover_document_tree_format(&root).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::detection::ambiguous_manifest"
+    );
 }

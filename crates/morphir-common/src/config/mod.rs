@@ -61,11 +61,10 @@ pub fn load_config_value(path: &Path) -> crate::Result<Value> {
             serde_json::to_value(value).context("Failed to normalize TOML config")
         }
         Some("yaml" | "yml") => {
-            validate_yaml_syntax(&content)?;
-            let value: serde_yaml::Value = serde_yaml::from_str(&content)
-                .with_context(|| format!("Failed to parse YAML config: {}", path.display()))?;
+            let value = crate::ir_transport::yaml::decode_json_value(content.as_bytes())
+                .map_err(config_yaml_error)?;
             validate_yaml_value(&value, true)?;
-            serde_json::to_value(value).context("Failed to normalize YAML config")
+            Ok(value)
         }
         Some("json") => {
             let legacy: LegacyProjectConfig =
@@ -82,40 +81,23 @@ pub fn load_config_value(path: &Path) -> crate::Result<Value> {
     }
 }
 
-fn validate_yaml_syntax(content: &str) -> crate::Result<()> {
-    use yaml_rust::parser::{Event, Parser};
-
-    let mut parser = Parser::new(content.chars());
-    loop {
-        let (event, _) = parser.next().context("Failed to scan YAML config")?;
-        match event {
-            Event::Alias(_) => return Err(anyhow!("YAML config must not contain aliases")),
-            Event::Scalar(_, _, anchor, tag) => {
-                if anchor != 0 {
-                    return Err(anyhow!("YAML config must not contain anchors"));
-                }
-                if tag.is_some() {
-                    return Err(anyhow!("YAML config must not contain custom tags"));
-                }
-            }
-            Event::SequenceStart(anchor) | Event::MappingStart(anchor) if anchor != 0 => {
-                return Err(anyhow!("YAML config must not contain anchors"));
-            }
-            Event::StreamEnd => return Ok(()),
-            _ => {}
+fn config_yaml_error(diagnostic: crate::ir_transport::TransportDiagnostic) -> anyhow::Error {
+    match diagnostic.code() {
+        "morphir::ir::yaml::alias_not_allowed" => {
+            anyhow!("YAML config must not contain anchors or aliases")
         }
+        "morphir::ir::yaml::unsupported_tag" => {
+            anyhow!("YAML config must not contain custom tags")
+        }
+        _ => anyhow!("{}: {}", diagnostic.code(), diagnostic.message()),
     }
 }
 
-fn validate_yaml_value(value: &serde_yaml::Value, at_root: bool) -> crate::Result<()> {
+fn validate_yaml_value(value: &serde_json::Value, at_root: bool) -> crate::Result<()> {
     match value {
-        serde_yaml::Value::Null => Err(anyhow!("YAML config must not contain null values")),
-        serde_yaml::Value::Tagged(_) => Err(anyhow!("YAML config must not contain custom tags")),
-        serde_yaml::Value::Mapping(mapping) => {
+        serde_json::Value::Null => Err(anyhow!("YAML config must not contain null values")),
+        serde_json::Value::Object(mapping) => {
             for (key, value) in mapping {
-                let key = key
-                    .as_str()
-                    .ok_or_else(|| anyhow!("YAML config mapping keys must be strings"))?;
                 if key == "<<" {
                     return Err(anyhow!("YAML config must not use merge keys"));
                 }
@@ -123,7 +105,7 @@ fn validate_yaml_value(value: &serde_yaml::Value, at_root: bool) -> crate::Resul
             }
             Ok(())
         }
-        serde_yaml::Value::Sequence(values) => {
+        serde_json::Value::Array(values) => {
             if at_root {
                 return Err(anyhow!("YAML config root must be a mapping"));
             }

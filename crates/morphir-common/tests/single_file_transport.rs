@@ -198,3 +198,17 @@ fn rejects_non_v3_input_before_invoking_visitor_callbacks() {
     assert!(!began.get());
     assert_eq!(modules.get(), 0);
 }
+
+#[test]
+fn classic_v3_source_accepts_distribution_before_format_version() {
+    let source: serde_json::Value = serde_json::from_slice(&classic_v3_source(2, 0)).unwrap();
+    let source = format!(
+        r#"{{"distribution":{},"formatVersion":3}}"#,
+        source["distribution"]
+    );
+
+    let (modules, _) =
+        visit_classic_v3(Cursor::new(source.as_bytes()), ModuleCounter::default()).unwrap();
+
+    assert_eq!(modules, 2);
+}

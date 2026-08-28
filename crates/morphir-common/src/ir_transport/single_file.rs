@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail};
 use morphir_core::ir::classic;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
+use super::IR_RECURSION_STACK_BYTES;
+
 type ClassicDependencies = Vec<(classic::Path, classic::PackageSpecification<classic::Attrs>)>;
 type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
 
@@ -113,6 +115,7 @@ pub trait ClassicV3ModuleVisitor {
 
 struct DistributionSeed<'visitor, V> {
     visitor: &'visitor mut V,
+    prevalidated_version: Option<u32>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'_, V> {
@@ -124,12 +127,14 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'
     {
         deserializer.deserialize_map(DistributionVisitor {
             visitor: self.visitor,
+            prevalidated_version: self.prevalidated_version,
         })
     }
 }
 
 struct DistributionVisitor<'visitor, V> {
     visitor: &'visitor mut V,
+    prevalidated_version: Option<u32>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V> {
@@ -147,10 +152,28 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
         let mut saw_distribution = false;
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
-                "formatVersion" => format_version = Some(map.next_value()?),
+                "formatVersion" => {
+                    if format_version.is_some() {
+                        return Err(de::Error::duplicate_field("formatVersion"));
+                    }
+                    format_version = Some(map.next_value()?);
+                }
                 "distribution" => {
                     if saw_distribution {
                         return Err(de::Error::duplicate_field("distribution"));
+                    }
+                    match format_version.or(self.prevalidated_version) {
+                        Some(3) => {}
+                        Some(version) => {
+                            return Err(de::Error::custom(format!(
+                                "typed Classic migration requires formatVersion 3, found {version}"
+                            )));
+                        }
+                        None => {
+                            return Err(de::Error::custom(
+                                "formatVersion must precede distribution for streaming decode",
+                            ));
+                        }
                     }
                     map.next_value_seed(DistributionBodySeed {
                         visitor: self.visitor,
@@ -165,8 +188,46 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
         if !saw_distribution {
             return Err(de::Error::missing_field("distribution"));
         }
-        format_version.ok_or_else(|| de::Error::missing_field("formatVersion"))
+        let format_version =
+            format_version.ok_or_else(|| de::Error::missing_field("formatVersion"))?;
+        if format_version != 3 {
+            return Err(de::Error::custom(format!(
+                "typed Classic migration requires formatVersion 3, found {format_version}"
+            )));
+        }
+        Ok(format_version)
     }
+}
+
+/// Decode Classic v3 modules from any Serde deserializer.
+///
+/// The deserializer must present `formatVersion` before `distribution`, allowing
+/// the visitor to reject non-v3 input before invoking callbacks.
+pub fn visit_classic_v3_deserializer<'de, D, V>(
+    deserializer: D,
+    mut visitor: V,
+) -> std::result::Result<V::Output, String>
+where
+    D: de::Deserializer<'de>,
+    V: ClassicV3ModuleVisitor,
+{
+    deserialize_classic_v3(deserializer, &mut visitor).map_err(|error| error.to_string())?;
+    visitor.finish()
+}
+
+pub(crate) fn deserialize_classic_v3<'de, D, V>(
+    deserializer: D,
+    visitor: &mut V,
+) -> std::result::Result<u32, D::Error>
+where
+    D: de::Deserializer<'de>,
+    V: ClassicV3ModuleVisitor,
+{
+    DistributionSeed {
+        visitor,
+        prevalidated_version: None,
+    }
+    .deserialize(deserializer)
 }
 
 struct DistributionBodySeed<'visitor, V> {
@@ -315,10 +376,19 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
     where
         A: SeqAccess<'de>,
     {
-        while let Some(module) = sequence.next_element::<ClassicModule>()? {
-            self.visitor
-                .visit_module(module)
-                .map_err(de::Error::custom)?;
+        loop {
+            let visited = stacker::grow(IR_RECURSION_STACK_BYTES, || {
+                let Some(module) = sequence.next_element::<ClassicModule>()? else {
+                    return Ok(false);
+                };
+                self.visitor
+                    .visit_module(module)
+                    .map_err(de::Error::custom)?;
+                Ok(true)
+            })?;
+            if !visited {
+                break;
+            }
         }
         Ok(())
     }
@@ -341,6 +411,7 @@ where
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let version = DistributionSeed {
         visitor: &mut visitor,
+        prevalidated_version: Some(version),
     }
     .deserialize(&mut deserializer)
     .context("failed to stream Classic IR")?;

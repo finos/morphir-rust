@@ -147,10 +147,28 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
         let mut saw_distribution = false;
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
-                "formatVersion" => format_version = Some(map.next_value()?),
+                "formatVersion" => {
+                    if format_version.is_some() {
+                        return Err(de::Error::duplicate_field("formatVersion"));
+                    }
+                    format_version = Some(map.next_value()?);
+                }
                 "distribution" => {
                     if saw_distribution {
                         return Err(de::Error::duplicate_field("distribution"));
+                    }
+                    match format_version {
+                        Some(3) => {}
+                        Some(version) => {
+                            return Err(de::Error::custom(format!(
+                                "typed Classic migration requires formatVersion 3, found {version}"
+                            )));
+                        }
+                        None => {
+                            return Err(de::Error::custom(
+                                "formatVersion must precede distribution for streaming decode",
+                            ));
+                        }
                     }
                     map.next_value_seed(DistributionBodySeed {
                         visitor: self.visitor,
@@ -165,8 +183,35 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
         if !saw_distribution {
             return Err(de::Error::missing_field("distribution"));
         }
-        format_version.ok_or_else(|| de::Error::missing_field("formatVersion"))
+        let format_version =
+            format_version.ok_or_else(|| de::Error::missing_field("formatVersion"))?;
+        if format_version != 3 {
+            return Err(de::Error::custom(format!(
+                "typed Classic migration requires formatVersion 3, found {format_version}"
+            )));
+        }
+        Ok(format_version)
     }
+}
+
+/// Decode Classic v3 modules from any Serde deserializer.
+///
+/// The deserializer must present `formatVersion` before `distribution`, allowing
+/// the visitor to reject non-v3 input before invoking callbacks.
+pub fn visit_classic_v3_deserializer<'de, D, V>(
+    deserializer: D,
+    mut visitor: V,
+) -> std::result::Result<V::Output, String>
+where
+    D: de::Deserializer<'de>,
+    V: ClassicV3ModuleVisitor,
+{
+    DistributionSeed {
+        visitor: &mut visitor,
+    }
+    .deserialize(deserializer)
+    .map_err(|error| error.to_string())?;
+    visitor.finish()
 }
 
 struct DistributionBodySeed<'visitor, V> {

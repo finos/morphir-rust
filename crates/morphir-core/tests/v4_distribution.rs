@@ -69,3 +69,26 @@ fn test_minimal_v4_distribution_serialize_deserialize() {
         _ => panic!("Expected Library distribution"),
     }
 }
+
+#[test]
+fn distribution_wrapper_rejects_extra_entries() {
+    let source = serde_json::json!({
+        "Library": {
+            "packageName": "example",
+            "dependencies": {},
+            "def": { "modules": {} }
+        },
+        "Specs": {
+            "packageName": "example",
+            "dependencies": {},
+            "spec": { "modules": {} }
+        }
+    });
+
+    let error = serde_json::from_value::<Distribution>(source).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("exactly one distribution wrapper entry")
+    );
+}

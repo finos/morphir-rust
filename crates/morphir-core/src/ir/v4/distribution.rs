@@ -4,7 +4,7 @@
 //! (LibraryContent, SpecsContent, ApplicationContent).
 
 use indexmap::IndexMap;
-use serde::de::{self, Deserializer, MapAccess, Visitor};
+use serde::de::{self, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -67,6 +67,11 @@ impl<'de> Visitor<'de> for DistributionVisitor {
         let (key, value): (String, serde_json::Value) = map
             .next_entry()?
             .ok_or_else(|| de::Error::custom("expected distribution wrapper object"))?;
+        if map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {
+            return Err(de::Error::custom(
+                "expected exactly one distribution wrapper entry",
+            ));
+        }
 
         match key.as_str() {
             "Library" => {

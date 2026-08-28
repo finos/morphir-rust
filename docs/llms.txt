@@ -36,7 +36,7 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 - [Morphir Extension System - Overview](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/00-overview): **Status:** Draft **Version:** 0.1.0 **Last Updated:** 2025-01-23
 - [Tasks](https://finos.github.io/morphir-rust/contributors/design/extensions/tasks): This document defines the task system for Morphir, modeled after [mise tasks](https://mise.jdx.dev/tasks/).
 - [Workspace Lifecycle](https://finos.github.io/morphir-rust/contributors/design/daemon/lifecycle): This document defines the lifecycle operations for Morphir workspaces: creation, opening, closing, and configuration management.
-- [Installation](https://finos.github.io/morphir-rust/install): There are several ways to install the Morphir CLI.
+- [Installation](https://finos.github.io/morphir-rust/install): The Morphir CLI is built and released from the [finos/morphir](https://github.com/finos/morphir) repository. See [Installing Morphir](https://github.com/finos/morphir/blob/main/INSTALLING.md) for c...
 - [Morphir Extension System - Architecture](https://finos.github.io/morphir-rust/contributors/design/extensions/actor-based/01-architecture): **Status:** Draft **Version:** 0.1.0
 - [Project Management](https://finos.github.io/morphir-rust/contributors/design/daemon/projects): This document defines operations for managing projects within a Morphir workspace.
 - [WASM Component Model](https://finos.github.io/morphir-rust/contributors/design/extensions/wasm-component): This document defines WIT (WebAssembly Interface Types) interfaces for implementing Morphir backends and extensions as portable, sandboxed WASM components.

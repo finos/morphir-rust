@@ -161,7 +161,7 @@ To change CLI documentation, edit the clap doc comments and `long_about` attribu
 - `#[arg(required = true)]` - Mark argument as required
 
 ### Markdown Console Rendering
-The CLI includes `termimad` for rendering markdown to the terminal with proper syntax highlighting. Use `help::print_markdown()` in `crates/morphir/src/help.rs` to render markdown text.
+The CLI includes `termimad` for rendering markdown to the terminal with proper syntax highlighting; see `help::print_markdown()` in finos/morphir's `crates/morphir/src/help.rs`.
 
 ## Release Management
 

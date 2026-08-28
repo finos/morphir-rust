@@ -4,8 +4,7 @@
 
 use morphir_core::ir::v4::{Distribution, FormatVersion, IRFile};
 
-const V4_FIXTURE: &str =
-    include_str!("../../integration-tests/fixtures/ir/v4/v4-library-distribution.json");
+const V4_FIXTURE: &str = include_str!("fixtures/ir/v4/v4-library-distribution.json");
 
 #[test]
 fn test_load_v4_distribution_fixture() {

@@ -2,7 +2,7 @@
 
 # Morphir Rust
 
-Rust-based tooling for the Morphir ecosystem. This project provides a multi-crate workspace including a CLI tool and core libraries for working with Morphir IR (Intermediate Representation).
+Rust-based tooling for the Morphir ecosystem. This project provides a multi-crate workspace of core libraries for working with Morphir IR (Intermediate Representation). These crates power the canonical `morphir` CLI, which lives in [finos/morphir](https://github.com/finos/morphir).
 
 ## Overview
 
@@ -17,7 +17,6 @@ Morphir Rust is part of the Morphir ecosystem, which includes:
 
 This is a Rust workspace containing multiple crates:
 
-- **`morphir`** - CLI tool for working with Morphir IR
 - **`morphir-ir`** - Core IR model definitions and utilities
 - **`morphir-common`** - Shared utilities (remote sources, caching)
 
@@ -26,158 +25,14 @@ This is a Rust workspace containing multiple crates:
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable version recommended)
 - Cargo (comes with Rust)
 
-## Installation
+## The Morphir CLI
 
-### Quick Install (Recommended)
+The canonical `morphir` CLI is built and released from the
+[finos/morphir](https://github.com/finos/morphir) repository, which consumes
+this workspace's crates through a git submodule.
 
-The easiest way to install morphir with automatic version management:
-
-**Linux / macOS:**
-```sh
-curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.ps1 | iex
-```
-
-The installer sets up a launcher that automatically downloads the correct version when needed.
-
-### Alternative Methods
-
-**Using [mise](https://mise.jdx.dev/):**
-```sh
-mise install github:finos/morphir-rust@v0.1.0
-mise use github:finos/morphir-rust@v0.1.0
-```
-
-**Using [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):**
-```sh
-cargo binstall --git https://github.com/finos/morphir-rust morphir
-```
-
-### Building from Source
-
-```sh
-git clone https://github.com/finos/morphir-rust.git
-cd morphir-rust
-cargo install --path crates/morphir
-```
-
-### Version Management
-
-```sh
-# Use a specific version
-morphir +0.1.0 ir migrate --input ./ir.json --output ./v4.json
-
-# Pin version for a project
-echo "0.1.0" > .morphir-version
-
-# Or in morphir.toml
-# version = "0.1.0"
-
-# Upgrade to latest
-morphir self upgrade
-
-# List installed versions
-morphir self list
-```
-
-## Usage
-
-### Getting Help
-
-```sh
-# Show help
-morphir --help
-
-# Show help including experimental commands
-morphir --help-all
-morphir help --full
-morphir help --experimental
-
-# Show version
-morphir --version
-```
-
-### IR Migration
-
-Convert Morphir IR between format versions (Classic V1-V3 ↔ V4):
-
-```sh
-# Migrate local file to V4 format
-morphir ir migrate --input ./morphir-ir.json --output ./morphir-ir-v4.json
-
-# Migrate from remote URL
-morphir ir migrate \
-    --input https://lcr-interactive.finos.org/server/morphir-ir.json \
-    --output ./lcr-v4.json
-
-# Migrate from GitHub
-morphir ir migrate \
-    --input github:finos/morphir-examples@main/examples/basic/morphir-ir.json \
-    --output ./example-v4.json
-
-# Migrate to Classic format
-morphir ir migrate \
-    --input ./morphir-ir-v4.json \
-    --output ./morphir-ir-classic.json \
-    --target-version classic
-```
-
-See the [IR Migration Guide](https://morphir.finos.org/docs/user-guides/cli-tools/ir-migrate) for full details.
-
-### JSON Schema Generation
-
-Generate JSON Schema for Morphir IR validation:
-
-```sh
-# Output to stdout
-morphir schema
-
-# Output to file
-morphir schema --output ./morphir-ir-schema.json
-```
-
-### Tool Management
-
-Manage Morphir tools, distributions, and extensions:
-
-```sh
-# Tools
-morphir tool install <tool-name> [--version <version>]
-morphir tool list
-morphir tool update <tool-name> [--version <version>]
-morphir tool uninstall <tool-name>
-
-# Distributions
-morphir dist install <dist-name> [--version <version>]
-morphir dist list
-morphir dist update <dist-name>
-morphir dist uninstall <dist-name>
-
-# Extensions
-morphir extension install <extension-name> [--version <version>]
-morphir extension list
-morphir extension update <extension-name>
-morphir extension uninstall <extension-name>
-```
-
-### Experimental Commands
-
-The following commands are experimental and hidden by default. Use `--help-all` to see them:
-
-```sh
-# Validate Morphir IR (experimental)
-morphir validate --input ./morphir-ir.json
-
-# Generate code (experimental)
-morphir generate --target rust --input ./morphir-ir.json --output ./output
-
-# Transform IR (experimental)
-morphir transform --input ./morphir-ir.json --output ./transformed.json
-```
+- Install: [Installing Morphir](https://github.com/finos/morphir/blob/main/INSTALLING.md)
+- Command reference: [CLI Reference](https://morphir.finos.org/docs/cli/)
 
 ## Documentation Generation
 
@@ -206,9 +61,6 @@ cargo build
 
 # Run tests
 cargo test
-
-# Run the CLI
-cargo run --bin morphir -- --help
 
 # Format code
 cargo fmt

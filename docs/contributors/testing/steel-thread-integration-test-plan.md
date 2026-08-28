@@ -2,7 +2,9 @@
 
 **Version:** 1.0
 **Date:** 2026-01-29
-**Status:** Draft
+**Status:** Draft (historical — the `morphir` CLI and the
+`integration-tests` crate described here now live in
+[finos/morphir](https://github.com/finos/morphir))
 
 ## Overview
 

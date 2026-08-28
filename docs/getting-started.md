@@ -16,21 +16,10 @@ This guide will help you get up and running with Morphir Rust.
 
 ## Installation
 
-The quickest way to install morphir:
-
-**Linux / macOS:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
-```
-
-**Windows (PowerShell):**
-
-```powershell
-irm https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.ps1 | iex
-```
-
-For more installation options, see the [Installation Guide](install).
+The `morphir` CLI is built and released from the
+[finos/morphir](https://github.com/finos/morphir) repository. Follow
+[Installing Morphir](https://github.com/finos/morphir/blob/main/INSTALLING.md)
+for installation options on Linux, macOS, and Windows.
 
 ## Your First Command
 

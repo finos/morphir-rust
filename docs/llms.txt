@@ -8,39 +8,6 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 
 - [Getting Started](https://finos.github.io/morphir-rust/getting-started): This guide will help you get up and running with Morphir Rust.
 
-## CLI Reference
-
-- [CLI Reference](https://finos.github.io/morphir-rust/cli/): **Usage**: `morphir [--help-all] [-V --version] <SUBCOMMAND>`
-- [morphir self](https://finos.github.io/morphir-rust/cli/self): **Usage**: `morphir self <COMMAND>`
-- [tool](https://finos.github.io/morphir-rust/cli/tool): - **Usage**: `morphir tool <SUBCOMMAND>`
-- [extension](https://finos.github.io/morphir-rust/cli/extension): - **Usage**: `morphir extension <SUBCOMMAND>`
-- [ir](https://finos.github.io/morphir-rust/cli/ir): - **Usage**: `morphir ir <SUBCOMMAND>`
-- [compile](https://finos.github.io/morphir-rust/cli/compile): - **Usage**: `morphir compile [FLAGS]`
-- [generate](https://finos.github.io/morphir-rust/cli/generate): - **Usage**: `morphir generate [FLAGS]`
-- [gleam](https://finos.github.io/morphir-rust/cli/gleam): - **Usage**: `morphir gleam [--json] [--json-lines] <SUBCOMMAND>`
-- [schema](https://finos.github.io/morphir-rust/cli/schema): - **Usage**: `morphir schema [-o --output <OUTPUT>]`
-- [config](https://finos.github.io/morphir-rust/cli/config): - **Usage**: `morphir config <SUBCOMMAND>`
-- [version](https://finos.github.io/morphir-rust/cli/version): - **Usage**: `morphir version [--json]`
-- [dist](https://finos.github.io/morphir-rust/cli/dist): - **Usage**: `morphir dist <SUBCOMMAND>`
-- [config path](https://finos.github.io/morphir-rust/cli/config/path): - **Usage**: `morphir config path [--config <CONFIG>] [--json]`
-- [config show](https://finos.github.io/morphir-rust/cli/config/show): - **Usage**: `morphir config show [--config <CONFIG>] [--json]`
-- [dist install](https://finos.github.io/morphir-rust/cli/dist/install): - **Usage**: `morphir dist install [-v --version <VERSION>] <NAME>`
-- [dist list](https://finos.github.io/morphir-rust/cli/dist/list): - **Usage**: `morphir dist list`
-- [dist uninstall](https://finos.github.io/morphir-rust/cli/dist/uninstall): - **Usage**: `morphir dist uninstall <NAME>`
-- [dist update](https://finos.github.io/morphir-rust/cli/dist/update): - **Usage**: `morphir dist update [-v --version <VERSION>] <NAME>`
-- [extension install](https://finos.github.io/morphir-rust/cli/extension/install): - **Usage**: `morphir extension install [-v --version <VERSION>] <NAME>`
-- [extension list](https://finos.github.io/morphir-rust/cli/extension/list): - **Usage**: `morphir extension list`
-- [extension uninstall](https://finos.github.io/morphir-rust/cli/extension/uninstall): - **Usage**: `morphir extension uninstall <NAME>`
-- [extension update](https://finos.github.io/morphir-rust/cli/extension/update): - **Usage**: `morphir extension update [-v --version <VERSION>] <NAME>`
-- [gleam compile](https://finos.github.io/morphir-rust/cli/gleam/compile): - **Usage**: `morphir gleam compile [FLAGS]`
-- [gleam generate](https://finos.github.io/morphir-rust/cli/gleam/generate): - **Usage**: `morphir gleam generate [FLAGS]`
-- [gleam roundtrip](https://finos.github.io/morphir-rust/cli/gleam/roundtrip): - **Usage**: `morphir gleam roundtrip [FLAGS]`
-- [ir migrate](https://finos.github.io/morphir-rust/cli/ir/migrate): - **Usage**: `morphir ir migrate [FLAGS] <INPUT>`
-- [tool install](https://finos.github.io/morphir-rust/cli/tool/install): - **Usage**: `morphir tool install [-v --version <VERSION>] <NAME>`
-- [tool list](https://finos.github.io/morphir-rust/cli/tool/list): - **Usage**: `morphir tool list`
-- [tool uninstall](https://finos.github.io/morphir-rust/cli/tool/uninstall): - **Usage**: `morphir tool uninstall <NAME>`
-- [tool update](https://finos.github.io/morphir-rust/cli/tool/update): - **Usage**: `morphir tool update [-v --version <VERSION>] <NAME>`
-
 ## Tutorials
 
 - [Getting Started Tutorial](https://finos.github.io/morphir-rust/tutorials/getting-started-tutorial): This tutorial will walk you through setting up your first Morphir project and using the CLI to compile and generate code.

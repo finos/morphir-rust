@@ -10,6 +10,9 @@ pub const JSONRPC_VERSION: &str = "2.0";
 /// Morphir Extension Protocol version implemented by this SDK.
 pub const MEP_VERSION: &str = "0.1";
 
+/// MEP versions this host SDK can negotiate, newest first.
+pub const SUPPORTED_MEP_VERSIONS: &[&str] = &[MEP_VERSION];
+
 /// Standard extension method names
 pub mod methods {
     /// Negotiate a Morphir Extension Protocol session.

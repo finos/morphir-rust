@@ -1,19 +1,29 @@
 use morphir_distribution::{
-    ArtifactFilename, Channel, ExtensionHistory, ExtensionId, Platform, RelativeArtifactPath,
-    Selection, Sha256Digest, resolve,
+    ArtifactFilename, Channel, DistributionError, ExtensionHistory, ExtensionId, Platform,
+    RelativeArtifactPath, Selection, Sha256Digest, resolve,
 };
+use morphir_extension_sdk::protocol::MEP_VERSION;
 use semver::Version;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn release(version: &str, channels: &[&str], platform: (&str, &str)) -> String {
+    release_with_mep(version, channels, platform, &[MEP_VERSION])
+}
+
+fn release_with_mep(
+    version: &str,
+    channels: &[&str],
+    platform: (&str, &str),
+    mep_versions: &[&str],
+) -> String {
     serde_json::json!({
         "schemaVersion": 1,
         "id": "morphir-elm",
         "name": "Morphir Elm",
         "version": version,
         "channels": channels,
-        "mepVersions": ["0.1"],
+        "mepVersions": mep_versions,
         "capabilities": ["frontend"],
         "artifacts": [{
             "runtime": "process",
@@ -234,6 +244,59 @@ fn stable_selects_the_highest_non_prerelease_for_the_platform() {
         &Version::parse("1.1.0").unwrap()
     );
     assert_eq!(selected.artifact().platform().os(), "linux");
+}
+
+#[test]
+fn stable_skips_a_newer_release_with_no_host_supported_mep_version() {
+    let bytes = [
+        release("1.5.0", &["stable"], ("linux", "x86_64")),
+        release_with_mep("2.0.0", &["stable"], ("linux", "x86_64"), &["999.0"]),
+    ]
+    .join("\n");
+    let history = ExtensionHistory::parse_jsonl(bytes.as_bytes()).unwrap();
+
+    let selected = resolve(
+        &history,
+        &Selection::Channel(Channel::Stable),
+        &Platform::new("linux", "x86_64").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        selected.release().version(),
+        &Version::parse("1.5.0").unwrap()
+    );
+    assert!(
+        selected
+            .release()
+            .mep_versions()
+            .iter()
+            .any(|version| version == MEP_VERSION)
+    );
+}
+
+#[test]
+fn exact_and_channel_selection_reject_releases_with_no_supported_mep_version() {
+    let bytes = release_with_mep("2.0.0", &["stable"], ("linux", "x86_64"), &["999.0"]);
+    let history = ExtensionHistory::parse_jsonl(bytes.as_bytes()).unwrap();
+    let platform = Platform::new("linux", "x86_64").unwrap();
+
+    for selection in [
+        Selection::Exact(Version::parse("2.0.0").unwrap()),
+        Selection::Channel(Channel::Stable),
+    ] {
+        let error = resolve(&history, &selection, &platform).unwrap_err();
+        match error {
+            DistributionError::NoCompatibleMepVersion {
+                selection: rejected,
+                supported,
+            } => {
+                assert_eq!(rejected, selection.to_string());
+                assert!(supported.split(", ").any(|version| version == MEP_VERSION));
+            }
+            other => panic!("expected NoCompatibleMepVersion, got {other}"),
+        }
+    }
 }
 
 #[test]

@@ -29,7 +29,10 @@ pub struct ExtensionLock {
     source: ArtifactSource,
     runtime: ArtifactRuntime,
     platform: Platform,
+    args: Vec<String>,
     digest: Sha256Digest,
+    capabilities: Vec<Capability>,
+    mep_versions: Vec<String>,
     executable: bool,
 }
 
@@ -45,7 +48,10 @@ impl ExtensionLock {
             source: artifact.selected.artifact.source().clone(),
             runtime: artifact.selected.artifact.runtime(),
             platform: artifact.selected.artifact.platform().clone(),
+            args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
+            capabilities: artifact.selected.release.capabilities().to_vec(),
+            mep_versions: artifact.selected.release.mep_versions().to_vec(),
             executable: artifact.selected.artifact.executable(),
         }
     }
@@ -95,9 +101,24 @@ impl ExtensionLock {
         &self.platform
     }
 
+    /// Return immutable arguments passed to the extension process.
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
     /// Return the verified artifact digest.
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
+    }
+
+    /// Return the extension capabilities fixed by this lock.
+    pub fn capabilities(&self) -> &[Capability] {
+        &self.capabilities
+    }
+
+    /// Return MEP versions fixed by this lock.
+    pub fn mep_versions(&self) -> &[String] {
+        &self.mep_versions
     }
 
     /// Return the executable state declared by the exact selection.
@@ -248,6 +269,25 @@ impl InstalledExtension {
                 .collect(),
             ..ExtensionInfo::default()
         }
+    }
+}
+
+/// One atomically read and fully validated installed extension state pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledExtensionSnapshot {
+    installed: InstalledExtension,
+    selection: Selection,
+}
+
+impl InstalledExtensionSnapshot {
+    /// Return the exact installed catalog entry.
+    pub fn installed(&self) -> &InstalledExtension {
+        &self.installed
+    }
+
+    /// Return the channel or exact-version request stored in the exact lock.
+    pub fn selection(&self) -> &Selection {
+        &self.selection
     }
 }
 
@@ -405,6 +445,30 @@ fn uninstall_with_writer(
     Ok(removed)
 }
 
+/// Atomically list installed extensions with their exact requested selections.
+///
+/// The catalog and every corresponding lock are loaded under one Morphir-home
+/// state lock. Every pair must agree before any snapshot is returned.
+pub fn list_installed(home: &MorphirHome) -> Result<Vec<InstalledExtensionSnapshot>> {
+    let _transaction = InstalledStateGuard::acquire(home)?;
+    list_installed_unlocked(home)
+}
+
+fn list_installed_unlocked(home: &MorphirHome) -> Result<Vec<InstalledExtensionSnapshot>> {
+    InstalledCatalog::load_unlocked(home)?
+        .extensions
+        .into_values()
+        .map(|installed| {
+            let lock = read_extension_lock_unlocked(home, installed.extension_id())?;
+            validate_installed_pair(&installed, &lock)?;
+            Ok(InstalledExtensionSnapshot {
+                installed,
+                selection: lock.selection,
+            })
+        })
+        .collect()
+}
+
 /// Offline process activation whose installed bytes have just been rehashed.
 #[derive(Debug, Clone)]
 pub struct VerifiedProcessArtifact {
@@ -445,17 +509,7 @@ pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<Verifi
         let lock = read_extension_lock_unlocked(home, id)?;
         (installed, lock)
     };
-    if lock.extension_id != installed.extension_id
-        || lock.name != installed.name
-        || lock.version != installed.version
-        || lock.runtime != installed.runtime
-        || lock.platform != installed.platform
-        || lock.digest != installed.digest
-        || lock.index != installed.index
-        || lock.executable != installed.executable
-    {
-        return Err(DistributionError::StateMismatch { id: id.clone() });
-    }
+    validate_installed_pair(&installed, &lock)?;
 
     let home_root = fs::canonicalize(home.root()).map_err(|source| DistributionError::Io {
         path: home.root().to_path_buf(),
@@ -480,6 +534,26 @@ pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<Verifi
         args: installed.args.clone(),
         extension_info: installed.extension_info(),
     })
+}
+
+fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock) -> Result<()> {
+    if lock.extension_id != installed.extension_id
+        || lock.name != installed.name
+        || lock.version != installed.version
+        || lock.runtime != installed.runtime
+        || lock.platform != installed.platform
+        || lock.args != installed.args
+        || lock.digest != installed.digest
+        || lock.capabilities != installed.capabilities
+        || lock.mep_versions != installed.mep_versions
+        || lock.index != installed.index
+        || lock.executable != installed.executable
+    {
+        return Err(DistributionError::StateMismatch {
+            id: installed.extension_id.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn extension_type(capability: Capability) -> ExtensionType {
@@ -704,6 +778,9 @@ fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::{Channel, LocalIndex};
+    use std::sync::{Mutex, mpsc};
+    use std::thread;
+    use std::time::Duration;
 
     struct FailingWriter {
         fail_path: PathBuf,
@@ -734,6 +811,28 @@ mod tests {
         failure: UninstallFailure,
         lock_path: PathBuf,
         catalog_path: PathBuf,
+    }
+
+    struct PausingCatalogWriter {
+        catalog_path: PathBuf,
+        reached_catalog: Mutex<Option<mpsc::Sender<()>>>,
+        resume: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl StateWriter for PausingCatalogWriter {
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            if path == self.catalog_path {
+                self.reached_catalog
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap()
+                    .send(())
+                    .unwrap();
+                self.resume.lock().unwrap().recv().unwrap();
+            }
+            atomic_write_bytes(path, bytes)
+        }
     }
 
     impl StateWriter for FailingUninstallWriter {
@@ -837,6 +936,64 @@ mod tests {
     #[test]
     fn failed_uninstall_catalog_commit_restores_the_previous_state_pair() {
         assert_failed_uninstall_restores_state(UninstallFailure::CatalogWrite);
+    }
+
+    #[test]
+    fn listing_waits_for_an_in_progress_state_update_and_returns_one_exact_snapshot() {
+        let (root, home, id) = installed_extension();
+        let index = root.path().join("index");
+        let digest = Sha256Digest::of_bytes(b"example extension");
+        write_release(&index, "2.0.0", &digest);
+        let selected = LocalIndex::open(&index)
+            .unwrap()
+            .resolve(
+                &id,
+                Selection::Channel(Channel::Stable),
+                &Platform::new("linux", "x86_64").unwrap(),
+            )
+            .unwrap();
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let writer = PausingCatalogWriter {
+            catalog_path: home.extensions_catalog_file(),
+            reached_catalog: Mutex::new(Some(reached_tx)),
+            resume: Mutex::new(resume_rx),
+        };
+        let update_home = home.clone();
+        let update = thread::spawn(move || {
+            ExtensionInstaller::new(&update_home).install_with_writer(selected, &writer)
+        });
+        reached_rx.recv().unwrap();
+
+        let (listing_started_tx, listing_started_rx) = mpsc::channel();
+        let (listing_result_tx, listing_result_rx) = mpsc::channel();
+        let listing_home = home.clone();
+        let listing = thread::spawn(move || {
+            listing_started_tx.send(()).unwrap();
+            listing_result_tx
+                .send(list_installed(&listing_home))
+                .unwrap();
+        });
+        listing_started_rx.recv().unwrap();
+        assert!(
+            matches!(
+                listing_result_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "listing observed the half-committed catalog/lock pair"
+        );
+
+        resume_tx.send(()).unwrap();
+        update.join().unwrap().unwrap();
+        let snapshots = listing_result_rx.recv().unwrap().unwrap();
+        listing.join().unwrap();
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].installed().version().to_string(), "2.0.0");
+        assert_eq!(
+            snapshots[0].selection(),
+            &Selection::Channel(Channel::Stable)
+        );
     }
 
     fn assert_failed_uninstall_restores_state(failure: UninstallFailure) {

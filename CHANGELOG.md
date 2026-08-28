@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Atomic, validated installed-extension snapshots that pair each catalog entry with the requested selection from its exact lock
 - Transactional extension uninstall that removes active catalog and exact-lock state while retaining verified content-addressed artifact bytes
 - `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation
 - MEP 0.1 frontend capability negotiation and compile request, result, dependency, diagnostic range, and source document contracts in `morphir-extension-sdk`, including structured extension capabilities and host validation of negotiated compilation support and successful compile results
@@ -48,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Operational environment variables (`MORPHIR_HOME`, `MORPHIR_LOG_DIR`) are no longer interpreted as configuration keys by the `MORPHIR_*` environment source, so `morphir config show` no longer reports a spurious `home` or `log_dir` setting when they are set
 
 ### Security
+
+- Extension resolution now rejects releases without a host-supported MEP version, and exact locks authenticate launch arguments, capabilities, and MEP versions before activation
 
 ## [0.2.0] - 2026-01-24
 

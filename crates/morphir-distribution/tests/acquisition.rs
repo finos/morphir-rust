@@ -1,8 +1,8 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
     ArtifactStore, Channel, DistributionError, ExtensionId, ExtensionInstaller, InstalledCatalog,
-    LocalIndex, Platform, Selection, Sha256Digest, activate_installed, read_extension_lock,
-    uninstall_extension, write_extension_lock,
+    LocalIndex, Platform, Selection, Sha256Digest, activate_installed, list_installed,
+    read_extension_lock, uninstall_extension, write_extension_lock,
 };
 use std::fs;
 use std::path::Path;
@@ -316,6 +316,12 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(lock.extension_id(), &mother.id);
     assert_eq!(lock.version().to_string(), "3.2.1");
     assert_eq!(lock.digest(), &mother.digest);
+    assert_eq!(lock.args(), ["serve"]);
+    assert_eq!(
+        lock.capabilities(),
+        [morphir_distribution::Capability::Frontend]
+    );
+    assert_eq!(lock.mep_versions(), ["0.1"]);
     assert!(lock.executable());
     assert_eq!(lock.index().kind().as_str(), "local-directory");
     assert!(lock.index().identity().is_absolute());
@@ -329,6 +335,9 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(lock_json["version"], "3.2.1");
     assert_eq!(lock_json["digest"], mother.digest.to_string());
     assert_eq!(lock_json["executable"], true);
+    assert_eq!(lock_json["args"], serde_json::json!(["serve"]));
+    assert_eq!(lock_json["capabilities"], serde_json::json!(["frontend"]));
+    assert_eq!(lock_json["mepVersions"], serde_json::json!(["0.1"]));
     assert_eq!(
         lock_json["index"]["revision"],
         lock.index().revision().to_string()
@@ -402,6 +411,43 @@ fn concurrent_catalog_transactions_preserve_both_entries() {
     assert!(catalog.get(&mother.id).is_some());
     assert!(catalog.get(&second_id).is_some());
     assert_eq!(catalog.entries().len(), 2);
+}
+
+#[test]
+fn atomic_listing_returns_validated_entries_with_their_requested_selections() {
+    let mother = DistributionMother::a_local_process_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+
+    let snapshots = list_installed(&mother.home).unwrap();
+
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].installed(), &installed);
+    assert_eq!(
+        snapshots[0].selection(),
+        &Selection::Channel(Channel::Stable)
+    );
+}
+
+#[test]
+fn atomic_listing_rejects_a_corrupted_catalog_and_lock_pair() {
+    let mother = DistributionMother::a_local_process_artifact();
+    ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+    lock["args"] = serde_json::json!(["--tampered"]);
+    fs::write(lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+
+    let error = list_installed(&mother.home).unwrap_err();
+
+    match error {
+        DistributionError::StateMismatch { id } => assert_eq!(id, mother.id),
+        other => panic!("expected StateMismatch, got {other}"),
+    }
 }
 
 #[test]
@@ -517,6 +563,33 @@ fn activation_is_offline_and_reverifies_installed_content() {
     fs::write(launch.program(), b"tampered after install").unwrap();
     let error = activate_installed(&mother.home, &mother.id).unwrap_err();
     assert!(error.to_string().contains("digest mismatch"));
+}
+
+#[test]
+fn activation_rejects_tampered_locked_launch_metadata() {
+    let mother = DistributionMother::a_local_process_artifact();
+    ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
+    let original: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+
+    for (field, tampered) in [
+        ("args", serde_json::json!(["--tampered"])),
+        ("capabilities", serde_json::json!(["backend"])),
+        ("mepVersions", serde_json::json!(["999.0"])),
+    ] {
+        let mut lock = original.clone();
+        lock[field] = tampered;
+        fs::write(&lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+
+        let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+        match error {
+            DistributionError::StateMismatch { id } => assert_eq!(id, mother.id),
+            other => panic!("expected StateMismatch after tampering {field}, got {other}"),
+        }
+    }
 }
 
 fn count_staging_files(root: &Path) -> usize {

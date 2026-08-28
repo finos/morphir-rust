@@ -4,6 +4,7 @@ use crate::DistributionError;
 use crate::{
     ArtifactRecord, Channel, ExtensionHistory, Platform, ReleaseRecord, Result, Selection,
 };
+use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
 
 /// An exact release and its single platform artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,11 +37,22 @@ pub fn resolve(
     selection: &Selection,
     platform: &Platform,
 ) -> Result<ResolvedRelease> {
-    let mut candidates = history
+    let matching_selection = history
         .releases()
         .iter()
         .filter(|release| matches_selection(release, selection))
         .collect::<Vec<_>>();
+    let mut candidates = matching_selection
+        .iter()
+        .copied()
+        .filter(|release| supports_host_mep(release))
+        .collect::<Vec<_>>();
+    if !matching_selection.is_empty() && candidates.is_empty() {
+        return Err(DistributionError::NoCompatibleMepVersion {
+            selection: selection.to_string(),
+            supported: SUPPORTED_MEP_VERSIONS.join(", "),
+        });
+    }
     candidates.sort_by(|left, right| right.version().cmp_precedence(left.version()));
 
     for release in candidates {
@@ -71,6 +83,13 @@ pub fn resolve(
         selection: selection.to_string(),
         platform: platform.to_string(),
     })
+}
+
+fn supports_host_mep(release: &ReleaseRecord) -> bool {
+    release
+        .mep_versions()
+        .iter()
+        .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
 }
 
 fn matches_selection(release: &ReleaseRecord, selection: &Selection) -> bool {

@@ -103,15 +103,43 @@ pub fn contained_relative(rel: &str) -> bool {
 /// that exists with the missing tail rejoined — so a path that has not been
 /// created yet still resolves through the links that lead to it.
 fn resolve_existing(p: &Path) -> Option<PathBuf> {
+    resolve_existing_within(p, 0)
+}
+
+/// How many links deep to follow before giving up, so a symlink cycle ends in
+/// a refusal rather than a hang. `canonicalize` stops at the platform's own
+/// limit; this bounds the dangling case, which we walk ourselves.
+const LINK_DEPTH_LIMIT: u32 = 32;
+
+fn resolve_existing_within(p: &Path, depth: u32) -> Option<PathBuf> {
+    if depth > LINK_DEPTH_LIMIT {
+        return None;
+    }
     if let Ok(c) = p.canonicalize() {
         return Some(c);
+    }
+    // A dangling symlink fails `canonicalize` because its target is missing,
+    // but it still redirects a write to wherever it points — `fs::write`
+    // follows it and creates the target. Treating that as an ordinary missing
+    // file would report the link's own name as the destination and call it
+    // contained, so follow the link by hand and judge what it actually names.
+    if let Ok(meta) = p.symlink_metadata()
+        && meta.file_type().is_symlink()
+    {
+        let dest = std::fs::read_link(p).ok()?;
+        let joined = if dest.is_absolute() {
+            dest
+        } else {
+            p.parent()?.join(dest)
+        };
+        return resolve_existing_within(&joined, depth + 1);
     }
     let parent = p.parent()?;
     let name = p.file_name()?;
     let base = if parent.as_os_str().is_empty() {
         std::env::current_dir().ok()?.canonicalize().ok()?
     } else {
-        resolve_existing(parent)?
+        resolve_existing_within(parent, depth)?
     };
     Some(base.join(name))
 }
@@ -189,6 +217,44 @@ mod tests {
                 "a link is not contained just because its name is"
             );
         }
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolves_inside_refuses_a_dangling_symlink_that_points_out() {
+        let tmp = std::env::temp_dir().join(format!("kb-dangle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let inside = tmp.join("kb");
+        std::fs::create_dir_all(inside.join("docs")).unwrap();
+
+        // The target does not exist, so `canonicalize` fails on the link; a
+        // write through it would still create the victim outside the tree.
+        let victim = tmp.join("victim.md");
+        let link = inside.join("docs/file.md");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert!(
+            !link.exists(),
+            "the link is dangling for this to be a fair test"
+        );
+        assert!(
+            !resolves_inside(&inside, &link),
+            "a dangling link is not contained just because its own name is"
+        );
+
+        // A dangling link pointing back inside stays acceptable: the write it
+        // redirects lands in the tree, which is all containment asks.
+        let homely = inside.join("docs/ours.md");
+        std::os::unix::fs::symlink(inside.join("docs/target.md"), &homely).unwrap();
+        assert!(resolves_inside(&inside, &homely));
+
+        // A cycle ends in refusal rather than recursing forever.
+        let a = inside.join("docs/a");
+        let b = inside.join("docs/b");
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        assert!(!resolves_inside(&inside, &a));
+
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 

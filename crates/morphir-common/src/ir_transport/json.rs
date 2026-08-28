@@ -372,6 +372,13 @@ impl<'writer> V4JsonEventEncoder<'writer> {
         dependency: DependencyEvent,
         cursor: &IrCursor,
     ) -> Result<(), TransportDiagnostic> {
+        if self.distribution.is_none() {
+            return Err(json_stream_error(
+                "missing_begin",
+                cursor,
+                "a dependency appeared before the distribution header",
+            ));
+        }
         if self.modules_started {
             return Err(json_stream_error(
                 "dependency_after_module",

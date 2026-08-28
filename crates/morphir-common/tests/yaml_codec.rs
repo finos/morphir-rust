@@ -198,6 +198,12 @@ distribution:
             values: {}
             doc: |
               Literal * alias, ! tag, & anchor, and 2026-08-28 text.
+        release-notes:
+          access: Public
+          value:
+            types: {}
+            values: {}
+            doc: "released on 2026-08-28 today"
 "#;
 
     decode(
@@ -206,6 +212,35 @@ distribution:
         &options(IrVersion::V4, FormatId::yaml()),
     )
     .unwrap();
+}
+
+#[test]
+fn v4_json_encoder_rejects_a_dependency_before_begin() {
+    let events = decode(
+        &JsonCodec::new(),
+        include_str!("../../morphir-core/tests/fixtures/ir/v4/complete-example.json"),
+        &options(IrVersion::V4, FormatId::json()),
+    )
+    .unwrap();
+    let dependency = events
+        .into_iter()
+        .find(|event| {
+            matches!(
+                event.kind(),
+                morphir_core::traversal::SemanticEventKind::Dependency(_)
+            )
+        })
+        .expect("fixture should contain a dependency");
+    let mut output = Vec::new();
+    let mut encoder = JsonCodec::new()
+        .encoder(&mut output, &options(IrVersion::V4, FormatId::json()))
+        .unwrap();
+
+    let diagnostic = encoder.accept(dependency).unwrap_err();
+    drop(encoder);
+
+    assert_eq!(diagnostic.code(), "morphir::ir::json::missing_begin");
+    assert!(output.is_empty());
 }
 
 #[test]

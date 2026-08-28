@@ -926,12 +926,9 @@ fn forbidden_token(line: &str) -> Option<(usize, &'static str, Stage, &'static s
         }
     }
 
-    for token in line.split(|character: char| {
-        character.is_whitespace() || matches!(character, ':' | ',' | '[' | ']' | '{' | '}')
-    }) {
+    for (index, token) in unquoted_scalar_tokens(line) {
         let lowercase = token.to_ascii_lowercase();
         if matches!(lowercase.as_str(), ".inf" | "+.inf" | "-.inf" | ".nan") {
-            let index = line.find(token).unwrap_or_default();
             return Some((
                 index,
                 "morphir::ir::yaml::non_finite_number",
@@ -941,7 +938,6 @@ fn forbidden_token(line: &str) -> Option<(usize, &'static str, Stage, &'static s
             ));
         }
         if looks_like_timestamp(token) {
-            let index = line.find(token).unwrap_or_default();
             return Some((
                 index,
                 "morphir::ir::yaml::ambiguous_scalar",
@@ -952,6 +948,72 @@ fn forbidden_token(line: &str) -> Option<(usize, &'static str, Stage, &'static s
         }
     }
     None
+}
+
+fn unquoted_scalar_tokens(line: &str) -> Vec<(usize, &str)> {
+    let characters = line.char_indices().collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    let mut token_start = None;
+    let mut single_quoted = false;
+    let mut double_quoted = false;
+    let mut escaped = false;
+    let mut skip_escaped_single_quote = false;
+
+    for (position, (index, character)) in characters.iter().copied().enumerate() {
+        if double_quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                double_quoted = false;
+            }
+            continue;
+        }
+        if single_quoted {
+            if skip_escaped_single_quote {
+                skip_escaped_single_quote = false;
+            } else if character == '\'' {
+                if characters
+                    .get(position + 1)
+                    .is_some_and(|(_, next)| *next == '\'')
+                {
+                    skip_escaped_single_quote = true;
+                } else {
+                    single_quoted = false;
+                }
+            }
+            continue;
+        }
+
+        if matches!(character, '\'' | '"') {
+            push_unquoted_token(&mut tokens, line, &mut token_start, index);
+            single_quoted = character == '\'';
+            double_quoted = character == '"';
+        } else if character == '#' && token_boundary(line[..index].chars().next_back()) {
+            push_unquoted_token(&mut tokens, line, &mut token_start, index);
+            break;
+        } else if character.is_whitespace()
+            || matches!(character, ':' | ',' | '[' | ']' | '{' | '}')
+        {
+            push_unquoted_token(&mut tokens, line, &mut token_start, index);
+        } else {
+            token_start.get_or_insert(index);
+        }
+    }
+    push_unquoted_token(&mut tokens, line, &mut token_start, line.len());
+    tokens
+}
+
+fn push_unquoted_token<'line>(
+    tokens: &mut Vec<(usize, &'line str)>,
+    line: &'line str,
+    token_start: &mut Option<usize>,
+    end: usize,
+) {
+    if let Some(start) = token_start.take() {
+        tokens.push((start, &line[start..end]));
+    }
 }
 
 fn token_boundary(character: Option<char>) -> bool {

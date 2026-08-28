@@ -115,6 +115,7 @@ pub trait ClassicV3ModuleVisitor {
 
 struct DistributionSeed<'visitor, V> {
     visitor: &'visitor mut V,
+    prevalidated_version: Option<u32>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'_, V> {
@@ -126,12 +127,14 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'
     {
         deserializer.deserialize_map(DistributionVisitor {
             visitor: self.visitor,
+            prevalidated_version: self.prevalidated_version,
         })
     }
 }
 
 struct DistributionVisitor<'visitor, V> {
     visitor: &'visitor mut V,
+    prevalidated_version: Option<u32>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V> {
@@ -159,7 +162,7 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
                     if saw_distribution {
                         return Err(de::Error::duplicate_field("distribution"));
                     }
-                    match format_version {
+                    match format_version.or(self.prevalidated_version) {
                         Some(3) => {}
                         Some(version) => {
                             return Err(de::Error::custom(format!(
@@ -220,7 +223,11 @@ where
     D: de::Deserializer<'de>,
     V: ClassicV3ModuleVisitor,
 {
-    DistributionSeed { visitor }.deserialize(deserializer)
+    DistributionSeed {
+        visitor,
+        prevalidated_version: None,
+    }
+    .deserialize(deserializer)
 }
 
 struct DistributionBodySeed<'visitor, V> {
@@ -404,6 +411,7 @@ where
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let version = DistributionSeed {
         visitor: &mut visitor,
+        prevalidated_version: Some(version),
     }
     .deserialize(&mut deserializer)
     .context("failed to stream Classic IR")?;

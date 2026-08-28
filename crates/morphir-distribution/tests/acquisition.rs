@@ -1,8 +1,8 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    ArtifactStore, Channel, ExtensionId, ExtensionInstaller, InstalledCatalog, LocalIndex,
-    Platform, Selection, Sha256Digest, activate_installed, read_extension_lock,
-    write_extension_lock,
+    ArtifactStore, Channel, DistributionError, ExtensionId, ExtensionInstaller, InstalledCatalog,
+    LocalIndex, Platform, Selection, Sha256Digest, activate_installed, read_extension_lock,
+    uninstall_extension, write_extension_lock,
 };
 use std::fs;
 use std::path::Path;
@@ -402,6 +402,57 @@ fn concurrent_catalog_transactions_preserve_both_entries() {
     assert!(catalog.get(&mother.id).is_some());
     assert!(catalog.get(&second_id).is_some());
     assert_eq!(catalog.entries().len(), 2);
+}
+
+#[test]
+fn uninstall_removes_the_catalog_entry_and_exact_lock() {
+    let mother = DistributionMother::a_local_process_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+
+    let removed = uninstall_extension(&mother.home, &mother.id).unwrap();
+
+    assert_eq!(removed, installed);
+    assert!(
+        InstalledCatalog::load(&mother.home)
+            .unwrap()
+            .get(&mother.id)
+            .is_none()
+    );
+    assert!(
+        !mother
+            .home
+            .extensions_locks_dir()
+            .join("morphir-elm.json")
+            .exists()
+    );
+}
+
+#[test]
+fn uninstall_leaves_content_addressed_artifact_bytes_untouched() {
+    let mother = DistributionMother::a_local_process_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let artifact = mother.home.root().join(installed.store_path());
+    let expected = fs::read(&artifact).unwrap();
+
+    uninstall_extension(&mother.home, &mother.id).unwrap();
+
+    assert_eq!(fs::read(artifact).unwrap(), expected);
+}
+
+#[test]
+fn uninstall_reports_a_typed_error_for_an_extension_that_is_not_installed() {
+    let mother = DistributionMother::a_local_process_artifact();
+
+    let error = uninstall_extension(&mother.home, &mother.id).unwrap_err();
+
+    match error {
+        DistributionError::NotInstalled { id } => assert_eq!(id, mother.id),
+        other => panic!("expected NotInstalled, got {other}"),
+    }
 }
 
 #[test]

@@ -48,7 +48,7 @@ fn compact_parameterized_references_round_trip() {
 #[test]
 fn checked_in_complete_v4_example_decodes_concretely() {
     serde_json::from_str::<morphir_core::ir::v4::IRFile>(include_str!(
-        "../../../../../website/static/ir/examples/v4/complete-example.json"
+        "fixtures/ir/v4/complete-example.json"
     ))
     .unwrap();
 }

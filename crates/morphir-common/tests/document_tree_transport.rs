@@ -6,10 +6,41 @@ use morphir_core::migration::{MigrationOptions, migrate_distribution};
 use morphir_core::naming::PackageName;
 
 fn fixture() -> morphir_core::ir::v4::IRFile {
-    let classic: classic::Distribution = serde_json::from_str(include_str!(
-        "../../../../../website/static/ir/examples/v3/greeting-example.json"
-    ))
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ClassicFile {
+        format_version: u32,
+        distribution: serde_json::Value,
+    }
+
+    let source = serde_json::to_value(ClassicFile {
+        format_version: 3,
+        distribution: serde_json::json!([
+            "Library",
+            [["document", "tree", "fixture"]],
+            [],
+            {
+                "modules": [
+                    [
+                        [["first", "module"]],
+                        {
+                            "access": "Public",
+                            "value": { "types": [], "values": [], "doc": "first" }
+                        }
+                    ],
+                    [
+                        [["second", "module"]],
+                        {
+                            "access": "Public",
+                            "value": { "types": [], "values": [], "doc": "second" }
+                        }
+                    ]
+                ]
+            }
+        ]),
+    })
     .unwrap();
+    let classic: classic::Distribution = serde_json::from_value(source).unwrap();
     let migrated = migrate_distribution(&classic, MigrationOptions::default())
         .unwrap()
         .value;

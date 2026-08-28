@@ -3,10 +3,8 @@ use morphir_core::migration::{MigrationOptions, migrate_distribution};
 
 #[test]
 fn migrates_real_morphir_elm_v3_distribution() {
-    let source: classic::Distribution = serde_json::from_str(include_str!(
-        "../../../../../website/static/ir/examples/v3/greeting-example.json"
-    ))
-    .unwrap();
+    let source: classic::Distribution =
+        serde_json::from_str(include_str!("fixtures/ir/classic/greeting-example.json")).unwrap();
 
     let migrated = migrate_distribution(&source, MigrationOptions::default()).unwrap();
     let v4::Distribution::Library(library) = &migrated.value.distribution else {
@@ -29,10 +27,8 @@ fn migrates_real_morphir_elm_v3_distribution() {
 
 #[test]
 fn rejects_a_non_v3_classic_distribution_at_the_typed_boundary() {
-    let mut source: classic::Distribution = serde_json::from_str(include_str!(
-        "../../../../../website/static/ir/examples/v3/greeting-example.json"
-    ))
-    .unwrap();
+    let mut source: classic::Distribution =
+        serde_json::from_str(include_str!("fixtures/ir/classic/greeting-example.json")).unwrap();
     source.format_version = 2;
 
     let error = migrate_distribution(&source, MigrationOptions::default()).unwrap_err();

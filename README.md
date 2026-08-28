@@ -126,7 +126,7 @@ morphir ir migrate \
     --target-version classic
 ```
 
-See [IR Migrate Documentation](docs/ir-migrate.md) for full details.
+See the [IR Migration Guide](https://morphir.finos.org/docs/user-guides/cli-tools/ir-migrate) for full details.
 
 ### JSON Schema Generation
 
@@ -181,35 +181,15 @@ morphir transform --input ./morphir-ir.json --output ./transformed.json
 
 ## Documentation Generation
 
-Generate man pages, markdown documentation, and shell completions:
+Generate the release notes page:
 
 ```sh
-# Install usage CLI (required for doc generation)
-mise install usage
-
-# Generate all documentation
 mise run docs:generate
-
-# Generate specific types
-mise run docs:man          # Man pages
-mise run docs:markdown     # Markdown docs
-mise run docs:completions  # Shell completions
 ```
 
 ### CLI Reference Documentation
 
-The CLI reference docs in `docs/cli/` are auto-generated from `docs/morphir.usage.kdl`:
-
-```sh
-# Using mise task (recommended)
-mise run docs:cli
-
-# Or manually:
-usage generate markdown --file docs/morphir.usage.kdl --multi --out-dir docs/cli/ --url-prefix /cli/
-docs/scripts/add-frontmatter.sh
-```
-
-**Important**: To add examples to CLI docs, edit the `long_help` field in `morphir.usage.kdl`, not the generated markdown files. For detailed guides, create separate pages in `docs/` (e.g., `docs/ir-migrate.md`).
+The Morphir CLI reference (markdown docs, man page, and shell completions) is generated in the [finos/morphir](https://github.com/finos/morphir) repository with `mise run docs:cli` there, and published at [morphir.finos.org](https://morphir.finos.org/docs/cli/). To add examples to CLI docs, edit the `long_about` help text in the CLI source in that repository.
 
 ## Development Setup
 
@@ -252,12 +232,8 @@ mise tasks
 mise run check:fmt    # Format check
 mise run check:lint   # Lint check
 
-# CLI Documentation
-mise run docs:cli          # Regenerate CLI reference docs from KDL spec
-mise run docs:generate     # Generate all docs
-mise run docs:man          # Man pages only
-mise run docs:markdown     # Markdown only
-mise run docs:completions  # Shell completions
+# Documentation
+mise run docs:generate     # Generate release notes page
 
 # Jekyll Site (test locally)
 mise run docs:serve        # Serve at http://localhost:4000

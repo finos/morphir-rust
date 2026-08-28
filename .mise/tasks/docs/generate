@@ -1,13 +1,19 @@
 #!/bin/sh
-#MISE description="Generate all documentation (CLI + release notes)"
-#MISE depends=["docs:man", "docs:markdown", "docs:completions", "docs:releases"]
+#MISE description="Generate documentation (release notes + llms.txt indexes)"
+#MISE depends=["docs:releases"]
+
+set -e
+
+# Regenerate the LLM documentation indexes after the release notes so the
+# committed llms.txt artifacts stay current; CI diff-checks docs/.
+mise run docs:llms-txt
 
 echo ""
 echo "Documentation generated successfully!"
 echo ""
 echo "Output locations:"
-echo "  - Man pages:      docs/man/man1/"
-echo "  - Markdown:       docs/cli/"
-echo "  - Completions:    completions/"
-echo "  - Usage spec:     docs/morphir.usage.kdl"
 echo "  - Release notes:  docs/releases.md"
+echo "  - LLM indexes:    docs/llms.txt, docs/llms-full.txt"
+echo ""
+echo "Note: the Morphir CLI reference (markdown, man page, completions) is"
+echo "generated in the finos/morphir repository with 'mise run docs:cli'."

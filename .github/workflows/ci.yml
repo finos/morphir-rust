@@ -293,9 +293,9 @@ jobs:
 
       - name: Check docs are up to date
         run: |
-          if ! git diff --quiet docs/ completions/; then
+          if ! git diff --quiet docs/; then
             echo "::error::Generated documentation is out of date. Run 'mise run docs:generate' and commit the changes."
-            git diff docs/ completions/
+            git diff docs/
             exit 1
           fi
 

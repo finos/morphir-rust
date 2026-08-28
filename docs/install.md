@@ -242,4 +242,4 @@ MORPHIR_BACKEND=github morphir self upgrade
 ## Next Steps
 
 - [Getting Started](getting-started) - Basic usage guide
-- [CLI Reference](cli/) - Complete command documentation
+- [CLI Reference](https://morphir.finos.org/docs/cli/) - Complete command documentation

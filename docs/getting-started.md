@@ -152,5 +152,5 @@ See the [Installation Guide](install#dev-mode) for more details.
 ## Next Steps
 
 - [Installation Guide](install) - Detailed installation options
-- [CLI Reference](cli/) - Complete command documentation
-- [IR Migrate](ir-migrate) - Detailed migration documentation
+- [CLI Reference](https://morphir.finos.org/docs/cli/) - Complete command documentation
+- [IR Migration Guide](https://morphir.finos.org/docs/user-guides/cli-tools/ir-migrate) - Detailed migration documentation

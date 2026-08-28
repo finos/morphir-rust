@@ -200,7 +200,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install Morphir
-        run: curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
+        # See https://github.com/finos/morphir/blob/main/INSTALLING.md
+        run: mise use -g github:finos/morphir@latest
       - name: Compile to IR
         run: morphir gleam compile --json > compile-result.json
       - name: Check compilation

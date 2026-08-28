@@ -1,5 +1,6 @@
 #!/bin/sh
-#MISE description="Run all tests"
+#MISE description="Run all tests (unit + integration)"
 
 set -e
 mise run test:unit
+mise run test:integration

@@ -1,0 +1,5 @@
+#!/bin/sh
+#MISE description="Run integration tests (crate test targets, no CLI binary required)"
+
+set -e
+cargo test --verbose --test '*' "$@"

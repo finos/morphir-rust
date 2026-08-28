@@ -29,8 +29,8 @@ permalink: /
 ## Quick Start
 
 ```bash
-# Install morphir
-curl -fsSL https://raw.githubusercontent.com/finos/morphir-rust/main/scripts/install.sh | bash
+# Install morphir first: see
+# https://github.com/finos/morphir/blob/main/INSTALLING.md
 
 # Migrate a Morphir IR file to V4 format
 morphir ir migrate ./morphir-ir.json --output ./v4.json

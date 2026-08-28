@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `kb sync diff` gained `--json` and `--raw`. `--json` reports `{path, identical, diff, patch}`;
   `--raw` prints the patch alone, with headers relative to the upstream repository root so it can be
   piped into `git apply`, and prints nothing when the two sides are identical
+- `kb sync diff` covers more than one file. Its path argument is now a list, each element either a
+  mirrored path or a glob in the dialect `sync.yaml` mappings already use (`*`, `?`, `**`, and
+  `**/` matching zero directories); no argument at all means every file the mirror knows about,
+  which is the same set `kb sync status` reports on. Only differing files are shown, sorted by
+  mirrored path, so `--raw` is a multi-file patch `git apply` takes in one go and `--json` carries
+  the per-file records as `{files, summary: {differing, matched}}`. A pattern matching nothing is
+  refused by name, and every such pattern is named in one refusal rather than one per run. A
+  single mirrored path still renders exactly as it did, in all three forms
 - Atomic, validated installed-extension snapshots that pair each catalog entry with the requested selection from its exact lock
 - Transactional extension uninstall that removes active catalog and exact-lock state while retaining verified content-addressed artifact bytes
 - `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation
@@ -57,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `kb sync diff` compares an asset as bytes rather than as text. Every mirrored file was decoded as
+  UTF-8 first, so an asset holding bytes that are not valid UTF-8 — an image, an archive — came back
+  with U+FFFD where those bytes had been and diffed against itself as a change. Concepts are still
+  projected as text, which is the only form a frontmatter fence can be removed from. `--raw` now
+  emits a real binary patch for such a file, rather than a `Binary files ... differ` line that
+  `git apply` refuses — and that would take every other file in a multi-file patch down with it
 - Canonical constructor names in v4 custom types now round-trip (#103). An acronym constructor such
   as `GC` serializes to the canonical `"(gc)"`, which the decoders read back as a single literal
   word, leaving a constructor named `(gc)`; the Gleam backend then emitted that into source that

@@ -1038,21 +1038,20 @@ fn upstream_form_of(
     Ok(local_copy_of(sb, rel, kind)?.map(|c| c.upstream_form))
 }
 
-pub fn status(sb: &SyncBundle, upstream_root: Option<&Path>) -> Result<Vec<FileStatus>> {
-    let upstream_rels: Vec<String> = match upstream_root {
-        None => Vec::new(),
-        Some(r) => relative_files_under(r)?
+/// The files upstream holds that the manifest claims — everything a checkout
+/// contributes to the mirror's file set.
+fn selected_upstream_rels(sb: &SyncBundle, upstream_root: Option<&Path>) -> Result<Vec<String>> {
+    match upstream_root {
+        None => Ok(Vec::new()),
+        Some(r) => Ok(relative_files_under(r)?
             .into_iter()
             .filter(|rel| sb.manifest.selects(rel))
-            .collect(),
-    };
-    let mut upstream_hashes: HashMap<String, String> = HashMap::new();
-    if let Some(r) = upstream_root {
-        for rel in &upstream_rels {
-            let bytes = fs::read(resolve(r, rel))?;
-            upstream_hashes.insert(rel.clone(), sha256(&bytes));
-        }
+            .collect()),
     }
+}
+
+/// The lockfile's paths and the checkout's, as one sorted, deduplicated list.
+fn union_of(sb: &SyncBundle, upstream_rels: &[String]) -> Vec<String> {
     let mut paths: Vec<String> = sb
         .lock
         .files
@@ -1062,6 +1061,30 @@ pub fn status(sb: &SyncBundle, upstream_root: Option<&Path>) -> Result<Vec<FileS
         .collect();
     paths.sort();
     paths.dedup();
+    paths
+}
+
+/// Every mirrored path this bundle knows about: what the lockfile records, plus
+/// whatever the checkout now holds that the manifest selects.
+///
+/// One list, two callers. [`status`] reports a row per entry and [`diff_many`]
+/// selects from it, so the two cannot disagree about which files exist — a path
+/// `sync status` lists is a path `sync diff` will compare, and a glob can reach
+/// nothing that `sync status` does not show.
+pub fn known_paths(sb: &SyncBundle, upstream_root: Option<&Path>) -> Result<Vec<String>> {
+    Ok(union_of(sb, &selected_upstream_rels(sb, upstream_root)?))
+}
+
+pub fn status(sb: &SyncBundle, upstream_root: Option<&Path>) -> Result<Vec<FileStatus>> {
+    let upstream_rels = selected_upstream_rels(sb, upstream_root)?;
+    let mut upstream_hashes: HashMap<String, String> = HashMap::new();
+    if let Some(r) = upstream_root {
+        for rel in &upstream_rels {
+            let bytes = fs::read(resolve(r, rel))?;
+            upstream_hashes.insert(rel.clone(), sha256(&bytes));
+        }
+    }
+    let paths = union_of(sb, &upstream_rels);
     let mut rows = Vec::new();
     for rel in paths {
         let entry = sb.lock.get(&rel);
@@ -1443,8 +1466,14 @@ pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<DiffResu
              e.g. `docs/types.md`, with no leading separator and no `.` or `..` segments"
         )));
     }
-    let local_file = sb.mirror_file(rel)?;
     let upstream_file = resolve(upstream_root, rel);
+    // The same reading `status` takes of the same file, rather than a second one
+    // of its own: bytes for an asset, the projected text for a concept. Reading
+    // every file as text meant an asset that is not valid UTF-8 came back with
+    // U+FFFD where its bytes had been, and a freshly pulled binary then diffed
+    // against itself as a change. Nothing shows that up on one named `.md`; a
+    // diff over the whole mirror walks into it on the first image.
+    //
     // Either side may be absent, and both absences are states `sync status`
     // already has names for: `deleted-upstream-edited` when the checkout has
     // dropped a file the mirror still holds an edit of, `missing-local` the
@@ -1452,11 +1481,17 @@ pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<DiffResu
     // to make git complain into a dropped stderr and hand back an empty diff,
     // which then read as "identical", and the second died on an `fs::read` that
     // named nothing.
-    let projected = if local_file.is_file() {
-        let text = String::from_utf8_lossy(&fs::read(&local_file)?).into_owned();
-        Some(project(&text).map_err(|err| Error::msg(format!("{rel}: {err}")))?)
-    } else {
-        None
+    let kind = sb
+        .lock
+        .get(rel)
+        .map(|e| e.kind)
+        .unwrap_or_else(|| sb.manifest.kind_of(rel));
+    let projected: Option<Vec<u8>> = match local_copy_of(sb, rel, kind)? {
+        Some(copy) => Some(
+            copy.upstream_form
+                .map_err(|err| Error::msg(format!("{rel}: {err}")))?,
+        ),
+        None => None,
     };
     let upstream = upstream_file.is_file().then_some(upstream_file.as_path());
     if projected.is_none() && upstream.is_none() {
@@ -1513,13 +1548,13 @@ fn diff_in(
     scratch: &Path,
     upstream: Option<&Path>,
     rel: &str,
-    projected: Option<&str>,
+    projected: Option<&[u8]>,
 ) -> Result<(String, String)> {
     let null = Path::new(NULL_PATH);
     let flat = scratch.join(rel.replace('/', "_"));
     let projected_side = match projected {
-        Some(text) => {
-            write_bytes(&flat, text.as_bytes())?;
+        Some(bytes) => {
+            write_bytes(&flat, bytes)?;
             flat.as_path()
         }
         None => null,
@@ -1539,22 +1574,28 @@ fn diff_in(
     // names on it.
     let staged_a = resolve(&scratch.join("a"), rel);
     let staged_b = resolve(&scratch.join("b"), rel);
+    // `--binary` on the patch side only. Without it a changed asset that is not
+    // text becomes the line `Binary files a/x and b/x differ`, which carries no
+    // content and which `git apply` refuses — and one such file in a multi-file
+    // patch takes every other file in it down too, since `git apply` is all or
+    // nothing. The human diff keeps the summary line, because a screenful of
+    // base85 is not a reading of anything.
     let patch = match (upstream, projected) {
-        (Some(up), Some(text)) => {
+        (Some(up), Some(bytes)) => {
             fs::copy(up, ensure_parent(&staged_a)?)?;
-            write_bytes(&staged_b, text.as_bytes())?;
+            write_bytes(&staged_b, bytes)?;
             git_diff(
                 Some(scratch),
-                &["--src-prefix=", "--dst-prefix="],
+                &["--src-prefix=", "--dst-prefix=", "--binary"],
                 format!("a/{rel}").as_ref(),
                 format!("b/{rel}").as_ref(),
             )?
         }
-        (None, Some(text)) => {
-            write_bytes(&staged_b, text.as_bytes())?;
+        (None, Some(bytes)) => {
+            write_bytes(&staged_b, bytes)?;
             git_diff(
                 Some(&scratch.join("b")),
-                &[],
+                &["--binary"],
                 null.as_os_str(),
                 rel.as_ref(),
             )?
@@ -1563,7 +1604,7 @@ fn diff_in(
             fs::copy(up, ensure_parent(&staged_a)?)?;
             git_diff(
                 Some(&scratch.join("a")),
-                &[],
+                &["--binary"],
                 rel.as_ref(),
                 null.as_os_str(),
             )?
@@ -1623,6 +1664,182 @@ fn git_diff(cwd: Option<&Path>, opts: &[&str], old: &OsStr, new: &OsStr) -> Resu
     Ok(stdout)
 }
 
+// ------------------------------------------------------------ diff: many
+
+/// True when `pattern` is a glob rather than a literal mirrored path.
+///
+/// The two metacharacters [`compile_glob`] acts on, and only those: `[` and `.`
+/// are ordinary characters in this dialect, so a filename holding one is still
+/// a literal path.
+pub fn is_glob(pattern: &str) -> bool {
+    pattern.contains(['*', '?'])
+}
+
+/// The files a multi-file diff found, and how many it looked at.
+///
+/// `files` holds only the ones whose two sides differ — a diff of everything is
+/// a diff, not an inventory, and under `--raw` a file that agrees contributes no
+/// bytes anyway. `matched` is what the selection reached, so the renderings can
+/// still say that twenty files were compared and none of them moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffSet {
+    /// Differing files only, in mirrored-path order.
+    pub files: Vec<DiffResult>,
+    /// How many mirrored paths the selection matched, differing or not.
+    pub matched: usize,
+}
+
+/// What one `sync diff` invocation asked for: one named file, or a set of them.
+///
+/// The distinction is the argument's shape, not how many files it turned out to
+/// reach: `sync diff docs/types.md` is [`DiffSelection::Single`] and everything
+/// else — no argument, a glob, several patterns — is [`DiffSelection::Many`].
+/// Keeping them apart is what lets the single-file renderings stay byte-for-byte
+/// what they have always been while the multi-file ones are free to frame their
+/// output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffSelection {
+    Single(DiffResult),
+    Many(DiffSet),
+}
+
+impl DiffSelection {
+    /// The differing files, whichever form the selection took. A `Single` that
+    /// is identical still has a record — that is the case that prints
+    /// `<path>: identical` — so this is not the same as "what would be printed".
+    pub fn files(&self) -> &[DiffResult] {
+        match self {
+            DiffSelection::Single(d) => std::slice::from_ref(d),
+            DiffSelection::Many(set) => &set.files,
+        }
+    }
+}
+
+/// Resolves `select` and diffs what it names, in the form the CLI should print.
+///
+/// `select` is a list because the caller is a shell: a glob is as likely to
+/// arrive already expanded by the shell as intact, and `find`, `ls` and
+/// `git diff --name-only` all hand over many paths at once. Empty means every
+/// file the mirror knows about. Each element is either a literal mirrored path
+/// or a glob in the [`glob_matches`] dialect — the one `sync.yaml` mappings are
+/// written in, so there is nothing new to learn and `docs/**` means here what it
+/// means there.
+///
+/// Exactly one literal path is the single-file case, unchanged in every respect
+/// including its output. Anything else is a union: matched once, deduplicated,
+/// and sorted by mirrored path, so the same patterns in any order produce the
+/// same bytes.
+///
+/// A shell expands an unquoted glob before this ever sees it. Mirrored paths
+/// rarely exist in the working directory, so the pattern usually survives
+/// untouched, but quoting it — `'docs/**'` — is the only way to be sure which
+/// dialect is doing the matching.
+pub fn diff_selected(
+    sb: &SyncBundle,
+    upstream_root: &Path,
+    select: &[String],
+) -> Result<DiffSelection> {
+    match select {
+        [only] if !is_glob(only) => Ok(DiffSelection::Single(diff(sb, upstream_root, only)?)),
+        _ => Ok(DiffSelection::Many(diff_many(sb, upstream_root, select)?)),
+    }
+}
+
+/// Every differing file among those `select` names, in mirrored-path order.
+///
+/// See [`diff_selected`] for what `select` accepts. The file set comes from
+/// [`known_paths`], so this and `sync status` never disagree about which files
+/// exist; a pattern reaching outside that set is refused rather than silently
+/// producing nothing.
+pub fn diff_many(sb: &SyncBundle, upstream_root: &Path, select: &[String]) -> Result<DiffSet> {
+    // Per pattern, and before anything is read or staged. A list is not a way
+    // around the containment guard `diff` puts in front of a single path:
+    // one `..` element among twenty good ones refuses the whole invocation.
+    let escaping: Vec<&String> = select.iter().filter(|p| !safe_relative(p)).collect();
+    if !escaping.is_empty() {
+        return Err(Error::msg(format!(
+            "{} {} the mirror — diff paths relative to the mirror root, e.g. \
+             `docs/types.md` or `docs/**`, with no leading separator and no `.` or `..` segments",
+            quoted(&escaping),
+            if escaping.len() == 1 {
+                "leaves"
+            } else {
+                "leave"
+            }
+        )));
+    }
+    let known = known_paths(sb, Some(upstream_root))?;
+    if known.is_empty() {
+        return Err(Error::msg(
+            "this mirror holds no files — `kb sync pull` imports what `sync.yaml` selects, \
+             and there is nothing to compare until it has",
+        ));
+    }
+    let selected = if select.is_empty() {
+        known
+    } else {
+        // Named individually so the refusal can be too: with twenty patterns
+        // arriving down a pipe, "matched nothing" without saying which one is a
+        // message that costs the reader a bisect.
+        let mut unmatched: Vec<&String> = Vec::new();
+        let mut chosen: Vec<String> = Vec::new();
+        for pattern in select {
+            let hits: Vec<&String> = known.iter().filter(|p| glob_matches(pattern, p)).collect();
+            if hits.is_empty() {
+                unmatched.push(pattern);
+            }
+            chosen.extend(hits.into_iter().cloned());
+        }
+        if !unmatched.is_empty() {
+            return Err(Error::msg(format!(
+                "{} {} no mirrored file — `kb sync status` lists every path this mirror knows \
+                 about, and a pattern is matched against those; quote a glob so the shell hands \
+                 it over intact, e.g. `'docs/**'`",
+                quoted(&unmatched),
+                if unmatched.len() == 1 {
+                    "matches"
+                } else {
+                    "match"
+                }
+            )));
+        }
+        // Two patterns may reach the same file; it is one file either way, and
+        // the sort is what makes the patch independent of the order the
+        // patterns arrived in.
+        chosen.sort();
+        chosen.dedup();
+        chosen
+    };
+    let matched = selected.len();
+    let mut files = Vec::new();
+    for rel in selected {
+        // A path neither side holds is refused when it is asked for by name,
+        // because the asker is wrong about it. In a set it is passed over: two
+        // absent sides make no hunk, and the lockfile entry that outlived them
+        // both is `sync status`'s business — `missing-local`, `deleted-upstream`
+        // — not a patch's.
+        let held_here = sb.mirror_file(&rel)?.is_file();
+        let held_upstream = resolve(upstream_root, &rel).is_file();
+        if !held_here && !held_upstream {
+            continue;
+        }
+        let d = diff(sb, upstream_root, &rel)?;
+        if !d.identical {
+            files.push(d);
+        }
+    }
+    Ok(DiffSet { files, matched })
+}
+
+/// `` `a`, `b` `` — the way this module names paths back to the reader.
+fn quoted(items: &[&String]) -> String {
+    items
+        .iter()
+        .map(|p| format!("`{p}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The human rendering: `<path>: identical`, or git's unified diff verbatim.
 /// Byte-for-byte what the CLI printed before this became a value.
 pub fn render_diff_text(d: &DiffResult) -> String {
@@ -1646,6 +1863,100 @@ pub fn render_diff_json(d: &DiffResult) -> String {
 /// here would corrupt the pipe.
 pub fn render_diff_raw(d: &DiffResult) -> String {
     d.patch.clone()
+}
+
+/// A [`DiffSet`] as `--json` prints it: the same records the single-file payload
+/// carries, inside the `{collection, summary}` envelope `sync status` uses.
+///
+/// An array on its own would have been enough for the files, but a bare array
+/// cannot say that eleven paths were compared and none of them differed — which
+/// is exactly the answer a reader is most likely to doubt.
+#[derive(Serialize)]
+struct DiffSetJson<'a> {
+    files: &'a [DiffResult],
+    summary: DiffSummaryJson,
+}
+
+#[derive(Serialize)]
+struct DiffSummaryJson {
+    differing: usize,
+    matched: usize,
+}
+
+/// One `=== <path> ===` heading per file. The human diff underneath names a
+/// checkout path and a scratch path, neither of which is the mirrored path, so
+/// without this a multi-file diff would not say which file it was showing.
+fn diff_section(path: &str) -> String {
+    format!("=== {path} ===\n")
+}
+
+/// Git's output always ends in a newline, including after a
+/// `\ No newline at end of file` line. Enforced anyway: an unterminated patch
+/// would run into the next file's `diff --git` header and take it with it.
+fn newline_terminated(s: &str) -> String {
+    if s.is_empty() || s.ends_with('\n') {
+        s.to_string()
+    } else {
+        format!("{s}\n")
+    }
+}
+
+/// The human rendering of a whole selection. A single file renders exactly as
+/// [`render_diff_text`] has always rendered it; a set renders one section per
+/// differing file, then the tally.
+pub fn render_diffs_text(sel: &DiffSelection) -> String {
+    match sel {
+        DiffSelection::Single(d) => render_diff_text(d),
+        DiffSelection::Many(set) => {
+            if set.files.is_empty() {
+                return format!("{} file(s) compared, no differences\n", set.matched);
+            }
+            let mut sbuf = String::new();
+            for d in &set.files {
+                sbuf.push_str(&diff_section(&d.path));
+                sbuf.push_str(&newline_terminated(&d.diff));
+            }
+            sbuf.push_str(&format!(
+                "\n{} of {} file(s) differ\n",
+                set.files.len(),
+                set.matched
+            ));
+            sbuf
+        }
+    }
+}
+
+/// The `--json` rendering of a whole selection. A single file is the bare object
+/// [`render_diff_json`] emits, unchanged, so anything already reading it keeps
+/// working; a set is the envelope above.
+pub fn render_diffs_json(sel: &DiffSelection) -> String {
+    match sel {
+        DiffSelection::Single(d) => render_diff_json(d),
+        DiffSelection::Many(set) => {
+            let payload = DiffSetJson {
+                files: &set.files,
+                summary: DiffSummaryJson {
+                    differing: set.files.len(),
+                    matched: set.matched,
+                },
+            };
+            serde_json::to_string_pretty(&payload).expect("a diff set serializes") + "\n"
+        }
+    }
+}
+
+/// The `--raw` rendering of a whole selection: the patches concatenated in
+/// mirrored-path order and nothing else, which is a multi-file patch `git apply`
+/// takes in one go. Nothing differing means no output at all.
+pub fn render_diffs_raw(sel: &DiffSelection) -> String {
+    match sel {
+        DiffSelection::Single(d) => render_diff_raw(d),
+        DiffSelection::Many(set) => set
+            .files
+            .iter()
+            .map(|d| newline_terminated(&d.patch))
+            .collect(),
+    }
 }
 
 // -------------------------------------------------------------- index region

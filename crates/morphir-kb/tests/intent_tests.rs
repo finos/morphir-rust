@@ -902,3 +902,133 @@ fn text_show_renders_the_record() {
     assert!(text.contains("created      2026-07-28\n"));
     assert!(text.contains("file         kb/bundles/intent/0001-open-thing.md\n"));
 }
+
+// ------------------------------------------------------------ line endings
+
+/// Splits on the document's own terminator, so a comparison is line-for-line
+/// whichever terminator the file uses.
+fn terminated_lines(text: &str, eol: &str) -> Vec<String> {
+    text.split(eol).map(str::to_string).collect()
+}
+
+fn changed_lines(before: &[String], after: &[String]) -> Vec<String> {
+    after
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| before.get(*i) != Some(l))
+        .map(|(_, l)| l.clone())
+        .collect()
+}
+
+#[test]
+fn a_transition_on_a_crlf_document_rewrites_only_the_keys_it_edits() {
+    let (_tmp, kb_root) = with_one_intent("Add caching", IntentKind::Feature);
+    let file = {
+        let kb = load(&kb_root);
+        first(intent_bundle(&kb)).doc.file.clone()
+    };
+    let lf = fs::read_to_string(&file).unwrap();
+    let crlf = lf.replace('\n', "\r\n");
+    fs::write(&file, &crlf).unwrap();
+
+    let kb = load(&kb_root);
+    let b = intent_bundle(&kb);
+    intent::transition(
+        &kb,
+        b,
+        &first(b),
+        &Transition::to(IntentState::Refinement),
+        today(),
+    )
+    .unwrap();
+
+    let after = fs::read_to_string(&file).unwrap();
+    assert!(
+        !after.replace("\r\n", "").contains('\n'),
+        "every terminator is still CRLF"
+    );
+    let before_lines = terminated_lines(&crlf, "\r\n");
+    let after_lines = terminated_lines(&after, "\r\n");
+    assert_eq!(
+        after_lines.len(),
+        before_lines.len(),
+        "the line count is unchanged"
+    );
+    let changed = changed_lines(&before_lines, &after_lines);
+    // `state_since` was already today, so `state` is the one line that moves.
+    assert_eq!(
+        changed,
+        vec!["state: Refinement".to_string()],
+        "only the edited key may differ"
+    );
+    // And the body is byte-identical, terminators included.
+    let body_of = |t: &str| t.split("\r\n---\r\n").nth(1).unwrap().to_string();
+    assert_eq!(body_of(&after), body_of(&crlf));
+}
+
+#[test]
+fn a_transition_on_an_lf_document_still_rewrites_only_the_keys_it_edits() {
+    let (_tmp, kb_root) = with_one_intent("Add caching", IntentKind::Feature);
+    let file = {
+        let kb = load(&kb_root);
+        first(intent_bundle(&kb)).doc.file.clone()
+    };
+    let before = fs::read_to_string(&file).unwrap();
+
+    let kb = load(&kb_root);
+    let b = intent_bundle(&kb);
+    intent::transition(
+        &kb,
+        b,
+        &first(b),
+        &Transition::to(IntentState::Refinement),
+        today(),
+    )
+    .unwrap();
+
+    let after = fs::read_to_string(&file).unwrap();
+    assert!(!after.contains('\r'), "no CR is introduced");
+    let changed = changed_lines(
+        &terminated_lines(&before, "\n"),
+        &terminated_lines(&after, "\n"),
+    );
+    assert_eq!(changed, vec!["state: Refinement".to_string()]);
+}
+
+#[test]
+fn set_keys_keeps_crlf_when_removing_a_key() {
+    let tmp = TempDir::new().unwrap();
+    let f = tmp.path().join("doc.md");
+    let text = "---\r\ntype: Intent\r\nsources:\r\n  - id: s1\r\n    resource: https://x/y.md\r\nstate: Backlog\r\n---\r\n\r\nbody\r\n";
+    fs::write(&f, text).unwrap();
+    set_keys(&f, &[("sources".to_string(), None)]).unwrap();
+    assert_eq!(
+        fs::read_to_string(&f).unwrap(),
+        "---\r\ntype: Intent\r\nstate: Backlog\r\n---\r\n\r\nbody\r\n"
+    );
+}
+
+#[test]
+fn generated_index_keeps_a_crlf_preamble_intact() {
+    let (_tmp, kb_root) = with_one_intent("Add caching", IntentKind::Feature);
+    let index_file = kb_root.join("bundles/intent/index.md");
+    let crlf = fs::read_to_string(&index_file)
+        .unwrap()
+        .replace('\n', "\r\n");
+    fs::write(&index_file, &crlf).unwrap();
+
+    let kb = load(&kb_root);
+    assert!(intent::generate_index(intent_bundle(&kb), today()).unwrap());
+    let after = fs::read_to_string(&index_file).unwrap();
+    assert!(
+        !after.replace("\r\n", "").contains('\n'),
+        "every terminator is still CRLF"
+    );
+    let marker = morphir_kb::intent::MARKER;
+    let preamble = |t: &str| t.split(marker).next().unwrap().to_string();
+    assert_eq!(
+        preamble(&after),
+        preamble(&crlf),
+        "the preamble is untouched"
+    );
+}

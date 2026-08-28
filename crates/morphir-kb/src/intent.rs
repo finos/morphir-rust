@@ -682,6 +682,7 @@ fn check_one(
 /// provenance with it.
 pub fn set_keys(file: &Path, updates: &[(String, Option<String>)]) -> Result<()> {
     let text = fs::read_to_string(file)?;
+    let eol = line_terminator(&text);
     let (raw_fm, body) = split_frontmatter(&text);
     let Some(fm) = raw_fm else {
         return Err(Error::msg(format!(
@@ -715,11 +716,34 @@ pub fn set_keys(file: &Path, updates: &[(String, Option<String>)]) -> Result<()>
             }
         }
     }
-    fs::write(
-        file,
-        format!("---\n{}\n---\n{body}", out.join("\n").trim_end()),
-    )?;
+    let rewritten = format!("---\n{}\n---\n{body}", out.join("\n").trim_end());
+    fs::write(file, with_terminator(&rewritten, eol))?;
     Ok(())
+}
+
+/// The line terminator a document is written with.
+///
+/// `split_frontmatter` normalizes CRLF→LF, so without restoring the original
+/// terminator every edit to a CRLF document rewrites every line — a diff of
+/// one key becomes a diff of the whole file. Only a uniformly-CRLF document
+/// is reported as CRLF: a mixed document has no single right answer, and LF
+/// keeps the behaviour these writers have always had.
+fn line_terminator(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    if crlf > 0 && crlf == text.matches('\n').count() {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// Rewrites LF-terminated `text` with `eol`. A no-op for LF.
+fn with_terminator(text: &str, eol: &'static str) -> String {
+    if eol == "\n" {
+        text.to_string()
+    } else {
+        text.replace('\n', eol)
+    }
 }
 
 // ------------------------------------------------------------------ creating
@@ -889,6 +913,7 @@ pub fn transition(
 /// longer valid".
 pub fn generate_index(b: &Bundle, today: NaiveDate) -> Result<bool> {
     let text = fs::read_to_string(&b.index.file)?;
+    let eol = line_terminator(&text);
     let normalized = text.replace("\r\n", "\n");
     let preamble = match normalized.find(MARKER) {
         Some(at) => normalized[..at + MARKER.len()].to_string(),
@@ -899,7 +924,9 @@ pub fn generate_index(b: &Bundle, today: NaiveDate) -> Result<bool> {
     if updated == normalized {
         Ok(false)
     } else {
-        fs::write(&b.index.file, updated)?;
+        // Same reasoning as `set_keys`: the preamble above the marker is the
+        // author's, and regenerating below it must not reflow their lines.
+        fs::write(&b.index.file, with_terminator(&updated, eol))?;
         Ok(true)
     }
 }

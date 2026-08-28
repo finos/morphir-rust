@@ -20,7 +20,7 @@ use std::time::UNIX_EPOCH;
 use chrono::{DateTime, SecondsFormat, Utc};
 use regex::Regex;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 
 use morphir_okf::markdown::extract_headings;
 use morphir_okf::model::{DocKind, Kb, LinkRef};
@@ -476,7 +476,13 @@ pub fn query(db: &Path, sql: &str) -> Result<Rows> {
 }
 
 fn run_query(db: &Path, sql: &str) -> rusqlite::Result<Rows> {
-    let conn = Connection::open(db)?;
+    // SQLite enforces read-only, not the token guard above: a `PRAGMA` that
+    // writes, or a CTE prefixing a DELETE/UPDATE, sails straight past a first
+    // token of `pragma` or `with`.
+    let conn = Connection::open_with_flags(
+        db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     let mut stmt = conn.prepare(sql)?;
     let columns: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
     let ncols = columns.len();

@@ -623,6 +623,40 @@ fn strs_at(m: &Mapping, key: &str) -> Vec<String> {
     }
 }
 
+/// The mirror directory a manifest declares, refused when it would not be inside
+/// the bundle.
+///
+/// [`SyncBundle::mirror_root`] resolves `root` segment by segment onto the bundle
+/// directory, so a `..` in it puts the whole mirror somewhere else: `../shared`
+/// wrote into a sibling bundle, and `pull --prune` then deleted files there. This
+/// is the same guard [`safe_relative`] already gives each mirrored file, applied to
+/// the directory they all hang from.
+///
+/// An absolute root is refused outright rather than reinterpreted. Resolving it
+/// would quietly turn `/etc/morphir` into `<bundle>/etc/morphir`, which is neither
+/// what it says nor something anybody would write on purpose — better to say so
+/// than to mirror into a directory the author did not name. An absent or empty
+/// root keeps its historical default of `sources`.
+fn validated_root(declared: Option<String>) -> Result<String> {
+    let root = declared.unwrap_or_default();
+    if root.is_empty() {
+        return Ok("sources".to_string());
+    }
+    if root.starts_with('/') {
+        return Err(Error::msg(format!(
+            "sync.yaml `root: {root}` must be relative to the bundle, e.g. `sources` \
+             — an absolute path is refused rather than silently reread as a bundle subdirectory"
+        )));
+    }
+    if !safe_relative(&root) {
+        return Err(Error::msg(format!(
+            "sync.yaml `root: {root}` leaves the bundle \
+             — a root is a plain directory inside it, e.g. `sources`, with no `.` or `..` segments"
+        )));
+    }
+    Ok(root)
+}
+
 pub fn parse_manifest(raw: &str) -> Result<SyncManifest> {
     let top = top_mapping(raw).map_err(Error::msg)?;
     let empty = Mapping::new();
@@ -653,10 +687,11 @@ pub fn parse_manifest(raw: &str) -> Result<SyncManifest> {
             "sync.yaml needs at least one entry under `mappings:`",
         ));
     }
+    let root = validated_root(str_at(&top, "root"))?;
     let manifest = SyncManifest {
         refs_path: str_at(up, "refs_path").unwrap_or_else(|| repo.clone()),
         r#ref: str_at(up, "ref").unwrap_or_else(|| "main".to_string()),
-        root: str_at(&top, "root").unwrap_or_else(|| "sources".to_string()),
+        root,
         mappings,
         exclude: strs_at(&top, "exclude"),
         // serde_yaml's Mapping preserves document order, and order decides which
@@ -733,11 +768,21 @@ pub fn render_lock(lock: &SyncLock) -> String {
     let mut sorted: Vec<&LockEntry> = lock.files.iter().collect();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
     for e in sorted {
+        // Quoted through `yaml_str`, which quotes only what would otherwise change
+        // meaning. A comma is a legal filename byte and used to end the flow entry
+        // early — `docs/a,b.md` read back as `docs/a`, a phantom the pruner would
+        // act on while the real file stayed untracked — and `:`, `{` or `}` made
+        // the lockfile fail to parse at all.
+        //
+        // Quoting only when needed is what keeps this safe to change: an ordinary
+        // path renders exactly as it did before, so `sync.lock.yaml`, which is
+        // committed, sees no diff from a no-op pull, and we stay byte-identical
+        // with the Scala `renderLock` (`KbSync.scala`) for every realistic path.
         sb.push_str(&format!(
             "  - {{ path: {}, kind: {}, upstream_sha256: {} }}\n",
-            e.path,
-            e.kind.label(),
-            e.upstream_sha256
+            yaml_str(&e.path),
+            yaml_str(e.kind.label()),
+            yaml_str(&e.upstream_sha256)
         ));
     }
     sb

@@ -2917,6 +2917,8 @@ name = "morphir-gleam-binding"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "cap-fs-ext",
+ "cap-std",
  "chrono",
  "chumsky",
  "cucumber",
@@ -2926,12 +2928,14 @@ dependencies = [
  "morphir-common",
  "morphir-core",
  "morphir-extension-sdk",
+ "percent-encoding",
  "pretty",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

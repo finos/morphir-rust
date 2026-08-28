@@ -6,7 +6,7 @@ use crate::extensions::protocol::{
 };
 use crate::extensions::session::{
     ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
-    TransportError, TransportState,
+    Stopped, TransportError, TransportState,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
@@ -370,6 +370,26 @@ impl<S> Session<SpawnedProcessTransport, S> {
     /// Return captured child-process diagnostics without exposing transport I/O.
     pub fn process_stderr_output(&self) -> &str {
         self.transport_internal().session.stderr_output()
+    }
+}
+
+impl Session<SpawnedProcessTransport, Stopped> {
+    /// Report whether the stopped child left any unread bytes on standard output.
+    ///
+    /// A conforming process writes only the response frames consumed by the host.
+    /// Remaining bytes therefore identify protocol output that was not framed as a
+    /// response.
+    pub async fn process_stdout_is_exhausted(&mut self) -> Result<bool> {
+        let request_timeout = self.transport_internal().session.request_timeout;
+        let stdout = &mut self.transport_mut_internal().session.stdout;
+        match timeout(request_timeout, stdout.fill_buf()).await {
+            Ok(result) => result
+                .map(|remaining| remaining.is_empty())
+                .map_err(Into::into),
+            Err(_) => Err(DaemonError::Extension(format!(
+                "Timed out while checking extension stdout after {request_timeout:?}"
+            ))),
+        }
     }
 }
 

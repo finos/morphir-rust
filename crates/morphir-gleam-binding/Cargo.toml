@@ -38,14 +38,20 @@ morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" } # For Vfs and pipeline
 indexmap = "2.0"                                # Required for V4 IndexMap structures
 anyhow = "1.0"
+url = { workspace = true }
+percent-encoding = { workspace = true }
 
 # Pretty printing (Wadler-style)
 pretty = "0.12"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-std = { workspace = true }
+cap-fs-ext = { workspace = true }
+
 [dev-dependencies]
 cucumber = { version = "0.22", features = ["output-json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tempfile = "3"
+tempfile = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"

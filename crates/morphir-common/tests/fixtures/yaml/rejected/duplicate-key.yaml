@@ -1,3 +1,4 @@
 formatVersion: 4
+# yamllint disable-line rule:key-duplicates
 formatVersion: 4
 distribution: {}

@@ -154,60 +154,9 @@ Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
 
 ## CLI Documentation Generation
 
-The CLI reference documentation is auto-generated from the Rust CLI source code via clap's usage output.
+The Morphir CLI reference documentation (markdown, man page, and shell completions) is generated in the [finos/morphir](https://github.com/finos/morphir) repository with `mise run docs:cli` there, and published at [morphir.finos.org](https://morphir.finos.org/docs/cli/).
 
-### Key Files
-- **Source of Truth**: `crates/morphir/src/main.rs` - Rust source with clap derive macros
-- **Intermediate**: `docs/morphir.usage.kdl` - Generated from `morphir usage` command
-- **Generated Output**: `docs/cli/` directory - Markdown files generated from the KDL spec
-- **Task**: `.mise/tasks/docs/markdown` - Orchestrates generation and post-processing
-
-### Regenerating CLI Docs
-
-```bash
-mise run docs:markdown    # Regenerate CLI docs
-mise run docs:generate    # Regenerate all docs (CLI + release notes)
-```
-
-The task automatically:
-1. Builds the morphir binary
-2. Generates `docs/morphir.usage.kdl` from `morphir usage`
-3. Generates markdown with `usage generate markdown`
-4. Adds Jekyll front matter for just-the-docs theme
-
-### Adding Examples to CLI Docs
-
-**DO NOT** add examples directly to generated markdown files or the KDL file - they will be lost on regeneration.
-
-Instead, add a `long_about` attribute in the Rust source code (`crates/morphir/src/main.rs`):
-
-```rust
-#[derive(Clone, Subcommand)]
-enum IrAction {
-    /// Migrate IR between versions
-    #[command(long_about = "Migrate IR between versions
-
-Converts Morphir IR between Classic (V1-V3) and V4 formats.
-
-**Examples:**
-
-```bash
-morphir ir migrate ./morphir-ir.json -o ./morphir-ir-v4.json
-```
-
-See the [IR Migration Guide](/ir-migrate/) for details.")]
-    Migrate {
-        // fields...
-    }
-}
-```
-
-For detailed real-world examples (like step-by-step walkthroughs), add them to separate guide pages in `docs/` that are NOT auto-generated (e.g., `docs/ir-migrate.md`).
-
-### Clap Attributes for Documentation
-- Doc comment (`///`) - Short description shown in command listing
-- `#[command(long_about = "...")]` - Extended help with examples (supports markdown)
-- `#[command(hide = true)]` - Hide command from default help (experimental commands)
+To change CLI documentation, edit the clap doc comments and `long_about` attributes in the CLI source in finos/morphir (`crates/morphir/src/main.rs`), then regenerate with `mise run docs:cli` in that repository. Do not add generated CLI docs to this repository.
 - `#[arg(short, long)]` - Short and long flag names
 - `#[arg(required = true)]` - Mark argument as required
 

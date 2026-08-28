@@ -1,13 +1,12 @@
 #!/bin/sh
-#MISE description="Generate all documentation (CLI + release notes)"
-#MISE depends=["docs:man", "docs:markdown", "docs:completions", "docs:releases"]
+#MISE description="Generate documentation (release notes)"
+#MISE depends=["docs:releases"]
 
 echo ""
 echo "Documentation generated successfully!"
 echo ""
 echo "Output locations:"
-echo "  - Man pages:      docs/man/man1/"
-echo "  - Markdown:       docs/cli/"
-echo "  - Completions:    completions/"
-echo "  - Usage spec:     docs/morphir.usage.kdl"
 echo "  - Release notes:  docs/releases.md"
+echo ""
+echo "Note: the Morphir CLI reference (markdown, man page, completions) is"
+echo "generated in the finos/morphir repository with 'mise run docs:cli'."

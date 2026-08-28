@@ -270,4 +270,4 @@ Error: Compilation failed
 
 - Explore [Extension Development](../contributors/extension-tutorial)
 - Read [Architecture Documentation](../contributors/architecture)
-- Check [CLI Reference](../cli/index)
+- Check the [CLI Reference](https://morphir.finos.org/docs/cli/)

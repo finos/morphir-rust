@@ -28,12 +28,10 @@ The Morphir Rust documentation lives in `docs/` and is organized into these sect
 |---------|---------|
 | `getting-started/` | New user introduction and setup |
 | `install.md` | Installation instructions |
-| `cli/` | CLI command documentation |
 | `tutorials/` | Step-by-step tutorials |
 | `contributors/` | Contributor guides and design documents |
 | `contributors/design/` | Design documents (daemon, extensions) |
 | `contributors/architecture.md` | System architecture |
-| `ir-migrate.md` | IR migration guide |
 
 For detailed section guidelines, see [docs-structure.md](references/docs-structure.md).
 

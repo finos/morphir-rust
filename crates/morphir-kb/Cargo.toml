@@ -13,9 +13,9 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 thiserror = { workspace = true }
 regex = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 chrono = "0.4"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 walkdir = "2"
 
 [dev-dependencies]

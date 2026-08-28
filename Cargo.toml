@@ -36,7 +36,7 @@ categories = ["development-tools", "parsers"]
 
 [workspace.dependencies]
 # CLI framework
-starbase = "0.10"
+starbase = "0.13"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "2.0"

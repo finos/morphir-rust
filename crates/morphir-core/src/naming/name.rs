@@ -44,6 +44,67 @@ impl Name {
         Name { words }
     }
 
+    /// Render this name using the Morphir IR v4 canonical encoding.
+    ///
+    /// Consecutive one-letter words are grouped in parentheses so decoding can
+    /// distinguish an acronym such as `["u", "s", "d"]` from `["usd"]`.
+    pub fn to_canonical_string(&self) -> String {
+        let mut parts = Vec::new();
+        let mut acronym = String::new();
+
+        for word in &self.words {
+            if word.chars().count() == 1 {
+                acronym.push_str(&word.to_lowercase());
+            } else {
+                if !acronym.is_empty() {
+                    parts.push(format!("({acronym})"));
+                    acronym.clear();
+                }
+                parts.push(word.to_lowercase());
+            }
+        }
+
+        if !acronym.is_empty() {
+            parts.push(format!("({acronym})"));
+        }
+
+        parts.join("-")
+    }
+
+    /// Parse a Morphir IR v4 canonical name.
+    pub fn from_canonical_string(source: &str) -> Result<Self, String> {
+        if source.is_empty() {
+            return Ok(Self { words: Vec::new() });
+        }
+
+        let mut words = Vec::new();
+        for part in source.split('-') {
+            if part.is_empty() {
+                return Err(format!("empty word in canonical name: {source}"));
+            }
+
+            let opens = part.starts_with('(');
+            let closes = part.ends_with(')');
+            if opens != closes || part[1..part.len().saturating_sub(1)].contains(['(', ')']) {
+                return Err(format!("unmatched parentheses in canonical name: {source}"));
+            }
+
+            if opens {
+                let acronym = &part[1..part.len() - 1];
+                if acronym.is_empty() {
+                    return Err(format!("empty acronym in canonical name: {source}"));
+                }
+                words.extend(acronym.chars().map(|character| character.to_string()));
+            } else if part.contains(['(', ')']) {
+                return Err(format!("unmatched parentheses in canonical name: {source}"));
+            } else {
+                words.push(part.to_owned());
+            }
+        }
+
+        Ok(Self { words })
+    }
+
     pub fn to_camel_case(&self) -> String {
         let mut result = String::new();
         for (i, word) in self.words.iter().enumerate() {
@@ -91,9 +152,7 @@ impl Name {
 
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Use kebab-case for canonical string representation to match test expectations
-        // and standard path formatting
-        write!(f, "{}", self.to_kebab_case())
+        write!(f, "{}", self.to_canonical_string())
     }
 }
 
@@ -102,8 +161,7 @@ impl Serialize for Name {
     where
         S: serde::Serializer,
     {
-        // V4 canonical format: serialize as kebab-case string
-        serializer.serialize_str(&self.to_kebab_case())
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -118,7 +176,9 @@ impl<'de> Deserialize<'de> for Name {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
             // V4 canonical string format: "testModule" or "my-function"
-            serde_json::Value::String(s) => Ok(Name::from(&s)),
+            serde_json::Value::String(s) => {
+                Name::from_canonical_string(&s).map_err(de::Error::custom)
+            }
             // Classic array format: ["test", "module"]
             serde_json::Value::Array(arr) => {
                 let words: Result<Vec<String>, _> = arr

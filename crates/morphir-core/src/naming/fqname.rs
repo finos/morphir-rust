@@ -61,33 +61,29 @@ impl FQName {
         let local_str = &rest[hash_pos + 1..];
 
         Ok(Self::new(
-            Path::new(package_str),
-            Path::new(module_str),
-            Name::from(local_str),
+            Path::from_canonical_string(package_str)?,
+            Path::from_canonical_string(module_str)?,
+            Name::from_canonical_string(local_str)?,
         ))
     }
 }
 
 impl std::fmt::Display for FQName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}:{}:{}",
-            self.package_path, self.module_path, self.local_name
-        )
+        write!(f, "{}", self.to_canonical_string())
     }
 }
 
 impl From<FQName> for String {
     fn from(fqname: FQName) -> String {
-        fqname.to_string()
+        fqname.to_canonical_string()
     }
 }
 
 impl TryFrom<String> for FQName {
     type Error = String;
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        FQName::parse(&s).ok_or_else(|| format!("Invalid FQName string: {}", s))
+        FQName::from_canonical_string(&s)
     }
 }
 

@@ -1,0 +1,22 @@
+[package]
+name = "morphir-kb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Knowledgebase operations for Morphir: OKF bundle checks, scaffolding, SQLite index, sync vendoring, intent and decision registers"
+
+[dependencies]
+morphir-okf = { path = "../morphir-okf" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+regex = "1"
+sha2 = "0.10"
+chrono = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,27 @@
+[package]
+name = "morphir-okf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Open Knowledge Format (OKF) domain model, frontmatter and markdown parsing, and bundle loading"
+
+[lib]
+name = "morphir_okf"
+path = "src/lib.rs"
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false }
+regex = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

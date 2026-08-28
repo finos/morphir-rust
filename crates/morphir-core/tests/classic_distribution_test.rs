@@ -135,3 +135,130 @@ fn module_spec_entry_serializes_as_canonical_array_and_round_trips() {
         serde_json::from_value(serialized).expect("serialized package specification should parse");
     assert_eq!(round_tripped, specification);
 }
+
+#[test]
+fn value_argument_serializes_canonically_in_distribution_and_round_trips() {
+    let canonical = serde_json::json!({
+        "formatVersion": 3,
+        "distribution": [
+            "Library",
+            [["example"]],
+            [],
+            {
+                "modules": [
+                    [
+                        [["main"]],
+                        {
+                            "access": "Public",
+                            "value": {
+                                "types": [],
+                                "values": [
+                                    [
+                                        ["identity"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "Return the input value.",
+                                                "value": {
+                                                    "inputTypes": [
+                                                        [
+                                                            ["input"],
+                                                            ["Variable", {}, ["input", "annotation"]],
+                                                            ["Variable", {}, ["input", "type"]]
+                                                        ]
+                                                    ],
+                                                    "outputType": ["Variable", {}, ["output"]],
+                                                    "body": [
+                                                        "Variable",
+                                                        ["Variable", {}, ["body", "annotation"]],
+                                                        ["input"]
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    ]
+                                ],
+                                "doc": "Example module"
+                            }
+                        }
+                    ]
+                ]
+            }
+        ]
+    });
+
+    let distribution: Distribution =
+        serde_json::from_value(canonical.clone()).expect("canonical distribution should parse");
+    let serialized =
+        serde_json::to_value(&distribution).expect("typed distribution should serialize");
+    let argument = &serialized["distribution"][3]["modules"][0][1]["value"]["values"][0][1]["value"]
+        ["value"]["inputTypes"][0];
+
+    assert!(argument.is_array());
+    assert_eq!(argument.as_array().unwrap().len(), 3);
+    assert_eq!(serialized, canonical);
+
+    let round_tripped: Distribution =
+        serde_json::from_value(serialized).expect("serialized distribution should parse");
+    assert_eq!(round_tripped, distribution);
+}
+
+#[test]
+fn value_parameter_serializes_canonically_in_dependency_spec_and_round_trips() {
+    let canonical = serde_json::json!({
+        "formatVersion": 3,
+        "distribution": [
+            "Library",
+            [["example"]],
+            [
+                [
+                    [["shared"]],
+                    {
+                        "modules": [
+                            [
+                                [["api"]],
+                                {
+                                    "types": [],
+                                    "values": [
+                                        [
+                                            ["identity"],
+                                            {
+                                                "doc": "The public identity function.",
+                                                "value": {
+                                                    "inputs": [
+                                                        [
+                                                            ["input"],
+                                                            ["Variable", {}, ["input", "type"]]
+                                                        ]
+                                                    ],
+                                                    "output": ["Variable", {}, ["output"]]
+                                                }
+                                            }
+                                        ]
+                                    ],
+                                    "doc": "Dependency API"
+                                }
+                            ]
+                        ]
+                    }
+                ]
+            ],
+            { "modules": [] }
+        ]
+    });
+
+    let distribution: Distribution =
+        serde_json::from_value(canonical.clone()).expect("canonical distribution should parse");
+    let serialized =
+        serde_json::to_value(&distribution).expect("typed distribution should serialize");
+    let parameter =
+        &serialized["distribution"][2][0][1]["modules"][0][1]["values"][0][1]["value"]["inputs"][0];
+
+    assert!(parameter.is_array());
+    assert_eq!(parameter.as_array().unwrap().len(), 2);
+    assert_eq!(serialized, canonical);
+
+    let round_tripped: Distribution =
+        serde_json::from_value(serialized).expect("serialized distribution should parse");
+    assert_eq!(round_tripped, distribution);
+}

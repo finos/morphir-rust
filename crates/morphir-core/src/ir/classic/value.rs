@@ -499,10 +499,22 @@ impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for Value
 // ----------------------------------------------------------------------------
 
 /// Value parameter - [name, type]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueParameter<A> {
     pub name: Name,
     pub ty: Type<A>,
+}
+
+impl<A: Serialize> Serialize for ValueParameter<A> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(2)?;
+        tuple.serialize_element(&self.name)?;
+        tuple.serialize_element(&self.ty)?;
+        tuple.end()
+    }
 }
 
 impl<'de, A: Deserialize<'de>> Deserialize<'de> for ValueParameter<A> {
@@ -537,11 +549,24 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for ValueParameter<A> {
 }
 
 /// Value argument - [name, va, type]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValueArgument<TA, VA> {
     pub name: Name,
     pub annotation: VA,
     pub ty: Type<TA>,
+}
+
+impl<TA: Serialize, VA: Serialize> Serialize for ValueArgument<TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(3)?;
+        tuple.serialize_element(&self.name)?;
+        tuple.serialize_element(&self.annotation)?;
+        tuple.serialize_element(&self.ty)?;
+        tuple.end()
+    }
 }
 
 impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for ValueArgument<TA, VA> {

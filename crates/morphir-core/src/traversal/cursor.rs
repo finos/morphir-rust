@@ -1,47 +1,83 @@
-use crate::naming::Path;
+use std::fmt;
 
-/// A Cursor for navigating the IR with context.
-#[derive(Debug, Clone, Default)]
-pub struct Cursor {
-    path_stack: Vec<String>,
-    depth: usize,
+/// A typed semantic location within a Morphir IR tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorSegment {
+    Distribution,
+    Package(String),
+    Dependency(String),
+    Module(String),
+    Type(String),
+    Value(String),
+    Constructor(String),
+    Field(String),
+    Argument(usize),
+    PatternCase(usize),
+    LetBinding(String),
+    Branch(&'static str),
 }
 
-impl Cursor {
-    pub fn new() -> Self {
-        Self::default()
+impl fmt::Display for CursorSegment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Distribution => formatter.write_str("distribution"),
+            Self::Package(name) => write!(formatter, "package:{name}"),
+            Self::Dependency(name) => write!(formatter, "dependency:{name}"),
+            Self::Module(name) => write!(formatter, "module:{name}"),
+            Self::Type(name) => write!(formatter, "type:{name}"),
+            Self::Value(name) => write!(formatter, "value:{name}"),
+            Self::Constructor(name) => write!(formatter, "constructor:{name}"),
+            Self::Field(name) => write!(formatter, "field:{name}"),
+            Self::Argument(index) => write!(formatter, "argument:{index}"),
+            Self::PatternCase(index) => write!(formatter, "pattern-case:{index}"),
+            Self::LetBinding(name) => write!(formatter, "let-binding:{name}"),
+            Self::Branch(name) => write!(formatter, "branch:{name}"),
+        }
+    }
+}
+
+/// Cursor used by visitors and migration diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IrCursor {
+    segments: Vec<CursorSegment>,
+}
+
+impl IrCursor {
+    pub fn from_segments(segments: impl IntoIterator<Item = CursorSegment>) -> Self {
+        Self {
+            segments: segments.into_iter().collect(),
+        }
     }
 
-    /// Enter a named segment of the IR tree (pushes to path stack).
-    pub fn enter(&mut self, segment: &str) {
-        self.path_stack.push(segment.to_string());
-        self.depth += 1;
+    pub fn is_root(&self) -> bool {
+        self.segments.is_empty()
     }
 
-    /// Exit the current segment (pops from path stack).
-    pub fn exit(&mut self) {
-        self.path_stack.pop();
-        self.depth -= 1;
+    pub fn segments(&self) -> &[CursorSegment] {
+        &self.segments
     }
 
-    /// Advance to the next sibling (currently a placeholder for sibling tracking).
-    pub fn next(&mut self) {
-        // Future: track index or sibling state
+    /// Run an operation under a child segment and restore the parent cursor.
+    pub fn with_segment<R>(
+        &mut self,
+        segment: CursorSegment,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.segments.push(segment);
+        let result = operation(self);
+        self.segments.pop();
+        result
     }
+}
 
-    /// Get the current traversal path as a Morphir Path.
-    pub fn path(&self) -> Path {
-        // Simple conversion: treating stack segments as path words
-        let segments: Vec<crate::naming::Name> = self
-            .path_stack
+impl fmt::Display for IrCursor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let path = self
+            .segments
             .iter()
-            .map(|s| crate::naming::Name::from(s.as_str()))
-            .collect();
-        Path { segments }
-    }
-
-    /// Get current nesting depth.
-    pub fn depth(&self) -> usize {
-        self.depth
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("/");
+        formatter.write_str(&path)
     }
 }

@@ -1,13 +1,7 @@
-pub mod cursor;
-pub mod transform;
-pub mod visitor;
-pub mod walker;
+//! Cursor-aware visitors for the concrete Classic and v4 IR models.
 
-pub use cursor::Cursor;
-pub use transform::{
-    PatternTransformVisitor, TypeTransformVisitor, ValueTransformVisitor,
-    transform_type_definition, walk_transform_pattern, walk_transform_type, walk_transform_value,
-    walk_transform_value_definition,
-};
-pub use visitor::Visitor;
-pub use walker::*;
+pub mod classic;
+pub mod cursor;
+pub mod v4;
+
+pub use cursor::{CursorSegment, IrCursor};

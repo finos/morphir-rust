@@ -1,7 +1,7 @@
 // TODO: These modules have pre-existing issues with undefined types
 // They need to be updated to use the refactored classic IR types
 // pub mod converter;
-// pub mod traversal;
+pub mod traversal;
 
 pub mod error;
 pub mod ir;

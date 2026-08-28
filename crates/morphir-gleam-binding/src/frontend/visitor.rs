@@ -286,7 +286,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         let v4_value_def = V4ValueDefinition {
             input_types,
-            output_type,
+            output_type: Some(output_type),
             body,
         };
 
@@ -454,7 +454,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 // Convert to LetDefinition
                 let def = V4ValueDefinition {
                     input_types: IndexMap::new(),
-                    output_type: Type::Unit(TypeAttributes::default()),
+                    output_type: Some(Type::Unit(TypeAttributes::default())),
                     body: V4ValueBody::Expression(self.convert_expr(value)),
                 };
 

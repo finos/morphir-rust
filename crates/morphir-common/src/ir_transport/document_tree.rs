@@ -206,6 +206,12 @@ fn write_specification_module(
 /// advertised as complete on backends without an atomic directory move.
 pub fn write_document_tree(root: &VfsPath, ir: &IRFile) -> Result<()> {
     root.create_dir_all()?;
+    let package = match &ir.distribution {
+        Distribution::Library(content) => &content.package_name,
+        Distribution::Specs(content) => &content.package_name,
+        Distribution::Application(content) => &content.package_name,
+    };
+    package_root(root, package)?.remove_dir_all()?;
     let manifest = match &ir.distribution {
         Distribution::Library(content) => {
             for (path, module) in &content.def.modules {
@@ -350,7 +356,7 @@ fn read_specification_module(
 /// Read a granular v4 document tree into the concrete v4 IR model.
 pub fn read_document_tree(root: &VfsPath) -> Result<IRFile> {
     let manifest: DistributionManifest = read_json(&root.join("manifest.json")?)?;
-    let modules = module_manifests(root)?;
+    let modules = module_manifests(&package_root(root, &manifest.package)?)?;
     let distribution = match manifest.distribution {
         DistributionKind::Library => Distribution::Library(LibraryContent {
             package_name: manifest.package,

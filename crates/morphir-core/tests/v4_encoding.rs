@@ -1,4 +1,7 @@
-use morphir_core::ir::v4::{Type, TypeAttributes, TypeEncoding, with_type_encoding};
+use morphir_core::ir::v4::{
+    Field, Pattern, RecordFieldEntry, Type, TypeAttributes, TypeEncoding, Value, ValueAttributes,
+    with_type_encoding,
+};
 use morphir_core::naming::{FQName, Name};
 
 fn reference() -> Type {
@@ -48,4 +51,62 @@ fn checked_in_complete_v4_example_decodes_concretely() {
         "../../../../../website/static/ir/examples/v4/complete-example.json"
     ))
     .unwrap();
+}
+
+#[test]
+fn canonical_acronym_names_round_trip_through_manual_v4_visitors() {
+    let acronym = Name::new(&["u", "s", "d"]);
+    let attrs = TypeAttributes::default();
+    let types = [
+        Type::Variable(attrs.clone(), acronym.clone()),
+        Type::Record(
+            attrs.clone(),
+            vec![Field {
+                name: acronym.clone(),
+                tpe: Type::Unit(attrs.clone()),
+            }],
+        ),
+        Type::ExtensibleRecord(
+            attrs,
+            acronym.clone(),
+            vec![Field {
+                name: acronym.clone(),
+                tpe: Type::Unit(TypeAttributes::default()),
+            }],
+        ),
+    ];
+    for value in types {
+        let encoded = serde_json::to_value(&value).unwrap();
+        assert_eq!(serde_json::from_value::<Type>(encoded).unwrap(), value);
+    }
+
+    let value_attrs = ValueAttributes::default();
+    let pattern = Pattern::AsPattern(
+        value_attrs.clone(),
+        Box::new(Pattern::WildcardPattern(value_attrs.clone())),
+        acronym.clone(),
+    );
+    let encoded = serde_json::to_value(&pattern).unwrap();
+    assert_eq!(serde_json::from_value::<Pattern>(encoded).unwrap(), pattern);
+
+    let values = [
+        Value::Variable(value_attrs.clone(), acronym.clone()),
+        Value::Record(
+            value_attrs.clone(),
+            vec![RecordFieldEntry(
+                acronym.clone(),
+                Value::Unit(value_attrs.clone()),
+            )],
+        ),
+        Value::Field(
+            value_attrs.clone(),
+            Box::new(Value::Unit(value_attrs.clone())),
+            acronym.clone(),
+        ),
+        Value::FieldFunction(value_attrs, acronym),
+    ];
+    for value in values {
+        let encoded = serde_json::to_value(&value).unwrap();
+        assert_eq!(serde_json::from_value::<Value>(encoded).unwrap(), value);
+    }
 }

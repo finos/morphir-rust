@@ -1,5 +1,5 @@
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::{Context, Result, bail};
 use morphir_core::ir::classic;
@@ -7,6 +7,94 @@ use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor
 
 type ClassicDependencies = Vec<(classic::Path, classic::PackageSpecification<classic::Attrs>)>;
 type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
+
+fn read_format_version(reader: &mut impl Read) -> Result<u32> {
+    let mut buffer = [0_u8; 1024];
+    let mut depth = 0_usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut capturing_key = false;
+    let mut expecting_key = false;
+    let mut key = Vec::new();
+    let mut pending_key = None;
+    let mut reading_version = false;
+    let mut version = Vec::new();
+
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .context("failed to scan Classic IR format version")?;
+        if read == 0 {
+            bail!("Classic IR is missing formatVersion");
+        }
+        for byte in &buffer[..read] {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if *byte == b'\\' {
+                    escaped = true;
+                } else if *byte == b'"' {
+                    in_string = false;
+                    if capturing_key {
+                        pending_key = Some(std::mem::take(&mut key));
+                        capturing_key = false;
+                    }
+                } else if capturing_key {
+                    key.push(*byte);
+                }
+                continue;
+            }
+
+            if reading_version {
+                if byte.is_ascii_digit() {
+                    version.push(*byte);
+                    continue;
+                }
+                if byte.is_ascii_whitespace() && version.is_empty() {
+                    continue;
+                }
+                if !version.is_empty()
+                    && (byte.is_ascii_whitespace() || matches!(byte, b',' | b'}'))
+                {
+                    let source = std::str::from_utf8(&version)
+                        .context("formatVersion is not valid UTF-8")?;
+                    return source
+                        .parse()
+                        .context("formatVersion must be an unsigned integer");
+                }
+                bail!("formatVersion must be an unsigned integer");
+            }
+
+            match *byte {
+                b'"' => {
+                    in_string = true;
+                    if depth == 1 && expecting_key {
+                        capturing_key = true;
+                        expecting_key = false;
+                    }
+                }
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth == 1 {
+                        expecting_key = true;
+                    }
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                b':' if depth == 1 => {
+                    if pending_key.as_deref() == Some(b"formatVersion") {
+                        reading_version = true;
+                    }
+                    pending_key = None;
+                }
+                b',' if depth == 1 => {
+                    expecting_key = true;
+                    pending_key = None;
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 /// Receives a Classic v3 distribution without retaining its package modules.
 pub trait ClassicV3ModuleVisitor {
@@ -239,9 +327,17 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
 /// Parse a Classic v3 single-file distribution and release each module after visiting it.
 pub fn visit_classic_v3<R, V>(reader: R, mut visitor: V) -> Result<V::Output>
 where
-    R: Read,
+    R: Read + Seek,
     V: ClassicV3ModuleVisitor,
 {
+    let mut reader = reader;
+    let version = read_format_version(&mut reader)?;
+    if version != 3 {
+        bail!("typed Classic migration requires formatVersion 3, found {version}");
+    }
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("failed to rewind Classic IR after reading its format version")?;
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let version = DistributionSeed {
         visitor: &mut visitor,
@@ -251,8 +347,6 @@ where
     deserializer
         .end()
         .context("unexpected data after Classic IR distribution")?;
-    if version != 3 {
-        bail!("typed Classic migration requires formatVersion 3, found {version}");
-    }
+    debug_assert_eq!(version, 3);
     visitor.finish().map_err(anyhow::Error::msg)
 }

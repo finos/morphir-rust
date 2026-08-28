@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::io::{self, Read};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::rc::Rc;
 
 use morphir_common::ir_transport::{ClassicV3ModuleVisitor, visit_classic_v3};
@@ -21,12 +21,48 @@ impl<R: Read> Read for ChunkedReader<R> {
     }
 }
 
+impl<R: Seek> Seek for ChunkedReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.inner.seek(position)
+    }
+}
+
 #[derive(Default)]
 struct ModuleCounter {
     began: bool,
     modules: usize,
     bytes_read: Rc<Cell<usize>>,
     first_module_offset: Option<usize>,
+}
+
+struct CallbackObserver {
+    began: Rc<Cell<bool>>,
+    modules: Rc<Cell<usize>>,
+}
+
+impl ClassicV3ModuleVisitor for CallbackObserver {
+    type Output = ();
+
+    fn begin(
+        &mut self,
+        _package: &classic::Path,
+        _dependencies: &[(classic::Path, classic::PackageSpecification<classic::Attrs>)],
+    ) -> Result<(), String> {
+        self.began.set(true);
+        Ok(())
+    }
+
+    fn visit_module(
+        &mut self,
+        _module: classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>,
+    ) -> Result<(), String> {
+        self.modules.set(self.modules.get() + 1);
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Self::Output, String> {
+        Ok(())
+    }
 }
 
 impl ClassicV3ModuleVisitor for ModuleCounter {
@@ -64,7 +100,7 @@ fn classic_v3_source_visits_one_module_at_a_time_from_a_reader() {
     let largest_read = Rc::new(Cell::new(0));
     let bytes_read = Rc::new(Cell::new(0));
     let reader = ChunkedReader {
-        inner: bytes.as_slice(),
+        inner: Cursor::new(bytes.as_slice()),
         largest_read: largest_read.clone(),
         bytes_read: bytes_read.clone(),
     };
@@ -89,7 +125,7 @@ fn large_lcr_source_releases_each_module_before_reading_the_rest() {
     let largest_read = Rc::new(Cell::new(0));
     let bytes_read = Rc::new(Cell::new(0));
     let reader = ChunkedReader {
-        inner: bytes.as_slice(),
+        inner: Cursor::new(bytes.as_slice()),
         largest_read: largest_read.clone(),
         bytes_read: bytes_read.clone(),
     };
@@ -106,4 +142,28 @@ fn large_lcr_source_releases_each_module_before_reading_the_rest() {
     assert_eq!(modules, 84);
     assert!(first_module_offset < bytes.len() / 10);
     assert!(largest_read.get() <= 1024);
+}
+
+#[test]
+fn rejects_non_v3_input_before_invoking_visitor_callbacks() {
+    let mut source: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../website/static/ir/examples/v3/greeting-example.json"
+    ))
+    .unwrap();
+    source["formatVersion"] = 2.into();
+    let source = serde_json::to_vec(&source).unwrap();
+    let began = Rc::new(Cell::new(false));
+    let modules = Rc::new(Cell::new(0));
+
+    let result = visit_classic_v3(
+        Cursor::new(source.as_slice()),
+        CallbackObserver {
+            began: began.clone(),
+            modules: modules.clone(),
+        },
+    );
+
+    assert!(result.is_err());
+    assert!(!began.get());
+    assert_eq!(modules.get(), 0);
 }

@@ -311,7 +311,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
 
     write_extension_lock(&mother.home, &verified).unwrap();
     let lock = read_extension_lock(&mother.home, &mother.id).unwrap();
-    assert_eq!(lock.schema_version(), 1);
+    assert_eq!(lock.schema_version(), 2);
     assert_eq!(lock.selection(), &Selection::Channel(Channel::Stable));
     assert_eq!(lock.extension_id(), &mother.id);
     assert_eq!(lock.version().to_string(), "3.2.1");
@@ -329,7 +329,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
         &fs::read(mother.home.extensions_locks_dir().join("morphir-elm.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(lock_json["schemaVersion"], 1);
+    assert_eq!(lock_json["schemaVersion"], 2);
     assert_eq!(lock_json["selection"]["kind"], "channel");
     assert_eq!(lock_json["selection"]["value"], "stable");
     assert_eq!(lock_json["version"], "3.2.1");
@@ -350,6 +350,32 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(installed.extension_id(), &mother.id);
     assert!(installed.executable());
     assert!(mother.home.extensions_catalog_file().exists());
+}
+
+#[test]
+fn serialized_legacy_v1_lock_is_rejected_by_its_schema_version() {
+    let mother = DistributionMother::a_local_process_artifact();
+    ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+    legacy["schemaVersion"] = serde_json::json!(1);
+    legacy.as_object_mut().unwrap().remove("args");
+    legacy.as_object_mut().unwrap().remove("capabilities");
+    legacy.as_object_mut().unwrap().remove("mepVersions");
+    fs::write(lock_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+    let error = read_extension_lock(&mother.home, &mother.id).unwrap_err();
+
+    match error {
+        DistributionError::UnsupportedStateSchema { kind, version } => {
+            assert_eq!(kind, "extension lock");
+            assert_eq!(version, 1);
+        }
+        other => panic!("expected UnsupportedStateSchema, got {other}"),
+    }
 }
 
 #[test]

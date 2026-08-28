@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Extension resolution now rejects releases without a host-supported MEP version, and exact locks authenticate launch arguments, capabilities, and MEP versions before activation
+- Extension resolution now rejects releases without a host-supported MEP version, and v2 exact locks authenticate launch arguments, capabilities, and MEP versions before activation; legacy v1 locks are rejected explicitly
 
 ## [0.2.0] - 2026-01-24
 

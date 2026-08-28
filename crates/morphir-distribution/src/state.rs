@@ -17,6 +17,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+const EXTENSION_LOCK_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StateSchemaEnvelope {
+    schema_version: u32,
+}
+
 /// Reproducible selection and integrity record for one installed extension.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,7 +48,7 @@ pub struct ExtensionLock {
 impl ExtensionLock {
     fn from_verified(artifact: &VerifiedArtifact) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: EXTENSION_LOCK_SCHEMA_VERSION,
             selection: artifact.selected.selection.clone(),
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -143,13 +151,15 @@ pub fn read_extension_lock(home: &MorphirHome, id: &ExtensionId) -> Result<Exten
 
 fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<ExtensionLock> {
     let path = extension_lock_path(home, id);
-    let lock: ExtensionLock = read_json(&path)?;
-    if lock.schema_version != 1 {
+    let bytes = read_state_bytes(&path)?;
+    let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
+    if envelope.schema_version != EXTENSION_LOCK_SCHEMA_VERSION {
         return Err(DistributionError::UnsupportedStateSchema {
             kind: "extension lock",
-            version: lock.schema_version,
+            version: envelope.schema_version,
         });
     }
+    let lock: ExtensionLock = decode_state(&path, &bytes)?;
     if &lock.extension_id != id {
         return Err(DistributionError::StateMismatch { id: id.clone() });
     }
@@ -451,16 +461,49 @@ fn uninstall_with_writer(
 /// The catalog and every corresponding lock are loaded under one Morphir-home
 /// state lock. Every pair must agree before any snapshot is returned.
 pub fn list_installed(home: &MorphirHome) -> Result<Vec<InstalledExtensionSnapshot>> {
-    let _transaction = InstalledStateGuard::acquire(home)?;
-    list_installed_unlocked(home)
+    list_installed_with_catalog_observer(home, || {})
 }
 
-fn list_installed_unlocked(home: &MorphirHome) -> Result<Vec<InstalledExtensionSnapshot>> {
-    InstalledCatalog::load_unlocked(home)?
+fn list_installed_with_catalog_observer(
+    home: &MorphirHome,
+    after_catalog: impl FnOnce(),
+) -> Result<Vec<InstalledExtensionSnapshot>> {
+    let _transaction = InstalledStateGuard::acquire(home)?;
+    let catalog = InstalledCatalog::load_unlocked(home)?;
+    after_catalog();
+    list_installed_catalog_unlocked(home, catalog)
+}
+
+fn list_installed_catalog_unlocked(
+    home: &MorphirHome,
+    catalog: InstalledCatalog,
+) -> Result<Vec<InstalledExtensionSnapshot>> {
+    catalog
         .extensions
         .into_values()
         .map(|installed| {
             let lock = read_extension_lock_unlocked(home, installed.extension_id())?;
+            validate_installed_pair(&installed, &lock)?;
+            Ok(InstalledExtensionSnapshot {
+                installed,
+                selection: lock.selection,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn list_installed_with_reacquisition_after_catalog(
+    home: &MorphirHome,
+    after_catalog: impl FnOnce(),
+) -> Result<Vec<InstalledExtensionSnapshot>> {
+    let catalog = InstalledCatalog::load(home)?;
+    after_catalog();
+    catalog
+        .extensions
+        .into_values()
+        .map(|installed| {
+            let lock = read_extension_lock(home, installed.extension_id())?;
             validate_installed_pair(&installed, &lock)?;
             Ok(InstalledExtensionSnapshot {
                 installed,
@@ -734,11 +777,19 @@ fn remove_file(path: &Path) -> Result<()> {
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    let bytes = fs::read(path).map_err(|source| DistributionError::Io {
+    let bytes = read_state_bytes(path)?;
+    decode_state(path, &bytes)
+}
+
+fn read_state_bytes(path: &Path) -> Result<Vec<u8>> {
+    fs::read(path).map_err(|source| DistributionError::Io {
         path: path.to_path_buf(),
         source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| DistributionError::InvalidState {
+    })
+}
+
+fn decode_state<T: for<'de> Deserialize<'de>>(path: &Path, bytes: &[u8]) -> Result<T> {
+    serde_json::from_slice(bytes).map_err(|source| DistributionError::InvalidState {
         path: path.to_path_buf(),
         source,
     })
@@ -1004,6 +1055,103 @@ mod tests {
         assert_eq!(
             snapshots[0].selection(),
             &Selection::Channel(Channel::Stable)
+        );
+    }
+
+    #[test]
+    fn forced_race_breaks_listing_that_reacquires_between_catalog_and_lock_reads() {
+        let (root, home, id) = installed_extension();
+        let index = root.path().join("index");
+        let digest = Sha256Digest::of_bytes(b"example extension");
+        write_release(&index, "2.0.0", &digest);
+        let selected = LocalIndex::open(&index)
+            .unwrap()
+            .resolve(
+                &id,
+                Selection::Channel(Channel::Stable),
+                &Platform::new("linux", "x86_64").unwrap(),
+            )
+            .unwrap();
+        let (catalog_read_tx, catalog_read_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let listing_home = home.clone();
+        let listing = thread::spawn(move || {
+            list_installed_with_reacquisition_after_catalog(&listing_home, || {
+                catalog_read_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+            })
+        });
+        catalog_read_rx.recv().unwrap();
+
+        ExtensionInstaller::new(&home).install(selected).unwrap();
+        resume_tx.send(()).unwrap();
+
+        match listing.join().unwrap().unwrap_err() {
+            DistributionError::StateMismatch { id: mismatched } => assert_eq!(mismatched, id),
+            other => panic!("expected StateMismatch from forced two-acquisition race, got {other}"),
+        }
+    }
+
+    #[test]
+    fn atomic_listing_holds_one_guard_across_the_forced_catalog_lock_race() {
+        let (root, home, id) = installed_extension();
+        let index = root.path().join("index");
+        let digest = Sha256Digest::of_bytes(b"example extension");
+        write_release(&index, "2.0.0", &digest);
+        let selected = LocalIndex::open(&index)
+            .unwrap()
+            .resolve(
+                &id,
+                Selection::Channel(Channel::Stable),
+                &Platform::new("linux", "x86_64").unwrap(),
+            )
+            .unwrap();
+        let (catalog_read_tx, catalog_read_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let listing_home = home.clone();
+        let listing = thread::spawn(move || {
+            list_installed_with_catalog_observer(&listing_home, || {
+                catalog_read_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+            })
+        });
+        catalog_read_rx.recv().unwrap();
+
+        let (update_started_tx, update_started_rx) = mpsc::channel();
+        let (update_done_tx, update_done_rx) = mpsc::channel();
+        let update_home = home.clone();
+        let update = thread::spawn(move || {
+            update_started_tx.send(()).unwrap();
+            update_done_tx
+                .send(ExtensionInstaller::new(&update_home).install(selected))
+                .unwrap();
+        });
+        update_started_rx.recv().unwrap();
+        let early_update = update_done_rx.recv_timeout(Duration::from_millis(100));
+        let update_was_blocked = matches!(&early_update, Err(mpsc::RecvTimeoutError::Timeout));
+        resume_tx.send(()).unwrap();
+
+        let snapshots = listing.join().unwrap().unwrap();
+        let update_result = match early_update {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => update_done_rx.recv().unwrap(),
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!("update thread disconnected"),
+        };
+        update_result.unwrap();
+        update.join().unwrap();
+
+        assert!(
+            update_was_blocked,
+            "update committed after the old catalog read but before its lock read"
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].installed().version().to_string(), "1.0.0");
+        assert_eq!(
+            list_installed(&home).unwrap()[0]
+                .installed()
+                .version()
+                .to_string(),
+            "2.0.0"
         );
     }
 

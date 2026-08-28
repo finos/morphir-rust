@@ -10,7 +10,7 @@ use crate::extensions::session::{
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::ExtensionType;
+use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use serde::{Serialize, de::DeserializeOwned};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,7 @@ const MAX_STDERR_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone)]
 pub struct ProcessLaunch {
     extension_id: String,
+    discovered: Option<ExtensionInfo>,
     program: PathBuf,
     args: Vec<OsString>,
     working_directory: PathBuf,
@@ -46,6 +47,28 @@ impl ProcessLaunch {
     ) -> Self {
         Self {
             extension_id: extension_id.into(),
+            discovered: None,
+            program: program.into(),
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a verified process launch with exact discovery metadata.
+    ///
+    /// Typestate initialization requires the child to reproduce this identity,
+    /// name, version, and capability set. Use [`Self::new`] for explicit
+    /// development commands that have only a configured identity.
+    pub fn from_discovered(
+        discovered: ExtensionInfo,
+        program: impl Into<PathBuf>,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
             program: program.into(),
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -93,6 +116,7 @@ enum ProcessSessionData {
 /// ```
 pub struct SpawnedProcessSession {
     expected_extension_id: String,
+    discovered: Option<ExtensionInfo>,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -138,6 +162,7 @@ impl SpawnedProcessSession {
 
         Ok(Self {
             expected_extension_id: launch.extension_id,
+            discovered: launch.discovered,
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
@@ -279,7 +304,13 @@ pub struct SpawnedProcessTransport {
 #[async_trait]
 impl MepTransport for SpawnedProcessTransport {
     fn expected_extension(&self) -> ExpectedExtension {
-        ExpectedExtension::identified(self.session.expected_extension_id.clone())
+        self.session
+            .discovered
+            .clone()
+            .map(ExpectedExtension::discovered)
+            .unwrap_or_else(|| {
+                ExpectedExtension::identified(self.session.expected_extension_id.clone())
+            })
     }
 
     async fn exchange(
@@ -611,7 +642,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use morphir_extension_sdk::ExtensionInfo;
     use tokio::io::{BufReader, duplex};
+
+    #[test]
+    fn discovered_process_launch_retains_exact_negotiation_metadata() {
+        let discovered = ExtensionInfo {
+            id: "morphir-elm".into(),
+            name: "Morphir Elm".into(),
+            version: "3.2.1".into(),
+            types: vec![ExtensionType::Frontend],
+            ..ExtensionInfo::default()
+        };
+        let launch = ProcessLaunch::from_discovered(
+            discovered.clone(),
+            "/verified/morphir-elm",
+            "/workspace",
+        );
+
+        assert_eq!(launch.extension_id, discovered.id);
+        let retained = launch
+            .discovered
+            .expect("verified launches should retain discovery metadata");
+        assert_eq!(retained.name, discovered.name);
+        assert_eq!(retained.version, discovered.version);
+        assert_eq!(retained.types, discovered.types);
+    }
 
     #[tokio::test]
     async fn content_length_frames_round_trip_formatted_json() {

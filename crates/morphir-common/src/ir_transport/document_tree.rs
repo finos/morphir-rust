@@ -94,7 +94,7 @@ fn read_json<T: DeserializeOwned>(path: &VfsPath) -> Result<T> {
 }
 
 fn package_root(root: &VfsPath, package: &PackageName) -> Result<VfsPath> {
-    root.join(&format!("pkg/{package}"))
+    root.join(format!("pkg/{package}"))
         .context("invalid package path")
 }
 
@@ -115,7 +115,7 @@ fn write_definition_module(
 
     for (name, definition) in &module.value.types {
         write_json(
-            &directory.join(&format!("{name}.type.json"))?,
+            &directory.join(format!("{name}.type.json"))?,
             &DefinitionFile {
                 format_version: FormatVersion::Integer(4),
                 name: name.clone(),
@@ -129,7 +129,7 @@ fn write_definition_module(
     }
     for (name, definition) in &module.value.values {
         write_json(
-            &directory.join(&format!("{name}.value.json"))?,
+            &directory.join(format!("{name}.value.json"))?,
             &DefinitionFile {
                 format_version: FormatVersion::Integer(4),
                 name: name.clone(),
@@ -166,7 +166,7 @@ fn write_specification_module(
 
     for (name, specification) in &module.types {
         write_json(
-            &directory.join(&format!("{name}.type.json"))?,
+            &directory.join(format!("{name}.type.json"))?,
             &SpecificationFile {
                 format_version: FormatVersion::Integer(4),
                 name: name.clone(),
@@ -177,7 +177,7 @@ fn write_specification_module(
     }
     for (name, specification) in &module.values {
         write_json(
-            &directory.join(&format!("{name}.value.json"))?,
+            &directory.join(format!("{name}.value.json"))?,
             &SpecificationFile {
                 format_version: FormatVersion::Integer(4),
                 name: name.clone(),
@@ -282,7 +282,7 @@ fn read_definition_module(
 ) -> Result<(String, AccessControlled<ModuleDefinition>)> {
     let mut types = IndexMap::new();
     for name in &manifest.types {
-        let path = directory.join(&format!("{name}.type.json"))?;
+        let path = directory.join(format!("{name}.type.json"))?;
         let file: DefinitionFile<TypeDefinition> = read_json(&path)?;
         checked_name(name, &file.name, &path)?;
         types.insert(
@@ -295,7 +295,7 @@ fn read_definition_module(
     }
     let mut values = IndexMap::new();
     for name in &manifest.values {
-        let path = directory.join(&format!("{name}.value.json"))?;
+        let path = directory.join(format!("{name}.value.json"))?;
         let file: DefinitionFile<ValueDefinition> = read_json(&path)?;
         checked_name(name, &file.name, &path)?;
         values.insert(
@@ -325,14 +325,14 @@ fn read_specification_module(
 ) -> Result<(String, ModuleSpecification)> {
     let mut types = IndexMap::new();
     for name in &manifest.types {
-        let path = directory.join(&format!("{name}.type.json"))?;
+        let path = directory.join(format!("{name}.type.json"))?;
         let file: SpecificationFile<TypeSpecification> = read_json(&path)?;
         checked_name(name, &file.name, &path)?;
         types.insert(name.clone(), Documented::new(file.doc, file.spec));
     }
     let mut values = IndexMap::new();
     for name in &manifest.values {
-        let path = directory.join(&format!("{name}.value.json"))?;
+        let path = directory.join(format!("{name}.value.json"))?;
         let file: SpecificationFile<ValueSpecification> = read_json(&path)?;
         checked_name(name, &file.name, &path)?;
         values.insert(name.clone(), Documented::new(file.doc, file.spec));

@@ -57,7 +57,7 @@ pub struct Migrated<T> {
     pub report: MigrationReport,
 }
 
-pub(crate) fn migrate_path(path: &classic::Path) -> Path {
+pub fn migrate_path(path: &classic::Path) -> Path {
     Path {
         segments: path.segments.iter().map(migrate_name).collect(),
     }
@@ -398,7 +398,7 @@ pub fn migrate_value(
     })
 }
 
-fn migrate_access(access: &classic::Access) -> v4::Access {
+pub fn migrate_access(access: &classic::Access) -> v4::Access {
     match access {
         classic::Access::Public => v4::Access::Public,
         classic::Access::Private => v4::Access::Private,
@@ -546,7 +546,7 @@ fn migrate_module_specification(
     })
 }
 
-fn migrate_package_specification(
+pub fn migrate_package_specification(
     specification: &classic::PackageSpecification<classic::Attrs>,
     context: &mut MigrationContext,
 ) -> Result<v4::PackageSpecification, MigrationDiagnostic> {
@@ -564,7 +564,7 @@ fn migrate_package_specification(
     })
 }
 
-fn migrate_module_definition(
+pub fn migrate_module_definition(
     definition: &classic::ModuleDefinition<classic::Attrs, classic::Type<classic::Attrs>>,
     context: &mut MigrationContext,
 ) -> Result<v4::ModuleDefinition, MigrationDiagnostic> {

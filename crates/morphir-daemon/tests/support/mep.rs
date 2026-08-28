@@ -1,9 +1,135 @@
-use morphir_daemon::extensions::{ExtensionSession, ExtensionSessionState, protocol::methods};
+use morphir_daemon::extensions::{
+    ExtensionSession, ExtensionSessionState, InvokeOutcome, ProcessLaunch, Ready, Session,
+    SpawnedProcessSession, SpawnedProcessTransport, protocol::methods,
+};
 use morphir_extension_sdk::{
-    ExtensionType, GenerateRequest, GenerateResult, ValidateRequest,
+    CompileRequest, CompileResult, DiagnosticSeverity, ExtensionType, GenerateRequest,
+    GenerateResult, ValidateRequest,
     protocol::{InitializeParams, PeerInfo, error_codes},
 };
 use serde_json::json;
+
+#[allow(dead_code)]
+pub async fn assert_frontend_typestate_conformance(
+    launch: ProcessLaunch,
+    valid_request: CompileRequest,
+    malformed_request: CompileRequest,
+) {
+    let valid_session = initialize_frontend(launch.clone()).await;
+    let valid_session = match valid_session
+        .invoke::<CompileResult>(methods::COMPILE, valid_request)
+        .await
+    {
+        InvokeOutcome::Success(session, result) => {
+            assert!(result.success, "valid Elm should compile successfully");
+            assert_eq!(result.ir_version.as_deref(), Some("3"));
+            assert!(result.ir.is_some(), "a successful compile should return IR");
+            assert!(
+                result.modules.iter().any(|module| module == "Example"),
+                "a successful compile should report the Example module"
+            );
+            session
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("valid Elm was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("valid Elm failed the MEP session: {}", failure.error())
+        }
+    };
+    shutdown_frontend(valid_session).await;
+
+    let malformed_session = initialize_frontend(launch).await;
+    let malformed_session = match malformed_session
+        .invoke::<CompileResult>(methods::COMPILE, malformed_request)
+        .await
+    {
+        InvokeOutcome::Success(session, result) => {
+            assert!(!result.success, "malformed Elm should not compile");
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error),
+                "malformed Elm should return an error diagnostic"
+            );
+            session
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("malformed Elm was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("malformed Elm failed the MEP session: {}", failure.error())
+        }
+    };
+    shutdown_frontend(malformed_session).await;
+}
+
+async fn initialize_frontend(launch: ProcessLaunch) -> Session<SpawnedProcessTransport, Ready> {
+    let session = SpawnedProcessSession::spawn_typestate(launch)
+        .await
+        .expect("the host should start the frontend extension");
+    let session = session
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "morphir-conformance".into(),
+                version: "0.1.0".into(),
+            },
+        })
+        .await
+        .unwrap_or_else(|failure| panic!("MEP negotiation failed: {}", failure.error()));
+
+    assert_eq!(session.negotiated().protocol_version(), "0.1");
+    assert_eq!(session.negotiated().extension().id, "morphir-elm");
+    assert!(
+        session
+            .negotiated()
+            .extension()
+            .types
+            .contains(&ExtensionType::Frontend),
+        "morphir-elm should declare the frontend capability"
+    );
+    let frontend = session
+        .negotiated()
+        .capabilities()
+        .frontend
+        .as_ref()
+        .expect("morphir-elm should advertise frontend details");
+    assert!(
+        frontend.compile,
+        "morphir-elm should accept compile requests"
+    );
+    assert!(
+        frontend
+            .languages
+            .iter()
+            .any(|language| language.id == "elm"),
+        "morphir-elm should advertise Elm"
+    );
+    assert!(
+        frontend.ir_versions.iter().any(|version| version == "3"),
+        "morphir-elm should advertise Morphir IR 3"
+    );
+
+    session
+}
+
+async fn shutdown_frontend(session: Session<SpawnedProcessTransport, Ready>) {
+    let mut session = session
+        .shutdown()
+        .await
+        .unwrap_or_else(|failure| panic!("MEP shutdown failed: {}", failure.error()));
+    assert!(
+        !session
+            .process_is_running()
+            .expect("process status should be readable"),
+        "the frontend process should stop after shutdown"
+    );
+    assert!(
+        session
+            .process_stdout_is_exhausted()
+            .await
+            .expect("frontend stdout should be readable after shutdown"),
+        "frontend stdout should contain only the framed protocol responses"
+    );
+}
 
 #[allow(dead_code)]
 pub async fn assert_backend_typestate_conformance<T>(

@@ -1679,14 +1679,27 @@ pub fn is_glob(pattern: &str) -> bool {
 ///
 /// `files` holds only the ones whose two sides differ — a diff of everything is
 /// a diff, not an inventory, and under `--raw` a file that agrees contributes no
-/// bytes anyway. `matched` is what the selection reached, so the renderings can
-/// still say that twenty files were compared and none of them moved.
+/// bytes anyway. `matched` is what the selection reached and `absent` how many
+/// of those held content on neither side, so the renderings can say that twenty
+/// files were compared and none moved — and never claim a comparison for a path
+/// that had nothing to compare.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffSet {
     /// Differing files only, in mirrored-path order.
     pub files: Vec<DiffResult>,
     /// How many mirrored paths the selection matched, differing or not.
     pub matched: usize,
+    /// Matched paths holding content on neither side — lockfile entries that
+    /// outlived both copies. Passed over rather than compared; `sync status`
+    /// reports them as `missing-local` / `deleted-upstream`.
+    pub absent: usize,
+}
+
+impl DiffSet {
+    /// How many matched paths actually had two sides to compare.
+    pub fn compared(&self) -> usize {
+        self.matched - self.absent
+    }
 }
 
 /// What one `sync diff` invocation asked for: one named file, or a set of them.
@@ -1812,15 +1825,18 @@ pub fn diff_many(sb: &SyncBundle, upstream_root: &Path, select: &[String]) -> Re
     };
     let matched = selected.len();
     let mut files = Vec::new();
+    let mut absent = 0;
     for rel in selected {
         // A path neither side holds is refused when it is asked for by name,
         // because the asker is wrong about it. In a set it is passed over: two
         // absent sides make no hunk, and the lockfile entry that outlived them
         // both is `sync status`'s business — `missing-local`, `deleted-upstream`
-        // — not a patch's.
+        // — not a patch's. Passed over, but counted: reporting it as compared
+        // would claim a comparison that never happened.
         let held_here = sb.mirror_file(&rel)?.is_file();
         let held_upstream = resolve(upstream_root, &rel).is_file();
         if !held_here && !held_upstream {
+            absent += 1;
             continue;
         }
         let d = diff(sb, upstream_root, &rel)?;
@@ -1828,7 +1844,11 @@ pub fn diff_many(sb: &SyncBundle, upstream_root: &Path, select: &[String]) -> Re
             files.push(d);
         }
     }
-    Ok(DiffSet { files, matched })
+    Ok(DiffSet {
+        files,
+        matched,
+        absent,
+    })
 }
 
 /// `` `a`, `b` `` — the way this module names paths back to the reader.
@@ -1880,7 +1900,8 @@ struct DiffSetJson<'a> {
 #[derive(Serialize)]
 struct DiffSummaryJson {
     differing: usize,
-    matched: usize,
+    compared: usize,
+    absent: usize,
 }
 
 /// One `=== <path> ===` heading per file. The human diff underneath names a
@@ -1908,8 +1929,31 @@ pub fn render_diffs_text(sel: &DiffSelection) -> String {
     match sel {
         DiffSelection::Single(d) => render_diff_text(d),
         DiffSelection::Many(set) => {
+            // The tally counts what was actually compared. A lockfile entry
+            // absent on both sides was passed over, and saying it was compared
+            // and found equal would be a false statement — the one reading it
+            // while debugging a missing hunk would be misled precisely when it
+            // matters. Absent paths get their own clause, pointing at the tool
+            // whose job they are.
+            let absent_note = if set.absent > 0 {
+                format!(
+                    "; {} listed in the lockfile absent on both sides — see `kb sync status`",
+                    set.absent
+                )
+            } else {
+                String::new()
+            };
             if set.files.is_empty() {
-                return format!("{} file(s) compared, no differences\n", set.matched);
+                if set.compared() == 0 && set.absent > 0 {
+                    return format!(
+                        "{} path(s) matched, none present on either side — see `kb sync status`\n",
+                        set.absent
+                    );
+                }
+                return format!(
+                    "{} file(s) compared, no differences{absent_note}\n",
+                    set.compared()
+                );
             }
             let mut sbuf = String::new();
             for d in &set.files {
@@ -1917,9 +1961,9 @@ pub fn render_diffs_text(sel: &DiffSelection) -> String {
                 sbuf.push_str(&newline_terminated(&d.diff));
             }
             sbuf.push_str(&format!(
-                "\n{} of {} file(s) differ\n",
+                "\n{} of {} file(s) differ{absent_note}\n",
                 set.files.len(),
-                set.matched
+                set.compared()
             ));
             sbuf
         }
@@ -1937,7 +1981,8 @@ pub fn render_diffs_json(sel: &DiffSelection) -> String {
                 files: &set.files,
                 summary: DiffSummaryJson {
                     differing: set.files.len(),
-                    matched: set.matched,
+                    compared: set.compared(),
+                    absent: set.absent,
                 },
             };
             serde_json::to_string_pretty(&payload).expect("a diff set serializes") + "\n"

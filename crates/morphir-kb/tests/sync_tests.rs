@@ -2010,6 +2010,49 @@ fn diff_of_a_path_on_neither_side_names_the_path_and_the_situation() {
 
 /// The seeded fixture with `docs/types.md` and `schemas/thing.yaml` edited here,
 /// leaving `docs/index.md` agreeing with upstream.
+/// A fixture whose lockfile lists a path that neither side still holds — the
+/// ghost the sweep passes over.
+fn with_a_ghost() -> (TempDir, sync::SyncBundle, PathBuf) {
+    let (dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let _ = seeded(&kb_root, &upstream);
+    fs::remove_file(upstream.join("docs").join("types.md")).unwrap();
+    let (_, sb) = load_sync(&kb_root);
+    fs::remove_file(sb.local_file("docs/types.md")).unwrap();
+    let (_, sb) = load_sync(&kb_root);
+    (dir, sb, upstream)
+}
+
+#[test]
+fn a_ghost_in_the_lockfile_is_counted_absent_not_compared() {
+    let (_dir, sb, upstream) = with_a_ghost();
+    let set = sync::diff_many(&sb, &upstream, &[]).unwrap();
+    assert!(set.absent >= 1, "the ghost is counted");
+    assert_eq!(set.compared(), set.matched - set.absent);
+    let sel = sync::DiffSelection::Many(set);
+    let v: serde_json::Value = serde_json::from_str(&sync::render_diffs_json(&sel)).unwrap();
+    assert_eq!(v["summary"]["absent"], 1);
+    // The tally never claims the ghost was compared, and it points the reader
+    // at the tool whose job the ghost is.
+    let text = sync::render_diffs_text(&sel);
+    assert!(
+        text.contains("listed in the lockfile absent on both sides — see `kb sync status`"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn a_selection_reaching_only_ghosts_says_so_rather_than_claiming_agreement() {
+    let (_dir, sb, upstream) = with_a_ghost();
+    let set = sync::diff_many(&sb, &upstream, &select(&["docs/types.md"])).unwrap();
+    assert_eq!((set.compared(), set.absent), (0, 1));
+    let sel = sync::DiffSelection::Many(set);
+    assert_eq!(
+        sync::render_diffs_text(&sel),
+        "1 path(s) matched, none present on either side — see `kb sync status`\n"
+    );
+    assert_eq!(sync::render_diffs_raw(&sel), "", "still nothing to apply");
+}
+
 fn two_of_three_differ() -> (TempDir, sync::SyncBundle, PathBuf) {
     let (dir, kb_root, _bundle_root, upstream) = sync_fixture();
     let sb = seeded(&kb_root, &upstream);
@@ -2178,7 +2221,8 @@ fn a_mirror_that_agrees_with_upstream_everywhere_is_not_an_error() {
     let v: serde_json::Value = serde_json::from_str(&sync::render_diffs_json(&sel)).unwrap();
     assert_eq!(v["files"].as_array().unwrap().len(), 0);
     assert_eq!(v["summary"]["differing"], 0);
-    assert_eq!(v["summary"]["matched"], 3);
+    assert_eq!(v["summary"]["compared"], 3);
+    assert_eq!(v["summary"]["absent"], 0);
 }
 
 #[test]
@@ -2425,7 +2469,8 @@ fn multi_file_json_is_an_object_carrying_the_records_and_a_count() {
     );
     assert_eq!(files[1]["path"], "schemas/thing.yaml");
     assert_eq!(v["summary"]["differing"], 2);
-    assert_eq!(v["summary"]["matched"], 3);
+    assert_eq!(v["summary"]["compared"], 3);
+    assert_eq!(v["summary"]["absent"], 0);
 }
 
 #[test]

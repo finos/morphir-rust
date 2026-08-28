@@ -31,7 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mirrored path, so `--raw` is a multi-file patch `git apply` takes in one go and `--json` carries
   the per-file records as `{files, summary: {differing, matched}}`. A pattern matching nothing is
   refused by name, and every such pattern is named in one refusal rather than one per run. A
-  single mirrored path still renders exactly as it did, in all three forms
+  single mirrored path still renders exactly as it did, in all three forms. A lockfile entry
+  absent on both sides is passed over rather than compared, and counted as `absent` in the
+  summary instead of being reported as a comparison that never happened
 - Atomic, validated installed-extension snapshots that pair each catalog entry with the requested selection from its exact lock
 - Transactional extension uninstall that removes active catalog and exact-lock state while retaining verified content-addressed artifact bytes
 - `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation

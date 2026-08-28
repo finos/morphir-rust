@@ -18,20 +18,6 @@ type AccessControlledModuleDefinition = AccessControlled<ModuleDefinition>;
 type AccessControlledTypeDefinition = AccessControlled<Documented<TypeDefinition>>;
 type AccessControlledValueDefinition = AccessControlled<Documented<ValueDefinition>>;
 
-/// Convert a kebab-case or snake-case name to PascalCase for Gleam type constructors
-fn to_pascal_case(name: &str) -> String {
-    name.split(['-', '_'])
-        .filter(|s| !s.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().chain(chars).collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect()
-}
-
 /// Visitor that converts Morphir IR V4 to Gleam source code
 pub struct MorphirToGleamVisitor<V: Vfs> {
     vfs: V,
@@ -118,7 +104,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                         if i > 0 {
                             output.push_str(", ");
                         }
-                        output.push_str(&param.to_string());
+                        output.push_str(&param.to_snake_case());
                     }
                     output.push(')');
                 }
@@ -130,7 +116,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                         if i > 0 {
                             output.push_str(", ");
                         }
-                        output.push_str(&param.to_string());
+                        output.push_str(&param.to_snake_case());
                     }
                     output.push(')');
                 }
@@ -142,7 +128,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                         if i > 0 {
                             output.push_str(", ");
                         }
-                        output.push_str(&param.to_string());
+                        output.push_str(&param.to_snake_case());
                     }
                     output.push(')');
                 }
@@ -165,8 +151,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     } else {
                         output.push_str("  ");
                     }
-                    // Gleam type constructors must start with uppercase
-                    output.push_str(&to_pascal_case(&constructor.name.to_string()));
+                    // Gleam type constructors must start with uppercase. Render from the
+                    // Name's words: Display gives the canonical v4 encoding, which
+                    // parenthesizes acronyms ("(gc)") and is not a Gleam identifier.
+                    output.push_str(&constructor.name.to_title_case());
 
                     if !constructor.args.is_empty() {
                         output.push('(');
@@ -202,11 +190,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
         match type_expr {
             Type::Variable(_, name) => {
-                output.push_str(&name.to_string());
+                output.push_str(&name.to_snake_case());
             }
             Type::Reference(_, fqname, args) => {
-                let type_name = fqname.local_name.to_string();
-                output.push_str(&to_pascal_case(&type_name));
+                output.push_str(&fqname.local_name.to_title_case());
                 if !args.is_empty() {
                     output.push('(');
                     for (i, arg) in args.iter().enumerate() {
@@ -234,7 +221,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     if i > 0 {
                         output.push_str(", ");
                     }
-                    output.push_str(&field.name.to_string());
+                    output.push_str(&field.name.to_snake_case());
                     output.push_str(": ");
                     self.generate_type_expr(output, &field.tpe)?;
                 }
@@ -246,7 +233,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     if i > 0 {
                         output.push_str(", ");
                     }
-                    output.push_str(&field.name.to_string());
+                    output.push_str(&field.name.to_snake_case());
                     output.push_str(": ");
                     self.generate_type_expr(output, &field.tpe)?;
                 }
@@ -287,7 +274,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             if i > 0 {
                 output.push_str(", ");
             }
-            output.push_str(&input.0.to_string());
+            output.push_str(input.0.as_str());
         }
 
         output.push_str(") {\n  ");
@@ -321,7 +308,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 self.generate_literal(output, lit)?;
             }
             Value::Variable(_, name) => {
-                output.push_str(&name.to_string());
+                output.push_str(&name.to_snake_case());
             }
             Value::Apply(_, function, argument) => {
                 self.generate_value_expr(output, function)?;
@@ -339,7 +326,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             Value::LetDefinition(_, name, def, body) => {
                 // Gleam uses: let name = value \n body (no 'in' keyword)
                 output.push_str("let ");
-                output.push_str(&name.to_string());
+                output.push_str(&name.to_snake_case());
                 output.push_str(" = ");
                 self.generate_value_expr(output, def.body.get_expression()?)?;
                 output.push_str("\n  ");
@@ -361,7 +348,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                     if i > 0 {
                         output.push_str(", ");
                     }
-                    output.push_str(&field.0.to_string());
+                    output.push_str(&field.0.to_snake_case());
                     output.push_str(": ");
                     self.generate_value_expr(output, &field.1)?;
                 }
@@ -370,7 +357,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             Value::Field(_, record, field) => {
                 self.generate_value_expr(output, record)?;
                 output.push('.');
-                output.push_str(&field.to_string());
+                output.push_str(&field.to_snake_case());
             }
             Value::Tuple(_, elements) => {
                 output.push_str("#(");
@@ -397,11 +384,11 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(" }");
             }
             Value::Constructor(_, fqname) => {
-                output.push_str(&fqname.local_name.to_string());
+                output.push_str(&fqname.local_name.to_title_case());
             }
             Value::Reference(_, fqname) => {
                 // For references, output just the local name for now
-                output.push_str(&fqname.local_name.to_string());
+                output.push_str(&fqname.local_name.to_snake_case());
             }
             Value::List(_, items) => {
                 output.push('[');
@@ -433,11 +420,11 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 // In Gleam, `x as name` is often just a binding
                 // If sub_pattern is wildcard, just output the name
                 if matches!(**sub_pattern, MorphirPattern::WildcardPattern(_)) {
-                    output.push_str(&name.to_string());
+                    output.push_str(&name.to_snake_case());
                 } else {
                     self.generate_pattern(output, sub_pattern)?;
                     output.push_str(" as ");
-                    output.push_str(&name.to_string());
+                    output.push_str(&name.to_snake_case());
                 }
             }
             MorphirPattern::TuplePattern(_, elements) => {
@@ -451,7 +438,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push(')');
             }
             MorphirPattern::ConstructorPattern(_, fqname, args) => {
-                output.push_str(&fqname.local_name.to_string());
+                output.push_str(&fqname.local_name.to_title_case());
                 if !args.is_empty() {
                     output.push('(');
                     for (i, arg) in args.iter().enumerate() {

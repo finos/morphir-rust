@@ -292,14 +292,16 @@ impl<'de> Deserialize<'de> for TypeSpecification {
                 constructors: content
                     .constructors
                     .into_iter()
-                    .map(|(name, args)| ConstructorSpecification {
-                        name: Name::from(name.as_str()),
-                        args: args
-                            .into_iter()
-                            .map(|(name, arg_type)| ConstructorArgSpec { name, arg_type })
-                            .collect(),
+                    .map(|(name, args)| {
+                        Ok(ConstructorSpecification {
+                            name: Name::from_canonical_string(&name).map_err(de::Error::custom)?,
+                            args: args
+                                .into_iter()
+                                .map(|(name, arg_type)| ConstructorArgSpec { name, arg_type })
+                                .collect(),
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
             });
         }
         Err(de::Error::custom("unknown type specification wrapper"))
@@ -543,14 +545,20 @@ impl<'de> Deserialize<'de> for TypeDefinition {
                             value: parsed
                                 .constructors
                                 .into_iter()
-                                .map(|(name, args)| ConstructorDefinition {
-                                    name: Name::from(name.as_str()),
-                                    args: args
-                                        .into_iter()
-                                        .map(|(name, arg_type)| ConstructorArg { name, arg_type })
-                                        .collect(),
+                                .map(|(name, args)| {
+                                    Ok(ConstructorDefinition {
+                                        name: Name::from_canonical_string(&name)
+                                            .map_err(de::Error::custom)?,
+                                        args: args
+                                            .into_iter()
+                                            .map(|(name, arg_type)| ConstructorArg {
+                                                name,
+                                                arg_type,
+                                            })
+                                            .collect(),
+                                    })
                                 })
-                                .collect(),
+                                .collect::<Result<_, D::Error>>()?,
                         },
                     });
                 }
@@ -602,6 +610,62 @@ mod tests {
     fn test_variable_type() {
         let var: Type = Type::variable(TypeAttributes::default(), Name::from("a"));
         assert!(matches!(var, Type::Variable(_, _)));
+    }
+
+    #[test]
+    fn test_constructor_name_roundtrips_through_canonical_map_key() {
+        // Acronym names serialize to the parenthesized canonical form ("GC" -> "(gc)"),
+        // so the map-key decode must parse the canonical encoding, not treat the key
+        // as a raw word.
+        let def = TypeDefinition::CustomTypeDefinition {
+            type_params: vec![],
+            constructors: AccessControlled {
+                access: super::super::Access::Public,
+                value: vec![ConstructorDefinition {
+                    name: Name::from("GC"),
+                    args: vec![],
+                }],
+            },
+        };
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(
+            json.contains("\"(gc)\""),
+            "canonical key expected in {json}"
+        );
+        let back: TypeDefinition = serde_json::from_str(&json).unwrap();
+        // Name words lowercase under the canonical encoding, so compare the
+        // canonical forms (the serialized shape is the fixed point).
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        match back {
+            TypeDefinition::CustomTypeDefinition { constructors, .. } => {
+                assert_eq!(constructors.value[0].name.to_title_case(), "GC");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_constructor_spec_name_roundtrips_through_canonical_map_key() {
+        let spec = TypeSpecification::CustomTypeSpecification {
+            type_params: vec![],
+            constructors: vec![ConstructorSpecification {
+                name: Name::from("GC"),
+                args: vec![],
+            }],
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(
+            json.contains("\"(gc)\""),
+            "canonical key expected in {json}"
+        );
+        let back: TypeSpecification = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        match back {
+            TypeSpecification::CustomTypeSpecification { constructors, .. } => {
+                assert_eq!(constructors[0].name.to_title_case(), "GC");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 
     #[test]

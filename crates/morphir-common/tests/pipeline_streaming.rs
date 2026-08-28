@@ -6,9 +6,11 @@ use std::path::Path;
 use std::rc::Rc;
 
 use morphir_common::ir_transport::{
-    ClassicToV4, CodecOptions, EventSink, EventSource, EventTransform, FormatId, IrCodec,
-    IrVersion, JsonCodec, Layout, Pipeline, Retention, TransportDiagnostic, YamlCodec,
+    ClassicToV4, CodecOptions, DocumentTreeSink, DocumentTreeSource, EventSink, EventSource,
+    EventTransform, FormatId, IrCodec, IrVersion, JsonCodec, Layout, Pipeline, Retention,
+    TransportDiagnostic, YamlCodec,
 };
+use morphir_common::vfs::memory_root;
 use morphir_core::ir::classic;
 use morphir_core::migration::{MigrationOptions, migrate_distribution};
 use morphir_core::traversal::{IrCursor, SemanticEvent, SemanticEventKind};
@@ -321,6 +323,52 @@ fn real_lcr_v3_migrates_to_native_yaml_incrementally() {
             .iter()
             .any(|event| { matches!(event.kind(), SemanticEventKind::Module(_)) })
     );
+}
+
+#[test]
+fn real_lcr_v3_migrates_to_a_streamed_yaml_document_tree() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../morphir-tests/tests/features/lcr_v3.json");
+    let input_length = path.metadata().unwrap().len() as usize;
+    let bytes_read = Rc::new(Cell::new(0));
+    let first_module_offset = Rc::new(Cell::new(0));
+    let mut reader = ChunkedReader {
+        inner: File::open(path).unwrap(),
+        bytes_read: bytes_read.clone(),
+    };
+    let input_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json());
+    let tree_options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::yaml());
+    let root = memory_root();
+    let mut tree_sink = DocumentTreeSink::new(root.clone(), tree_options.clone()).unwrap();
+    let mut pipeline = Pipeline::new()
+        .with_transform(FirstModuleObserver {
+            bytes_read,
+            first_module_offset: first_module_offset.clone(),
+        })
+        .with_transform(ClassicToV4::new(MigrationOptions::default()));
+    {
+        let mut sink = pipeline.sink(&mut tree_sink).unwrap();
+        JsonCodec::new()
+            .decode(&mut reader, &input_options, &mut sink)
+            .unwrap();
+    }
+
+    assert!(first_module_offset.get() < input_length / 10);
+    assert!(root.join("manifest.yaml").unwrap().is_file().unwrap());
+    assert!(
+        root.walk_dir()
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|path| !path.filename().ends_with(".json"))
+    );
+    let mut source = DocumentTreeSource::open(root, tree_options).unwrap();
+    let mut module_count = 0;
+    while let Some(event) = source.next_event().unwrap() {
+        if matches!(event.kind(), SemanticEventKind::Module(_)) {
+            module_count += 1;
+        }
+    }
+    assert!(module_count > 0);
 }
 
 #[test]

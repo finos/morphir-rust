@@ -8,6 +8,7 @@ use morphir_core::traversal::IrCursor;
 use morphir_core::traversal::{
     DependencyEvent, DistributionHeader, ModuleEvent, SemanticEvent, SemanticEventKind,
 };
+use serde::{Serialize, de::DeserializeOwned};
 use serde_saphyr::budget::BudgetBreach;
 use serde_saphyr::options::{DuplicateKeyPolicy, MergeKeyPolicy};
 use serde_saphyr::{Error, alias_limits, budget, options, ser_options};
@@ -196,15 +197,8 @@ impl YamlCodec {
         writer: &mut dyn Write,
         value: &impl serde::Serialize,
     ) -> Result<(), TransportDiagnostic> {
-        let mut rendered = serde_saphyr::to_string_with_options(value, Self::serializer_options())
-            .map_err(Self::encode_error)?;
-        rendered = rendered.replace("\r\n", "\n");
-        if !rendered.ends_with('\n') {
-            rendered.push('\n');
-        }
-        writer
-            .write_all(rendered.as_bytes())
-            .map_err(Self::encode_error)
+        let rendered = encode_document(value)?;
+        writer.write_all(&rendered).map_err(Self::encode_error)
     }
 }
 
@@ -646,9 +640,27 @@ fn validate_yaml_profile(input: &[u8]) -> Result<(), TransportDiagnostic> {
 }
 
 pub(crate) fn decode_json_value(input: &[u8]) -> Result<serde_json::Value, TransportDiagnostic> {
+    decode_document(input)
+}
+
+pub(crate) fn decode_document<T: DeserializeOwned>(input: &[u8]) -> Result<T, TransportDiagnostic> {
     validate_yaml_profile(input)?;
-    serde_saphyr::from_slice_with_options(input, YamlCodec::parse_options())
-        .map_err(YamlCodec::decode_error)
+    stacker::grow(IR_RECURSION_STACK_BYTES, || {
+        serde_saphyr::from_slice_with_options(input, YamlCodec::parse_options())
+            .map_err(YamlCodec::decode_error)
+    })
+}
+
+pub(crate) fn encode_document<T: Serialize>(value: &T) -> Result<Vec<u8>, TransportDiagnostic> {
+    let mut rendered = stacker::grow(IR_RECURSION_STACK_BYTES, || {
+        serde_saphyr::to_string_with_options(value, YamlCodec::serializer_options())
+            .map_err(YamlCodec::encode_error)
+    })?;
+    rendered = rendered.replace("\r\n", "\n");
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    Ok(rendered.into_bytes())
 }
 
 fn is_block_scalar_header(line: &str) -> bool {

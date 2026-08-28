@@ -13,7 +13,11 @@ pub(crate) mod yaml;
 
 pub use codec::{CodecRegistry, EventSink, EventSource, IrCodec};
 pub use diagnostic::{Severity, SourceSpan, Stage, TransportDiagnostic};
-pub use document_tree::{read_document_tree, write_document_tree};
+pub use document_tree::{
+    DocumentTreeSink, DocumentTreeSource, LogicalDocument, discover_document_tree_format,
+    read_document_tree, read_document_tree_with_options, write_document_tree,
+    write_document_tree_with_options,
+};
 pub use json::JsonCodec;
 pub use migration::{ClassicToV4, MigrationReportHandle};
 pub use options::{

@@ -1,5 +1,7 @@
 //! Stable diagnostics produced by IR transport stages.
 
+use std::fmt;
+
 use morphir_core::migration::MigrationDiagnostic;
 use morphir_core::traversal::IrCursor;
 
@@ -132,3 +134,11 @@ impl From<MigrationDiagnostic> for TransportDiagnostic {
         }))
     }
 }
+
+impl fmt::Display for TransportDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.code(), self.message())
+    }
+}
+
+impl std::error::Error for TransportDiagnostic {}

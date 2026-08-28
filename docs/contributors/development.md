@@ -32,7 +32,7 @@ cargo build
 cargo test
 
 # Specific crate
-cargo test -p morphir
+cargo test -p morphir-common
 
 # BDD acceptance tests
 cd crates/morphir-gleam-binding
@@ -44,7 +44,6 @@ cargo test --test acceptance
 ```
 morphir-rust/
 ├── crates/
-│   ├── morphir/              # CLI
 │   ├── morphir-devkit/       # Devkit: workspace, config, and extension discovery
 │   ├── morphir-common/       # Shared infrastructure
 │   ├── morphir-daemon/       # Runtime services
@@ -56,12 +55,12 @@ morphir-rust/
 
 ## Code Organization
 
-### CLI Commands
+### CLI
 
-Commands are in `crates/morphir/src/commands/`:
-- `compile.rs` - Compile command
-- `generate.rs` - Generate command
-- `gleam.rs` - Gleam subcommands
+The canonical `morphir` CLI lives in the
+[finos/morphir](https://github.com/finos/morphir) repository
+(`crates/morphir` there) and consumes this workspace's crates through a
+git submodule.
 
 ### Devkit
 
@@ -82,11 +81,9 @@ Shared code in `crates/morphir-common/`:
 
 ## Adding a New Command
 
-1. Create command module in `crates/morphir/src/commands/`
-2. Add to `Commands` enum in `main.rs`
-3. Wire up execution in `MorphirSession::execute()`
-4. Add help text in `help.rs`
-5. Add tests in `tests/cli_integration.rs`
+CLI commands live in finos/morphir. Create the command module under
+`crates/morphir/src/commands/` in that repository, wire it into the
+`Commands` enum and `MorphirSession::execute()`, and add tests there.
 
 ## Adding a New Extension
 

@@ -71,38 +71,6 @@ jobs:
       - name: Lint YAML files
         run: mise run check:lint:yaml
 
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: [lint-rust]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Install mise
-        uses: jdx/mise-action@v4
-
-      - name: Cache dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-
-      - name: Build release binary
-        run: mise run build:release
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: morphir-binary-${{ runner.os }}
-          path: .morphir/build/bin/morphir
-          retention-days: 1
-
   build-wasm:
     name: Build (WASM extension)
     runs-on: ubuntu-latest
@@ -225,43 +193,6 @@ jobs:
 
       - name: Run unit tests
         run: mise run test:unit
-
-  test-integration:
-    name: Test (Integration)
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Install mise
-        uses: jdx/mise-action@v4
-
-      - name: Cache dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-
-      - name: Download morphir binary
-        uses: actions/download-artifact@v8
-        with:
-          name: morphir-binary-${{ runner.os }}
-          path: .morphir/build/bin/
-
-      - name: Make binary executable
-        run: chmod +x .morphir/build/bin/morphir
-
-      - name: Verify binary works
-        run: .morphir/build/bin/morphir --version
-
-      - name: Run integration tests
-        run: mise run test:integration
 
   docs:
     name: Documentation

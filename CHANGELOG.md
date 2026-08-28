@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Classic IR value arguments and parameters now serialize as canonical arrays, matching their strict deserializers and Morphir IR v3 JSON
 - Classic IR module definition and specification entries now serialize as canonical two-element arrays, matching their strict deserializers and Morphir IR v3 JSON
 - Native extension hosts no longer link Extism guest PDK imports; the SDK keeps native authoring tests available while compiling guest exports and host imports only for `wasm32`
 - `ir.format_version` defaults to 4, and the configuration model, the built-in defaults layer, and the specification now agree on it. Version 3 remains supported and is covered by tests that pin it through the whole merge chain, so a project can stay on 3 with `ir.format_version = 3`.

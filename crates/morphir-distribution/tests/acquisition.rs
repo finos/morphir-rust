@@ -592,6 +592,36 @@ fn activation_rejects_tampered_locked_launch_metadata() {
     }
 }
 
+#[test]
+fn activation_and_listing_reject_consistently_unsupported_installed_mep_versions() {
+    let mother = DistributionMother::a_local_process_artifact();
+    ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+    lock["mepVersions"] = serde_json::json!(["999.0"]);
+    fs::write(&lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+    let catalog_path = mother.home.extensions_catalog_file();
+    let mut catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(&catalog_path).unwrap()).unwrap();
+    catalog["extensions"][0]["mepVersions"] = serde_json::json!(["999.0"]);
+    fs::write(catalog_path, serde_json::to_vec_pretty(&catalog).unwrap()).unwrap();
+
+    for error in [
+        activate_installed(&mother.home, &mother.id).unwrap_err(),
+        list_installed(&mother.home).unwrap_err(),
+    ] {
+        match error {
+            DistributionError::NoCompatibleMepVersion { supported, .. } => {
+                assert!(supported.contains(morphir_extension_sdk::protocol::MEP_VERSION));
+            }
+            other => panic!("expected NoCompatibleMepVersion, got {other}"),
+        }
+    }
+}
+
 fn count_staging_files(root: &Path) -> usize {
     fs::read_dir(root)
         .into_iter()

@@ -8,6 +8,7 @@ use crate::{
 };
 use fs2::FileExt;
 use morphir_common::home::MorphirHome;
+use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
 use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -551,6 +552,16 @@ fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock)
     {
         return Err(DistributionError::StateMismatch {
             id: installed.extension_id.clone(),
+        });
+    }
+    if !lock
+        .mep_versions
+        .iter()
+        .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+    {
+        return Err(DistributionError::NoCompatibleMepVersion {
+            selection: lock.selection.to_string(),
+            supported: SUPPORTED_MEP_VERSIONS.join(", "),
         });
     }
     Ok(())

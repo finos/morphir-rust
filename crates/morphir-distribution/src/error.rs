@@ -135,6 +135,14 @@ pub enum DistributionError {
         /// Extension whose durable records disagree.
         id: crate::ExtensionId,
     },
+    /// A state transaction failed and its previous files could not be restored.
+    #[error("distribution state update failed ({original}); rollback also failed ({rollback})")]
+    StateRollback {
+        /// Original transaction failure.
+        original: Box<DistributionError>,
+        /// Failure encountered while restoring the previous state.
+        rollback: Box<DistributionError>,
+    },
     /// A catalog store path escaped the Morphir home directory.
     #[error("installed path {path} escapes Morphir home {root}")]
     InstalledPathEscape {

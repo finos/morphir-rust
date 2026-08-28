@@ -6,12 +6,13 @@ use crate::{
     IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result, Selection,
     Sha256Digest, VerifiedArtifact,
 };
+use fs2::FileExt;
 use morphir_common::home::MorphirHome;
 use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -33,6 +34,22 @@ pub struct ExtensionLock {
 }
 
 impl ExtensionLock {
+    fn from_verified(artifact: &VerifiedArtifact) -> Self {
+        Self {
+            schema_version: 1,
+            selection: artifact.selected.selection.clone(),
+            extension_id: artifact.selected.release.extension_id().clone(),
+            name: artifact.selected.release.name().to_owned(),
+            version: artifact.selected.release.version().clone(),
+            index: artifact.selected.index.clone(),
+            source: artifact.selected.artifact.source().clone(),
+            runtime: artifact.selected.artifact.runtime(),
+            platform: artifact.selected.artifact.platform().clone(),
+            digest: artifact.selected.artifact.digest().clone(),
+            executable: artifact.selected.artifact.executable(),
+        }
+    }
+
     /// Return the lock schema version.
     pub fn schema_version(&self) -> u32 {
         self.schema_version
@@ -91,24 +108,18 @@ impl ExtensionLock {
 
 /// Write an exact extension lock after artifact verification.
 pub fn write_extension_lock(home: &MorphirHome, artifact: &VerifiedArtifact) -> Result<()> {
-    let lock = ExtensionLock {
-        schema_version: 1,
-        selection: artifact.selected.selection.clone(),
-        extension_id: artifact.selected.release.extension_id().clone(),
-        name: artifact.selected.release.name().to_owned(),
-        version: artifact.selected.release.version().clone(),
-        index: artifact.selected.index.clone(),
-        source: artifact.selected.artifact.source().clone(),
-        runtime: artifact.selected.artifact.runtime(),
-        platform: artifact.selected.artifact.platform().clone(),
-        digest: artifact.selected.artifact.digest().clone(),
-        executable: artifact.selected.artifact.executable(),
-    };
+    let _transaction = InstalledStateGuard::acquire(home)?;
+    let lock = ExtensionLock::from_verified(artifact);
     atomic_write_json(&extension_lock_path(home, &lock.extension_id), &lock)
 }
 
 /// Read and validate one exact extension lock.
 pub fn read_extension_lock(home: &MorphirHome, id: &ExtensionId) -> Result<ExtensionLock> {
+    let _transaction = InstalledStateGuard::acquire(home)?;
+    read_extension_lock_unlocked(home, id)
+}
+
+fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<ExtensionLock> {
     let path = extension_lock_path(home, id);
     let lock: ExtensionLock = read_json(&path)?;
     if lock.schema_version != 1 {
@@ -146,6 +157,23 @@ pub struct InstalledExtension {
 }
 
 impl InstalledExtension {
+    fn from_verified(artifact: &VerifiedArtifact) -> Self {
+        Self {
+            extension_id: artifact.selected.release.extension_id().clone(),
+            name: artifact.selected.release.name().to_owned(),
+            version: artifact.selected.release.version().clone(),
+            runtime: artifact.selected.artifact.runtime(),
+            platform: artifact.selected.artifact.platform().clone(),
+            args: artifact.selected.artifact.args().to_vec(),
+            digest: artifact.selected.artifact.digest().clone(),
+            store_path: artifact.store_path.clone(),
+            capabilities: artifact.selected.release.capabilities().to_vec(),
+            mep_versions: artifact.selected.release.mep_versions().to_vec(),
+            index: artifact.selected.index.clone(),
+            executable: artifact.selected.artifact.executable(),
+        }
+    }
+
     /// Return the stable extension identity.
     pub fn extension_id(&self) -> &ExtensionId {
         &self.extension_id
@@ -233,17 +261,22 @@ struct CatalogFile {
 /// Durable installed extension catalog.
 #[derive(Debug)]
 pub struct InstalledCatalog {
-    path: PathBuf,
+    home: MorphirHome,
     extensions: BTreeMap<ExtensionId, InstalledExtension>,
 }
 
 impl InstalledCatalog {
     /// Load the durable catalog, or create an empty in-memory catalog if absent.
     pub fn load(home: &MorphirHome) -> Result<Self> {
+        let _transaction = InstalledStateGuard::acquire(home)?;
+        Self::load_unlocked(home)
+    }
+
+    fn load_unlocked(home: &MorphirHome) -> Result<Self> {
         let path = home.extensions_catalog_file();
         if !path.exists() {
             return Ok(Self {
-                path,
+                home: home.clone(),
                 extensions: BTreeMap::new(),
             });
         }
@@ -261,7 +294,10 @@ impl InstalledCatalog {
                 return Err(DistributionError::StateMismatch { id });
             }
         }
-        Ok(Self { path, extensions })
+        Ok(Self {
+            home: home.clone(),
+            extensions,
+        })
     }
 
     /// Return an installed entry by stable identity.
@@ -279,27 +315,16 @@ impl InstalledCatalog {
     /// The parameter cannot be constructed from an unchecked path. This write
     /// is deliberately the final step of [`ExtensionInstaller::install`].
     pub fn register(&mut self, artifact: VerifiedArtifact) -> Result<InstalledExtension> {
-        let entry = InstalledExtension {
-            extension_id: artifact.selected.release.extension_id().clone(),
-            name: artifact.selected.release.name().to_owned(),
-            version: artifact.selected.release.version().clone(),
-            runtime: artifact.selected.artifact.runtime(),
-            platform: artifact.selected.artifact.platform().clone(),
-            args: artifact.selected.artifact.args().to_vec(),
-            digest: artifact.selected.artifact.digest().clone(),
-            store_path: artifact.store_path,
-            capabilities: artifact.selected.release.capabilities().to_vec(),
-            mep_versions: artifact.selected.release.mep_versions().to_vec(),
-            index: artifact.selected.index.clone(),
-            executable: artifact.selected.artifact.executable(),
-        };
-        let mut next = self.extensions.clone();
+        let _transaction = InstalledStateGuard::acquire(&self.home)?;
+        let latest = Self::load_unlocked(&self.home)?;
+        let entry = InstalledExtension::from_verified(&artifact);
+        let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
             schema_version: 1,
             extensions: next.values().cloned().collect(),
         };
-        atomic_write_json(&self.path, &stored)?;
+        atomic_write_json(&self.home.extensions_catalog_file(), &stored)?;
         self.extensions = next;
         Ok(entry)
     }
@@ -319,9 +344,35 @@ impl<'home> ExtensionInstaller<'home> {
 
     /// Materialize verified bytes, write the exact lock, then register them.
     pub fn install(&self, selected: ResolvedArtifact) -> Result<InstalledExtension> {
+        self.install_with_writer(selected, &FilesystemStateWriter)
+    }
+
+    fn install_with_writer(
+        &self,
+        selected: ResolvedArtifact,
+        writer: &impl StateWriter,
+    ) -> Result<InstalledExtension> {
         let verified = ArtifactStore::from_home(self.home).materialize(selected)?;
-        write_extension_lock(self.home, &verified)?;
-        InstalledCatalog::load(self.home)?.register(verified)
+        let _transaction = InstalledStateGuard::acquire(self.home)?;
+        let catalog = InstalledCatalog::load_unlocked(self.home)?;
+        let lock = ExtensionLock::from_verified(&verified);
+        let entry = InstalledExtension::from_verified(&verified);
+        let mut extensions = catalog.extensions;
+        extensions.insert(entry.extension_id.clone(), entry.clone());
+        let stored = CatalogFile {
+            schema_version: 1,
+            extensions: extensions.into_values().collect(),
+        };
+        let lock_bytes = encode_json(&lock)?;
+        let catalog_bytes = encode_json(&stored)?;
+        commit_state_pair(
+            &extension_lock_path(self.home, &entry.extension_id),
+            &lock_bytes,
+            &self.home.extensions_catalog_file(),
+            &catalog_bytes,
+            writer,
+        )?;
+        Ok(entry)
     }
 }
 
@@ -355,12 +406,16 @@ impl VerifiedProcessArtifact {
 /// The catalog and exact lock must agree. The artifact is then canonicalized
 /// beneath Morphir home and rehashed before this function returns.
 pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<VerifiedProcessArtifact> {
-    let catalog = InstalledCatalog::load(home)?;
-    let installed = catalog
-        .get(id)
-        .cloned()
-        .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
-    let lock = read_extension_lock(home, id)?;
+    let (installed, lock) = {
+        let _transaction = InstalledStateGuard::acquire(home)?;
+        let catalog = InstalledCatalog::load_unlocked(home)?;
+        let installed = catalog
+            .get(id)
+            .cloned()
+            .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
+        let lock = read_extension_lock_unlocked(home, id)?;
+        (installed, lock)
+    };
     if lock.extension_id != installed.extension_id
         || lock.name != installed.name
         || lock.version != installed.version
@@ -407,6 +462,115 @@ fn extension_type(capability: Capability) -> ExtensionType {
     }
 }
 
+struct InstalledStateGuard {
+    file: File,
+}
+
+impl InstalledStateGuard {
+    fn acquire(home: &MorphirHome) -> Result<Self> {
+        let path = home.extensions_state_lock_file();
+        let parent = path.parent().expect("durable lock path has a parent");
+        fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|source| DistributionError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock_exclusive()
+            .map_err(|source| DistributionError::Io { path, source })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for InstalledStateGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+trait StateWriter {
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<()>;
+}
+
+struct FilesystemStateWriter;
+
+impl StateWriter for FilesystemStateWriter {
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        atomic_write_bytes(path, bytes)
+    }
+}
+
+fn commit_state_pair(
+    lock_path: &Path,
+    lock_bytes: &[u8],
+    catalog_path: &Path,
+    catalog_bytes: &[u8],
+    writer: &impl StateWriter,
+) -> Result<()> {
+    let previous_lock = read_optional(lock_path)?;
+    let previous_catalog = read_optional(catalog_path)?;
+    writer.write(lock_path, lock_bytes)?;
+    if let Err(original) = writer.write(catalog_path, catalog_bytes) {
+        return match restore_state_pair(
+            lock_path,
+            previous_lock.as_deref(),
+            catalog_path,
+            previous_catalog.as_deref(),
+        ) {
+            Ok(()) => Err(original),
+            Err(rollback) => Err(DistributionError::StateRollback {
+                original: Box::new(original),
+                rollback: Box::new(rollback),
+            }),
+        };
+    }
+    Ok(())
+}
+
+fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn restore_state_pair(
+    lock_path: &Path,
+    lock_bytes: Option<&[u8]>,
+    catalog_path: &Path,
+    catalog_bytes: Option<&[u8]>,
+) -> Result<()> {
+    let lock_result = restore_file(lock_path, lock_bytes);
+    let catalog_result = restore_file(catalog_path, catalog_bytes);
+    lock_result.and(catalog_result)
+}
+
+fn restore_file(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
+    if let Some(bytes) = bytes {
+        return atomic_write_bytes(path, bytes);
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let bytes = fs::read(path).map_err(|source| DistributionError::Io {
         path: path.to_path_buf(),
@@ -419,6 +583,16 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
 }
 
 fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    atomic_write_bytes(path, &encode_json(value)?)
+}
+
+fn encode_json(value: &impl Serialize) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(DistributionError::StateEncoding)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().expect("durable state path has a parent");
     fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
         path: parent.to_path_buf(),
@@ -431,11 +605,9 @@ fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
             path: parent.to_path_buf(),
             source,
         })?;
-    serde_json::to_writer_pretty(staged.as_file_mut(), value)
-        .map_err(DistributionError::StateEncoding)?;
     staged
         .as_file_mut()
-        .write_all(b"\n")
+        .write_all(bytes)
         .and_then(|()| staged.as_file_mut().flush())
         .and_then(|()| staged.as_file().sync_all())
         .map_err(|source| DistributionError::Io {
@@ -449,4 +621,131 @@ fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
             source: error.error,
         })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Channel, LocalIndex};
+
+    struct FailingWriter {
+        fail_path: PathBuf,
+        fail_after_write: bool,
+    }
+
+    impl StateWriter for FailingWriter {
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            if path == self.fail_path {
+                if self.fail_after_write {
+                    atomic_write_bytes(path, bytes)?;
+                }
+                return Err(DistributionError::Io {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::other("injected catalog write failure"),
+                });
+            }
+            atomic_write_bytes(path, bytes)
+        }
+    }
+
+    #[test]
+    fn failed_catalog_commit_restores_previous_state_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let lock_path = root.path().join("locks/example.json");
+        let catalog_path = root.path().join("catalog/extensions.json");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        fs::write(&lock_path, b"old lock\n").unwrap();
+        fs::write(&catalog_path, b"old catalog\n").unwrap();
+
+        let writer = FailingWriter {
+            fail_path: catalog_path.clone(),
+            fail_after_write: true,
+        };
+        let error = commit_state_pair(
+            &lock_path,
+            b"new lock\n",
+            &catalog_path,
+            b"new catalog\n",
+            &writer,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected catalog write failure"));
+        assert_eq!(fs::read(lock_path).unwrap(), b"old lock\n");
+        assert_eq!(fs::read(catalog_path).unwrap(), b"old catalog\n");
+    }
+
+    #[test]
+    fn failed_upgrade_restores_the_previously_active_lock_and_catalog() {
+        let root = tempfile::tempdir().unwrap();
+        let index = root.path().join("index");
+        let source = index.join("artifacts/example");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(index.join("extensions")).unwrap();
+        fs::write(&source, b"example extension").unwrap();
+        let digest = Sha256Digest::of_bytes(b"example extension");
+        write_release(&index, "1.0.0", &digest);
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ExtensionId::parse("example").unwrap();
+        let platform = Platform::new("linux", "x86_64").unwrap();
+        let select = || {
+            LocalIndex::open(&index)
+                .unwrap()
+                .resolve(&id, Selection::Channel(Channel::Stable), &platform)
+                .unwrap()
+        };
+        ExtensionInstaller::new(&home).install(select()).unwrap();
+        let lock_path = extension_lock_path(&home, &id);
+        let catalog_path = home.extensions_catalog_file();
+        let previous_lock = fs::read(&lock_path).unwrap();
+        let previous_catalog = fs::read(&catalog_path).unwrap();
+
+        write_release(&index, "2.0.0", &digest);
+        let writer = FailingWriter {
+            fail_path: catalog_path.clone(),
+            fail_after_write: false,
+        };
+        let error = ExtensionInstaller::new(&home)
+            .install_with_writer(select(), &writer)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("injected catalog write failure"));
+        assert_eq!(fs::read(&lock_path).unwrap(), previous_lock);
+        assert_eq!(fs::read(&catalog_path).unwrap(), previous_catalog);
+        assert_eq!(
+            activate_installed(&home, &id)
+                .unwrap()
+                .extension_info()
+                .version,
+            "1.0.0"
+        );
+    }
+
+    fn write_release(index: &Path, version: &str, digest: &Sha256Digest) {
+        let record = serde_json::json!({
+            "schemaVersion": 1,
+            "id": "example",
+            "name": "Example",
+            "version": version,
+            "channels": ["stable"],
+            "mepVersions": ["0.1"],
+            "capabilities": ["frontend"],
+            "artifacts": [{
+                "runtime": "process",
+                "platform": { "os": "linux", "arch": "x86_64" },
+                "source": { "kind": "local-file", "path": "artifacts/example" },
+                "sha256": digest,
+                "filename": "example",
+                "args": [],
+                "executable": false
+            }]
+        });
+        fs::write(
+            index.join("extensions/example.jsonl"),
+            format!("{record}\n"),
+        )
+        .unwrap();
+    }
 }

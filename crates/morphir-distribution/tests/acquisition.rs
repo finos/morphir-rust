@@ -6,6 +6,8 @@ use morphir_distribution::{
 };
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Barrier, mpsc};
+use std::thread;
 use tempfile::TempDir;
 
 struct DistributionMother {
@@ -60,14 +62,54 @@ impl DistributionMother {
     }
 
     fn selected(&self) -> morphir_distribution::ResolvedArtifact {
+        self.selected_for(&self.id)
+    }
+
+    fn selected_for(&self, id: &ExtensionId) -> morphir_distribution::ResolvedArtifact {
         LocalIndex::open(&self.index)
             .unwrap()
             .resolve(
-                &self.id,
+                id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
             )
             .unwrap()
+    }
+
+    fn add_local_process_artifact(
+        &self,
+        id: &str,
+        name: &str,
+        filename: &str,
+        bytes: &[u8],
+    ) -> ExtensionId {
+        let source = self.index.join("artifacts").join(filename);
+        fs::write(&source, bytes).unwrap();
+        let digest = Sha256Digest::of_bytes(bytes);
+        let record = serde_json::json!({
+            "schemaVersion": 1,
+            "id": id,
+            "name": name,
+            "version": "1.0.0",
+            "channels": ["stable"],
+            "mepVersions": ["0.1"],
+            "capabilities": ["backend"],
+            "artifacts": [{
+                "runtime": "process",
+                "platform": { "os": "linux", "arch": "x86_64" },
+                "source": { "kind": "local-file", "path": format!("artifacts/{filename}") },
+                "sha256": digest,
+                "filename": filename,
+                "args": [],
+                "executable": false
+            }]
+        });
+        fs::write(
+            self.index.join("extensions").join(format!("{id}.jsonl")),
+            format!("{record}\n"),
+        )
+        .unwrap();
+        ExtensionId::parse(id).unwrap()
     }
 
     fn declare_executable(&self, executable: bool) {
@@ -100,6 +142,10 @@ fn morphir_home_has_durable_distribution_paths() {
     assert_eq!(
         mother.home.extensions_locks_dir(),
         mother.root.path().join("home/locks/extensions")
+    );
+    assert_eq!(
+        mother.home.extensions_state_lock_file(),
+        mother.root.path().join("home/locks/extensions.state.lock")
     );
 }
 
@@ -314,6 +360,48 @@ fn installer_orders_materialization_lock_then_catalog() {
     );
     assert!(mother.home.extensions_catalog_file().exists());
     assert!(installed.store_path().is_relative());
+}
+
+#[test]
+fn concurrent_catalog_transactions_preserve_both_entries() {
+    let mother = DistributionMother::a_local_process_artifact();
+    let second_id = mother.add_local_process_artifact(
+        "morphir-test-backend",
+        "Morphir Test Backend",
+        "morphir-test-backend",
+        b"test backend",
+    );
+    let store = ArtifactStore::from_home(&mother.home);
+    let first_artifact = store.materialize(mother.selected()).unwrap();
+    let second_artifact = store.materialize(mother.selected_for(&second_id)).unwrap();
+
+    let barrier = Arc::new(Barrier::new(3));
+    let (first_done_tx, first_done_rx) = mpsc::channel();
+    let first_home = mother.home.clone();
+    let first_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        let mut catalog = InstalledCatalog::load(&first_home).unwrap();
+        first_barrier.wait();
+        catalog.register(first_artifact).unwrap();
+        first_done_tx.send(()).unwrap();
+    });
+    let second_home = mother.home.clone();
+    let second_barrier = Arc::clone(&barrier);
+    let second = thread::spawn(move || {
+        let mut catalog = InstalledCatalog::load(&second_home).unwrap();
+        second_barrier.wait();
+        first_done_rx.recv().unwrap();
+        catalog.register(second_artifact).unwrap();
+    });
+
+    barrier.wait();
+    first.join().unwrap();
+    second.join().unwrap();
+
+    let catalog = InstalledCatalog::load(&mother.home).unwrap();
+    assert!(catalog.get(&mother.id).is_some());
+    assert!(catalog.get(&second_id).is_some());
+    assert_eq!(catalog.entries().len(), 2);
 }
 
 #[test]

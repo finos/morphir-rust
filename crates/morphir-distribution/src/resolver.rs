@@ -41,13 +41,13 @@ pub fn resolve(
         .iter()
         .filter(|release| matches_selection(release, selection))
         .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| right.version.cmp(&left.version));
+    candidates.sort_by(|left, right| right.version().cmp_precedence(left.version()));
 
     for release in candidates {
         let artifacts = release
-            .artifacts
+            .artifacts()
             .iter()
-            .filter(|artifact| &artifact.platform == platform)
+            .filter(|artifact| artifact.platform() == platform)
             .collect::<Vec<_>>();
         match artifacts.as_slice() {
             [] => continue,
@@ -60,7 +60,7 @@ pub fn resolve(
             }
             _ => {
                 return Err(DistributionError::AmbiguousPlatform {
-                    version: release.version.clone(),
+                    version: release.version().clone(),
                     platform: platform.to_string(),
                 });
             }
@@ -75,16 +75,16 @@ pub fn resolve(
 
 fn matches_selection(release: &ReleaseRecord, selection: &Selection) -> bool {
     match selection {
-        Selection::Exact(version) => &release.version == version,
+        Selection::Exact(version) => release.version() == version,
         Selection::Channel(Channel::Stable) => {
-            release.version.pre.is_empty() && release.channels.contains(&Channel::Stable)
+            release.version().pre.is_empty() && release.channels().contains(&Channel::Stable)
         }
         Selection::Channel(Channel::Preview(None) | Channel::Insiders) => release
-            .channels
+            .channels()
             .iter()
             .any(|channel| matches!(channel, Channel::Preview(_) | Channel::Insiders)),
         Selection::Channel(Channel::Preview(Some(expected))) => release
-            .channels
+            .channels()
             .iter()
             .any(|channel| matches!(channel, Channel::Preview(Some(actual)) if actual == expected)),
     }

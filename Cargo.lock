@@ -2876,6 +2876,8 @@ dependencies = [
 name = "morphir-distribution"
 version = "0.2.0"
 dependencies = [
+ "morphir-common",
+ "morphir-extension-sdk",
  "semver",
  "serde",
  "serde_json",

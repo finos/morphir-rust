@@ -50,6 +50,14 @@ pub enum DistributionError {
         /// Duplicated semantic version.
         version: semver::Version,
     },
+    /// Two versions differ only by build metadata, which has no SemVer precedence.
+    #[error("versions {first} and {second} have equal semantic precedence")]
+    DuplicatePrecedence {
+        /// First version from the history.
+        first: semver::Version,
+        /// Later version with equal precedence.
+        second: semver::Version,
+    },
     /// No release and platform artifact satisfied the requested selection.
     #[error("no artifact matches {selection} for platform {platform}")]
     NoMatchingArtifact {
@@ -65,6 +73,63 @@ pub enum DistributionError {
         version: semver::Version,
         /// Requested operating-system and architecture pair.
         platform: String,
+    },
+    /// A canonical local-index path escaped its controlled root.
+    #[error("path {path} escapes local index root {root}")]
+    IndexPathEscape {
+        /// Canonical path outside the controlled root.
+        path: PathBuf,
+        /// Canonical controlled index root.
+        root: PathBuf,
+    },
+    /// Artifact bytes did not match the declared digest.
+    #[error("digest mismatch for {path}: expected {expected}, got {actual}")]
+    DigestMismatch {
+        /// Source or installed artifact path.
+        path: PathBuf,
+        /// Digest declared by the exact lock or index.
+        expected: crate::Sha256Digest,
+        /// Digest computed from the file bytes.
+        actual: crate::Sha256Digest,
+    },
+    /// Durable JSON state could not be decoded.
+    #[error("invalid distribution state in {path}: {source}")]
+    InvalidState {
+        /// State file being decoded.
+        path: PathBuf,
+        /// JSON decoding failure.
+        source: serde_json::Error,
+    },
+    /// Durable JSON state could not be encoded.
+    #[error("failed to encode distribution state: {0}")]
+    StateEncoding(serde_json::Error),
+    /// Durable state uses an unsupported schema revision.
+    #[error("unsupported {kind} schema version {version}")]
+    UnsupportedStateSchema {
+        /// Kind of durable state.
+        kind: &'static str,
+        /// Unsupported schema version.
+        version: u32,
+    },
+    /// No installed catalog entry exists for the requested identity.
+    #[error("extension {id} is not installed")]
+    NotInstalled {
+        /// Requested extension identity.
+        id: crate::ExtensionId,
+    },
+    /// Catalog and lock records disagree about exact installed content.
+    #[error("installed catalog and lock disagree for extension {id}")]
+    StateMismatch {
+        /// Extension whose durable records disagree.
+        id: crate::ExtensionId,
+    },
+    /// A catalog store path escaped the Morphir home directory.
+    #[error("installed path {path} escapes Morphir home {root}")]
+    InstalledPathEscape {
+        /// Canonical installed artifact path.
+        path: PathBuf,
+        /// Canonical Morphir home root.
+        root: PathBuf,
     },
     /// Filesystem access failed.
     #[error("failed to access {path}: {source}")]

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation
 - MEP 0.1 frontend capability negotiation and compile request, result, dependency, diagnostic range, and source document contracts in `morphir-extension-sdk`, including structured extension capabilities and host validation of negotiated compilation support and successful compile results
 - Connected extension-daemon hosting over JSON-RPC HTTP, with an independently launched daemon conformance fixture and coverage for clean shutdown, connection refusal, and request timeout
 - Validated MEP typestate sessions that separate untrusted wire initialization from negotiated application state and preserve indeterminate transport outcomes

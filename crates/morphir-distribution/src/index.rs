@@ -1,7 +1,7 @@
 //! Parsing for local JSONL extension histories.
 
 use crate::{DistributionError, ExtensionId, ReleaseRecord, Result, Sha256Digest};
-use std::collections::BTreeSet;
+use std::cmp::Ordering;
 
 /// A validated release history and the digest of its exact JSONL bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,18 +25,18 @@ impl ExtensionHistory {
                     source,
                 }
             })?;
-            if record.schema_version != 1 {
+            if record.schema_version() != 1 {
                 return Err(DistributionError::UnsupportedSchema {
                     line: line_index + 1,
-                    version: record.schema_version,
+                    version: record.schema_version(),
                 });
             }
             if let Some(first) = releases.first()
-                && record.id != first.id
+                && record.extension_id() != first.extension_id()
             {
                 return Err(DistributionError::MixedIdentity {
-                    expected: first.id.to_string(),
-                    actual: record.id.to_string(),
+                    expected: first.extension_id().to_string(),
+                    actual: record.extension_id().to_string(),
                     line: line_index + 1,
                 });
             }
@@ -45,15 +45,25 @@ impl ExtensionHistory {
 
         let extension_id = releases
             .first()
-            .map(|record| record.id.clone())
+            .map(|record| record.extension_id().clone())
             .ok_or(DistributionError::EmptyHistory)?;
-        let mut versions = BTreeSet::new();
+        let mut versions: Vec<semver::Version> = Vec::new();
         for record in &releases {
-            if !versions.insert(record.version.clone()) {
+            if versions.contains(record.version()) {
                 return Err(DistributionError::DuplicateVersion {
-                    version: record.version.clone(),
+                    version: record.version().clone(),
                 });
             }
+            if let Some(first) = versions
+                .iter()
+                .find(|version| version.cmp_precedence(record.version()) == Ordering::Equal)
+            {
+                return Err(DistributionError::DuplicatePrecedence {
+                    first: (*first).clone(),
+                    second: record.version().clone(),
+                });
+            }
+            versions.push(record.version().clone());
         }
 
         Ok(Self {

@@ -8,7 +8,7 @@
 //! use morphir_common::home::MorphirHome;
 //! use morphir_distribution::{
 //!     Channel, ExtensionId, ExtensionInstaller, LocalIndex, Platform, Selection,
-//!     activate_installed, uninstall_extension,
+//!     activate_installed, list_installed, uninstall_extension,
 //! };
 //!
 //! # fn install() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,6 +24,14 @@
 //! // Activation is offline and rehashes the installed bytes.
 //! let process = activate_installed(&home, &id)?;
 //! assert_eq!(process.extension_info().id, "morphir-elm");
+//!
+//! // Catalog entries and their exact locks are read as one validated snapshot.
+//! let installed = list_installed(&home)?;
+//! assert_eq!(installed[0].installed().extension_id(), &id);
+//! assert_eq!(
+//!     installed[0].selection(),
+//!     &Selection::Channel(Channel::Stable),
+//! );
 //!
 //! // Uninstall removes active state but leaves content-addressed bytes cached.
 //! let removed = uninstall_extension(&home, &id)?;
@@ -51,7 +59,7 @@ pub use local::{IndexKind, IndexProvenance, LocalIndex, ResolvedArtifact};
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{
     ExtensionInstaller, ExtensionLock, InstalledCatalog, InstalledExtension,
-    VerifiedProcessArtifact, activate_installed, read_extension_lock, uninstall_extension,
-    write_extension_lock,
+    InstalledExtensionSnapshot, VerifiedProcessArtifact, activate_installed, list_installed,
+    read_extension_lock, uninstall_extension, write_extension_lock,
 };
 pub use store::{ArtifactStore, VerifiedArtifact};

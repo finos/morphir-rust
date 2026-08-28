@@ -66,6 +66,14 @@ pub enum DistributionError {
         /// Requested operating-system and architecture pair.
         platform: String,
     },
+    /// Matching releases do not support any MEP version understood by the host.
+    #[error("no release matching {selection} supports host MEP versions {supported}")]
+    NoCompatibleMepVersion {
+        /// Requested channel or exact version.
+        selection: String,
+        /// Host-supported MEP versions.
+        supported: String,
+    },
     /// A release declared multiple artifacts for one platform.
     #[error("release {version} contains more than one artifact for platform {platform}")]
     AmbiguousPlatform {

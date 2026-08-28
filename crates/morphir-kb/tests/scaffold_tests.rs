@@ -500,3 +500,86 @@ fn slugify_kebab_cases_free_form_names() {
     assert_eq!(slugify("Morphir IR v5"), "morphir-ir-v5");
     assert_eq!(slugify("--x--"), "x");
 }
+
+#[test]
+fn new_bundle_refuses_a_group_that_escapes_the_bundles_directory() {
+    let (tmp, kb_root) = fixture();
+    let err = new_bundle(
+        &kb_root,
+        "escaped",
+        Some("../../outside"),
+        "Escaped",
+        "Nope.",
+        "0.2",
+        today(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("must stay inside kb/bundles"), "got: {err}");
+    assert!(
+        !tmp.path().join("outside").exists(),
+        "nothing may be written outside kb/bundles"
+    );
+}
+
+#[test]
+fn new_bundle_refuses_an_absolute_group() {
+    // Previously accepted and silently reinterpreted as a subdirectory of
+    // kb/bundles, which is not what the caller asked for.
+    let (_tmp, kb_root) = fixture();
+    let err = new_bundle(
+        &kb_root,
+        "rooted",
+        Some("/morphir"),
+        "Rooted",
+        "Nope.",
+        "0.2",
+        today(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("must stay inside kb/bundles"), "got: {err}");
+    assert!(!kb_root.join("bundles/morphir/rooted").exists());
+}
+
+#[test]
+fn new_bundle_refuses_a_single_dot_group_segment() {
+    let (_tmp, kb_root) = fixture();
+    let err = new_bundle(
+        &kb_root,
+        "dotted",
+        Some("morphir/./tools"),
+        "Dotted",
+        "Nope.",
+        "0.2",
+        today(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("must stay inside kb/bundles"), "got: {err}");
+}
+
+#[test]
+fn new_bundle_accepts_a_benign_nested_group_and_names_its_real_path() {
+    let (_tmp, kb_root) = fixture();
+    let res = new_bundle(
+        &kb_root,
+        "sub",
+        Some("morphir/tools"),
+        "Sub",
+        "Grouped.",
+        "0.2",
+        today(),
+    )
+    .unwrap();
+    assert!(kb_root.join("bundles/morphir/tools/sub/index.md").is_file());
+    let note = res
+        .notes
+        .iter()
+        .find(|n| n.contains("grouping directory has no README.md yet"))
+        .unwrap_or_else(|| panic!("got: {:?}", res.notes));
+    assert!(
+        note.ends_with("/kb/bundles/morphir/tools"),
+        "the note must name the directory that was really created, got: {note}"
+    );
+}

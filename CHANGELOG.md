@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The `morphir-okf` and `morphir-kb` crates, backing the `morphir kb` command (#98). `morphir-okf`
+  models the Open Knowledge Format v0.2 — bundles, concept documents, frontmatter, markdown link and
+  heading extraction, bundle discovery and link resolution — behind an extensible `OkfProfile`.
+  `morphir-kb` adds the operations on top: conformance checks, scaffolding, a SQLite FTS5 index,
+  upstream sync vendoring, the intent and decision registers, refresh and rendering. Ported from the
+  `kb` CLI in morphir-scala, including its JSON shapes and exit codes; the intent register also
+  reports `intent-duplicate-id`, which the Scala tool lacks
+
 - Atomic, validated installed-extension snapshots that pair each catalog entry with the requested selection from its exact lock
 - Transactional extension uninstall that removes active catalog and exact-lock state while retaining verified content-addressed artifact bytes
 - `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation
@@ -41,6 +49,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** the `morphir` CLI crate, its integration tests, the release workflow that published CLI binaries, and the installer and launcher scripts (`scripts/install.*`, `scripts/morphir.*`). The canonical `morphir` CLI is now built, released, and documented from [finos/morphir](https://github.com/finos/morphir), which consumes this workspace's library crates through a git submodule. Install it by following [Installing Morphir](https://github.com/finos/morphir/blob/main/INSTALLING.md); library crates are unaffected
 
 ### Fixed
+
+- Canonical constructor names in v4 custom types now round-trip (#103). An acronym constructor such
+  as `GC` serializes to the canonical `"(gc)"`, which the decoders read back as a single literal
+  word, leaving a constructor named `(gc)`; the Gleam backend then emitted that into source that
+  would not reparse. Decoding goes through `Name::from_canonical_string`, and the backend renders
+  identifiers from a name's words rather than its canonical `Display` form
+- `kb sync` refuses a mirror `root` that leaves the bundle. A manifest with `root: ../shared` was
+  resolved lexically, so `pull` wrote outside the bundle and `pull --prune` deleted files there. An
+  absolute root is now rejected outright rather than silently reread as a bundle subdirectory
+- `kb sync` quotes lockfile entries that need it. An upstream path containing `,` was silently
+  truncated on read — the mirror reported a phantom deleted file while the real one stayed untracked
+  — and paths containing `:`, `{` or `}` made `sync.lock.yaml` unparseable. Ordinary paths render
+  exactly as before, so a no-op pull still produces no diff
+- `kb new-bundle` refuses a `--group` that escapes `kb/bundles`, matching the guard `add-concept`
+  already applied
+- `kb query` opens the index read-only. The first-token guard admitted every `PRAGMA` and `WITH`
+  statement, so `PRAGMA user_version=7` and `WITH … DELETE … RETURNING` could write to the derived
+  index through a documented read-only API
+- `kb intent` transitions preserve CRLF line endings. Frontmatter normalization meant every
+  transition on a CRLF document rewrote the whole file instead of the keys it edits
 
 - Classic IR value arguments and parameters now serialize as canonical arrays, matching their strict deserializers and Morphir IR v3 JSON
 - Classic IR module definition and specification entries now serialize as canonical two-element arrays, matching their strict deserializers and Morphir IR v3 JSON

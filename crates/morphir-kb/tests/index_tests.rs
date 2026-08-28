@@ -478,3 +478,83 @@ fn render_rows_text_aligns_and_counts() {
     };
     assert_eq!(index::render_rows(&empty, false), "no rows\n");
 }
+
+#[test]
+fn query_cannot_write_through_a_pragma_the_token_guard_admits() {
+    // The first-token guard lets every PRAGMA past, so the connection itself
+    // has to be read-only.
+    let tmp = TempDir::new().unwrap();
+    let (_kb, db, _) = built(tmp.path(), false);
+    let before = single_column(&index::query(&db, "PRAGMA user_version").unwrap());
+    let journal = single_column(&index::query(&db, "PRAGMA journal_mode").unwrap());
+    for sql in [
+        "PRAGMA user_version = 7",
+        "PRAGMA application_id = 1234",
+        "PRAGMA journal_mode = DELETE",
+    ] {
+        // Refused or inert, but never effective.
+        let _ = index::query(&db, sql);
+    }
+    assert_eq!(
+        single_column(&index::query(&db, "PRAGMA user_version").unwrap()),
+        before,
+        "user_version must not move"
+    );
+    assert_eq!(
+        single_column(&index::query(&db, "PRAGMA application_id").unwrap()),
+        vec![Some("0".to_string())],
+        "application_id must not move"
+    );
+    assert_eq!(
+        single_column(&index::query(&db, "PRAGMA journal_mode").unwrap()),
+        journal,
+        "journal_mode must not move"
+    );
+}
+
+#[test]
+fn query_cannot_mutate_through_a_with_prefixed_statement() {
+    // `WITH` is admitted by the token guard, but a CTE may prefix a DELETE or
+    // an UPDATE.
+    let tmp = TempDir::new().unwrap();
+    let (_kb, db, _) = built(tmp.path(), false);
+    let links = single_column(&index::query(&db, "SELECT count(*) FROM link").unwrap());
+    let titles = single_column(&index::query(&db, "SELECT count(*) FROM doc").unwrap());
+    assert_ne!(links, vec![Some("0".to_string())], "fixture has links");
+
+    let err = index::query(
+        &db,
+        "WITH victims AS (SELECT id FROM link) DELETE FROM link WHERE id IN (SELECT id FROM victims) RETURNING id",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("readonly"),
+        "got: {err}"
+    );
+    let err = index::query(
+        &db,
+        "WITH x AS (SELECT 1) UPDATE doc SET title = 'pwned' RETURNING title",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("readonly"),
+        "got: {err}"
+    );
+
+    assert_eq!(
+        single_column(&index::query(&db, "SELECT count(*) FROM link").unwrap()),
+        links,
+        "no link was deleted"
+    );
+    assert_eq!(
+        single_column(&index::query(&db, "SELECT count(*) FROM doc").unwrap()),
+        titles
+    );
+    assert_eq!(
+        single_column(
+            &index::query(&db, "SELECT count(*) FROM doc WHERE title = 'pwned'").unwrap()
+        ),
+        vec![Some("0".to_string())],
+        "no title was rewritten"
+    );
+}

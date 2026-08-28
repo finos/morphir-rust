@@ -57,6 +57,18 @@ pub fn new_bundle(
 ) -> Result<ScaffoldResult> {
     let slug = slugify(name);
     let bundles = kb_root.join("bundles");
+    // A group names a directory *inside* kb/bundles. Without this, `--group
+    // ../../outside` writes the bundle outside the knowledge base entirely,
+    // and an absolute group is silently reinterpreted as a subdirectory —
+    // neither is what the caller asked for. Same guard as `add_concept`.
+    if let Some(g) = group {
+        let segs: Vec<&str> = g.split('/').filter(|s| !s.is_empty()).collect();
+        if g.starts_with('/') || segs.iter().any(|s| *s == ".." || *s == ".") {
+            return Err(Error::msg(format!(
+                "`{g}` must stay inside kb/bundles — no leading /, `.` or `..` segments"
+            )));
+        }
+    }
     let group_dir = group.map(|g| descend(&bundles, g));
     let dir = match &group_dir {
         Some(g) => g.join(&slug),

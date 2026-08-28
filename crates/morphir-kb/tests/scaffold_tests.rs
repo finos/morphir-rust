@@ -234,6 +234,63 @@ fn add_concept_refuses_an_absolute_path() {
 }
 
 #[test]
+fn add_concept_refuses_a_path_that_escapes_through_a_windows_separator() {
+    // The guard split on `/` alone, so none of these held a separator it could
+    // see; `PathBuf::push` on Windows reads all of them as escapes.
+    let (_tmp, kb_root) = fixture();
+    let kb = load(&kb_root);
+    for path in [
+        "..\\escaped.md",
+        "..\\..\\outside.md",
+        "a/..\\escaped.md",
+        "C:\\victim.md",
+        "\\victim.md",
+    ] {
+        let err = add_concept(
+            demo(&kb),
+            path,
+            "Concept",
+            "X",
+            "Y.",
+            &[],
+            None,
+            &[],
+            "Orientation",
+            None,
+            today(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("must stay inside the bundle"), "got: {err}");
+    }
+}
+
+#[test]
+fn add_concept_accepts_a_backslash_that_stays_contained_on_unix_and_on_windows() {
+    // Policy: refuse what escapes under *some* platform's reading of the path,
+    // not every path a platform reads differently. `notes\draft.md` is one file
+    // called `notes\draft.md` on Unix and `notes/draft.md` on Windows — inside
+    // the bundle either way, so it stays legal.
+    let (_tmp, kb_root) = fixture();
+    let kb = load(&kb_root);
+    add_concept(
+        demo(&kb),
+        "notes\\draft.md",
+        "Concept",
+        "Draft",
+        "A draft.",
+        &[],
+        None,
+        &[],
+        "Orientation",
+        None,
+        today(),
+    )
+    .unwrap();
+    assert!(kb_root.join("bundles/demo/notes\\draft.md").is_file());
+}
+
+#[test]
 fn add_concept_refuses_the_reserved_okf_filenames() {
     let (_tmp, kb_root) = fixture();
     let kb = load(&kb_root);
@@ -581,5 +638,67 @@ fn new_bundle_accepts_a_benign_nested_group_and_names_its_real_path() {
     assert!(
         note.ends_with("/kb/bundles/morphir/tools"),
         "the note must name the directory that was really created, got: {note}"
+    );
+}
+
+#[test]
+fn new_bundle_refuses_a_group_that_escapes_through_a_windows_separator() {
+    let (tmp, kb_root) = fixture();
+    for group in [
+        "..\\..\\outside",
+        "morphir/..\\outside",
+        "C:\\victim",
+        "\\victim",
+    ] {
+        let err = new_bundle(
+            &kb_root,
+            "escaped",
+            Some(group),
+            "Escaped",
+            "Nope.",
+            "0.2",
+            today(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("must stay inside kb/bundles"), "got: {err}");
+    }
+    assert!(!tmp.path().join("outside").exists());
+    let mut entries: Vec<String> = fs::read_dir(kb_root.join("bundles"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec!["demo".to_string()],
+        "nothing may be scaffolded outside kb/bundles"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_bundle_refuses_a_group_directory_that_symlinks_out_of_the_knowledge_base() {
+    // `shared` is a plain name and passes every lexical check, but it is a link,
+    // and scaffolding through it writes outside kb/bundles entirely.
+    let (tmp, kb_root) = fixture();
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, kb_root.join("bundles/shared")).unwrap();
+    let err = new_bundle(
+        &kb_root,
+        "leaked",
+        Some("shared"),
+        "Leaked",
+        "Nope.",
+        "0.2",
+        today(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("resolves outside"), "got: {err}");
+    assert!(
+        !outside.join("leaked").exists(),
+        "nothing may be scaffolded through the link"
     );
 }

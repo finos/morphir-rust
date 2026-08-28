@@ -430,6 +430,74 @@ fn manifest_refuses_a_root_that_leaves_the_bundle() {
 }
 
 #[test]
+fn manifest_refuses_a_root_that_leaves_the_bundle_through_a_windows_separator() {
+    // The guard used to split on `/` alone, so `..\victim` held no separator it
+    // could see, passed validation, and was handed to `PathBuf::push` — which on
+    // Windows, where the release workflow ships two targets, reads it as two
+    // segments and climbs out of the bundle. Same story for a drive designator
+    // and for a bare leading `\`.
+    //
+    // Validation is uniformly strict rather than platform-dependent: sync.yaml is
+    // committed and read on every platform, so a root that is only safe on Linux
+    // is still a bad root, and the manifest must be refused wherever it is read.
+    for root in ["..\\victim", "..\\..\\outside", "a/..\\b"] {
+        let err = sync::parse_manifest(&format!(
+            "upstream:\n  repo: a/b\nroot: '{root}'\nmappings:\n  - docs/**\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            format!(
+                "sync.yaml `root: {root}` leaves the bundle \
+                 — a root is a plain directory inside it, e.g. `sources`, with no `.` or `..` segments"
+            )
+        );
+    }
+    for root in ["C:\\victim", "\\victim", "C:victim"] {
+        let err = sync::parse_manifest(&format!(
+            "upstream:\n  repo: a/b\nroot: '{root}'\nmappings:\n  - docs/**\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            format!(
+                "sync.yaml `root: {root}` must be relative to the bundle, e.g. `sources` \
+                 — an absolute path is refused rather than silently reread as a bundle subdirectory"
+            )
+        );
+    }
+}
+
+#[test]
+fn safe_relative_accepts_a_backslash_that_stays_contained_on_unix_and_on_windows() {
+    // The policy is containment, not separator purity. `a\b.md` is one ordinary
+    // filename on Unix and the file `b.md` inside the directory `a` on Windows —
+    // inside the mirror either way — so refusing it would break a legitimate
+    // upstream file for no gain. What is refused is what *escapes* under some
+    // platform's reading: `..\`, `\` at the front, and a drive designator.
+    assert!(sync::safe_relative("docs/a\\b.md"));
+    let m = parse_manifest("upstream:\n  repo: a/b\nroot: 'a\\b'\nmappings:\n  - docs/**\n");
+    assert_eq!(m.root, "a\\b");
+}
+
+#[test]
+fn safe_relative_refuses_windows_separators_drive_letters_and_bare_roots() {
+    assert!(!sync::safe_relative("..\\victim"));
+    assert!(!sync::safe_relative("..\\..\\outside"));
+    assert!(!sync::safe_relative("a/..\\b"));
+    assert!(!sync::safe_relative("C:\\victim"));
+    assert!(
+        !sync::safe_relative("C:victim"),
+        "drive-relative escapes too"
+    );
+    assert!(!sync::safe_relative("\\victim"));
+    assert!(!sync::safe_relative(".\\here"));
+    assert!(sync::safe_relative("docs/spec/types.md"));
+}
+
+#[test]
 fn manifest_keeps_a_nested_root_and_defaults_an_absent_or_empty_one() {
     let nested =
         parse_manifest("upstream:\n  repo: a/b\nroot: vendor/sources\nmappings:\n  - docs/**\n");
@@ -722,6 +790,44 @@ fn safe_relative_refuses_a_manifest_path_that_escapes_the_mirror() {
     assert!(!sync::safe_relative("../escaped.md"));
     assert!(!sync::safe_relative("/etc/passwd"));
     assert!(sync::safe_relative("docs/spec/types.md"));
+}
+
+#[cfg(unix)]
+#[test]
+fn pull_refuses_a_mirror_root_that_symlinks_out_of_the_bundle() {
+    // Every containment check up to here is lexical, and `sources` is as plain a
+    // name as there is — so a mirror root that is a *symlink* to somewhere else
+    // passed all of them, and then every read, write and delete followed the
+    // link. `pull --prune` deleting a file it never owned is the worst of those.
+    let (dir, kb_root, bundle_root, upstream) = sync_fixture();
+    let victim = dir.path().join("victim");
+    write_file(&victim.join("docs/gone.md"), "# Victim\n");
+    // A lock entry for a file that upstream does not have, so a successful prune
+    // would delete `victim/docs/gone.md` outright.
+    write_file(
+        &bundle_root.join(sync::LOCK_NAME),
+        &format!(
+            "base_commit: deadbeef\nimported_at: 2026-07-28\nfiles:\n  - {{ path: docs/gone.md, kind: concept, upstream_sha256: {} }}\n",
+            sync::sha256(b"# Victim\n")
+        ),
+    );
+    std::os::unix::fs::symlink(&victim, bundle_root.join("sources")).unwrap();
+    let (_, sb) = load_sync(&kb_root);
+    for prune in [false, true] {
+        let err = sync::pull(&sb, &upstream, "deadbeef", today(), false, false, prune)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("resolves outside the bundle"), "got: {err}");
+    }
+    assert_eq!(
+        fs::read_to_string(victim.join("docs/gone.md")).unwrap(),
+        "# Victim\n",
+        "nothing outside the bundle may be deleted or rewritten through the link"
+    );
+    assert!(
+        !victim.join("docs/types.md").exists(),
+        "nor may anything be imported through it"
+    );
 }
 
 #[test]

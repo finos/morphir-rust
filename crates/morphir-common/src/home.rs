@@ -84,6 +84,26 @@ impl MorphirHome {
         self.root.join("extensions.json")
     }
 
+    /// Content-addressed store for verified extension artifacts.
+    pub fn extensions_store_dir(&self) -> PathBuf {
+        self.root.join("store/extensions/sha256")
+    }
+
+    /// Durable catalog of installed extension artifacts.
+    pub fn extensions_catalog_file(&self) -> PathBuf {
+        self.root.join("catalog/extensions.json")
+    }
+
+    /// Directory containing exact extension selection locks.
+    pub fn extensions_locks_dir(&self) -> PathBuf {
+        self.root.join("locks/extensions")
+    }
+
+    /// Interprocess lock serializing installed extension state transactions.
+    pub fn extensions_state_lock_file(&self) -> PathBuf {
+        self.root.join("locks/extensions.state.lock")
+    }
+
     /// Directory for global (non-workspace) log output.
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
@@ -173,6 +193,22 @@ mod tests {
         );
         assert_eq!(home.extensions_file(), Path::new("/mh/extensions.json"));
         assert_eq!(home.logs_dir(), Path::new("/mh/logs"));
+        assert_eq!(
+            home.extensions_store_dir(),
+            Path::new("/mh/store/extensions/sha256")
+        );
+        assert_eq!(
+            home.extensions_catalog_file(),
+            Path::new("/mh/catalog/extensions.json")
+        );
+        assert_eq!(
+            home.extensions_locks_dir(),
+            Path::new("/mh/locks/extensions")
+        );
+        assert_eq!(
+            home.extensions_state_lock_file(),
+            Path::new("/mh/locks/extensions.state.lock")
+        );
     }
 
     #[test]

@@ -376,6 +376,35 @@ impl<'home> ExtensionInstaller<'home> {
     }
 }
 
+/// Remove an installed extension from active state without deleting CAS bytes.
+///
+/// The returned entry is the exact catalog record that was removed. A missing
+/// catalog entry returns [`DistributionError::NotInstalled`].
+pub fn uninstall_extension(home: &MorphirHome, id: &ExtensionId) -> Result<InstalledExtension> {
+    uninstall_with_writer(home, id, &FilesystemStateWriter)
+}
+
+fn uninstall_with_writer(
+    home: &MorphirHome,
+    id: &ExtensionId,
+    writer: &impl StateWriter,
+) -> Result<InstalledExtension> {
+    let _transaction = InstalledStateGuard::acquire(home)?;
+    let catalog = InstalledCatalog::load_unlocked(home)?;
+    let mut extensions = catalog.extensions;
+    let removed = extensions
+        .remove(id)
+        .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
+    let stored = CatalogFile {
+        schema_version: 1,
+        extensions: extensions.into_values().collect(),
+    };
+    let lock_path = extension_lock_path(home, id);
+    let catalog_path = home.extensions_catalog_file();
+    remove_state_pair(&lock_path, &catalog_path, &encode_json(&stored)?, writer)?;
+    Ok(removed)
+}
+
 /// Offline process activation whose installed bytes have just been rehashed.
 #[derive(Debug, Clone)]
 pub struct VerifiedProcessArtifact {
@@ -498,6 +527,10 @@ impl Drop for InstalledStateGuard {
 
 trait StateWriter {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<()>;
+
+    fn remove(&self, path: &Path) -> Result<()> {
+        remove_file(path)
+    }
 }
 
 struct FilesystemStateWriter;
@@ -519,20 +552,60 @@ fn commit_state_pair(
     let previous_catalog = read_optional(catalog_path)?;
     writer.write(lock_path, lock_bytes)?;
     if let Err(original) = writer.write(catalog_path, catalog_bytes) {
-        return match restore_state_pair(
+        return rollback_state_error(
+            original,
             lock_path,
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
-        ) {
-            Ok(()) => Err(original),
-            Err(rollback) => Err(DistributionError::StateRollback {
-                original: Box::new(original),
-                rollback: Box::new(rollback),
-            }),
-        };
+        );
     }
     Ok(())
+}
+
+fn remove_state_pair(
+    lock_path: &Path,
+    catalog_path: &Path,
+    catalog_bytes: &[u8],
+    writer: &impl StateWriter,
+) -> Result<()> {
+    let previous_lock = read_optional(lock_path)?;
+    let previous_catalog = read_optional(catalog_path)?;
+    if let Err(original) = writer.remove(lock_path) {
+        return rollback_state_error(
+            original,
+            lock_path,
+            previous_lock.as_deref(),
+            catalog_path,
+            previous_catalog.as_deref(),
+        );
+    }
+    if let Err(original) = writer.write(catalog_path, catalog_bytes) {
+        return rollback_state_error(
+            original,
+            lock_path,
+            previous_lock.as_deref(),
+            catalog_path,
+            previous_catalog.as_deref(),
+        );
+    }
+    Ok(())
+}
+
+fn rollback_state_error(
+    original: DistributionError,
+    lock_path: &Path,
+    lock_bytes: Option<&[u8]>,
+    catalog_path: &Path,
+    catalog_bytes: Option<&[u8]>,
+) -> Result<()> {
+    match restore_state_pair(lock_path, lock_bytes, catalog_path, catalog_bytes) {
+        Ok(()) => Err(original),
+        Err(rollback) => Err(DistributionError::StateRollback {
+            original: Box::new(original),
+            rollback: Box::new(rollback),
+        }),
+    }
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -561,6 +634,10 @@ fn restore_file(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
     if let Some(bytes) = bytes {
         return atomic_write_bytes(path, bytes);
     }
+    remove_file(path)
+}
+
+fn remove_file(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -648,6 +725,35 @@ mod tests {
         }
     }
 
+    enum UninstallFailure {
+        LockRemoval,
+        CatalogWrite,
+    }
+
+    struct FailingUninstallWriter {
+        failure: UninstallFailure,
+        lock_path: PathBuf,
+        catalog_path: PathBuf,
+    }
+
+    impl StateWriter for FailingUninstallWriter {
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            atomic_write_bytes(path, bytes)?;
+            if matches!(self.failure, UninstallFailure::CatalogWrite) && path == self.catalog_path {
+                return Err(injected_uninstall_error(path));
+            }
+            Ok(())
+        }
+
+        fn remove(&self, path: &Path) -> Result<()> {
+            remove_file(path)?;
+            if matches!(self.failure, UninstallFailure::LockRemoval) && path == self.lock_path {
+                return Err(injected_uninstall_error(path));
+            }
+            Ok(())
+        }
+    }
+
     #[test]
     fn failed_catalog_commit_restores_previous_state_pair() {
         let root = tempfile::tempdir().unwrap();
@@ -721,6 +827,68 @@ mod tests {
                 .version,
             "1.0.0"
         );
+    }
+
+    #[test]
+    fn failed_uninstall_lock_removal_restores_the_previous_state_pair() {
+        assert_failed_uninstall_restores_state(UninstallFailure::LockRemoval);
+    }
+
+    #[test]
+    fn failed_uninstall_catalog_commit_restores_the_previous_state_pair() {
+        assert_failed_uninstall_restores_state(UninstallFailure::CatalogWrite);
+    }
+
+    fn assert_failed_uninstall_restores_state(failure: UninstallFailure) {
+        let (root, home, id) = installed_extension();
+        let lock_path = extension_lock_path(&home, &id);
+        let catalog_path = home.extensions_catalog_file();
+        let previous_lock = fs::read(&lock_path).unwrap();
+        let previous_catalog = fs::read(&catalog_path).unwrap();
+        let writer = FailingUninstallWriter {
+            failure,
+            lock_path: lock_path.clone(),
+            catalog_path: catalog_path.clone(),
+        };
+
+        let error = uninstall_with_writer(&home, &id, &writer).unwrap_err();
+
+        assert!(error.to_string().contains("injected uninstall failure"));
+        assert_eq!(fs::read(&lock_path).unwrap(), previous_lock);
+        assert_eq!(fs::read(&catalog_path).unwrap(), previous_catalog);
+        assert!(activate_installed(&home, &id).is_ok());
+        drop(root);
+    }
+
+    fn installed_extension() -> (tempfile::TempDir, MorphirHome, ExtensionId) {
+        let root = tempfile::tempdir().unwrap();
+        let index = root.path().join("index");
+        let source = index.join("artifacts/example");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(index.join("extensions")).unwrap();
+        fs::write(&source, b"example extension").unwrap();
+        let digest = Sha256Digest::of_bytes(b"example extension");
+        write_release(&index, "1.0.0", &digest);
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ExtensionId::parse("example").unwrap();
+        let selected = LocalIndex::open(&index)
+            .unwrap()
+            .resolve(
+                &id,
+                Selection::Channel(Channel::Stable),
+                &Platform::new("linux", "x86_64").unwrap(),
+            )
+            .unwrap();
+        ExtensionInstaller::new(&home).install(selected).unwrap();
+        (root, home, id)
+    }
+
+    fn injected_uninstall_error(path: &Path) -> DistributionError {
+        DistributionError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other("injected uninstall failure"),
+        }
     }
 
     fn write_release(index: &Path, version: &str, digest: &Sha256Digest) {

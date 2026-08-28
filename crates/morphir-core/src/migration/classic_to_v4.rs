@@ -51,6 +51,12 @@ fn migrate_name(name: &classic::Name) -> Name {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Migrated<T> {
+    pub value: T,
+    pub report: MigrationReport,
+}
+
 pub(crate) fn migrate_path(path: &classic::Path) -> Path {
     Path {
         segments: path.segments.iter().map(migrate_name).collect(),
@@ -389,5 +395,269 @@ pub fn migrate_value(
         classic::Value::Reference(_, name) => {
             v4::Value::Reference(attributes, migrate_fqname(name))
         }
+    })
+}
+
+fn migrate_access(access: &classic::Access) -> v4::Access {
+    match access {
+        classic::Access::Public => v4::Access::Public,
+        classic::Access::Private => v4::Access::Private,
+    }
+}
+
+fn documentation(value: &str) -> v4::Documentation {
+    v4::Documentation::new(value.lines().map(str::to_owned))
+}
+
+fn migrate_type_definition(
+    definition: &classic::TypeDefinition<classic::Attrs>,
+    context: &mut MigrationContext,
+) -> Result<v4::TypeDefinition, MigrationDiagnostic> {
+    Ok(match definition {
+        classic::TypeDefinition::Alias(parameters, body) => {
+            v4::TypeDefinition::TypeAliasDefinition {
+                type_params: parameters.iter().map(migrate_name).collect(),
+                type_expr: migrate_type(body, context)?,
+            }
+        }
+        classic::TypeDefinition::Custom(parameters, constructors) => {
+            let mut migrated = Vec::with_capacity(constructors.value.len());
+            for constructor in &constructors.value {
+                migrated.push(v4::ConstructorDefinition {
+                    name: migrate_name(&constructor.name),
+                    args: constructor
+                        .args
+                        .iter()
+                        .map(|(name, argument)| {
+                            Ok(v4::ConstructorArg {
+                                name: migrate_name(name),
+                                arg_type: migrate_type(argument, context)?,
+                            })
+                        })
+                        .collect::<Result<_, MigrationDiagnostic>>()?,
+                });
+            }
+            v4::TypeDefinition::CustomTypeDefinition {
+                type_params: parameters.iter().map(migrate_name).collect(),
+                constructors: v4::AccessControlled {
+                    access: migrate_access(&constructors.access),
+                    value: migrated,
+                },
+            }
+        }
+    })
+}
+
+fn migrate_type_specification(
+    specification: &classic::TypeSpecification<classic::Attrs>,
+    context: &mut MigrationContext,
+) -> Result<v4::TypeSpecification, MigrationDiagnostic> {
+    Ok(match specification {
+        classic::TypeSpecification::Alias(parameters, body) => {
+            v4::TypeSpecification::TypeAliasSpecification {
+                type_params: parameters.iter().map(migrate_name).collect(),
+                type_expr: migrate_type(body, context)?,
+            }
+        }
+        classic::TypeSpecification::Opaque(parameters) => {
+            v4::TypeSpecification::OpaqueTypeSpecification {
+                type_params: parameters.iter().map(migrate_name).collect(),
+            }
+        }
+        classic::TypeSpecification::Custom(parameters, constructors) => {
+            v4::TypeSpecification::CustomTypeSpecification {
+                type_params: parameters.iter().map(migrate_name).collect(),
+                constructors: constructors
+                    .iter()
+                    .map(|constructor| {
+                        Ok(v4::ConstructorSpecification {
+                            name: migrate_name(&constructor.name),
+                            args: constructor
+                                .args
+                                .iter()
+                                .map(|(name, argument)| {
+                                    Ok(v4::ConstructorArgSpec {
+                                        name: migrate_name(name),
+                                        arg_type: migrate_type(argument, context)?,
+                                    })
+                                })
+                                .collect::<Result<_, MigrationDiagnostic>>()?,
+                        })
+                    })
+                    .collect::<Result<_, MigrationDiagnostic>>()?,
+            }
+        }
+    })
+}
+
+fn migrate_value_specification(
+    specification: &classic::ValueSpecification<classic::Attrs>,
+    context: &mut MigrationContext,
+) -> Result<v4::ValueSpecification, MigrationDiagnostic> {
+    Ok(v4::ValueSpecification {
+        inputs: specification
+            .inputs
+            .iter()
+            .map(|parameter| {
+                Ok((
+                    migrate_name(&parameter.name).to_canonical_string(),
+                    migrate_type(&parameter.ty, context)?,
+                ))
+            })
+            .collect::<Result<_, MigrationDiagnostic>>()?,
+        output: migrate_type(&specification.output, context)?,
+    })
+}
+
+fn migrate_module_specification(
+    specification: &classic::ModuleSpecification<classic::Attrs>,
+    context: &mut MigrationContext,
+) -> Result<v4::ModuleSpecification, MigrationDiagnostic> {
+    let types = specification
+        .types
+        .iter()
+        .map(|(name, documented)| {
+            Ok((
+                migrate_name(name).to_canonical_string(),
+                v4::Documented::new(
+                    Some(documentation(&documented.doc)),
+                    migrate_type_specification(&documented.value, context)?,
+                ),
+            ))
+        })
+        .collect::<Result<_, MigrationDiagnostic>>()?;
+    let values = specification
+        .values
+        .iter()
+        .map(|(name, documented)| {
+            Ok((
+                migrate_name(name).to_canonical_string(),
+                v4::Documented::new(
+                    Some(documentation(&documented.doc)),
+                    migrate_value_specification(&documented.value, context)?,
+                ),
+            ))
+        })
+        .collect::<Result<_, MigrationDiagnostic>>()?;
+    Ok(v4::ModuleSpecification {
+        types,
+        values,
+        doc: specification.doc.as_deref().map(documentation),
+    })
+}
+
+fn migrate_package_specification(
+    specification: &classic::PackageSpecification<classic::Attrs>,
+    context: &mut MigrationContext,
+) -> Result<v4::PackageSpecification, MigrationDiagnostic> {
+    Ok(v4::PackageSpecification {
+        modules: specification
+            .modules
+            .iter()
+            .map(|entry| {
+                Ok((
+                    migrate_path(&entry.path).to_canonical_string(),
+                    migrate_module_specification(&entry.specification, context)?,
+                ))
+            })
+            .collect::<Result<_, MigrationDiagnostic>>()?,
+    })
+}
+
+fn migrate_module_definition(
+    definition: &classic::ModuleDefinition<classic::Attrs, classic::Type<classic::Attrs>>,
+    context: &mut MigrationContext,
+) -> Result<v4::ModuleDefinition, MigrationDiagnostic> {
+    let types = definition
+        .types
+        .iter()
+        .map(|(name, controlled)| {
+            Ok((
+                migrate_name(name).to_canonical_string(),
+                v4::AccessControlled {
+                    access: migrate_access(&controlled.access),
+                    value: v4::Documented::new(
+                        Some(documentation(&controlled.value.doc)),
+                        migrate_type_definition(&controlled.value.value, context)?,
+                    ),
+                },
+            ))
+        })
+        .collect::<Result<_, MigrationDiagnostic>>()?;
+    let values = definition
+        .values
+        .iter()
+        .map(|(name, controlled)| {
+            Ok((
+                migrate_name(name).to_canonical_string(),
+                v4::AccessControlled {
+                    access: migrate_access(&controlled.access),
+                    value: v4::Documented::new(
+                        Some(documentation(&controlled.value.doc)),
+                        migrate_value_definition(&controlled.value.value, context)?,
+                    ),
+                },
+            ))
+        })
+        .collect::<Result<_, MigrationDiagnostic>>()?;
+    Ok(v4::ModuleDefinition {
+        types,
+        values,
+        doc: definition.doc.as_deref().map(documentation),
+    })
+}
+
+pub fn migrate_distribution(
+    distribution: &classic::Distribution,
+    options: MigrationOptions,
+) -> Result<Migrated<v4::IRFile>, MigrationDiagnostic> {
+    let mut context = MigrationContext::new(options);
+    if distribution.format_version != 3 {
+        return Err(MigrationDiagnostic::error(
+            "unsupported-source-version",
+            context.cursor.clone(),
+            format!(
+                "typed Classic migration requires formatVersion 3, found {}",
+                distribution.format_version
+            ),
+        ));
+    }
+
+    let classic::DistributionBody::Library(package_name, dependencies, package) =
+        &distribution.distribution;
+
+    let dependencies = dependencies
+        .iter()
+        .map(|(name, specification)| {
+            Ok((
+                migrate_path(name).to_canonical_string(),
+                migrate_package_specification(specification, &mut context)?,
+            ))
+        })
+        .collect::<Result<_, MigrationDiagnostic>>()?;
+    let modules = package
+        .modules
+        .iter()
+        .map(|entry| {
+            Ok((
+                migrate_path(&entry.path).to_canonical_string(),
+                v4::AccessControlled {
+                    access: migrate_access(&entry.definition.access),
+                    value: migrate_module_definition(&entry.definition.value, &mut context)?,
+                },
+            ))
+        })
+        .collect::<Result<_, MigrationDiagnostic>>()?;
+
+    Ok(Migrated {
+        value: v4::IRFile {
+            format_version: v4::FormatVersion::Integer(4),
+            distribution: v4::Distribution::Library(v4::LibraryContent {
+                package_name: crate::naming::PackageName::new(migrate_path(package_name)),
+                dependencies,
+                def: v4::PackageDefinition { modules },
+            }),
+        },
+        report: context.report,
     })
 }

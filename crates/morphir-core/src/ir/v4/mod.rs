@@ -51,7 +51,7 @@ pub use distribution::{
 };
 
 // Re-export module types
-pub use module::{Documentation, ModuleDefinition, ModuleSpecification};
+pub use module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
 
 // Re-export package types
 pub use package::{PackageDefinition, PackageSpecification};

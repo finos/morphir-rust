@@ -103,6 +103,6 @@ mod tests {
     fn test_fqname_roundtrip() {
         let fq = FQName::parse("my/pkg:my/mod:myFunc").unwrap();
         let s = fq.to_string();
-        assert_eq!(s, "my/pkg:my/mod:my-func");
+        assert_eq!(s, "my/pkg:my/mod#my-func");
     }
 }

@@ -25,6 +25,7 @@ Each ADR follows this structure:
 | ADR                                                    | Title                                          | Status   | Date       |
 |--------------------------------------------------------|------------------------------------------------|----------|------------|
 | [0001](./0001-envelope-only-execution-for-builtins.md) | Envelope-Only Execution for Builtin Extensions | Accepted | 2026-01-29 |
+| [0002](./0002-validated-typestate-mep-sessions.md)       | Validated typestate MEP sessions                | Accepted | 2026-08-27 |
 
 ## Creating a New ADR
 

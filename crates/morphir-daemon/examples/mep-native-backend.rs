@@ -90,6 +90,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             &[morphir_extension_sdk::__dispatch_backend::<NativeBackend>],
             &[ExtensionType::Backend],
         );
+        if std::env::var_os("MEP_FIXTURE_INVALID_ENVELOPE").is_some() {
+            response.jsonrpc = "1.0".into();
+        }
         if request.method == methods::INITIALIZE
             && std::env::var_os("MEP_FIXTURE_UNSUPPORTED_PROTOCOL").is_some()
             && let Some(result) = response
@@ -100,6 +103,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             result.insert("protocolVersion".into(), "unsupported".into());
         }
         write_frame(&mut writer, &response)?;
+        if request.method == methods::INITIALIZE
+            && std::env::var_os("MEP_FIXTURE_HANG_AFTER_INITIALIZE").is_some()
+        {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
         if shutdown {
             if std::env::var_os("MEP_FIXTURE_IGNORE_SHUTDOWN").is_some() {
                 std::thread::sleep(std::time::Duration::from_secs(30));

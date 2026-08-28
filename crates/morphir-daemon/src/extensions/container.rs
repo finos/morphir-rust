@@ -107,7 +107,7 @@ impl ExtensionContainer {
             .map_err(|e| DaemonError::Extension(format!("Plugin call failed: {}", e)))?;
 
         let response: ExtensionResponse = serde_json::from_slice(&output)?;
-        response.into_result()
+        response.into_result(id)
     }
 
     /// Call a raw function on the plugin (no JSON-RPC wrapping)

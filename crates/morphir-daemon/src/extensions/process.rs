@@ -1,10 +1,13 @@
 //! Native child-process transport for the Morphir Extension Protocol.
 
 use crate::extensions::protocol::{
-    ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, JSONRPC_VERSION,
+    ExtensionRequest, ExtensionResponse, ExtensionResponseExt, InitializeParams, InitializeResult,
     MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
-use crate::extensions::session::{ExtensionSession, ExtensionSessionState};
+use crate::extensions::session::{
+    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
+    TransportError, TransportState,
+};
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
 use morphir_extension_sdk::ExtensionType;
@@ -76,7 +79,18 @@ enum ProcessSessionData {
     Stopped,
 }
 
-/// A MEP session carried over a child process's standard streams.
+/// A runtime-erased MEP session carried over a child process's standard streams.
+///
+/// Compatibility sessions cannot be reused as typestate transports after their
+/// lifecycle has started.
+///
+/// ```compile_fail
+/// use morphir_daemon::extensions::{Session, SpawnedProcessSession};
+/// use morphir_extension_sdk::protocol::InitializeParams;
+/// fn cannot_rewrap(session: SpawnedProcessSession, params: InitializeParams) {
+///     let _initialization = Session::loaded(session).initialize(params);
+/// }
+/// ```
 pub struct SpawnedProcessSession {
     expected_extension_id: String,
     child: Child,
@@ -135,6 +149,15 @@ impl SpawnedProcessSession {
         })
     }
 
+    /// Start a native extension behind the shared typestate session controller.
+    pub async fn spawn_typestate(
+        launch: ProcessLaunch,
+    ) -> Result<Session<SpawnedProcessTransport, Loaded>> {
+        Ok(Session::loaded(SpawnedProcessTransport {
+            session: Self::spawn(launch).await?,
+        }))
+    }
+
     /// Return captured standard error after the process exits.
     pub fn stderr_output(&self) -> &str {
         &self.stderr_output
@@ -190,19 +213,10 @@ impl SpawnedProcessSession {
             }
         };
 
-        if let Err(error) = validate_response(&response, request_id) {
+        if let Err(error) = response.validate_envelope(request_id) {
             return Err(self.abort_with_error(error).await);
         }
-        if let Some(error) = response.error {
-            return Err(DaemonError::Extension(format!(
-                "RPC error {}: {}",
-                error.code, error.message
-            )));
-        }
-        let result = response.result.ok_or_else(|| {
-            DaemonError::Extension("Extension response did not contain a result".to_string())
-        })?;
-        serde_json::from_value(result).map_err(DaemonError::from)
+        response.into_result(request_id)
     }
 
     async fn collect_stderr(&mut self) -> Result<()> {
@@ -242,9 +256,120 @@ impl SpawnedProcessSession {
             self.child.kill().await?;
         }
         let _ = self.child.wait().await?;
-        self.collect_stderr().await?;
+        self.cancel_stderr();
         self.state = ProcessSessionData::Stopped;
         Ok(())
+    }
+
+    fn cancel_stderr(&mut self) {
+        if let Some(stderr_task) = self.stderr_task.take() {
+            stderr_task.abort();
+        }
+    }
+}
+
+/// Fresh child-process transport owned by a typestate session.
+///
+/// Only [`SpawnedProcessSession::spawn_typestate`] constructs this type, so a
+/// runtime-erased compatibility session cannot be reintroduced as loaded.
+pub struct SpawnedProcessTransport {
+    session: SpawnedProcessSession,
+}
+
+#[async_trait]
+impl MepTransport for SpawnedProcessTransport {
+    fn expected_extension(&self) -> ExpectedExtension {
+        ExpectedExtension::identified(self.session.expected_extension_id.clone())
+    }
+
+    async fn exchange(
+        &mut self,
+        request: ExtensionRequest,
+    ) -> std::result::Result<ExtensionResponse, TransportError> {
+        let method = request.method.clone();
+        let exchange = async {
+            let stdin = self.session.stdin.as_mut().ok_or_else(|| {
+                DaemonError::Extension("Extension process stdin is closed".to_string())
+            })?;
+            write_frame(stdin, &request).await?;
+            let frame = read_frame(&mut self.session.stdout).await?;
+            serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
+        };
+        let result = match timeout(self.session.request_timeout, exchange).await {
+            Ok(result) => result,
+            Err(_) => Err(DaemonError::Extension(format!(
+                "Extension request '{}' timed out after {:?}",
+                method, self.session.request_timeout
+            ))),
+        };
+        match result {
+            Ok(response) => Ok(response),
+            Err(error) => Err(match self.session.abort_process().await {
+                Ok(()) => TransportError::new(error, TransportState::Stopped),
+                Err(cleanup) => TransportError::new(
+                    DaemonError::Extension(format!(
+                        "{error}; process cleanup also failed: {cleanup}"
+                    )),
+                    TransportState::Indeterminate,
+                ),
+            }),
+        }
+    }
+
+    async fn abort(&mut self) -> std::result::Result<TransportState, TransportError> {
+        self.session
+            .abort_process()
+            .await
+            .map(|()| TransportState::Stopped)
+            .map_err(|error| TransportError::new(error, TransportState::Indeterminate))
+    }
+
+    async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
+        self.session.stdin.take();
+        let status = match timeout(self.session.request_timeout, self.session.child.wait()).await {
+            Ok(status) => status.map_err(|error| {
+                TransportError::new(error.into(), TransportState::Indeterminate)
+            })?,
+            Err(_) => {
+                let error = DaemonError::Extension(format!(
+                    "Extension process did not exit after {:?}",
+                    self.session.request_timeout
+                ));
+                return Err(match self.session.abort_process().await {
+                    Ok(()) => TransportError::new(error, TransportState::Stopped),
+                    Err(cleanup) => TransportError::new(
+                        DaemonError::Extension(format!(
+                            "{error}; process cleanup also failed: {cleanup}"
+                        )),
+                        TransportState::Indeterminate,
+                    ),
+                });
+            }
+        };
+        self.session
+            .collect_stderr()
+            .await
+            .map_err(|error| TransportError::new(error, TransportState::Stopped))?;
+        self.session.state = ProcessSessionData::Stopped;
+        if !status.success() {
+            return Err(TransportError::new(
+                DaemonError::Extension(format!("Extension process exited with status {status}")),
+                TransportState::Stopped,
+            ));
+        }
+        Ok(TransportState::Stopped)
+    }
+}
+
+impl<S> Session<SpawnedProcessTransport, S> {
+    /// Report whether the child process is still running without exposing transport I/O.
+    pub fn process_is_running(&mut self) -> Result<bool> {
+        self.transport_mut_internal().session.is_running()
+    }
+
+    /// Return captured child-process diagnostics without exposing transport I/O.
+    pub fn process_stderr_output(&self) -> &str {
+        self.transport_internal().session.stderr_output()
     }
 }
 
@@ -387,27 +512,6 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
             "Extension working directory does not exist: {}",
             launch.working_directory.display()
         )));
-    }
-    Ok(())
-}
-
-fn validate_response(response: &ExtensionResponse, expected_id: u64) -> Result<()> {
-    if response.jsonrpc != JSONRPC_VERSION {
-        return Err(DaemonError::Extension(format!(
-            "Extension response used unsupported JSON-RPC version '{}'",
-            response.jsonrpc
-        )));
-    }
-    if response.id != expected_id {
-        return Err(DaemonError::Extension(format!(
-            "Extension response ID {} did not match request ID {}",
-            response.id, expected_id
-        )));
-    }
-    if response.result.is_some() == response.error.is_some() {
-        return Err(DaemonError::Extension(
-            "Extension response must contain exactly one of result or error".to_string(),
-        ));
     }
     Ok(())
 }

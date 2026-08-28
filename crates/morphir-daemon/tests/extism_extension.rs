@@ -139,8 +139,8 @@ async fn rejects_unknown_methods_at_the_guest_boundary() {
 #[ignore = "requires the independently built morphir-wasm-binding artifact"]
 async fn completes_the_mep_lifecycle_in_order() {
     let driver = ExtismConformanceDriver::load_wasm_backend();
-    support::mep::assert_backend_session_conformance(
-        ExtismSession::new(driver.container),
+    support::mep::assert_backend_typestate_conformance(
+        ExtismSession::connect(driver.container),
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
     )

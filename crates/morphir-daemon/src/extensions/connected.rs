@@ -1,15 +1,15 @@
 //! JSON-RPC HTTP transport for independently hosted extension daemons.
 
 use crate::extensions::protocol::{
-    InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
+    ExtensionRequest, ExtensionResponse, MAX_MEP_PAYLOAD_BYTES, RpcError, methods,
 };
-use crate::extensions::session::{ExtensionSession, ExtensionSessionState};
+use crate::extensions::session::{
+    ExpectedExtension, Loaded, MepTransport, Session, TransportError, TransportState,
+};
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
 use jsonrpsee::core::{ClientError, client::ClientT};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use morphir_extension_sdk::ExtensionType;
-use serde::Serialize;
 use std::time::Duration;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,50 +39,39 @@ impl DaemonConnection {
     }
 }
 
-enum ConnectedSessionData {
-    Starting,
-    Ready(Box<InitializeResult>),
-    Stopped,
-}
-
-/// A MEP session connected to an independently hosted extension daemon.
+/// Factory for HTTP daemon typestate sessions.
 ///
 /// ```no_run
 /// # async fn example() -> morphir_daemon::Result<()> {
-/// use morphir_daemon::extensions::{
-///     ConnectedDaemonSession, DaemonConnection, ExtensionSession,
-/// };
+/// use morphir_daemon::{DaemonError, extensions::{ConnectedDaemonSession, DaemonConnection}};
 /// use morphir_extension_sdk::protocol::{InitializeParams, PeerInfo};
 ///
-/// let connection = DaemonConnection::new(
+/// let loaded = ConnectedDaemonSession::connect(DaemonConnection::new(
 ///     "example-backend",
 ///     "http://127.0.0.1:9741",
-/// );
-/// let mut session = ConnectedDaemonSession::connect(connection)?;
-/// session.initialize(InitializeParams {
+/// ))?;
+/// let ready = loaded.initialize(InitializeParams {
 ///     protocol_versions: vec!["0.1".into()],
 ///     host: PeerInfo {
 ///         name: "example-host".into(),
 ///         version: "1.0.0".into(),
 ///     },
-/// }).await?;
-/// session.shutdown().await?;
+/// }).await.map_err(|failure| DaemonError::Extension(failure.error().to_string()))?;
+/// let _stopped = ready.shutdown().await
+///     .map_err(|failure| DaemonError::Extension(failure.error().to_string()))?;
 /// # Ok(())
 /// # }
 /// ```
-pub struct ConnectedDaemonSession {
-    expected_extension_id: String,
-    client: HttpClient,
-    state: ConnectedSessionData,
-}
+pub struct ConnectedDaemonSession;
 
 impl ConnectedDaemonSession {
-    /// Configure a JSON-RPC HTTP client for an extension daemon.
+    /// Configure an HTTP transport in the loaded state.
     ///
     /// The first request performs the network connection. This constructor
-    /// validates the endpoint and prepares the client without changing the
-    /// remote daemon.
-    pub fn connect(connection: DaemonConnection) -> Result<Self> {
+    /// validates the endpoint without changing the remote daemon.
+    pub fn connect(
+        connection: DaemonConnection,
+    ) -> Result<Session<ConnectedDaemonTransport, Loaded>> {
         if connection.extension_id.trim().is_empty() {
             return Err(DaemonError::Extension(
                 "Extension daemon identity cannot be empty".to_string(),
@@ -100,123 +89,101 @@ impl ConnectedDaemonSession {
                 ))
             })?;
 
-        Ok(Self {
+        Ok(Session::loaded(ConnectedDaemonTransport {
             expected_extension_id: connection.extension_id,
             client,
-            state: ConnectedSessionData::Starting,
-        })
+            shutdown_acknowledged: false,
+        }))
     }
+}
 
-    fn ready_session(&self) -> Result<&InitializeResult> {
-        match &self.state {
-            ConnectedSessionData::Ready(initialized) => Ok(initialized),
-            ConnectedSessionData::Starting | ConnectedSessionData::Stopped => Err(
-                DaemonError::Extension("Extension session is not ready".to_string()),
-            ),
-        }
-    }
-
-    async fn call<P>(&mut self, method: &str, params: P) -> Result<serde_json::Value>
-    where
-        P: Serialize,
-    {
-        let params = serde_json::to_value(params)?;
-        let params = params.as_object().cloned().ok_or_else(|| {
-            DaemonError::Extension("Extension request parameters must be an object".to_string())
-        })?;
-        match self.client.request(method, params).await {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                if !matches!(error, ClientError::Call(_)) {
-                    self.state = ConnectedSessionData::Stopped;
-                }
-                Err(DaemonError::Extension(format!(
-                    "HTTP extension request '{method}' failed: {error}"
-                )))
-            }
-        }
-    }
+/// JSON-RPC HTTP implementation of the object-safe MEP transport.
+pub struct ConnectedDaemonTransport {
+    expected_extension_id: String,
+    client: HttpClient,
+    shutdown_acknowledged: bool,
 }
 
 #[async_trait]
-impl ExtensionSession for ConnectedDaemonSession {
-    fn state(&self) -> ExtensionSessionState {
-        match self.state {
-            ConnectedSessionData::Starting => ExtensionSessionState::Starting,
-            ConnectedSessionData::Ready(_) => ExtensionSessionState::Ready,
-            ConnectedSessionData::Stopped => ExtensionSessionState::Stopped,
-        }
+impl MepTransport for ConnectedDaemonTransport {
+    fn expected_extension(&self) -> ExpectedExtension {
+        ExpectedExtension::identified(self.expected_extension_id.clone())
     }
 
-    async fn initialize(&mut self, params: InitializeParams) -> Result<InitializeResult> {
-        if !matches!(self.state, ConnectedSessionData::Starting) {
-            return Err(DaemonError::Extension(
-                "Extension session can only initialize once".to_string(),
-            ));
-        }
-
-        let offered_versions = params.protocol_versions.clone();
-        let initialized = serde_json::from_value::<InitializeResult>(
-            self.call(methods::INITIALIZE, params).await?,
-        )?;
-        if !offered_versions.contains(&initialized.protocol_version) {
-            self.state = ConnectedSessionData::Stopped;
-            return Err(DaemonError::Extension(format!(
-                "Extension selected protocol version '{}' that the host did not offer",
-                initialized.protocol_version
-            )));
-        }
-        if initialized.extension.id != self.expected_extension_id {
-            self.state = ConnectedSessionData::Stopped;
-            return Err(DaemonError::Extension(format!(
-                "Extension identity changed during initialization: expected '{}', initialized '{}'",
-                self.expected_extension_id, initialized.extension.id
-            )));
-        }
-
-        self.state = ConnectedSessionData::Ready(Box::new(initialized.clone()));
-        Ok(initialized)
-    }
-
-    async fn invoke(
+    async fn exchange(
         &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let initialized = self.ready_session()?;
-        if matches!(method, methods::INITIALIZE | methods::SHUTDOWN) {
-            return Err(DaemonError::Extension(format!(
-                "Protocol lifecycle method '{method}' must use its dedicated session operation"
-            )));
-        }
-        if let Some(required) = required_capability(method)
-            && !initialized.extension.types.contains(&required)
-        {
-            return Err(DaemonError::Extension(format!(
-                "RPC error {}: Extension '{}' does not support capability '{}'",
-                error_codes::CAPABILITY_UNAVAILABLE,
-                initialized.extension.id,
-                method
-            )));
-        }
+        request: ExtensionRequest,
+    ) -> std::result::Result<ExtensionResponse, TransportError> {
+        let id = request.id;
+        let method = request.method;
+        let Some(params) = request.params.as_object().cloned() else {
+            return Ok(ExtensionResponse::error(
+                id,
+                RpcError::invalid_params("Extension request parameters must be an object"),
+            ));
+        };
 
-        self.call(method, params).await
+        match self
+            .client
+            .request::<serde_json::Value, _>(&method, params)
+            .await
+        {
+            Ok(result) => {
+                if method == methods::SHUTDOWN {
+                    self.shutdown_acknowledged = true;
+                }
+                ExtensionResponse::success(id, result).map_err(|error| {
+                    TransportError::new(error.into(), TransportState::Indeterminate)
+                })
+            }
+            Err(ClientError::Call(error)) => Ok(ExtensionResponse::error(
+                id,
+                RpcError {
+                    code: error.code(),
+                    message: error.message().to_string(),
+                    data: None,
+                },
+            )),
+            Err(error) => Err(TransportError::new(
+                DaemonError::Extension(format!(
+                    "HTTP extension request '{method}' failed: {error}"
+                )),
+                TransportState::Indeterminate,
+            )),
+        }
     }
 
-    async fn shutdown(&mut self) -> Result<()> {
-        self.ready_session()?;
-        self.call(methods::SHUTDOWN, serde_json::json!({})).await?;
-        self.state = ConnectedSessionData::Stopped;
-        Ok(())
+    async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
+        Ok(if self.shutdown_acknowledged {
+            TransportState::Stopped
+        } else {
+            TransportState::Indeterminate
+        })
     }
 }
 
-fn required_capability(method: &str) -> Option<ExtensionType> {
-    match method {
-        methods::COMPILE => Some(ExtensionType::Frontend),
-        methods::GENERATE => Some(ExtensionType::Backend),
-        methods::VALIDATE => Some(ExtensionType::Validator),
-        methods::TRANSFORM => Some(ExtensionType::Transform),
-        _ => None,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_an_empty_expected_identity() {
+        let error =
+            ConnectedDaemonSession::connect(DaemonConnection::new("  ", "http://127.0.0.1:9741"))
+                .err()
+                .expect("an empty identity should fail");
+        assert!(error.to_string().contains("identity cannot be empty"));
+    }
+
+    #[test]
+    fn rejects_an_invalid_endpoint() {
+        let error = ConnectedDaemonSession::connect(DaemonConnection::new("example", "not a URL"))
+            .err()
+            .expect("an invalid endpoint should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid extension daemon endpoint")
+        );
     }
 }

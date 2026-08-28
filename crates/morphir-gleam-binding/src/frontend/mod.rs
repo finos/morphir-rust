@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod compare;
+pub(crate) mod dependencies;
 pub mod errors;
 pub mod lexer;
 #[cfg(not(target_arch = "wasm32"))]

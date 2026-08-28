@@ -226,12 +226,13 @@ impl<T: MepTransport, S> Session<T, S> {
             Ok(request) => request,
             Err(error) => return CallOutcome::Local(error.into()),
         };
+        let request_params = request.params.clone();
         let response = match self.transport.exchange(request).await {
             Ok(response) => response,
             Err(error) => return CallOutcome::Transport(error),
         };
         match validate_response(response, id) {
-            Ok(value) => match validate_method_result(method, value)
+            Ok(value) => match validate_method_result(method, &request_params, value)
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
             {
                 Ok(value) => CallOutcome::Success(value),

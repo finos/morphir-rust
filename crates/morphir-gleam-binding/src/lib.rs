@@ -78,6 +78,20 @@ impl Frontend for GleamExtension {
                 )]));
             }
         };
+        let dependencies = match frontend::dependencies::package_specifications(
+            &request.dependencies,
+            GLEAM_IR_VERSION,
+        ) {
+            Ok(dependencies) => dependencies,
+            Err(errors) => {
+                return Ok(failed_compile(
+                    errors
+                        .into_iter()
+                        .map(|error| error_diagnostic(error.code, error.message, None))
+                        .collect(),
+                ));
+            }
+        };
 
         host_info!("Compiling {} Gleam source file(s)", request.documents.len());
 
@@ -161,7 +175,7 @@ impl Frontend for GleamExtension {
 
         let distribution = Distribution::Library(LibraryContent {
             package_name,
-            dependencies: IndexMap::new(),
+            dependencies,
             def: PackageDefinition { modules },
         });
 
@@ -348,20 +362,7 @@ fn validate_request_semantics(request: &CompileRequest) -> Option<Diagnostic> {
 }
 
 fn validate_package_name(value: &str) -> std::result::Result<PackageName, String> {
-    if value.is_empty()
-        || value.starts_with('/')
-        || value.contains('\\')
-        || value.as_bytes().get(1) == Some(&b':')
-    {
-        return Err(format!("Invalid Morphir package name '{value}'"));
-    }
-    let segments = value.split('/').collect::<Vec<_>>();
-    validate_name_segments(&segments, "package")?;
-    let package_name = PackageName::parse(value);
-    if package_name.to_string() != value {
-        return Err(format!("Package name '{value}' is not canonical"));
-    }
-    Ok(package_name)
+    frontend::dependencies::canonical_package_name(value)
 }
 
 #[derive(Debug)]
@@ -600,28 +601,6 @@ fn validate_raw_path_structure(
     Ok(())
 }
 
-fn validate_name_segments(segments: &[&str], kind: &str) -> std::result::Result<(), String> {
-    if segments.is_empty() {
-        return Err(format!("{kind} name cannot be empty"));
-    }
-    for segment in segments {
-        if segment.is_empty()
-            || *segment == "."
-            || *segment == ".."
-            || !segment
-                .bytes()
-                .next()
-                .is_some_and(|byte| byte.is_ascii_lowercase())
-            || !segment
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        {
-            return Err(format!("Invalid {kind} name segment '{segment}'"));
-        }
-    }
-    Ok(())
-}
-
 fn validate_module_source_segments(segments: &[&str]) -> std::result::Result<(), String> {
     if segments.is_empty() {
         return Err("module name cannot be empty".into());
@@ -724,7 +703,10 @@ morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);
 mod tests {
     use super::*;
     use morphir_core::ir::v4::{
-        Access as MorphirAccess, Distribution, FormatVersion, IRFile, LibraryContent,
+        Access as MorphirAccess, AccessControlled, Distribution, FormatVersion, IRFile,
+        Incompleteness, InputTypeEntry, LibraryContent, ModuleDefinition, PackageDefinition,
+        PackageSpecification, SpecsContent, Type, TypeAttributes, TypeDefinition,
+        TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
     };
     use std::collections::HashMap;
 
@@ -773,6 +755,21 @@ mod tests {
             language_id: "gleam".into(),
             version: 1,
             text: text.into(),
+        }
+    }
+
+    fn specs_dependency(package_name: &str) -> CompileDependency {
+        CompileDependency {
+            package_name: package_name.into(),
+            ir_version: IR_VERSION.into(),
+            distribution: serde_json::to_value(Distribution::Specs(SpecsContent {
+                package_name: PackageName::parse(package_name),
+                dependencies: IndexMap::new(),
+                spec: PackageSpecification {
+                    modules: IndexMap::new(),
+                },
+            }))
+            .expect("serialize dependency distribution"),
         }
     }
 
@@ -848,6 +845,359 @@ mod tests {
         assert_eq!(library.def.modules.keys().collect::<Vec<_>>(), ["main"]);
         assert_eq!(result.modules, ["main"]);
         assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn compile_preserves_a_typed_v4_specs_dependency() {
+        let (mut request, _output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let specification = PackageSpecification {
+            modules: IndexMap::new(),
+        };
+        request.dependencies.push(CompileDependency {
+            package_name: "example/dependency".into(),
+            ir_version: IR_VERSION.into(),
+            distribution: serde_json::to_value(Distribution::Specs(SpecsContent {
+                package_name: PackageName::parse("example/dependency"),
+                dependencies: IndexMap::new(),
+                spec: specification.clone(),
+            }))
+            .expect("serialize dependency distribution"),
+        });
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("compile with a V4 Specs dependency");
+
+        assert!(result.success);
+        assert_eq!(
+            library(&result).dependencies.get("example/dependency"),
+            Some(&specification)
+        );
+    }
+
+    #[test]
+    fn compile_derives_a_dependency_specification_from_a_v4_library_ir_file() {
+        let (mut request, _output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let module_definition = || ModuleDefinition {
+            types: IndexMap::from([(
+                "opaque-type".into(),
+                AccessControlled {
+                    access: MorphirAccess::Public,
+                    value: TypeDefinition::CustomTypeDefinition {
+                        type_params: vec![Name::from("parameter")],
+                        constructors: AccessControlled {
+                            access: MorphirAccess::Private,
+                            value: vec![],
+                        },
+                    },
+                },
+            )]),
+            values: IndexMap::from([(
+                "public-value".into(),
+                AccessControlled {
+                    access: MorphirAccess::Public,
+                    value: ValueDefinition {
+                        input_types: IndexMap::from([(
+                            "argument".into(),
+                            InputTypeEntry {
+                                type_attributes: None,
+                                input_type: Type::unit(TypeAttributes::default()),
+                            },
+                        )]),
+                        output_type: Type::unit(TypeAttributes::default()),
+                        body: ValueBody::External {
+                            external_name: "unused".into(),
+                            target_platform: "test".into(),
+                        },
+                    },
+                },
+            )]),
+            doc: None,
+        };
+        let dependency = IRFile {
+            format_version: FormatVersion::String(IR_VERSION.into()),
+            distribution: Distribution::Library(LibraryContent {
+                package_name: PackageName::parse("example/dependency"),
+                dependencies: IndexMap::new(),
+                def: PackageDefinition {
+                    modules: IndexMap::from([
+                        (
+                            "public-module".into(),
+                            AccessControlled {
+                                access: MorphirAccess::Public,
+                                value: module_definition(),
+                            },
+                        ),
+                        (
+                            "private-module".into(),
+                            AccessControlled {
+                                access: MorphirAccess::Private,
+                                value: module_definition(),
+                            },
+                        ),
+                    ]),
+                },
+            }),
+        };
+        request.dependencies.push(CompileDependency {
+            package_name: "example/dependency".into(),
+            ir_version: IR_VERSION.into(),
+            distribution: serde_json::to_value(dependency).expect("serialize dependency IR file"),
+        });
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("compile with a V4 Library dependency");
+        let dependency = &library(&result).dependencies["example/dependency"];
+
+        assert!(result.success);
+        assert_eq!(
+            dependency.modules.keys().collect::<Vec<_>>(),
+            ["public-module"]
+        );
+        assert_eq!(
+            dependency.modules["public-module"].types["opaque-type"],
+            TypeSpecification::OpaqueTypeSpecification {
+                type_params: vec![Name::from("parameter")],
+            }
+        );
+        assert_eq!(
+            dependency.modules["public-module"].values["public-value"],
+            ValueSpecification {
+                inputs: IndexMap::from([(
+                    "argument".into(),
+                    Type::unit(TypeAttributes::default())
+                )]),
+                output: Type::unit(TypeAttributes::default()),
+            }
+        );
+    }
+
+    #[test]
+    fn compile_rejects_a_dependency_with_an_unsupported_ir_version_atomically() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let mut dependency = specs_dependency("example/dependency");
+        dependency.ir_version = "3".into();
+        request.dependencies.push(dependency);
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("UNSUPPORTED_DEPENDENCY_IR_VERSION")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_a_dependency_ir_file_with_a_mismatched_format_version() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let mut dependency = specs_dependency("example/dependency");
+        let distribution = serde_json::from_value(dependency.distribution)
+            .expect("decode typed dependency distribution");
+        dependency.distribution = serde_json::to_value(IRFile {
+            format_version: FormatVersion::Integer(4),
+            distribution,
+        })
+        .expect("serialize dependency IR file");
+        request.dependencies.push(dependency);
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("DEPENDENCY_IR_VERSION_MISMATCH")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_a_dependency_whose_distribution_has_another_package() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let mut dependency = specs_dependency("actual/package");
+        dependency.package_name = "declared/package".into();
+        request.dependencies.push(dependency);
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("DEPENDENCY_PACKAGE_MISMATCH")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_a_noncanonical_dependency_package_name() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let mut dependency = specs_dependency("example/dependency");
+        dependency.package_name = "Example/Dependency".into();
+        request.dependencies.push(dependency);
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("INVALID_DEPENDENCY_PACKAGE_NAME")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_duplicate_dependency_package_keys_atomically() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        request.dependencies = vec![
+            specs_dependency("example/dependency"),
+            specs_dependency("example/dependency"),
+        ];
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("DUPLICATE_DEPENDENCY")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_an_incomplete_dependency_type_that_has_no_specification() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        request.dependencies.push(CompileDependency {
+            package_name: "example/dependency".into(),
+            ir_version: IR_VERSION.into(),
+            distribution: serde_json::to_value(Distribution::Library(LibraryContent {
+                package_name: PackageName::parse("example/dependency"),
+                dependencies: IndexMap::new(),
+                def: PackageDefinition {
+                    modules: IndexMap::from([(
+                        "public-module".into(),
+                        AccessControlled {
+                            access: MorphirAccess::Public,
+                            value: ModuleDefinition {
+                                types: IndexMap::from([(
+                                    "incomplete".into(),
+                                    AccessControlled {
+                                        access: MorphirAccess::Public,
+                                        value: TypeDefinition::IncompleteTypeDefinition {
+                                            type_params: vec![],
+                                            incompleteness: Incompleteness::Draft,
+                                        },
+                                    },
+                                )]),
+                                values: IndexMap::new(),
+                                doc: None,
+                            },
+                        },
+                    )]),
+                },
+            }))
+            .expect("serialize incomplete dependency"),
+        });
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("INCOMPATIBLE_DEPENDENCY_DISTRIBUTION")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_an_arbitrary_object_around_a_typed_dependency_distribution() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let mut dependency = specs_dependency("example/dependency");
+        dependency.distribution["unexpected"] = serde_json::json!({});
+        request.dependencies.push(dependency);
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("INVALID_DEPENDENCY_DISTRIBUTION")
+        );
+        assert_directory_empty(&output_dir);
+    }
+
+    #[test]
+    fn compile_rejects_a_noncanonical_embedded_dependency_package_identity() {
+        let (mut request, output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let mut dependency = specs_dependency("example/dependency");
+        dependency.distribution["Specs"]["packageName"] = serde_json::json!("Example/Dependency");
+        request.dependencies.push(dependency);
+
+        let result = GleamExtension
+            .compile(request)
+            .expect("return a typed dependency failure");
+
+        assert_typed_failure(&result);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("DEPENDENCY_PACKAGE_MISMATCH")
+        );
+        assert_directory_empty(&output_dir);
     }
 
     #[test]

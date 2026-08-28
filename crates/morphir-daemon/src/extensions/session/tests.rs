@@ -75,6 +75,16 @@ fn params() -> InitializeParams {
     }
 }
 
+fn compile_params(ir_version: &str) -> serde_json::Value {
+    serde_json::json!({
+        "languageId": "elm",
+        "documents": [],
+        "package": {"name": "example/package", "exposedModules": []},
+        "dependencies": [],
+        "options": {"typesOnly": false, "irVersion": ir_version}
+    })
+}
+
 fn transport(expected: ExpectedExtension, response: ExtensionResponse) -> FakeTransport {
     FakeTransport {
         expected,
@@ -359,7 +369,7 @@ async fn rejects_successful_compile_result_without_ir_version() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<CompileResult>(methods::COMPILE, serde_json::json!({}))
+        .invoke::<CompileResult>(methods::COMPILE, compile_params("3"))
         .await
     {
         InvokeOutcome::Failed(failure) => {
@@ -417,7 +427,10 @@ async fn accepts_successful_compile_result_with_ir_version_and_ir() {
         serde_json::json!({
             "success": true,
             "irVersion": "3",
-            "ir": {},
+            "ir": {
+                "formatVersion": 3,
+                "distribution": ["Library", [], [], {"modules": []}]
+            },
             "diagnostics": [],
             "modules": ["Example"]
         }),
@@ -434,7 +447,7 @@ async fn accepts_successful_compile_result_with_ir_version_and_ir() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<CompileResult>(methods::COMPILE, serde_json::json!({}))
+        .invoke::<CompileResult>(methods::COMPILE, compile_params("3"))
         .await
     {
         InvokeOutcome::Success(_, result) => {
@@ -446,5 +459,44 @@ async fn accepts_successful_compile_result_with_ir_version_and_ir() {
         InvokeOutcome::Failed(failure) => {
             panic!("valid success failed the session: {}", failure.error())
         }
+    }
+}
+
+#[tokio::test]
+async fn rejects_a_successful_compile_result_for_another_requested_ir_version() {
+    let initialized = ExtensionResponse::success(1, frontend_initialization(true)).unwrap();
+    let compile_response = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "success": true,
+            "irVersion": "4.0.0",
+            "ir": {"Library": {}},
+            "diagnostics": [],
+            "modules": []
+        }),
+    )
+    .unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<CompileResult>(methods::COMPILE, compile_params("3"))
+        .await
+    {
+        InvokeOutcome::Failed(failure) => assert!(
+            failure
+                .error()
+                .to_string()
+                .contains("did not match requested irVersion")
+        ),
+        InvokeOutcome::Success(_, _) => panic!("mismatched result version should fail the session"),
+        InvokeOutcome::Rejected(_, error) => panic!("mismatch is not an RPC error: {error}"),
     }
 }

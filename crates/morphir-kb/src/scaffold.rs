@@ -13,7 +13,7 @@ use morphir_okf::model::{Bundle, SourceRef};
 use morphir_okf::paths;
 
 use crate::error::{Error, Result};
-use crate::util::{slugify, yaml_str};
+use crate::util::{contained_relative, resolves_inside, slugify, yaml_str};
 
 /// What a scaffolding operation touched, for the CLI to report.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -34,8 +34,23 @@ fn descend(base: &Path, rel_path: &str) -> PathBuf {
 }
 
 /// Writes `text` to `file`, creating parent directories as needed (the Scala
-/// implementation's `Path.write` does the same implicitly).
-fn write_creating_dirs(file: &Path, text: &str) -> Result<()> {
+/// implementation's `Path.write` does the same implicitly) — but only once the
+/// path has been shown to land inside `inside`.
+///
+/// The guards on `group` and `--path` are lexical, and a lexical guard cannot
+/// see a symlink: `kb/bundles/shared` pointing out of the knowledge base is a
+/// plain name that passes every one of them, and scaffolding through it writes
+/// wherever the link goes. The check belongs here rather than beside those
+/// guards because this is the call that actually creates directories and files.
+fn write_creating_dirs(inside: &Path, file: &Path, text: &str, remedy: &str) -> Result<()> {
+    if !resolves_inside(inside, file) {
+        return Err(Error::msg(format!(
+            "`{}` resolves outside `{}` \
+             — a directory on the way there is a symlink leading out; make it {remedy}",
+            paths::render(file),
+            paths::render(inside)
+        )));
+    }
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -60,14 +75,16 @@ pub fn new_bundle(
     // A group names a directory *inside* kb/bundles. Without this, `--group
     // ../../outside` writes the bundle outside the knowledge base entirely,
     // and an absolute group is silently reinterpreted as a subdirectory —
-    // neither is what the caller asked for. Same guard as `add_concept`.
-    if let Some(g) = group {
-        let segs: Vec<&str> = g.split('/').filter(|s| !s.is_empty()).collect();
-        if g.starts_with('/') || segs.iter().any(|s| *s == ".." || *s == ".") {
-            return Err(Error::msg(format!(
-                "`{g}` must stay inside kb/bundles — no leading /, `.` or `..` segments"
-            )));
-        }
+    // neither is what the caller asked for. Same guard as `add_concept`, and
+    // it reads `\` as a separator too, because a group typed on Linux is a
+    // directory name the Windows build has to live with as well.
+    if let Some(g) = group
+        && !contained_relative(g)
+    {
+        return Err(Error::msg(format!(
+            "`{g}` must stay inside kb/bundles \
+             — name a directory within it, e.g. `platform`, with no leading separator, drive letter, `.` or `..` segment"
+        )));
     }
     let group_dir = group.map(|g| descend(&bundles, g));
     let dir = match &group_dir {
@@ -82,8 +99,14 @@ pub fn new_bundle(
     }
     let index = dir.join("index.md");
     let log = dir.join("log.md");
-    write_creating_dirs(&index, &index_template(okf_version, title, description))?;
-    write_creating_dirs(&log, &log_template(today))?;
+    let remedy = "a real directory under kb/bundles, e.g. `kb/bundles/platform`";
+    write_creating_dirs(
+        &bundles,
+        &index,
+        &index_template(okf_version, title, description),
+        remedy,
+    )?;
+    write_creating_dirs(&bundles, &log, &log_template(today), remedy)?;
     let mut notes = Vec::new();
     if let Some(g) = &group_dir
         && !g.join("README.md").exists()
@@ -143,10 +166,12 @@ pub fn add_concept(
     let leaf = rel_segs.last().copied().unwrap_or("");
     // A concept path names a location *inside* the bundle. Without this,
     // `--path ../escaped.md` writes outside it while still adding a
-    // bundle-relative index entry pointing at nothing.
-    if raw.starts_with('/') || rel_segs.iter().any(|s| *s == ".." || *s == ".") {
+    // bundle-relative index entry pointing at nothing. `\` counts as a
+    // separator here too — see `util::path_fault`.
+    if !contained_relative(&raw) {
         return Err(Error::msg(format!(
-            "`{rel_path}` must stay inside the bundle — no leading /, `.` or `..` segments"
+            "`{rel_path}` must stay inside the bundle \
+             — name a path within it, e.g. `concepts/types.md`, with no leading separator, drive letter, `.` or `..` segment"
         )));
     }
     if rel_segs.is_empty() {
@@ -181,6 +206,7 @@ pub fn add_concept(
         })
         .unwrap_or(&bundle.index);
     write_creating_dirs(
+        &bundle.root,
         &target,
         &concept_template(
             concept_type,
@@ -192,6 +218,7 @@ pub fn add_concept(
             generated_by,
             today,
         ),
+        "a real directory inside the bundle, e.g. `concepts/`",
     )?;
     insert_index_entry(&idx_doc.file, section, title, &bundle_path, description)?;
     if let Some(log) = &bundle.log {

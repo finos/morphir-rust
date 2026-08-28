@@ -39,7 +39,7 @@ use sha2::{Digest, Sha256};
 use morphir_okf::{Bundle, Finding, Frontmatter, Kb, OkfProfile, Severity, parse_frontmatter};
 
 use crate::error::{Error, Result};
-use crate::util::yaml_str;
+use crate::util::{PathFault, contained_relative, path_fault, resolves_inside, yaml_str};
 
 // --------------------------------------------------------------------- model
 
@@ -242,6 +242,28 @@ impl SyncBundle {
 
     pub fn local_file(&self, rel: &str) -> PathBuf {
         resolve(&self.mirror_root(), rel)
+    }
+
+    /// The mirrored file at `rel`, refused when the path it names on disk does
+    /// not really sit inside the bundle.
+    ///
+    /// [`safe_relative`] and [`validated_root`] read the strings; this reads the
+    /// filesystem. A mirror root called `sources` that is a symlink to
+    /// `../../../victim` satisfies both of them and escapes anyway, and every
+    /// mirror read, write and delete goes through here — including the one in
+    /// `pull --prune`, which is the operation that destroys work nobody can get
+    /// back.
+    pub fn mirror_file(&self, rel: &str) -> Result<PathBuf> {
+        let file = self.local_file(rel);
+        if resolves_inside(&self.bundle.root, &file) {
+            Ok(file)
+        } else {
+            Err(Error::msg(format!(
+                "sync.yaml `root: {}` resolves outside the bundle at `{rel}` \
+                 — a directory on the way there is a symlink leading out; a mirror is a real directory inside the bundle, e.g. `sources`",
+                self.manifest.root
+            )))
+        }
     }
 }
 
@@ -637,24 +659,27 @@ fn strs_at(m: &Mapping, key: &str) -> Vec<String> {
 /// what it says nor something anybody would write on purpose — better to say so
 /// than to mirror into a directory the author did not name. An absent or empty
 /// root keeps its historical default of `sources`.
+///
+/// "Absolute" and "escaping" are decided by [`crate::util::path_fault`], which
+/// reads `\` as a separator as well as `/`. A manifest is committed and pulled
+/// on Windows too, where `..\victim` and `C:\victim` are exactly the escapes
+/// `../victim` and `/victim` are here.
 fn validated_root(declared: Option<String>) -> Result<String> {
     let root = declared.unwrap_or_default();
     if root.is_empty() {
         return Ok("sources".to_string());
     }
-    if root.starts_with('/') {
-        return Err(Error::msg(format!(
+    match path_fault(&root) {
+        Some(PathFault::Anchored) => Err(Error::msg(format!(
             "sync.yaml `root: {root}` must be relative to the bundle, e.g. `sources` \
              — an absolute path is refused rather than silently reread as a bundle subdirectory"
-        )));
-    }
-    if !safe_relative(&root) {
-        return Err(Error::msg(format!(
+        ))),
+        Some(PathFault::Escapes) => Err(Error::msg(format!(
             "sync.yaml `root: {root}` leaves the bundle \
              — a root is a plain directory inside it, e.g. `sources`, with no `.` or `..` segments"
-        )));
+        ))),
+        None => Ok(root),
     }
-    Ok(root)
 }
 
 pub fn parse_manifest(raw: &str) -> Result<SyncManifest> {
@@ -847,9 +872,11 @@ pub fn resolve(root: &Path, rel: &str) -> PathBuf {
 }
 
 /// Rejects a manifest path that would write outside the mirror — the same guard
-/// `add-concept` carries.
+/// `add-concept` carries, and on the same terms: see [`crate::util::path_fault`]
+/// for why `\` counts as a separator and why a lone backslash in a filename
+/// does not.
 pub fn safe_relative(rel: &str) -> bool {
-    !rel.is_empty() && !rel.starts_with('/') && !rel.split('/').any(|s| s == ".." || s == ".")
+    contained_relative(rel)
 }
 
 /// Current HEAD of a local checkout, or `None` when it is not a git repository.
@@ -981,7 +1008,7 @@ struct LocalCopy {
 /// Reads a mirrored file into its [`LocalCopy`], or `None` when the mirror does
 /// not have it.
 fn local_copy_of(sb: &SyncBundle, rel: &str, kind: SyncKind) -> Result<Option<LocalCopy>> {
-    let f = sb.local_file(rel);
+    let f = sb.mirror_file(rel)?;
     if !f.exists() {
         return Ok(None);
     }
@@ -1118,13 +1145,14 @@ fn reinject_if_stale(
     if !st.injection_stale {
         return Ok(None);
     }
-    let bytes = fs::read(sb.local_file(&st.path))?;
+    let file = sb.mirror_file(&st.path)?;
+    let bytes = fs::read(&file)?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
     match reinjected(&sb.manifest, &st.path, &text) {
         Err(_) => Ok(None),
         Ok(out) => {
             if !dry_run {
-                write_bytes(&sb.local_file(&st.path), out.as_bytes())?;
+                write_bytes(&file, out.as_bytes())?;
             }
             Ok(Some(SyncAction::new(
                 "re-injected",
@@ -1172,7 +1200,7 @@ pub fn pull(
         } else if st.state == SyncState::DeletedUpstream {
             let act = if prune { "removed" } else { "gone upstream" };
             if prune && !dry_run {
-                delete_file(&sb.local_file(&rel))?;
+                delete_file(&sb.mirror_file(&rel)?)?;
             }
             actions.push(SyncAction::new(act, &rel, "no longer present upstream"));
             if !prune {
@@ -1227,7 +1255,7 @@ pub fn pull(
                 "updated"
             };
             if !dry_run {
-                write_bytes(&sb.local_file(&rel), &out)?;
+                write_bytes(&sb.mirror_file(&rel)?, &out)?;
             }
             actions.push(SyncAction::new(verb, &rel, kind.label()));
             entries.push(LockEntry {
@@ -1358,7 +1386,7 @@ pub fn push(
 /// form of the local copy — the thing an export would send. Empty output means the
 /// two are identical.
 pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<String> {
-    let local = fs::read(sb.local_file(rel))?;
+    let local = fs::read(sb.mirror_file(rel)?)?;
     let text = String::from_utf8_lossy(&local).into_owned();
     let projected = project(&text).map_err(|err| Error::msg(format!("{rel}: {err}")))?;
     let tmp = std::env::temp_dir().join(format!("kb-sync-{}", rel.replace('/', "_")));

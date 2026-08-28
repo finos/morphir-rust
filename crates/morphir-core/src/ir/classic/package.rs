@@ -1,6 +1,7 @@
 use super::module::{ModuleEntry, ModuleSpecification};
 use super::naming::Path;
 use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
+use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -11,10 +12,22 @@ pub struct PackageSpecification<A> {
 }
 
 /// Module specification entry - [modulePath, ModuleSpecification]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModuleSpecEntry<A> {
     pub path: Path,
     pub specification: ModuleSpecification<A>,
+}
+
+impl<A: Serialize> Serialize for ModuleSpecEntry<A> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(2)?;
+        tuple.serialize_element(&self.path)?;
+        tuple.serialize_element(&self.specification)?;
+        tuple.end()
+    }
 }
 
 impl<'de, A: Deserialize<'de>> Deserialize<'de> for ModuleSpecEntry<A> {

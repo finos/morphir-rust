@@ -3,6 +3,7 @@
 //! Module structures for the Classic Morphir IR format.
 
 use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
+use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -13,10 +14,22 @@ use super::types::TypeDefinition;
 use super::value::ValueDefinition;
 
 /// Module entry - [modulePath, AccessControlled<ModuleDefinition>]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModuleEntry<TA, VA> {
     pub path: Path,
     pub definition: AccessControlled<ModuleDefinition<TA, VA>>,
+}
+
+impl<TA: Serialize, VA: Serialize> Serialize for ModuleEntry<TA, VA> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(2)?;
+        tuple.serialize_element(&self.path)?;
+        tuple.serialize_element(&self.definition)?;
+        tuple.end()
+    }
 }
 
 impl<'de, TA: Deserialize<'de>, VA: Deserialize<'de>> Deserialize<'de> for ModuleEntry<TA, VA> {

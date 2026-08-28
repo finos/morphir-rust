@@ -55,7 +55,6 @@ pub struct TypeAttributes {
 /// - Inferred type information
 /// - Tool-specific extensions
 ///
-/// Note: `inferred_type` is stored as JSON until Phase 2 adds serde to Type<A>.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueAttributes {
@@ -64,9 +63,8 @@ pub struct ValueAttributes {
     pub source: Option<SourceLocation>,
 
     /// The inferred type of this value (if available)
-    /// TODO: Change to Option<Box<Type<TypeAttributes>>> in Phase 2
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub inferred_type: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inferred_type: Option<Box<Type>>,
 
     /// Tool-specific extensions (IDE hints, optimization notes, etc.)
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -126,17 +124,16 @@ impl ValueAttributes {
     pub fn with_source(source: SourceLocation) -> Self {
         ValueAttributes {
             source: Some(source),
-            inferred_type: serde_json::Value::Null,
+            inferred_type: None,
             extensions: serde_json::Value::Null,
         }
     }
 
-    /// Create attributes with an inferred type (as JSON)
-    /// TODO: Change to accept V4Type in Phase 2
-    pub fn with_type_json(inferred_type: serde_json::Value) -> Self {
+    /// Create attributes with an inferred concrete type.
+    pub fn with_type(inferred_type: Type) -> Self {
         ValueAttributes {
             source: None,
-            inferred_type,
+            inferred_type: Some(Box::new(inferred_type)),
             extensions: serde_json::Value::Null,
         }
     }
@@ -186,9 +183,8 @@ mod tests {
 
     #[test]
     fn test_value_attributes_with_type() {
-        let type_json = serde_json::json!(["Unit", {}]);
-        let attrs = ValueAttributes::with_type_json(type_json);
-        assert!(!attrs.inferred_type.is_null());
+        let attrs = ValueAttributes::with_type(Type::unit(TypeAttributes::empty()));
+        assert!(attrs.inferred_type.is_some());
     }
 
     #[test]

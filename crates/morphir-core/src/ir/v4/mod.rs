@@ -37,6 +37,7 @@ pub use access::{Access, AccessControlled};
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use literal::Literal;
 pub use pattern::Pattern;
+pub use serde_v4::{TypeEncoding, with_type_encoding};
 pub use types::{Field, Type};
 pub use value::{
     HoleReason as ValueHoleReason, InputType, LetBinding, NativeHint as ValueNativeHint,
@@ -51,7 +52,7 @@ pub use distribution::{
 };
 
 // Re-export module types
-pub use module::{ModuleDefinition, ModuleSpecification};
+pub use module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
 
 // Re-export package types
 pub use package::{PackageDefinition, PackageSpecification};

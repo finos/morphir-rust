@@ -2,9 +2,9 @@
 
 use indexmap::IndexMap;
 use morphir_core::ir::v4::{
-    Access, ConstructorArgSpec, ConstructorSpecification, Distribution, FormatVersion, IRFile,
-    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageName, PackageSpecification,
-    TypeDefinition, TypeSpecification, ValueDefinition, ValueSpecification,
+    Access, ConstructorArgSpec, ConstructorSpecification, Distribution, Documented, FormatVersion,
+    IRFile, ModuleDefinition, ModuleSpecification, PackageDefinition, PackageName,
+    PackageSpecification, TypeDefinition, TypeSpecification, ValueDefinition, ValueSpecification,
 };
 use morphir_extension_sdk::CompileDependency;
 
@@ -216,39 +216,56 @@ fn module_to_specification(
         IndexMap::new(),
         |mut types, (name, controlled)| {
             if controlled.access == Access::Public {
+                let Documented { doc, value } = controlled.value;
                 types.insert(
                     name.clone(),
-                    type_to_specification(controlled.value).map_err(|message| {
-                        format!("module '{module_name}', type '{name}': {message}")
-                    })?,
+                    Documented::new(
+                        doc,
+                        type_to_specification(value).map_err(|message| {
+                            format!("module '{module_name}', type '{name}': {message}")
+                        })?,
+                    ),
                 );
             }
             Ok::<_, String>(types)
         },
     )?;
+    let values = definition.values.into_iter().try_fold(
+        IndexMap::new(),
+        |mut values, (name, controlled)| {
+            if controlled.access == Access::Public {
+                let Documented { doc, value } = controlled.value;
+                values.insert(
+                    name.clone(),
+                    Documented::new(
+                        doc,
+                        value_to_specification(value).map_err(|message| {
+                            format!("module '{module_name}', value '{name}': {message}")
+                        })?,
+                    ),
+                );
+            }
+            Ok::<_, String>(values)
+        },
+    )?;
     Ok(ModuleSpecification {
         types,
-        values: definition
-            .values
-            .into_iter()
-            .filter_map(|(name, controlled)| {
-                (controlled.access == Access::Public)
-                    .then(|| (name, value_to_specification(controlled.value)))
-            })
-            .collect(),
+        values,
         doc: definition.doc,
     })
 }
 
-fn value_to_specification(definition: ValueDefinition) -> ValueSpecification {
-    ValueSpecification {
+fn value_to_specification(definition: ValueDefinition) -> Result<ValueSpecification, String> {
+    Ok(ValueSpecification {
         inputs: definition
             .input_types
             .into_iter()
             .map(|(name, input)| (name, input.input_type))
             .collect(),
-        output: definition.output_type,
-    }
+        output: definition
+            .output_type
+            .ok_or_else(|| "value definition is missing its output type".to_owned())?,
+    })
 }
 
 fn type_to_specification(definition: TypeDefinition) -> Result<TypeSpecification, String> {

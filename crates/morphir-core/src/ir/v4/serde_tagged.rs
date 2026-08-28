@@ -27,6 +27,10 @@ use super::value::{
 };
 use crate::naming::{FQName, Name};
 
+fn parse_canonical_name<E: de::Error>(source: &str) -> Result<Name, E> {
+    Name::from_canonical_string(source).map_err(E::custom)
+}
+
 // =============================================================================
 // Type Serialization
 // =============================================================================
@@ -84,11 +88,35 @@ impl<'de> Visitor<'de> for TypeVisitor {
                     attrs: Option<TypeAttributes>,
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let name = Name::from(content.name.as_str());
+                let name = parse_canonical_name::<M::Error>(&content.name)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Variable(attrs, name))
             }
             "Reference" => {
+                if let serde_json::Value::String(fqname) = &value {
+                    return Ok(Type::Reference(
+                        TypeAttributes::default(),
+                        FQName::from_canonical_string(fqname).map_err(de::Error::custom)?,
+                        Vec::new(),
+                    ));
+                }
+                if let serde_json::Value::Array(items) = value {
+                    let mut items = items.into_iter();
+                    let fqname = items
+                        .next()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .ok_or_else(|| {
+                            de::Error::custom("Reference array must begin with an FQName")
+                        })?;
+                    let args = items
+                        .map(|value| serde_json::from_value(value).map_err(de::Error::custom))
+                        .collect::<Result<_, M::Error>>()?;
+                    return Ok(Type::Reference(
+                        TypeAttributes::default(),
+                        FQName::from_canonical_string(&fqname).map_err(de::Error::custom)?,
+                        args,
+                    ));
+                }
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Content {
@@ -104,6 +132,11 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 Ok(Type::Reference(attrs, fqname, args))
             }
             "Tuple" => {
+                if value.is_array() {
+                    return serde_json::from_value(value)
+                        .map(|elements| Type::Tuple(TypeAttributes::default(), elements))
+                        .map_err(de::Error::custom);
+                }
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Content {
@@ -115,22 +148,31 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 Ok(Type::Tuple(attrs, content.elements))
             }
             "Record" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    fields: IndexMap<String, Type>,
-                    attrs: Option<TypeAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let fields = content
-                    .fields
+                let (attrs, fields): (TypeAttributes, IndexMap<String, Type>) =
+                    if value.get("fields").is_some() {
+                        #[derive(Deserialize)]
+                        #[serde(rename_all = "camelCase")]
+                        struct ExpandedContent {
+                            fields: IndexMap<String, Type>,
+                            attrs: Option<TypeAttributes>,
+                        }
+
+                        let content: ExpandedContent =
+                            serde_json::from_value(value).map_err(de::Error::custom)?;
+                        (content.attrs.unwrap_or_default(), content.fields)
+                    } else {
+                        let fields = serde_json::from_value(value).map_err(de::Error::custom)?;
+                        (TypeAttributes::default(), fields)
+                    };
+                let fields = fields
                     .into_iter()
-                    .map(|(name, tpe)| Field {
-                        name: Name::from(name.as_str()),
-                        tpe,
+                    .map(|(name, tpe)| {
+                        Ok(Field {
+                            name: parse_canonical_name::<M::Error>(&name)?,
+                            tpe,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, M::Error>>()?;
                 Ok(Type::Record(attrs, fields))
             }
             "ExtensibleRecord" => {
@@ -143,31 +185,35 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                let variable = Name::from(content.variable.as_str());
+                let variable = parse_canonical_name::<M::Error>(&content.variable)?;
                 let fields = content
                     .fields
                     .into_iter()
-                    .map(|(name, tpe)| Field {
-                        name: Name::from(name.as_str()),
-                        tpe,
+                    .map(|(name, tpe)| {
+                        Ok(Field {
+                            name: parse_canonical_name::<M::Error>(&name)?,
+                            tpe,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, M::Error>>()?;
                 Ok(Type::ExtensibleRecord(attrs, variable, fields))
             }
             "Function" => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Content {
-                    arg: Type,
-                    result: Type,
+                    #[serde(alias = "arg")]
+                    argument_type: Type,
+                    #[serde(alias = "result")]
+                    return_type: Type,
                     attrs: Option<TypeAttributes>,
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Function(
                     attrs,
-                    Box::new(content.arg),
-                    Box::new(content.result),
+                    Box::new(content.argument_type),
+                    Box::new(content.return_type),
                 ))
             }
             "Unit" => {
@@ -203,6 +249,19 @@ impl<'de> Visitor<'de> for TypeVisitor {
         let tag: String = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+        if tag.contains(':') && tag.contains('#') {
+            let fqname = FQName::from_canonical_string(&tag).map_err(de::Error::custom)?;
+            let mut arguments = Vec::new();
+            while let Some(argument) = seq.next_element::<Type>()? {
+                arguments.push(argument);
+            }
+            return Ok(Type::Reference(
+                TypeAttributes::default(),
+                fqname,
+                arguments,
+            ));
+        }
 
         match tag.as_str() {
             "Variable" | "variable" => {
@@ -301,7 +360,7 @@ impl<'de> Visitor<'de> for TypeVisitor {
             Ok(Type::Reference(TypeAttributes::default(), fqname, vec![]))
         } else {
             // Variable shorthand
-            let name = Name::from(v);
+            let name = parse_canonical_name::<E>(v)?;
             Ok(Type::Variable(TypeAttributes::default(), name))
         }
     }
@@ -444,7 +503,7 @@ impl<'de> Visitor<'de> for PatternVisitor {
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                let name = Name::from(content.name.as_str());
+                let name = parse_canonical_name::<M::Error>(&content.name)?;
                 Ok(Pattern::AsPattern(attrs, Box::new(content.pattern), name))
             }
             "TuplePattern" => {
@@ -979,8 +1038,13 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 let fields = content
                     .fields
                     .into_iter()
-                    .map(|(name, val)| RecordFieldEntry(Name::from(name.as_str()), val))
-                    .collect();
+                    .map(|(name, value)| {
+                        Ok(RecordFieldEntry(
+                            parse_canonical_name::<M::Error>(&name)?,
+                            value,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, M::Error>>()?;
                 Ok(Value::Record(attrs, fields))
             }
             "Variable" => {
@@ -992,7 +1056,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                let name = Name::from(content.name.as_str());
+                let name = parse_canonical_name::<M::Error>(&content.name)?;
                 Ok(Value::Variable(attrs, name))
             }
             "Reference" => {
@@ -1018,7 +1082,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                let name = Name::from(content.name.as_str());
+                let name = parse_canonical_name::<M::Error>(&content.name)?;
                 Ok(Value::Field(attrs, Box::new(content.value), name))
             }
             "FieldFunction" => {
@@ -1030,7 +1094,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                let name = Name::from(content.name.as_str());
+                let name = parse_canonical_name::<M::Error>(&content.name)?;
                 Ok(Value::FieldFunction(attrs, name))
             }
             "Apply" => {
@@ -1076,7 +1140,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
-                let name = Name::from(content.name.as_str());
+                let name = parse_canonical_name::<M::Error>(&content.name)?;
                 Ok(Value::LetDefinition(
                     attrs,
                     name,

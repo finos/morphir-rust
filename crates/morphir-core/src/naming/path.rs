@@ -10,8 +10,34 @@ pub struct Path {
 
 impl Path {
     pub fn new(source: &str) -> Self {
-        let segments = source.split('/').map(Name::from).collect();
+        let segments = if source.is_empty() {
+            Vec::new()
+        } else {
+            source.split('/').map(Name::from).collect()
+        };
         Path { segments }
+    }
+
+    pub fn from_canonical_string(source: &str) -> Result<Self, String> {
+        if source.is_empty() {
+            return Ok(Self {
+                segments: Vec::new(),
+            });
+        }
+
+        source
+            .split('/')
+            .map(Name::from_canonical_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|segments| Self { segments })
+    }
+
+    pub fn to_canonical_string(&self) -> String {
+        self.segments
+            .iter()
+            .map(Name::to_canonical_string)
+            .collect::<Vec<_>>()
+            .join("/")
     }
 
     pub fn is_empty(&self) -> bool {
@@ -21,12 +47,7 @@ impl Path {
 
 impl fmt::Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let parts: Vec<String> = self
-            .segments
-            .iter()
-            .map(|n: &super::Name| n.to_kebab_case())
-            .collect();
-        write!(f, "{}", parts.join("/"))
+        write!(f, "{}", self.to_canonical_string())
     }
 }
 
@@ -35,7 +56,7 @@ impl Serialize for Path {
     where
         S: serde::Serializer,
     {
-        self.segments.serialize(serializer)
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -50,7 +71,9 @@ impl<'de> Deserialize<'de> for Path {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
             // V4 canonical string format: "my-org/my-lib" or "test-package"
-            serde_json::Value::String(s) => Ok(Path::new(&s)),
+            serde_json::Value::String(s) => {
+                Path::from_canonical_string(&s).map_err(de::Error::custom)
+            }
             // Classic array format: [["my"], ["org"], ["my"], ["lib"]]
             serde_json::Value::Array(arr) => {
                 let segments: Result<Vec<Name>, _> = arr

@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
-use super::types::Type;
+use super::types::{Incompleteness, Type};
 use crate::naming::{FQName, Name};
 
 // ============================================================================
@@ -239,7 +239,10 @@ pub enum ValueBody {
     },
 
     /// Incomplete value definition (V4 only)
-    Incomplete(HoleReason),
+    Incomplete {
+        incompleteness: Incompleteness,
+        partial_body: Option<Value>,
+    },
 }
 
 impl Value {
@@ -431,12 +434,231 @@ pub struct ValueSpecification {
 /// A value definition (function or constant)
 ///
 /// V4 format supports multiple body types (Expression, Native, External, Incomplete).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValueDefinition {
     pub input_types: IndexMap<String, InputTypeEntry>,
-    pub output_type: Type,
+    pub output_type: Option<Type>,
     pub body: ValueBody,
+}
+
+fn serialize_input_types<S>(
+    input_types: &IndexMap<String, InputTypeEntry>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    input_types
+        .iter()
+        .map(|(name, entry)| (name, &entry.input_type))
+        .collect::<IndexMap<_, _>>()
+        .serialize(serializer)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExpressionDefinitionContent<'a> {
+    #[serde(serialize_with = "serialize_input_types")]
+    input_types: &'a IndexMap<String, InputTypeEntry>,
+    output_type: &'a Type,
+    body: &'a Value,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeDefinitionContent<'a> {
+    #[serde(serialize_with = "serialize_input_types")]
+    input_types: &'a IndexMap<String, InputTypeEntry>,
+    output_type: &'a Type,
+    native_info: &'a NativeInfo,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalDefinitionContent<'a> {
+    #[serde(serialize_with = "serialize_input_types")]
+    input_types: &'a IndexMap<String, InputTypeEntry>,
+    output_type: &'a Type,
+    external_name: &'a str,
+    target_platform: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IncompleteDefinitionContent<'a> {
+    #[serde(serialize_with = "serialize_input_types")]
+    input_types: &'a IndexMap<String, InputTypeEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_type: &'a Option<Type>,
+    incompleteness: &'a Incompleteness,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial_body: &'a Option<Value>,
+}
+
+impl Serialize for ValueDefinition {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(1))?;
+        match &self.body {
+            ValueBody::Expression(body) => map.serialize_entry(
+                "ExpressionBody",
+                &ExpressionDefinitionContent {
+                    input_types: &self.input_types,
+                    output_type: self.output_type.as_ref().ok_or_else(|| {
+                        serde::ser::Error::custom("ExpressionBody requires outputType")
+                    })?,
+                    body,
+                },
+            )?,
+            ValueBody::Native(native_info) => map.serialize_entry(
+                "NativeBody",
+                &NativeDefinitionContent {
+                    input_types: &self.input_types,
+                    output_type: self.output_type.as_ref().ok_or_else(|| {
+                        serde::ser::Error::custom("NativeBody requires outputType")
+                    })?,
+                    native_info,
+                },
+            )?,
+            ValueBody::External {
+                external_name,
+                target_platform,
+            } => map.serialize_entry(
+                "ExternalBody",
+                &ExternalDefinitionContent {
+                    input_types: &self.input_types,
+                    output_type: self.output_type.as_ref().ok_or_else(|| {
+                        serde::ser::Error::custom("ExternalBody requires outputType")
+                    })?,
+                    external_name,
+                    target_platform,
+                },
+            )?,
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => map.serialize_entry(
+                "IncompleteBody",
+                &IncompleteDefinitionContent {
+                    input_types: &self.input_types,
+                    output_type: &self.output_type,
+                    incompleteness,
+                    partial_body,
+                },
+            )?,
+        }
+        map.end()
+    }
+}
+
+fn deserialize_input_types<E: de::Error>(
+    values: IndexMap<String, serde_json::Value>,
+) -> Result<IndexMap<String, InputTypeEntry>, E> {
+    values
+        .into_iter()
+        .map(|(name, value)| {
+            let entry = serde_json::from_value::<Type>(value.clone())
+                .map(|input_type| InputTypeEntry {
+                    type_attributes: None,
+                    input_type,
+                })
+                .or_else(|_| serde_json::from_value::<InputTypeEntry>(value))
+                .map_err(de::Error::custom)?;
+            Ok((name, entry))
+        })
+        .collect()
+}
+
+impl<'de> Deserialize<'de> for ValueDefinition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Common {
+            #[serde(default)]
+            input_types: IndexMap<String, serde_json::Value>,
+            output_type: Option<Type>,
+            body: Option<Value>,
+            native_info: Option<NativeInfo>,
+            external_name: Option<String>,
+            target_platform: Option<String>,
+            incompleteness: Option<Incompleteness>,
+            partial_body: Option<Value>,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| de::Error::custom("expected a value definition wrapper"))?;
+        if object.contains_key("inputTypes") {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Legacy {
+                #[serde(default)]
+                input_types: IndexMap<String, serde_json::Value>,
+                output_type: Option<Type>,
+                body: ValueBody,
+            }
+            let legacy: Legacy = serde_json::from_value(value).map_err(de::Error::custom)?;
+            return Ok(Self {
+                input_types: deserialize_input_types(legacy.input_types)?,
+                output_type: legacy.output_type,
+                body: legacy.body,
+            });
+        }
+        let (tag, content) = object
+            .iter()
+            .next()
+            .ok_or_else(|| de::Error::custom("empty value definition wrapper"))?;
+        let content: Common = serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+        let input_types = deserialize_input_types(content.input_types)?;
+        let body = match tag.as_str() {
+            "ExpressionBody" => ValueBody::Expression(
+                content
+                    .body
+                    .ok_or_else(|| de::Error::missing_field("body"))?,
+            ),
+            "NativeBody" => ValueBody::Native(
+                content
+                    .native_info
+                    .ok_or_else(|| de::Error::missing_field("nativeInfo"))?,
+            ),
+            "ExternalBody" => ValueBody::External {
+                external_name: content
+                    .external_name
+                    .ok_or_else(|| de::Error::missing_field("externalName"))?,
+                target_platform: content
+                    .target_platform
+                    .ok_or_else(|| de::Error::missing_field("targetPlatform"))?,
+            },
+            "IncompleteBody" => ValueBody::Incomplete {
+                incompleteness: content
+                    .incompleteness
+                    .ok_or_else(|| de::Error::missing_field("incompleteness"))?,
+                partial_body: content.partial_body,
+            },
+            _ => {
+                return Err(de::Error::unknown_variant(
+                    tag,
+                    &[
+                        "ExpressionBody",
+                        "NativeBody",
+                        "ExternalBody",
+                        "IncompleteBody",
+                    ],
+                ));
+            }
+        };
+        Ok(Self {
+            input_types,
+            output_type: content.output_type,
+            body,
+        })
+    }
 }
 
 /// Input type entry
@@ -465,7 +687,7 @@ impl ValueDefinition {
 
         ValueDefinition {
             input_types: inputs,
-            output_type,
+            output_type: Some(output_type),
             body: ValueBody::Expression(body),
         }
     }
@@ -485,7 +707,7 @@ impl ValueDefinition {
 
         ValueDefinition {
             input_types: inputs,
-            output_type,
+            output_type: Some(output_type),
             body: ValueBody::Native(info),
         }
     }
@@ -526,8 +748,17 @@ impl Serialize for ValueBody {
                     },
                 )?;
             }
-            ValueBody::Incomplete(reason) => {
-                map.serialize_entry("IncompleteBody", &IncompleteBodySerContent { reason })?;
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => {
+                map.serialize_entry(
+                    "IncompleteBody",
+                    &IncompleteBodySerContent {
+                        incompleteness,
+                        partial_body: partial_body.as_ref(),
+                    },
+                )?;
             }
         }
         map.end()
@@ -557,7 +788,9 @@ struct ExternalBodySerContent {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteBodySerContent<'a> {
-    reason: &'a HoleReason,
+    incompleteness: &'a Incompleteness,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial_body: Option<&'a Value>,
 }
 
 impl<'de> Deserialize<'de> for ValueBody {
@@ -592,12 +825,20 @@ impl<'de> Deserialize<'de> for ValueBody {
                 });
             }
             if let Some(content) = map.get("IncompleteBody") {
-                let reason_val = content
-                    .get("reason")
-                    .ok_or_else(|| de::Error::missing_field("reason"))?;
-                let reason: HoleReason =
-                    serde_json::from_value(reason_val.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Incomplete(reason));
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct IncompleteBodyContent {
+                    incompleteness: Incompleteness,
+                    #[serde(default)]
+                    partial_body: Option<Value>,
+                }
+
+                let parsed: IncompleteBodyContent =
+                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+                return Ok(ValueBody::Incomplete {
+                    incompleteness: parsed.incompleteness,
+                    partial_body: parsed.partial_body,
+                });
             }
         }
         Err(de::Error::custom(

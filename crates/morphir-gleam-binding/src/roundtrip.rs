@@ -7,7 +7,7 @@ use crate::backend::MorphirToGleamVisitor;
 use crate::frontend::ast::ModuleIR;
 use crate::frontend::{GleamToMorphirVisitor, parse_gleam};
 use morphir_common::vfs::{MemoryVfs, Vfs};
-use morphir_core::ir::v4::{AccessControlled, ModuleDefinition};
+use morphir_core::ir::v4::{AccessControlled, Documentation, Documented, ModuleDefinition};
 use morphir_core::naming::{ModuleName, PackageName};
 use std::path::{Path, PathBuf};
 
@@ -159,8 +159,9 @@ fn build_v4_module_from_ir(
         .join(package_name.to_string())
         .join(module_name.to_string());
 
-    let mut types: IndexMap<String, AccessControlled<TypeDefinition>> = IndexMap::new();
-    let mut values: IndexMap<String, AccessControlled<ValueDefinition>> = IndexMap::new();
+    let mut types: IndexMap<String, AccessControlled<Documented<TypeDefinition>>> = IndexMap::new();
+    let mut values: IndexMap<String, AccessControlled<Documented<ValueDefinition>>> =
+        IndexMap::new();
 
     // Read type definitions - frontend writes .type.json extension
     // Note: MemoryVfs doesn't track directories, so we directly check file existence
@@ -172,7 +173,13 @@ fn build_v4_module_from_ir(
         {
             match serde_json::from_str::<AccessControlled<TypeDefinition>>(&content) {
                 Ok(type_def_v4) => {
-                    types.insert(type_def.name.clone(), type_def_v4);
+                    types.insert(
+                        type_def.name.clone(),
+                        AccessControlled {
+                            access: type_def_v4.access,
+                            value: Documented::new(None, type_def_v4.value),
+                        },
+                    );
                 }
                 Err(e) => {
                     eprintln!(
@@ -193,7 +200,13 @@ fn build_v4_module_from_ir(
         {
             match serde_json::from_str::<AccessControlled<ValueDefinition>>(&content) {
                 Ok(value_def_v4) => {
-                    values.insert(value_def.name.clone(), value_def_v4);
+                    values.insert(
+                        value_def.name.clone(),
+                        AccessControlled {
+                            access: value_def_v4.access,
+                            value: Documented::new(None, value_def_v4.value),
+                        },
+                    );
                 }
                 Err(e) => {
                     eprintln!(
@@ -210,7 +223,7 @@ fn build_v4_module_from_ir(
         value: ModuleDefinition {
             types,
             values,
-            doc: module_ir.doc.clone(),
+            doc: module_ir.doc.clone().map(Documentation::from),
         },
     })
 }

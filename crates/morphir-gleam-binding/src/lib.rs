@@ -703,7 +703,7 @@ morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);
 mod tests {
     use super::*;
     use morphir_core::ir::v4::{
-        Access as MorphirAccess, AccessControlled, Distribution, FormatVersion, IRFile,
+        Access as MorphirAccess, AccessControlled, Distribution, Documented, FormatVersion, IRFile,
         Incompleteness, InputTypeEntry, LibraryContent, ModuleDefinition, PackageDefinition,
         PackageSpecification, SpecsContent, Type, TypeAttributes, TypeDefinition,
         TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
@@ -891,33 +891,39 @@ mod tests {
                 "opaque-type".into(),
                 AccessControlled {
                     access: MorphirAccess::Public,
-                    value: TypeDefinition::CustomTypeDefinition {
-                        type_params: vec![Name::from("parameter")],
-                        constructors: AccessControlled {
-                            access: MorphirAccess::Private,
-                            value: vec![],
+                    value: Documented::new(
+                        None,
+                        TypeDefinition::CustomTypeDefinition {
+                            type_params: vec![Name::from("parameter")],
+                            constructors: AccessControlled {
+                                access: MorphirAccess::Private,
+                                value: vec![],
+                            },
                         },
-                    },
+                    ),
                 },
             )]),
             values: IndexMap::from([(
                 "public-value".into(),
                 AccessControlled {
                     access: MorphirAccess::Public,
-                    value: ValueDefinition {
-                        input_types: IndexMap::from([(
-                            "argument".into(),
-                            InputTypeEntry {
-                                type_attributes: None,
-                                input_type: Type::unit(TypeAttributes::default()),
+                    value: Documented::new(
+                        None,
+                        ValueDefinition {
+                            input_types: IndexMap::from([(
+                                "argument".into(),
+                                InputTypeEntry {
+                                    type_attributes: None,
+                                    input_type: Type::unit(TypeAttributes::default()),
+                                },
+                            )]),
+                            output_type: Some(Type::unit(TypeAttributes::default())),
+                            body: ValueBody::External {
+                                external_name: "unused".into(),
+                                target_platform: "test".into(),
                             },
-                        )]),
-                        output_type: Type::unit(TypeAttributes::default()),
-                        body: ValueBody::External {
-                            external_name: "unused".into(),
-                            target_platform: "test".into(),
                         },
-                    },
+                    ),
                 },
             )]),
             doc: None,
@@ -965,19 +971,25 @@ mod tests {
         );
         assert_eq!(
             dependency.modules["public-module"].types["opaque-type"],
-            TypeSpecification::OpaqueTypeSpecification {
-                type_params: vec![Name::from("parameter")],
-            }
+            Documented::new(
+                None,
+                TypeSpecification::OpaqueTypeSpecification {
+                    type_params: vec![Name::from("parameter")],
+                }
+            )
         );
         assert_eq!(
             dependency.modules["public-module"].values["public-value"],
-            ValueSpecification {
-                inputs: IndexMap::from([(
-                    "argument".into(),
-                    Type::unit(TypeAttributes::default())
-                )]),
-                output: Type::unit(TypeAttributes::default()),
-            }
+            Documented::new(
+                None,
+                ValueSpecification {
+                    inputs: IndexMap::from([(
+                        "argument".into(),
+                        Type::unit(TypeAttributes::default())
+                    )]),
+                    output: Type::unit(TypeAttributes::default()),
+                }
+            )
         );
     }
 
@@ -1126,10 +1138,14 @@ mod tests {
                                     "incomplete".into(),
                                     AccessControlled {
                                         access: MorphirAccess::Public,
-                                        value: TypeDefinition::IncompleteTypeDefinition {
-                                            type_params: vec![],
-                                            incompleteness: Incompleteness::Draft,
-                                        },
+                                        value: Documented::new(
+                                            None,
+                                            TypeDefinition::IncompleteTypeDefinition {
+                                                type_params: vec![],
+                                                incompleteness: Incompleteness::Draft,
+                                                partial_type_expr: None,
+                                            },
+                                        ),
                                     },
                                 )]),
                                 values: IndexMap::new(),

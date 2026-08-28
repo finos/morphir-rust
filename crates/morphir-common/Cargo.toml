@@ -26,6 +26,7 @@ glob = "0.3"
 indexmap = { version = "2", features = ["serde"] }
 nbformat = "~1.2"
 uuid = { version = "1.0", features = ["v4"] }
+vfs = { workspace = true }
 
 # Remote source support
 reqwest = { version = "0.13", default-features = false, features = [

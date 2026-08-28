@@ -9,9 +9,9 @@ use crate::frontend::ast::{
 use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
 use morphir_core::ir::v4::{
-    Access as MorphirAccess, AccessControlled, ConstructorDefinition, InputTypeEntry,
-    Literal as MorphirLiteral, ModuleDefinition, Pattern as MorphirPattern, TypeDefinition,
-    ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
+    Access as MorphirAccess, AccessControlled, ConstructorDefinition, Documentation, Documented,
+    InputTypeEntry, Literal as MorphirLiteral, ModuleDefinition, Pattern as MorphirPattern,
+    TypeDefinition, ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
 };
 use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
@@ -20,8 +20,8 @@ use std::io::Result;
 use std::path::{Path, PathBuf};
 
 // Type aliases for the new V4 generic types
-type AccessControlledValueDefinition = AccessControlled<V4ValueDefinition>;
-type AccessControlledTypeDefinition = AccessControlled<TypeDefinition>;
+type AccessControlledValueDefinition = AccessControlled<Documented<V4ValueDefinition>>;
+type AccessControlledTypeDefinition = AccessControlled<Documented<TypeDefinition>>;
 
 /// Distribution layout mode
 #[derive(Debug, Clone, Copy)]
@@ -106,7 +106,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             value: ModuleDefinition {
                 types,
                 values,
-                doc: module_ir.doc.clone(),
+                doc: module_ir.doc.clone().map(Documentation::from),
             },
         })
     }
@@ -273,7 +273,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
                 Ok(AccessControlledTypeDefinition {
                     access,
-                    value: v4_type_def,
+                    value: Documented::new(None, v4_type_def),
                 })
             }
             _ => {
@@ -286,7 +286,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
                 Ok(AccessControlledTypeDefinition {
                     access,
-                    value: v4_type_def,
+                    value: Documented::new(None, v4_type_def),
                 })
             }
         }
@@ -321,13 +321,13 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         let v4_value_def = V4ValueDefinition {
             input_types,
-            output_type,
+            output_type: Some(output_type),
             body,
         };
 
         Ok(AccessControlledValueDefinition {
             access,
-            value: v4_value_def,
+            value: Documented::new(None, v4_value_def),
         })
     }
 
@@ -489,7 +489,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 // Convert to LetDefinition
                 let def = V4ValueDefinition {
                     input_types: IndexMap::new(),
-                    output_type: Type::Unit(TypeAttributes::default()),
+                    output_type: Some(Type::Unit(TypeAttributes::default())),
                     body: V4ValueBody::Expression(self.convert_expr(value)),
                 };
 

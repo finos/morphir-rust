@@ -273,6 +273,7 @@ pub enum TypeDefinition {
     IncompleteTypeDefinition {
         type_params: Vec<Name>,
         incompleteness: Incompleteness,
+        partial_type_expr: Option<Type>,
     },
 }
 
@@ -310,12 +311,14 @@ impl Serialize for TypeDefinition {
             TypeDefinition::IncompleteTypeDefinition {
                 type_params,
                 incompleteness,
+                partial_type_expr,
             } => {
                 map.serialize_entry(
                     "IncompleteTypeDefinition",
                     &IncompleteTypeDefContent {
                         type_params: type_params.clone(),
                         incompleteness: incompleteness.clone(),
+                        partial_type_exp: partial_type_expr.clone(),
                     },
                 )?;
             }
@@ -343,6 +346,8 @@ struct CustomTypeDefContent {
 struct IncompleteTypeDefContent {
     type_params: Vec<Name>,
     incompleteness: Incompleteness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    partial_type_exp: Option<Type>,
 }
 
 impl<'de> Deserialize<'de> for TypeDefinition {
@@ -374,6 +379,7 @@ impl<'de> Deserialize<'de> for TypeDefinition {
                 return Ok(TypeDefinition::IncompleteTypeDefinition {
                     type_params: parsed.type_params,
                     incompleteness: parsed.incompleteness,
+                    partial_type_expr: parsed.partial_type_exp,
                 });
             }
         }

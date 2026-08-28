@@ -115,16 +115,23 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 Ok(Type::Tuple(attrs, content.elements))
             }
             "Record" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    fields: IndexMap<String, Type>,
-                    attrs: Option<TypeAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let fields = content
-                    .fields
+                let (attrs, fields): (TypeAttributes, IndexMap<String, Type>) =
+                    if value.get("fields").is_some() {
+                        #[derive(Deserialize)]
+                        #[serde(rename_all = "camelCase")]
+                        struct ExpandedContent {
+                            fields: IndexMap<String, Type>,
+                            attrs: Option<TypeAttributes>,
+                        }
+
+                        let content: ExpandedContent =
+                            serde_json::from_value(value).map_err(de::Error::custom)?;
+                        (content.attrs.unwrap_or_default(), content.fields)
+                    } else {
+                        let fields = serde_json::from_value(value).map_err(de::Error::custom)?;
+                        (TypeAttributes::default(), fields)
+                    };
+                let fields = fields
                     .into_iter()
                     .map(|(name, tpe)| Field {
                         name: Name::from(name.as_str()),

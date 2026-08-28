@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
-use super::types::Type;
+use super::types::{Incompleteness, Type};
 use crate::naming::{FQName, Name};
 
 // ============================================================================
@@ -239,7 +239,10 @@ pub enum ValueBody {
     },
 
     /// Incomplete value definition (V4 only)
-    Incomplete(HoleReason),
+    Incomplete {
+        incompleteness: Incompleteness,
+        partial_body: Option<Value>,
+    },
 }
 
 impl Value {
@@ -435,7 +438,8 @@ pub struct ValueSpecification {
 #[serde(rename_all = "camelCase")]
 pub struct ValueDefinition {
     pub input_types: IndexMap<String, InputTypeEntry>,
-    pub output_type: Type,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_type: Option<Type>,
     pub body: ValueBody,
 }
 
@@ -465,7 +469,7 @@ impl ValueDefinition {
 
         ValueDefinition {
             input_types: inputs,
-            output_type,
+            output_type: Some(output_type),
             body: ValueBody::Expression(body),
         }
     }
@@ -485,7 +489,7 @@ impl ValueDefinition {
 
         ValueDefinition {
             input_types: inputs,
-            output_type,
+            output_type: Some(output_type),
             body: ValueBody::Native(info),
         }
     }
@@ -526,8 +530,17 @@ impl Serialize for ValueBody {
                     },
                 )?;
             }
-            ValueBody::Incomplete(reason) => {
-                map.serialize_entry("IncompleteBody", &IncompleteBodySerContent { reason })?;
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => {
+                map.serialize_entry(
+                    "IncompleteBody",
+                    &IncompleteBodySerContent {
+                        incompleteness,
+                        partial_body: partial_body.as_ref(),
+                    },
+                )?;
             }
         }
         map.end()
@@ -557,7 +570,9 @@ struct ExternalBodySerContent {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteBodySerContent<'a> {
-    reason: &'a HoleReason,
+    incompleteness: &'a Incompleteness,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial_body: Option<&'a Value>,
 }
 
 impl<'de> Deserialize<'de> for ValueBody {
@@ -592,12 +607,20 @@ impl<'de> Deserialize<'de> for ValueBody {
                 });
             }
             if let Some(content) = map.get("IncompleteBody") {
-                let reason_val = content
-                    .get("reason")
-                    .ok_or_else(|| de::Error::missing_field("reason"))?;
-                let reason: HoleReason =
-                    serde_json::from_value(reason_val.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Incomplete(reason));
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct IncompleteBodyContent {
+                    incompleteness: Incompleteness,
+                    #[serde(default)]
+                    partial_body: Option<Value>,
+                }
+
+                let parsed: IncompleteBodyContent =
+                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+                return Ok(ValueBody::Incomplete {
+                    incompleteness: parsed.incompleteness,
+                    partial_body: parsed.partial_body,
+                });
             }
         }
         Err(de::Error::custom(

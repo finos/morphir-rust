@@ -1,6 +1,7 @@
 pub mod codegen;
 pub mod config;
 pub mod home;
+pub mod ir_transport;
 pub mod loader;
 pub mod pipeline;
 pub mod remote;

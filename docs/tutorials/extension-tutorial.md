@@ -25,9 +25,14 @@ Converts source code → Morphir IR V4
 ```rust
 impl Frontend for MyExtension {
     fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
-        // Parse source files
-        // Convert to Morphir IR V4
-        // Return CompileResult
+        let ir = serde_json::json!({"formatVersion": 4});
+        Ok(CompileResult {
+            success: true,
+            ir_version: Some(request.options.ir_version),
+            ir: Some(ir),
+            diagnostics: vec![],
+            modules: request.package.exposed_modules,
+        })
     }
 }
 ```
@@ -87,19 +92,45 @@ impl Extension for MyExtension {
             name: "My Extension".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             types: vec![ExtensionType::Frontend],
-            // ...
+            ..ExtensionInfo::default()
+        }
+    }
+
+    fn capabilities() -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            frontend: Some(FrontendCapability {
+                languages: vec![LanguageCapability {
+                    id: "my-language".into(),
+                    file_extensions: vec![".my".into()],
+                }],
+                ir_versions: vec!["4".into()],
+                compile: true,
+                incremental: false,
+                fragments: false,
+            }),
+            ..ExtensionCapabilities::default()
         }
     }
 }
 
 impl Frontend for MyExtension {
     fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
-        // Implementation
+        let ir = serde_json::json!({"formatVersion": 4});
         Ok(CompileResult {
             success: true,
-            ir: vec![],
+            ir_version: Some(request.options.ir_version),
+            ir: Some(ir),
             diagnostics: vec![],
+            modules: request.package.exposed_modules,
         })
+    }
+
+    fn supported_languages() -> Vec<String> {
+        vec!["my-language".into()]
+    }
+
+    fn file_extensions() -> Vec<String> {
+        vec![".my".into()]
     }
 }
 ```
@@ -155,7 +186,7 @@ custom_setting = "value"
 Access in extension:
 
 ```rust
-let custom_setting = request.options
+let custom_setting = request.options.extra
     .get("custom_setting")
     .and_then(|v| v.as_str());
 ```
@@ -173,11 +204,28 @@ mod tests {
     fn test_compile() {
         let ext = MyExtension;
         let request = CompileRequest {
-            sources: vec![],
-            options: Default::default(),
+            language_id: "my-language".into(),
+            documents: vec![SourceDocument {
+                uri: "file:///workspace/Example.my".into(),
+                language_id: "my-language".into(),
+                version: 1,
+                text: "module Example".into(),
+            }],
+            package: CompilePackage {
+                name: "local/example".into(),
+                exposed_modules: vec!["Example".into()],
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "4".into(),
+                extra: Default::default(),
+            },
         };
         let result = ext.compile(request).unwrap();
         assert!(result.success);
+        assert_eq!(result.ir_version.as_deref(), Some("4"));
+        assert!(result.ir.is_some());
     }
 }
 ```

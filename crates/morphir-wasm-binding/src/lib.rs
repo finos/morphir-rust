@@ -29,11 +29,8 @@ impl Extension for WasmExtension {
 
     fn capabilities() -> ExtensionCapabilities {
         ExtensionCapabilities {
-            streaming: false,
-            incremental: false,
-            cancellation: false,
-            progress: false,
-            extra: Default::default(),
+            frontend: None,
+            ..ExtensionCapabilities::default()
         }
     }
 }

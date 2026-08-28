@@ -6,7 +6,7 @@ use crate::extensions::protocol::{
     ExtensionResponse, InitializeResult, JSONRPC_VERSION, RpcError, methods,
 };
 use crate::{DaemonError, Result};
-use morphir_extension_sdk::ExtensionType;
+use morphir_extension_sdk::{CompileResult, ExtensionType};
 use std::collections::HashSet;
 
 pub(super) enum ResponseFailure {
@@ -39,6 +39,26 @@ pub(super) fn validate_response(
             "Extension response must contain exactly one of result or error".into(),
         ))),
     }
+}
+
+pub(super) fn validate_method_result(
+    method: &str,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    if method == methods::COMPILE {
+        let result: CompileResult = serde_json::from_value(value.clone())?;
+        if result.success && result.ir_version.is_none() {
+            return Err(DaemonError::Extension(
+                "Successful compile result is missing irVersion".into(),
+            ));
+        }
+        if result.success && result.ir.is_none() {
+            return Err(DaemonError::Extension(
+                "Successful compile result is missing ir".into(),
+            ));
+        }
+    }
+    Ok(value)
 }
 
 pub(super) fn validate_negotiation(
@@ -74,19 +94,19 @@ pub(super) fn validate_negotiation(
             expected.id
         )));
     }
+    if unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_none() {
+        return Err(DaemonError::Extension(
+            "Extension declared Frontend without frontend capabilities".into(),
+        ));
+    }
+    if !unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_some() {
+        return Err(DaemonError::Extension(
+            "Extension advertised frontend capabilities without declaring Frontend".into(),
+        ));
+    }
     Ok(NegotiatedSession {
         protocol_version: result.protocol_version,
         extension: result.extension,
         capabilities: result.capabilities,
     })
-}
-
-pub(super) fn required_capability(method: &str) -> Option<ExtensionType> {
-    match method {
-        methods::COMPILE => Some(ExtensionType::Frontend),
-        methods::GENERATE => Some(ExtensionType::Backend),
-        methods::VALIDATE => Some(ExtensionType::Validator),
-        methods::TRANSFORM => Some(ExtensionType::Transform),
-        _ => None,
-    }
 }

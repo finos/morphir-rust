@@ -5,7 +5,9 @@ use crate::extensions::protocol::{
     ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, methods,
 };
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{
+    CompileResult, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
+};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::mem::size_of;
@@ -52,6 +54,15 @@ fn initialization(info: ExtensionInfo) -> InitializeResult {
         extension: info,
         capabilities: ExtensionCapabilities::default(),
     }
+}
+
+fn frontend_initialization(compile: bool) -> InitializeResult {
+    let mut result = initialization(extension(vec![ExtensionType::Frontend]));
+    result.capabilities.frontend = Some(FrontendCapability {
+        compile,
+        ..FrontendCapability::default()
+    });
+    result
 }
 
 fn params() -> InitializeParams {
@@ -138,6 +149,50 @@ async fn rejects_duplicate_capability_kinds() {
 }
 
 #[tokio::test]
+async fn rejects_declared_frontend_without_frontend_capabilities() {
+    let response =
+        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Frontend])))
+            .unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::identified("example"),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("missing frontend capabilities should fail");
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("declared Frontend without frontend capabilities")
+    );
+}
+
+#[tokio::test]
+async fn rejects_frontend_capabilities_without_declared_frontend() {
+    let mut result = initialization(extension(vec![ExtensionType::Backend]));
+    result.capabilities.frontend = Some(FrontendCapability::default());
+    let response = ExtensionResponse::success(1, result).unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::identified("example"),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("undeclared frontend capabilities should fail");
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("frontend capabilities without declaring Frontend")
+    );
+}
+
+#[tokio::test]
 async fn retains_an_indeterminate_state_after_an_uncertain_exchange_failure() {
     let transport = FakeTransport {
         expected: ExpectedExtension::identified("example"),
@@ -204,6 +259,192 @@ async fn local_serialization_failure_preserves_the_ready_session() {
         InvokeOutcome::Success(_, _) => panic!("invalid parameters should not be sent"),
         InvokeOutcome::Failed(failure) => {
             panic!("a local error should preserve Ready: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejects_compile_when_the_frontend_did_not_enable_it_without_sending() {
+    let initialized = ExtensionResponse::success(1, frontend_initialization(false)).unwrap();
+    let compile_response = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "success": false,
+            "diagnostics": [],
+            "modules": []
+        }),
+    )
+    .unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::COMPILE, serde_json::json!({}))
+        .await
+    {
+        InvokeOutcome::Rejected(session, error) => {
+            assert!(error.to_string().contains("does not support capability"));
+            assert_eq!(session.transport_internal().responses.len(), 1);
+        }
+        InvokeOutcome::Success(_, _) => panic!("disabled compilation should be rejected"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("local rejection should preserve Ready: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
+async fn permits_compile_when_the_frontend_enabled_it() {
+    let initialized = ExtensionResponse::success(1, frontend_initialization(true)).unwrap();
+    let compile_response = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "success": false,
+            "diagnostics": [],
+            "modules": []
+        }),
+    )
+    .unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::COMPILE, serde_json::json!({}))
+        .await
+    {
+        InvokeOutcome::Success(session, result) => {
+            assert_eq!(result["success"], false);
+            assert!(session.transport_internal().responses.is_empty());
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("compile should be sent: {error}"),
+        InvokeOutcome::Failed(failure) => panic!("compile should succeed: {}", failure.error()),
+    }
+}
+
+#[tokio::test]
+async fn rejects_successful_compile_result_without_ir_version() {
+    let initialized = ExtensionResponse::success(1, frontend_initialization(true)).unwrap();
+    let compile_response = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "success": true,
+            "ir": {},
+            "diagnostics": [],
+            "modules": []
+        }),
+    )
+    .unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<CompileResult>(methods::COMPILE, serde_json::json!({}))
+        .await
+    {
+        InvokeOutcome::Failed(failure) => {
+            assert!(failure.error().to_string().contains("missing irVersion"));
+        }
+        InvokeOutcome::Success(_, _) => panic!("malformed success should fail the session"),
+        InvokeOutcome::Rejected(_, error) => {
+            panic!("malformed success is not an RPC error: {error}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejects_successful_compile_result_without_ir_for_raw_callers() {
+    let initialized = ExtensionResponse::success(1, frontend_initialization(true)).unwrap();
+    let compile_response = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "success": true,
+            "irVersion": "3",
+            "diagnostics": [],
+            "modules": []
+        }),
+    )
+    .unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::COMPILE, serde_json::json!({}))
+        .await
+    {
+        InvokeOutcome::Failed(failure) => {
+            assert!(failure.error().to_string().contains("missing ir"));
+        }
+        InvokeOutcome::Success(_, _) => panic!("malformed success should fail the session"),
+        InvokeOutcome::Rejected(_, error) => {
+            panic!("malformed success is not an RPC error: {error}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn accepts_successful_compile_result_with_ir_version_and_ir() {
+    let initialized = ExtensionResponse::success(1, frontend_initialization(true)).unwrap();
+    let compile_response = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "success": true,
+            "irVersion": "3",
+            "ir": {},
+            "diagnostics": [],
+            "modules": ["Example"]
+        }),
+    )
+    .unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<CompileResult>(methods::COMPILE, serde_json::json!({}))
+        .await
+    {
+        InvokeOutcome::Success(_, result) => {
+            assert!(result.success);
+            assert_eq!(result.ir_version.as_deref(), Some("3"));
+            assert!(result.ir.is_some());
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("valid success was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("valid success failed the session: {}", failure.error())
         }
     }
 }

@@ -49,6 +49,15 @@ impl Name {
     /// Consecutive one-letter words are grouped in parentheses so decoding can
     /// distinguish an acronym such as `["u", "s", "d"]` from `["usd"]`.
     pub fn to_canonical_string(&self) -> String {
+        fn push_acronym(parts: &mut Vec<String>, acronym: &mut String) {
+            if acronym.len() == 1 {
+                parts.push(std::mem::take(acronym));
+            } else if !acronym.is_empty() {
+                parts.push(format!("({acronym})"));
+                acronym.clear();
+            }
+        }
+
         let mut parts = Vec::new();
         let mut acronym = String::new();
 
@@ -56,17 +65,12 @@ impl Name {
             if word.chars().count() == 1 {
                 acronym.push_str(&word.to_lowercase());
             } else {
-                if !acronym.is_empty() {
-                    parts.push(format!("({acronym})"));
-                    acronym.clear();
-                }
+                push_acronym(&mut parts, &mut acronym);
                 parts.push(word.to_lowercase());
             }
         }
 
-        if !acronym.is_empty() {
-            parts.push(format!("({acronym})"));
-        }
+        push_acronym(&mut parts, &mut acronym);
 
         parts.join("-")
     }
@@ -85,7 +89,9 @@ impl Name {
 
             let opens = part.starts_with('(');
             let closes = part.ends_with(')');
-            if opens != closes || part[1..part.len().saturating_sub(1)].contains(['(', ')']) {
+            let nested_parentheses =
+                part.len() > 2 && part[1..part.len().saturating_sub(1)].contains(['(', ')']);
+            if opens != closes || nested_parentheses {
                 return Err(format!("unmatched parentheses in canonical name: {source}"));
             }
 

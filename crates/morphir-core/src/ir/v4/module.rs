@@ -109,7 +109,7 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut value = serde_json::Value::deserialize(deserializer)?;
         if let Some(object) = value.as_object()
             && object.contains_key("doc")
             && object.contains_key("value")
@@ -117,6 +117,18 @@ where
             let doc =
                 serde_json::from_value(object["doc"].clone()).map_err(serde::de::Error::custom)?;
             let value = serde_json::from_value(object["value"].clone())
+                .map_err(serde::de::Error::custom)?;
+            return Ok(Self {
+                doc: Some(doc),
+                value,
+            });
+        }
+
+        if let Some(object) = value.as_object_mut()
+            && let Some(doc) = object.remove("doc")
+        {
+            let doc = serde_json::from_value(doc).map_err(serde::de::Error::custom)?;
+            let value = serde_json::from_value(serde_json::Value::Object(std::mem::take(object)))
                 .map_err(serde::de::Error::custom)?;
             return Ok(Self {
                 doc: Some(doc),

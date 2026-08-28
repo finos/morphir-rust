@@ -9,7 +9,8 @@
 
 use indexmap::IndexMap;
 use serde::Serialize;
-use serde::ser::{SerializeMap, Serializer};
+use serde::ser::{SerializeMap, SerializeSeq, Serializer};
+use std::cell::Cell;
 
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
@@ -18,6 +19,30 @@ use super::types::Type;
 use super::value::{
     HoleReason, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value, ValueDefinition,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TypeEncoding {
+    Compact,
+    Expanded,
+}
+
+thread_local! {
+    static TYPE_ENCODING: Cell<TypeEncoding> = const { Cell::new(TypeEncoding::Expanded) };
+}
+
+/// Select the v4 type encoding for every nested type serialized by `operation`.
+pub fn with_type_encoding<R>(encoding: TypeEncoding, operation: impl FnOnce() -> R) -> R {
+    struct Restore(TypeEncoding);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TYPE_ENCODING.set(self.0);
+        }
+    }
+
+    let previous = TYPE_ENCODING.replace(encoding);
+    let _restore = Restore(previous);
+    operation()
+}
 
 // =============================================================================
 // Type V4 Serialization
@@ -41,6 +66,11 @@ pub fn serialize_type<S>(tpe: &Type, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
+    if TYPE_ENCODING.get() == TypeEncoding::Compact
+        && tpe.attributes() == &TypeAttributes::default()
+    {
+        return serialize_compact_type(tpe, serializer);
+    }
     match tpe {
         Type::Variable(attrs, name) => {
             let mut map = serializer.serialize_map(Some(1))?;
@@ -113,8 +143,8 @@ where
             map.serialize_entry(
                 "Function",
                 &FunctionContent {
-                    arg: arg.as_ref(),
-                    result: result.as_ref(),
+                    argument_type: arg.as_ref(),
+                    return_type: result.as_ref(),
                     attrs: Some(attrs),
                 },
             )?;
@@ -176,10 +206,99 @@ struct ExtensibleRecordContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FunctionContent<'a> {
-    arg: &'a Type,
-    result: &'a Type,
+    argument_type: &'a Type,
+    return_type: &'a Type,
     #[serde(skip_serializing_if = "Option::is_none")]
     attrs: Option<&'a TypeAttributes>,
+}
+
+struct ReferenceArgs<'a> {
+    fqname: String,
+    args: &'a [Type],
+}
+
+impl Serialize for ReferenceArgs<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.args.len() + 1))?;
+        sequence.serialize_element(&self.fqname)?;
+        for argument in self.args {
+            sequence.serialize_element(argument)?;
+        }
+        sequence.end()
+    }
+}
+
+fn serialize_compact_type<S>(tpe: &Type, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match tpe {
+        Type::Variable(_, name) => serializer.serialize_str(&name.to_canonical_string()),
+        Type::Reference(_, fqname, arguments) if arguments.is_empty() => {
+            serializer.serialize_str(&fqname.to_canonical_string())
+        }
+        Type::Reference(_, fqname, arguments) => {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(
+                "Reference",
+                &ReferenceArgs {
+                    fqname: fqname.to_canonical_string(),
+                    args: arguments,
+                },
+            )?;
+            map.end()
+        }
+        Type::Tuple(_, elements) => {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry("Tuple", elements)?;
+            map.end()
+        }
+        Type::Record(_, fields) => {
+            let fields: IndexMap<String, &Type> = fields
+                .iter()
+                .map(|field| (field.name.to_canonical_string(), &field.tpe))
+                .collect();
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry("Record", &fields)?;
+            map.end()
+        }
+        Type::ExtensibleRecord(_, variable, fields) => {
+            let fields: IndexMap<String, &Type> = fields
+                .iter()
+                .map(|field| (field.name.to_canonical_string(), &field.tpe))
+                .collect();
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(
+                "ExtensibleRecord",
+                &ExtensibleRecordContent {
+                    variable: variable.to_canonical_string(),
+                    fields,
+                    attrs: None,
+                },
+            )?;
+            map.end()
+        }
+        Type::Function(_, argument, result) => {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(
+                "Function",
+                &FunctionContent {
+                    argument_type: argument,
+                    return_type: result,
+                    attrs: None,
+                },
+            )?;
+            map.end()
+        }
+        Type::Unit(_) => {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry("Unit", &IndexMap::<String, String>::new())?;
+            map.end()
+        }
+    }
 }
 
 #[derive(Serialize)]

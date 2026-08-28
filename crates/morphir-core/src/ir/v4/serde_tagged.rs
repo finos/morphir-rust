@@ -89,6 +89,30 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 Ok(Type::Variable(attrs, name))
             }
             "Reference" => {
+                if let serde_json::Value::String(fqname) = &value {
+                    return Ok(Type::Reference(
+                        TypeAttributes::default(),
+                        FQName::from_canonical_string(fqname).map_err(de::Error::custom)?,
+                        Vec::new(),
+                    ));
+                }
+                if let serde_json::Value::Array(items) = value {
+                    let mut items = items.into_iter();
+                    let fqname = items
+                        .next()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .ok_or_else(|| {
+                            de::Error::custom("Reference array must begin with an FQName")
+                        })?;
+                    let args = items
+                        .map(|value| serde_json::from_value(value).map_err(de::Error::custom))
+                        .collect::<Result<_, M::Error>>()?;
+                    return Ok(Type::Reference(
+                        TypeAttributes::default(),
+                        FQName::from_canonical_string(&fqname).map_err(de::Error::custom)?,
+                        args,
+                    ));
+                }
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Content {
@@ -104,6 +128,11 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 Ok(Type::Reference(attrs, fqname, args))
             }
             "Tuple" => {
+                if value.is_array() {
+                    return serde_json::from_value(value)
+                        .map(|elements| Type::Tuple(TypeAttributes::default(), elements))
+                        .map_err(de::Error::custom);
+                }
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Content {
@@ -165,16 +194,18 @@ impl<'de> Visitor<'de> for TypeVisitor {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Content {
-                    arg: Type,
-                    result: Type,
+                    #[serde(alias = "arg")]
+                    argument_type: Type,
+                    #[serde(alias = "result")]
+                    return_type: Type,
                     attrs: Option<TypeAttributes>,
                 }
                 let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
                 let attrs = content.attrs.unwrap_or_default();
                 Ok(Type::Function(
                     attrs,
-                    Box::new(content.arg),
-                    Box::new(content.result),
+                    Box::new(content.argument_type),
+                    Box::new(content.return_type),
                 ))
             }
             "Unit" => {
@@ -210,6 +241,19 @@ impl<'de> Visitor<'de> for TypeVisitor {
         let tag: String = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+        if tag.contains(':') && tag.contains('#') {
+            let fqname = FQName::from_canonical_string(&tag).map_err(de::Error::custom)?;
+            let mut arguments = Vec::new();
+            while let Some(argument) = seq.next_element::<Type>()? {
+                arguments.push(argument);
+            }
+            return Ok(Type::Reference(
+                TypeAttributes::default(),
+                fqname,
+                arguments,
+            ));
+        }
 
         match tag.as_str() {
             "Variable" | "variable" => {

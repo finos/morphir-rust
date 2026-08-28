@@ -148,13 +148,11 @@ impl Field {
 /// Type specification (public API view of a type)
 // The variant names include "Specification" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpecification {
     /// Type alias specification
     TypeAliasSpecification {
         type_params: Vec<Name>,
-        #[serde(rename = "typeExp")]
         type_expr: Type,
     },
     /// Opaque type (constructors hidden)
@@ -164,6 +162,148 @@ pub enum TypeSpecification {
         type_params: Vec<Name>,
         constructors: Vec<ConstructorSpecification>,
     },
+}
+
+impl Serialize for TypeSpecification {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Alias<'a> {
+            type_params: &'a [Name],
+            type_exp: &'a Type,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Opaque<'a> {
+            #[serde(skip_serializing_if = "<[Name]>::is_empty")]
+            type_params: &'a [Name],
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Custom<'a> {
+            type_params: &'a [Name],
+            constructors: indexmap::IndexMap<String, Vec<(&'a Name, &'a Type)>>,
+        }
+
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            Self::TypeAliasSpecification {
+                type_params,
+                type_expr,
+            } => map.serialize_entry(
+                "TypeAliasSpecification",
+                &Alias {
+                    type_params,
+                    type_exp: type_expr,
+                },
+            )?,
+            Self::OpaqueTypeSpecification { type_params } => {
+                map.serialize_entry("OpaqueTypeSpecification", &Opaque { type_params })?
+            }
+            Self::CustomTypeSpecification {
+                type_params,
+                constructors,
+            } => map.serialize_entry(
+                "CustomTypeSpecification",
+                &Custom {
+                    type_params,
+                    constructors: constructors
+                        .iter()
+                        .map(|constructor| {
+                            (
+                                constructor.name.to_canonical_string(),
+                                constructor
+                                    .args
+                                    .iter()
+                                    .map(|argument| (&argument.name, &argument.arg_type))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                },
+            )?,
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TypeSpecification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Alias {
+            #[serde(default)]
+            type_params: Vec<Name>,
+            type_exp: Type,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Opaque {
+            #[serde(default)]
+            type_params: Vec<Name>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Custom {
+            #[serde(default)]
+            type_params: Vec<Name>,
+            constructors: indexmap::IndexMap<String, Vec<(Name, Type)>>,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| de::Error::custom("expected a type specification wrapper"))?;
+        if let Some(content) = object
+            .get("TypeAliasSpecification")
+            .or_else(|| object.get("typeAliasSpecification"))
+        {
+            let content: Alias =
+                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+            return Ok(Self::TypeAliasSpecification {
+                type_params: content.type_params,
+                type_expr: content.type_exp,
+            });
+        }
+        if let Some(content) = object
+            .get("OpaqueTypeSpecification")
+            .or_else(|| object.get("opaqueTypeSpecification"))
+        {
+            let content: Opaque =
+                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+            return Ok(Self::OpaqueTypeSpecification {
+                type_params: content.type_params,
+            });
+        }
+        if let Some(content) = object
+            .get("CustomTypeSpecification")
+            .or_else(|| object.get("customTypeSpecification"))
+        {
+            let content: Custom =
+                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
+            return Ok(Self::CustomTypeSpecification {
+                type_params: content.type_params,
+                constructors: content
+                    .constructors
+                    .into_iter()
+                    .map(|(name, args)| ConstructorSpecification {
+                        name: Name::from(name.as_str()),
+                        args: args
+                            .into_iter()
+                            .map(|(name, arg_type)| ConstructorArgSpec { name, arg_type })
+                            .collect(),
+                    })
+                    .collect(),
+            });
+        }
+        Err(de::Error::custom("unknown type specification wrapper"))
+    }
 }
 
 /// Constructor specification
@@ -300,11 +440,32 @@ impl Serialize for TypeDefinition {
                 type_params,
                 constructors,
             } => {
+                #[derive(Serialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Canonical<'a> {
+                    type_params: &'a [Name],
+                    access: &'a super::Access,
+                    constructors: indexmap::IndexMap<String, Vec<(&'a Name, &'a Type)>>,
+                }
                 map.serialize_entry(
                     "CustomTypeDefinition",
-                    &CustomTypeDefContent {
-                        type_params: type_params.clone(),
-                        constructors: constructors.clone(),
+                    &Canonical {
+                        type_params,
+                        access: &constructors.access,
+                        constructors: constructors
+                            .value
+                            .iter()
+                            .map(|constructor| {
+                                (
+                                    constructor.name.to_canonical_string(),
+                                    constructor
+                                        .args
+                                        .iter()
+                                        .map(|argument| (&argument.name, &argument.arg_type))
+                                        .collect(),
+                                )
+                            })
+                            .collect(),
                     },
                 )?;
             }
@@ -366,6 +527,33 @@ impl<'de> Deserialize<'de> for TypeDefinition {
                 });
             }
             if let Some(content) = map.get("CustomTypeDefinition") {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Canonical {
+                    #[serde(default)]
+                    type_params: Vec<Name>,
+                    access: super::Access,
+                    constructors: indexmap::IndexMap<String, Vec<(Name, Type)>>,
+                }
+                if let Ok(parsed) = serde_json::from_value::<Canonical>(content.clone()) {
+                    return Ok(TypeDefinition::CustomTypeDefinition {
+                        type_params: parsed.type_params,
+                        constructors: AccessControlled {
+                            access: parsed.access,
+                            value: parsed
+                                .constructors
+                                .into_iter()
+                                .map(|(name, args)| ConstructorDefinition {
+                                    name: Name::from(name.as_str()),
+                                    args: args
+                                        .into_iter()
+                                        .map(|(name, arg_type)| ConstructorArg { name, arg_type })
+                                        .collect(),
+                                })
+                                .collect(),
+                        },
+                    });
+                }
                 let parsed: CustomTypeDefContent =
                     serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
                 return Ok(TypeDefinition::CustomTypeDefinition {

@@ -46,45 +46,35 @@ impl Serialize for Literal {
     where
         S: Serializer,
     {
-        #[derive(Serialize)]
-        struct LiteralValue<T: Serialize> {
-            value: T,
-        }
-
         match self {
             Literal::Bool(v) => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("BoolLiteral", &LiteralValue { value: v })?;
+                map.serialize_entry("BoolLiteral", v)?;
                 map.end()
             }
             Literal::Char(v) => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry(
-                    "CharLiteral",
-                    &LiteralValue {
-                        value: v.to_string(),
-                    },
-                )?;
+                map.serialize_entry("CharLiteral", &v.to_string())?;
                 map.end()
             }
             Literal::String(v) => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("StringLiteral", &LiteralValue { value: v })?;
+                map.serialize_entry("StringLiteral", v)?;
                 map.end()
             }
             Literal::Integer(v) => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("IntegerLiteral", &LiteralValue { value: v })?;
+                map.serialize_entry("IntegerLiteral", v)?;
                 map.end()
             }
             Literal::Float(v) => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("FloatLiteral", &LiteralValue { value: v })?;
+                map.serialize_entry("FloatLiteral", v)?;
                 map.end()
             }
             Literal::Decimal(v) => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("DecimalLiteral", &LiteralValue { value: v })?;
+                map.serialize_entry("DecimalLiteral", v)?;
                 map.end()
             }
         }
@@ -115,9 +105,13 @@ impl<'de> Visitor<'de> for LiteralVisitor {
     where
         M: MapAccess<'de>,
     {
-        #[derive(Deserialize)]
-        struct LiteralValue<T> {
-            value: T,
+        fn compact_or_expanded(value: serde_json::Value) -> serde_json::Value {
+            match value {
+                serde_json::Value::Object(mut object) if object.contains_key("value") => {
+                    object.remove("value").unwrap()
+                }
+                value => value,
+            }
         }
 
         let (tag, value): (String, serde_json::Value) = map
@@ -125,41 +119,32 @@ impl<'de> Visitor<'de> for LiteralVisitor {
             .ok_or_else(|| de::Error::custom("expected object wrapper with single key"))?;
 
         match tag.as_str() {
-            "BoolLiteral" => {
-                let content: LiteralValue<bool> =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                Ok(Literal::Bool(content.value))
-            }
+            "BoolLiteral" => serde_json::from_value(compact_or_expanded(value))
+                .map(Literal::Bool)
+                .map_err(de::Error::custom),
             "CharLiteral" => {
-                let content: LiteralValue<String> =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let content: String = serde_json::from_value(compact_or_expanded(value))
+                    .map_err(de::Error::custom)?;
                 let c = content
-                    .value
                     .chars()
                     .next()
                     .ok_or_else(|| de::Error::custom("empty char literal"))?;
                 Ok(Literal::Char(c))
             }
-            "StringLiteral" => {
-                let content: LiteralValue<String> =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                Ok(Literal::String(content.value))
-            }
+            "StringLiteral" => serde_json::from_value(compact_or_expanded(value))
+                .map(Literal::String)
+                .map_err(de::Error::custom),
             "IntegerLiteral" | "WholeNumberLiteral" => {
-                let content: LiteralValue<i64> =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                Ok(Literal::Integer(content.value))
+                serde_json::from_value(compact_or_expanded(value))
+                    .map(Literal::Integer)
+                    .map_err(de::Error::custom)
             }
-            "FloatLiteral" => {
-                let content: LiteralValue<f64> =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                Ok(Literal::Float(content.value))
-            }
-            "DecimalLiteral" => {
-                let content: LiteralValue<String> =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                Ok(Literal::Decimal(content.value))
-            }
+            "FloatLiteral" => serde_json::from_value(compact_or_expanded(value))
+                .map(Literal::Float)
+                .map_err(de::Error::custom),
+            "DecimalLiteral" => serde_json::from_value(compact_or_expanded(value))
+                .map(Literal::Decimal)
+                .map_err(de::Error::custom),
             _ => Err(de::Error::unknown_variant(
                 &tag,
                 &[

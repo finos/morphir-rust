@@ -93,10 +93,44 @@ impl ClassicV3ModuleVisitor for ModuleCounter {
     }
 }
 
+fn classic_v3_source(module_count: usize, module_padding: usize) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ClassicFile {
+        format_version: u32,
+        distribution: serde_json::Value,
+    }
+
+    let modules = (0..module_count)
+        .map(|index| {
+            serde_json::json!([
+                [["module", index.to_string()]],
+                {
+                    "access": "Public",
+                    "value": {
+                        "types": [],
+                        "values": [],
+                        "doc": "x".repeat(module_padding),
+                    }
+                }
+            ])
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&ClassicFile {
+        format_version: 3,
+        distribution: serde_json::json!([
+            "Library",
+            [["streaming", "fixture"]],
+            [],
+            { "modules": modules }
+        ]),
+    })
+    .unwrap()
+}
+
 #[test]
 fn classic_v3_source_visits_one_module_at_a_time_from_a_reader() {
-    let bytes =
-        include_bytes!("../../../../../website/static/ir/examples/v3/greeting-example.json");
+    let bytes = classic_v3_source(2, 2_000);
     let largest_read = Rc::new(Cell::new(0));
     let bytes_read = Rc::new(Cell::new(0));
     let reader = ChunkedReader {
@@ -120,8 +154,8 @@ fn classic_v3_source_visits_one_module_at_a_time_from_a_reader() {
 }
 
 #[test]
-fn large_lcr_source_releases_each_module_before_reading_the_rest() {
-    let bytes = include_bytes!("../../../../../website/static/ir/examples/v3/lcr-morphir-ir.json");
+fn large_lcr_scale_source_releases_each_module_before_reading_the_rest() {
+    let bytes = classic_v3_source(84, 42_000);
     let largest_read = Rc::new(Cell::new(0));
     let bytes_read = Rc::new(Cell::new(0));
     let reader = ChunkedReader {
@@ -146,10 +180,7 @@ fn large_lcr_source_releases_each_module_before_reading_the_rest() {
 
 #[test]
 fn rejects_non_v3_input_before_invoking_visitor_callbacks() {
-    let mut source: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../website/static/ir/examples/v3/greeting-example.json"
-    ))
-    .unwrap();
+    let mut source: serde_json::Value = serde_json::from_slice(&classic_v3_source(2, 0)).unwrap();
     source["formatVersion"] = 2.into();
     let source = serde_json::to_vec(&source).unwrap();
     let began = Rc::new(Cell::new(false));

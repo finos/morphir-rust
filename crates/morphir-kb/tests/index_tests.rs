@@ -927,3 +927,84 @@ fn indexed_search_filters_cannot_inject_sql() {
         );
     }
 }
+
+// ------------------------------------------- bundle filter under ambiguity
+
+const AMBIGUOUS_INDEX: &str = "---\nokf_version: \"0.2\"\ntitle: Foo\ndescription: A bundle called foo.\n---\n\n# Foo\n\nA bundle called foo.\n";
+
+const PRIVATE_DOC: &str = "---\ntype: Concept\ntitle: Naming, in private\ndescription: Held back.\n---\n\n# Naming, in private\n\nPrivate naming guidance.\n";
+
+const PUBLIC_DOC: &str = "---\ntype: Concept\ntitle: Naming, in public\ndescription: Published.\n---\n\n# Naming, in public\n\nPublic naming guidance.\n";
+
+/// Two bundles that share the bare name `foo` under different groups — the
+/// public/private split where the bundle filter has to mean exactly one thing.
+fn ambiguous_fixture(root: &Path) -> PathBuf {
+    let kb_root = root.join("kb");
+    let private = kb_root.join("bundles").join("private").join("foo");
+    write(&private.join("index.md"), AMBIGUOUS_INDEX);
+    write(&private.join("secret.md"), PRIVATE_DOC);
+    let public = kb_root.join("bundles").join("public").join("foo");
+    write(&public.join("index.md"), AMBIGUOUS_INDEX);
+    write(&public.join("open.md"), PUBLIC_DOC);
+    kb_root
+}
+
+#[test]
+fn indexed_search_scopes_an_ambiguous_bare_name_to_the_bundle_the_scan_picks() {
+    let tmp = TempDir::new().unwrap();
+    let kb_root = ambiguous_fixture(tmp.path());
+    let kb = load(&kb_root);
+    let db = db_path(&kb_root);
+    index::build(&kb, &db, Utc::now()).unwrap();
+
+    let chosen = kb.bundle("foo").expect("a bare name resolves").label();
+    assert_eq!(
+        chosen, "private/foo",
+        "first match over bundles sorted by root path"
+    );
+
+    let rows = index::search(
+        &db,
+        "naming",
+        20,
+        &index::SearchFilters {
+            bundle: Some("foo"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let labels: Vec<String> = rows
+        .rows
+        .iter()
+        .map(|r| r[0].clone().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        labels,
+        vec![chosen.clone()],
+        "`--bundle foo` is one bundle, not every bundle wearing the name"
+    );
+    assert_eq!(paths_of(&rows), vec!["/secret.md"]);
+
+    // And the two search paths answer the same question the same way.
+    let scanned: serde_json::Value = serde_json::from_str(&morphir_kb::render::search(
+        &kb,
+        Some("naming"),
+        true,
+        None,
+        &[],
+        None,
+        Some("foo"),
+        true,
+    ))
+    .expect("the scan renders JSON");
+    let scanned_labels: Vec<String> = scanned["results"]
+        .as_array()
+        .expect("results is an array")
+        .iter()
+        .map(|r| r["bundle"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        labels, scanned_labels,
+        "the indexed search and the scan agree on which bundle `foo` names"
+    );
+}

@@ -1825,3 +1825,183 @@ fn run_git(dir: &Path, args: &[&str]) {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// ------------------------------------------------- diff: containment and gaps
+
+/// A bundle whose mirror root is two directories deep.
+///
+/// The depth is the point. `mirror_file` judges containment against the bundle
+/// root, which sits that far above the resolved path, so it absorbs two `..`
+/// segments and calls the result contained. The diff's own scratch tree is only
+/// one directory above `scratch/a` and `scratch/b`, so the very same `rel`
+/// climbs out of it — the two containment roots cannot be made to agree.
+fn deep_mirror_fixture() -> (TempDir, PathBuf, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let kb_root = dir.path().join("kb");
+    let bundle_root = kb_root.join("bundles").join("vendored");
+    write_file(
+        &bundle_root.join("index.md"),
+        "---\nokf_version: \"0.2\"\ntitle: Vendored\ndescription: Mirrored upstream material.\nsync: true\n---\n\n# Vendored\n\nMirrored upstream material.\n\n## Orientation\n",
+    );
+    write_file(
+        &bundle_root.join("sync.yaml"),
+        "upstream:\n  repo: acme/spec\n  refs_path: acme/spec\nroot: mirror/sources\nmappings:\n  - \"docs/**\"\n",
+    );
+    // Real directories, so the `..` segments below are resolvable by the OS
+    // rather than failing before anything is written.
+    fs::create_dir_all(bundle_root.join("mirror").join("sources")).unwrap();
+    (dir, kb_root, bundle_root)
+}
+
+#[test]
+fn diff_refuses_a_rel_that_climbs_out_of_the_scratch_directory() {
+    let (dir, kb_root, bundle_root) = deep_mirror_fixture();
+
+    // The scratch directory lives directly under the system temp directory, and
+    // so does the fixture, so two `..` segments from `scratch/a` land on a
+    // sentinel that has nothing to do with either.
+    let victim = std::env::temp_dir().join(format!("kb-diff-victim-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&victim);
+    fs::create_dir_all(&victim).unwrap();
+    let sentinel = victim.join("evil.md");
+    fs::write(&sentinel, "SENTINEL\n").unwrap();
+    let name = victim.file_name().unwrap().to_str().unwrap().to_string();
+    let rel = format!("../../{name}/evil.md");
+
+    // Both sides of the comparison exist, so nothing short of the guard stops
+    // the staging writes: the mirrored file where the rel really lands inside
+    // the bundle, and an upstream copy where it lands from the checkout root.
+    write_file(
+        &bundle_root.join(&name).join("evil.md"),
+        "---\ntitle: Evil\n---\n\n# Evil\n",
+    );
+    let upstream = dir.path().join("nested").join("upstream");
+    fs::create_dir_all(&upstream).unwrap();
+    write_file(
+        &dir.path().join(&name).join("evil.md"),
+        "---\ntitle: Upstream\n---\n\n# Upstream\n",
+    );
+
+    let (_, sb) = load_sync(&kb_root);
+    let outcome = sync::diff(&sb, &upstream, &rel);
+    let survived = fs::read_to_string(&sentinel).unwrap();
+    let _ = fs::remove_dir_all(&victim);
+    assert_eq!(
+        survived, "SENTINEL\n",
+        "a diff writes inside its own scratch directory and nowhere else"
+    );
+    let err = outcome.unwrap_err();
+    assert!(
+        err.to_string().contains(&rel),
+        "the refusal names the path it refused: {err}"
+    );
+}
+
+/// A scratch checkout of `upstream`, minus `absent`, as a git repository — the
+/// only place a patch from `diff` claims to fit.
+fn checkout_of(upstream: &Path, absent: Option<&str>) -> TempDir {
+    let repo = TempDir::new().unwrap();
+    run_git(repo.path(), &["init", "-q"]);
+    for rel in sync::relative_files_under(upstream).unwrap() {
+        if Some(rel.as_str()) == absent {
+            continue;
+        }
+        let target = sync::resolve(repo.path(), &rel);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::copy(upstream.join(&rel), &target).unwrap();
+    }
+    run_git(repo.path(), &["add", "-A"]);
+    repo
+}
+
+/// `git apply` in `repo`, insisting the patch both checks and lands.
+fn apply_patch(repo: &Path, patch: &str) {
+    let patch_file = repo.join("kb.patch");
+    fs::write(&patch_file, patch).unwrap();
+    let checked = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["apply", "--check", "kb.patch"])
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "git apply --check refused the patch:\n{patch}\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    run_git(repo, &["apply", "kb.patch"]);
+}
+
+#[test]
+fn diff_of_a_file_deleted_upstream_but_edited_here_is_not_identical() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nA local edit.\n").unwrap();
+    fs::remove_file(upstream.join("docs").join("types.md")).unwrap();
+
+    let d = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    assert!(
+        !d.identical,
+        "a file that exists here and is gone upstream is not identical: {d:?}"
+    );
+    assert!(
+        d.diff.contains("A local edit."),
+        "the human diff shows what would go upstream: {}",
+        d.diff
+    );
+    assert!(
+        d.patch
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "the patch still names the mirrored path: {}",
+        d.patch
+    );
+    assert_eq!(sync::render_diff_raw(&d), d.patch);
+    assert_ne!(sync::render_diff_text(&d), "docs/types.md: identical\n");
+
+    // And it lands in a checkout where the file is gone, which is the only
+    // state the upstream repository can be in for this to have happened.
+    let repo = checkout_of(&upstream, Some("docs/types.md"));
+    apply_patch(repo.path(), &d.patch);
+    let projected =
+        sync::project(&fs::read_to_string(sb.local_file("docs/types.md")).unwrap()).unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.path().join("docs").join("types.md")).unwrap(),
+        projected
+    );
+}
+
+#[test]
+fn diff_of_a_file_missing_locally_is_a_deletion_rather_than_an_unattributed_io_error() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    fs::remove_file(sb.local_file("docs/types.md")).unwrap();
+
+    let d = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    assert!(!d.identical, "got: {d:?}");
+    assert!(
+        d.patch
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "got: {}",
+        d.patch
+    );
+
+    let repo = checkout_of(&upstream, None);
+    apply_patch(repo.path(), &d.patch);
+    assert!(
+        !repo.path().join("docs").join("types.md").exists(),
+        "the patch takes the file away, which is what the mirror now says"
+    );
+}
+
+#[test]
+fn diff_of_a_path_on_neither_side_names_the_path_and_the_situation() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let err = sync::diff(&sb, &upstream, "docs/never-existed.md").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("docs/never-existed.md"), "got: {msg}");
+    assert!(
+        !msg.contains("os error"),
+        "a bare IO error attributes nothing: {msg}"
+    );
+}

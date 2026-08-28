@@ -1422,10 +1422,49 @@ pub struct DiffResult {
 /// headers without rewriting git's output by hand — which would break on the
 /// first filename holding a space — is to hand git paths that already have the
 /// shape it should print.
+///
+/// A side that is not there is compared against nothing rather than passed over:
+/// a file deleted upstream diffs as an addition and carries a patch that restores
+/// it, one deleted here diffs as a removal, and a path neither side holds is
+/// refused by name. `rel` itself is checked for containment first, as `pull` and
+/// `push` check every path they touch.
 pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<DiffResult> {
-    let local = fs::read(sb.mirror_file(rel)?)?;
-    let text = String::from_utf8_lossy(&local).into_owned();
-    let projected = project(&text).map_err(|err| Error::msg(format!("{rel}: {err}")))?;
+    // The guard `pull` and `push` already put in front of every path they act
+    // on. Without it a `rel` carrying `..` reached the staging writes below,
+    // and a mirror root a few directories deep absorbs enough of those segments
+    // for `mirror_file` to call the path contained — while `scratch/a` and
+    // `scratch/b`, one directory down rather than several, do not: the copy and
+    // the write landed outside the scratch tree, and `create_dir_all` made the
+    // directories to receive them. Tightening `mirror_file` cannot close this,
+    // because its containment root is legitimately the deeper of the two.
+    if !safe_relative(rel) {
+        return Err(Error::msg(format!(
+            "`{rel}` leaves the mirror — diff a path relative to the mirror root, \
+             e.g. `docs/types.md`, with no leading separator and no `.` or `..` segments"
+        )));
+    }
+    let local_file = sb.mirror_file(rel)?;
+    let upstream_file = resolve(upstream_root, rel);
+    // Either side may be absent, and both absences are states `sync status`
+    // already has names for: `deleted-upstream-edited` when the checkout has
+    // dropped a file the mirror still holds an edit of, `missing-local` the
+    // other way round. Modelled here rather than left to fail — the first used
+    // to make git complain into a dropped stderr and hand back an empty diff,
+    // which then read as "identical", and the second died on an `fs::read` that
+    // named nothing.
+    let projected = if local_file.is_file() {
+        let text = String::from_utf8_lossy(&fs::read(&local_file)?).into_owned();
+        Some(project(&text).map_err(|err| Error::msg(format!("{rel}: {err}")))?)
+    } else {
+        None
+    };
+    let upstream = upstream_file.is_file().then_some(upstream_file.as_path());
+    if projected.is_none() && upstream.is_none() {
+        return Err(Error::msg(format!(
+            "`{rel}` is in neither the mirror nor the upstream checkout — \
+             name a path one side still holds, e.g. `docs/types.md`"
+        )));
+    }
     // A scratch directory unique to this call. A fixed name under the system
     // temp directory was a shared mutable file: two diffs running at once —
     // two shells, or two tests — would compare upstream against whichever
@@ -1435,7 +1474,7 @@ pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<DiffResu
         std::process::id(),
         DIFF_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let outcome = diff_in(&scratch, upstream_root, rel, &projected);
+    let outcome = diff_in(&scratch, upstream, rel, projected.as_deref());
     // Best effort: scratch files left behind are untidy, never wrong, and any
     // git failure above is the more interesting thing to report.
     let _ = fs::remove_dir_all(&scratch);
@@ -1451,35 +1490,87 @@ pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<DiffResu
     })
 }
 
+/// The name git reads as "there was nothing on this side" in `--no-index`.
+/// Git special-cases the string itself, so it means the same on Windows as it
+/// does here and never reaches a filesystem.
+const NULL_PATH: &str = "/dev/null";
+
 /// Both renderings of the same comparison, staged under `scratch`.
+///
+/// `upstream` is `None` when the checkout no longer holds the file and
+/// `projected` is `None` when the mirror does not; the caller guarantees at
+/// least one of them. Git is never handed a path that is not there — it refuses
+/// one outright, saying so on stderr and printing nothing — so the absent side
+/// is named [`NULL_PATH`] instead, which is what makes the comparison a
+/// `new file mode` or `deleted file mode` patch rather than a silent failure.
+///
+/// Staging an empty `a/<rel>` would carry the same headers and the same content,
+/// and it is the smaller change, but `git apply` refuses the result wherever the
+/// file is missing — "No such file or directory" — because nothing in such a
+/// patch says a file is being created. Only the `/dev/null` form lands, and a
+/// patch that does not land is not worth emitting.
 fn diff_in(
     scratch: &Path,
-    upstream_root: &Path,
+    upstream: Option<&Path>,
     rel: &str,
-    projected: &str,
+    projected: Option<&str>,
 ) -> Result<(String, String)> {
+    let null = Path::new(NULL_PATH);
     let flat = scratch.join(rel.replace('/', "_"));
-    write_bytes(&flat, projected.as_bytes())?;
-    let upstream = resolve(upstream_root, rel);
-    let human = git_diff(None, &[], upstream.as_os_str(), flat.as_os_str())?;
+    let projected_side = match projected {
+        Some(text) => {
+            write_bytes(&flat, text.as_bytes())?;
+            flat.as_path()
+        }
+        None => null,
+    };
+    let human = git_diff(
+        None,
+        &[],
+        upstream.unwrap_or(null).as_os_str(),
+        projected_side.as_os_str(),
+    )?;
 
     // The staged pair carries the relative path under an `a/` and a `b/` root.
     // With the prefixes blanked, git prints exactly `a/<rel>` and `b/<rel>` —
     // its own quoting and escaping rules intact, which is the whole point of
-    // not touching the text afterwards.
-    let mut patch = String::new();
-    if upstream.is_file() {
-        let staged_a = resolve(&scratch.join("a"), rel);
-        let staged_b = resolve(&scratch.join("b"), rel);
-        fs::copy(&upstream, ensure_parent(&staged_a)?)?;
-        write_bytes(&staged_b, projected.as_bytes())?;
-        patch = git_diff(
-            Some(scratch),
-            &["--src-prefix=", "--dst-prefix="],
-            format!("a/{rel}").as_ref(),
-            format!("b/{rel}").as_ref(),
-        )?;
-    }
+    // not touching the text afterwards. Where only one side exists there is
+    // only one root to stage, and git's own default prefixes put those same two
+    // names on it.
+    let staged_a = resolve(&scratch.join("a"), rel);
+    let staged_b = resolve(&scratch.join("b"), rel);
+    let patch = match (upstream, projected) {
+        (Some(up), Some(text)) => {
+            fs::copy(up, ensure_parent(&staged_a)?)?;
+            write_bytes(&staged_b, text.as_bytes())?;
+            git_diff(
+                Some(scratch),
+                &["--src-prefix=", "--dst-prefix="],
+                format!("a/{rel}").as_ref(),
+                format!("b/{rel}").as_ref(),
+            )?
+        }
+        (None, Some(text)) => {
+            write_bytes(&staged_b, text.as_bytes())?;
+            git_diff(
+                Some(&scratch.join("b")),
+                &[],
+                null.as_os_str(),
+                rel.as_ref(),
+            )?
+        }
+        (Some(up), None) => {
+            fs::copy(up, ensure_parent(&staged_a)?)?;
+            git_diff(
+                Some(&scratch.join("a")),
+                &[],
+                rel.as_ref(),
+                null.as_os_str(),
+            )?
+        }
+        // Refused by `diff` before anything is staged.
+        (None, None) => String::new(),
+    };
     Ok((human, patch))
 }
 
@@ -1513,7 +1604,23 @@ fn git_diff(cwd: Option<&Path>, opts: &[&str], old: &OsStr, new: &OsStr) -> Resu
         .arg(new)
         .output()
         .map_err(|_| Error::msg("git diff failed — is git on PATH?"))?;
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    // `--no-index` exits 1 to say "the two files differ", which is the ordinary
+    // outcome here, so the exit status cannot tell that apart from a real
+    // failure — checking `status.success()` would reject every diff that found
+    // something. Where the words come out can tell them apart: git writes the
+    // diff to stdout and its complaints to stderr, so nothing on stdout
+    // together with something on stderr is a failure. Dropping both, as this
+    // used to, turned each such failure into an empty diff, and an empty diff
+    // reads as "identical".
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stdout.is_empty() && !stderr.trim().is_empty() {
+        return Err(Error::msg(format!(
+            "`git diff --no-index` failed — {}",
+            stderr.trim()
+        )));
+    }
+    Ok(stdout)
 }
 
 /// The human rendering: `<path>: identical`, or git's unified diff verbatim.

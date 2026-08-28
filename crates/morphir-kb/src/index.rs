@@ -545,6 +545,42 @@ pub struct SearchFilters<'a> {
 /// `description`, `snippet` — and its order are part of the JSON contract
 /// [`render_rows`] emits, so filtering may only remove rows, never reshape
 /// them.
+///
+/// Search everything the index holds by passing the default filters:
+///
+/// ```no_run
+/// use morphir_kb::index::{self, SearchFilters};
+/// use std::path::Path;
+///
+/// # fn main() -> morphir_kb::Result<()> {
+/// let db = Path::new(".dev/kb/index.db");
+/// let hits = index::search(db, "naming", 20, &SearchFilters::default())?;
+/// println!("{} row(s)", hits.rows.len());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Narrow it by naming the facets. Every tag listed must be present, so this
+/// finds stable reference documents tagged both `naming` and `v4`, within one
+/// bundle:
+///
+/// ```no_run
+/// use morphir_kb::index::{self, SearchFilters};
+/// use std::path::Path;
+///
+/// # fn main() -> morphir_kb::Result<()> {
+/// let tags = vec!["naming".to_string(), "v4".to_string()];
+/// let filters = SearchFilters {
+///     doc_type: Some("Reference"),
+///     tags: &tags,
+///     status: Some("stable"),
+///     bundle: Some("morphir/morphir-cli"),
+/// };
+/// let hits = index::search(Path::new(".dev/kb/index.db"), "naming", 20, &filters)?;
+/// # let _ = hits;
+/// # Ok(())
+/// # }
+/// ```
 pub fn search(db: &Path, needle: &str, limit: usize, filters: &SearchFilters<'_>) -> Result<Rows> {
     present(db)?;
     let (sql, binds) = search_sql(needle, limit, filters);
@@ -573,9 +609,27 @@ fn search_sql(needle: &str, limit: usize, filters: &SearchFilters<'_>) -> (Strin
         binds.push(Value::Text(s.to_string()));
     }
     // `Kb::bundle` accepts either the full label or the bare name, and matches
-    // both exactly; the index stores each in its own column.
+    // both exactly; the index stores each in its own column. The subquery is
+    // what keeps the answer to one bundle. `label = ? OR name = ?` is
+    // set-valued, so a bare name shared by `public/foo` and `private/foo`
+    // matched both, while the scanning search — which asks `Kb::bundle` and
+    // scopes to the single bundle it returns — matched one: the indexed search
+    // handed back documents from a bundle the scan had excluded, which in a
+    // public/private split is a disclosure. Bundle ids are handed out in
+    // `kb.bundles` order, so the lowest id is the bundle `Kb::bundle` finds
+    // first, and the two searches now scope alike.
+    //
+    // The underlying rule is itself poor: silently picking one of two bundles
+    // that both answer to `foo` is not a good answer to an ambiguous name, and
+    // an error would be. But that means changing `Kb::bundle`, which both
+    // search paths and several other callers go through, so it is a behaviour
+    // change of its own and belongs in its own change rather than smuggled in
+    // behind a leak fix.
     if let Some(b) = filters.bundle {
-        wheres.push("(b.label = ? OR b.name = ?)".to_string());
+        wheres.push(
+            "b.id = (SELECT id FROM bundle WHERE label = ? OR name = ? ORDER BY id LIMIT 1)"
+                .to_string(),
+        );
         binds.push(Value::Text(b.to_string()));
         binds.push(Value::Text(b.to_string()));
     }

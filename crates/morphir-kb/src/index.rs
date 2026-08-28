@@ -19,8 +19,8 @@ use std::time::UNIX_EPOCH;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use regex::Regex;
-use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::types::{Value, ValueRef};
+use rusqlite::{Connection, OpenFlags, params, params_from_iter};
 
 use morphir_okf::markdown::extract_headings;
 use morphir_okf::model::{DocKind, Kb, LinkRef};
@@ -466,16 +466,25 @@ pub fn query(db: &Path, sql: &str) -> Result<Rows> {
             "refusing to run `{head}`: kb query is read-only (SELECT, WITH, PRAGMA, EXPLAIN)"
         )));
     }
-    if !db.exists() {
-        return Err(Error::msg(format!(
-            "no index at {} — run `kb index` first",
-            paths::render(db)
-        )));
-    }
-    run_query(db, trimmed).map_err(|e| Error::msg(e.to_string()))
+    present(db)?;
+    run_query(db, trimmed, Vec::new()).map_err(|e| Error::msg(e.to_string()))
 }
 
-fn run_query(db: &Path, sql: &str) -> rusqlite::Result<Rows> {
+/// The one message every read path owes the caller when there is no database
+/// yet — pulled out so [`search`], which builds its own statement, cannot
+/// drift from [`query`].
+fn present(db: &Path) -> Result<()> {
+    if db.exists() {
+        Ok(())
+    } else {
+        Err(Error::msg(format!(
+            "no index at {} — run `kb index` first",
+            paths::render(db)
+        )))
+    }
+}
+
+fn run_query(db: &Path, sql: &str, binds: Vec<Value>) -> rusqlite::Result<Rows> {
     // SQLite enforces read-only, not the token guard above: a `PRAGMA` that
     // writes, or a CTE prefixing a DELETE/UPDATE, sails straight past a first
     // token of `pragma` or `with`.
@@ -487,7 +496,7 @@ fn run_query(db: &Path, sql: &str) -> rusqlite::Result<Rows> {
     let columns: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
     let ncols = columns.len();
     let mut out = Vec::new();
-    let mut rows = stmt.query([])?;
+    let mut rows = stmt.query(params_from_iter(binds))?;
     while let Some(row) = rows.next()? {
         let mut cells = Vec::with_capacity(ncols);
         for i in 0..ncols {
@@ -509,23 +518,91 @@ fn cell_to_string(v: ValueRef<'_>) -> Option<String> {
     }
 }
 
+/// The facet filters an indexed search narrows by — the same set the scanning
+/// search in [`crate::render::search`] accepts, so `--type`, `--tag`,
+/// `--status` and `--bundle` mean one thing whichever path serves them.
+///
+/// The Scala CLI applies these only when scanning; asking the index for
+/// `--bundle private` there quietly returns every bundle. Silently dropping a
+/// filter the user asked for is worse than not offering it, so this port
+/// honours them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SearchFilters<'a> {
+    /// Frontmatter `type`, compared without regard to ASCII case.
+    pub doc_type: Option<&'a str>,
+    /// Every tag listed must be present on the document.
+    pub tags: &'a [String],
+    /// Frontmatter `status`, compared without regard to ASCII case.
+    pub status: Option<&'a str>,
+    /// A bundle label (`group/name`) or its bare name, as `Kb::bundle` resolves.
+    pub bundle: Option<&'a str>,
+}
+
 /// Full-text search over titles, descriptions and bodies, ranked by FTS5's
-/// bm25. Facet filters (`--type`, `--tag`, …) belong to the scan search in
-/// the render layer, as in the Scala CLI.
-pub fn search(db: &Path, needle: &str, limit: usize) -> Result<Rows> {
-    let escaped = needle.replace('\'', "''");
-    query(
-        db,
-        &format!(
+/// bm25, narrowed by `filters`.
+///
+/// The column set — `bundle`, `bundle_path`, `type`, `status`, `title`,
+/// `description`, `snippet` — and its order are part of the JSON contract
+/// [`render_rows`] emits, so filtering may only remove rows, never reshape
+/// them.
+pub fn search(db: &Path, needle: &str, limit: usize, filters: &SearchFilters<'_>) -> Result<Rows> {
+    present(db)?;
+    let (sql, binds) = search_sql(needle, limit, filters);
+    // Deliberately not routed through `query`: that entry point takes a bare
+    // SQL string and binds nothing, so carrying user-supplied facet values
+    // through it would mean interpolating them — an injection surface, and
+    // one that would also mangle any value holding a quote or a wildcard.
+    // Filters are bound instead, which is why this private path exists.
+    run_query(db, &sql, binds).map_err(|e| Error::msg(e.to_string()))
+}
+
+/// Builds the statement and its bindings together, so a predicate can never
+/// be added without the value it consumes.
+fn search_sql(needle: &str, limit: usize, filters: &SearchFilters<'_>) -> (String, Vec<Value>) {
+    let mut binds = vec![Value::Text(needle.to_string())];
+    let mut wheres = vec!["doc_fts MATCH ?".to_string()];
+
+    // NOCASE is SQLite's ASCII-only case folding, which is precisely what the
+    // scanning search's `eq_ignore_ascii_case` does.
+    if let Some(t) = filters.doc_type {
+        wheres.push("d.type = ? COLLATE NOCASE".to_string());
+        binds.push(Value::Text(t.to_string()));
+    }
+    if let Some(s) = filters.status {
+        wheres.push("d.status = ? COLLATE NOCASE".to_string());
+        binds.push(Value::Text(s.to_string()));
+    }
+    // `Kb::bundle` accepts either the full label or the bare name, and matches
+    // both exactly; the index stores each in its own column.
+    if let Some(b) = filters.bundle {
+        wheres.push("(b.label = ? OR b.name = ?)".to_string());
+        binds.push(Value::Text(b.to_string()));
+        binds.push(Value::Text(b.to_string()));
+    }
+    // One EXISTS per tag rather than an IN list: every tag supplied has to be
+    // present, and an IN list would settle for any one of them.
+    for t in filters.tags {
+        wheres.push(
+            "EXISTS (SELECT 1 FROM tag WHERE tag.doc_id = d.id AND tag.tag = ? COLLATE NOCASE)"
+                .to_string(),
+        );
+        binds.push(Value::Text(t.clone()));
+    }
+
+    binds.push(Value::Integer(limit as i64));
+    let predicate = wheres.join("\n               AND ");
+    (
+        format!(
             "SELECT b.label AS bundle, d.bundle_path, d.type, d.status, d.title, d.description,
                     snippet(doc_fts, 3, '[', ']', '…', 12) AS snippet
              FROM doc_fts
              JOIN doc d ON d.id = doc_fts.rowid
              JOIN bundle b ON b.id = d.bundle_id
-             WHERE doc_fts MATCH '{escaped}'
+             WHERE {predicate}
              ORDER BY bm25(doc_fts, 1.0, 8.0, 4.0, 1.0)
-             LIMIT {limit}"
+             LIMIT ?"
         ),
+        binds,
     )
 }
 

@@ -137,7 +137,7 @@ fn views_are_queryable() {
 fn fts_search_ranks_title_matches_first_and_snippets() {
     let tmp = TempDir::new().unwrap();
     let (_kb, db, _) = built(tmp.path(), false);
-    let rows = index::search(&db, "caching", 20).unwrap();
+    let rows = index::search(&db, "caching", 20, &index::SearchFilters::default()).unwrap();
     assert_eq!(
         rows.columns,
         vec![
@@ -168,7 +168,7 @@ fn fts_search_ranks_title_matches_first_and_snippets() {
 fn search_limit_caps_rows() {
     let tmp = TempDir::new().unwrap();
     let (_kb, db, _) = built(tmp.path(), false);
-    let rows = index::search(&db, "caching", 1).unwrap();
+    let rows = index::search(&db, "caching", 1, &index::SearchFilters::default()).unwrap();
     assert_eq!(rows.rows.len(), 1);
 }
 
@@ -557,4 +557,373 @@ fn query_cannot_mutate_through_a_with_prefixed_statement() {
         vec![Some("0".to_string())],
         "no title was rewritten"
     );
+}
+
+// ------------------------------------------------------- search filters
+
+// Every document below carries the word "naming" in its body, so the FTS
+// match alone selects all four. What each test then varies is the filter,
+// which is the only thing that can change the row count.
+const FILTER_DEMO_INDEX: &str = "---\nokf_version: \"0.2\"\ntitle: Demo\ndescription: A scratch bundle.\n---\n\n# Demo\n\nA scratch bundle.\n";
+
+const FILTER_A: &str = "---\ntype: Concept\ntitle: Alpha rules\ndescription: First.\ntags: [alpha, shared]\nstatus: draft\n---\n\n# Alpha rules\n\nOur naming conventions start here.\n";
+
+const FILTER_B: &str = "---\ntype: Pattern\ntitle: Beta rules\ndescription: Second.\ntags: [beta, shared]\nstatus: active\n---\n\n# Beta rules\n\nA naming pattern worth copying.\n";
+
+const FILTER_VAULT_INDEX: &str = "---\nokf_version: \"0.2\"\ntitle: Vault\ndescription: A private bundle.\n---\n\n# Vault\n\nA private bundle.\n";
+
+const FILTER_C: &str = "---\ntype: Concept\ntitle: Gamma rules\ndescription: Third.\ntags: [alpha, beta]\nstatus: active\n---\n\n# Gamma rules\n\nPrivate naming guidance.\n";
+
+// Facet values chosen to break naive string interpolation: an apostrophe
+// closes a SQL literal, and `%` is a wildcard the moment anyone reaches for
+// LIKE instead of `=`.
+const FILTER_QUIRKY: &str = "---\ntype: \"O'Reilly\"\ntitle: Quirky rules\ndescription: Fourth.\ntags: [\"it's\", \"50%\"]\nstatus: \"100% done\"\n---\n\n# Quirky rules\n\nOdd naming edge cases.\n";
+
+/// Two bundles, one of them grouped, spanning four facet combinations.
+fn filter_fixture(root: &Path) -> PathBuf {
+    let kb_root = root.join("kb");
+    let demo = kb_root.join("bundles").join("demo");
+    write(&demo.join("index.md"), FILTER_DEMO_INDEX);
+    write(&demo.join("a.md"), FILTER_A);
+    write(&demo.join("b.md"), FILTER_B);
+    let vault = kb_root.join("bundles").join("private").join("vault");
+    write(&vault.join("index.md"), FILTER_VAULT_INDEX);
+    write(&vault.join("c.md"), FILTER_C);
+    write(&vault.join("quirky.md"), FILTER_QUIRKY);
+    kb_root
+}
+
+fn filter_db(root: &Path) -> PathBuf {
+    let kb_root = filter_fixture(root);
+    let kb = load(&kb_root);
+    let db = db_path(&kb_root);
+    index::build(&kb, &db, Utc::now()).unwrap();
+    db
+}
+
+/// The `bundle_path` column of every hit, sorted so assertions do not depend
+/// on bm25's ordering among equally-ranked documents.
+fn paths_of(rows: &Rows) -> Vec<String> {
+    let mut out: Vec<String> = rows
+        .rows
+        .iter()
+        .map(|r| r[1].clone().unwrap_or_default())
+        .collect();
+    out.sort();
+    out
+}
+
+fn tags(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).to_string()).collect()
+}
+
+#[test]
+fn indexed_search_without_filters_sees_every_match() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let rows = index::search(&db, "naming", 20, &index::SearchFilters::default()).unwrap();
+    assert_eq!(
+        paths_of(&rows),
+        vec!["/a.md", "/b.md", "/c.md", "/quirky.md"]
+    );
+}
+
+#[test]
+fn indexed_search_filters_by_type() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let filters = index::SearchFilters {
+        doc_type: Some("Concept"),
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(paths_of(&rows), vec!["/a.md", "/c.md"]);
+}
+
+#[test]
+fn indexed_search_type_filter_ignores_case_like_the_scan() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let filters = index::SearchFilters {
+        doc_type: Some("concept"),
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(paths_of(&rows), vec!["/a.md", "/c.md"]);
+}
+
+#[test]
+fn indexed_search_filters_by_status() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let filters = index::SearchFilters {
+        status: Some("active"),
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(paths_of(&rows), vec!["/b.md", "/c.md"]);
+}
+
+#[test]
+fn indexed_search_filters_by_single_tag() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let tag_list = tags(&["shared"]);
+    let filters = index::SearchFilters {
+        tags: &tag_list,
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(paths_of(&rows), vec!["/a.md", "/b.md"]);
+}
+
+#[test]
+fn indexed_search_requires_every_supplied_tag() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let tag_list = tags(&["alpha", "beta"]);
+    let filters = index::SearchFilters {
+        tags: &tag_list,
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(
+        paths_of(&rows),
+        vec!["/c.md"],
+        "only the document carrying both tags survives"
+    );
+}
+
+#[test]
+fn indexed_search_filters_by_bundle_label_and_bare_name() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let by_label = index::search(
+        &db,
+        "naming",
+        20,
+        &index::SearchFilters {
+            bundle: Some("private/vault"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(paths_of(&by_label), vec!["/c.md", "/quirky.md"]);
+    let by_name = index::search(
+        &db,
+        "naming",
+        20,
+        &index::SearchFilters {
+            bundle: Some("vault"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        paths_of(&by_name),
+        vec!["/c.md", "/quirky.md"],
+        "a bare name resolves the same bundle as its label, as `Kb::bundle` does"
+    );
+    let ungrouped = index::search(
+        &db,
+        "naming",
+        20,
+        &index::SearchFilters {
+            bundle: Some("demo"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(paths_of(&ungrouped), vec!["/a.md", "/b.md"]);
+}
+
+#[test]
+fn indexed_search_combines_filters() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let tag_list = tags(&["alpha"]);
+    let filters = index::SearchFilters {
+        doc_type: Some("Concept"),
+        tags: &tag_list,
+        status: Some("draft"),
+        bundle: Some("demo"),
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(paths_of(&rows), vec!["/a.md"]);
+}
+
+#[test]
+fn indexed_search_filter_that_matches_nothing_returns_no_rows() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    for filters in [
+        index::SearchFilters {
+            status: Some("retired"),
+            ..Default::default()
+        },
+        index::SearchFilters {
+            doc_type: Some("Nonesuch"),
+            ..Default::default()
+        },
+        index::SearchFilters {
+            bundle: Some("absent"),
+            ..Default::default()
+        },
+    ] {
+        let rows = index::search(&db, "naming", 20, &filters).unwrap();
+        assert!(rows.rows.is_empty(), "{filters:?} should match nothing");
+        assert_eq!(
+            rows.columns.len(),
+            7,
+            "the column set survives an empty run"
+        );
+    }
+}
+
+#[test]
+fn indexed_search_keeps_ranking_columns_and_snippets_under_a_filter() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let filters = index::SearchFilters {
+        doc_type: Some("Concept"),
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 20, &filters).unwrap();
+    assert_eq!(
+        rows.columns,
+        vec![
+            "bundle",
+            "bundle_path",
+            "type",
+            "status",
+            "title",
+            "description",
+            "snippet"
+        ],
+        "the column set and order stay stable for JSON consumers"
+    );
+    for row in &rows.rows {
+        let snippet = row[6].as_deref().unwrap();
+        assert!(
+            snippet.contains('[') && snippet.contains(']'),
+            "the snippet still highlights the match, got {snippet:?}"
+        );
+        // Filtering narrows rows; it must not disturb the join that puts a
+        // bundle label beside each hit.
+        let expected = match row[1].as_deref() {
+            Some("/a.md") => "demo",
+            Some("/c.md") => "private/vault",
+            other => panic!("unexpected hit {other:?}"),
+        };
+        assert_eq!(row[0].as_deref(), Some(expected), "bundle label");
+    }
+}
+
+#[test]
+fn indexed_search_limit_still_caps_filtered_rows() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let filters = index::SearchFilters {
+        doc_type: Some("Concept"),
+        ..Default::default()
+    };
+    let rows = index::search(&db, "naming", 1, &filters).unwrap();
+    assert_eq!(rows.rows.len(), 1);
+}
+
+#[test]
+fn indexed_search_filters_treat_quotes_and_percent_as_data() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    let quirky = |filters: &index::SearchFilters<'_>| {
+        paths_of(&index::search(&db, "naming", 20, filters).unwrap())
+    };
+    assert_eq!(
+        quirky(&index::SearchFilters {
+            doc_type: Some("O'Reilly"),
+            ..Default::default()
+        }),
+        vec!["/quirky.md"],
+        "an apostrophe in a type is matched, not parsed"
+    );
+    assert_eq!(
+        quirky(&index::SearchFilters {
+            status: Some("100% done"),
+            ..Default::default()
+        }),
+        vec!["/quirky.md"],
+        "a percent sign in a status is matched literally"
+    );
+    let apostrophe_tag = tags(&["it's"]);
+    assert_eq!(
+        quirky(&index::SearchFilters {
+            tags: &apostrophe_tag,
+            ..Default::default()
+        }),
+        vec!["/quirky.md"]
+    );
+    let percent_tag = tags(&["50%"]);
+    assert_eq!(
+        quirky(&index::SearchFilters {
+            tags: &percent_tag,
+            ..Default::default()
+        }),
+        vec!["/quirky.md"]
+    );
+}
+
+#[test]
+fn indexed_search_filters_cannot_inject_sql() {
+    let tmp = TempDir::new().unwrap();
+    let db = filter_db(tmp.path());
+    // Were the filter interpolated, this would close the literal and make the
+    // predicate a tautology, handing back every row.
+    for injection in ["' OR '1'='1", "x' OR 1=1 --", "%", "_"] {
+        let by_type = index::search(
+            &db,
+            "naming",
+            20,
+            &index::SearchFilters {
+                doc_type: Some(injection),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            by_type.rows.is_empty(),
+            "type {injection:?} must be data, got {:?}",
+            paths_of(&by_type)
+        );
+        let by_bundle = index::search(
+            &db,
+            "naming",
+            20,
+            &index::SearchFilters {
+                bundle: Some(injection),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            by_bundle.rows.is_empty(),
+            "bundle {injection:?} must be data, got {:?}",
+            paths_of(&by_bundle)
+        );
+        let injected = tags(&[injection]);
+        let by_tag = index::search(
+            &db,
+            "naming",
+            20,
+            &index::SearchFilters {
+                tags: &injected,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            by_tag.rows.is_empty(),
+            "tag {injection:?} must be data, got {:?}",
+            paths_of(&by_tag)
+        );
+    }
 }

@@ -1661,13 +1661,167 @@ fn diff_compares_the_upstream_copy_against_the_projected_local_copy() {
     let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
     let sb = seeded(&kb_root, &upstream);
     let identical = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
-    assert!(identical.trim().is_empty(), "got: {identical}");
+    assert_eq!(identical.path, "docs/types.md");
+    assert!(identical.identical, "got: {}", identical.diff);
+    assert!(identical.diff.trim().is_empty(), "got: {}", identical.diff);
     let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
     fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
     let changed = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
-    assert!(changed.contains("+An addition."), "got: {changed}");
+    assert!(!changed.identical);
     assert!(
-        !changed.contains("kb:begin"),
-        "the diff shows the upstream form, never the fence: {changed}"
+        changed.diff.contains("+An addition."),
+        "got: {}",
+        changed.diff
+    );
+    assert!(
+        !changed.diff.contains("kb:begin"),
+        "the diff shows the upstream form, never the fence: {}",
+        changed.diff
+    );
+}
+
+/// The same fixture, diffed twice: once unchanged, once after a local edit.
+fn diff_both_ways() -> (TempDir, sync::DiffResult, sync::DiffResult) {
+    let (dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let identical = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let changed = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+    (dir, identical, changed)
+}
+
+#[test]
+fn render_diff_text_form_is_unchanged() {
+    let (_dir, identical, changed) = diff_both_ways();
+    assert_eq!(
+        sync::render_diff_text(&identical),
+        "docs/types.md: identical\n",
+        "the identical line is byte-for-byte what the CLI printed before"
+    );
+    assert_eq!(
+        sync::render_diff_text(&changed),
+        changed.diff,
+        "a changed file renders git's output verbatim, as `print!` did"
+    );
+}
+
+#[test]
+fn render_diff_json_is_machine_readable_in_both_cases() {
+    let (_dir, identical, changed) = diff_both_ways();
+
+    let text = sync::render_diff_json(&identical);
+    assert!(
+        text.ends_with('\n'),
+        "payloads end in a newline like the rest"
+    );
+    let v: serde_json::Value = serde_json::from_str(&text).expect("identical case parses");
+    assert_eq!(v["path"], "docs/types.md");
+    assert_eq!(v["identical"], true);
+    assert_eq!(v["diff"], "");
+    assert_eq!(v["patch"], "");
+
+    let v: serde_json::Value =
+        serde_json::from_str(&sync::render_diff_json(&changed)).expect("changed case parses");
+    assert_eq!(v["path"], "docs/types.md");
+    assert_eq!(v["identical"], false);
+    assert!(
+        v["diff"].as_str().unwrap().contains("+An addition."),
+        "the unified diff travels in the payload: {v}"
+    );
+    assert!(
+        v["patch"]
+            .as_str()
+            .unwrap()
+            .starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "and so does the applicable patch: {v}"
+    );
+}
+
+#[test]
+fn render_diff_raw_emits_git_bytes_and_nothing_else() {
+    let (_dir, identical, changed) = diff_both_ways();
+    assert_eq!(
+        sync::render_diff_raw(&identical),
+        "",
+        "an identical pair is an empty patch — any decoration would corrupt the pipe"
+    );
+    let raw = sync::render_diff_raw(&changed);
+    assert_eq!(raw, changed.patch, "git's bytes, unwrapped and unpadded");
+    assert!(raw.contains("+An addition."));
+    assert!(
+        !raw.contains("docs/types.md: identical"),
+        "the human line never leaks into the raw form"
+    );
+}
+
+#[test]
+fn render_diff_raw_headers_are_relative_to_the_upstream_root() {
+    let (_dir, _identical, changed) = diff_both_ways();
+    let raw = sync::render_diff_raw(&changed);
+    assert!(
+        raw.starts_with("diff --git a/docs/types.md b/docs/types.md\n"),
+        "the headers name the mirrored path, not a checkout or a temp file: {raw}"
+    );
+    assert!(raw.contains("\n--- a/docs/types.md\n"), "got: {raw}");
+    assert!(raw.contains("\n+++ b/docs/types.md\n"), "got: {raw}");
+    assert!(
+        !raw.contains("kb-sync-"),
+        "no scratch path survives into the patch: {raw}"
+    );
+    assert!(
+        sync::render_diff_text(&changed).contains("kb-sync-"),
+        "while the human form keeps the real paths it always showed"
+    );
+}
+
+#[test]
+fn render_diff_raw_produces_a_patch_that_git_apply_lands_upstream() {
+    let (_dir, kb_root, _bundle_root, upstream) = sync_fixture();
+    let sb = seeded(&kb_root, &upstream);
+    let before = fs::read_to_string(sb.local_file("docs/types.md")).unwrap();
+    fs::write(sb.local_file("docs/types.md"), before + "\nAn addition.\n").unwrap();
+    let changed = sync::diff(&sb, &upstream, "docs/types.md").unwrap();
+
+    // A scratch checkout holding upstream's copy at the mirrored path — the
+    // only place the patch claims to fit.
+    let repo = TempDir::new().unwrap();
+    run_git(repo.path(), &["init", "-q"]);
+    let target = repo.path().join("docs").join("types.md");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::copy(upstream.join("docs").join("types.md"), &target).unwrap();
+    run_git(repo.path(), &["add", "-A"]);
+
+    let patch_file = repo.path().join("kb.patch");
+    fs::write(&patch_file, sync::render_diff_raw(&changed)).unwrap();
+    let checked = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["apply", "--check", "kb.patch"])
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "git apply --check refused the patch: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    run_git(repo.path(), &["apply", "kb.patch"]);
+
+    // And what it lands is our projected form, byte for byte.
+    let projected =
+        sync::project(&fs::read_to_string(sb.local_file("docs/types.md")).unwrap()).unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), projected);
+}
+
+/// Runs git in `dir` and insists it succeeded.
+fn run_git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

@@ -26,8 +26,10 @@
 //! reaches files that were imported long ago.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use chrono::NaiveDate;
@@ -1382,24 +1384,161 @@ pub fn push(
 
 // ---------------------------------------------------------------------- diff
 
+/// Distinguishes concurrent diffs within one process; the process id alone
+/// does not separate two threads.
+static DIFF_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The outcome of a [`diff`]: which mirrored path was compared, whether the two
+/// sides agree, and the unified diff when they do not.
+///
+/// Returned rather than printed so the CLI can honour `--json`. The Scala tool
+/// prints from inside the diff operation and so has nothing left to serialize;
+/// `--json` there yields unparseable stdout. Everything the text renderer needs
+/// is here, so both forms derive from one value and cannot drift.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiffResult {
+    /// The mirrored path, exactly as it was asked for.
+    pub path: String,
+    /// True when the projected local copy and the upstream copy agree.
+    pub identical: bool,
+    /// `git diff`'s unified output over the two files where they actually sit,
+    /// so its headers name a checkout path and a scratch path. This is what the
+    /// CLI has always shown a human; empty when the two sides are identical.
+    pub diff: String,
+    /// The same change as a patch whose headers read `a/<path>` and `b/<path>`,
+    /// so `git apply` lands it in the upstream repository. Empty when the two
+    /// sides are identical.
+    pub patch: String,
+}
+
 /// The `git diff --no-index` between the upstream copy of `rel` and the projected
 /// form of the local copy — the thing an export would send. Empty output means the
 /// two are identical.
-pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<String> {
+///
+/// Git runs twice, over one staging directory, because the two outputs answer
+/// different questions. The human diff names the files where they really are,
+/// which is what someone reading the terminal wants. The patch has to name
+/// `a/<rel>` and `b/<rel>` or it applies nowhere, and the only way to get those
+/// headers without rewriting git's output by hand — which would break on the
+/// first filename holding a space — is to hand git paths that already have the
+/// shape it should print.
+pub fn diff(sb: &SyncBundle, upstream_root: &Path, rel: &str) -> Result<DiffResult> {
     let local = fs::read(sb.mirror_file(rel)?)?;
     let text = String::from_utf8_lossy(&local).into_owned();
     let projected = project(&text).map_err(|err| Error::msg(format!("{rel}: {err}")))?;
-    let tmp = std::env::temp_dir().join(format!("kb-sync-{}", rel.replace('/', "_")));
-    write_bytes(&tmp, projected.as_bytes())?;
-    let out = std::process::Command::new("git")
+    // A scratch directory unique to this call. A fixed name under the system
+    // temp directory was a shared mutable file: two diffs running at once —
+    // two shells, or two tests — would compare upstream against whichever
+    // projection landed last.
+    let scratch = std::env::temp_dir().join(format!(
+        "kb-sync-{}-{}",
+        std::process::id(),
+        DIFF_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let outcome = diff_in(&scratch, upstream_root, rel, &projected);
+    // Best effort: scratch files left behind are untidy, never wrong, and any
+    // git failure above is the more interesting thing to report.
+    let _ = fs::remove_dir_all(&scratch);
+    let (diff, patch) = outcome?;
+    // Whitespace-only output still means "no change"; git emits nothing at
+    // all for a match, but callers should not have to rely on that.
+    let identical = diff.trim().is_empty();
+    Ok(DiffResult {
+        path: rel.to_string(),
+        identical,
+        diff: if identical { String::new() } else { diff },
+        patch: if identical { String::new() } else { patch },
+    })
+}
+
+/// Both renderings of the same comparison, staged under `scratch`.
+fn diff_in(
+    scratch: &Path,
+    upstream_root: &Path,
+    rel: &str,
+    projected: &str,
+) -> Result<(String, String)> {
+    let flat = scratch.join(rel.replace('/', "_"));
+    write_bytes(&flat, projected.as_bytes())?;
+    let upstream = resolve(upstream_root, rel);
+    let human = git_diff(None, &[], upstream.as_os_str(), flat.as_os_str())?;
+
+    // The staged pair carries the relative path under an `a/` and a `b/` root.
+    // With the prefixes blanked, git prints exactly `a/<rel>` and `b/<rel>` —
+    // its own quoting and escaping rules intact, which is the whole point of
+    // not touching the text afterwards.
+    let mut patch = String::new();
+    if upstream.is_file() {
+        let staged_a = resolve(&scratch.join("a"), rel);
+        let staged_b = resolve(&scratch.join("b"), rel);
+        fs::copy(&upstream, ensure_parent(&staged_a)?)?;
+        write_bytes(&staged_b, projected.as_bytes())?;
+        patch = git_diff(
+            Some(scratch),
+            &["--src-prefix=", "--dst-prefix="],
+            format!("a/{rel}").as_ref(),
+            format!("b/{rel}").as_ref(),
+        )?;
+    }
+    Ok((human, patch))
+}
+
+fn ensure_parent(p: &Path) -> Result<&Path> {
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(p)
+}
+
+/// One `git diff --no-index` invocation, with the two paths always behind `--`
+/// so a name beginning with a dash cannot be read as an option.
+///
+/// `diff.noprefix` and `diff.mnemonicPrefix` are pinned off: a user's global
+/// config must not decide whether the patch we hand back is applicable.
+fn git_diff(cwd: Option<&Path>, opts: &[&str], old: &OsStr, new: &OsStr) -> Result<String> {
+    let mut cmd = std::process::Command::new("git");
+    if let Some(dir) = cwd {
+        cmd.arg("-C").arg(dir);
+    }
+    let out = cmd
+        .arg("-c")
+        .arg("diff.noprefix=false")
+        .arg("-c")
+        .arg("diff.mnemonicPrefix=false")
         .arg("diff")
         .arg("--no-index")
+        .args(opts)
         .arg("--")
-        .arg(resolve(upstream_root, rel))
-        .arg(&tmp)
+        .arg(old)
+        .arg(new)
         .output()
         .map_err(|_| Error::msg("git diff failed — is git on PATH?"))?;
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The human rendering: `<path>: identical`, or git's unified diff verbatim.
+/// Byte-for-byte what the CLI printed before this became a value.
+pub fn render_diff_text(d: &DiffResult) -> String {
+    if d.identical {
+        format!("{}: identical\n", d.path)
+    } else {
+        d.diff.clone()
+    }
+}
+
+/// The `--json` rendering: a pretty object carrying the path, the verdict, the
+/// human diff and the applicable patch, in the shape the rest of this module
+/// emits.
+pub fn render_diff_json(d: &DiffResult) -> String {
+    serde_json::to_string_pretty(d).expect("a diff result serializes") + "\n"
+}
+
+/// The `--raw` rendering: the patch bytes git produced, undecorated, ready for
+/// `git apply` in the upstream checkout. An identical pair yields nothing at
+/// all — an empty patch is the honest answer, and a `<path>: identical` line
+/// here would corrupt the pipe.
+pub fn render_diff_raw(d: &DiffResult) -> String {
+    d.patch.clone()
 }
 
 // -------------------------------------------------------------- index region

@@ -66,5 +66,5 @@ morphir-devkit = { path = "../morphir-devkit" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 
 [dev-dependencies]
-base64 = "0.22"
+base64 = "0.23"
 tempfile = "3"

@@ -22,7 +22,9 @@ impl Sha256Digest {
             return Err(invalid_digest(value));
         }
         let mut bytes = [0_u8; 32];
-        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
+        debug_assert!(remainder.is_empty());
+        for (index, pair) in pairs.iter().enumerate() {
             bytes[index] = hex_nibble(pair[0])
                 .zip(hex_nibble(pair[1]))
                 .map(|(high, low)| high << 4 | low)

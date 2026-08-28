@@ -1,6 +1,6 @@
 //! Exact locks, installed catalog state, and offline activation.
 
-use crate::store::verify_file;
+use crate::store::{verify_executable_mode, verify_file};
 use crate::{
     ArtifactRuntime, ArtifactSource, ArtifactStore, Capability, DistributionError, ExtensionId,
     IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result, Selection,
@@ -29,6 +29,7 @@ pub struct ExtensionLock {
     runtime: ArtifactRuntime,
     platform: Platform,
     digest: Sha256Digest,
+    executable: bool,
 }
 
 impl ExtensionLock {
@@ -81,6 +82,11 @@ impl ExtensionLock {
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
     }
+
+    /// Return the executable state declared by the exact selection.
+    pub fn executable(&self) -> bool {
+        self.executable
+    }
 }
 
 /// Write an exact extension lock after artifact verification.
@@ -96,6 +102,7 @@ pub fn write_extension_lock(home: &MorphirHome, artifact: &VerifiedArtifact) -> 
         runtime: artifact.selected.artifact.runtime(),
         platform: artifact.selected.artifact.platform().clone(),
         digest: artifact.selected.artifact.digest().clone(),
+        executable: artifact.selected.artifact.executable(),
     };
     atomic_write_json(&extension_lock_path(home, &lock.extension_id), &lock)
 }
@@ -135,6 +142,7 @@ pub struct InstalledExtension {
     capabilities: Vec<Capability>,
     mep_versions: Vec<String>,
     index: IndexProvenance,
+    executable: bool,
 }
 
 impl InstalledExtension {
@@ -191,6 +199,11 @@ impl InstalledExtension {
     /// Return exact index provenance.
     pub fn index(&self) -> &IndexProvenance {
         &self.index
+    }
+
+    /// Return the executable state registered for the artifact.
+    pub fn executable(&self) -> bool {
+        self.executable
     }
 
     /// Convert installed discovery metadata to the shared MEP representation.
@@ -278,6 +291,7 @@ impl InstalledCatalog {
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
             index: artifact.selected.index.clone(),
+            executable: artifact.selected.artifact.executable(),
         };
         let mut next = self.extensions.clone();
         next.insert(entry.extension_id.clone(), entry.clone());
@@ -354,6 +368,7 @@ pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<Verifi
         || lock.platform != installed.platform
         || lock.digest != installed.digest
         || lock.index != installed.index
+        || lock.executable != installed.executable
     {
         return Err(DistributionError::StateMismatch { id: id.clone() });
     }
@@ -374,6 +389,7 @@ pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<Verifi
         });
     }
     verify_file(&program, &lock.digest)?;
+    verify_executable_mode(&program, lock.executable)?;
 
     Ok(VerifiedProcessArtifact {
         program,

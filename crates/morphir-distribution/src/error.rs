@@ -92,6 +92,18 @@ pub enum DistributionError {
         /// Digest computed from the file bytes.
         actual: crate::Sha256Digest,
     },
+    /// Existing content has different executable semantics than the manifest.
+    #[error(
+        "executable mode mismatch for {path}: expected executable={expected}, got executable={actual}"
+    )]
+    ExecutableModeMismatch {
+        /// Materialized artifact path.
+        path: PathBuf,
+        /// Executable state declared by the selected artifact.
+        expected: bool,
+        /// Executable state present on disk.
+        actual: bool,
+    },
     /// Durable JSON state could not be decoded.
     #[error("invalid distribution state in {path}: {source}")]
     InvalidState {

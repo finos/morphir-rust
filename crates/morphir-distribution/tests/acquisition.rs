@@ -69,6 +69,21 @@ impl DistributionMother {
             )
             .unwrap()
     }
+
+    fn declare_executable(&self, executable: bool) {
+        let history = self.index.join("extensions/morphir-elm.jsonl");
+        let current = fs::read_to_string(&history).unwrap();
+        let updated = if executable {
+            current.replace("\"executable\":false", "\"executable\":true")
+        } else {
+            current.replace("\"executable\":true", "\"executable\":false")
+        };
+        assert_ne!(
+            current, updated,
+            "fixture executable declaration did not change"
+        );
+        fs::write(history, updated).unwrap();
+    }
 }
 
 #[test]
@@ -211,6 +226,35 @@ fn an_existing_cas_object_is_rehashed_before_reuse() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn non_executable_cas_content_cannot_be_reused_as_executable() {
+    let mother = DistributionMother::a_local_process_artifact();
+    mother.declare_executable(false);
+    let store = ArtifactStore::from_home(&mother.home);
+    let installed = store.materialize(mother.selected()).unwrap();
+    assert!(!owner_executable(installed.path()));
+
+    mother.declare_executable(true);
+    let error = store.materialize(mother.selected()).unwrap_err();
+    assert!(error.to_string().contains("executable mode mismatch"));
+    assert!(!owner_executable(installed.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn executable_cas_content_cannot_be_reused_as_non_executable() {
+    let mother = DistributionMother::a_local_process_artifact();
+    let store = ArtifactStore::from_home(&mother.home);
+    let installed = store.materialize(mother.selected()).unwrap();
+    assert!(owner_executable(installed.path()));
+
+    mother.declare_executable(false);
+    let error = store.materialize(mother.selected()).unwrap_err();
+    assert!(error.to_string().contains("executable mode mismatch"));
+    assert!(owner_executable(installed.path()));
+}
+
 #[test]
 fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     let mother = DistributionMother::a_local_process_artifact();
@@ -226,6 +270,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(lock.extension_id(), &mother.id);
     assert_eq!(lock.version().to_string(), "3.2.1");
     assert_eq!(lock.digest(), &mother.digest);
+    assert!(lock.executable());
     assert_eq!(lock.index().kind().as_str(), "local-directory");
     assert!(lock.index().identity().is_absolute());
     let lock_json: serde_json::Value = serde_json::from_slice(
@@ -237,6 +282,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(lock_json["selection"]["value"], "stable");
     assert_eq!(lock_json["version"], "3.2.1");
     assert_eq!(lock_json["digest"], mother.digest.to_string());
+    assert_eq!(lock_json["executable"], true);
     assert_eq!(
         lock_json["index"]["revision"],
         lock.index().revision().to_string()
@@ -247,6 +293,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     let mut catalog = InstalledCatalog::load(&mother.home).unwrap();
     let installed = catalog.register(verified).unwrap();
     assert_eq!(installed.extension_id(), &mother.id);
+    assert!(installed.executable());
     assert!(mother.home.extensions_catalog_file().exists());
 }
 
@@ -313,6 +360,21 @@ fn activation_is_offline_and_reverifies_installed_content() {
     assert_eq!(info.version, "3.2.1");
     assert_eq!(info.types, [morphir_extension_sdk::ExtensionType::Frontend]);
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(launch.program()).unwrap().permissions();
+        permissions.set_mode(permissions.mode() & !0o100);
+        fs::set_permissions(launch.program(), permissions).unwrap();
+        let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+        assert!(error.to_string().contains("executable mode mismatch"));
+
+        let mut permissions = fs::metadata(launch.program()).unwrap().permissions();
+        permissions.set_mode(permissions.mode() | 0o100);
+        fs::set_permissions(launch.program(), permissions).unwrap();
+    }
+
     fs::write(launch.program(), b"tampered after install").unwrap();
     let error = activate_installed(&mother.home, &mother.id).unwrap_err();
     assert!(error.to_string().contains("digest mismatch"));
@@ -323,8 +385,21 @@ fn count_staging_files(root: &Path) -> usize {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".stage-"))
-        .count()
+        .map(|entry| {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                count_staging_files(&entry.path())
+            } else {
+                usize::from(entry.file_name().to_string_lossy().starts_with(".stage-"))
+            }
+        })
+        .sum()
+}
+
+#[cfg(unix)]
+fn owner_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path).unwrap().permissions().mode() & 0o100 != 0
 }
 
 #[cfg(unix)]

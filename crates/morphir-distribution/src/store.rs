@@ -88,6 +88,7 @@ impl ArtifactStore {
                 }
             })?;
             verify_file(&canonical_destination, selected.artifact.digest())?;
+            verify_executable_mode(&canonical_destination, selected.artifact.executable())?;
             return self.verified(selected, canonical_destination);
         }
 
@@ -119,7 +120,10 @@ impl ArtifactStore {
         }
 
         match staged.persist_noclobber(&destination) {
-            Ok(_) => self.verified(selected, destination),
+            Ok(_) => {
+                verify_executable_mode(&destination, selected.artifact.executable())?;
+                self.verified(selected, destination)
+            }
             Err(_error) if destination.exists() => {
                 let canonical_destination = canonicalize(&destination)?;
                 ensure_home_contained(&canonical_store, &canonical_destination).map_err(|_| {
@@ -129,6 +133,7 @@ impl ArtifactStore {
                     }
                 })?;
                 verify_file(&canonical_destination, selected.artifact.digest())?;
+                verify_executable_mode(&canonical_destination, selected.artifact.executable())?;
                 self.verified(selected, canonical_destination)
             }
             Err(error) => Err(DistributionError::Io {
@@ -224,6 +229,35 @@ pub(crate) fn verify_file(path: &Path, expected: &Sha256Digest) -> Result<()> {
             actual,
         })
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn verify_executable_mode(path: &Path, expected: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let actual = fs::metadata(path)
+        .map_err(|source| DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .permissions()
+        .mode()
+        & 0o100
+        != 0;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(DistributionError::ExecutableModeMismatch {
+            path: path.to_path_buf(),
+            expected,
+            actual,
+        })
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn verify_executable_mode(_path: &Path, _expected: bool) -> Result<()> {
+    Ok(())
 }
 
 fn hash_file(path: &Path) -> Result<Sha256Digest> {

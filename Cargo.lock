@@ -2868,6 +2868,7 @@ name = "morphir-common"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "cucumber",
  "dirs",
  "flate2",
  "glob",
@@ -2883,6 +2884,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml 1.1.0+spec-1.1.0",
  "uuid",
  "vfs",

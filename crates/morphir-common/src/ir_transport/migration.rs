@@ -26,6 +26,44 @@ impl MigrationReportHandle {
 }
 
 /// Module-bounded transform from concrete Classic v3 events to concrete v4 events.
+///
+/// The transform composes between any event source and sink, so physical formats
+/// stay outside the migration logic:
+///
+/// ```
+/// use std::io::Cursor;
+///
+/// use morphir_common::ir_transport::{
+///     ClassicToV4, CodecOptions, FormatId, IrCodec, IrVersion, JsonCodec, Layout,
+///     Pipeline, YamlCodec,
+/// };
+/// use morphir_core::migration::MigrationOptions;
+///
+/// let input = br#"{
+///   "formatVersion": 3,
+///   "distribution": ["Library", [["example"]], [], {"modules": []}]
+/// }"#;
+/// let input_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json());
+/// let output_options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::yaml());
+/// let transform = ClassicToV4::new(MigrationOptions::default());
+/// let report = transform.report_handle();
+/// let mut pipeline = Pipeline::new().with_transform(transform);
+/// let mut output = Vec::new();
+/// let mut encoder = YamlCodec::new()
+///     .encoder(&mut output, &output_options)
+///     .expect("create YAML sink");
+///
+/// {
+///     let mut sink = pipeline.sink(encoder.as_mut()).expect("create migration sink");
+///     JsonCodec::new()
+///         .decode(&mut Cursor::new(input), &input_options, &mut sink)
+///         .expect("stream v3 JSON through the migration pipeline");
+/// }
+/// drop(encoder);
+///
+/// assert!(report.get().expect("completed report").can_publish());
+/// assert!(String::from_utf8(output).unwrap().starts_with("formatVersion: 4\n"));
+/// ```
 pub struct ClassicToV4 {
     context: MigrationContext,
     report: MigrationReportHandle,

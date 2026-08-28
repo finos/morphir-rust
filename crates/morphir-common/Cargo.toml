@@ -40,4 +40,10 @@ tar = "0.4"
 tempfile = "3"
 
 [dev-dependencies]
+cucumber = "0.22"
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "streaming_migration_acceptance"
+harness = false

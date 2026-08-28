@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upstream sync vendoring, the intent and decision registers, refresh and rendering. Ported from the
   `kb` CLI in morphir-scala, including its JSON shapes and exit codes; the intent register also
   reports `intent-duplicate-id`, which the Scala tool lacks
-
+- Open native JSON/YAML IR codecs, cursor-based semantic events, module-bounded v3-to-v4 migration
+  pipelines, and streaming single-file and document-tree transports
 - Atomic, validated installed-extension snapshots that pair each catalog entry with the requested selection from its exact lock
 - Transactional extension uninstall that removes active catalog and exact-lock state while retaining verified content-addressed artifact bytes
 - `morphir-distribution` verified extension acquisition with strict local JSONL indexes, deterministic channel and exact-version resolution, SHA-256 content-addressed storage, exact locks, an installed catalog, and offline re-verification before process activation

@@ -4,9 +4,9 @@
 //! These tests mutate the process environment, so they live in their own
 //! integration-test binary (one process) instead of the unit-test suite.
 
-use morphir_common::home::MorphirHome;
+use morphir_common::home::{MorphirHome, cache_root_from, cache_root_from_home};
 use morphir_common::remote::RemoteSourceConfig;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn set_morphir_home(path: &str) {
     // SAFETY: this test binary is single-purpose; no other thread reads the
@@ -25,5 +25,17 @@ fn relocated_home_keeps_remote_source_cache_under_home() {
     assert_eq!(
         RemoteSourceConfig::default().cache_directory(),
         Path::new("/sandbox/morphir-home/cache/sources")
+    );
+}
+
+#[test]
+fn public_cache_helpers_distinguish_home_and_legacy_cache_inputs() {
+    assert_eq!(
+        cache_root_from_home(None, Some(PathBuf::from("/home/u"))),
+        Some(PathBuf::from("/home/u/.morphir/cache"))
+    );
+    assert_eq!(
+        cache_root_from(None, Some(PathBuf::from("/home/u/.cache"))),
+        Some(PathBuf::from("/home/u/.cache/morphir"))
     );
 }

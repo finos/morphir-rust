@@ -1,10 +1,9 @@
 //! Resolution of the user-level Morphir home directory.
 //!
 //! The Morphir home directory holds user-global state such as the tool,
-//! extension, and distribution registries and fallback log output. Advanced
-//! users can relocate it (e.g. for testing or sandboxed environments) by
-//! setting the `MORPHIR_HOME` environment variable. When relocated, caches
-//! also move under the home directory so the environment stays hermetic.
+//! extension, and distribution registries, component data, caches, and logs.
+//! Advanced users can relocate it (e.g. for testing or sandboxed environments)
+//! by setting the `MORPHIR_HOME` environment variable.
 //!
 //! Resolution order:
 //! 1. `MORPHIR_HOME` environment variable (an empty value is treated as unset)
@@ -69,63 +68,166 @@ impl MorphirHome {
         self.relocated
     }
 
-    /// Path of the tool registry file.
+    /// Path of the global Morphir configuration file.
+    pub fn global_config_file(&self) -> PathBuf {
+        self.root.join("morphir.toml")
+    }
+
+    /// Directory for component-owned configuration.
+    pub fn config_dir(&self) -> PathBuf {
+        self.root.join("config")
+    }
+
+    /// Directory for durable component-owned application data.
+    pub fn data_dir(&self) -> PathBuf {
+        self.root.join("data")
+    }
+
+    /// Directory for catalogs maintained by Morphir's distribution kernel.
+    pub fn catalog_dir(&self) -> PathBuf {
+        self.root.join("catalog")
+    }
+
+    /// Directory for verified, content-addressed artifacts.
+    pub fn store_dir(&self) -> PathBuf {
+        self.root.join("store")
+    }
+
+    /// Directory for interprocess coordination locks.
+    pub fn locks_dir(&self) -> PathBuf {
+        self.root.join("locks")
+    }
+
+    /// Directory for disposable cached content.
+    pub fn cache_dir(&self) -> PathBuf {
+        self.root.join("cache")
+    }
+
+    /// Directory for downloaded artifacts that can be reacquired.
+    pub fn downloads_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("downloads")
+    }
+
+    /// Directory for cached registry and release indexes.
+    pub fn indexes_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("indexes")
+    }
+
+    /// Directory for Desktop-owned re-creatable application caches.
+    pub fn desktop_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("desktop")
+    }
+
+    /// Directory for component log output.
+    pub fn logs_dir(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+
+    /// Directory for temporary staging owned by Morphir processes.
+    pub fn temp_dir(&self) -> PathBuf {
+        self.root.join("tmp")
+    }
+
+    /// Durable state used by automatic cache maintenance.
+    pub fn cache_maintenance_state_file(&self) -> PathBuf {
+        self.data_dir().join("maintenance/cache-cleanup.json")
+    }
+
+    /// Interprocess lock shared by manual and automatic maintenance runs.
+    pub fn maintenance_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("maintenance.lock")
+    }
+
+    /// Temporary destination for entries selected for atomic cleanup.
+    pub fn maintenance_trash_dir(&self) -> PathBuf {
+        self.temp_dir().join("maintenance-trash")
+    }
+
+    /// Directory for CLI log output.
+    pub fn cli_logs_dir(&self) -> PathBuf {
+        self.logs_dir().join("cli")
+    }
+
+    /// Directory for Desktop log and crash output.
+    pub fn desktop_logs_dir(&self) -> PathBuf {
+        self.logs_dir().join("desktop")
+    }
+
+    /// Path of the legacy tool-intent registry file.
     pub fn tools_file(&self) -> PathBuf {
         self.root.join("tools.json")
     }
 
-    /// Path of the distribution registry file.
+    /// Path of the legacy distribution registry file.
     pub fn distributions_file(&self) -> PathBuf {
         self.root.join("distributions.json")
     }
 
-    /// Path of the extension registry file.
+    /// Path of the legacy extension registry file.
     pub fn extensions_file(&self) -> PathBuf {
         self.root.join("extensions.json")
     }
 
+    /// Durable catalog of installed tool artifacts.
+    pub fn tools_catalog_file(&self) -> PathBuf {
+        self.catalog_dir().join("tools.json")
+    }
+
+    /// Durable catalog of installed distributions.
+    pub fn distributions_catalog_file(&self) -> PathBuf {
+        self.catalog_dir().join("distributions.json")
+    }
+
     /// Content-addressed store for verified extension artifacts.
     pub fn extensions_store_dir(&self) -> PathBuf {
-        self.root.join("store/extensions/sha256")
+        self.store_dir().join("extensions/sha256")
     }
 
     /// Durable catalog of installed extension artifacts.
     pub fn extensions_catalog_file(&self) -> PathBuf {
-        self.root.join("catalog/extensions.json")
+        self.catalog_dir().join("extensions.json")
     }
 
     /// Directory containing exact extension selection locks.
     pub fn extensions_locks_dir(&self) -> PathBuf {
-        self.root.join("locks/extensions")
+        self.locks_dir().join("extensions")
     }
 
     /// Interprocess lock serializing installed extension state transactions.
     pub fn extensions_state_lock_file(&self) -> PathBuf {
-        self.root.join("locks/extensions.state.lock")
-    }
-
-    /// Directory for global (non-workspace) log output.
-    pub fn logs_dir(&self) -> PathBuf {
-        self.root.join("logs")
+        self.locks_dir().join("extensions.state.lock")
     }
 }
 
 /// Root directory for Morphir caches.
 ///
-/// A relocated home keeps caches under `<home>/cache` so sandboxed
-/// environments stay hermetic; otherwise the OS cache directory is used.
-/// Returns `None` only when neither `MORPHIR_HOME` nor an OS cache directory
-/// is available — callers keep their own fallback so environments without a
-/// user home (e.g. service accounts with only `XDG_CACHE_HOME`) still work.
+/// Caches always live under `<MORPHIR_HOME>/cache`, including when Morphir Home
+/// uses its default location. Returns `None` only when neither `MORPHIR_HOME`
+/// nor an OS user home directory is available.
 pub fn cache_root() -> Option<PathBuf> {
-    cache_root_from(
+    cache_root_from_home(
         std::env::var_os(MORPHIR_HOME_ENV).as_deref(),
-        dirs::cache_dir(),
+        dirs::home_dir(),
     )
 }
 
 /// Pure form of [`cache_root`] taking the raw `MORPHIR_HOME` value (if set)
-/// and the OS cache directory (if known).
+/// and the OS user home directory (if known).
+pub fn cache_root_from_home(
+    env_value: Option<&OsStr>,
+    os_home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    MorphirHome::resolve_from(env_value, os_home)
+        .ok()
+        .map(|home| home.cache_dir())
+}
+
+/// Resolves a cache root from the raw `MORPHIR_HOME` value (if set) and the OS
+/// cache directory (if known).
+///
+/// This helper preserves its original OS-cache-directory contract for existing
+/// callers. New callers that want the unified `<MORPHIR_HOME>/cache` layout
+/// should use [`cache_root`] or [`cache_root_from_home`].
 pub fn cache_root_from(env_value: Option<&OsStr>, os_cache: Option<PathBuf>) -> Option<PathBuf> {
     match env_value.filter(|value| !value.is_empty()) {
         Some(value) => Some(PathBuf::from(value).join("cache")),
@@ -186,13 +288,46 @@ mod tests {
     #[test]
     fn well_known_paths_live_under_the_home_root() {
         let home = MorphirHome::resolve_from(Some(os("/mh").as_os_str()), None).unwrap();
+        assert_eq!(home.global_config_file(), Path::new("/mh/morphir.toml"));
+        assert_eq!(home.config_dir(), Path::new("/mh/config"));
+        assert_eq!(home.data_dir(), Path::new("/mh/data"));
+        assert_eq!(home.catalog_dir(), Path::new("/mh/catalog"));
+        assert_eq!(home.store_dir(), Path::new("/mh/store"));
+        assert_eq!(home.locks_dir(), Path::new("/mh/locks"));
+        assert_eq!(home.cache_dir(), Path::new("/mh/cache"));
+        assert_eq!(home.logs_dir(), Path::new("/mh/logs"));
+        assert_eq!(home.temp_dir(), Path::new("/mh/tmp"));
+        assert_eq!(home.cli_logs_dir(), Path::new("/mh/logs/cli"));
+        assert_eq!(home.desktop_logs_dir(), Path::new("/mh/logs/desktop"));
+        assert_eq!(home.downloads_cache_dir(), Path::new("/mh/cache/downloads"));
+        assert_eq!(home.indexes_cache_dir(), Path::new("/mh/cache/indexes"));
+        assert_eq!(home.desktop_cache_dir(), Path::new("/mh/cache/desktop"));
+        assert_eq!(
+            home.cache_maintenance_state_file(),
+            Path::new("/mh/data/maintenance/cache-cleanup.json")
+        );
+        assert_eq!(
+            home.maintenance_lock_file(),
+            Path::new("/mh/locks/maintenance.lock")
+        );
+        assert_eq!(
+            home.maintenance_trash_dir(),
+            Path::new("/mh/tmp/maintenance-trash")
+        );
         assert_eq!(home.tools_file(), Path::new("/mh/tools.json"));
         assert_eq!(
             home.distributions_file(),
             Path::new("/mh/distributions.json")
         );
         assert_eq!(home.extensions_file(), Path::new("/mh/extensions.json"));
-        assert_eq!(home.logs_dir(), Path::new("/mh/logs"));
+        assert_eq!(
+            home.tools_catalog_file(),
+            Path::new("/mh/catalog/tools.json")
+        );
+        assert_eq!(
+            home.distributions_catalog_file(),
+            Path::new("/mh/catalog/distributions.json")
+        );
         assert_eq!(
             home.extensions_store_dir(),
             Path::new("/mh/store/extensions/sha256")
@@ -212,15 +347,40 @@ mod tests {
     }
 
     #[test]
-    fn default_caches_stay_in_os_cache_dir() {
+    fn default_caches_stay_in_morphir_home() {
         assert_eq!(
-            cache_root_from(None, Some("/home/u/.cache".into())),
-            Some(PathBuf::from("/home/u/.cache/morphir"))
+            cache_root_from_home(None, Some("/home/u".into())),
+            Some(PathBuf::from("/home/u/.morphir/cache"))
         );
     }
 
     #[test]
     fn relocated_home_keeps_caches_under_home() {
+        assert_eq!(
+            cache_root_from_home(Some(os("/sandbox/mh").as_os_str()), Some("/home/u".into())),
+            Some(PathBuf::from("/sandbox/mh/cache"))
+        );
+    }
+
+    #[test]
+    fn empty_env_var_keeps_caches_in_morphir_home() {
+        assert_eq!(
+            cache_root_from_home(Some(os("").as_os_str()), Some("/home/u".into())),
+            Some(PathBuf::from("/home/u/.morphir/cache"))
+        );
+    }
+
+    #[test]
+    fn no_env_var_and_no_os_home_yields_none() {
+        assert_eq!(cache_root_from_home(None, None), None);
+    }
+
+    #[test]
+    fn legacy_cache_helper_keeps_os_cache_directory_contract() {
+        assert_eq!(
+            cache_root_from(None, Some("/home/u/.cache".into())),
+            Some(PathBuf::from("/home/u/.cache/morphir"))
+        );
         assert_eq!(
             cache_root_from(
                 Some(os("/sandbox/mh").as_os_str()),
@@ -228,28 +388,5 @@ mod tests {
             ),
             Some(PathBuf::from("/sandbox/mh/cache"))
         );
-    }
-
-    #[test]
-    fn empty_env_var_keeps_caches_in_os_cache_dir() {
-        assert_eq!(
-            cache_root_from(Some(os("").as_os_str()), Some("/home/u/.cache".into())),
-            Some(PathBuf::from("/home/u/.cache/morphir"))
-        );
-    }
-
-    #[test]
-    fn caches_resolve_without_a_user_home() {
-        // A service account may have an OS cache dir but no home; no MorphirHome
-        // resolution is required for caches.
-        assert_eq!(
-            cache_root_from(None, Some("/var/cache/svc".into())),
-            Some(PathBuf::from("/var/cache/svc/morphir"))
-        );
-    }
-
-    #[test]
-    fn no_env_var_and_no_os_cache_dir_yields_none() {
-        assert_eq!(cache_root_from(None, None), None);
     }
 }

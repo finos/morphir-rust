@@ -80,6 +80,43 @@ async fn completes_mep_through_a_real_child_process() {
 
 #[tokio::test]
 #[ignore = "requires the independently built mep-native-backend executable"]
+async fn compatibility_session_rejects_exit_as_a_request() {
+    use morphir_daemon::extensions::{ExtensionSession, ExtensionSessionState};
+
+    let launch = ProcessLaunch::new(
+        "mep-native-backend",
+        native_fixture_path(),
+        std::env::current_dir().expect("the test working directory should exist"),
+    );
+    let mut session = SpawnedProcessSession::spawn(launch)
+        .await
+        .expect("the host should start the native extension fixture");
+    session
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "exit-request-test".into(),
+                version: "0.1.0".into(),
+            },
+        })
+        .await
+        .expect("the fixture should initialize");
+
+    let error = session
+        .invoke(methods::EXIT, json!({}))
+        .await
+        .expect_err("exit must use a notification during shutdown");
+
+    assert!(error.to_string().contains("lifecycle method"));
+    assert_eq!(session.state(), ExtensionSessionState::Ready);
+    session
+        .shutdown()
+        .await
+        .expect("the ready session should still shut down cleanly");
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
 async fn kills_a_child_that_exceeds_the_request_timeout() {
     let launch = ProcessLaunch::new(
         "mep-native-backend",

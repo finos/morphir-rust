@@ -137,7 +137,10 @@ impl<T: MepTransport> Session<T, Ready> {
         method: &str,
         params: impl Serialize,
     ) -> InvokeOutcome<T, R> {
-        if matches!(method, methods::INITIALIZE | methods::SHUTDOWN) {
+        if matches!(
+            method,
+            methods::INITIALIZE | methods::SHUTDOWN | methods::EXIT
+        ) {
             return InvokeOutcome::Rejected(
                 self,
                 DaemonError::Extension(format!(

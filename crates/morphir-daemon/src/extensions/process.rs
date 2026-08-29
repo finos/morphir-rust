@@ -1,8 +1,8 @@
 //! Native child-process transport for the Morphir Extension Protocol.
 
 use crate::extensions::protocol::{
-    ExtensionRequest, ExtensionResponse, ExtensionResponseExt, InitializeParams, InitializeResult,
-    MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
+    ExtensionNotification, ExtensionRequest, ExtensionResponse, ExtensionResponseExt,
+    InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
 use crate::extensions::session::{
     ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
@@ -265,6 +265,23 @@ impl SpawnedProcessSession {
         Ok(())
     }
 
+    async fn send_exit_notification(&mut self) -> Result<()> {
+        let notification = ExtensionNotification::without_params(methods::EXIT);
+        let send = async {
+            let stdin = self.stdin.as_mut().ok_or_else(|| {
+                DaemonError::Extension("Extension process stdin is closed".to_string())
+            })?;
+            write_frame(stdin, &notification).await
+        };
+        match timeout(self.request_timeout, send).await {
+            Ok(result) => result,
+            Err(_) => Err(DaemonError::Extension(format!(
+                "Extension exit notification timed out after {:?}",
+                self.request_timeout
+            ))),
+        }
+    }
+
     async fn abort_with_error(&mut self, error: DaemonError) -> DaemonError {
         match self.abort_process().await {
             Ok(()) => error,
@@ -356,6 +373,17 @@ impl MepTransport for SpawnedProcessTransport {
     }
 
     async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
+        if let Err(error) = self.session.send_exit_notification().await {
+            return Err(match self.session.abort_process().await {
+                Ok(()) => TransportError::new(error, TransportState::Stopped),
+                Err(cleanup) => TransportError::new(
+                    DaemonError::Extension(format!(
+                        "{error}; process cleanup also failed: {cleanup}"
+                    )),
+                    TransportState::Indeterminate,
+                ),
+            });
+        }
         self.session.stdin.take();
         let status = match timeout(self.session.request_timeout, self.session.child.wait()).await {
             Ok(status) => status.map_err(|error| {
@@ -470,7 +498,10 @@ impl ExtensionSession for SpawnedProcessSession {
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
         let initialized = self.ready_session()?;
-        if matches!(method, methods::INITIALIZE | methods::SHUTDOWN) {
+        if matches!(
+            method,
+            methods::INITIALIZE | methods::SHUTDOWN | methods::EXIT
+        ) {
             return Err(DaemonError::Extension(format!(
                 "Protocol lifecycle method '{}' must use its dedicated session operation",
                 method
@@ -493,6 +524,9 @@ impl ExtensionSession for SpawnedProcessSession {
     async fn shutdown(&mut self) -> Result<()> {
         self.ready_session()?;
         let _: serde_json::Value = self.call(methods::SHUTDOWN, serde_json::json!({})).await?;
+        if let Err(error) = self.send_exit_notification().await {
+            return Err(self.abort_with_error(error).await);
+        }
         self.stdin.take();
 
         let status = match timeout(self.request_timeout, self.child.wait()).await {

@@ -67,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Native process hosts now complete MEP shutdown by sending the required `morphir.exit`
+  notification after the extension acknowledges `morphir.shutdown`
 - `kb sync diff` compares an asset as bytes rather than as text. Every mirrored file was decoded as
   UTF-8 first, so an asset holding bytes that are not valid UTF-8 — an image, an archive — came back
   with U+FFFD where those bytes had been and diffed against itself as a change. Concepts are still

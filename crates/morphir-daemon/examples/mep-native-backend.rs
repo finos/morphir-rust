@@ -81,8 +81,39 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut reader = stdin.lock();
     let stdout = io::stdout();
     let mut writer = stdout.lock();
+    let mut awaiting_exit = false;
 
-    while let Some(body) = read_frame(&mut reader)? {
+    loop {
+        let Some(body) = read_frame(&mut reader)? else {
+            if awaiting_exit {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stdin closed before morphir.exit",
+                )
+                .into());
+            }
+            break;
+        };
+        if awaiting_exit {
+            let notification: serde_json::Value = serde_json::from_slice(&body)?;
+            if notification
+                .get("jsonrpc")
+                .and_then(serde_json::Value::as_str)
+                != Some("2.0")
+                || notification
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(methods::EXIT)
+                || notification.get("id").is_some()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "expected morphir.exit notification",
+                )
+                .into());
+            }
+            break;
+        }
         let request: ExtensionRequest = serde_json::from_slice(&body)?;
         let shutdown = request.method == methods::SHUTDOWN;
         let mut response = morphir_extension_sdk::__dispatch_request::<NativeBackend>(
@@ -112,7 +143,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             if std::env::var_os("MEP_FIXTURE_IGNORE_SHUTDOWN").is_some() {
                 std::thread::sleep(std::time::Duration::from_secs(30));
             }
-            break;
+            awaiting_exit = true;
         }
     }
 

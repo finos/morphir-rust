@@ -498,7 +498,10 @@ impl ExtensionSession for SpawnedProcessSession {
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
         let initialized = self.ready_session()?;
-        if matches!(method, methods::INITIALIZE | methods::SHUTDOWN) {
+        if matches!(
+            method,
+            methods::INITIALIZE | methods::SHUTDOWN | methods::EXIT
+        ) {
             return Err(DaemonError::Extension(format!(
                 "Protocol lifecycle method '{}' must use its dedicated session operation",
                 method

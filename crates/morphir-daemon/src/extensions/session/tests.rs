@@ -274,6 +274,37 @@ async fn local_serialization_failure_preserves_the_ready_session() {
 }
 
 #[tokio::test]
+async fn rejects_exit_as_a_ready_request_without_sending() {
+    let initialized =
+        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
+            .unwrap();
+    let exit_response = ExtensionResponse::success(2, serde_json::json!({})).unwrap();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([Ok(initialized), Ok(exit_response)]),
+        termination: TransportState::Stopped,
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::EXIT, serde_json::json!({}))
+        .await
+    {
+        InvokeOutcome::Rejected(session, error) => {
+            assert!(error.to_string().contains("lifecycle method"));
+            assert_eq!(session.transport_internal().responses.len(), 1);
+        }
+        InvokeOutcome::Success(_, _) => panic!("exit must not be sent as a request"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("local rejection should preserve Ready: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
 async fn rejects_compile_when_the_frontend_did_not_enable_it_without_sending() {
     let initialized = ExtensionResponse::success(1, frontend_initialization(false)).unwrap();
     let compile_response = ExtensionResponse::success(

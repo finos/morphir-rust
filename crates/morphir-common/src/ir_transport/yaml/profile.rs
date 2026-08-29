@@ -6,7 +6,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use super::YamlCodec;
 use crate::ir_transport::{IR_RECURSION_STACK_BYTES, SourceSpan, Stage, TransportDiagnostic};
 
-pub(super) fn validate_yaml_profile(input: &[u8]) -> Result<(), TransportDiagnostic> {
+pub(crate) fn validate_yaml_profile(input: &[u8]) -> Result<(), TransportDiagnostic> {
     let source = std::str::from_utf8(input).map_err(|error| {
         TransportDiagnostic::error(
             "morphir::ir::yaml::invalid_utf8",

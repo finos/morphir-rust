@@ -7,6 +7,7 @@ use morphir_core::format_version::{
 };
 use tempfile::NamedTempFile;
 
+use super::yaml::validate_yaml_profile;
 use super::{SourceSpan, Stage, TransportDiagnostic};
 
 const REPLAY_MEMORY_THRESHOLD: usize = 64 * 1024;
@@ -16,7 +17,6 @@ struct ProbeAccumulator {
     buffer: Vec<u8>,
     spill: Option<NamedTempFile>,
     spill_len: usize,
-    spill_cursor: usize,
 }
 
 impl ProbeAccumulator {
@@ -25,7 +25,6 @@ impl ProbeAccumulator {
             buffer: Vec::new(),
             spill: None,
             spill_len: 0,
-            spill_cursor: 0,
         }
     }
 
@@ -70,7 +69,6 @@ impl ProbeAccumulator {
             memory: &self.buffer,
             spill: self.spill.as_mut(),
             spill_len: self.spill_len,
-            spill_cursor: &mut self.spill_cursor,
         }
     }
 
@@ -131,7 +129,6 @@ struct ForwardProbeBytes<'a> {
     memory: &'a [u8],
     spill: Option<&'a mut NamedTempFile>,
     spill_len: usize,
-    spill_cursor: &'a mut usize,
 }
 
 impl ForwardProbeBytes<'_> {
@@ -153,23 +150,15 @@ impl ForwardProbeBytes<'_> {
         if spill_index >= self.spill_len {
             return Ok(None);
         }
-        if spill_index < *self.spill_cursor {
-            temp.seek(SeekFrom::Start(spill_index as u64))
-                .map_err(probe_io_error)?;
-            *self.spill_cursor = spill_index;
+        temp.seek(SeekFrom::Start(spill_index as u64))
+            .map_err(probe_io_error)?;
+        let mut byte = [0_u8; 1];
+        let read = temp.read(&mut byte).map_err(probe_io_error)?;
+        if read == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(byte[0]))
         }
-        while *self.spill_cursor <= spill_index {
-            let mut byte = [0_u8; 1];
-            let read = temp.read(&mut byte).map_err(probe_io_error)?;
-            if read == 0 {
-                return Ok(None);
-            }
-            if *self.spill_cursor == spill_index {
-                return Ok(Some(byte[0]));
-            }
-            *self.spill_cursor += 1;
-        }
-        Ok(None)
     }
 }
 
@@ -297,7 +286,6 @@ pub fn probe_json_root<'reader, R: Read + ?Sized + 'reader>(
     support: &SupportTable,
 ) -> Result<(JsonRootProbe, ProbedJsonReader<'reader, R>), TransportDiagnostic> {
     let mut accum = ProbeAccumulator::new();
-    let mut scan_state = JsonRootScanState::new();
     let mut stream_after_header = false;
     let mut streaming_header = None;
 
@@ -305,6 +293,7 @@ pub fn probe_json_root<'reader, R: Read + ?Sized + 'reader>(
         if accum.spill.is_some() {
             break;
         }
+        let mut scan_state = JsonRootScanState::new();
         let mut source = accum.forward_bytes();
         match scan_state.advance(&mut source)? {
             IncrementalScan::StreamingReady(header) => {
@@ -354,6 +343,7 @@ pub fn probe_yaml_slice(
 ) -> Result<JsonRootProbe, TransportDiagnostic> {
     let text = std::str::from_utf8(source).map_err(probe_io_error)?;
     let header = if text.trim_start().starts_with('{') {
+        validate_yaml_profile(source)?;
         YamlFlowRootScanner::new(source).scan()?
     } else {
         YamlRootScanner::new(text).scan()?
@@ -1294,12 +1284,12 @@ impl<'source> YamlFlowRootScanner<'source> {
 
     fn scan(self) -> Result<JsonRootHeader, TransportDiagnostic> {
         let mut index = 0_usize;
-        skip_ws(self.source, &mut index);
+        skip_yaml_flow_ws(self.source, &mut index);
         if peek(self.source, index) != Some(b'{') {
             return Err(probe_syntax_error("invalid YAML syntax"));
         }
         index += 1;
-        skip_ws(self.source, &mut index);
+        skip_yaml_flow_ws(self.source, &mut index);
 
         let mut member_order = Vec::new();
         let mut format_version_count = 0_usize;
@@ -1309,7 +1299,7 @@ impl<'source> YamlFlowRootScanner<'source> {
         let mut first_member = true;
 
         loop {
-            skip_ws(self.source, &mut index);
+            skip_yaml_flow_ws(self.source, &mut index);
             if peek(self.source, index) == Some(b'}') {
                 break;
             }
@@ -1321,18 +1311,18 @@ impl<'source> YamlFlowRootScanner<'source> {
                     return Err(probe_syntax_error("invalid YAML syntax"));
                 }
                 index += 1;
-                skip_ws(self.source, &mut index);
+                skip_yaml_flow_ws(self.source, &mut index);
             }
             first_member = false;
 
             let key = read_yaml_flow_key(self.source, &mut index)?;
             member_order.push(key.clone());
-            skip_ws(self.source, &mut index);
+            skip_yaml_flow_ws(self.source, &mut index);
             if peek(self.source, index) != Some(b':') {
                 return Err(probe_syntax_error("invalid YAML syntax"));
             }
             index += 1;
-            skip_ws(self.source, &mut index);
+            skip_yaml_flow_ws(self.source, &mut index);
 
             if key == "formatVersion" {
                 format_version_count += 1;
@@ -1349,7 +1339,7 @@ impl<'source> YamlFlowRootScanner<'source> {
                 }
                 skip_yaml_flow_value(self.source, &mut index)?;
             }
-            skip_ws(self.source, &mut index);
+            skip_yaml_flow_ws(self.source, &mut index);
         }
 
         if format_version_count == 0 {
@@ -1381,6 +1371,19 @@ impl<'source> YamlFlowRootScanner<'source> {
             saw_distribution,
             format_version_complete: true,
         })
+    }
+}
+
+fn skip_yaml_flow_ws(source: &[u8], index: &mut usize) {
+    loop {
+        skip_ws(source, index);
+        if peek(source, *index) == Some(b'#') {
+            while matches!(peek(source, *index), Some(byte) if byte != b'\n') {
+                *index += 1;
+            }
+            continue;
+        }
+        break;
     }
 }
 
@@ -1766,6 +1769,55 @@ pub fn observation_diagnostic(observation: &HeaderObservation) -> TransportDiagn
 mod tests {
     use super::*;
     use morphir_core::format_version::ReleaseTriplet;
+
+    #[test]
+    fn canonical_json_header_streams_with_short_reads() {
+        let source =
+            br#"{"formatVersion":3,"distribution":["Library",[[["example"]]],[],{"modules":[]}]}"#;
+        let mut reader = ChunkReader {
+            data: source,
+            pos: 0,
+            chunk_size: 7,
+        };
+        let (probe, input) = probe_json_root(&mut reader, &SupportTable::reference()).unwrap();
+        assert_eq!(probe.replay.replay_kind, ReplayKind::None);
+        assert!(matches!(input, ProbedJsonReader::Stream(_)));
+    }
+
+    #[test]
+    fn flow_yaml_root_preserves_member_order_and_inline_comments() {
+        let source = br#"{formatVersion: 4, # hdr
+distribution: {}}"#;
+        let probe = probe_yaml_slice(source, &SupportTable::reference()).expect("flow yaml probe");
+        assert_eq!(probe.member_order, vec!["formatVersion", "distribution"]);
+        assert_eq!(probe.normalized.release, ReleaseTriplet::new(4, 0, 0));
+    }
+
+    #[test]
+    fn flow_yaml_root_rejects_profile_violations() {
+        let source = br#"{formatVersion: 3, distribution: &anchor {}}"#;
+        let error = probe_yaml_slice(source, &SupportTable::reference()).unwrap_err();
+        assert_eq!(error.code(), "morphir::ir::yaml::alias_not_allowed");
+    }
+
+    struct ChunkReader<'a> {
+        data: &'a [u8],
+        pos: usize,
+        chunk_size: usize,
+    }
+
+    impl Read for ChunkReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let end = (self.pos + self.chunk_size).min(self.data.len());
+            let count = end - self.pos;
+            buf[..count].copy_from_slice(&self.data[self.pos..end]);
+            self.pos = end;
+            Ok(count)
+        }
+    }
 
     #[test]
     fn canonical_json_header_streams_without_replay() {

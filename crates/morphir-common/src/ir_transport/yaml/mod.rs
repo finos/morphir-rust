@@ -20,8 +20,9 @@ mod v3;
 mod v4;
 
 use super::root_probe::probe_yaml_slice;
-use profile::validate_yaml_profile;
-pub(crate) use profile::{decode_document, decode_json_value, encode_document};
+pub(crate) use profile::{
+    decode_document, decode_json_value, encode_document, validate_yaml_profile,
+};
 use v3::V3YamlEventEncoder;
 use v4::V4YamlEventEncoder;
 

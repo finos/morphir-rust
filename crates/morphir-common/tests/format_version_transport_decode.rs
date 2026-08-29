@@ -21,7 +21,8 @@ impl EventSink for NullSink {
 
 #[test]
 fn json_v3_codec_accepts_supported_release_string_spelling() {
-    let source = br#"{"formatVersion":"3.0.0","distribution":["Library",[["example"]],[],{"modules":[]}]}"#;
+    let source =
+        br#"{"formatVersion":"3.0.0","distribution":["Library",[["example"]],[],{"modules":[]}]}"#;
     let mut reader = &source[..];
     let mut sink = NullSink;
     JsonCodec::new()

@@ -4,7 +4,9 @@ use std::fmt;
 
 use serde::de::{self, DeserializeSeed, Deserializer, Visitor};
 
-use super::{CanonicalSpelling, FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable};
+use super::{
+    CanonicalSpelling, FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable,
+};
 
 /// Deserialize a normalized baseline `formatVersion` major as `u32`.
 pub fn deserialize_baseline_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
@@ -89,7 +91,10 @@ mod tests {
 
     #[derive(Deserialize)]
     struct VersionField {
-        #[serde(rename = "formatVersion", deserialize_with = "deserialize_baseline_u32")]
+        #[serde(
+            rename = "formatVersion",
+            deserialize_with = "deserialize_baseline_u32"
+        )]
         format_version: u32,
     }
 

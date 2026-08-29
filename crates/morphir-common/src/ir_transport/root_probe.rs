@@ -227,7 +227,9 @@ fn yaml_root_header_from_json(
     value: &serde_json::Value,
     source_len: usize,
 ) -> Result<JsonRootHeader, TransportDiagnostic> {
-    let mapping = value.as_object().ok_or_else(|| probe_syntax_error("invalid YAML syntax"))?;
+    let mapping = value
+        .as_object()
+        .ok_or_else(|| probe_syntax_error("invalid YAML syntax"))?;
 
     let mut member_order = Vec::new();
     let mut format_version_count = 0_usize;
@@ -243,9 +245,7 @@ fn yaml_root_header_from_json(
                     FormatVersionDiagnostic::duplicate_format_version(),
                 ));
             }
-            scalar = Some(
-                ScalarValue::from_json(value).map_err(transport_from_format_version)?,
-            );
+            scalar = Some(ScalarValue::from_json(value).map_err(transport_from_format_version)?);
         } else if key == "distribution" {
             saw_distribution = true;
         }

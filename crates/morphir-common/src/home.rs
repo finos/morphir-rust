@@ -103,6 +103,21 @@ impl MorphirHome {
         self.root.join("cache")
     }
 
+    /// Directory for downloaded artifacts that can be reacquired.
+    pub fn downloads_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("downloads")
+    }
+
+    /// Directory for cached registry and release indexes.
+    pub fn indexes_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("indexes")
+    }
+
+    /// Directory for Desktop-owned re-creatable application caches.
+    pub fn desktop_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("desktop")
+    }
+
     /// Directory for component log output.
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
@@ -111,6 +126,21 @@ impl MorphirHome {
     /// Directory for temporary staging owned by Morphir processes.
     pub fn temp_dir(&self) -> PathBuf {
         self.root.join("tmp")
+    }
+
+    /// Durable state used by automatic cache maintenance.
+    pub fn cache_maintenance_state_file(&self) -> PathBuf {
+        self.data_dir().join("maintenance/cache-cleanup.json")
+    }
+
+    /// Interprocess lock shared by manual and automatic maintenance runs.
+    pub fn maintenance_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("maintenance.lock")
+    }
+
+    /// Temporary destination for entries selected for atomic cleanup.
+    pub fn maintenance_trash_dir(&self) -> PathBuf {
+        self.temp_dir().join("maintenance-trash")
     }
 
     /// Directory for CLI log output.
@@ -253,6 +283,21 @@ mod tests {
         assert_eq!(home.temp_dir(), Path::new("/mh/tmp"));
         assert_eq!(home.cli_logs_dir(), Path::new("/mh/logs/cli"));
         assert_eq!(home.desktop_logs_dir(), Path::new("/mh/logs/desktop"));
+        assert_eq!(home.downloads_cache_dir(), Path::new("/mh/cache/downloads"));
+        assert_eq!(home.indexes_cache_dir(), Path::new("/mh/cache/indexes"));
+        assert_eq!(home.desktop_cache_dir(), Path::new("/mh/cache/desktop"));
+        assert_eq!(
+            home.cache_maintenance_state_file(),
+            Path::new("/mh/data/maintenance/cache-cleanup.json")
+        );
+        assert_eq!(
+            home.maintenance_lock_file(),
+            Path::new("/mh/locks/maintenance.lock")
+        );
+        assert_eq!(
+            home.maintenance_trash_dir(),
+            Path::new("/mh/tmp/maintenance-trash")
+        );
         assert_eq!(home.tools_file(), Path::new("/mh/tools.json"));
         assert_eq!(
             home.distributions_file(),

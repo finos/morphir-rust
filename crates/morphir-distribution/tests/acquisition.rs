@@ -1,8 +1,9 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    ArtifactStore, Channel, DistributionError, ExtensionId, ExtensionInstaller, InstalledCatalog,
-    LocalIndex, Platform, Selection, Sha256Digest, activate_installed, list_installed,
-    read_extension_lock, uninstall_extension, write_extension_lock,
+    ArtifactFilename, ArtifactStore, Channel, DistributionError, ExtensionId, ExtensionInstaller,
+    InstalledCatalog, LocalIndex, Platform, RelativeArtifactPath, Selection, Sha256Digest,
+    activate_installed, list_installed, read_extension_lock, uninstall_extension,
+    write_extension_lock,
 };
 use std::fs;
 use std::path::Path;
@@ -148,6 +149,38 @@ fn morphir_home_has_durable_distribution_paths() {
         mother.home.extensions_state_lock_file(),
         mother.root.path().join("home/locks/extensions.state.lock")
     );
+}
+
+#[test]
+fn tools_and_extensions_share_verification_but_not_store_namespaces() {
+    let root = tempfile::tempdir().unwrap();
+    let source_root = root.path().join("repository");
+    let source = source_root.join("artifacts/example");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, b"verified tool bytes").unwrap();
+    let digest = Sha256Digest::of_bytes(b"verified tool bytes");
+    let relative_source = RelativeArtifactPath::parse("artifacts/example").unwrap();
+    let filename = ArtifactFilename::parse("example").unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+
+    let tool = ArtifactStore::for_tools(&home)
+        .materialize_file(&source_root, &relative_source, &digest, &filename, false)
+        .unwrap();
+    let extension = ArtifactStore::from_home(&home)
+        .materialize_file(&source_root, &relative_source, &digest, &filename, false)
+        .unwrap();
+
+    assert_eq!(
+        tool.store_path().to_string_lossy().replace('\\', "/"),
+        format!("store/tools/sha256/{digest}/example")
+    );
+    assert_eq!(
+        extension.store_path().to_string_lossy().replace('\\', "/"),
+        format!("store/extensions/sha256/{digest}/example")
+    );
+    assert_ne!(tool.path(), extension.path());
+    assert_eq!(fs::read(tool.path()).unwrap(), b"verified tool bytes");
+    assert_eq!(fs::read(extension.path()).unwrap(), b"verified tool bytes");
 }
 
 #[test]

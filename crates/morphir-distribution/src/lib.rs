@@ -62,4 +62,4 @@ pub use state::{
     InstalledExtensionSnapshot, VerifiedProcessArtifact, activate_installed, list_installed,
     read_extension_lock, uninstall_extension, write_extension_lock,
 };
-pub use store::{ArtifactStore, VerifiedArtifact};
+pub use store::{ArtifactStore, StoredArtifact, VerifiedArtifact};

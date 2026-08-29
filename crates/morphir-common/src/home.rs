@@ -173,6 +173,21 @@ impl MorphirHome {
         self.catalog_dir().join("tools.json")
     }
 
+    /// Content-addressed store for verified tool artifacts.
+    pub fn tools_store_dir(&self) -> PathBuf {
+        self.store_dir().join("tools/sha256")
+    }
+
+    /// Directory containing exact tool selection locks.
+    pub fn tools_locks_dir(&self) -> PathBuf {
+        self.locks_dir().join("tools")
+    }
+
+    /// Interprocess lock serializing installed tool state transactions.
+    pub fn tools_state_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("tools.state.lock")
+    }
+
     /// Durable catalog of installed distributions.
     pub fn distributions_catalog_file(&self) -> PathBuf {
         self.catalog_dir().join("distributions.json")
@@ -323,6 +338,12 @@ mod tests {
         assert_eq!(
             home.tools_catalog_file(),
             Path::new("/mh/catalog/tools.json")
+        );
+        assert_eq!(home.tools_store_dir(), Path::new("/mh/store/tools/sha256"));
+        assert_eq!(home.tools_locks_dir(), Path::new("/mh/locks/tools"));
+        assert_eq!(
+            home.tools_state_lock_file(),
+            Path::new("/mh/locks/tools.state.lock")
         );
         assert_eq!(
             home.distributions_catalog_file(),

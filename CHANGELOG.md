@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Morphir Home paths for the verified tool store, exact tool locks, and the shared tool-state
+  transaction lock.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

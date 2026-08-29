@@ -73,13 +73,30 @@ impl TransportDiagnostic {
         }))
     }
 
+    /// Create a warning at a semantic cursor.
+    pub fn warning(
+        code: impl Into<String>,
+        stage: Stage,
+        cursor: IrCursor,
+        message: impl Into<String>,
+    ) -> Self {
+        Self(Box::new(TransportDiagnosticData {
+            code: code.into(),
+            stage,
+            severity: Severity::Warning,
+            cursor,
+            message: message.into(),
+            guidance: None,
+            source_span: None,
+        }))
+    }
+
     /// Attach actionable recovery guidance.
     pub fn with_guidance(mut self, guidance: impl Into<String>) -> Self {
         self.0.guidance = Some(guidance.into());
         self
     }
-
-    /// Attach a physical source location.
+    /// Attach the decoder-provided physical source location.
     pub fn with_source_span(mut self, source_span: SourceSpan) -> Self {
         self.0.source_span = Some(source_span);
         self

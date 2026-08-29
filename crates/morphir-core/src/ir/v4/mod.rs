@@ -10,6 +10,10 @@ use schemars::JsonSchema;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
+use crate::format_version::{
+    CanonicalSpelling, NormalizedFormatVersion, ScalarValue, SupportTable,
+};
+
 // Submodules - Core IR types
 pub mod access;
 pub mod attributes;
@@ -83,11 +87,33 @@ pub struct IRFile {
     pub distribution: Distribution,
 }
 
-/// Format version - accepts both string "4.0.0" and integer 4
+/// Format version - accepts both string "4.0.0" and integer 4 using the shared contract.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum FormatVersion {
     String(String),
     Integer(u32),
+}
+
+impl From<CanonicalSpelling> for FormatVersion {
+    fn from(value: CanonicalSpelling) -> Self {
+        match value {
+            CanonicalSpelling::Integer(version) => Self::Integer(version),
+            CanonicalSpelling::String(version) => Self::String(version),
+        }
+    }
+}
+
+impl FormatVersion {
+    /// Normalize this wire spelling against the reference support table.
+    pub fn normalize(
+        &self,
+    ) -> Result<NormalizedFormatVersion, crate::format_version::FormatVersionDiagnostic> {
+        let scalar = match self {
+            Self::Integer(version) => ScalarValue::Integer(*version as u64),
+            Self::String(version) => ScalarValue::String(version.clone()),
+        };
+        NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::reference())
+    }
 }
 
 impl Serialize for FormatVersion {
@@ -108,27 +134,16 @@ impl<'de> Deserialize<'de> for FormatVersion {
         D: Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
-        match value {
-            serde_json::Value::String(s) => Ok(FormatVersion::String(s)),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_u64() {
-                    Ok(FormatVersion::Integer(i as u32))
-                } else {
-                    Err(de::Error::custom(
-                        "format version must be a positive integer",
-                    ))
-                }
-            }
-            _ => Err(de::Error::custom(
-                "format version must be a string or integer",
-            )),
-        }
+        let scalar = ScalarValue::from_json(&value).map_err(de::Error::custom)?;
+        let normalized = NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::reference())
+            .map_err(de::Error::custom)?;
+        Ok(normalized.canonical.into())
     }
 }
 
 impl Default for FormatVersion {
     fn default() -> Self {
-        FormatVersion::String("4.0.0".to_string())
+        FormatVersion::Integer(4)
     }
 }
 

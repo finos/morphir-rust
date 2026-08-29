@@ -1,13 +1,15 @@
 //! JSON codec entry point.
 
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
+use morphir_core::format_version::SupportTable;
 use morphir_core::ir::v4;
 use morphir_core::traversal::{
     DependencyEvent, DistributionHeader, IrCursor, ModuleEvent, SemanticEvent, SemanticEventKind,
 };
 
+use super::root_probe::{ProbedJsonReader, probe_json_root};
 use super::semantic::{self, ClassicEventVisitor, SemanticFile};
 use super::single_file::deserialize_classic_v3;
 use super::{
@@ -72,33 +74,81 @@ impl IrCodec for JsonCodec {
         options: &CodecOptions,
         sink: &mut dyn EventSink,
     ) -> Result<(), TransportDiagnostic> {
+        let (probe, input) = probe_json_root(reader, &SupportTable::reference())?;
         match options.version() {
             IrVersion::V3 => {
-                let mut deserializer = serde_json::Deserializer::from_reader(reader);
-                let mut visitor = ClassicEventVisitor::new(sink);
-                if let Err(error) = deserialize_classic_v3(&mut deserializer, &mut visitor) {
-                    if let Some(diagnostic) = visitor.take_failure() {
-                        return Err(diagnostic);
-                    }
-                    return Err(Self::decode_error(error));
-                }
-                deserializer.end().map_err(Self::decode_error)?;
-                visitor.finish().map_err(|message| {
-                    TransportDiagnostic::error(
-                        "morphir::ir::json::visitor_failed",
-                        Stage::Normalization,
+                if probe.normalized.release.major() != 3 {
+                    return Err(TransportDiagnostic::error(
+                        "morphir::ir::json::version_mismatch",
+                        Stage::Detection,
                         IrCursor::root(),
-                        message,
-                    )
-                    .with_guidance("verify the semantic sink and concrete v3 event order")
-                })?
+                        format!(
+                            "the v3 JSON codec requires formatVersion 3, found {}",
+                            probe.normalized.release
+                        ),
+                    ));
+                }
+                match input {
+                    ProbedJsonReader::Stream(mut prefixed) => {
+                        let mut deserializer = serde_json::Deserializer::from_reader(&mut prefixed);
+                        decode_v3_with_deserializer(
+                            &mut deserializer,
+                            sink,
+                            Some(probe.normalized.release.major()),
+                        )?;
+                        deserializer.end().map_err(Self::decode_error)?;
+                    }
+                    ProbedJsonReader::Memory(mut cursor) => {
+                        cursor.seek(SeekFrom::Start(0)).map_err(probe_seek_error)?;
+                        let mut deserializer = serde_json::Deserializer::from_reader(&mut cursor);
+                        decode_v3_with_deserializer(
+                            &mut deserializer,
+                            sink,
+                            Some(probe.normalized.release.major()),
+                        )?;
+                        deserializer.end().map_err(Self::decode_error)?;
+                    }
+                    ProbedJsonReader::Temporary(mut file) => {
+                        file.seek(SeekFrom::Start(0)).map_err(probe_seek_error)?;
+                        let mut deserializer = serde_json::Deserializer::from_reader(&mut file);
+                        decode_v3_with_deserializer(
+                            &mut deserializer,
+                            sink,
+                            Some(probe.normalized.release.major()),
+                        )?;
+                        deserializer.end().map_err(Self::decode_error)?;
+                    }
+                }
             }
             IrVersion::V4 => {
-                let file: v4::IRFile =
-                    serde_json::from_reader(reader).map_err(Self::decode_error)?;
-                semantic::emit_v4(file, sink)
+                if probe.normalized.release.major() != 4 {
+                    return Err(TransportDiagnostic::error(
+                        "morphir::ir::json::version_mismatch",
+                        Stage::Detection,
+                        IrCursor::root(),
+                        format!(
+                            "the v4 JSON codec requires formatVersion 4, found {}",
+                            probe.normalized.release
+                        ),
+                    ));
+                }
+                let file: v4::IRFile = match input {
+                    ProbedJsonReader::Stream(mut prefixed) => {
+                        serde_json::from_reader(&mut prefixed).map_err(Self::decode_error)?
+                    }
+                    ProbedJsonReader::Memory(mut cursor) => {
+                        cursor.seek(SeekFrom::Start(0)).map_err(probe_seek_error)?;
+                        serde_json::from_reader(&mut cursor).map_err(Self::decode_error)?
+                    }
+                    ProbedJsonReader::Temporary(mut file) => {
+                        file.seek(SeekFrom::Start(0)).map_err(probe_seek_error)?;
+                        serde_json::from_reader(&mut file).map_err(Self::decode_error)?
+                    }
+                };
+                semantic::emit_v4(file, sink)?;
             }
         }
+        Ok(())
     }
 
     fn encoder<'writer>(
@@ -555,6 +605,48 @@ impl EventSink for V4JsonEventEncoder<'_> {
         }
         self.writer.flush().map_err(JsonCodec::encode_error)
     }
+}
+
+fn decode_v3_with_deserializer<'de, D>(
+    deserializer: D,
+    sink: &mut dyn EventSink,
+    prevalidated_version: Option<u32>,
+) -> Result<(), TransportDiagnostic>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    let mut visitor = ClassicEventVisitor::new(sink);
+    if let Err(error) = deserialize_classic_v3(deserializer, &mut visitor, prevalidated_version) {
+        if let Some(diagnostic) = visitor.take_failure() {
+            return Err(diagnostic);
+        }
+        return Err(TransportDiagnostic::error(
+            "morphir::ir::json::invalid_syntax",
+            Stage::Syntax,
+            IrCursor::root(),
+            error.to_string(),
+        )
+        .with_guidance("correct the JSON syntax or select the actual input format"));
+    }
+    let _ = visitor.finish().map_err(|message| {
+        TransportDiagnostic::error(
+            "morphir::ir::json::visitor_failed",
+            Stage::Normalization,
+            IrCursor::root(),
+            message,
+        )
+        .with_guidance("verify the semantic sink and concrete v3 event order")
+    })?;
+    Ok(())
+}
+
+fn probe_seek_error(error: std::io::Error) -> TransportDiagnostic {
+    TransportDiagnostic::error(
+        "morphir::ir::root_probe::io_failed",
+        Stage::Detection,
+        IrCursor::root(),
+        error.to_string(),
+    )
 }
 
 fn json_stream_error(

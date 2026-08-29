@@ -50,7 +50,8 @@ impl Default for RemoteSourceConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheConfig {
-    /// Cache directory (defaults to ~/.cache/morphir/sources).
+    /// Cache directory (defaults to `<MORPHIR_HOME>/cache/sources`, where
+    /// `MORPHIR_HOME` defaults to `~/.morphir`).
     pub directory: Option<PathBuf>,
 
     /// Maximum cache size in MB (0 = unlimited).

@@ -31,8 +31,9 @@ The Morphir home directory for user-level data.
 | Default (Windows)     | `%USERPROFILE%\.morphir`              |
 | Contains              | User extensions, cache, global config |
 
-When set, caches also relocate under `$MORPHIR_HOME/cache` so sandboxed and
-hermetic environments never touch the real user directories.
+All Morphir caches live under `$MORPHIR_HOME/cache`, including when
+`MORPHIR_HOME` uses its default value. Setting `MORPHIR_HOME` therefore keeps
+sandboxed and hermetic environments from touching the real user directories.
 
 ```bash
 export MORPHIR_HOME="/opt/morphir"
@@ -50,20 +51,6 @@ The Morphir configuration directory.
 
 ```bash
 export MORPHIR_CONFIG_HOME="/etc/morphir"
-```
-
-### `MORPHIR_CACHE_HOME`
-
-The Morphir cache directory.
-
-| Aspect                | Value                                           |
-| --------------------- | ----------------------------------------------- |
-| Default (Linux/macOS) | `$XDG_CACHE_HOME/morphir` or `~/.cache/morphir` |
-| Default (Windows)     | `%LOCALAPPDATA%\morphir\cache`                  |
-| Contains              | Downloaded dependencies, build cache            |
-
-```bash
-export MORPHIR_CACHE_HOME="/var/cache/morphir"
 ```
 
 ## Daemon Variables
@@ -466,7 +453,6 @@ export MORPHIR_ENV="production"
 | --------------------------------- | ------ | ------------- | -------------------------- |
 | `MORPHIR_HOME`                    | path   | `~/.morphir`  | Morphir home directory     |
 | `MORPHIR_CONFIG_HOME`             | path   | XDG default   | Configuration directory    |
-| `MORPHIR_CACHE_HOME`              | path   | XDG default   | Cache directory            |
 | `MORPHIR_DAEMON_URL`              | url    | None          | Daemon connection URL      |
 | `MORPHIR_DAEMON_AUTO_START`       | bool   | `true`        | Auto-start daemon          |
 | `MORPHIR_DAEMON_TIMEOUT`          | int    | `30000`       | Connection timeout (ms)    |

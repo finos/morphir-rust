@@ -205,7 +205,7 @@ impl MorphirHome {
 /// uses its default location. Returns `None` only when neither `MORPHIR_HOME`
 /// nor an OS user home directory is available.
 pub fn cache_root() -> Option<PathBuf> {
-    cache_root_from(
+    cache_root_from_home(
         std::env::var_os(MORPHIR_HOME_ENV).as_deref(),
         dirs::home_dir(),
     )
@@ -213,10 +213,26 @@ pub fn cache_root() -> Option<PathBuf> {
 
 /// Pure form of [`cache_root`] taking the raw `MORPHIR_HOME` value (if set)
 /// and the OS user home directory (if known).
-pub fn cache_root_from(env_value: Option<&OsStr>, os_home: Option<PathBuf>) -> Option<PathBuf> {
+pub fn cache_root_from_home(
+    env_value: Option<&OsStr>,
+    os_home: Option<PathBuf>,
+) -> Option<PathBuf> {
     MorphirHome::resolve_from(env_value, os_home)
         .ok()
         .map(|home| home.cache_dir())
+}
+
+/// Resolves a cache root from the raw `MORPHIR_HOME` value (if set) and the OS
+/// cache directory (if known).
+///
+/// This helper preserves its original OS-cache-directory contract for existing
+/// callers. New callers that want the unified `<MORPHIR_HOME>/cache` layout
+/// should use [`cache_root`] or [`cache_root_from_home`].
+pub fn cache_root_from(env_value: Option<&OsStr>, os_cache: Option<PathBuf>) -> Option<PathBuf> {
+    match env_value.filter(|value| !value.is_empty()) {
+        Some(value) => Some(PathBuf::from(value).join("cache")),
+        None => os_cache.map(|cache| cache.join("morphir")),
+    }
 }
 
 #[cfg(test)]
@@ -333,7 +349,7 @@ mod tests {
     #[test]
     fn default_caches_stay_in_morphir_home() {
         assert_eq!(
-            cache_root_from(None, Some("/home/u".into())),
+            cache_root_from_home(None, Some("/home/u".into())),
             Some(PathBuf::from("/home/u/.morphir/cache"))
         );
     }
@@ -341,7 +357,7 @@ mod tests {
     #[test]
     fn relocated_home_keeps_caches_under_home() {
         assert_eq!(
-            cache_root_from(Some(os("/sandbox/mh").as_os_str()), Some("/home/u".into())),
+            cache_root_from_home(Some(os("/sandbox/mh").as_os_str()), Some("/home/u".into())),
             Some(PathBuf::from("/sandbox/mh/cache"))
         );
     }
@@ -349,13 +365,28 @@ mod tests {
     #[test]
     fn empty_env_var_keeps_caches_in_morphir_home() {
         assert_eq!(
-            cache_root_from(Some(os("").as_os_str()), Some("/home/u".into())),
+            cache_root_from_home(Some(os("").as_os_str()), Some("/home/u".into())),
             Some(PathBuf::from("/home/u/.morphir/cache"))
         );
     }
 
     #[test]
     fn no_env_var_and_no_os_home_yields_none() {
-        assert_eq!(cache_root_from(None, None), None);
+        assert_eq!(cache_root_from_home(None, None), None);
+    }
+
+    #[test]
+    fn legacy_cache_helper_keeps_os_cache_directory_contract() {
+        assert_eq!(
+            cache_root_from(None, Some("/home/u/.cache".into())),
+            Some(PathBuf::from("/home/u/.cache/morphir"))
+        );
+        assert_eq!(
+            cache_root_from(
+                Some(os("/sandbox/mh").as_os_str()),
+                Some("/home/u/.cache".into())
+            ),
+            Some(PathBuf::from("/sandbox/mh/cache"))
+        );
     }
 }

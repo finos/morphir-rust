@@ -25,7 +25,7 @@
 //! trusted_github_orgs = ["finos", "morphir-org"]
 //!
 //! [sources.cache]
-//! directory = "~/.cache/morphir/sources"
+//! directory = "~/.morphir/cache/sources"
 //! max_size_mb = 500
 //! ttl_secs = 86400  # 24 hours
 //!

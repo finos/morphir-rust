@@ -852,15 +852,16 @@ Repository dependencies can be cached locally (per-workspace) or globally (user-
 
 ### Cache Locations
 
-| Cache  | Location                        | Use Case                                      |
-| ------ | ------------------------------- | --------------------------------------------- |
-| Local  | `.morphir/deps/`                | Workspace isolation, offline builds           |
-| Global | `$XDG_CACHE_HOME/morphir/deps/` | Shared across workspaces, reduced duplication |
+| Cache  | Location                    | Use Case                                      |
+| ------ | --------------------------- | --------------------------------------------- |
+| Local  | `.morphir/deps/`            | Workspace isolation, offline builds           |
+| Global | `$MORPHIR_HOME/cache/deps/` | Shared across workspaces, reduced duplication |
 
-The global cache follows XDG Base Directory conventions:
+The global cache follows the unified Morphir Home layout:
 
-- Linux/macOS: `~/.cache/morphir/deps/` (or `$XDG_CACHE_HOME/morphir/deps/`)
-- Windows: `%LOCALAPPDATA%\morphir\cache\deps\`
+- Linux/macOS: `~/.morphir/cache/deps/`
+- Windows: `%USERPROFILE%\.morphir\cache\deps\`
+- Relocated Morphir Home: `$MORPHIR_HOME/cache/deps/`
 
 ### Local Cache (Default)
 
@@ -883,7 +884,7 @@ workspace/
 ### Global Cache
 
 ```
-~/.cache/morphir/
+~/.morphir/cache/
 └── deps/
     ├── github.com/
     │   ├── finos/

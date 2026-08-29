@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
+  root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
+  specification (morphir-l2p9.2)
 - The `morphir-okf` and `morphir-kb` crates, backing the `morphir kb` command (#98). `morphir-okf`
   models the Open Knowledge Format v0.2 — bundles, concept documents, frontmatter, markdown link and
   heading extraction, bundle discovery and link resolution — behind an extensible `OkfProfile`.

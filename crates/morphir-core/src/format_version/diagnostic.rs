@@ -26,6 +26,7 @@ impl FormatVersionDiagnostic {
         &self.message
     }
 
+    /// Diagnostic for a root mapping that omits `formatVersion`.
     pub fn missing_format_version() -> Self {
         Self::new(
             "missing_format_version",
@@ -33,6 +34,7 @@ impl FormatVersionDiagnostic {
         )
     }
 
+    /// Diagnostic for more than one root-level `formatVersion` member.
     pub fn duplicate_format_version() -> Self {
         Self::new(
             "duplicate_format_version",
@@ -40,6 +42,7 @@ impl FormatVersionDiagnostic {
         )
     }
 
+    /// Diagnostic when `formatVersion` is not a string or unsigned integer.
     pub fn invalid_format_version_type() -> Self {
         Self::new(
             "invalid_format_version_type",
@@ -47,6 +50,7 @@ impl FormatVersionDiagnostic {
         )
     }
 
+    /// Diagnostic when a release string does not match the accepted grammar.
     pub fn invalid_format_version_syntax() -> Self {
         Self::new(
             "invalid_format_version_syntax",
@@ -54,6 +58,7 @@ impl FormatVersionDiagnostic {
         )
     }
 
+    /// Diagnostic when a numeric component exceeds the unsigned 32-bit range.
     pub fn format_version_out_of_range() -> Self {
         Self::new(
             "format_version_out_of_range",

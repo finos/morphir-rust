@@ -8,17 +8,40 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::format_version::deserialize_baseline_u32;
+
 use super::Attrs;
 use super::naming::Path;
 use super::package::{PackageDefinition, PackageSpecification};
 use super::types::Type;
 
 /// Distribution of packages
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Distribution {
+    #[serde(deserialize_with = "deserialize_baseline_u32")]
     pub format_version: u32,
     pub distribution: DistributionBody,
+}
+
+impl<'de> Deserialize<'de> for Distribution {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DistributionFields {
+            #[serde(deserialize_with = "deserialize_baseline_u32")]
+            format_version: u32,
+            distribution: DistributionBody,
+        }
+        let fields = DistributionFields::deserialize(deserializer)?;
+        Ok(Self {
+            format_version: fields.format_version,
+            distribution: fields.distribution,
+        })
+    }
 }
 
 /// Distribution body - serialized as ["Library", packagePath, dependencies, package]

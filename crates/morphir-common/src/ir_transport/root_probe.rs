@@ -91,11 +91,13 @@ pub fn probe_json_root<'reader, R: Read + ?Sized + 'reader>(
     support: &SupportTable,
 ) -> Result<(JsonRootProbe, ProbedJsonReader<'reader, R>), TransportDiagnostic> {
     let mut buffer = Vec::new();
+    let mut spill = None;
     let mut stream_after_header = false;
     let mut streaming_header = None;
 
     loop {
-        let scanner = JsonRootScanner::new(&buffer);
+        let source = materialize_probe_source(&buffer, &mut spill)?;
+        let scanner = JsonRootScanner::new(&source);
         match scanner.scan_incremental() {
             Ok(IncrementalScan::StreamingReady(header)) => {
                 stream_after_header = true;
@@ -106,35 +108,42 @@ pub fn probe_json_root<'reader, R: Read + ?Sized + 'reader>(
             Ok(IncrementalScan::Incomplete) => {}
             Err(error) => return Err(error),
         }
-        let mut chunk = [0_u8; 4096];
-        let read = reader.read(&mut chunk).map_err(probe_io_error)?;
-        if read == 0 {
+        if !read_probe_chunk(reader, &mut buffer, &mut spill)? {
             break;
         }
-        buffer.extend_from_slice(&chunk[..read]);
     }
 
     if !stream_after_header {
-        reader.read_to_end(&mut buffer).map_err(probe_io_error)?;
+        while read_probe_chunk(reader, &mut buffer, &mut spill)? {}
     }
 
-    let probe = if JsonRootScanner::new(&buffer).scan_partial()?.is_some() {
-        finish_probe(JsonRootScanner::new(&buffer), &buffer, support)?
+    let source = materialize_probe_source(&buffer, &mut spill)?;
+    let probe = if JsonRootScanner::new(&source).scan_partial()?.is_some() {
+        finish_probe(JsonRootScanner::new(&source), &source, support)?
     } else if let Some(header) = streaming_header {
-        finalize_streaming_probe(header, &buffer, support)?
+        finalize_streaming_probe(header, &source, support)?
     } else {
-        finish_probe(JsonRootScanner::new(&buffer), &buffer, support)?
+        finish_probe(JsonRootScanner::new(&source), &source, support)?
     };
     let input = if probe.replay.replay_kind == ReplayKind::None {
+        let mut prefix = buffer;
+        if let Some(mut temp) = spill {
+            temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+            temp.read_to_end(&mut prefix).map_err(probe_io_error)?;
+        }
         ProbedJsonReader::Stream(PrefixedReader {
-            prefix: Cursor::new(buffer),
+            prefix: Cursor::new(prefix),
             reader,
         })
-    } else if buffer.len() <= REPLAY_MEMORY_THRESHOLD {
-        ProbedJsonReader::Memory(Cursor::new(buffer))
+    } else if spill.is_some() {
+        let mut temp = spill.take().expect("spilled replay source");
+        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+        ProbedJsonReader::Temporary(temp)
+    } else if source.len() <= REPLAY_MEMORY_THRESHOLD {
+        ProbedJsonReader::Memory(Cursor::new(source))
     } else {
         let mut temp = NamedTempFile::new().map_err(probe_io_error)?;
-        temp.write_all(&buffer).map_err(probe_io_error)?;
+        temp.write_all(&source).map_err(probe_io_error)?;
         temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
         ProbedJsonReader::Temporary(temp)
     };
@@ -155,8 +164,122 @@ pub fn probe_yaml_slice(
     support: &SupportTable,
 ) -> Result<JsonRootProbe, TransportDiagnostic> {
     let text = std::str::from_utf8(source).map_err(probe_io_error)?;
-    let header = YamlRootScanner::new(text).scan()?;
+    let header = if text.trim_start().starts_with('{') {
+        let value = super::yaml::decode_json_value(source)?;
+        yaml_root_header_from_json(&value, source.len())?
+    } else {
+        YamlRootScanner::new(text).scan()?
+    };
     finish_probe_from_header(header, source, support)
+}
+
+fn read_probe_chunk<R: Read + ?Sized>(
+    reader: &mut R,
+    buffer: &mut Vec<u8>,
+    spill: &mut Option<NamedTempFile>,
+) -> Result<bool, TransportDiagnostic> {
+    let mut chunk = [0_u8; 4096];
+    let read = reader.read(&mut chunk).map_err(probe_io_error)?;
+    if read == 0 {
+        return Ok(false);
+    }
+    append_probe_bytes(buffer, spill, &chunk[..read])?;
+    Ok(true)
+}
+
+fn append_probe_bytes(
+    buffer: &mut Vec<u8>,
+    spill: &mut Option<NamedTempFile>,
+    bytes: &[u8],
+) -> Result<(), TransportDiagnostic> {
+    if let Some(temp) = spill {
+        temp.write_all(bytes).map_err(probe_io_error)?;
+        return Ok(());
+    }
+    if buffer.len() + bytes.len() > REPLAY_MEMORY_THRESHOLD {
+        let mut temp = NamedTempFile::new().map_err(probe_io_error)?;
+        temp.write_all(buffer).map_err(probe_io_error)?;
+        temp.write_all(bytes).map_err(probe_io_error)?;
+        buffer.clear();
+        *spill = Some(temp);
+        return Ok(());
+    }
+    buffer.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn materialize_probe_source(
+    buffer: &[u8],
+    spill: &mut Option<NamedTempFile>,
+) -> Result<Vec<u8>, TransportDiagnostic> {
+    if let Some(temp) = spill {
+        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+        let mut source = buffer.to_vec();
+        temp.read_to_end(&mut source).map_err(probe_io_error)?;
+        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+        Ok(source)
+    } else {
+        Ok(buffer.to_vec())
+    }
+}
+
+fn yaml_root_header_from_json(
+    value: &serde_json::Value,
+    source_len: usize,
+) -> Result<JsonRootHeader, TransportDiagnostic> {
+    let mapping = value.as_object().ok_or_else(|| probe_syntax_error("invalid YAML syntax"))?;
+
+    let mut member_order = Vec::new();
+    let mut format_version_count = 0_usize;
+    let mut scalar = None;
+    let mut saw_distribution = false;
+
+    for (key, value) in mapping {
+        member_order.push(key.clone());
+        if key == "formatVersion" {
+            format_version_count += 1;
+            if format_version_count > 1 {
+                return Err(transport_from_format_version(
+                    FormatVersionDiagnostic::duplicate_format_version(),
+                ));
+            }
+            scalar = Some(
+                ScalarValue::from_json(value).map_err(transport_from_format_version)?,
+            );
+        } else if key == "distribution" {
+            saw_distribution = true;
+        }
+    }
+
+    if format_version_count == 0 {
+        return Err(transport_from_format_version(
+            FormatVersionDiagnostic::missing_format_version(),
+        ));
+    }
+
+    let replay_kind = if member_order
+        .first()
+        .is_some_and(|member| member == "formatVersion")
+    {
+        ReplayKind::None
+    } else if saw_distribution {
+        if source_len <= REPLAY_MEMORY_THRESHOLD {
+            ReplayKind::Memory
+        } else {
+            ReplayKind::TemporaryStorage
+        }
+    } else {
+        ReplayKind::None
+    };
+
+    Ok(JsonRootHeader {
+        scalar,
+        member_order,
+        format_version_offset: 0,
+        replay_kind,
+        saw_distribution,
+        format_version_complete: true,
+    })
 }
 
 fn finalize_streaming_probe(
@@ -321,6 +444,7 @@ impl<'source> JsonRootScanner<'source> {
         let mut format_version_offset = 0_usize;
         let mut saw_distribution = false;
         let mut format_version_complete = false;
+        let mut format_version_count = 0_usize;
         let mut first_member = true;
 
         loop {
@@ -354,6 +478,12 @@ impl<'source> JsonRootScanner<'source> {
             skip_ws(self.source, &mut index);
 
             if key == "formatVersion" {
+                format_version_count += 1;
+                if format_version_count > 1 {
+                    return Err(transport_from_format_version(
+                        FormatVersionDiagnostic::duplicate_format_version(),
+                    ));
+                }
                 format_version_offset = index;
                 match read_scalar_partial(self.source, &mut index) {
                     Ok(value) => {
@@ -367,6 +497,21 @@ impl<'source> JsonRootScanner<'source> {
                     .first()
                     .is_some_and(|member| member == "formatVersion")
                 {
+                    let mut lookahead = index;
+                    skip_ws(self.source, &mut lookahead);
+                    if peek(self.source, lookahead) == Some(b',') {
+                        lookahead += 1;
+                        skip_ws(self.source, &mut lookahead);
+                        match read_string_partial(self.source, &mut lookahead) {
+                            Ok(next_key) if next_key == "formatVersion" => {
+                                return Err(transport_from_format_version(
+                                    FormatVersionDiagnostic::duplicate_format_version(),
+                                ));
+                            }
+                            Ok(_) | Err(PartialScanError::NeedMore) => {}
+                            Err(PartialScanError::Invalid(error)) => return Err(error),
+                        }
+                    }
                     return Ok(IncrementalScan::StreamingReady(JsonRootHeader {
                         scalar,
                         member_order,
@@ -375,8 +520,7 @@ impl<'source> JsonRootScanner<'source> {
                         saw_distribution,
                         format_version_complete,
                     }));
-                }
-                if saw_distribution {
+                } else if saw_distribution {
                     return Ok(IncrementalScan::LateHeaderPending);
                 }
             } else {
@@ -821,11 +965,50 @@ impl<'source> YamlRootScanner<'source> {
 fn split_yaml_mapping_line(line: &str) -> Option<(&str, &str)> {
     let colon = line.find(':')?;
     let key = line[..colon].trim();
-    let value = line[colon + 1..].trim();
+    let value = strip_yaml_inline_comment(line[colon + 1..].trim());
     if key.is_empty() {
         return None;
     }
     Some((key, value))
+}
+
+fn strip_yaml_inline_comment(value: &str) -> &str {
+    let mut single_quoted = false;
+    let mut double_quoted = false;
+    let mut escaped = false;
+    for (index, character) in value.char_indices() {
+        if double_quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                double_quoted = false;
+            }
+            continue;
+        }
+        if single_quoted {
+            if character == '\'' {
+                single_quoted = false;
+            }
+            continue;
+        }
+        match character {
+            '\'' => single_quoted = true,
+            '"' => double_quoted = true,
+            '#' if yaml_token_boundary(value[..index].chars().next_back()) => {
+                return value[..index].trim_end();
+            }
+            _ => {}
+        }
+    }
+    value
+}
+
+fn yaml_token_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| {
+        character.is_whitespace() || matches!(character, ':' | ',' | '[' | ']' | '{' | '}' | '-')
+    })
 }
 
 fn normalize_yaml_key(key: &str) -> &str {
@@ -840,6 +1023,7 @@ fn normalize_yaml_key(key: &str) -> &str {
 }
 
 fn parse_yaml_scalar_value(value: &str) -> Result<ScalarValue, TransportDiagnostic> {
+    let value = value.trim();
     if value.is_empty() {
         return Err(transport_from_format_version(
             FormatVersionDiagnostic::missing_format_version(),
@@ -920,5 +1104,21 @@ mod tests {
         let source = br#"{"formatVersion":"3.1.0","distribution":[]}"#;
         let error = probe_json_root(&mut &source[..], &SupportTable::reference()).unwrap_err();
         assert_eq!(error.code(), "unsupported_format_version_revision");
+    }
+
+    #[test]
+    fn duplicate_format_version_is_detected_during_streaming_probe() {
+        let source = br#"{"formatVersion":3,"formatVersion":3,"distribution":["Library",[[["example"]]],[],{"modules":[]}]}"#;
+        let mut reader = &source[..];
+        let error = probe_json_root(&mut reader, &SupportTable::reference())
+            .expect_err("duplicate formatVersion");
+        assert_eq!(error.code(), "duplicate_format_version");
+    }
+
+    #[test]
+    fn yaml_format_version_with_inline_comment_is_recognized() {
+        let source = b"formatVersion: 4 # current format\ndistribution:\n  Specs:\n    packageName: example\n    modules: {}\n";
+        let probe = probe_yaml_slice(source, &SupportTable::reference()).expect("yaml probe");
+        assert_eq!(probe.normalized.release, ReleaseTriplet::new(4, 0, 0));
     }
 }

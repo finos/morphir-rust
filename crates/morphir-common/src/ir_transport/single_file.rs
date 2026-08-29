@@ -2,6 +2,7 @@ use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::{Context, Result, bail};
+use morphir_core::format_version::FormatVersionBaselineSeed;
 use morphir_core::ir::classic;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
@@ -68,7 +69,7 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
                     if format_version.is_some() {
                         return Err(de::Error::duplicate_field("formatVersion"));
                     }
-                    format_version = Some(map.next_value()?);
+                    format_version = Some(map.next_value_seed(FormatVersionBaselineSeed)?);
                 }
                 "distribution" => {
                     if saw_distribution {

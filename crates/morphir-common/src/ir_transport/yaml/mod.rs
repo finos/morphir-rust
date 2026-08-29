@@ -25,7 +25,7 @@ pub(crate) use profile::{decode_document, decode_json_value, encode_document};
 use v3::V3YamlEventEncoder;
 use v4::V4YamlEventEncoder;
 
-pub(super) const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
+pub(crate) const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
 
 /// Built-in native YAML IR codec.
 pub struct YamlCodec {

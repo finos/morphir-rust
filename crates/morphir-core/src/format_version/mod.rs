@@ -6,12 +6,14 @@
 mod canonical;
 mod diagnostic;
 mod parse;
+mod serde;
 mod support;
 mod triplet;
 
 pub use canonical::CanonicalSpelling;
 pub use diagnostic::FormatVersionDiagnostic;
 pub use parse::ScalarValue;
+pub use serde::{FormatVersionBaselineSeed, deserialize_baseline_u32};
 pub use support::{Compatibility, SupportTable, default_support_table};
 pub use triplet::ReleaseTriplet;
 

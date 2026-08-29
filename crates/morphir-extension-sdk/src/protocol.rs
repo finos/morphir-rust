@@ -33,6 +33,8 @@ pub mod methods {
     pub const TRANSFORM: &str = "morphir.transform.transform";
     /// Stop accepting extension operations.
     pub const SHUTDOWN: &str = "morphir.shutdown";
+    /// End an acknowledged extension session.
+    pub const EXIT: &str = "morphir.exit";
 }
 
 /// Identifies one side of a Morphir Extension Protocol session.
@@ -87,6 +89,38 @@ impl ExtensionRequest {
             method: method.to_string(),
             params: serde_json::to_value(params)?,
             id,
+        })
+    }
+}
+
+/// JSON-RPC 2.0 notification sent without a request identifier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionNotification {
+    /// JSON-RPC version (always "2.0")
+    pub jsonrpc: String,
+    /// Notification method name
+    pub method: String,
+    /// Optional notification parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+impl ExtensionNotification {
+    /// Create a notification without parameters.
+    pub fn without_params(method: &str) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            method: method.to_string(),
+            params: None,
+        }
+    }
+
+    /// Create a notification with serialized parameters.
+    pub fn new<P: Serialize>(method: &str, params: P) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            method: method.to_string(),
+            params: Some(serde_json::to_value(params)?),
         })
     }
 }
@@ -286,5 +320,21 @@ impl RpcError {
             message,
             data,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_notification_has_no_request_identifier() {
+        let notification = ExtensionNotification::without_params(methods::EXIT);
+        let encoded = serde_json::to_value(notification).expect("the notification should encode");
+
+        assert_eq!(encoded["jsonrpc"], JSONRPC_VERSION);
+        assert_eq!(encoded["method"], methods::EXIT);
+        assert!(encoded.get("id").is_none());
+        assert!(encoded.get("params").is_none());
     }
 }

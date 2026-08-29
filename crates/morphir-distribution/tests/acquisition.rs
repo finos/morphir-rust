@@ -112,6 +112,7 @@ impl DistributionMother {
         ExtensionId::parse(id).unwrap()
     }
 
+    #[cfg(unix)]
     fn declare_executable(&self, executable: bool) {
         let history = self.index.join("extensions/morphir-elm.jsonl");
         let current = fs::read_to_string(&history).unwrap();

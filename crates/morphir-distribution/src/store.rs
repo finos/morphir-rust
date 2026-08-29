@@ -155,13 +155,7 @@ impl ArtifactStore {
         Ok(VerifiedArtifact {
             selected,
             path,
-            store_path: RelativeArtifactPath::parse(relative.to_str().ok_or_else(|| {
-                crate::error::invalid_value(
-                    "store path",
-                    relative.to_string_lossy(),
-                    "expected a UTF-8 path beneath Morphir home",
-                )
-            })?)?,
+            store_path: RelativeArtifactPath::from_native_path(&relative)?,
         })
     }
 }

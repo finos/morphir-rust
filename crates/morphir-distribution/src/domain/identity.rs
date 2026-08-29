@@ -4,7 +4,7 @@ use crate::error::{Result, invalid_value};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
-use std::path::Path;
+use std::path::{Component, Path};
 
 pub(crate) fn portable_token(value: &str) -> bool {
     !value.is_empty()
@@ -257,6 +257,28 @@ impl RelativeArtifactPath {
         }
     }
 
+    /// Convert a native relative path into its portable forward-slash spelling.
+    pub fn from_native_path(path: &Path) -> Result<Self> {
+        let segments = path
+            .components()
+            .map(|component| match component {
+                Component::Normal(segment) => segment.to_str().ok_or_else(|| {
+                    invalid_value(
+                        "local artifact path",
+                        path.to_string_lossy(),
+                        "expected a UTF-8 relative path",
+                    )
+                }),
+                _ => Err(invalid_value(
+                    "local artifact path",
+                    path.to_string_lossy(),
+                    "expected a relative path without special segments",
+                )),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::parse(segments.join("/"))
+    }
+
     /// Return the portable path spelling.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -284,5 +306,24 @@ impl<'de> Deserialize<'de> for RelativeArtifactPath {
     {
         let value = String::deserialize(deserializer)?;
         Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RelativeArtifactPath;
+    use std::path::PathBuf;
+
+    #[test]
+    fn native_relative_paths_are_stored_with_portable_separators() {
+        let native = PathBuf::from("store")
+            .join("extensions")
+            .join("sha256")
+            .join("digest")
+            .join("example");
+
+        let path = RelativeArtifactPath::from_native_path(&native).unwrap();
+
+        assert_eq!(path.as_str(), "store/extensions/sha256/digest/example");
     }
 }

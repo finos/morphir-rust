@@ -65,6 +65,56 @@ impl<'de> Deserialize<'de> for ExtensionId {
     }
 }
 
+/// A lowercase portable tool identifier such as `desktop`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ToolId(String);
+
+impl ToolId {
+    /// Parse and validate a tool identifier.
+    pub fn parse(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        if portable_token(&value) {
+            Ok(Self(value))
+        } else {
+            Err(invalid_value(
+                "tool id",
+                value,
+                "expected a lowercase portable token",
+            ))
+        }
+    }
+
+    /// Return the portable identifier.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ToolId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ToolId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A validated segment in a named preview channel.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChannelSegment(String);

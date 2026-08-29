@@ -74,6 +74,22 @@ pub enum DistributionError {
         /// Host-supported MEP versions.
         supported: String,
     },
+    /// Matching tool releases do not support the invoking Morphir CLI.
+    #[error("no release matching {selection} supports Morphir CLI {cli_version}")]
+    NoCompatibleCliVersion {
+        /// Requested channel or exact version.
+        selection: String,
+        /// Invoking Morphir CLI version.
+        cli_version: semver::Version,
+    },
+    /// An exact tool release has been revoked by its publisher.
+    #[error("tool {tool} version {version} is revoked")]
+    RevokedToolRelease {
+        /// Revoked tool identity.
+        tool: crate::ToolId,
+        /// Revoked exact semantic version.
+        version: semver::Version,
+    },
     /// A release declared multiple artifacts for one platform.
     #[error("release {version} contains more than one artifact for platform {platform}")]
     AmbiguousPlatform {

@@ -47,11 +47,13 @@ mod local;
 mod resolver;
 mod state;
 mod store;
+mod tool_resolver;
 
 pub use domain::{
-    ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability, Channel,
-    ChannelSegment, ExtensionId, Platform, RelativeArtifactPath, ReleaseRecord, Selection,
-    Sha256Digest,
+    ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability,
+    Channel, ChannelSegment, ExtensionId, Platform, RelativeArtifactPath, ReleaseRecord, Selection,
+    Sha256Digest, ToolArchive, ToolArtifactRecord, ToolId, ToolLaunch, ToolReleaseRecord,
+    ToolReleaseStatus,
 };
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
@@ -63,3 +65,4 @@ pub use state::{
     read_extension_lock, uninstall_extension, write_extension_lock,
 };
 pub use store::{ArtifactStore, StoredArtifact, VerifiedArtifact};
+pub use tool_resolver::{ResolvedToolRelease, resolve_tool};

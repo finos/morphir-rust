@@ -264,7 +264,7 @@ fn rejected_yaml_has_stable_located_diagnostics() {
         (
             "fixtures/yaml/rejected/duplicate-key.yaml",
             include_str!("fixtures/yaml/rejected/duplicate-key.yaml"),
-            "morphir::ir::yaml::duplicate_key",
+            "duplicate_format_version",
         ),
         (
             "fixtures/yaml/rejected/multiple-documents.yaml",
@@ -289,7 +289,10 @@ fn rejected_yaml_has_stable_located_diagnostics() {
         let diagnostic = decode(&codec, input, &options).unwrap_err();
         assert_eq!(diagnostic.code(), expected_code, "{fixture}");
         assert!(
-            matches!(diagnostic.stage(), Stage::Syntax | Stage::Normalization),
+            matches!(
+                diagnostic.stage(),
+                Stage::Syntax | Stage::Normalization | Stage::Detection
+            ),
             "{fixture}: {:?}",
             diagnostic.stage()
         );

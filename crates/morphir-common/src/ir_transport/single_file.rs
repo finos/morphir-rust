@@ -10,94 +10,6 @@ use super::IR_RECURSION_STACK_BYTES;
 type ClassicDependencies = Vec<(classic::Path, classic::PackageSpecification<classic::Attrs>)>;
 type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
 
-fn read_format_version(reader: &mut impl Read) -> Result<u32> {
-    let mut buffer = [0_u8; 1024];
-    let mut depth = 0_usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut capturing_key = false;
-    let mut expecting_key = false;
-    let mut key = Vec::new();
-    let mut pending_key = None;
-    let mut reading_version = false;
-    let mut version = Vec::new();
-
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .context("failed to scan Classic IR format version")?;
-        if read == 0 {
-            bail!("Classic IR is missing formatVersion");
-        }
-        for byte in &buffer[..read] {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if *byte == b'\\' {
-                    escaped = true;
-                } else if *byte == b'"' {
-                    in_string = false;
-                    if capturing_key {
-                        pending_key = Some(std::mem::take(&mut key));
-                        capturing_key = false;
-                    }
-                } else if capturing_key {
-                    key.push(*byte);
-                }
-                continue;
-            }
-
-            if reading_version {
-                if byte.is_ascii_digit() {
-                    version.push(*byte);
-                    continue;
-                }
-                if byte.is_ascii_whitespace() && version.is_empty() {
-                    continue;
-                }
-                if !version.is_empty()
-                    && (byte.is_ascii_whitespace() || matches!(byte, b',' | b'}'))
-                {
-                    let source = std::str::from_utf8(&version)
-                        .context("formatVersion is not valid UTF-8")?;
-                    return source
-                        .parse()
-                        .context("formatVersion must be an unsigned integer");
-                }
-                bail!("formatVersion must be an unsigned integer");
-            }
-
-            match *byte {
-                b'"' => {
-                    in_string = true;
-                    if depth == 1 && expecting_key {
-                        capturing_key = true;
-                        expecting_key = false;
-                    }
-                }
-                b'{' | b'[' => {
-                    depth += 1;
-                    if depth == 1 {
-                        expecting_key = true;
-                    }
-                }
-                b'}' | b']' => depth = depth.saturating_sub(1),
-                b':' if depth == 1 => {
-                    if pending_key.as_deref() == Some(b"formatVersion") {
-                        reading_version = true;
-                    }
-                    pending_key = None;
-                }
-                b',' if depth == 1 => {
-                    expecting_key = true;
-                    pending_key = None;
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 /// Receives a Classic v3 distribution without retaining its package modules.
 pub trait ClassicV3ModuleVisitor {
     type Output;
@@ -211,13 +123,14 @@ where
     D: de::Deserializer<'de>,
     V: ClassicV3ModuleVisitor,
 {
-    deserialize_classic_v3(deserializer, &mut visitor).map_err(|error| error.to_string())?;
+    deserialize_classic_v3(deserializer, &mut visitor, None).map_err(|error| error.to_string())?;
     visitor.finish()
 }
 
 pub(crate) fn deserialize_classic_v3<'de, D, V>(
     deserializer: D,
     visitor: &mut V,
+    prevalidated_version: Option<u32>,
 ) -> std::result::Result<u32, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -225,7 +138,7 @@ where
 {
     DistributionSeed {
         visitor,
-        prevalidated_version: None,
+        prevalidated_version,
     }
     .deserialize(deserializer)
 }
@@ -395,29 +308,71 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
 }
 
 /// Parse a Classic v3 single-file distribution and release each module after visiting it.
-pub fn visit_classic_v3<R, V>(reader: R, mut visitor: V) -> Result<V::Output>
+pub fn visit_classic_v3<R, V>(mut reader: R, mut visitor: V) -> Result<V::Output>
 where
-    R: Read + Seek,
+    R: Read,
     V: ClassicV3ModuleVisitor,
 {
-    let mut reader = reader;
-    let version = read_format_version(&mut reader)?;
-    if version != 3 {
-        bail!("typed Classic migration requires formatVersion 3, found {version}");
+    use morphir_core::format_version::SupportTable;
+
+    use super::root_probe::{ProbedJsonReader, probe_json_root};
+
+    let (probe, input) = probe_json_root(&mut reader, &SupportTable::reference())
+        .map_err(|diagnostic| anyhow::Error::msg(diagnostic.to_string()))?;
+    if probe.normalized.release.major() != 3 {
+        bail!(
+            "typed Classic migration requires formatVersion 3, found {}",
+            probe.normalized.release
+        );
     }
-    reader
-        .seek(SeekFrom::Start(0))
-        .context("failed to rewind Classic IR after reading its format version")?;
-    let mut deserializer = serde_json::Deserializer::from_reader(reader);
-    let version = DistributionSeed {
-        visitor: &mut visitor,
-        prevalidated_version: Some(version),
-    }
-    .deserialize(&mut deserializer)
-    .context("failed to stream Classic IR")?;
-    deserializer
-        .end()
-        .context("unexpected data after Classic IR distribution")?;
+
+    let prevalidated = Some(probe.normalized.release.major());
+    let version = match input {
+        ProbedJsonReader::Stream(mut prefixed) => {
+            let mut deserializer = serde_json::Deserializer::from_reader(&mut prefixed);
+            let version = DistributionSeed {
+                visitor: &mut visitor,
+                prevalidated_version: prevalidated,
+            }
+            .deserialize(&mut deserializer)
+            .context("failed to stream Classic IR")?;
+            deserializer
+                .end()
+                .context("unexpected data after Classic IR distribution")?;
+            version
+        }
+        ProbedJsonReader::Memory(mut cursor) => {
+            cursor
+                .seek(SeekFrom::Start(0))
+                .context("failed to rewind Classic IR after reading its format version")?;
+            let mut deserializer = serde_json::Deserializer::from_reader(&mut cursor);
+            let version = DistributionSeed {
+                visitor: &mut visitor,
+                prevalidated_version: prevalidated,
+            }
+            .deserialize(&mut deserializer)
+            .context("failed to stream Classic IR")?;
+            deserializer
+                .end()
+                .context("unexpected data after Classic IR distribution")?;
+            version
+        }
+        ProbedJsonReader::Temporary(mut file) => {
+            file.seek(SeekFrom::Start(0))
+                .context("failed to rewind Classic IR after reading its format version")?;
+            let mut deserializer = serde_json::Deserializer::from_reader(&mut file);
+            let version = DistributionSeed {
+                visitor: &mut visitor,
+                prevalidated_version: prevalidated,
+            }
+            .deserialize(&mut deserializer)
+            .context("failed to stream Classic IR")?;
+            deserializer
+                .end()
+                .context("unexpected data after Classic IR distribution")?;
+            version
+        }
+    };
     debug_assert_eq!(version, 3);
     visitor.finish().map_err(anyhow::Error::msg)
 }

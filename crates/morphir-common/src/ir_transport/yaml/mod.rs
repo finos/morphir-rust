@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 
+use morphir_core::format_version::SupportTable;
 use morphir_core::ir::{classic, v4 as ir_v4};
 use morphir_core::traversal::IrCursor;
 use serde_saphyr::budget::BudgetBreach;
@@ -18,6 +19,7 @@ mod profile;
 mod v3;
 mod v4;
 
+use super::root_probe::probe_yaml_slice;
 use profile::validate_yaml_profile;
 pub(crate) use profile::{decode_document, decode_json_value, encode_document};
 use v3::V3YamlEventEncoder;
@@ -225,14 +227,37 @@ impl IrCodec for YamlCodec {
     ) -> Result<(), TransportDiagnostic> {
         let input = Self::read_input(reader)?;
         validate_yaml_profile(&input)?;
+        let probe = probe_yaml_slice(&input, &SupportTable::reference())?;
         stacker::grow(IR_RECURSION_STACK_BYTES, || match options.version() {
             IrVersion::V3 => {
+                if probe.normalized.release.major() != 3 {
+                    return Err(TransportDiagnostic::error(
+                        "morphir::ir::yaml::version_mismatch",
+                        Stage::Detection,
+                        IrCursor::root(),
+                        format!(
+                            "the v3 YAML codec requires formatVersion 3, found {}",
+                            probe.normalized.release
+                        ),
+                    ));
+                }
                 let file: classic::Distribution =
                     serde_saphyr::from_slice_with_options(&input, Self::parse_options())
                         .map_err(Self::decode_error)?;
                 semantic::emit_classic_v3(file, sink)
             }
             IrVersion::V4 => {
+                if probe.normalized.release.major() != 4 {
+                    return Err(TransportDiagnostic::error(
+                        "morphir::ir::yaml::version_mismatch",
+                        Stage::Detection,
+                        IrCursor::root(),
+                        format!(
+                            "the v4 YAML codec requires formatVersion 4, found {}",
+                            probe.normalized.release
+                        ),
+                    ));
+                }
                 let file: ir_v4::IRFile =
                     serde_saphyr::from_slice_with_options(&input, Self::parse_options())
                         .map_err(Self::decode_error)?;

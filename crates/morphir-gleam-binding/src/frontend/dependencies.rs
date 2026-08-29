@@ -1,6 +1,7 @@
 //! Validation and conversion of frontend compile dependencies.
 
 use indexmap::IndexMap;
+use morphir_core::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
 use morphir_core::ir::v4::{
     Access, ConstructorArgSpec, ConstructorSpecification, Distribution, Documented, FormatVersion,
     IRFile, ModuleDefinition, ModuleSpecification, PackageDefinition, PackageName,
@@ -56,7 +57,7 @@ pub(crate) fn package_specifications(
                 }]);
             }
             if let Some(format_version) = parsed.format_version
-                && format_version != FormatVersion::String(supported_ir_version.into())
+                && !matches_supported_format_version(&format_version, supported_ir_version)
             {
                 return Err(vec![DependencyError {
                     code: "DEPENDENCY_IR_VERSION_MISMATCH",
@@ -181,6 +182,22 @@ fn serialized_package_name(value: &serde_json::Value) -> Option<String> {
         .into_iter()
         .find_map(|variant| distribution.get(variant))?;
     content.get("packageName")?.as_str().map(str::to_owned)
+}
+
+fn matches_supported_format_version(
+    format_version: &FormatVersion,
+    supported_ir_version: &str,
+) -> bool {
+    let Ok(normalized) = format_version.normalize() else {
+        return false;
+    };
+    let Ok(expected) = NormalizedFormatVersion::from_scalar(
+        &ScalarValue::String(supported_ir_version.to_string()),
+        &SupportTable::reference(),
+    ) else {
+        return false;
+    };
+    normalized.release == expected.release
 }
 
 fn display_format_version(version: &FormatVersion) -> String {

@@ -206,7 +206,7 @@ impl Frontend for GleamExtension {
             _ => unreachable!("Gleam produces Library distributions"),
         };
         let ir_file = IRFile {
-            format_version: FormatVersion::String(GLEAM_IR_VERSION.into()),
+            format_version: FormatVersion::default(),
             distribution,
         };
         Ok(CompileResult {
@@ -777,10 +777,7 @@ mod tests {
         let ir_file: IRFile =
             serde_json::from_value(result.ir.clone().expect("successful result contains IR"))
                 .expect("successful result is typed V4 IR");
-        assert_eq!(
-            ir_file.format_version,
-            FormatVersion::String(IR_VERSION.into())
-        );
+        assert_eq!(ir_file.format_version, FormatVersion::default());
         match ir_file.distribution {
             Distribution::Library(content) => content,
             other => panic!("expected Library distribution, got {other:?}"),
@@ -1027,7 +1024,7 @@ mod tests {
         let distribution = serde_json::from_value(dependency.distribution)
             .expect("decode typed dependency distribution");
         dependency.distribution = serde_json::to_value(IRFile {
-            format_version: FormatVersion::Integer(4),
+            format_version: FormatVersion::Integer(3),
             distribution,
         })
         .expect("serialize dependency IR file");
@@ -1228,14 +1225,11 @@ mod tests {
             .compile(request)
             .expect("compile valid Gleam document");
         let ir = result.ir.expect("successful IR");
-        assert_eq!(ir["formatVersion"], IR_VERSION);
+        assert_eq!(ir["formatVersion"], 4);
         assert!(ir.get("distribution").is_some());
         let ir_file: IRFile = serde_json::from_value(ir).expect("deserialize V4 IR file root");
 
-        assert_eq!(
-            ir_file.format_version,
-            FormatVersion::String(IR_VERSION.into())
-        );
+        assert_eq!(ir_file.format_version, FormatVersion::default());
         assert!(matches!(ir_file.distribution, Distribution::Library(_)));
     }
 

@@ -7,6 +7,7 @@ mod json;
 mod migration;
 mod options;
 mod pipeline;
+mod root_probe;
 mod semantic;
 mod single_file;
 pub(crate) mod yaml;
@@ -24,8 +25,13 @@ pub use options::{
     CodecOptions, FormatId, IdentifierError, IrVersion, Layout, NormalizationPolicy, VocabularyId,
 };
 pub use pipeline::{EventTransform, Pipeline, PipelineSink, Retention};
-pub use single_file::{ClassicV3ModuleVisitor, visit_classic_v3, visit_classic_v3_deserializer};
+pub use root_probe::{
+    HeaderObservation, JsonRootProbe, PrefixedReader, ProbedJsonReader, ReplayKind,
+    ReplayObservation, observation_diagnostic, probe_json_root, probe_json_slice, probe_yaml_slice,
+};
 pub use yaml::YamlCodec;
+
+pub use single_file::{ClassicV3ModuleVisitor, visit_classic_v3, visit_classic_v3_deserializer};
 
 // Concrete IR values are recursive and production models can be much deeper
 // than a platform's default worker-thread stack permits.

@@ -11,6 +11,194 @@ use super::{SourceSpan, Stage, TransportDiagnostic};
 
 const REPLAY_MEMORY_THRESHOLD: usize = 64 * 1024;
 
+/// Incrementally collected probe input that spills to disk without rematerializing.
+struct ProbeAccumulator {
+    buffer: Vec<u8>,
+    spill: Option<NamedTempFile>,
+    spill_len: usize,
+    spill_cursor: usize,
+}
+
+impl ProbeAccumulator {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            spill: None,
+            spill_len: 0,
+            spill_cursor: 0,
+        }
+    }
+
+    fn total_len(&self) -> usize {
+        self.buffer.len() + self.spill_len
+    }
+
+    fn append_chunk(&mut self, bytes: &[u8]) -> Result<(), TransportDiagnostic> {
+        if let Some(temp) = &mut self.spill {
+            temp.write_all(bytes).map_err(probe_io_error)?;
+            self.spill_len += bytes.len();
+            return Ok(());
+        }
+        if self.buffer.len() + bytes.len() > REPLAY_MEMORY_THRESHOLD {
+            let mut temp = NamedTempFile::new().map_err(probe_io_error)?;
+            temp.write_all(&self.buffer).map_err(probe_io_error)?;
+            temp.write_all(bytes).map_err(probe_io_error)?;
+            self.spill_len = self.buffer.len() + bytes.len();
+            self.buffer.clear();
+            self.spill = Some(temp);
+            return Ok(());
+        }
+        self.buffer.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn read_chunk<R: Read + ?Sized>(
+        &mut self,
+        reader: &mut R,
+    ) -> Result<bool, TransportDiagnostic> {
+        let mut chunk = [0_u8; 4096];
+        let read = reader.read(&mut chunk).map_err(probe_io_error)?;
+        if read == 0 {
+            return Ok(false);
+        }
+        self.append_chunk(&chunk[..read])?;
+        Ok(true)
+    }
+
+    fn forward_bytes(&mut self) -> ForwardProbeBytes<'_> {
+        ForwardProbeBytes {
+            memory: &self.buffer,
+            spill: self.spill.as_mut(),
+            spill_len: self.spill_len,
+            spill_cursor: &mut self.spill_cursor,
+        }
+    }
+
+    fn materialized_source(&mut self) -> Result<Vec<u8>, TransportDiagnostic> {
+        if let Some(temp) = &mut self.spill {
+            temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+            let mut source = self.buffer.clone();
+            temp.read_to_end(&mut source).map_err(probe_io_error)?;
+            temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+            Ok(source)
+        } else {
+            Ok(self.buffer.clone())
+        }
+    }
+
+    fn into_stream_reader<'reader, R: Read + ?Sized + 'reader>(
+        mut self,
+        reader: &'reader mut R,
+        replay_kind: ReplayKind,
+    ) -> Result<ProbedJsonReader<'reader, R>, TransportDiagnostic> {
+        if replay_kind != ReplayKind::None {
+            if let Some(mut temp) = self.spill {
+                temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+                return Ok(ProbedJsonReader::Temporary(temp));
+            }
+            if self.total_len() <= REPLAY_MEMORY_THRESHOLD {
+                return Ok(ProbedJsonReader::Memory(Cursor::new(self.buffer)));
+            }
+            let mut temp = NamedTempFile::new().map_err(probe_io_error)?;
+            temp.write_all(&self.buffer).map_err(probe_io_error)?;
+            temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+            return Ok(ProbedJsonReader::Temporary(temp));
+        }
+
+        if let Some(mut temp) = self.spill.take() {
+            temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
+            Ok(ProbedJsonReader::Stream(ProbeStreamReader::Spilled(
+                SpillPrefixedReader {
+                    spill: temp,
+                    spill_done: false,
+                    prefix: Cursor::new(self.buffer),
+                    reader,
+                },
+            )))
+        } else {
+            Ok(ProbedJsonReader::Stream(ProbeStreamReader::Prefixed(
+                PrefixedReader {
+                    prefix: Cursor::new(self.buffer),
+                    reader,
+                },
+            )))
+        }
+    }
+}
+
+/// Forward-only byte view over in-memory and spilled probe bytes.
+struct ForwardProbeBytes<'a> {
+    memory: &'a [u8],
+    spill: Option<&'a mut NamedTempFile>,
+    spill_len: usize,
+    spill_cursor: &'a mut usize,
+}
+
+impl ForwardProbeBytes<'_> {
+    fn len(&self) -> usize {
+        self.memory.len() + self.spill_len
+    }
+
+    fn peek(&mut self, index: usize) -> Result<Option<u8>, TransportDiagnostic> {
+        if index >= self.len() {
+            return Ok(None);
+        }
+        if index < self.memory.len() {
+            return Ok(self.memory.get(index).copied());
+        }
+        let Some(temp) = self.spill.as_mut() else {
+            return Ok(None);
+        };
+        let spill_index = index - self.memory.len();
+        if spill_index >= self.spill_len {
+            return Ok(None);
+        }
+        if spill_index < *self.spill_cursor {
+            temp.seek(SeekFrom::Start(spill_index as u64))
+                .map_err(probe_io_error)?;
+            *self.spill_cursor = spill_index;
+        }
+        while *self.spill_cursor <= spill_index {
+            let mut byte = [0_u8; 1];
+            let read = temp.read(&mut byte).map_err(probe_io_error)?;
+            if read == 0 {
+                return Ok(None);
+            }
+            if *self.spill_cursor == spill_index {
+                return Ok(Some(byte[0]));
+            }
+            *self.spill_cursor += 1;
+        }
+        Ok(None)
+    }
+}
+
+/// Chains spilled probe bytes with the remaining reader without rematerializing.
+#[derive(Debug)]
+pub struct SpillPrefixedReader<'reader, R: Read + ?Sized + 'reader> {
+    spill: NamedTempFile,
+    spill_done: bool,
+    prefix: Cursor<Vec<u8>>,
+    reader: &'reader mut R,
+}
+
+impl<R: Read + ?Sized> Read for SpillPrefixedReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if !self.spill_done {
+            let from_spill = self.spill.read(buf)?;
+            if from_spill > 0 {
+                return Ok(from_spill);
+            }
+            self.spill_done = true;
+        }
+        let from_prefix = self.prefix.read(buf)?;
+        if from_prefix > 0 {
+            return Ok(from_prefix);
+        }
+        self.reader.read(buf)
+    }
+}
+
 /// How a reader replays a late `formatVersion` header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplayKind {
@@ -61,11 +249,29 @@ pub struct JsonRootProbe {
 #[derive(Debug)]
 pub enum ProbedJsonReader<'reader, R: Read + ?Sized + 'reader> {
     /// Prefix bytes already read chained with the remaining reader.
-    Stream(PrefixedReader<'reader, R>),
+    Stream(ProbeStreamReader<'reader, R>),
     /// Replay from an in-memory buffer.
     Memory(Cursor<Vec<u8>>),
     /// Replay from a temporary file.
     Temporary(NamedTempFile),
+}
+
+/// Streaming reader backed by memory prefix, spill file, and remaining input.
+#[derive(Debug)]
+pub enum ProbeStreamReader<'reader, R: Read + ?Sized + 'reader> {
+    /// In-memory prefix only.
+    Prefixed(PrefixedReader<'reader, R>),
+    /// Spilled prefix chained with remaining input.
+    Spilled(SpillPrefixedReader<'reader, R>),
+}
+
+impl<R: Read + ?Sized> Read for ProbeStreamReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Prefixed(reader) => reader.read(buf),
+            Self::Spilled(reader) => reader.read(buf),
+        }
+    }
 }
 
 /// Chains bytes already read during probing with the remaining reader.
@@ -90,63 +296,46 @@ pub fn probe_json_root<'reader, R: Read + ?Sized + 'reader>(
     reader: &'reader mut R,
     support: &SupportTable,
 ) -> Result<(JsonRootProbe, ProbedJsonReader<'reader, R>), TransportDiagnostic> {
-    let mut buffer = Vec::new();
-    let mut spill = None;
+    let mut accum = ProbeAccumulator::new();
+    let mut scan_state = JsonRootScanState::new();
     let mut stream_after_header = false;
     let mut streaming_header = None;
 
     loop {
-        let source = materialize_probe_source(&buffer, &mut spill)?;
-        let scanner = JsonRootScanner::new(&source);
-        match scanner.scan_incremental() {
-            Ok(IncrementalScan::StreamingReady(header)) => {
+        if accum.spill.is_some() {
+            break;
+        }
+        let mut source = accum.forward_bytes();
+        match scan_state.advance(&mut source)? {
+            IncrementalScan::StreamingReady(header) => {
                 stream_after_header = true;
                 streaming_header = Some(header);
                 break;
             }
-            Ok(IncrementalScan::LateHeaderPending) => break,
-            Ok(IncrementalScan::Incomplete) => {}
-            Err(error) => return Err(error),
+            IncrementalScan::LateHeaderPending => break,
+            IncrementalScan::Incomplete => {}
         }
-        if !read_probe_chunk(reader, &mut buffer, &mut spill)? {
+        if !accum.read_chunk(reader)? {
             break;
         }
     }
 
     if !stream_after_header {
-        while read_probe_chunk(reader, &mut buffer, &mut spill)? {}
+        while accum.read_chunk(reader)? {}
     }
 
-    let source = materialize_probe_source(&buffer, &mut spill)?;
-    let probe = if JsonRootScanner::new(&source).scan_partial()?.is_some() {
-        finish_probe(JsonRootScanner::new(&source), &source, support)?
-    } else if let Some(header) = streaming_header {
-        finalize_streaming_probe(header, &source, support)?
+    let total_len = accum.total_len();
+    let probe = if stream_after_header {
+        finalize_streaming_probe(
+            streaming_header.expect("streaming header"),
+            total_len,
+            support,
+        )?
     } else {
+        let source = accum.materialized_source()?;
         finish_probe(JsonRootScanner::new(&source), &source, support)?
     };
-    let input = if probe.replay.replay_kind == ReplayKind::None {
-        let mut prefix = buffer;
-        if let Some(mut temp) = spill {
-            temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
-            temp.read_to_end(&mut prefix).map_err(probe_io_error)?;
-        }
-        ProbedJsonReader::Stream(PrefixedReader {
-            prefix: Cursor::new(prefix),
-            reader,
-        })
-    } else if spill.is_some() {
-        let mut temp = spill.take().expect("spilled replay source");
-        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
-        ProbedJsonReader::Temporary(temp)
-    } else if source.len() <= REPLAY_MEMORY_THRESHOLD {
-        ProbedJsonReader::Memory(Cursor::new(source))
-    } else {
-        let mut temp = NamedTempFile::new().map_err(probe_io_error)?;
-        temp.write_all(&source).map_err(probe_io_error)?;
-        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
-        ProbedJsonReader::Temporary(temp)
-    };
+    let input = accum.into_stream_reader(reader, probe.replay.replay_kind)?;
     Ok((probe, input))
 }
 
@@ -165,126 +354,16 @@ pub fn probe_yaml_slice(
 ) -> Result<JsonRootProbe, TransportDiagnostic> {
     let text = std::str::from_utf8(source).map_err(probe_io_error)?;
     let header = if text.trim_start().starts_with('{') {
-        let value = super::yaml::decode_json_value(source)?;
-        yaml_root_header_from_json(&value, source.len())?
+        YamlFlowRootScanner::new(source).scan()?
     } else {
         YamlRootScanner::new(text).scan()?
     };
-    finish_probe_from_header(header, source, support)
-}
-
-fn read_probe_chunk<R: Read + ?Sized>(
-    reader: &mut R,
-    buffer: &mut Vec<u8>,
-    spill: &mut Option<NamedTempFile>,
-) -> Result<bool, TransportDiagnostic> {
-    let mut chunk = [0_u8; 4096];
-    let read = reader.read(&mut chunk).map_err(probe_io_error)?;
-    if read == 0 {
-        return Ok(false);
-    }
-    append_probe_bytes(buffer, spill, &chunk[..read])?;
-    Ok(true)
-}
-
-fn append_probe_bytes(
-    buffer: &mut Vec<u8>,
-    spill: &mut Option<NamedTempFile>,
-    bytes: &[u8],
-) -> Result<(), TransportDiagnostic> {
-    if let Some(temp) = spill {
-        temp.write_all(bytes).map_err(probe_io_error)?;
-        return Ok(());
-    }
-    if buffer.len() + bytes.len() > REPLAY_MEMORY_THRESHOLD {
-        let mut temp = NamedTempFile::new().map_err(probe_io_error)?;
-        temp.write_all(buffer).map_err(probe_io_error)?;
-        temp.write_all(bytes).map_err(probe_io_error)?;
-        buffer.clear();
-        *spill = Some(temp);
-        return Ok(());
-    }
-    buffer.extend_from_slice(bytes);
-    Ok(())
-}
-
-fn materialize_probe_source(
-    buffer: &[u8],
-    spill: &mut Option<NamedTempFile>,
-) -> Result<Vec<u8>, TransportDiagnostic> {
-    if let Some(temp) = spill {
-        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
-        let mut source = buffer.to_vec();
-        temp.read_to_end(&mut source).map_err(probe_io_error)?;
-        temp.seek(SeekFrom::Start(0)).map_err(probe_io_error)?;
-        Ok(source)
-    } else {
-        Ok(buffer.to_vec())
-    }
-}
-
-fn yaml_root_header_from_json(
-    value: &serde_json::Value,
-    source_len: usize,
-) -> Result<JsonRootHeader, TransportDiagnostic> {
-    let mapping = value
-        .as_object()
-        .ok_or_else(|| probe_syntax_error("invalid YAML syntax"))?;
-
-    let mut member_order = Vec::new();
-    let mut format_version_count = 0_usize;
-    let mut scalar = None;
-    let mut saw_distribution = false;
-
-    for (key, value) in mapping {
-        member_order.push(key.clone());
-        if key == "formatVersion" {
-            format_version_count += 1;
-            if format_version_count > 1 {
-                return Err(transport_from_format_version(
-                    FormatVersionDiagnostic::duplicate_format_version(),
-                ));
-            }
-            scalar = Some(ScalarValue::from_json(value).map_err(transport_from_format_version)?);
-        } else if key == "distribution" {
-            saw_distribution = true;
-        }
-    }
-
-    if format_version_count == 0 {
-        return Err(transport_from_format_version(
-            FormatVersionDiagnostic::missing_format_version(),
-        ));
-    }
-
-    let replay_kind = if member_order
-        .first()
-        .is_some_and(|member| member == "formatVersion")
-    {
-        ReplayKind::None
-    } else if saw_distribution {
-        if source_len <= REPLAY_MEMORY_THRESHOLD {
-            ReplayKind::Memory
-        } else {
-            ReplayKind::TemporaryStorage
-        }
-    } else {
-        ReplayKind::None
-    };
-
-    Ok(JsonRootHeader {
-        scalar,
-        member_order,
-        format_version_offset: 0,
-        replay_kind,
-        saw_distribution,
-        format_version_complete: true,
-    })
+    finish_probe_from_header(header, source.len(), support)
 }
 
 fn finalize_streaming_probe(
     header: JsonRootHeader,
-    source: &[u8],
+    source_len: usize,
     support: &SupportTable,
 ) -> Result<JsonRootProbe, TransportDiagnostic> {
     let scalar = header.scalar.ok_or_else(|| {
@@ -306,7 +385,7 @@ fn finalize_streaming_probe(
         observations: Vec::new(),
         replay: ReplayObservation {
             format_version_offset: header.format_version_offset,
-            bytes_scanned: source.len(),
+            bytes_scanned: source_len,
             replay_kind: ReplayKind::None,
         },
     })
@@ -317,12 +396,12 @@ fn finish_probe(
     source: &[u8],
     support: &SupportTable,
 ) -> Result<JsonRootProbe, TransportDiagnostic> {
-    finish_probe_from_header(scanner.scan()?, source, support)
+    finish_probe_from_header(scanner.scan()?, source.len(), support)
 }
 
 fn finish_probe_from_header(
     header: JsonRootHeader,
-    source: &[u8],
+    source_len: usize,
     support: &SupportTable,
 ) -> Result<JsonRootProbe, TransportDiagnostic> {
     let scalar = header.scalar.ok_or_else(|| {
@@ -349,7 +428,7 @@ fn finish_probe_from_header(
             message: "formatVersion is valid but does not appear first in the root mapping".into(),
             replay: Some(ReplayObservation {
                 format_version_offset: header.format_version_offset,
-                bytes_scanned: source.len(),
+                bytes_scanned: source_len,
                 replay_kind: header.replay_kind,
             }),
         });
@@ -361,7 +440,7 @@ fn finish_probe_from_header(
         observations,
         replay: ReplayObservation {
             format_version_offset: header.format_version_offset,
-            bytes_scanned: source.len(),
+            bytes_scanned: source_len,
             replay_kind: header.replay_kind,
         },
     })
@@ -380,6 +459,178 @@ enum IncrementalScan {
     Incomplete,
     StreamingReady(JsonRootHeader),
     LateHeaderPending,
+}
+
+struct JsonRootScanState {
+    index: usize,
+    member_order: Vec<String>,
+    scalar: Option<ScalarValue>,
+    format_version_offset: usize,
+    saw_distribution: bool,
+    format_version_complete: bool,
+    format_version_count: usize,
+    first_member: bool,
+    root_open: bool,
+    finished: bool,
+}
+
+impl JsonRootScanState {
+    fn new() -> Self {
+        Self {
+            index: 0,
+            member_order: Vec::new(),
+            scalar: None,
+            format_version_offset: 0,
+            saw_distribution: false,
+            format_version_complete: false,
+            format_version_count: 0,
+            first_member: true,
+            root_open: false,
+            finished: false,
+        }
+    }
+
+    fn advance(
+        &mut self,
+        source: &mut ForwardProbeBytes<'_>,
+    ) -> Result<IncrementalScan, TransportDiagnostic> {
+        if self.finished {
+            return Ok(IncrementalScan::Incomplete);
+        }
+        if !self.root_open {
+            forward_skip_ws(source, &mut self.index)?;
+            if forward_peek(source, self.index)? != Some(b'{') {
+                return Ok(IncrementalScan::Incomplete);
+            }
+            self.index += 1;
+            self.root_open = true;
+            forward_skip_ws(source, &mut self.index)?;
+        }
+
+        loop {
+            forward_skip_ws(source, &mut self.index)?;
+            if forward_peek(source, self.index)? == Some(b'}') {
+                self.index += 1;
+                self.finished = true;
+                return Ok(IncrementalScan::Incomplete);
+            }
+            if forward_peek(source, self.index)?.is_none() {
+                return Ok(IncrementalScan::Incomplete);
+            }
+            if !self.first_member {
+                if forward_peek(source, self.index)? != Some(b',') {
+                    return Ok(IncrementalScan::Incomplete);
+                }
+                self.index += 1;
+                forward_skip_ws(source, &mut self.index)?;
+            }
+            self.first_member = false;
+
+            let key = match read_string_partial_forward(source, &mut self.index) {
+                Ok(value) => value,
+                Err(PartialScanError::NeedMore) => return Ok(IncrementalScan::Incomplete),
+                Err(PartialScanError::Invalid(error)) => return Err(error),
+            };
+            self.member_order.push(key.clone());
+            forward_skip_ws(source, &mut self.index)?;
+            if forward_peek(source, self.index)? != Some(b':') {
+                return Ok(IncrementalScan::Incomplete);
+            }
+            self.index += 1;
+            forward_skip_ws(source, &mut self.index)?;
+
+            if key == "formatVersion" {
+                self.format_version_count += 1;
+                if self.format_version_count > 1 {
+                    return Err(transport_from_format_version(
+                        FormatVersionDiagnostic::duplicate_format_version(),
+                    ));
+                }
+                self.format_version_offset = self.index;
+                match read_scalar_partial_forward(source, &mut self.index) {
+                    Ok(value) => {
+                        self.scalar = Some(value);
+                        self.format_version_complete = true;
+                    }
+                    Err(PartialScanError::NeedMore) => return Ok(IncrementalScan::Incomplete),
+                    Err(PartialScanError::Invalid(error)) => return Err(error),
+                }
+                if self.format_version_first() {
+                    let mut lookahead = self.index;
+                    forward_skip_ws(source, &mut lookahead)?;
+                    if forward_peek(source, lookahead)? == Some(b',') {
+                        lookahead += 1;
+                        forward_skip_ws(source, &mut lookahead)?;
+                        match read_string_partial_forward(source, &mut lookahead) {
+                            Ok(next_key) if next_key == "formatVersion" => {
+                                return Err(transport_from_format_version(
+                                    FormatVersionDiagnostic::duplicate_format_version(),
+                                ));
+                            }
+                            Ok(next_key) if next_key == "distribution" => {
+                                forward_skip_ws(source, &mut lookahead)?;
+                                if forward_peek(source, lookahead)? == Some(b':') {
+                                    lookahead += 1;
+                                    forward_skip_ws(source, &mut lookahead)?;
+                                    if skip_value_partial_forward(source, &mut lookahead).is_ok() {
+                                        forward_skip_ws(source, &mut lookahead)?;
+                                        if forward_peek(source, lookahead)? == Some(b',') {
+                                            lookahead += 1;
+                                            forward_skip_ws(source, &mut lookahead)?;
+                                            if let Ok(next_key) =
+                                                read_string_partial_forward(source, &mut lookahead)
+                                                && next_key == "formatVersion"
+                                            {
+                                                return Err(transport_from_format_version(
+                                                    FormatVersionDiagnostic::duplicate_format_version(
+                                                    ),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(_) | Err(PartialScanError::NeedMore) => {}
+                            Err(PartialScanError::Invalid(error)) => return Err(error),
+                        }
+                    }
+                    return Ok(IncrementalScan::StreamingReady(
+                        self.header(ReplayKind::None),
+                    ));
+                } else if self.saw_distribution {
+                    return Ok(IncrementalScan::LateHeaderPending);
+                }
+            } else {
+                if key == "distribution" {
+                    self.saw_distribution = true;
+                }
+                if skip_value_partial_forward(source, &mut self.index).is_err() {
+                    return Ok(IncrementalScan::Incomplete);
+                }
+                if self.saw_distribution && !self.format_version_complete {
+                    return Ok(IncrementalScan::LateHeaderPending);
+                }
+            }
+            forward_skip_ws(source, &mut self.index)?;
+        }
+    }
+
+    fn format_version_first(&self) -> bool {
+        self.member_order
+            .first()
+            .is_some_and(|member| member == "formatVersion")
+    }
+
+    fn header(&self, replay_kind: ReplayKind) -> JsonRootHeader {
+        JsonRootHeader {
+            scalar: self.scalar.clone(),
+            member_order: self.member_order.clone(),
+            format_version_offset: self.format_version_offset,
+            replay_kind,
+            saw_distribution: self.saw_distribution,
+            format_version_complete: self.format_version_complete,
+        }
+    }
 }
 
 struct JsonRootScanner<'source> {
@@ -427,115 +678,6 @@ impl<'source> JsonRootScanner<'source> {
             ReplayKind::None
         };
         Ok(header)
-    }
-
-    #[allow(unused_assignments)]
-    fn scan_incremental(&self) -> Result<IncrementalScan, TransportDiagnostic> {
-        let mut index = 0_usize;
-        skip_ws(self.source, &mut index);
-        if peek(self.source, index) != Some(b'{') {
-            return Ok(IncrementalScan::Incomplete);
-        }
-        index += 1;
-        skip_ws(self.source, &mut index);
-
-        let mut member_order = Vec::new();
-        let mut scalar = None::<ScalarValue>;
-        let mut format_version_offset = 0_usize;
-        let mut saw_distribution = false;
-        let mut format_version_complete = false;
-        let mut format_version_count = 0_usize;
-        let mut first_member = true;
-
-        loop {
-            skip_ws(self.source, &mut index);
-            if peek(self.source, index) == Some(b'}') {
-                return Ok(IncrementalScan::Incomplete);
-            }
-            if peek(self.source, index).is_none() {
-                return Ok(IncrementalScan::Incomplete);
-            }
-            if !first_member {
-                if peek(self.source, index) != Some(b',') {
-                    return Ok(IncrementalScan::Incomplete);
-                }
-                index += 1;
-                skip_ws(self.source, &mut index);
-            }
-            first_member = false;
-
-            let key = match read_string_partial(self.source, &mut index) {
-                Ok(value) => value,
-                Err(PartialScanError::NeedMore) => return Ok(IncrementalScan::Incomplete),
-                Err(PartialScanError::Invalid(error)) => return Err(error),
-            };
-            member_order.push(key.clone());
-            skip_ws(self.source, &mut index);
-            if peek(self.source, index) != Some(b':') {
-                return Ok(IncrementalScan::Incomplete);
-            }
-            index += 1;
-            skip_ws(self.source, &mut index);
-
-            if key == "formatVersion" {
-                format_version_count += 1;
-                if format_version_count > 1 {
-                    return Err(transport_from_format_version(
-                        FormatVersionDiagnostic::duplicate_format_version(),
-                    ));
-                }
-                format_version_offset = index;
-                match read_scalar_partial(self.source, &mut index) {
-                    Ok(value) => {
-                        scalar = Some(value);
-                        format_version_complete = true;
-                    }
-                    Err(PartialScanError::NeedMore) => return Ok(IncrementalScan::Incomplete),
-                    Err(PartialScanError::Invalid(error)) => return Err(error),
-                }
-                if member_order
-                    .first()
-                    .is_some_and(|member| member == "formatVersion")
-                {
-                    let mut lookahead = index;
-                    skip_ws(self.source, &mut lookahead);
-                    if peek(self.source, lookahead) == Some(b',') {
-                        lookahead += 1;
-                        skip_ws(self.source, &mut lookahead);
-                        match read_string_partial(self.source, &mut lookahead) {
-                            Ok(next_key) if next_key == "formatVersion" => {
-                                return Err(transport_from_format_version(
-                                    FormatVersionDiagnostic::duplicate_format_version(),
-                                ));
-                            }
-                            Ok(_) | Err(PartialScanError::NeedMore) => {}
-                            Err(PartialScanError::Invalid(error)) => return Err(error),
-                        }
-                    }
-                    return Ok(IncrementalScan::StreamingReady(JsonRootHeader {
-                        scalar,
-                        member_order,
-                        format_version_offset,
-                        replay_kind: ReplayKind::None,
-                        saw_distribution,
-                        format_version_complete,
-                    }));
-                } else if saw_distribution {
-                    return Ok(IncrementalScan::LateHeaderPending);
-                }
-            } else {
-                if key == "distribution" {
-                    saw_distribution = true;
-                }
-                if skip_value_partial(self.source, &mut index).is_err() {
-                    return Ok(IncrementalScan::Incomplete);
-                }
-                if saw_distribution && !format_version_complete {
-                    return Ok(IncrementalScan::LateHeaderPending);
-                }
-            }
-            skip_ws(self.source, &mut index);
-        }
     }
 
     fn scan_partial(&self) -> Result<Option<JsonRootHeader>, TransportDiagnostic> {
@@ -614,6 +756,280 @@ impl<'source> JsonRootScanner<'source> {
             format_version_complete: format_version_count > 0,
         }))
     }
+}
+
+fn forward_peek(
+    source: &mut ForwardProbeBytes<'_>,
+    index: usize,
+) -> Result<Option<u8>, TransportDiagnostic> {
+    source.peek(index)
+}
+
+fn forward_skip_ws(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<(), TransportDiagnostic> {
+    while matches!(
+        forward_peek(source, *index)?,
+        Some(b' ' | b'\t' | b'\r' | b'\n')
+    ) {
+        *index += 1;
+    }
+    Ok(())
+}
+
+fn read_string_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<String, PartialScanError> {
+    if forward_peek(source, *index).map_err(PartialScanError::transport)? != Some(b'"') {
+        return Err(PartialScanError::Invalid(probe_syntax_error(
+            "invalid JSON syntax",
+        )));
+    }
+    *index += 1;
+    let mut bytes = Vec::new();
+    bytes.push(b'"');
+    let mut escaped = false;
+    loop {
+        let Some(byte) = forward_peek(source, *index).map_err(PartialScanError::transport)? else {
+            return Err(PartialScanError::NeedMore);
+        };
+        *index += 1;
+        bytes.push(byte);
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        if byte == b'"' {
+            let quoted = std::str::from_utf8(&bytes)
+                .map_err(|error| PartialScanError::Invalid(probe_io_error(error)))?;
+            return serde_json::from_str(quoted)
+                .map_err(|_| PartialScanError::Invalid(probe_syntax_error("invalid JSON string")));
+        }
+    }
+}
+
+fn read_scalar_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<ScalarValue, PartialScanError> {
+    if forward_peek(source, *index).map_err(PartialScanError::transport)? == Some(b'-') {
+        return Err(PartialScanError::Invalid(transport_from_format_version(
+            FormatVersionDiagnostic::invalid_format_version_type(),
+        )));
+    }
+    match forward_peek(source, *index).map_err(PartialScanError::transport)? {
+        Some(b'"') => {
+            let string = read_string_partial_forward(source, index)?;
+            ScalarValue::from_json(&serde_json::Value::String(string))
+                .map_err(|error| PartialScanError::Invalid(transport_from_format_version(error)))
+        }
+        Some(b'0'..=b'9') => {
+            let start = *index;
+            while matches!(
+                forward_peek(source, *index).map_err(PartialScanError::transport)?,
+                Some(b'0'..=b'9')
+            ) {
+                *index += 1;
+            }
+            let mut digits = Vec::new();
+            for offset in start..*index {
+                digits.push(
+                    forward_peek(source, offset)
+                        .map_err(PartialScanError::transport)?
+                        .expect("digit"),
+                );
+            }
+            let digits = std::str::from_utf8(&digits)
+                .map_err(|error| PartialScanError::Invalid(probe_io_error(error)))?;
+            let integer = digits.parse::<u64>().map_err(|_| {
+                PartialScanError::Invalid(transport_from_format_version(
+                    FormatVersionDiagnostic::invalid_format_version_type(),
+                ))
+            })?;
+            Ok(ScalarValue::Integer(integer))
+        }
+        None => Err(PartialScanError::NeedMore),
+        _ => Err(PartialScanError::Invalid(transport_from_format_version(
+            FormatVersionDiagnostic::invalid_format_version_type(),
+        ))),
+    }
+}
+
+fn skip_value_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<(), PartialScanError> {
+    match forward_peek(source, *index).map_err(PartialScanError::transport)? {
+        Some(b'"') => {
+            read_string_partial_forward(source, index)?;
+        }
+        Some(b'{') => skip_object_partial_forward(source, index)?,
+        Some(b'[') => skip_array_partial_forward(source, index)?,
+        Some(b't') => consume_literal_partial_forward(source, index, "true")?,
+        Some(b'f') => consume_literal_partial_forward(source, index, "false")?,
+        Some(b'n') => consume_literal_partial_forward(source, index, "null")?,
+        Some(b'0'..=b'9') | Some(b'-') => skip_number_partial_forward(source, index)?,
+        None => return Err(PartialScanError::NeedMore),
+        _ => {
+            return Err(PartialScanError::Invalid(probe_syntax_error(
+                "invalid JSON value",
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn skip_object_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<(), PartialScanError> {
+    if forward_peek(source, *index).map_err(PartialScanError::transport)? != Some(b'{') {
+        return Err(PartialScanError::Invalid(probe_syntax_error(
+            "invalid JSON syntax",
+        )));
+    }
+    *index += 1;
+    forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+    let mut first = true;
+    loop {
+        forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+        if forward_peek(source, *index).map_err(PartialScanError::transport)? == Some(b'}') {
+            *index += 1;
+            return Ok(());
+        }
+        if forward_peek(source, *index)
+            .map_err(PartialScanError::transport)?
+            .is_none()
+        {
+            return Err(PartialScanError::NeedMore);
+        }
+        if !first {
+            if forward_peek(source, *index).map_err(PartialScanError::transport)? != Some(b',') {
+                return Err(PartialScanError::NeedMore);
+            }
+            *index += 1;
+            forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+        }
+        first = false;
+        read_string_partial_forward(source, index)?;
+        forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+        if forward_peek(source, *index).map_err(PartialScanError::transport)? != Some(b':') {
+            return Err(PartialScanError::NeedMore);
+        }
+        *index += 1;
+        forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+        skip_value_partial_forward(source, index)?;
+    }
+}
+
+fn skip_array_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<(), PartialScanError> {
+    if forward_peek(source, *index).map_err(PartialScanError::transport)? != Some(b'[') {
+        return Err(PartialScanError::Invalid(probe_syntax_error(
+            "invalid JSON syntax",
+        )));
+    }
+    *index += 1;
+    forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+    let mut first = true;
+    loop {
+        forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+        if forward_peek(source, *index).map_err(PartialScanError::transport)? == Some(b']') {
+            *index += 1;
+            return Ok(());
+        }
+        if forward_peek(source, *index)
+            .map_err(PartialScanError::transport)?
+            .is_none()
+        {
+            return Err(PartialScanError::NeedMore);
+        }
+        if !first {
+            if forward_peek(source, *index).map_err(PartialScanError::transport)? != Some(b',') {
+                return Err(PartialScanError::NeedMore);
+            }
+            *index += 1;
+            forward_skip_ws(source, index).map_err(PartialScanError::transport)?;
+        }
+        first = false;
+        skip_value_partial_forward(source, index)?;
+    }
+}
+
+fn skip_number_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+) -> Result<(), PartialScanError> {
+    if forward_peek(source, *index).map_err(PartialScanError::transport)? == Some(b'-') {
+        *index += 1;
+    }
+    if !matches!(
+        forward_peek(source, *index).map_err(PartialScanError::transport)?,
+        Some(b'0'..=b'9')
+    ) {
+        return Err(PartialScanError::NeedMore);
+    }
+    while matches!(
+        forward_peek(source, *index).map_err(PartialScanError::transport)?,
+        Some(b'0'..=b'9')
+    ) {
+        *index += 1;
+    }
+    if forward_peek(source, *index).map_err(PartialScanError::transport)? == Some(b'.') {
+        *index += 1;
+        while matches!(
+            forward_peek(source, *index).map_err(PartialScanError::transport)?,
+            Some(b'0'..=b'9')
+        ) {
+            *index += 1;
+        }
+    }
+    if matches!(
+        forward_peek(source, *index).map_err(PartialScanError::transport)?,
+        Some(b'e' | b'E')
+    ) {
+        *index += 1;
+        if matches!(
+            forward_peek(source, *index).map_err(PartialScanError::transport)?,
+            Some(b'+' | b'-')
+        ) {
+            *index += 1;
+        }
+        while matches!(
+            forward_peek(source, *index).map_err(PartialScanError::transport)?,
+            Some(b'0'..=b'9')
+        ) {
+            *index += 1;
+        }
+    }
+    Ok(())
+}
+
+fn consume_literal_partial_forward(
+    source: &mut ForwardProbeBytes<'_>,
+    index: &mut usize,
+    literal: &str,
+) -> Result<(), PartialScanError> {
+    for byte in literal.bytes() {
+        match forward_peek(source, *index).map_err(PartialScanError::transport)? {
+            Some(found) if found == byte => *index += 1,
+            None => return Err(PartialScanError::NeedMore),
+            _ => {
+                return Err(PartialScanError::Invalid(probe_syntax_error(
+                    "invalid JSON literal",
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_string_partial(source: &[u8], index: &mut usize) -> Result<String, PartialScanError> {
@@ -828,6 +1244,12 @@ enum PartialScanError {
     Invalid(TransportDiagnostic),
 }
 
+impl PartialScanError {
+    fn transport(error: TransportDiagnostic) -> Self {
+        Self::Invalid(error)
+    }
+}
+
 fn transport_from_format_version(error: FormatVersionDiagnostic) -> TransportDiagnostic {
     TransportDiagnostic::error(
         error.code(),
@@ -859,6 +1281,275 @@ fn probe_syntax_error(message: &'static str) -> TransportDiagnostic {
         line: 1,
         column: 1,
     })
+}
+
+struct YamlFlowRootScanner<'source> {
+    source: &'source [u8],
+}
+
+impl<'source> YamlFlowRootScanner<'source> {
+    fn new(source: &'source [u8]) -> Self {
+        Self { source }
+    }
+
+    fn scan(self) -> Result<JsonRootHeader, TransportDiagnostic> {
+        let mut index = 0_usize;
+        skip_ws(self.source, &mut index);
+        if peek(self.source, index) != Some(b'{') {
+            return Err(probe_syntax_error("invalid YAML syntax"));
+        }
+        index += 1;
+        skip_ws(self.source, &mut index);
+
+        let mut member_order = Vec::new();
+        let mut format_version_count = 0_usize;
+        let mut scalar = None;
+        let mut format_version_offset = 0_usize;
+        let mut saw_distribution = false;
+        let mut first_member = true;
+
+        loop {
+            skip_ws(self.source, &mut index);
+            if peek(self.source, index) == Some(b'}') {
+                break;
+            }
+            if peek(self.source, index).is_none() {
+                return Err(probe_syntax_error("invalid YAML syntax"));
+            }
+            if !first_member {
+                if peek(self.source, index) != Some(b',') {
+                    return Err(probe_syntax_error("invalid YAML syntax"));
+                }
+                index += 1;
+                skip_ws(self.source, &mut index);
+            }
+            first_member = false;
+
+            let key = read_yaml_flow_key(self.source, &mut index)?;
+            member_order.push(key.clone());
+            skip_ws(self.source, &mut index);
+            if peek(self.source, index) != Some(b':') {
+                return Err(probe_syntax_error("invalid YAML syntax"));
+            }
+            index += 1;
+            skip_ws(self.source, &mut index);
+
+            if key == "formatVersion" {
+                format_version_count += 1;
+                if format_version_count > 1 {
+                    return Err(transport_from_format_version(
+                        FormatVersionDiagnostic::duplicate_format_version(),
+                    ));
+                }
+                format_version_offset = index;
+                scalar = Some(read_yaml_flow_scalar(self.source, &mut index)?);
+            } else {
+                if key == "distribution" {
+                    saw_distribution = true;
+                }
+                skip_yaml_flow_value(self.source, &mut index)?;
+            }
+            skip_ws(self.source, &mut index);
+        }
+
+        if format_version_count == 0 {
+            return Err(transport_from_format_version(
+                FormatVersionDiagnostic::missing_format_version(),
+            ));
+        }
+
+        let replay_kind = if member_order
+            .first()
+            .is_some_and(|member| member == "formatVersion")
+        {
+            ReplayKind::None
+        } else if saw_distribution {
+            if self.source.len() <= REPLAY_MEMORY_THRESHOLD {
+                ReplayKind::Memory
+            } else {
+                ReplayKind::TemporaryStorage
+            }
+        } else {
+            ReplayKind::None
+        };
+
+        Ok(JsonRootHeader {
+            scalar,
+            member_order,
+            format_version_offset,
+            replay_kind,
+            saw_distribution,
+            format_version_complete: true,
+        })
+    }
+}
+
+fn read_yaml_flow_key(source: &[u8], index: &mut usize) -> Result<String, TransportDiagnostic> {
+    if peek(source, *index) == Some(b'"') {
+        return read_string_partial(source, index).map_err(|error| match error {
+            PartialScanError::Invalid(error) => error,
+            PartialScanError::NeedMore => probe_syntax_error("invalid YAML syntax"),
+        });
+    }
+    if peek(source, *index) == Some(b'\'') {
+        *index += 1;
+        let start = *index;
+        while *index < source.len() && source[*index] != b'\'' {
+            *index += 1;
+        }
+        if *index >= source.len() {
+            return Err(probe_syntax_error("invalid YAML syntax"));
+        }
+        let key = std::str::from_utf8(&source[start..*index]).map_err(probe_io_error)?;
+        *index += 1;
+        return Ok(key.to_owned());
+    }
+    let start = *index;
+    while matches!(
+        peek(source, *index),
+        Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+    ) {
+        *index += 1;
+    }
+    if start == *index {
+        return Err(probe_syntax_error("invalid YAML syntax"));
+    }
+    let key = std::str::from_utf8(&source[start..*index]).map_err(probe_io_error)?;
+    Ok(key.to_owned())
+}
+
+fn read_yaml_flow_scalar(
+    source: &[u8],
+    index: &mut usize,
+) -> Result<ScalarValue, TransportDiagnostic> {
+    if peek(source, *index) == Some(b'"') {
+        let string = read_string_partial(source, index).map_err(|error| match error {
+            PartialScanError::Invalid(error) => error,
+            PartialScanError::NeedMore => probe_syntax_error("invalid YAML syntax"),
+        })?;
+        return ScalarValue::from_json(&serde_json::Value::String(string))
+            .map_err(transport_from_format_version);
+    }
+    if peek(source, *index) == Some(b'\'') {
+        *index += 1;
+        let start = *index;
+        while *index < source.len() && source[*index] != b'\'' {
+            *index += 1;
+        }
+        if *index >= source.len() {
+            return Err(probe_syntax_error("invalid YAML syntax"));
+        }
+        let value = std::str::from_utf8(&source[start..*index]).map_err(probe_io_error)?;
+        *index += 1;
+        return ScalarValue::from_json(&serde_json::Value::String(value.to_owned()))
+            .map_err(transport_from_format_version);
+    }
+    let start = *index;
+    while matches!(
+        peek(source, *index),
+        Some(byte) if !matches!(byte, b',' | b'}' | b']' | b':' | b' ' | b'\t' | b'\r' | b'\n')
+    ) {
+        *index += 1;
+    }
+    let value = std::str::from_utf8(&source[start..*index])
+        .map_err(probe_io_error)?
+        .trim();
+    parse_yaml_scalar_value(value)
+}
+
+fn skip_yaml_flow_value(source: &[u8], index: &mut usize) -> Result<(), TransportDiagnostic> {
+    match peek(source, *index) {
+        Some(b'{') => skip_yaml_flow_mapping(source, index),
+        Some(b'[') => skip_yaml_flow_sequence(source, index),
+        Some(b'"') | Some(b'\'') => {
+            read_yaml_flow_scalar(source, index)?;
+            Ok(())
+        }
+        Some(b'0'..=b'9') | Some(b'-') => {
+            skip_number_partial(source, index).map_err(|error| match error {
+                PartialScanError::Invalid(error) => error,
+                PartialScanError::NeedMore => probe_syntax_error("invalid YAML syntax"),
+            })
+        }
+        Some(_) => {
+            let start = *index;
+            while matches!(
+                peek(source, *index),
+                Some(byte) if !matches!(byte, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+            ) {
+                *index += 1;
+            }
+            if start == *index {
+                Err(probe_syntax_error("invalid YAML syntax"))
+            } else {
+                Ok(())
+            }
+        }
+        None => Err(probe_syntax_error("invalid YAML syntax")),
+    }
+}
+
+fn skip_yaml_flow_mapping(source: &[u8], index: &mut usize) -> Result<(), TransportDiagnostic> {
+    if peek(source, *index) != Some(b'{') {
+        return Err(probe_syntax_error("invalid YAML syntax"));
+    }
+    *index += 1;
+    skip_ws(source, index);
+    let mut first = true;
+    loop {
+        skip_ws(source, index);
+        if peek(source, *index) == Some(b'}') {
+            *index += 1;
+            return Ok(());
+        }
+        if peek(source, *index).is_none() {
+            return Err(probe_syntax_error("invalid YAML syntax"));
+        }
+        if !first {
+            if peek(source, *index) != Some(b',') {
+                return Err(probe_syntax_error("invalid YAML syntax"));
+            }
+            *index += 1;
+            skip_ws(source, index);
+        }
+        first = false;
+        read_yaml_flow_key(source, index)?;
+        skip_ws(source, index);
+        if peek(source, *index) != Some(b':') {
+            return Err(probe_syntax_error("invalid YAML syntax"));
+        }
+        *index += 1;
+        skip_ws(source, index);
+        skip_yaml_flow_value(source, index)?;
+    }
+}
+
+fn skip_yaml_flow_sequence(source: &[u8], index: &mut usize) -> Result<(), TransportDiagnostic> {
+    if peek(source, *index) != Some(b'[') {
+        return Err(probe_syntax_error("invalid YAML syntax"));
+    }
+    *index += 1;
+    skip_ws(source, index);
+    let mut first = true;
+    loop {
+        skip_ws(source, index);
+        if peek(source, *index) == Some(b']') {
+            *index += 1;
+            return Ok(());
+        }
+        if peek(source, *index).is_none() {
+            return Err(probe_syntax_error("invalid YAML syntax"));
+        }
+        if !first {
+            if peek(source, *index) != Some(b',') {
+                return Err(probe_syntax_error("invalid YAML syntax"));
+            }
+            *index += 1;
+            skip_ws(source, index);
+        }
+        first = false;
+        skip_yaml_flow_value(source, index)?;
+    }
 }
 
 struct YamlRootScanner<'source> {

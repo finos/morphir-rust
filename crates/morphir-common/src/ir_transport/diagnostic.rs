@@ -96,6 +96,7 @@ impl TransportDiagnostic {
         self.0.guidance = Some(guidance.into());
         self
     }
+    /// Attach the decoder-provided physical source location.
     pub fn with_source_span(mut self, source_span: SourceSpan) -> Self {
         self.0.source_span = Some(source_span);
         self

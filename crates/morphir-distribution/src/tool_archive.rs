@@ -1,7 +1,7 @@
 //! Safe extraction of portable tool archives.
 
 use crate::store::{add_owner_executable, hash_file};
-use crate::{DistributionError, RelativeArtifactPath, Result, Sha256Digest};
+use crate::{ArtifactFilename, DistributionError, RelativeArtifactPath, Result, Sha256Digest};
 use flate2::read::GzDecoder;
 use std::collections::BTreeSet;
 use std::fs;
@@ -52,7 +52,7 @@ pub(crate) fn extract_tar_gzip(
             .map_err(|source| unsafe_archive("", format!("invalid tar path: {source}")))?
             .into_owned();
         let raw_name = raw_path.to_string_lossy().into_owned();
-        let relative = RelativeArtifactPath::from_native_path(&raw_path)
+        let relative = portable_archive_path(&raw_path)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
         if !names.insert(relative.as_str().to_lowercase()) {
             return Err(unsafe_archive(
@@ -143,6 +143,14 @@ pub(crate) fn extract_tar_gzip(
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
+}
+
+pub(crate) fn portable_archive_path(path: &Path) -> Result<RelativeArtifactPath> {
+    let relative = RelativeArtifactPath::from_native_path(path)?;
+    for segment in relative.as_str().split('/') {
+        ArtifactFilename::parse(segment)?;
+    }
+    Ok(relative)
 }
 
 pub(crate) fn unsafe_archive(

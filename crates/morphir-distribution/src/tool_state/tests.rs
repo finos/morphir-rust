@@ -1,3 +1,4 @@
+mod archive_portability;
 mod support;
 
 use super::*;

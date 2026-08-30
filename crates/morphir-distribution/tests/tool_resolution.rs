@@ -190,3 +190,42 @@ fn tool_resolution_rejects_versions_with_equal_semver_precedence() {
                 && second == Version::parse("1.0.0+desktop.2").unwrap()
     ));
 }
+
+#[test]
+fn tool_resolution_rejects_mixed_tool_identities() {
+    let companion = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 1,
+        "kind": "morphir-tool-release",
+        "tool": { "id": "companion", "name": "Morphir Companion" },
+        "version": "2.0.0",
+        "channels": ["stable"],
+        "status": "active",
+        "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+        "artifacts": [{
+            "targetPath": "artifacts/companion/2.0.0/windows-aarch64.zip",
+            "platform": { "os": "windows", "arch": "aarch64" },
+            "archive": { "format": "zip", "entryPoint": "companion.exe" },
+            "launch": { "kind": "executable", "path": "companion.exe", "args": [] }
+        }]
+    }))
+    .unwrap();
+    let releases = vec![
+        a_tool_release("1.0.0", &["stable"], "active", ">=0.4.0, <0.5.0"),
+        companion,
+    ];
+
+    let error = resolve_tool(
+        &releases,
+        &Selection::Channel(Channel::Stable),
+        &Platform::new("windows", "aarch64").unwrap(),
+        &Version::parse("0.4.0").unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        DistributionError::MixedToolIdentity { expected, actual }
+            if expected == ToolId::parse("desktop").unwrap()
+                && actual == ToolId::parse("companion").unwrap()
+    ));
+}

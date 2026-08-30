@@ -44,6 +44,14 @@ pub enum DistributionError {
         /// One-based JSONL line number.
         line: usize,
     },
+    /// Tool releases for more than one identity were supplied to one resolution.
+    #[error("tool releases mix identities {expected} and {actual}")]
+    MixedToolIdentity {
+        /// Identity established by the first release.
+        expected: crate::ToolId,
+        /// Different identity found later in the input.
+        actual: crate::ToolId,
+    },
     /// Two records declared the same exact version.
     #[error("duplicate version {version} in extension history")]
     DuplicateVersion {

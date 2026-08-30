@@ -38,6 +38,7 @@ pub fn resolve_tool(
     platform: &Platform,
     morphir_cli: &Version,
 ) -> Result<ResolvedToolRelease> {
+    validate_single_identity(releases)?;
     validate_distinct_precedence(releases)?;
     let matching = releases
         .iter()
@@ -101,6 +102,24 @@ pub fn resolve_tool(
         selection: selection.to_string(),
         platform: platform.to_string(),
     })
+}
+
+fn validate_single_identity(releases: &[ToolReleaseRecord]) -> Result<()> {
+    let Some(expected) = releases.first().map(ToolReleaseRecord::tool_id) else {
+        return Ok(());
+    };
+    if let Some(actual) = releases
+        .iter()
+        .skip(1)
+        .map(ToolReleaseRecord::tool_id)
+        .find(|actual| *actual != expected)
+    {
+        return Err(DistributionError::MixedToolIdentity {
+            expected: expected.clone(),
+            actual: actual.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_distinct_precedence(releases: &[ToolReleaseRecord]) -> Result<()> {

@@ -2,7 +2,7 @@
 
 use super::verification::verify_one_file;
 use crate::store::{add_owner_executable, hash_file};
-use crate::tool_archive::{extract_tar_gzip, unsafe_archive};
+use crate::tool_archive::{extract_tar_gzip, portable_archive_path, unsafe_archive};
 use crate::{
     ArchiveFormat, ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
     Platform, RelativeArtifactPath, ResolvedTrustedToolArtifact, Result, Selection, Sha256Digest,
@@ -406,7 +406,7 @@ fn extract_zip(
         let enclosed = entry.enclosed_name().ok_or_else(|| {
             unsafe_archive(&raw_name, "entry escapes the package root".to_owned())
         })?;
-        let relative = RelativeArtifactPath::from_native_path(&enclosed)
+        let relative = portable_archive_path(&enclosed)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
         let collision_key = relative.as_str().to_lowercase();
         if !names.insert(collision_key) {

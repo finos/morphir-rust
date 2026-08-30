@@ -32,7 +32,7 @@ impl Extension for WasmExtension {
             backend: Some(BackendCapability {
                 targets: vec!["wasm".into(), "wat".into()],
                 ir_versions: Vec::new(),
-                generate: false,
+                generate: true,
             }),
             ..ExtensionCapabilities::default()
         }
@@ -95,7 +95,7 @@ mod tests {
 
         assert_eq!(backend.targets, ["wasm", "wat"]);
         assert!(backend.ir_versions.is_empty());
-        assert!(!backend.generate);
+        assert!(backend.generate);
     }
 
     #[test]

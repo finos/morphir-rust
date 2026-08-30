@@ -88,6 +88,7 @@ pub(super) fn package_for(
         args: vec!["--morphir-home".to_owned()],
         files: vec![file],
         directories: Vec::new(),
+        state_guard: None,
     }
 }
 

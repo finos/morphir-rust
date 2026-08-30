@@ -271,10 +271,13 @@ impl<'home> ToolInstaller<'home> {
 
     pub(super) fn install_with_writer(
         &self,
-        package: VerifiedToolPackage,
+        mut package: VerifiedToolPackage,
         writer: &impl StateWriter,
     ) -> Result<InstalledTool> {
-        let _transaction = tool_state_guard(self.home)?;
+        let _transaction = match package.take_state_guard(self.home)? {
+            Some(state_guard) => state_guard,
+            None => tool_state_guard(self.home)?,
+        };
         verify_package(self.home, &package)?;
         sync_package(self.home, &package)?;
         if package.status == ToolReleaseStatus::Revoked {

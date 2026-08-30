@@ -98,7 +98,7 @@ impl<'home> ToolRepairer<'home> {
         let previous_path = quarantined_digest_path(self.home, id, &active.digest);
 
         let repair = ToolPackageStore::new(self.home)
-            .prepare(resolved, downloaded)
+            .prepare_unlocked(resolved, downloaded)
             .and_then(|package| {
                 validate_repair_package(&active, &package)?;
                 verify_package(self.home, &package)?;

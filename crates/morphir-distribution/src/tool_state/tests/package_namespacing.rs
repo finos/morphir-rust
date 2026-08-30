@@ -100,6 +100,7 @@ fn cached_archive_reuse_rejects_a_missing_declared_directory() {
     };
     let first = prepare("first").unwrap();
     let runtime_directory = home.root().join(first.directories[0].as_path());
+    drop(first);
     fs::remove_dir(&runtime_directory).unwrap();
 
     assert!(matches!(
@@ -206,10 +207,11 @@ fn identical_archives_with_distinct_entry_points_have_distinct_packages() {
             .unwrap()
     };
     let first = prepare("first", "first", "First Tool", "first.exe");
-    let second = prepare("second", "second", "Second Tool", "second.exe");
-    assert_ne!(first.package_root, second.package_root);
-
+    let first_package_root = first.package_root.clone();
     ToolInstaller::new(&home).install(first).unwrap();
+    let second = prepare("second", "second", "Second Tool", "second.exe");
+    assert_ne!(first_package_root, second.package_root);
+
     ToolInstaller::new(&home).install(second).unwrap();
 
     let first = activate_installed_tool(&home, &ToolId::parse("first").unwrap()).unwrap();
@@ -248,9 +250,9 @@ fn identical_source_objects_with_raw_and_archive_semantics_coexist() {
         "archive",
         zip_release("archive", "Archive Tool", "desktop.exe"),
     );
+    ToolInstaller::new(&home).install(archive).unwrap();
     let raw = prepare("raw", raw_release("raw", "Raw Tool", "bundle.zip"));
 
-    ToolInstaller::new(&home).install(archive).unwrap();
     ToolInstaller::new(&home).install(raw).unwrap();
     assert_eq!(
         fs::read(

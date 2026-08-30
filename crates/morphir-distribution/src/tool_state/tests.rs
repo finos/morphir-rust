@@ -44,6 +44,38 @@ fn verified_launch_contract_holds_state_guard_until_released() {
 }
 
 #[test]
+fn prepared_package_holds_state_guard_through_installation() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let (resolved, downloaded) = raw_download(root.path(), "1.0.0", b"desktop-v1");
+    let prepared = ToolPackageStore::new(&home)
+        .prepare(resolved, downloaded)
+        .unwrap();
+
+    let competing_home = home.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (acquired_tx, acquired_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let guard = super::catalog::tool_state_guard(&competing_home).unwrap();
+        acquired_tx.send(()).unwrap();
+        drop(guard);
+    });
+
+    started_rx.recv().unwrap();
+    assert!(
+        acquired_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "package preparation released the state guard before installation"
+    );
+
+    ToolInstaller::new(&home).install(prepared).unwrap();
+    acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    waiter.join().unwrap();
+}
+
+#[test]
 fn verified_tool_install_activates_offline_and_retains_rollback_release() {
     let root = tempfile::tempdir().unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();

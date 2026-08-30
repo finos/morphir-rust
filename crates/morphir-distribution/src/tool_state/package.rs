@@ -1,7 +1,9 @@
 //! Authenticated package materialization into the tool content-addressed store.
 
+use super::catalog::tool_state_guard;
 use super::package_key::extracted_package_path;
 use super::verification::verify_one_file;
+use crate::state_io::StateGuard;
 use crate::tool_archive::{extract_tar_gzip, extract_zip};
 use crate::{
     ArchiveFormat, ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
@@ -15,6 +17,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Verified immutable bytes and authenticated metadata ready for catalog activation.
+///
+/// Packages returned by [`ToolPackageStore::prepare`] retain the tool-state guard until consumed
+/// by [`super::ToolInstaller::install`]. This prevents repair from quarantining the prepared
+/// content between publication and installation.
 /// Fields are private so durable state cannot be built from an unchecked path.
 #[derive(Debug)]
 pub struct VerifiedToolPackage {
@@ -33,6 +39,27 @@ pub struct VerifiedToolPackage {
     pub(super) args: Vec<String>,
     pub(super) files: Vec<ToolPackageFile>,
     pub(super) directories: Vec<RelativeArtifactPath>,
+    pub(super) state_guard: Option<PreparedPackageGuard>,
+}
+
+#[derive(Debug)]
+pub(super) struct PreparedPackageGuard {
+    home_root: PathBuf,
+    state_guard: StateGuard,
+}
+
+impl VerifiedToolPackage {
+    pub(super) fn take_state_guard(&mut self, home: &MorphirHome) -> Result<Option<StateGuard>> {
+        let Some(guard) = self.state_guard.take() else {
+            return Ok(None);
+        };
+        if guard.home_root != home.root() {
+            return Err(DistributionError::InvalidToolManifest {
+                reason: "prepared package belongs to a different Morphir Home".to_owned(),
+            });
+        }
+        Ok(Some(guard.state_guard))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +83,10 @@ impl<'home> ToolPackageStore<'home> {
         Self { home }
     }
 
-    /// Reverify and publish a raw executable, AppImage, or ZIP package into the tool CAS.
+    /// Reverify and publish a raw executable, AppImage, ZIP, or tar.gz package into the tool CAS.
+    ///
+    /// The returned package retains state serialization and should be passed promptly to
+    /// [`super::ToolInstaller::install`], which transfers and releases that guard after commit.
     #[tracing::instrument(
         name = "morphir.tool.package.prepare",
         skip(self, downloaded),
@@ -69,6 +99,31 @@ impl<'home> ToolPackageStore<'home> {
         err
     )]
     pub fn prepare(
+        &self,
+        resolved: ResolvedTrustedToolArtifact,
+        downloaded: DownloadedToolArtifact,
+    ) -> Result<VerifiedToolPackage> {
+        let state_guard = tool_state_guard(self.home)?;
+        let mut package = self.prepare_unlocked(resolved, downloaded)?;
+        package.state_guard = Some(PreparedPackageGuard {
+            home_root: self.home.root().to_path_buf(),
+            state_guard,
+        });
+        Ok(package)
+    }
+
+    #[tracing::instrument(
+        name = "morphir.tool.package.materialize",
+        skip(self, downloaded),
+        fields(
+            tool_id = %resolved.release().tool_id(),
+            version = %resolved.release().version(),
+            digest = %resolved.digest(),
+            format = ?resolved.artifact().archive().format()
+        ),
+        err
+    )]
+    pub(super) fn prepare_unlocked(
         &self,
         resolved: ResolvedTrustedToolArtifact,
         downloaded: DownloadedToolArtifact,
@@ -337,6 +392,7 @@ pub(super) fn package_from_resolved(
         args: resolved.artifact().launch().args().to_vec(),
         files,
         directories,
+        state_guard: None,
     }
 }
 

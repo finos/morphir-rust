@@ -64,6 +64,7 @@ tempfile = "3"
 cap-std = "3.4.5"
 cap-fs-ext = "3.4.5"
 same-file = "1"
+fs2 = "0.4"
 
 # Functional programming utilities
 # Add more as needed

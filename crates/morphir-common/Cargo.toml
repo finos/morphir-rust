@@ -32,6 +32,8 @@ uuid = { version = "1.0", features = ["v4"] }
 vfs = { workspace = true }
 unicode-casefold = { workspace = true }
 unicode-normalization = { workspace = true }
+fs2 = { workspace = true }
+tracing = { workspace = true }
 
 # Remote source support
 reqwest = { version = "0.13", default-features = false, features = [

@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A bounded Morphir Home cache inventory that measures registered namespace entries without
   following links or junctions and reports unknown or unsafe content as protected, unclassified
   data.
+- A lock-serialized, budgeted cache cleanup executor that revalidates current ownership, leases,
+  byte counts, and link safety before moving selected entries through Morphir Home maintenance
+  trash.
 - Morphir Home paths for the verified tool store, exact tool locks, and the shared tool-state
   transaction lock.
 - A shared verified-file publication boundary for tool and extension content-addressed stores,

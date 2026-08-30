@@ -125,10 +125,15 @@ impl Workspace {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        let name = snapshot.name.or_else(|| {
+            projects
+                .get(Path::new("."))
+                .map(|project| project.name.clone())
+        });
 
         Self {
             root,
-            name: snapshot.name,
+            name,
             state: map_workspace_state(snapshot.state),
             config,
             projects,
@@ -224,7 +229,22 @@ mod tests {
         let workspace = Workspace::open(root.path().to_path_buf()).unwrap();
 
         assert_eq!(workspace.state, WorkspaceState::Open);
+        assert_eq!(workspace.name.as_deref(), Some("acme/orders"));
         assert!(workspace.get_project("acme/orders").is_some());
+    }
+
+    #[test]
+    fn prefers_a_named_workspace_over_its_root_project_name() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.yaml"),
+            "workspace:\n  name: order-domain\nproject:\n  name: acme/orders\n",
+        )
+        .unwrap();
+
+        let workspace = Workspace::open(root.path().to_path_buf()).unwrap();
+
+        assert_eq!(workspace.name.as_deref(), Some("order-domain"));
     }
 
     #[test]

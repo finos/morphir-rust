@@ -88,6 +88,55 @@ fn discovery_details_reuse_the_exact_pass_and_expose_effective_configs() {
 }
 
 #[test]
+fn root_project_can_come_from_an_adjacent_user_override() {
+    let request: DiscoveryRequest = serde_json::from_value(json!({
+        "protocolVersion": 1,
+        "developmentRoot": { "entries": {
+            "morphir.toml": {
+                "kind": "file",
+                "text": "[workspace]\nmembers = []\n"
+            },
+            "morphir.user.toml": {
+                "kind": "file",
+                "text": "[project]\nname = \"user/root\"\n"
+            }
+        } },
+        "morphirHome": null,
+        "systemConfig": null,
+        "environment": {},
+        "cliOverlay": {}
+    }))
+    .unwrap();
+
+    let snapshot = discover(request).into_result().unwrap();
+
+    assert_eq!(project(&snapshot, ".").name, "user/root");
+}
+
+#[test]
+fn root_project_can_come_from_environment_configuration() {
+    let mut request = request_with_root_config("[workspace]\nmembers = []\n");
+    request.environment.insert(
+        "MORPHIR_PROJECT__NAME".to_owned(),
+        "environment/root".to_owned(),
+    );
+
+    let snapshot = discover(request).into_result().unwrap();
+
+    assert_eq!(project(&snapshot, ".").name, "environment/root");
+}
+
+#[test]
+fn root_project_can_come_from_the_cli_overlay() {
+    let mut request = request_with_root_config("[workspace]\nmembers = []\n");
+    request.cli_overlay = json!({ "project": { "name": "cli/root" } });
+
+    let snapshot = discover(request).into_result().unwrap();
+
+    assert_eq!(project(&snapshot, ".").name, "cli/root");
+}
+
+#[test]
 fn shared_discovery_corpus_matches_structurally() {
     let corpus: Vec<CorpusCase> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

@@ -177,7 +177,7 @@ fn discover_internal(
         &request.cli_overlay,
     ]);
     let workspace = decode_workspace(&workspace_effective, &workspace_primary.path)?;
-    let root_has_project = workspace_primary.value.get("project").is_some();
+    let root_has_project = workspace_effective.get("project").is_some();
 
     let member_directories = member_directories(
         &request.development_root,

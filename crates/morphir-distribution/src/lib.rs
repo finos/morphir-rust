@@ -48,6 +48,7 @@ mod resolver;
 mod state;
 mod state_io;
 mod store;
+mod tool_archive;
 mod tool_repository;
 mod tool_resolver;
 mod tool_state;

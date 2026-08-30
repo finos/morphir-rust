@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rollback releases, failure-safe catalog replacement, and raw executable/AppImage publication.
 - Atomic ZIP package staging with traversal, special-file, collision, entry-count, and expanded-size
   defenses plus a durable per-file integrity manifest used by offline activation.
+- Safe tar.gz package staging with the same portable-path, collision, special-file, entry-count,
+  expansion-size, atomic publication, and offline manifest verification guarantees as ZIP.
 - Structured tracing spans and outcome events for tool repository loading, resolution, verified
   downloads, package staging, catalog activation, and offline launch verification.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML

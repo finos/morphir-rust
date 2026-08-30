@@ -5,6 +5,7 @@ use crate::state_io::{
     read_json, read_state_bytes,
 };
 use crate::store::{add_owner_executable, hash_file, verify_executable_mode, verify_file};
+use crate::tool_archive::extract_tar_gzip;
 use crate::{
     ArchiveFormat, ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
     Platform, RelativeArtifactPath, ResolvedTrustedToolArtifact, Result, Selection, Sha256Digest,
@@ -93,9 +94,7 @@ impl<'home> ToolPackageStore<'home> {
                 self.prepare_raw(resolved, downloaded.into_path())
             }
             ArchiveFormat::Zip => self.prepare_zip(resolved, downloaded.into_path()),
-            ArchiveFormat::TarGzip => Err(DistributionError::UnsupportedToolArchive {
-                format: "tar-gzip".to_owned(),
-            }),
+            ArchiveFormat::TarGzip => self.prepare_tar_gzip(resolved, downloaded.into_path()),
         }?;
         tracing::info!(
             program = %package.store_path.as_str(),
@@ -207,6 +206,98 @@ impl<'home> ToolPackageStore<'home> {
             &staging_root,
             resolved.artifact().launch().path(),
         )?;
+        if destination.exists() {
+            verify_relative_files(&destination, &relative_files)?;
+        } else if let Err(source) = fs::rename(&staging_root, &destination) {
+            if destination.exists() {
+                verify_relative_files(&destination, &relative_files)?;
+            } else {
+                return Err(DistributionError::Io {
+                    path: destination,
+                    source,
+                });
+            }
+        }
+
+        let program = destination.join(resolved.artifact().launch().path().as_path());
+        let store_path = home_relative(self.home, &program)?;
+        let files = relative_files
+            .into_iter()
+            .map(|file| {
+                Ok(ToolPackageFile {
+                    path: home_relative(self.home, &destination.join(file.path.as_path()))?,
+                    digest: file.digest,
+                    length: file.length,
+                    executable: file.executable,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(package_from_resolved(resolved, store_path, files))
+    }
+
+    fn prepare_tar_gzip(
+        &self,
+        resolved: ResolvedTrustedToolArtifact,
+        downloaded: PathBuf,
+    ) -> Result<VerifiedToolPackage> {
+        let source_root = downloaded
+            .parent()
+            .expect("downloaded TUF target has a parent");
+        let source_name = portable_filename(&downloaded)?;
+        let filename = ArtifactFilename::parse(source_name)?;
+        let source = RelativeArtifactPath::parse(source_name)?;
+        let stored = ArtifactStore::for_tools(self.home).materialize_file(
+            source_root,
+            &source,
+            resolved.digest(),
+            &filename,
+            false,
+        )?;
+        let actual_length = fs::metadata(stored.path())
+            .map_err(|source| DistributionError::Io {
+                path: stored.path().to_path_buf(),
+                source,
+            })?
+            .len();
+        if actual_length != resolved.length() {
+            return Err(DistributionError::ToolLengthMismatch {
+                path: stored.path().to_path_buf(),
+                expected: resolved.length(),
+                actual: actual_length,
+            });
+        }
+
+        let digest_directory = stored
+            .path()
+            .parent()
+            .expect("CAS artifact has a digest directory");
+        let destination = digest_directory.join("package");
+        let staging = tempfile::Builder::new()
+            .prefix(".package-")
+            .tempdir_in(digest_directory)
+            .map_err(|source| DistributionError::Io {
+                path: digest_directory.to_path_buf(),
+                source,
+            })?;
+        let staging_root = staging.path().join("root");
+        fs::create_dir(&staging_root).map_err(|source| DistributionError::Io {
+            path: staging_root.clone(),
+            source,
+        })?;
+        let extracted = extract_tar_gzip(
+            stored.path(),
+            &staging_root,
+            resolved.artifact().launch().path(),
+        )?;
+        let relative_files = extracted
+            .into_iter()
+            .map(|file| ToolPackageFile {
+                path: file.path,
+                digest: file.digest,
+                length: file.length,
+                executable: file.executable,
+            })
+            .collect::<Vec<_>>();
         if destination.exists() {
             verify_relative_files(&destination, &relative_files)?;
         } else if let Err(source) = fs::rename(&staging_root, &destination) {
@@ -1101,6 +1192,65 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_tar_gzip_is_expanded_and_reverified_offline() {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let download = root.path().join("desktop.tar.gz");
+        write_tar_gzip(
+            &download,
+            &[
+                ("morphir-desktop", b"signed-linux-desktop"),
+                ("resources/config.json", br#"{"ok":true}"#),
+            ],
+        );
+        let bytes = fs::read(&download).unwrap();
+        let resolved = crate::ResolvedTrustedToolArtifact::test_fixture(
+            tar_gzip_release(),
+            Selection::Channel(Channel::Stable),
+            Sha256Digest::of_bytes(&bytes),
+            bytes.len() as u64,
+        );
+        let package = ToolPackageStore::new(&home)
+            .prepare(
+                resolved,
+                crate::DownloadedToolArtifact::test_fixture(download),
+            )
+            .unwrap();
+        ToolInstaller::new(&home).install(package).unwrap();
+
+        let launch = activate_installed_tool(&home, &ToolId::parse("desktop").unwrap()).unwrap();
+        assert_eq!(fs::read(launch.program()).unwrap(), b"signed-linux-desktop");
+    }
+
+    #[test]
+    fn tar_gzip_links_are_rejected_without_catalog_activation() {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let download = root.path().join("desktop.tar.gz");
+        write_tar_gzip_link(&download, "morphir-desktop", "../escape");
+        let bytes = fs::read(&download).unwrap();
+        let resolved = crate::ResolvedTrustedToolArtifact::test_fixture(
+            tar_gzip_release(),
+            Selection::Channel(Channel::Stable),
+            Sha256Digest::of_bytes(&bytes),
+            bytes.len() as u64,
+        );
+
+        assert!(matches!(
+            ToolPackageStore::new(&home)
+                .prepare(
+                    resolved,
+                    crate::DownloadedToolArtifact::test_fixture(download)
+                )
+                .unwrap_err(),
+            crate::DistributionError::UnsafeToolArchive { .. }
+        ));
+        assert!(!home.tools_catalog_file().exists());
+    }
+
+    #[test]
     fn failed_tool_catalog_commit_restores_the_previous_active_release() {
         let root = tempfile::tempdir().unwrap();
         let home =
@@ -1217,6 +1367,29 @@ mod tests {
         .unwrap()
     }
 
+    fn tar_gzip_release() -> crate::ToolReleaseRecord {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "morphir-tool-release",
+            "tool": { "id": "desktop", "name": "Morphir Desktop" },
+            "version": "1.0.0",
+            "channels": ["stable"],
+            "status": "active",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "artifacts": [{
+                "targetPath": "artifacts/desktop/1.0.0/linux-x86_64.tar.gz",
+                "platform": { "os": "linux", "arch": "x86_64" },
+                "archive": { "format": "tar-gzip", "entryPoint": "morphir-desktop" },
+                "launch": {
+                    "kind": "executable",
+                    "path": "morphir-desktop",
+                    "args": []
+                }
+            }]
+        }))
+        .unwrap()
+    }
+
     fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
         let file = fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
@@ -1227,5 +1400,38 @@ mod tests {
             archive.write_all(bytes).unwrap();
         }
         archive.finish().unwrap();
+    }
+
+    fn write_tar_gzip(path: &Path, entries: &[(&str, &[u8])]) {
+        let gzip = flate2::write::GzEncoder::new(
+            fs::File::create(path).unwrap(),
+            flate2::Compression::none(),
+        );
+        let mut archive = tar::Builder::new(gzip);
+        for (name, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, *name, *bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    fn write_tar_gzip_link(path: &Path, name: &str, link: &str) {
+        let gzip = flate2::write::GzEncoder::new(
+            fs::File::create(path).unwrap(),
+            flate2::Compression::none(),
+        );
+        let mut archive = tar::Builder::new(gzip);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_path(name).unwrap();
+        header.set_link_name(link).unwrap();
+        header.set_cksum();
+        archive.append(&header, io::empty()).unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
     }
 }

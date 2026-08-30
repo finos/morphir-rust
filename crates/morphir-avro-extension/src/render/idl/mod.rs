@@ -108,16 +108,15 @@ impl<'package> IdlRenderer<'package> {
             }
         }
 
-        if self.package.protocols().is_empty() {
-            for root in self.package.roots() {
+        for root in self.package.roots() {
+            if self.package.protocols().is_empty() || !matches!(root.tpe(), AvroType::Named(_)) {
                 let artifact = self.render_root(root)?;
                 insert_artifact(&mut artifacts, &mut paths, artifact)?;
             }
-        } else {
-            for protocol in self.package.protocols() {
-                let artifact = self.render_protocol(protocol)?;
-                insert_artifact(&mut artifacts, &mut paths, artifact)?;
-            }
+        }
+        for protocol in self.package.protocols() {
+            let artifact = self.render_protocol(protocol)?;
+            insert_artifact(&mut artifacts, &mut paths, artifact)?;
         }
         Ok(artifacts)
     }

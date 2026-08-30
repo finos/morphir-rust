@@ -1,5 +1,40 @@
 use super::*;
-use crate::{AvroRequest, RecordSchema};
+use crate::{AvroRequest, AvroRoot, Protocol, RecordSchema};
+
+#[test]
+fn protocols_keep_non_named_public_roots_as_schema_artifacts() {
+    let root_name = AvroFullName::new("example".to_owned(), "UserId".to_owned()).unwrap();
+    let root = AvroRoot::new(
+        "example:domain#user-id".to_owned(),
+        root_name,
+        AvroType::String,
+        None,
+    )
+    .unwrap();
+    let protocol = Protocol::new(
+        AvroFullName::new("example".to_owned(), "Domain".to_owned()).unwrap(),
+        Vec::new(),
+        Vec::new(),
+        Properties::new(),
+    )
+    .unwrap();
+    let package = AvroPackage::new(
+        vec![root],
+        Vec::new(),
+        Vec::new(),
+        vec![protocol],
+        Vec::new(),
+    )
+    .unwrap();
+
+    let paths = render_idl(&package, Dependencies::SelfContained)
+        .unwrap()
+        .into_iter()
+        .map(|artifact| artifact.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, ["example/UserIdSchemas.avdl", "example/Domain.avdl"]);
+}
 
 #[test]
 fn missing_linked_graph_node_is_an_internal_error_during_validation() {

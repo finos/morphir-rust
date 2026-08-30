@@ -88,14 +88,14 @@ impl<'package> JsonRenderer<'package> {
                 predefined.extend(defined_names);
             }
         }
-        if self.package.protocols().is_empty() {
-            for root in self.package.roots() {
-                if paths.contains(&schema_path(root.full_name())) {
-                    continue;
-                }
-                let artifact = self.render_root(root, &predefined)?;
-                insert_artifact(&mut artifacts, &mut paths, artifact)?;
+        for root in self.package.roots() {
+            if (!self.package.protocols().is_empty() && matches!(root.tpe(), AvroType::Named(_)))
+                || paths.contains(&schema_path(root.full_name()))
+            {
+                continue;
             }
+            let artifact = self.render_root(root, &predefined)?;
+            insert_artifact(&mut artifacts, &mut paths, artifact)?;
         }
         for protocol in self.package.protocols() {
             let artifact = self.render_protocol(protocol, &predefined)?;

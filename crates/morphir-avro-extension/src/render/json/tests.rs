@@ -2,9 +2,44 @@ use serde_json::{Map, json};
 
 use super::*;
 use crate::{
-    AvroUnion, Properties,
+    AvroUnion, Properties, Protocol,
     avro::{EnumSchema, FixedSchema},
 };
+
+#[test]
+fn protocols_keep_non_named_public_roots_as_schema_artifacts() {
+    let root_name = AvroFullName::new("example".to_owned(), "UserId".to_owned()).unwrap();
+    let root = AvroRoot::new(
+        "example:domain#user-id".to_owned(),
+        root_name,
+        AvroType::String,
+        None,
+    )
+    .unwrap();
+    let protocol = Protocol::new(
+        AvroFullName::new("example".to_owned(), "Domain".to_owned()).unwrap(),
+        Vec::new(),
+        Vec::new(),
+        Properties::new(),
+    )
+    .unwrap();
+    let package = AvroPackage::new(
+        vec![root],
+        Vec::new(),
+        Vec::new(),
+        vec![protocol],
+        Vec::new(),
+    )
+    .unwrap();
+
+    let paths = render_json(&package, Dependencies::SelfContained)
+        .unwrap()
+        .into_iter()
+        .map(|artifact| artifact.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, ["example/UserId.avsc", "example/Domain.avpr"]);
+}
 
 #[test]
 fn renders_every_type_expression_form() {

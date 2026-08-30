@@ -83,6 +83,28 @@ fn tool_release_descriptors_reject_nul_in_fixed_launch_arguments() {
 }
 
 #[test]
+fn tool_release_descriptors_reject_impossible_raw_launch_paths() {
+    let descriptor = serde_json::json!({
+        "schemaVersion": 1,
+        "kind": "morphir-tool-release",
+        "tool": { "id": "desktop", "name": "Morphir Desktop" },
+        "version": "1.0.0",
+        "channels": ["stable"],
+        "status": "active",
+        "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+        "artifacts": [{
+            "targetPath": "artifacts/desktop/1.0.0/desktop.exe",
+            "platform": { "os": "windows", "arch": "x86_64" },
+            "archive": { "format": "raw", "entryPoint": "bin/desktop.exe" },
+            "launch": { "kind": "executable", "path": "bin/desktop.exe", "args": [] }
+        }]
+    });
+
+    let error = serde_json::from_value::<ToolReleaseRecord>(descriptor).unwrap_err();
+    assert!(error.to_string().contains("raw and AppImage entryPoint"));
+}
+
+#[test]
 fn tool_channels_and_exact_versions_resolve_deterministically() {
     let releases = vec![
         a_tool_release("1.0.0", &["stable"], "active", ">=0.4.0, <0.5.0"),

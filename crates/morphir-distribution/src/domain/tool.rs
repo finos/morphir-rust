@@ -273,6 +273,21 @@ impl<'de> Deserialize<'de> for ToolReleaseRecord {
                 "tool archive entryPoint and launch path must match",
             ));
         }
+        if wire.artifacts.iter().any(|artifact| {
+            matches!(
+                artifact.archive.format,
+                ArchiveFormat::Raw | ArchiveFormat::Appimage
+            ) && artifact
+                .target_path
+                .as_path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                != Some(artifact.archive.entry_point.as_str())
+        }) {
+            return Err(serde::de::Error::custom(
+                "raw and AppImage entryPoint must equal the targetPath filename",
+            ));
+        }
         Ok(Self {
             schema_version: wire.schema_version,
             tool_id: wire.tool.id,

@@ -39,9 +39,9 @@ pub(super) fn prepare(
         &source,
         resolved.digest(),
         &filename,
-        true,
+        false,
     )?;
-    verify_one_file(stored.path(), resolved.digest(), resolved.length(), true)?;
+    verify_one_file(stored.path(), resolved.digest(), resolved.length(), false)?;
 
     let digest_directory = stored
         .path()

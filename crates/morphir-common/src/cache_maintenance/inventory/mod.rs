@@ -11,6 +11,7 @@ use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt;
 use cap_std::fs::{Dir, DirEntry, Metadata};
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -206,27 +207,41 @@ impl InventoryWalk<'_> {
         depth: usize,
     ) -> Result<(), CacheInventoryError> {
         self.check_depth(depth)?;
-        for child in self.read_children(directory, display_path)? {
+        let children = self.read_children(directory, display_path)?;
+        let comparison_key_counts = children
+            .iter()
+            .map(|child| {
+                let relative = relative.join(child.file_name());
+                portable_comparison_key(&portable_identity(&relative))
+            })
+            .fold(BTreeMap::new(), |mut counts, key| {
+                *counts.entry(key).or_insert(0_usize) += 1;
+                counts
+            });
+
+        for child in children {
             let child_path = display_path.join(child.file_name());
             let child_relative = relative.join(child.file_name());
             let identity = portable_identity(&child_relative);
             let comparison_key = portable_comparison_key(&identity);
+            let portable_alias_is_ambiguous = comparison_key_counts[&comparison_key] > 1;
             let metadata = directory
                 .symlink_metadata(child.file_name())
                 .map_err(|source| io_error(&child_path, source))?;
 
-            if let Some(template) = self.namespace.entries.get(&comparison_key) {
+            if let Some(template) = self
+                .registered_entry(&identity, &comparison_key, portable_alias_is_ambiguous)
+                .cloned()
+            {
                 let measured =
                     self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
                 let entry = if measured.safe {
-                    template
-                        .clone()
-                        .with_observation(identity, measured.bytes)?
+                    template.with_observation(identity, measured.bytes)?
                 } else {
                     CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)?
                 };
                 self.entries.push(entry);
-            } else if self.has_registered_descendant(&identity) {
+            } else if self.has_registered_descendant(&identity, portable_alias_is_ambiguous) {
                 if is_link_like(&metadata) || !metadata.is_dir() {
                     let measured =
                         self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
@@ -314,12 +329,36 @@ impl InventoryWalk<'_> {
         Ok(MeasuredEntry { bytes, safe })
     }
 
-    fn has_registered_descendant(&self, identity: &str) -> bool {
-        let prefix = format!("{}/", portable_comparison_key(identity));
-        self.namespace
-            .entries
-            .keys()
-            .any(|path| path.starts_with(&prefix))
+    fn registered_entry(
+        &self,
+        identity: &str,
+        comparison_key: &str,
+        portable_alias_is_ambiguous: bool,
+    ) -> Option<&CacheEntry> {
+        if portable_alias_is_ambiguous {
+            self.namespace
+                .entries
+                .values()
+                .find(|entry| entry.path() == identity)
+        } else {
+            self.namespace.entries.get(comparison_key)
+        }
+    }
+
+    fn has_registered_descendant(&self, identity: &str, portable_alias_is_ambiguous: bool) -> bool {
+        if portable_alias_is_ambiguous {
+            let prefix = format!("{identity}/");
+            self.namespace
+                .entries
+                .values()
+                .any(|entry| entry.path().starts_with(&prefix))
+        } else {
+            let prefix = format!("{}/", portable_comparison_key(identity));
+            self.namespace
+                .entries
+                .keys()
+                .any(|path| path.starts_with(&prefix))
+        }
     }
 
     fn visit(&mut self) -> Result<(), CacheInventoryError> {

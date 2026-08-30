@@ -116,8 +116,14 @@ fn portable_aliases_keep_distinct_observed_paths() {
         inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
 
     assert_eq!(
-        entries.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
-        ["ARTIFACT", "artifact"]
+        entries
+            .iter()
+            .map(|entry| (entry.path(), entry.state()))
+            .collect::<Vec<_>>(),
+        [
+            ("ARTIFACT", CacheEntryState::Unclassified),
+            ("artifact", CacheEntryState::Disposable { last_used: 100 })
+        ]
     );
     plan_cache_cleanup(
         entries,

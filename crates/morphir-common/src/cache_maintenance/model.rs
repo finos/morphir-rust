@@ -167,9 +167,12 @@ impl CacheEntry {
         }
     }
 
-    pub(crate) fn with_observed_bytes(mut self, bytes: u64) -> Self {
-        self.bytes = bytes;
-        self
+    pub(crate) fn with_observation(
+        self,
+        path: String,
+        bytes: u64,
+    ) -> Result<Self, CacheModelError> {
+        Self::new(self.namespace, path, bytes, self.state)
     }
 }
 

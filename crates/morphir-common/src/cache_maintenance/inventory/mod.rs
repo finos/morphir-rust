@@ -219,7 +219,9 @@ impl InventoryWalk<'_> {
                 let measured =
                     self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
                 let entry = if measured.safe {
-                    template.clone().with_observed_bytes(measured.bytes)
+                    template
+                        .clone()
+                        .with_observation(identity, measured.bytes)?
                 } else {
                     CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)?
                 };

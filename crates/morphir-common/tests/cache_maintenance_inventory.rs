@@ -1,8 +1,12 @@
 use morphir_common::cache_maintenance::{
     CacheEntryState, CacheInventoryLimits, CacheNamespace, inventory_cache_namespace,
 };
+#[cfg(unix)]
+use morphir_common::cache_maintenance::{CachePolicy, CleanupMode, plan_cache_cleanup};
 use morphir_common::home::MorphirHome;
 use std::ffi::OsStr;
+#[cfg(unix)]
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn a_morphir_home() -> (TempDir, MorphirHome) {
@@ -88,12 +92,40 @@ fn inventory_matches_registered_paths_by_portable_comparison_key() {
         inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
 
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path(), "packages/cafe\u{301}");
+    assert_eq!(entries[0].path(), "Packages/CAF\u{c9}");
     assert_eq!(entries[0].bytes(), 5);
     assert_eq!(
         entries[0].state(),
         CacheEntryState::Disposable { last_used: 100 }
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn portable_aliases_keep_distinct_observed_paths() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    std::fs::write(home.downloads_cache_dir().join("artifact"), b"lower").unwrap();
+    std::fs::write(home.downloads_cache_dir().join("ARTIFACT"), b"upper").unwrap();
+
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("artifact", 100)
+        .unwrap();
+    let entries =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
+
+    assert_eq!(
+        entries.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
+        ["ARTIFACT", "artifact"]
+    );
+    plan_cache_cleanup(
+        entries,
+        CachePolicy::new(Duration::from_secs(0), 0),
+        200,
+        CleanupMode::All,
+    )
+    .expect("portable aliases should remain distinct planner identities");
 }
 
 #[test]

@@ -47,6 +47,7 @@ enum ProcessProgram {
     VerifiedBytes {
         filename: OsString,
         bytes: Arc<[u8]>,
+        staging_directory: Option<PathBuf>,
     },
 }
 
@@ -124,6 +125,31 @@ impl ProcessLaunch {
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
+                staging_directory: None,
+            },
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a verified process launch staged below an explicit executable directory.
+    pub fn from_verified_bytes_in(
+        discovered: ExtensionInfo,
+        filename: &OsStr,
+        bytes: &[u8],
+        staging_directory: impl Into<PathBuf>,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
+            capabilities: None,
+            program: ProcessProgram::VerifiedBytes {
+                filename: filename.to_os_string(),
+                bytes: Arc::from(bytes),
+                staging_directory: Some(staging_directory.into()),
             },
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -147,6 +173,32 @@ impl ProcessLaunch {
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
+                staging_directory: None,
+            },
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a capability-locked verified launch below an executable directory.
+    pub fn from_verified_bytes_with_capabilities_in(
+        discovered: ExtensionInfo,
+        capabilities: ExtensionCapabilities,
+        filename: &OsStr,
+        bytes: &[u8],
+        staging_directory: impl Into<PathBuf>,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
+            capabilities: Some(capabilities),
+            program: ProcessProgram::VerifiedBytes {
+                filename: filename.to_os_string(),
+                bytes: Arc::from(bytes),
+                staging_directory: Some(staging_directory.into()),
             },
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -701,11 +753,22 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
 fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
     match program {
         ProcessProgram::Path(path) => Ok((path.clone(), None)),
-        ProcessProgram::VerifiedBytes { filename, bytes } => {
-            let directory = tempfile::Builder::new()
-                .prefix("morphir-extension-")
-                .tempdir()
-                .map_err(DaemonError::from)?;
+        ProcessProgram::VerifiedBytes {
+            filename,
+            bytes,
+            staging_directory,
+        } => {
+            let mut builder = tempfile::Builder::new();
+            builder.prefix("morphir-extension-");
+            let directory = match staging_directory {
+                Some(staging_directory) => {
+                    fs::create_dir_all(staging_directory).map_err(DaemonError::from)?;
+                    builder
+                        .tempdir_in(staging_directory)
+                        .map_err(DaemonError::from)?
+                }
+                None => builder.tempdir().map_err(DaemonError::from)?,
+            };
             let path = directory.path().join(filename);
             let mut file = OpenOptions::new()
                 .write(true)
@@ -834,6 +897,27 @@ mod tests {
         assert_eq!(retained.name, discovered.name);
         assert_eq!(retained.version, discovered.version);
         assert_eq!(retained.types, discovered.types);
+    }
+
+    #[test]
+    fn verified_bytes_stage_under_the_explicit_managed_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let staging_directory = root.path().join("managed-staging");
+        fs::create_dir(&staging_directory).unwrap();
+        let launch = ProcessLaunch::from_verified_bytes_in(
+            ExtensionInfo {
+                id: "example".into(),
+                ..ExtensionInfo::default()
+            },
+            OsStr::new("example"),
+            b"#!/bin/sh\n",
+            &staging_directory,
+            root.path(),
+        );
+
+        let (program, _retained_directory) = prepare_program(&launch.program).unwrap();
+
+        assert!(program.starts_with(&staging_directory));
     }
 
     #[tokio::test]

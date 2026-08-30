@@ -666,6 +666,7 @@ fn list_installed_with_reacquisition_after_catalog(
 #[derive(Debug, Clone)]
 pub struct VerifiedProcessArtifact {
     program: PathBuf,
+    staging_directory: PathBuf,
     bytes: Arc<[u8]>,
     filename: OsString,
     args: Vec<String>,
@@ -677,6 +678,11 @@ impl VerifiedProcessArtifact {
     /// Return the verified absolute process path.
     pub fn program(&self) -> &Path {
         &self.program
+    }
+
+    /// Return Morphir-managed temporary storage on the executable's filesystem.
+    pub fn staging_directory(&self) -> &Path {
+        &self.staging_directory
     }
 
     /// Return the exact process bytes whose digest was verified.
@@ -835,6 +841,7 @@ pub fn activate_installed_snapshot(
         ArtifactRuntime::Process => Ok(VerifiedExtensionArtifact::Process(
             VerifiedProcessArtifact {
                 program: artifact_path,
+                staging_directory: home.temp_dir().join("extensions"),
                 bytes: bytes.into(),
                 filename,
                 args: installed.args,

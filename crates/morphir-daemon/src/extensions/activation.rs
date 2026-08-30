@@ -20,18 +20,20 @@ pub async fn activate_transport(
     let transport: BoxedMepTransport = match artifact {
         VerifiedExtensionArtifact::Process(process) => {
             let launch = if process.backend().is_some() {
-                ProcessLaunch::from_verified_bytes_with_capabilities(
+                ProcessLaunch::from_verified_bytes_with_capabilities_in(
                     process.extension_info().clone(),
                     process.extension_capabilities(),
                     process.filename(),
                     process.bytes(),
+                    process.staging_directory(),
                     working_directory,
                 )
             } else {
-                ProcessLaunch::from_verified_bytes(
+                ProcessLaunch::from_verified_bytes_in(
                     process.extension_info().clone(),
                     process.filename(),
                     process.bytes(),
+                    process.staging_directory(),
                     working_directory,
                 )
             };
@@ -83,6 +85,7 @@ mod tests {
         _root: TempDir,
         artifact: VerifiedExtensionArtifact,
         installed_path: PathBuf,
+        staging_directory: PathBuf,
         working_directory: PathBuf,
     }
 
@@ -221,6 +224,7 @@ mod tests {
                 .unwrap();
             let installed = ExtensionInstaller::new(&home).install(selected).unwrap();
             let installed_path = home.root().join(installed.store_path());
+            let staging_directory = home.temp_dir().join("extensions");
             let artifact = activate_installed(&home, &extension_id).unwrap();
             let working_directory = root.path().join("workspace");
             fs::create_dir(&working_directory).unwrap();
@@ -229,6 +233,7 @@ mod tests {
                 _root: root,
                 artifact,
                 installed_path,
+                staging_directory,
                 working_directory,
             }
         }
@@ -311,9 +316,12 @@ mod tests {
     async fn process_activation_preserves_discovery_capabilities_and_exact_launch() {
         let (fixture, capture, args) = runtime_mother::process();
         let expected_working_directory = fs::canonicalize(&fixture.working_directory).unwrap();
+        let staging_directory = fixture.staging_directory.clone();
         let session = activate_transport(fixture.artifact, &fixture.working_directory)
             .await
             .unwrap();
+
+        assert_eq!(fs::read_dir(staging_directory).unwrap().count(), 1);
 
         let expected = session.transport_internal().expected_extension();
         assert_eq!(expected.id(), "morphir-process");

@@ -1,0 +1,395 @@
+[
+  {
+    "name": "root-adjacent-toml",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[project]\nname = \"layout/root-toml\"\nversion = \"1.0.0\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open",
+      "projects": [{ "name": "layout/root-toml", "version": "1.0.0", "relativePath": ".", "configAnchor": "morphir.toml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "root-adjacent-yaml",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.yaml": { "kind": "file", "text": "project:\n  name: layout/root-yaml\n  version: 1.0.0\n  source_directory: src\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.yaml", "name": null, "state": "open",
+      "projects": [{ "name": "layout/root-yaml", "version": "1.0.0", "relativePath": ".", "configAnchor": "morphir.yaml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "morphir-directory-toml",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        ".morphir": { "kind": "directory" },
+        ".morphir/morphir.toml": { "kind": "file", "text": "[project]\nname = \"layout/dot-morphir-toml\"\nsource_directory = \"source\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": ".morphir/morphir.toml", "name": null, "state": "open",
+      "projects": [{ "name": "layout/dot-morphir-toml", "version": null, "relativePath": ".", "configAnchor": ".morphir/morphir.toml", "sourceDirectory": "source", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "morphir-directory-yaml",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        ".morphir": { "kind": "directory" },
+        ".morphir/morphir.yaml": { "kind": "file", "text": "project:\n  name: layout/dot-morphir-yaml\n  source_directory: source\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": ".morphir/morphir.yaml", "name": null, "state": "open",
+      "projects": [{ "name": "layout/dot-morphir-yaml", "version": null, "relativePath": ".", "configAnchor": ".morphir/morphir.yaml", "sourceDirectory": "source", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "dot-config-toml",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        ".config": { "kind": "directory" },
+        ".config/morphir": { "kind": "directory" },
+        ".config/morphir/config.toml": { "kind": "file", "text": "[project]\nname = \"layout/dot-config-toml\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": ".config/morphir/config.toml", "name": null, "state": "open",
+      "projects": [{ "name": "layout/dot-config-toml", "version": null, "relativePath": ".", "configAnchor": ".config/morphir/config.toml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "dot-config-yaml",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        ".config": { "kind": "directory" },
+        ".config/morphir": { "kind": "directory" },
+        ".config/morphir/config.yaml": { "kind": "file", "text": "project:\n  name: layout/dot-config-yaml\n  source_directory: src\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": ".config/morphir/config.yaml", "name": null, "state": "open",
+      "projects": [{ "name": "layout/dot-config-yaml", "version": null, "relativePath": ".", "configAnchor": ".config/morphir/config.yaml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "ambiguous-modern-root-primary",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[project]\nname = \"ambiguous/toml\"\n" },
+        ".morphir": { "kind": "directory" },
+        ".morphir/morphir.yaml": { "kind": "file", "text": "project:\n  name: ambiguous/yaml\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "failure", "error": {
+      "code": "workspace.config.ambiguous",
+      "message": "multiple Morphir configurations found for workspace root: `morphir.toml`, `.morphir/morphir.yaml`",
+      "path": "morphir.toml"
+    } }
+  },
+  {
+    "name": "global-and-adjacent-user-priority",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nname = \"primary-workspace\"\nmembers = [\"packages/member\"]\n\n[project]\nname = \"priority/root\"\nversion = \"1.0.0\"\nsource_directory = \"primary-root\"\n\n[ir]\nmode = \"workspace-primary\"\n" },
+        "morphir.user.toml": { "kind": "file", "text": "[workspace]\nname = \"user-workspace\"\n\n[project]\nversion = \"2.0.0\"\nsource_directory = \"workspace-user\"\n\n[ir]\nmode = \"workspace-user\"\n" },
+        "packages": { "kind": "directory" },
+        "packages/member": { "kind": "directory" },
+        "packages/member/morphir.yaml": { "kind": "file", "text": "project:\n  name: priority/member-primary\n  version: 1.0.0\n  source_directory: member-primary\nir:\n  mode: member-primary\n" },
+        "packages/member/morphir.user.yaml": { "kind": "file", "text": "project:\n  name: priority/member-user\n  version: 3.0.0\n  source_directory: member-user\nir:\n  mode: member-user\n" }
+      } },
+      "morphirHome": { "entries": {
+        ".config": { "kind": "directory" },
+        ".config/morphir": { "kind": "directory" },
+        ".config/morphir/config.toml": { "kind": "file", "text": "[project]\nname = \"must/not/inherit\"\nsource_directory = \"global-project\"\n\n[ir]\nmode = \"global\"\n" }
+      } },
+      "systemConfig": null,
+      "environment": { "MORPHIR_PROJECT__VERSION": "4.0.0" },
+      "cliOverlay": { "project": { "source_directory": "cli-source" } }
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": "user-workspace", "state": "open",
+      "projects": [
+        { "name": "priority/root", "version": "4.0.0", "relativePath": ".", "configAnchor": "morphir.toml", "sourceDirectory": "cli-source", "state": "unloaded", "diagnostics": [] },
+        { "name": "priority/member-user", "version": "4.0.0", "relativePath": "packages/member", "configAnchor": "packages/member/morphir.yaml", "sourceDirectory": "cli-source", "state": "unloaded", "diagnostics": [] }
+      ],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "unmatched-member-glob",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/missing-*\"]\n" },
+        "packages": { "kind": "directory" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open", "projects": [], "diagnostics": []
+    } }
+  },
+  {
+    "name": "member-pattern-escapes-root",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"../outside/*\"]\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "failure", "error": {
+      "code": "workspace.path.not-confined",
+      "message": "workspace pattern `../outside/*` is not confined to the development root",
+      "path": "morphir.toml"
+    } }
+  },
+  {
+    "name": "exclude-pattern-escapes-root",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"../outside/*\"]\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "failure", "error": {
+      "code": "workspace.path.not-confined",
+      "message": "workspace pattern `../outside/*` is not confined to the development root",
+      "path": "morphir.toml"
+    } }
+  },
+  {
+    "name": "malformed-member-isolated-from-sibling",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/*\"]\n" },
+        "packages": { "kind": "directory" },
+        "packages/bad": { "kind": "directory" },
+        "packages/bad/morphir.yaml": { "kind": "file", "text": "project:\n  name: broken\n  source_directory: [unterminated\n" },
+        "packages/good": { "kind": "directory" },
+        "packages/good/morphir.toml": { "kind": "file", "text": "[project]\nname = \"isolation/good\"\nversion = \"1.0.0\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "error",
+      "projects": [
+        {
+          "name": "packages/bad", "version": null, "relativePath": "packages/bad", "configAnchor": "packages/bad/morphir.yaml", "sourceDirectory": "src", "state": "error",
+          "diagnostics": [{
+            "severity": "error", "code": "workspace.member.invalid",
+            "message": "invalid member configuration at `packages/bad/morphir.yaml`: Failed to parse YAML config packages/bad/morphir.yaml: unclosed bracket '[' at char 44 line 3 column 21",
+            "path": "packages/bad/morphir.yaml", "projectPath": "packages/bad"
+          }]
+        },
+        { "name": "isolation/good", "version": "1.0.0", "relativePath": "packages/good", "configAnchor": "packages/good/morphir.toml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }
+      ],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "root-is-both-workspace-and-project",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = []\ndefault_member = \".\"\n\n[project]\nname = \"both/root\"\nversion = \"7.0.0\"\nsource_directory = \"root-src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open",
+      "projects": [{ "name": "both/root", "version": "7.0.0", "relativePath": ".", "configAnchor": "morphir.toml", "sourceDirectory": "root-src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "duplicate-names-retain-path-identity",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/*\"]\n" },
+        "packages": { "kind": "directory" },
+        "packages/alpha": { "kind": "directory" },
+        "packages/alpha/morphir.toml": { "kind": "file", "text": "[project]\nname = \"duplicate/name\"\nsource_directory = \"alpha-src\"\n" },
+        "packages/zeta": { "kind": "directory" },
+        "packages/zeta/morphir.yaml": { "kind": "file", "text": "project:\n  name: duplicate/name\n  source_directory: zeta-src\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open",
+      "projects": [
+        { "name": "duplicate/name", "version": null, "relativePath": "packages/alpha", "configAnchor": "packages/alpha/morphir.toml", "sourceDirectory": "alpha-src", "state": "unloaded", "diagnostics": [] },
+        { "name": "duplicate/name", "version": null, "relativePath": "packages/zeta", "configAnchor": "packages/zeta/morphir.yaml", "sourceDirectory": "zeta-src", "state": "unloaded", "diagnostics": [] }
+      ],
+      "diagnostics": [{
+        "severity": "warning", "code": "workspace.member.duplicate-name",
+        "message": "duplicate project name `duplicate/name` at paths: packages/alpha, packages/zeta",
+        "path": null, "projectPath": null
+      }]
+    } }
+  },
+  {
+    "name": "legacy-primary-fallback",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.json": { "kind": "file", "text": "{\"name\":\"legacy/root\",\"sourceDirectory\":\"legacy-src\",\"exposedModules\":[]}" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.json", "name": null, "state": "open",
+      "projects": [{ "name": "legacy/root", "version": "0.1.0", "relativePath": ".", "configAnchor": "morphir.json", "sourceDirectory": "legacy-src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "member-source-escape-is-isolated",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/*\"]\n" },
+        "packages": { "kind": "directory" },
+        "packages/bad": { "kind": "directory" },
+        "packages/bad/morphir.toml": { "kind": "file", "text": "[project]\nname = \"confinement/bad\"\nsource_directory = \"../outside\"\n" },
+        "packages/good": { "kind": "directory" },
+        "packages/good/morphir.toml": { "kind": "file", "text": "[project]\nname = \"confinement/good\"\nversion = \"1.0.0\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "error",
+      "projects": [
+        {
+          "name": "packages/bad", "version": null, "relativePath": "packages/bad", "configAnchor": "packages/bad/morphir.toml", "sourceDirectory": "src", "state": "error",
+          "diagnostics": [{
+            "severity": "error", "code": "workspace.path.not-confined",
+            "message": "workspace.path.not-confined: path `../outside` is not confined to its mount",
+            "path": "packages/bad/morphir.toml", "projectPath": "packages/bad"
+          }]
+        },
+        { "name": "confinement/good", "version": "1.0.0", "relativePath": "packages/good", "configAnchor": "packages/good/morphir.toml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }
+      ],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "root-user-project-and-workspace-do-not-flow-to-member",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nname = \"primary-workspace\"\nmembers = [\"packages/member\"]\n\n[project]\nname = \"root/primary\"\nversion = \"1.0.0\"\nsource_directory = \"root-primary-src\"\n\n[ir]\nmode = \"root-primary\"\n" },
+        "morphir.user.toml": { "kind": "file", "text": "[workspace]\nname = \"root-user-workspace\"\n\n[project]\nname = \"root/user\"\nversion = \"2.0.0\"\nsource_directory = \"root-user-src\"\n\n[ir]\nstrict_mode = true\n" },
+        "packages": { "kind": "directory" },
+        "packages/member": { "kind": "directory" },
+        "packages/member/morphir.toml": { "kind": "file", "text": "[project]\nname = \"member/primary\"\nversion = \"1.0.0\"\nsource_directory = \"member-primary-src\"\n\n[ir]\nformat_version = 3\n" },
+        "packages/member/morphir.user.toml": { "kind": "file", "text": "[project]\nversion = \"3.0.0\"\n\n[ir]\nmode = \"member-user\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": "root-user-workspace", "state": "open",
+      "projects": [
+        { "name": "root/user", "version": "2.0.0", "relativePath": ".", "configAnchor": "morphir.toml", "sourceDirectory": "root-user-src", "state": "unloaded", "diagnostics": [] },
+        { "name": "member/primary", "version": "3.0.0", "relativePath": "packages/member", "configAnchor": "packages/member/morphir.toml", "sourceDirectory": "member-primary-src", "state": "unloaded", "diagnostics": [] }
+      ],
+      "diagnostics": []
+    } }
+  },
+  {
+    "name": "yml-is-not-an-implicit-primary",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.yml": { "kind": "file", "text": "project:\n  name: explicit-only/yml\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "failure", "error": {
+      "code": "workspace.config.missing",
+      "message": "no Morphir configuration found at workspace root",
+      "path": "."
+    } }
+  }
+]

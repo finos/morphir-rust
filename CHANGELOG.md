@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Canonical portable workspace discovery for native daemon and browser hosts, with a root-confined
+  native adapter, deterministic browser WASM package, and cross-runtime conformance corpus
 - A shared, side-effect-free cache maintenance policy planner with portable owned-entry identities,
   active-lease and unclassified protections, deterministic age-then-LRU selection, bounded byte
   accounting, stable decision reasons, and serializable dry-run results.

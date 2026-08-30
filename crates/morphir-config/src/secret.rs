@@ -1,4 +1,4 @@
-//! References to secrets stored outside a Morphir configuration file.
+//! Portable references to secrets stored outside a Morphir configuration file.
 
 use serde_json::Value;
 use std::fmt;

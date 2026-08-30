@@ -8,6 +8,7 @@ resolver = "2"
 default-members = [
     "crates/morphir-builtins",
     "crates/morphir-common",
+    "crates/morphir-config",
     "crates/morphir-core",
     "crates/morphir-daemon",
     "crates/morphir-devkit",
@@ -20,6 +21,8 @@ default-members = [
     "crates/morphir-okf",
     "crates/morphir-runtime",
     "crates/morphir-wasm-binding",
+    "crates/morphir-workspace",
+    "crates/morphir-workspace-wasm",
 ]
 
 [workspace.package]
@@ -63,7 +66,7 @@ percent-encoding = "2.3.2"
 tempfile = "3"
 cap-std = "3.4.5"
 cap-fs-ext = "3.4.5"
-same-file = "1"
+same-file = "1.0.6"
 fs2 = "0.4"
 
 # Functional programming utilities

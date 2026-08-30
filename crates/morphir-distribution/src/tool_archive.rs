@@ -3,7 +3,7 @@
 use crate::store::{add_owner_executable, hash_file};
 use crate::{ArtifactFilename, DistributionError, RelativeArtifactPath, Result, Sha256Digest};
 use flate2::read::GzDecoder;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
@@ -42,7 +42,7 @@ pub(crate) fn extract_zip(
         ));
     }
 
-    let mut names = BTreeSet::new();
+    let mut names = PortableArchivePaths::default();
     let mut unpacked = 0_u64;
     let mut files = Vec::new();
     let mut directories = Vec::new();
@@ -56,7 +56,7 @@ pub(crate) fn extract_zip(
         })?;
         let relative = portable_archive_path(&enclosed)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
-        if !names.insert(relative.as_str().to_lowercase()) {
+        if !names.insert(&relative) {
             return Err(unsafe_archive(
                 &raw_name,
                 "entry collides with another portable path",
@@ -141,7 +141,7 @@ pub(crate) fn extract_tar_gzip(
     let entries = archive
         .entries()
         .map_err(|source| unsafe_archive("", format!("invalid tar.gz archive: {source}")))?;
-    let mut names = BTreeSet::new();
+    let mut names = PortableArchivePaths::default();
     let mut unpacked = 0_u64;
     let mut count = 0_usize;
     let mut files = Vec::new();
@@ -164,7 +164,7 @@ pub(crate) fn extract_tar_gzip(
         let raw_name = raw_path.to_string_lossy().into_owned();
         let relative = portable_archive_path(&raw_path)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
-        if !names.insert(relative.as_str().to_lowercase()) {
+        if !names.insert(&relative) {
             return Err(unsafe_archive(
                 &raw_name,
                 "entry collides with another portable path",
@@ -263,6 +263,37 @@ fn finish_extraction(
     files.sort_by(|left, right| left.path.cmp(&right.path));
     directories.sort();
     Ok(ExtractedArchive { files, directories })
+}
+
+#[derive(Default)]
+struct PortableArchivePaths {
+    entries: BTreeSet<String>,
+    component_spellings: BTreeMap<String, String>,
+}
+
+impl PortableArchivePaths {
+    fn insert(&mut self, path: &RelativeArtifactPath) -> bool {
+        if !self.entries.insert(path.as_str().to_owned()) {
+            return false;
+        }
+
+        let mut prefix = String::new();
+        for component in path.as_str().split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let folded = prefix.to_lowercase();
+            match self.component_spellings.get(&folded) {
+                Some(existing) if existing != &prefix => return false,
+                Some(_) => {}
+                None => {
+                    self.component_spellings.insert(folded, prefix.clone());
+                }
+            }
+        }
+        true
+    }
 }
 
 pub(crate) fn copy_zip_entry<R: Read, W: io::Write>(

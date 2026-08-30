@@ -84,6 +84,43 @@ fn public_protocol_includes_functions_constants_and_entry_metadata() {
 }
 
 #[test]
+fn protocol_requests_preserve_function_parameter_order() {
+    let mut input = package(Vec::new());
+    input.modules[0].values = vec![value_specification(
+        "acme/customer:customer#ordered",
+        "ordered",
+        vec![
+            field("z-input", TypeExpr::Unit),
+            field("a-input", TypeExpr::Unit),
+        ],
+        Some(TypeExpr::Unit),
+        ValueKind::Function,
+        None,
+    )];
+    let options = AvroOptions {
+        projection: Projection::ProtocolPublic,
+        ..AvroOptions::default()
+    };
+
+    let model = project(&input, &options).unwrap();
+    let request = model
+        .protocol("acme.customer.Customer")
+        .unwrap()
+        .message("ordered")
+        .unwrap()
+        .request();
+
+    assert_eq!(
+        request
+            .fields()
+            .iter()
+            .map(|field| field.name())
+            .collect::<Vec<_>>(),
+        ["zInput", "aInput"]
+    );
+}
+
+#[test]
 fn projection_modes_select_messages_without_inventing_library_entry_points() {
     let mut application = package(Vec::new());
     application.kind = DistributionKind::Application;

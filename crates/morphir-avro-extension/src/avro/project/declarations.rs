@@ -115,7 +115,32 @@ impl Projector<'_> {
         owner_source: &str,
         fields: &[NamedType],
     ) -> Result<Vec<AvroField>, AvroDiagnostic> {
-        let mut projected = fields
+        let mut projected =
+            self.project_fields_in_source_order(schema_namespace, owner_source, fields)?;
+        projected.sort_by(|left, right| left.name().cmp(right.name()));
+        validate_unique_fields(&projected)?;
+        Ok(projected)
+    }
+
+    pub(super) fn project_request_fields(
+        &mut self,
+        schema_namespace: &str,
+        owner_source: &str,
+        fields: &[NamedType],
+    ) -> Result<Vec<AvroField>, AvroDiagnostic> {
+        let projected =
+            self.project_fields_in_source_order(schema_namespace, owner_source, fields)?;
+        validate_unique_fields(&projected)?;
+        Ok(projected)
+    }
+
+    fn project_fields_in_source_order(
+        &mut self,
+        schema_namespace: &str,
+        owner_source: &str,
+        fields: &[NamedType],
+    ) -> Result<Vec<AvroField>, AvroDiagnostic> {
+        fields
             .iter()
             .map(|field| {
                 AvroField::new(
@@ -124,14 +149,7 @@ impl Projector<'_> {
                     Properties::new(),
                 )
             })
-            .collect::<Result<Vec<_>, AvroDiagnostic>>()?;
-        projected.sort_by(|left, right| left.name().cmp(right.name()));
-        for pair in projected.windows(2) {
-            if pair[0].name() == pair[1].name() {
-                return Err(AvroDiagnostic::name_collision(pair[0].name()));
-            }
-        }
-        Ok(projected)
+            .collect()
     }
 
     pub(super) fn project_alias_schema(
@@ -311,6 +329,16 @@ impl Projector<'_> {
         )?;
         Ok(AvroType::Named(full_name))
     }
+}
+
+fn validate_unique_fields(fields: &[AvroField]) -> Result<(), AvroDiagnostic> {
+    let mut names = BTreeSet::new();
+    for field in fields {
+        if !names.insert(field.name()) {
+            return Err(AvroDiagnostic::name_collision(field.name()));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn substitute(tpe: &TypeExpr, substitutions: &BTreeMap<String, TypeExpr>) -> TypeExpr {

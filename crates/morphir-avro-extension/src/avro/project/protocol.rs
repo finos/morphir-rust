@@ -193,7 +193,7 @@ impl Projector<'_> {
             .with_source(&value.source_name)
         })?;
         let request = AvroRequest::new(
-            self.project_fields(protocol_namespace, &value.source_name, &value.inputs)
+            self.project_request_fields(protocol_namespace, &value.source_name, &value.inputs)
                 .map_err(|error| error.with_source(&value.source_name))?,
         )
         .map_err(|error| error.with_source(&value.source_name))?;

@@ -320,6 +320,34 @@ pub(super) fn simulate_interrupted_repair(
 }
 
 /// Atomically activate the most recently retained release for one installed tool.
+///
+/// Inspect the validated installed snapshot before offering rollback, then confirm
+/// that the prior active release became the retained rollback candidate:
+///
+/// ```no_run
+/// use morphir_common::home::MorphirHome;
+/// use morphir_distribution::{ToolId, list_installed_tools, rollback_tool};
+///
+/// # fn rollback_desktop() -> Result<(), Box<dyn std::error::Error>> {
+/// let home = MorphirHome::resolve()?;
+/// let id = ToolId::parse("desktop")?;
+/// let installed = list_installed_tools(&home)?;
+/// if let Some(snapshot) = installed.iter().find(|tool| tool.active().tool_id() == &id)
+///     && let Some(candidate) = snapshot.rollback().first()
+/// {
+///     let previous_version = snapshot.active().version().clone();
+///     let candidate_version = candidate.version().clone();
+///     let restored = rollback_tool(&home, &id)?;
+///     assert_eq!(restored.version(), &candidate_version);
+///
+///     let after = list_installed_tools(&home)?;
+///     let snapshot = after.iter().find(|tool| tool.active().tool_id() == &id).unwrap();
+///     assert_eq!(snapshot.active().version(), &candidate_version);
+///     assert_eq!(snapshot.rollback()[0].version(), &previous_version);
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[tracing::instrument(
     name = "morphir.tool.rollback",
     skip(home),

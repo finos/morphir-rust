@@ -13,6 +13,9 @@ categories.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+cap-std = { workspace = true }
+cap-fs-ext = { workspace = true }
+same-file = { workspace = true }
 thiserror = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -27,6 +30,10 @@ indexmap = { version = "2", features = ["serde"] }
 nbformat = "~1.2"
 uuid = { version = "1.0", features = ["v4"] }
 vfs = { workspace = true }
+unicode-casefold = { workspace = true }
+unicode-normalization = { workspace = true }
+fs2 = { workspace = true }
+tracing = { workspace = true }
 
 # Remote source support
 reqwest = { version = "0.13", default-features = false, features = [
@@ -46,4 +53,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[test]]
 name = "streaming_migration_acceptance"
+harness = false
+
+[[test]]
+name = "cache_maintenance_inventory_acceptance"
+harness = false
+
+[[test]]
+name = "cache_maintenance_execution_acceptance"
 harness = false

@@ -13,7 +13,7 @@ categories.workspace = true
 description = "Verified artifact distribution for Morphir extensions"
 
 [dependencies]
-fs2 = "0.4"
+fs2 = { workspace = true }
 flate2 = "1.0"
 morphir-common = { path = "../morphir-common" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }

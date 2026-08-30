@@ -5,13 +5,17 @@ use crate::{ArtifactFilename, DistributionError, RelativeArtifactPath, Result, S
 use flate2::read::GzDecoder;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 const MAX_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_TAR_EXTENSION_BYTES: u64 = 1024 * 1024;
+const MAX_TAR_STREAM_BYTES: u64 = MAX_UNPACKED_BYTES + (MAX_ARCHIVE_ENTRIES as u64 * 1024);
+const ZIP_EOCD_MINIMUM_BYTES: usize = 22;
+const ZIP_EOCD_SEARCH_BYTES: u64 = ZIP_EOCD_MINIMUM_BYTES as u64 + u16::MAX as u64;
 
 #[derive(Debug)]
 pub(crate) struct ExtractedFile {
@@ -31,10 +35,11 @@ pub(crate) fn extract_zip(
     destination: &Path,
     entry_point: &RelativeArtifactPath,
 ) -> Result<ExtractedArchive> {
-    let file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
+    let mut file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
         path: archive_path.to_path_buf(),
         source,
     })?;
+    preflight_zip(&mut file)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|source| unsafe_archive("", format!("invalid ZIP archive: {source}")))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
@@ -137,6 +142,7 @@ pub(crate) fn extract_tar_gzip(
     destination: &Path,
     entry_point: &RelativeArtifactPath,
 ) -> Result<ExtractedArchive> {
+    preflight_tar_gzip(archive_path)?;
     let file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
         path: archive_path.to_path_buf(),
         source,
@@ -255,6 +261,167 @@ pub(crate) fn extract_tar_gzip(
     }
 
     finish_extraction(files, directories, entry_point)
+}
+
+fn preflight_zip(file: &mut fs::File) -> Result<()> {
+    let file_length = file
+        .seek(SeekFrom::End(0))
+        .map_err(|source| unsafe_archive("", format!("cannot inspect ZIP footer: {source}")))?;
+    let tail_length = file_length.min(ZIP_EOCD_SEARCH_BYTES) as usize;
+    file.seek(SeekFrom::End(-(tail_length as i64)))
+        .map_err(|source| unsafe_archive("", format!("cannot inspect ZIP footer: {source}")))?;
+    let mut tail = vec![0_u8; tail_length];
+    file.read_exact(&mut tail)
+        .map_err(|source| unsafe_archive("", format!("cannot inspect ZIP footer: {source}")))?;
+
+    let mut found = false;
+    for position in 0..tail.len().saturating_sub(ZIP_EOCD_MINIMUM_BYTES - 1) {
+        if tail[position..].starts_with(b"PK\x05\x06") {
+            let comment_length = u16::from_le_bytes([tail[position + 20], tail[position + 21]]);
+            if position + ZIP_EOCD_MINIMUM_BYTES + usize::from(comment_length) != tail.len() {
+                continue;
+            }
+            found = true;
+            let entries = u16::from_le_bytes([tail[position + 10], tail[position + 11]]);
+            if usize::from(entries) > MAX_ARCHIVE_ENTRIES {
+                return Err(unsafe_archive(
+                    "",
+                    format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"),
+                ));
+            }
+        }
+    }
+    if !found {
+        return Err(unsafe_archive("", "invalid ZIP end-of-directory record"));
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| unsafe_archive("", format!("cannot rewind ZIP archive: {source}")))?;
+    Ok(())
+}
+
+fn preflight_tar_gzip(archive_path: &Path) -> Result<()> {
+    let file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let mut decoder = GzDecoder::new(file);
+    let mut count = 0_usize;
+    let mut stream_bytes = 0_u64;
+    let mut pending_pax_size = None;
+    let mut block = [0_u8; 512];
+    loop {
+        if !read_tar_block(&mut decoder, &mut block)? || block.iter().all(|byte| *byte == 0) {
+            return Ok(());
+        }
+        count += 1;
+        if count > MAX_ARCHIVE_ENTRIES {
+            return Err(unsafe_archive(
+                "",
+                format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"),
+            ));
+        }
+
+        let header = tar::Header::from_byte_slice(&block);
+        let size = header
+            .size()
+            .map_err(|source| unsafe_archive("", format!("invalid tar header: {source}")))?;
+        let entry_type = header.entry_type();
+        if entry_type.is_gnu_sparse() {
+            return Err(unsafe_archive("", "GNU sparse tar entries are not allowed"));
+        }
+        if is_tar_extension(entry_type) && size > MAX_TAR_EXTENSION_BYTES {
+            return Err(unsafe_archive(
+                "",
+                format!("tar extension exceeds {MAX_TAR_EXTENSION_BYTES} bytes"),
+            ));
+        }
+        let payload_size = if is_tar_extension(entry_type) {
+            size
+        } else {
+            pending_pax_size.take().unwrap_or(size)
+        };
+        let padded_size = payload_size
+            .checked_add(511)
+            .map(|bytes| bytes / 512 * 512)
+            .ok_or_else(|| unsafe_archive("", "tar entry size overflow"))?;
+        stream_bytes = stream_bytes
+            .checked_add(512)
+            .and_then(|bytes| bytes.checked_add(padded_size))
+            .ok_or_else(|| unsafe_archive("", "tar stream size overflow"))?;
+        if stream_bytes > MAX_TAR_STREAM_BYTES {
+            return Err(unsafe_archive(
+                "",
+                format!("tar stream expands beyond {MAX_TAR_STREAM_BYTES} bytes"),
+            ));
+        }
+        if entry_type.is_pax_local_extensions() {
+            let payload = read_tar_payload(&mut decoder, size)?;
+            pending_pax_size = pax_size_override(&payload)?;
+            skip_tar_payload(&mut decoder, padded_size - size)?;
+        } else {
+            skip_tar_payload(&mut decoder, padded_size)?;
+        }
+    }
+}
+
+fn read_tar_block(reader: &mut impl Read, block: &mut [u8; 512]) -> Result<bool> {
+    let mut read = 0;
+    while read < block.len() {
+        match reader.read(&mut block[read..]) {
+            Ok(0) if read == 0 => return Ok(false),
+            Ok(0) => return Err(unsafe_archive("", "truncated tar header")),
+            Ok(bytes) => read += bytes,
+            Err(source) => {
+                return Err(unsafe_archive(
+                    "",
+                    format!("cannot decompress tar header: {source}"),
+                ));
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn skip_tar_payload(reader: &mut impl Read, size: u64) -> Result<()> {
+    let copied = io::copy(&mut reader.take(size), &mut io::sink())
+        .map_err(|source| unsafe_archive("", format!("cannot decompress tar payload: {source}")))?;
+    if copied != size {
+        return Err(unsafe_archive("", "truncated tar payload"));
+    }
+    Ok(())
+}
+
+fn read_tar_payload(reader: &mut impl Read, size: u64) -> Result<Vec<u8>> {
+    let mut payload = vec![0_u8; size as usize];
+    reader
+        .read_exact(&mut payload)
+        .map_err(|source| unsafe_archive("", format!("cannot decompress tar payload: {source}")))?;
+    Ok(payload)
+}
+
+fn pax_size_override(payload: &[u8]) -> Result<Option<u64>> {
+    let mut size = None;
+    for extension in tar::PaxExtensions::new(payload) {
+        let extension = extension
+            .map_err(|source| unsafe_archive("", format!("invalid PAX extension: {source}")))?;
+        if extension.key_bytes() == b"size" {
+            let value = std::str::from_utf8(extension.value_bytes())
+                .map_err(|source| unsafe_archive("", format!("invalid PAX size: {source}")))?;
+            size = Some(
+                value
+                    .parse()
+                    .map_err(|source| unsafe_archive("", format!("invalid PAX size: {source}")))?,
+            );
+        }
+    }
+    Ok(size)
+}
+
+fn is_tar_extension(entry_type: tar::EntryType) -> bool {
+    entry_type.is_gnu_longname()
+        || entry_type.is_gnu_longlink()
+        || entry_type.is_pax_global_extensions()
+        || entry_type.is_pax_local_extensions()
 }
 
 fn finish_extraction(
@@ -405,8 +572,15 @@ pub(crate) fn unsafe_archive(
 
 #[cfg(test)]
 mod zip_entry_kind_tests {
-    use super::{validate_tar_directory_entry, validate_zip_entry_kind};
+    use super::{
+        MAX_ARCHIVE_ENTRIES, MAX_TAR_EXTENSION_BYTES, preflight_tar_gzip, preflight_zip,
+        validate_tar_directory_entry, validate_zip_entry_kind,
+    };
     use crate::DistributionError;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::fs;
+    use std::io::{self, Read, Write};
 
     #[test]
     fn zip_names_and_unix_modes_must_describe_the_same_entry_kind() {
@@ -428,5 +602,68 @@ mod zip_entry_kind_tests {
             validate_tar_directory_entry("runtime/", 1).unwrap_err(),
             DistributionError::UnsafeToolArchive { .. }
         ));
+    }
+
+    #[test]
+    fn zip_entry_count_is_rejected_before_archive_indexing() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("too-many.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        for index in 0..=MAX_ARCHIVE_ENTRIES {
+            writer
+                .start_file(
+                    format!("{index}.txt"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+        }
+        writer.finish().unwrap();
+
+        let mut file = fs::File::open(path).unwrap();
+        assert!(matches!(
+            preflight_zip(&mut file).unwrap_err(),
+            DistributionError::UnsafeToolArchive { .. }
+        ));
+    }
+
+    #[test]
+    fn tar_preflight_counts_hidden_extension_records() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("too-many-extensions.tar.gz");
+        let mut encoder = GzEncoder::new(fs::File::create(&path).unwrap(), Compression::fast());
+        for _ in 0..=MAX_ARCHIVE_ENTRIES {
+            write_tar_extension(&mut encoder, 0);
+        }
+        encoder.finish().unwrap();
+
+        assert!(matches!(
+            preflight_tar_gzip(&path).unwrap_err(),
+            DistributionError::UnsafeToolArchive { .. }
+        ));
+    }
+
+    #[test]
+    fn tar_preflight_bounds_extension_payload_before_tar_buffers_it() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("oversized-extension.tar.gz");
+        let mut encoder = GzEncoder::new(fs::File::create(&path).unwrap(), Compression::fast());
+        write_tar_extension(&mut encoder, MAX_TAR_EXTENSION_BYTES + 1);
+        encoder.finish().unwrap();
+
+        assert!(matches!(
+            preflight_tar_gzip(&path).unwrap_err(),
+            DistributionError::UnsafeToolArchive { .. }
+        ));
+    }
+
+    fn write_tar_extension(writer: &mut impl Write, size: u64) {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::GNULongName);
+        header.set_size(size);
+        header.set_cksum();
+        writer.write_all(header.as_bytes()).unwrap();
+        io::copy(&mut io::repeat(0).take(size), writer).unwrap();
+        let padding = (512 - size % 512) % 512;
+        io::copy(&mut io::repeat(0).take(padding), writer).unwrap();
     }
 }

@@ -24,3 +24,4 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tough = "0.24"
 url = "2.5.8"
+zip = "8.0"

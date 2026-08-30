@@ -135,6 +135,20 @@ pub enum DistributionError {
         /// Declared launch entry point.
         entry_point: String,
     },
+    /// An archive entry violates portable and contained extraction rules.
+    #[error("unsafe tool archive entry {entry:?}: {reason}")]
+    UnsafeToolArchive {
+        /// Entry name as supplied by the archive.
+        entry: String,
+        /// Rejected archive property.
+        reason: String,
+    },
+    /// Installed package manifest is incomplete or internally inconsistent.
+    #[error("invalid installed tool package manifest: {reason}")]
+    InvalidToolManifest {
+        /// Violated manifest invariant.
+        reason: String,
+    },
     /// A release declared multiple artifacts for one platform.
     #[error("release {version} contains more than one artifact for platform {platform}")]
     AmbiguousPlatform {

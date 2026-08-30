@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   descriptor and target metadata cross-checks, and verified artifact downloads.
 - Transactional exact tool locks and active catalogs with offline byte re-verification, retained
   rollback releases, failure-safe catalog replacement, and raw executable/AppImage publication.
+- Atomic ZIP package staging with traversal, special-file, collision, entry-count, and expanded-size
+  defenses plus a durable per-file integrity manifest used by offline activation.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

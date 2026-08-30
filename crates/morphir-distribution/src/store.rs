@@ -323,7 +323,7 @@ pub(crate) fn verify_executable_mode(_path: &Path, _expected: bool) -> Result<()
     Ok(())
 }
 
-fn hash_file(path: &Path) -> Result<Sha256Digest> {
+pub(crate) fn hash_file(path: &Path) -> Result<Sha256Digest> {
     let mut file = File::open(path).map_err(|source| DistributionError::Io {
         path: path.to_path_buf(),
         source,
@@ -374,7 +374,7 @@ fn copy_and_hash(source: &Path, destination: &mut File) -> Result<Sha256Digest> 
 }
 
 #[cfg(unix)]
-fn add_owner_executable(path: &Path) -> Result<()> {
+pub(crate) fn add_owner_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let metadata = fs::metadata(path).map_err(|source| DistributionError::Io {
@@ -390,6 +390,6 @@ fn add_owner_executable(path: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn add_owner_executable(_path: &Path) -> Result<()> {
+pub(crate) fn add_owner_executable(_path: &Path) -> Result<()> {
     Ok(())
 }

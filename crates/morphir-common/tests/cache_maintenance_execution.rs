@@ -252,6 +252,27 @@ fn execution_refuses_a_link_like_maintenance_lock() {
     assert!(error.to_string().contains("unsafe maintenance path"));
 }
 
+#[test]
+fn execution_recovers_content_from_an_interrupted_trash_run() {
+    let (_root, home) = a_morphir_home();
+    let stranded_run = home
+        .maintenance_trash_dir()
+        .join("0123456789abcdef0123456789abcdef");
+    std::fs::create_dir_all(stranded_run.join("nested")).unwrap();
+    std::fs::write(stranded_run.join("nested/entry"), b"stranded").unwrap();
+
+    execute_cache_cleanup(
+        &home,
+        &a_policy_plan(Vec::new()),
+        &[],
+        CacheInventoryLimits::default(),
+        CacheExecutionLimits::new(10, 1_024).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!stranded_run.exists());
+}
+
 #[cfg(unix)]
 fn create_file_link(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)

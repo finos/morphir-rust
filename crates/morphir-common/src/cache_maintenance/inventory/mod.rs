@@ -208,7 +208,8 @@ impl InventoryWalk<'_> {
         depth: usize,
     ) -> Result<(), CacheInventoryError> {
         self.check_depth(depth)?;
-        for child in self.read_children(directory, display_path)? {
+        let children = self.read_children(directory, display_path)?;
+        for child in &children {
             let child_path = display_path.join(child.file_name());
             let child_relative = relative.join(child.file_name());
             let identity = portable_identity(&child_relative);
@@ -218,21 +219,29 @@ impl InventoryWalk<'_> {
                 .map_err(|source| io_error(&child_path, source))?;
 
             if let Some(template) = self
-                .registered_entry(directory, &child, &metadata, &identity, &comparison_key)
+                .registered_entry(
+                    directory,
+                    &children,
+                    child,
+                    &metadata,
+                    &identity,
+                    &comparison_key,
+                )
                 .cloned()
             {
-                let measured =
-                    self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
+                let measured = self.measure(directory, child, &child_path, &metadata, depth + 1)?;
                 let entry = if measured.safe {
                     template.with_observation(identity, measured.bytes)?
                 } else {
                     CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)?
                 };
                 self.entries.push(entry);
-            } else if self.has_registered_descendant(directory, &child, &metadata, &identity) {
+            } else if self
+                .has_registered_descendant(directory, &children, child, &metadata, &identity)
+            {
                 if is_link_like(&metadata) || !metadata.is_dir() {
                     let measured =
-                        self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
+                        self.measure(directory, child, &child_path, &metadata, depth + 1)?;
                     self.entries.push(CacheEntry::unclassified(
                         self.namespace.name.clone(),
                         identity,
@@ -251,8 +260,7 @@ impl InventoryWalk<'_> {
                     }
                 }
             } else {
-                let measured =
-                    self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
+                let measured = self.measure(directory, child, &child_path, &metadata, depth + 1)?;
                 self.entries.push(CacheEntry::unclassified(
                     self.namespace.name.clone(),
                     identity,
@@ -320,19 +328,21 @@ impl InventoryWalk<'_> {
     fn registered_entry(
         &self,
         directory: &Dir,
+        siblings: &[DirEntry],
         child: &DirEntry,
         metadata: &Metadata,
         identity: &str,
         comparison_key: &str,
     ) -> Option<&CacheEntry> {
         let entry = self.namespace.entries.get(comparison_key)?;
-        self.native_spelling_matches(directory, child, metadata, identity, entry.path())
+        self.native_spelling_matches(directory, siblings, child, metadata, identity, entry.path())
             .then_some(entry)
     }
 
     fn has_registered_descendant(
         &self,
         directory: &Dir,
+        siblings: &[DirEntry],
         child: &DirEntry,
         metadata: &Metadata,
         identity: &str,
@@ -340,13 +350,21 @@ impl InventoryWalk<'_> {
         let prefix = format!("{}/", portable_comparison_key(identity));
         self.namespace.entries.iter().any(|(path, entry)| {
             path.starts_with(&prefix)
-                && self.native_spelling_matches(directory, child, metadata, identity, entry.path())
+                && self.native_spelling_matches(
+                    directory,
+                    siblings,
+                    child,
+                    metadata,
+                    identity,
+                    entry.path(),
+                )
         })
     }
 
     fn native_spelling_matches(
         &self,
         directory: &Dir,
+        siblings: &[DirEntry],
         child: &DirEntry,
         metadata: &Metadata,
         observed_identity: &str,
@@ -364,6 +382,12 @@ impl InventoryWalk<'_> {
         let Some(registered_component) = registered_prefix.rsplit('/').next() else {
             return false;
         };
+        if siblings.iter().any(|sibling| {
+            sibling.file_name() == OsStr::new(registered_component)
+                && sibling.file_name() != child.file_name()
+        }) {
+            return false;
+        }
         same_object(
             directory,
             OsStr::new(registered_component),

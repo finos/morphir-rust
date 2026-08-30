@@ -169,6 +169,38 @@ fn portable_aliases_keep_distinct_observed_paths() {
     .expect("portable aliases should remain distinct planner identities");
 }
 
+#[cfg(unix)]
+#[test]
+fn hard_link_aliases_do_not_inherit_disposable_ownership() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    let registered = home.downloads_cache_dir().join("artifact");
+    std::fs::write(&registered, b"shared").unwrap();
+    std::fs::hard_link(&registered, home.downloads_cache_dir().join("ARTIFACT")).unwrap();
+
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("artifact", 100)
+        .unwrap();
+    let entries =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
+
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.path(), entry.bytes(), entry.state()))
+            .collect::<Vec<_>>(),
+        [
+            ("ARTIFACT", 6, CacheEntryState::Unclassified),
+            (
+                "artifact",
+                6,
+                CacheEntryState::Disposable { last_used: 100 }
+            )
+        ]
+    );
+}
+
 #[test]
 fn inventory_limits_fail_closed_before_an_unbounded_walk() {
     let (_root, home) = a_morphir_home();

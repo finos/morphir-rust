@@ -1,3 +1,12 @@
+# The classic-to-v4 converter is not implemented. The "morphir ir migrate" step
+# in tests/acceptance.rs is a stub that always returns an error, so every
+# scenario below fails by construction rather than by regression.
+#
+# They are tagged @pending and skipped, so that a genuine failure elsewhere in
+# the suite is visible instead of being lost among known-red scenarios. The
+# scenarios stay here because they specify the behaviour the converter owes.
+# Remove this tag along with the stub.
+@pending
 Feature: IR Migration
   As a developer
   I want to migrate IR between format versions

@@ -262,13 +262,12 @@ impl TrustedToolRepository {
             .repository
             .all_targets()
             .map(|(name, target)| {
-                release_custom(name.raw(), target.custom.get("morphir"))
+                release_custom(name.raw(), target.custom.get("morphir"), tool_id)
                     .map(|custom| custom.map(|custom| (name.clone(), custom, target.length)))
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
-            .filter(|(_, custom, _)| &custom.tool_id == tool_id)
             .collect::<Vec<_>>();
         let aggregate_length =
             targets
@@ -348,11 +347,19 @@ struct ToolArtifactCustom {
 fn release_custom(
     target: &str,
     custom: Option<&serde_json::Value>,
+    requested_tool_id: &ToolId,
 ) -> Result<Option<ToolReleaseCustom>> {
     let Some(custom) = custom else {
         return Ok(None);
     };
     if custom.get("kind").and_then(serde_json::Value::as_str) != Some("tool-release") {
+        return Ok(None);
+    }
+    if custom
+        .get("toolId")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|tool_id| tool_id != requested_tool_id.as_str())
+    {
         return Ok(None);
     }
     serde_json::from_value(custom.clone())
@@ -595,6 +602,41 @@ mod descriptor_size_tests {
             DistributionError::InvalidToolMetadata { .. }
         ));
         assert!(error.to_string().contains("artifact length"));
+    }
+}
+
+#[cfg(test)]
+mod descriptor_filter_tests {
+    use super::release_custom;
+    use crate::ToolId;
+
+    #[test]
+    fn unrelated_tool_metadata_is_filtered_before_strict_decoding() {
+        let requested = ToolId::parse("desktop").unwrap();
+        let unrelated = serde_json::json!({
+            "kind": "tool-release",
+            "toolId": "companion",
+            "schemaVersion": "from-a-newer-profile"
+        });
+
+        assert!(
+            release_custom(
+                "releases/companion/2.0.0.json",
+                Some(&unrelated),
+                &requested
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        let matching = serde_json::json!({
+            "kind": "tool-release",
+            "toolId": "desktop",
+            "schemaVersion": "invalid"
+        });
+        assert!(
+            release_custom("releases/desktop/2.0.0.json", Some(&matching), &requested).is_err()
+        );
     }
 }
 

@@ -7,6 +7,8 @@ use std::fmt;
 use std::path::{Component, Path};
 
 const MAX_PORTABLE_FILENAME_UNITS: usize = 255;
+const MAX_PORTABLE_PATH_UTF8_BYTES: usize = 512;
+const MAX_PORTABLE_PATH_UTF16_UNITS: usize = 240;
 const SHA256_HEX_LEN: usize = 64;
 // `{id}.json.transaction` is the longest derived extension state filename.
 const MAX_EXTENSION_ID_LEN: usize = MAX_PORTABLE_FILENAME_UNITS - ".json.transaction".len();
@@ -309,6 +311,8 @@ impl RelativeArtifactPath {
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         let valid = !value.is_empty()
+            && value.len() <= MAX_PORTABLE_PATH_UTF8_BYTES
+            && value.encode_utf16().count() <= MAX_PORTABLE_PATH_UTF16_UNITS
             && !value.starts_with('/')
             && !value.contains(['\\', ':', '\0'])
             && !value.bytes().any(|byte| byte < 32)
@@ -321,7 +325,7 @@ impl RelativeArtifactPath {
             Err(invalid_value(
                 "local artifact path",
                 value,
-                "expected a normalized UTF-8 relative path with portable filename components",
+                "expected a normalized relative path of at most 512 UTF-8 bytes and 240 UTF-16 units with portable filename components",
             ))
         }
     }
@@ -380,7 +384,9 @@ impl<'de> Deserialize<'de> for RelativeArtifactPath {
 
 #[cfg(test)]
 mod tests {
-    use super::RelativeArtifactPath;
+    use super::{
+        MAX_PORTABLE_PATH_UTF8_BYTES, MAX_PORTABLE_PATH_UTF16_UNITS, RelativeArtifactPath,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -394,5 +400,23 @@ mod tests {
         let path = RelativeArtifactPath::from_native_path(&native).unwrap();
 
         assert_eq!(path.as_str(), "store/extensions/sha256/digest/example");
+    }
+
+    #[test]
+    fn complete_portable_paths_are_bounded_in_both_encodings() {
+        let longest_portable = format!("{}/{}", "a".repeat(119), "b".repeat(120));
+        assert_eq!(
+            longest_portable.encode_utf16().count(),
+            MAX_PORTABLE_PATH_UTF16_UNITS
+        );
+        RelativeArtifactPath::parse(longest_portable).unwrap();
+
+        let too_many_utf16_units = format!("{}/{}", "a".repeat(120), "b".repeat(120));
+        assert!(RelativeArtifactPath::parse(too_many_utf16_units).is_err());
+
+        let too_many_utf8_bytes = ["界".repeat(79), "文".repeat(79), "字".repeat(79)].join("/");
+        assert!(too_many_utf8_bytes.len() > MAX_PORTABLE_PATH_UTF8_BYTES);
+        assert!(too_many_utf8_bytes.encode_utf16().count() <= MAX_PORTABLE_PATH_UTF16_UNITS);
+        assert!(RelativeArtifactPath::parse(too_many_utf8_bytes).is_err());
     }
 }

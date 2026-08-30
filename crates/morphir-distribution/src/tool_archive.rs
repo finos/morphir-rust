@@ -169,7 +169,9 @@ pub(crate) fn extract_tar_gzip(
         let relative = portable_archive_path(&raw_path)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
         let entry_type = entry.header().entry_type();
+        let declared_length = entry.size();
         let path_kind = if entry_type.is_dir() {
+            validate_tar_directory_entry(&raw_name, declared_length)?;
             ArchivePathKind::Directory
         } else if entry_type.is_file() {
             ArchivePathKind::File
@@ -195,7 +197,6 @@ pub(crate) fn extract_tar_gzip(
             directories.push(relative);
             continue;
         }
-        let declared_length = entry.size();
         unpacked = unpacked
             .checked_add(declared_length)
             .ok_or_else(|| unsafe_archive(&raw_name, "unpacked size overflow"))?;
@@ -380,6 +381,17 @@ fn validate_zip_entry_kind(entry: &str, is_directory: bool, unix_mode: u32) -> R
     Ok(())
 }
 
+fn validate_tar_directory_entry(entry: &str, declared_length: u64) -> Result<()> {
+    if declared_length == 0 {
+        Ok(())
+    } else {
+        Err(unsafe_archive(
+            entry,
+            "directory entries must not carry payload bytes",
+        ))
+    }
+}
+
 pub(crate) fn unsafe_archive(
     entry: impl Into<String>,
     reason: impl Into<String>,
@@ -392,7 +404,7 @@ pub(crate) fn unsafe_archive(
 
 #[cfg(test)]
 mod zip_entry_kind_tests {
-    use super::validate_zip_entry_kind;
+    use super::{validate_tar_directory_entry, validate_zip_entry_kind};
     use crate::DistributionError;
 
     #[test]
@@ -406,5 +418,14 @@ mod zip_entry_kind_tests {
 
         validate_zip_entry_kind("runtime/", true, 0o040755).unwrap();
         validate_zip_entry_kind("runtime/app", false, 0o100755).unwrap();
+    }
+
+    #[test]
+    fn tar_directories_must_not_carry_payload_bytes() {
+        validate_tar_directory_entry("runtime/", 0).unwrap();
+        assert!(matches!(
+            validate_tar_directory_entry("runtime/", 1).unwrap_err(),
+            DistributionError::UnsafeToolArchive { .. }
+        ));
     }
 }

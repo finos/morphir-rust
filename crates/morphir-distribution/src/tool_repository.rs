@@ -13,6 +13,7 @@ use tough::{FilesystemTransport, IntoVec, Limits, Prefix, RepositoryLoader, Targ
 use url::Url;
 
 const MAX_ROOT_UPDATES_PER_REFRESH: u64 = 32;
+const MAX_TOOL_RELEASE_DESCRIPTOR_BYTES: u64 = 1024 * 1024;
 
 /// A tool artifact selected from TUF-authenticated release metadata.
 #[derive(Debug, Clone)]
@@ -258,17 +259,18 @@ impl TrustedToolRepository {
             .all_targets()
             .map(|(name, target)| {
                 release_custom(name.raw(), target.custom.get("morphir"))
-                    .map(|custom| custom.map(|custom| (name.clone(), custom)))
+                    .map(|custom| custom.map(|custom| (name.clone(), custom, target.length)))
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
-            .filter(|(_, custom)| &custom.tool_id == tool_id)
+            .filter(|(_, custom, _)| &custom.tool_id == tool_id)
             .collect::<Vec<_>>();
-        targets.sort_by(|(left, _), (right, _)| left.raw().cmp(right.raw()));
+        targets.sort_by(|(left, _, _), (right, _, _)| left.raw().cmp(right.raw()));
 
         let mut releases = Vec::with_capacity(targets.len());
-        for (target, custom) in targets {
+        for (target, custom, length) in targets {
+            validate_release_descriptor_length(target.raw(), length)?;
             let bytes = self
                 .repository
                 .read_target(&target)
@@ -427,5 +429,45 @@ fn invalid_metadata(target: impl Into<String>, reason: impl Into<String>) -> Dis
     DistributionError::InvalidToolMetadata {
         target: target.into(),
         reason: reason.into(),
+    }
+}
+
+fn validate_release_descriptor_length(target: &str, length: u64) -> Result<()> {
+    if length <= MAX_TOOL_RELEASE_DESCRIPTOR_BYTES {
+        Ok(())
+    } else {
+        Err(invalid_metadata(
+            target,
+            format!(
+                "descriptor length {length} exceeds the {MAX_TOOL_RELEASE_DESCRIPTOR_BYTES}-byte limit"
+            ),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod descriptor_size_tests {
+    use super::{MAX_TOOL_RELEASE_DESCRIPTOR_BYTES, validate_release_descriptor_length};
+    use crate::DistributionError;
+
+    #[test]
+    fn release_descriptors_are_bounded_before_their_bytes_are_read() {
+        validate_release_descriptor_length(
+            "releases/desktop/1.0.0.json",
+            MAX_TOOL_RELEASE_DESCRIPTOR_BYTES,
+        )
+        .unwrap();
+
+        let error = validate_release_descriptor_length(
+            "releases/desktop/1.0.0.json",
+            MAX_TOOL_RELEASE_DESCRIPTOR_BYTES + 1,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            DistributionError::InvalidToolMetadata { .. }
+        ));
+        assert!(error.to_string().contains("exceeds the 1048576-byte limit"));
     }
 }

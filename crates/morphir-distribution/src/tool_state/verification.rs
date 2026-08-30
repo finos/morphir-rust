@@ -23,10 +23,35 @@ pub(super) fn verify_package(home: &MorphirHome, package: &VerifiedToolPackage) 
 }
 
 pub(super) fn sync_package(home: &MorphirHome, package: &VerifiedToolPackage) -> Result<()> {
-    for file in &package.files {
-        sync_installed_file(home, &home.root().join(file.path.as_path()))?;
+    for entry in package_sync_entries(home.root(), &package.files, &package.directories) {
+        match entry {
+            PackageSyncEntry::File(path) => sync_installed_file(home, &path)?,
+            PackageSyncEntry::Directory(path) => sync_installed_directory(home, &path)?,
+        }
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PackageSyncEntry {
+    File(PathBuf),
+    Directory(PathBuf),
+}
+
+fn package_sync_entries(
+    home: &Path,
+    files: &[ToolPackageFile],
+    directories: &[RelativeArtifactPath],
+) -> Vec<PackageSyncEntry> {
+    files
+        .iter()
+        .map(|file| PackageSyncEntry::File(home.join(file.path.as_path())))
+        .chain(
+            directories
+                .iter()
+                .map(|directory| PackageSyncEntry::Directory(home.join(directory.as_path()))),
+        )
+        .collect()
 }
 
 pub(super) fn sync_installed_file(home: &MorphirHome, path: &Path) -> Result<()> {
@@ -34,6 +59,13 @@ pub(super) fn sync_installed_file(home: &MorphirHome, path: &Path) -> Result<()>
         path: path.to_path_buf(),
         source,
     })?;
+    for entry in durability_entries(home.root(), path) {
+        sync_parent_directory(&entry)?;
+    }
+    Ok(())
+}
+
+fn sync_installed_directory(home: &MorphirHome, path: &Path) -> Result<()> {
     for entry in durability_entries(home.root(), path) {
         sync_parent_directory(&entry)?;
     }
@@ -277,7 +309,9 @@ pub(super) fn verify_one_file(
 
 #[cfg(test)]
 mod durability_tests {
-    use super::durability_entries;
+    use super::ToolPackageFile;
+    use super::{PackageSyncEntry, durability_entries, package_sync_entries};
+    use crate::{RelativeArtifactPath, Sha256Digest};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -296,6 +330,33 @@ mod durability_tests {
                 "morphir-home",
             ]
             .map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn package_sync_plan_includes_explicit_empty_directories() {
+        let home = Path::new("morphir-home");
+        let file = ToolPackageFile {
+            path: RelativeArtifactPath::parse("store/tools/sha256/digest/package/desktop.exe")
+                .unwrap(),
+            digest: Sha256Digest::of_bytes(b"desktop"),
+            length: 7,
+            executable: true,
+        };
+        let directory =
+            RelativeArtifactPath::parse("store/tools/sha256/digest/package/runtime/plugins")
+                .unwrap();
+
+        assert_eq!(
+            package_sync_entries(home, &[file], &[directory]),
+            [
+                PackageSyncEntry::File(PathBuf::from(
+                    "morphir-home/store/tools/sha256/digest/package/desktop.exe",
+                )),
+                PackageSyncEntry::Directory(PathBuf::from(
+                    "morphir-home/store/tools/sha256/digest/package/runtime/plugins",
+                )),
+            ]
         );
     }
 }

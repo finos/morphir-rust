@@ -5,7 +5,7 @@ use crate::{ArtifactFilename, DistributionError, RelativeArtifactPath, Result, S
 use flate2::read::GzDecoder;
 use std::collections::BTreeSet;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
@@ -19,11 +19,120 @@ pub(crate) struct ExtractedFile {
     pub(crate) executable: bool,
 }
 
+pub(crate) struct ExtractedArchive {
+    pub(crate) files: Vec<ExtractedFile>,
+    pub(crate) directories: Vec<RelativeArtifactPath>,
+}
+
+pub(crate) fn extract_zip(
+    archive_path: &Path,
+    destination: &Path,
+    entry_point: &RelativeArtifactPath,
+) -> Result<ExtractedArchive> {
+    let file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|source| unsafe_archive("", format!("invalid ZIP archive: {source}")))?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(unsafe_archive(
+            "",
+            format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"),
+        ));
+    }
+
+    let mut names = BTreeSet::new();
+    let mut unpacked = 0_u64;
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|source| unsafe_archive("", format!("invalid ZIP entry: {source}")))?;
+        let raw_name = entry.name().to_owned();
+        let enclosed = entry.enclosed_name().ok_or_else(|| {
+            unsafe_archive(&raw_name, "entry escapes the package root".to_owned())
+        })?;
+        let relative = portable_archive_path(&enclosed)
+            .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
+        if !names.insert(relative.as_str().to_lowercase()) {
+            return Err(unsafe_archive(
+                &raw_name,
+                "entry collides with another portable path",
+            ));
+        }
+        let unix_mode = entry.unix_mode().unwrap_or(0);
+        let mode_kind = unix_mode & 0o170000;
+        if mode_kind != 0 && mode_kind != 0o040000 && mode_kind != 0o100000 {
+            return Err(unsafe_archive(
+                &raw_name,
+                "links, devices, and special files are not allowed",
+            ));
+        }
+        let output = destination.join(relative.as_path());
+        if entry.is_dir() {
+            fs::create_dir_all(&output).map_err(|source| DistributionError::Io {
+                path: output,
+                source,
+            })?;
+            directories.push(relative);
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let mut output_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&output)
+            .map_err(|source| DistributionError::Io {
+                path: output.clone(),
+                source,
+            })?;
+        let remaining = MAX_UNPACKED_BYTES - unpacked;
+        let declared_size = entry.size();
+        unpacked += copy_zip_entry(
+            &mut entry,
+            &mut output_file,
+            declared_size,
+            remaining,
+            &raw_name,
+            &output,
+        )?;
+        output_file
+            .sync_all()
+            .map_err(|source| DistributionError::Io {
+                path: output.clone(),
+                source,
+            })?;
+        let executable = &relative == entry_point || unix_mode & 0o111 != 0;
+        if executable {
+            add_owner_executable(&output)?;
+        }
+        files.push(ExtractedFile {
+            path: relative,
+            digest: hash_file(&output)?,
+            length: fs::metadata(&output)
+                .map_err(|source| DistributionError::Io {
+                    path: output.clone(),
+                    source,
+                })?
+                .len(),
+            executable,
+        });
+    }
+    finish_extraction(files, directories, entry_point)
+}
+
 pub(crate) fn extract_tar_gzip(
     archive_path: &Path,
     destination: &Path,
     entry_point: &RelativeArtifactPath,
-) -> Result<Vec<ExtractedFile>> {
+) -> Result<ExtractedArchive> {
     let file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
         path: archive_path.to_path_buf(),
         source,
@@ -36,6 +145,7 @@ pub(crate) fn extract_tar_gzip(
     let mut unpacked = 0_u64;
     let mut count = 0_usize;
     let mut files = Vec::new();
+    let mut directories = Vec::new();
 
     for entry in entries {
         count += 1;
@@ -68,6 +178,7 @@ pub(crate) fn extract_tar_gzip(
                 path: output,
                 source,
             })?;
+            directories.push(relative);
             continue;
         }
         if !entry_type.is_file() {
@@ -135,6 +246,14 @@ pub(crate) fn extract_tar_gzip(
         });
     }
 
+    finish_extraction(files, directories, entry_point)
+}
+
+fn finish_extraction(
+    mut files: Vec<ExtractedFile>,
+    mut directories: Vec<RelativeArtifactPath>,
+    entry_point: &RelativeArtifactPath,
+) -> Result<ExtractedArchive> {
     if !files.iter().any(|file| &file.path == entry_point) {
         return Err(unsafe_archive(
             entry_point.as_str(),
@@ -142,7 +261,37 @@ pub(crate) fn extract_tar_gzip(
         ));
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
+    directories.sort();
+    Ok(ExtractedArchive { files, directories })
+}
+
+pub(crate) fn copy_zip_entry<R: Read, W: io::Write>(
+    input: &mut R,
+    output: &mut W,
+    declared_size: u64,
+    remaining_budget: u64,
+    entry_name: &str,
+    output_path: &Path,
+) -> Result<u64> {
+    if declared_size > remaining_budget {
+        return Err(unsafe_archive(
+            entry_name,
+            format!("archive expands beyond {MAX_UNPACKED_BYTES} bytes"),
+        ));
+    }
+    let actual = io::copy(&mut input.take(declared_size + 1), output).map_err(|source| {
+        DistributionError::Io {
+            path: output_path.to_path_buf(),
+            source,
+        }
+    })?;
+    if actual != declared_size {
+        return Err(unsafe_archive(
+            entry_name,
+            format!("declared {declared_size} bytes but expanded to at least {actual}"),
+        ));
+    }
+    Ok(actual)
 }
 
 pub(crate) fn portable_archive_path(path: &Path) -> Result<RelativeArtifactPath> {

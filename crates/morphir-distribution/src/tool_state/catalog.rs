@@ -44,6 +44,7 @@ pub struct ToolLock {
     package_root: Option<RelativeArtifactPath>,
     args: Vec<String>,
     files: Vec<ToolPackageFile>,
+    directories: Vec<RelativeArtifactPath>,
     rollback: Vec<InstalledTool>,
 }
 
@@ -65,6 +66,7 @@ impl ToolLock {
             package_root: package.package_root.clone(),
             args: package.args.clone(),
             files: package.files.clone(),
+            directories: package.directories.clone(),
             rollback: rollback.to_vec(),
         }
     }
@@ -86,6 +88,7 @@ impl ToolLock {
             package_root: installed.package_root.clone(),
             args: installed.args.clone(),
             files: installed.files.clone(),
+            directories: installed.directories.clone(),
             rollback: rollback.to_vec(),
         }
     }
@@ -129,6 +132,7 @@ pub struct InstalledTool {
     pub(super) package_root: Option<RelativeArtifactPath>,
     pub(super) args: Vec<String>,
     pub(super) files: Vec<ToolPackageFile>,
+    pub(super) directories: Vec<RelativeArtifactPath>,
 }
 
 impl InstalledTool {
@@ -148,6 +152,7 @@ impl InstalledTool {
             package_root: package.package_root.clone(),
             args: package.args.clone(),
             files: package.files.clone(),
+            directories: package.directories.clone(),
         }
     }
 
@@ -420,6 +425,7 @@ pub(super) fn validate_active_pair(
         && lock.package_root == active.package_root
         && lock.args == active.args
         && lock.files == active.files
+        && lock.directories == active.directories
         && lock.rollback == rollback;
     if matches {
         Ok(())

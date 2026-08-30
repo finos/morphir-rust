@@ -2,7 +2,7 @@
 
 use super::package::{
     ToolPackageFile, VerifiedToolPackage, home_relative, package_from_resolved, portable_filename,
-    verify_relative_files,
+    verify_relative_package,
 };
 use super::package_key::extracted_package_path;
 use super::verification::verify_one_file;
@@ -93,16 +93,17 @@ pub(super) fn prepare(
         store_path,
         Some(package_root),
         files,
+        Vec::new(),
     ))
 }
 
 fn publish(staging_root: &Path, destination: &Path, files: &[ToolPackageFile]) -> Result<()> {
     if destination.exists() {
-        return verify_relative_files(destination, files);
+        return verify_relative_package(destination, files, &[]);
     }
     if let Err(source) = fs::rename(staging_root, destination) {
         if destination.exists() {
-            verify_relative_files(destination, files)
+            verify_relative_package(destination, files, &[])
         } else {
             Err(DistributionError::Io {
                 path: destination.to_path_buf(),

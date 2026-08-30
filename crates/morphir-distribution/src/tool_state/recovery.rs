@@ -57,7 +57,7 @@ impl<'home> ToolRepairer<'home> {
         let lock = read_tool_lock_unlocked(self.home, id)?;
         validate_active_pair(&active, &entry.rollback, &lock)?;
         let shared_files = shared_digest_files(self.home, &tools, &active);
-        let shared_package_roots = shared_digest_package_roots(self.home, &tools, &active);
+        let shared_directories = shared_digest_directories(self.home, &tools, &active);
         validate_repair_resolution(&active, &resolved)?;
         let transaction = begin_repair(self.home, &active)?;
         let digest_path = self.home.tools_store_dir().join(active.digest.to_string());
@@ -69,7 +69,7 @@ impl<'home> ToolRepairer<'home> {
                 validate_repair_package(&active, &package)?;
                 verify_package(self.home, &package)?;
                 sync_package(self.home, &package)?;
-                restore_shared_directories(&digest_path, &previous_path, &shared_package_roots)?;
+                restore_shared_directories(&digest_path, &previous_path, &shared_directories)?;
                 restore_shared_files(self.home, &digest_path, &previous_path, &shared_files)?;
                 Ok(())
             });
@@ -149,6 +149,8 @@ fn validate_repair_package(active: &InstalledTool, package: &VerifiedToolPackage
         Some("launch arguments differ after materialization")
     } else if package.files != active.files {
         Some("installed file manifest differs")
+    } else if package.directories != active.directories {
+        Some("installed directory manifest differs")
     } else {
         None
     };
@@ -186,13 +188,13 @@ fn shared_digest_files(
     files
 }
 
-fn shared_digest_package_roots(
+fn shared_digest_directories(
     home: &MorphirHome,
     tools: &std::collections::BTreeMap<ToolId, super::catalog::ToolCatalogEntry>,
     active: &InstalledTool,
 ) -> Vec<PathBuf> {
     let digest_path = home.tools_store_dir().join(active.digest.to_string());
-    let mut roots = tools
+    let mut directories = tools
         .values()
         .flat_map(|entry| std::iter::once(&entry.active).chain(entry.rollback.iter()))
         .filter(|installed| {
@@ -200,71 +202,41 @@ fn shared_digest_package_roots(
                 || installed.version != active.version
                 || installed.digest != active.digest
         })
-        .filter_map(|installed| installed.package_root.as_ref())
-        .filter_map(|root| {
+        .flat_map(|installed| installed.directories.iter())
+        .filter_map(|directory| {
             home.root()
-                .join(root.as_path())
+                .join(directory.as_path())
                 .strip_prefix(&digest_path)
                 .ok()
                 .map(Path::to_path_buf)
         })
         .collect::<Vec<_>>();
-    roots.sort();
-    roots.dedup();
-    roots
+    directories.sort();
+    directories.dedup();
+    directories
 }
 
 fn restore_shared_directories(
     digest_path: &Path,
     previous_path: &Path,
-    package_roots: &[PathBuf],
+    directories: &[PathBuf],
 ) -> Result<()> {
-    for relative_root in package_roots {
-        restore_directory_tree(
-            &previous_path.join(relative_root),
-            &digest_path.join(relative_root),
-        )?;
-    }
-    Ok(())
-}
-
-fn restore_directory_tree(source_root: &Path, destination_root: &Path) -> Result<()> {
-    let metadata = match fs::symlink_metadata(source_root) {
-        Ok(metadata) => metadata,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(DistributionError::Io {
-                path: source_root.to_path_buf(),
-                source,
-            });
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Ok(());
-    }
-    create_dir_all_durable(destination_root)?;
-    let mut pending = vec![(source_root.to_path_buf(), destination_root.to_path_buf())];
-    while let Some((source_directory, destination_directory)) = pending.pop() {
-        let entries = fs::read_dir(&source_directory).map_err(|source| DistributionError::Io {
-            path: source_directory.clone(),
-            source,
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|source| DistributionError::Io {
-                path: source_directory.clone(),
-                source,
-            })?;
-            let file_type = entry.file_type().map_err(|source| DistributionError::Io {
-                path: entry.path(),
-                source,
-            })?;
-            if file_type.is_symlink() || !file_type.is_dir() {
-                continue;
+    for relative in directories {
+        let source_path = previous_path.join(relative);
+        let metadata = match fs::symlink_metadata(&source_path) {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(DistributionError::Io {
+                    path: source_path,
+                    source,
+                });
             }
-            let destination = destination_directory.join(entry.file_name());
-            create_dir_all_durable(&destination)?;
-            pending.push((entry.path(), destination));
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
         }
+        create_dir_all_durable(&digest_path.join(relative))?;
     }
     Ok(())
 }
@@ -347,6 +319,7 @@ pub(super) fn rollback_with_writer(
             .as_ref()
             .map(RelativeArtifactPath::as_path),
         &next.files,
+        &next.directories,
     )?;
     let previous = entry.active;
     entry.active = next.clone();

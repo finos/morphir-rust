@@ -64,6 +64,7 @@ pub fn activate_installed_tool(home: &MorphirHome, id: &ToolId) -> Result<Verifi
             .as_ref()
             .map(RelativeArtifactPath::as_path),
         &active.files,
+        &active.directories,
     )?;
     tracing::info!(
         tool_id = %active.tool_id,

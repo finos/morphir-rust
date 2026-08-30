@@ -7,6 +7,7 @@ use crate::{
 };
 use morphir_common::home::MorphirHome;
 use std::fs;
+use std::io::Write;
 
 fn zip_release(id: &str, name: &str, entry_point: &str) -> ToolReleaseRecord {
     zip_release_named(id, name, entry_point, "bundle.zip")
@@ -64,6 +65,47 @@ fn archive_source_filename_cannot_collide_with_its_package_directory() {
     ToolInstaller::new(&home).install(package).unwrap();
     let launch = activate_installed_tool(&home, &ToolId::parse("desktop").unwrap()).unwrap();
     assert_eq!(fs::read(launch.program()).unwrap(), b"desktop");
+}
+
+#[test]
+fn cached_archive_reuse_rejects_a_missing_declared_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let source = root.path().join("source.zip");
+    let file = fs::File::create(&source).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    archive
+        .add_directory("runtime/", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    archive
+        .start_file("desktop.exe", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    archive.write_all(b"desktop").unwrap();
+    archive.finish().unwrap();
+    let bytes = fs::read(&source).unwrap();
+    let digest = Sha256Digest::of_bytes(&bytes);
+    let prepare = |directory: &str| {
+        let download = root.path().join(directory).join("bundle.zip");
+        fs::create_dir_all(download.parent().unwrap()).unwrap();
+        fs::copy(&source, &download).unwrap();
+        ToolPackageStore::new(&home).prepare(
+            crate::ResolvedTrustedToolArtifact::test_fixture(
+                zip_release("desktop", "Morphir Desktop", "desktop.exe"),
+                Selection::Channel(Channel::Stable),
+                digest.clone(),
+                bytes.len() as u64,
+            ),
+            crate::DownloadedToolArtifact::test_fixture(download),
+        )
+    };
+    let first = prepare("first").unwrap();
+    let runtime_directory = home.root().join(first.directories[0].as_path());
+    fs::remove_dir(&runtime_directory).unwrap();
+
+    assert!(matches!(
+        prepare("second").unwrap_err(),
+        crate::DistributionError::InvalidToolManifest { .. }
+    ));
 }
 
 fn raw_release(id: &str, name: &str, filename: &str) -> ToolReleaseRecord {

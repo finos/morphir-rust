@@ -2,8 +2,7 @@
 
 use super::package_key::extracted_package_path;
 use super::verification::verify_one_file;
-use crate::store::{add_owner_executable, hash_file};
-use crate::tool_archive::{extract_tar_gzip, portable_archive_path, unsafe_archive};
+use crate::tool_archive::{extract_tar_gzip, extract_zip};
 use crate::{
     ArchiveFormat, ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
     Platform, RelativeArtifactPath, ResolvedTrustedToolArtifact, Result, Selection, Sha256Digest,
@@ -12,13 +11,8 @@ use crate::{
 use morphir_common::home::MorphirHome;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-
-const MAX_ARCHIVE_ENTRIES: usize = 10_000;
-const MAX_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Verified immutable bytes and authenticated metadata ready for catalog activation.
 /// Fields are private so durable state cannot be built from an unchecked path.
@@ -38,6 +32,7 @@ pub struct VerifiedToolPackage {
     pub(super) package_root: Option<RelativeArtifactPath>,
     pub(super) args: Vec<String>,
     pub(super) files: Vec<ToolPackageFile>,
+    pub(super) directories: Vec<RelativeArtifactPath>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,16 +145,27 @@ impl<'home> ToolPackageStore<'home> {
             path: staging_root.clone(),
             source,
         })?;
-        let relative_files = extract_zip(
+        let extracted = extract_zip(
             stored.path(),
             &staging_root,
             resolved.artifact().launch().path(),
         )?;
+        let relative_files = extracted
+            .files
+            .into_iter()
+            .map(|file| ToolPackageFile {
+                path: file.path,
+                digest: file.digest,
+                length: file.length,
+                executable: file.executable,
+            })
+            .collect::<Vec<_>>();
+        let relative_directories = extracted.directories;
         if destination.exists() {
-            verify_relative_files(&destination, &relative_files)?;
+            verify_relative_package(&destination, &relative_files, &relative_directories)?;
         } else if let Err(source) = fs::rename(&staging_root, &destination) {
             if destination.exists() {
-                verify_relative_files(&destination, &relative_files)?;
+                verify_relative_package(&destination, &relative_files, &relative_directories)?;
             } else {
                 return Err(DistributionError::Io {
                     path: destination,
@@ -182,11 +188,16 @@ impl<'home> ToolPackageStore<'home> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let directories = relative_directories
+            .into_iter()
+            .map(|directory| home_relative(self.home, &destination.join(directory.as_path())))
+            .collect::<Result<Vec<_>>>()?;
         Ok(package_from_resolved(
             resolved,
             store_path,
             Some(package_root),
             files,
+            directories,
         ))
     }
 
@@ -252,6 +263,7 @@ impl<'home> ToolPackageStore<'home> {
             resolved.artifact().launch().path(),
         )?;
         let relative_files = extracted
+            .files
             .into_iter()
             .map(|file| ToolPackageFile {
                 path: file.path,
@@ -260,11 +272,12 @@ impl<'home> ToolPackageStore<'home> {
                 executable: file.executable,
             })
             .collect::<Vec<_>>();
+        let relative_directories = extracted.directories;
         if destination.exists() {
-            verify_relative_files(&destination, &relative_files)?;
+            verify_relative_package(&destination, &relative_files, &relative_directories)?;
         } else if let Err(source) = fs::rename(&staging_root, &destination) {
             if destination.exists() {
-                verify_relative_files(&destination, &relative_files)?;
+                verify_relative_package(&destination, &relative_files, &relative_directories)?;
             } else {
                 return Err(DistributionError::Io {
                     path: destination,
@@ -287,11 +300,16 @@ impl<'home> ToolPackageStore<'home> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let directories = relative_directories
+            .into_iter()
+            .map(|directory| home_relative(self.home, &destination.join(directory.as_path())))
+            .collect::<Result<Vec<_>>>()?;
         Ok(package_from_resolved(
             resolved,
             store_path,
             Some(package_root),
             files,
+            directories,
         ))
     }
 }
@@ -301,6 +319,7 @@ pub(super) fn package_from_resolved(
     store_path: RelativeArtifactPath,
     package_root: Option<RelativeArtifactPath>,
     files: Vec<ToolPackageFile>,
+    directories: Vec<RelativeArtifactPath>,
 ) -> VerifiedToolPackage {
     VerifiedToolPackage {
         selection: resolved.selection().clone(),
@@ -317,6 +336,7 @@ pub(super) fn package_from_resolved(
         package_root,
         args: resolved.artifact().launch().args().to_vec(),
         files,
+        directories,
     }
 }
 
@@ -348,149 +368,42 @@ pub(super) fn home_relative(home: &MorphirHome, path: &Path) -> Result<RelativeA
     RelativeArtifactPath::from_native_path(relative)
 }
 
-fn extract_zip(
-    archive_path: &Path,
-    destination: &Path,
-    entry_point: &RelativeArtifactPath,
-) -> Result<Vec<ToolPackageFile>> {
-    let file = fs::File::open(archive_path).map_err(|source| DistributionError::Io {
-        path: archive_path.to_path_buf(),
-        source,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|source| unsafe_archive("", format!("invalid ZIP archive: {source}")))?;
-    if archive.len() > MAX_ARCHIVE_ENTRIES {
-        return Err(unsafe_archive(
-            "",
-            format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"),
-        ));
-    }
-
-    let mut names = BTreeSet::new();
-    let mut unpacked = 0_u64;
-    let mut files = Vec::new();
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|source| unsafe_archive("", format!("invalid ZIP entry: {source}")))?;
-        let raw_name = entry.name().to_owned();
-        let enclosed = entry.enclosed_name().ok_or_else(|| {
-            unsafe_archive(&raw_name, "entry escapes the package root".to_owned())
-        })?;
-        let relative = portable_archive_path(&enclosed)
-            .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
-        let collision_key = relative.as_str().to_lowercase();
-        if !names.insert(collision_key) {
-            return Err(unsafe_archive(
-                &raw_name,
-                "entry collides with another portable path".to_owned(),
-            ));
-        }
-        let unix_mode = entry.unix_mode().unwrap_or(0);
-        let mode_kind = unix_mode & 0o170000;
-        if mode_kind != 0 && mode_kind != 0o040000 && mode_kind != 0o100000 {
-            return Err(unsafe_archive(
-                &raw_name,
-                "links, devices, and special files are not allowed".to_owned(),
-            ));
-        }
-        let output = destination.join(relative.as_path());
-        if entry.is_dir() {
-            fs::create_dir_all(&output).map_err(|source| DistributionError::Io {
-                path: output,
-                source,
-            })?;
-            continue;
-        }
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        let mut output_file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&output)
-            .map_err(|source| DistributionError::Io {
-                path: output.clone(),
-                source,
-            })?;
-        let remaining = MAX_UNPACKED_BYTES - unpacked;
-        let declared_size = entry.size();
-        unpacked += copy_zip_entry(
-            &mut entry,
-            &mut output_file,
-            declared_size,
-            remaining,
-            &raw_name,
-            &output,
-        )?;
-        output_file
-            .sync_all()
-            .map_err(|source| DistributionError::Io {
-                path: output.clone(),
-                source,
-            })?;
-        let executable = &relative == entry_point || unix_mode & 0o111 != 0;
-        if executable {
-            add_owner_executable(&output)?;
-        }
-        files.push(ToolPackageFile {
-            path: relative,
-            digest: hash_file(&output)?,
-            length: fs::metadata(&output)
-                .map_err(|source| DistributionError::Io {
-                    path: output.clone(),
-                    source,
-                })?
-                .len(),
-            executable,
-        });
-    }
-    if !files.iter().any(|file| &file.path == entry_point) {
-        return Err(unsafe_archive(
-            entry_point.as_str(),
-            "declared launch entry point is missing".to_owned(),
-        ));
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
-}
-
-pub(super) fn copy_zip_entry<R: Read, W: io::Write>(
-    input: &mut R,
-    output: &mut W,
-    declared_size: u64,
-    remaining_budget: u64,
-    entry_name: &str,
-    output_path: &Path,
-) -> Result<u64> {
-    if declared_size > remaining_budget {
-        return Err(unsafe_archive(
-            entry_name,
-            format!("archive expands beyond {MAX_UNPACKED_BYTES} bytes"),
-        ));
-    }
-    let actual = io::copy(&mut input.take(declared_size + 1), output).map_err(|source| {
-        DistributionError::Io {
-            path: output_path.to_path_buf(),
-            source,
-        }
-    })?;
-    if actual != declared_size {
-        return Err(unsafe_archive(
-            entry_name,
-            format!("declared {declared_size} bytes but expanded to at least {actual}"),
-        ));
-    }
-    Ok(actual)
-}
-
-pub(super) fn verify_relative_files(root: &Path, files: &[ToolPackageFile]) -> Result<()> {
+pub(super) fn verify_relative_package(
+    root: &Path,
+    files: &[ToolPackageFile],
+    directories: &[RelativeArtifactPath],
+) -> Result<()> {
     for file in files {
         let path = root.join(file.path.as_path());
         verify_one_file(&path, &file.digest, file.length, file.executable)?;
+    }
+    for directory in directories {
+        let path = root.join(directory.as_path());
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Err(DistributionError::InvalidToolManifest {
+                    reason: format!(
+                        "declared package directory is missing: {}",
+                        directory.as_str()
+                    ),
+                });
+            }
+            Err(source) => {
+                return Err(DistributionError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(DistributionError::InvalidToolManifest {
+                reason: format!(
+                    "declared package directory is missing: {}",
+                    directory.as_str()
+                ),
+            });
+        }
     }
     Ok(())
 }

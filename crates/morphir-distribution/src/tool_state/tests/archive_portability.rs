@@ -1,6 +1,6 @@
 use super::super::ToolPackageStore;
-use super::super::package::copy_zip_entry;
 use super::support::{tar_gzip_release, write_tar_gzip, write_zip, zip_release};
+use crate::tool_archive::copy_zip_entry;
 use crate::{Channel, DistributionError, Selection, Sha256Digest};
 use morphir_common::home::MorphirHome;
 use std::fs;

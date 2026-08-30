@@ -18,6 +18,7 @@ pub(super) fn verify_package(home: &MorphirHome, package: &VerifiedToolPackage) 
             .as_ref()
             .map(RelativeArtifactPath::as_path),
         &package.files,
+        &package.directories,
     )
 }
 
@@ -71,9 +72,10 @@ pub(super) fn verify_installed(
     store_path: &Path,
     package_root: Option<&Path>,
     files: &[ToolPackageFile],
+    directories: &[RelativeArtifactPath],
 ) -> Result<PathBuf> {
-    validate_manifest(store_path, package_root, files)?;
-    verify_manifest_scope(home, package_root, files)?;
+    validate_manifest(store_path, package_root, files, directories)?;
+    verify_manifest_scope(home, package_root, files, directories)?;
     let home_root = fs::canonicalize(home.root()).map_err(|source| DistributionError::Io {
         path: home.root().to_path_buf(),
         source,
@@ -113,6 +115,7 @@ fn validate_manifest(
     store_path: &Path,
     package_root: Option<&Path>,
     files: &[ToolPackageFile],
+    directories: &[RelativeArtifactPath],
 ) -> Result<()> {
     if files.is_empty() {
         return Err(invalid_manifest("manifest cannot be empty"));
@@ -120,6 +123,18 @@ fn validate_manifest(
     let unique = files.iter().map(|file| &file.path).collect::<BTreeSet<_>>();
     if unique.len() != files.len() {
         return Err(invalid_manifest("manifest paths must be unique"));
+    }
+    let unique_directories = directories.iter().collect::<BTreeSet<_>>();
+    if unique_directories.len() != directories.len() {
+        return Err(invalid_manifest("manifest directories must be unique"));
+    }
+    if files
+        .iter()
+        .any(|file| unique_directories.contains(&file.path))
+    {
+        return Err(invalid_manifest(
+            "manifest paths cannot be both files and directories",
+        ));
     }
     if !files
         .iter()
@@ -130,9 +145,12 @@ fn validate_manifest(
         ));
     }
     if let Some(package_root) = package_root
-        && files
+        && (files
             .iter()
             .any(|file| !file.path.as_path().starts_with(package_root))
+            || directories
+                .iter()
+                .any(|directory| !directory.as_path().starts_with(package_root)))
     {
         return Err(invalid_manifest(
             "every archived file must remain beneath the package root",
@@ -145,12 +163,13 @@ fn verify_manifest_scope(
     home: &MorphirHome,
     package_root: Option<&Path>,
     files: &[ToolPackageFile],
+    directories: &[RelativeArtifactPath],
 ) -> Result<()> {
     let Some(package_root) = package_root else {
         return Ok(());
     };
     let root = home.root().join(package_root);
-    let expected = files
+    let expected_files = files
         .iter()
         .map(|file| {
             file.path
@@ -160,6 +179,25 @@ fn verify_manifest_scope(
                 .map_err(|_| invalid_manifest("package file escaped its declared root"))
         })
         .collect::<Result<BTreeSet<_>>>()?;
+    let explicit_directories = directories
+        .iter()
+        .map(|directory| {
+            directory
+                .as_path()
+                .strip_prefix(package_root)
+                .map(Path::to_path_buf)
+                .map_err(|_| invalid_manifest("package directory escaped its declared root"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let expected_directories = expected_files
+        .iter()
+        .chain(explicit_directories.iter())
+        .flat_map(|path| path.ancestors().skip(1))
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .chain(explicit_directories.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut found_directories = BTreeSet::new();
     let mut pending = vec![root.clone()];
     while let Some(directory) = pending.pop() {
         let entries = fs::read_dir(&directory).map_err(|source| DistributionError::Io {
@@ -186,14 +224,24 @@ fn verify_manifest_scope(
                 )));
             }
             if file_type.is_dir() {
+                if !expected_directories.contains(relative) {
+                    return Err(invalid_manifest(format!(
+                        "package contains an unmanifested directory: {}",
+                        relative.display()
+                    )));
+                }
+                found_directories.insert(relative.to_path_buf());
                 pending.push(path);
-            } else if !file_type.is_file() || !expected.contains(relative) {
+            } else if !file_type.is_file() || !expected_files.contains(relative) {
                 return Err(invalid_manifest(format!(
                     "package contains an unmanifested entry: {}",
                     relative.display()
                 )));
             }
         }
+    }
+    if found_directories != expected_directories {
+        return Err(invalid_manifest("package is missing a declared directory"));
     }
     Ok(())
 }

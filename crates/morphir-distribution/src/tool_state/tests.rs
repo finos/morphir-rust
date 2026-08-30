@@ -4,7 +4,7 @@ mod rollback_history;
 mod support;
 
 use super::*;
-use crate::{Channel, Selection, Sha256Digest, ToolId};
+use crate::{Channel, RelativeArtifactPath, Selection, Sha256Digest, ToolId};
 use morphir_common::home::MorphirHome;
 use semver::Version;
 use std::fs;
@@ -399,7 +399,7 @@ fn repair_preserves_other_tools_that_share_the_digest_directory() {
             bytes,
         ))
         .unwrap();
-    let companion = package_for(
+    let mut companion = package_for(
         &home,
         "companion",
         "Morphir Companion",
@@ -412,6 +412,12 @@ fn repair_preserves_other_tools_that_share_the_digest_directory() {
         .join(companion.package_root.as_ref().unwrap().as_path())
         .join("empty-runtime-directory");
     fs::create_dir(&empty_runtime_directory).unwrap();
+    companion.directories.push(
+        RelativeArtifactPath::from_native_path(
+            empty_runtime_directory.strip_prefix(home.root()).unwrap(),
+        )
+        .unwrap(),
+    );
     ToolInstaller::new(&home).install(companion).unwrap();
     fs::write(
         activate_installed_tool(&home, &desktop_id)

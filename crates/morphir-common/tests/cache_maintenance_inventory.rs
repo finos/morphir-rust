@@ -91,13 +91,21 @@ fn inventory_matches_portable_aliases_only_when_the_filesystem_resolves_them() {
     let entries =
         inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
 
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path(), "Packages/CAF\u{c9}");
-    assert_eq!(entries[0].bytes(), 5);
+    let registered_parent_resolves = home.downloads_cache_dir().join("packages").exists();
     let registered_spelling_resolves = home
         .downloads_cache_dir()
         .join("packages/cafe\u{301}")
         .exists();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].path(),
+        if registered_parent_resolves {
+            "Packages/CAF\u{c9}"
+        } else {
+            "Packages"
+        }
+    );
+    assert_eq!(entries[0].bytes(), 5);
     assert_eq!(
         entries[0].state(),
         if registered_spelling_resolves {

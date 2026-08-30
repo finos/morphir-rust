@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -24,6 +25,7 @@ pub(super) fn build_tree_from_capability(
         canonical_root,
         granted_root,
         AliasBudgets::DEFAULT,
+        TraversalBudgets::DEFAULT,
         &mut |_, _| {},
     )
 }
@@ -32,12 +34,14 @@ pub(super) fn build_tree_with(
     root: &Dir,
     canonical_root: &Path,
     granted_root: &Path,
-    budgets: AliasBudgets,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<FileTree> {
     let mut entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
     let mut visited_directories = BTreeSet::from([RelativePath::root()]);
     let mut directory_aliases = Vec::new();
+    let mut stats = TraversalStats::with_root(traversal_budgets)?;
     Traversal {
         root,
         canonical_root,
@@ -45,12 +49,92 @@ pub(super) fn build_tree_with(
         visited_directories: &mut visited_directories,
         directory_aliases: &mut directory_aliases,
         entries: &mut entries,
-        budgets,
+        alias_budgets,
+        traversal_budgets,
+        stats: &mut stats,
         boundary_hook,
     }
-    .walk(root, &RelativePath::root(), &RelativePath::root())?;
-    materialize_directory_aliases(&mut directory_aliases, &mut entries, budgets)?;
+    .walk(root, &RelativePath::root(), &RelativePath::root(), 0)?;
+    materialize_directory_aliases(&mut directory_aliases, &mut entries, alias_budgets)?;
     Ok(FileTree { entries })
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TraversalBudgets {
+    pub(super) real_directories: usize,
+    pub(super) real_entries: usize,
+    pub(super) max_depth: usize,
+    pub(super) config_bytes: usize,
+}
+
+impl TraversalBudgets {
+    pub(super) const DEFAULT: Self = Self {
+        real_directories: 65_536,
+        real_entries: 262_144,
+        max_depth: 128,
+        config_bytes: 64 * 1024 * 1024,
+    };
+}
+
+#[derive(Default)]
+struct TraversalStats {
+    real_directories: usize,
+    real_entries: usize,
+    config_bytes: usize,
+}
+
+impl TraversalStats {
+    fn with_root(budgets: TraversalBudgets) -> Result<Self> {
+        let mut stats = Self::default();
+        stats.enter_directory(budgets)?;
+        Ok(stats)
+    }
+
+    fn enter_directory(&mut self, budgets: TraversalBudgets) -> Result<()> {
+        increment_bounded(
+            &mut self.real_directories,
+            budgets.real_directories,
+            "real directories",
+        )
+    }
+
+    fn record_entry(&mut self, budgets: TraversalBudgets) -> Result<()> {
+        increment_bounded(&mut self.real_entries, budgets.real_entries, "real entries")
+    }
+
+    fn check_depth(&self, depth: usize, budgets: TraversalBudgets) -> Result<()> {
+        if depth > budgets.max_depth {
+            return traversal_resource_limit("depth", budgets.max_depth);
+        }
+        Ok(())
+    }
+
+    fn remaining_config_bytes(&self, budgets: TraversalBudgets) -> usize {
+        budgets.config_bytes.saturating_sub(self.config_bytes)
+    }
+
+    fn record_config_bytes(&mut self, bytes: usize, budgets: TraversalBudgets) -> Result<()> {
+        let remaining = self.remaining_config_bytes(budgets);
+        if bytes > remaining {
+            return traversal_resource_limit("configuration bytes", budgets.config_bytes);
+        }
+        self.config_bytes += bytes;
+        Ok(())
+    }
+}
+
+fn increment_bounded(value: &mut usize, limit: usize, resource: &str) -> Result<()> {
+    if *value >= limit {
+        return traversal_resource_limit(resource, limit);
+    }
+    *value += 1;
+    Ok(())
+}
+
+fn traversal_resource_limit<T>(resource: &str, limit: usize) -> Result<T> {
+    bail!(
+        "workspace.traversal.resource-limit: confined native traversal exceeded fixed {resource} budget {limit}"
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +150,9 @@ struct Traversal<'a> {
     visited_directories: &'a mut BTreeSet<RelativePath>,
     directory_aliases: &'a mut Vec<DirectoryAlias>,
     entries: &'a mut BTreeMap<RelativePath, FileEntry>,
-    budgets: AliasBudgets,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+    stats: &'a mut TraversalStats,
     boundary_hook: &'a mut dyn FnMut(BoundaryEvent, &RelativePath),
 }
 
@@ -76,14 +162,28 @@ impl Traversal<'_> {
         directory: &Dir,
         canonical_directory: &RelativePath,
         lexical_directory: &RelativePath,
+        depth: usize,
     ) -> Result<()> {
-        let mut children = directory
-            .entries()
-            .with_context(|| format!("Failed to read directory `{}`", lexical_directory.as_str()))?
-            .collect::<std::io::Result<Vec<_>>>()?;
-        children.sort_by_key(|entry| entry.file_name());
-
+        let children = directory.entries().with_context(|| {
+            format!(
+                "workspace.traversal.unreadable: Failed to read granted directory `{}`",
+                lexical_directory.as_str()
+            )
+        })?;
+        let mut buffered_children = Vec::new();
         for child in children {
+            let child = child.with_context(|| {
+                format!(
+                    "workspace.traversal.unreadable: Failed to enumerate granted directory `{}`",
+                    lexical_directory.as_str()
+                )
+            })?;
+            self.stats.record_entry(self.traversal_budgets)?;
+            buffered_children.push(child);
+        }
+        buffered_children.sort_by_key(|entry| entry.file_name());
+
+        for child in buffered_children {
             let file_name = child.file_name();
             let canonical_child = join_native_path(canonical_directory, &file_name);
             let link_metadata = self
@@ -127,7 +227,7 @@ impl Traversal<'_> {
                         )
                     })?;
                 if target_metadata.is_dir() {
-                    record_directory_alias(self.directory_aliases, self.budgets, || {
+                    record_directory_alias(self.directory_aliases, self.alias_budgets, || {
                         DirectoryAlias {
                             lexical_path,
                             canonical_target,
@@ -140,6 +240,8 @@ impl Traversal<'_> {
                         self.entries,
                         lexical_path,
                         confined_target,
+                        self.traversal_budgets,
+                        self.stats,
                         self.boundary_hook,
                     )?;
                 }
@@ -154,20 +256,28 @@ impl Traversal<'_> {
                     &canonical_child,
                     Some(&lexical_path),
                 )?;
-                self.entries
-                    .insert(lexical_path.clone(), FileEntry::Directory);
-                if self.visited_directories.insert(canonical_directory.clone()) {
+                if !self.visited_directories.contains(&canonical_directory) {
+                    let child_depth = depth.saturating_add(1);
+                    self.stats
+                        .check_depth(child_depth, self.traversal_budgets)?;
+                    self.stats.enter_directory(self.traversal_budgets)?;
+                    self.visited_directories.insert(canonical_directory.clone());
+                    self.entries
+                        .insert(lexical_path.clone(), FileEntry::Directory);
                     (self.boundary_hook)(BoundaryEvent::BeforeOpenDirectory, &lexical_path);
                     let opened = self
                         .root
                         .open_dir(relative_native_path(&canonical_directory))
                         .with_context(|| {
                             format!(
-                                "Failed to open confined directory `{}`",
+                                "workspace.traversal.unreadable: Failed to open confined directory `{}`",
                                 lexical_path.as_str()
                             )
                         })?;
-                    self.walk(&opened, &canonical_directory, &lexical_path)?;
+                    self.walk(&opened, &canonical_directory, &lexical_path, child_depth)?;
+                } else {
+                    self.entries
+                        .insert(lexical_path.clone(), FileEntry::Directory);
                 }
             } else if link_metadata.is_file() && is_recognized_config(&lexical_path) {
                 insert_config_file(
@@ -175,6 +285,8 @@ impl Traversal<'_> {
                     self.entries,
                     lexical_path,
                     canonical_child,
+                    self.traversal_budgets,
+                    self.stats,
                     self.boundary_hook,
                 )?;
             }
@@ -252,10 +364,40 @@ fn insert_config_file(
     entries: &mut BTreeMap<RelativePath, FileEntry>,
     lexical_path: RelativePath,
     confined_path: PathBuf,
+    budgets: TraversalBudgets,
+    stats: &mut TraversalStats,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<()> {
+    let remaining = stats.remaining_config_bytes(budgets);
+    let metadata = root.metadata(&confined_path).with_context(|| {
+        format!(
+            "workspace.traversal.unreadable: Failed to inspect confined Morphir configuration `{}` from `{}`",
+            lexical_path.as_str(),
+            confined_path.display()
+        )
+    })?;
+    if metadata.len() > remaining as u64 {
+        return traversal_resource_limit("configuration bytes", budgets.config_bytes);
+    }
     boundary_hook(BoundaryEvent::BeforeReadConfig, &lexical_path);
-    let text = root.read_to_string(&confined_path).with_context(|| {
+    let file = root.open(&confined_path).with_context(|| {
+        format!(
+            "workspace.traversal.unreadable: Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
+            lexical_path.as_str(),
+            confined_path.display()
+        )
+    })?;
+    let read_limit = u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX);
+    let mut bytes = Vec::new();
+    file.take(read_limit).read_to_end(&mut bytes).with_context(|| {
+        format!(
+            "workspace.traversal.unreadable: Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
+            lexical_path.as_str(),
+            confined_path.display()
+        )
+    })?;
+    stats.record_config_bytes(bytes.len(), budgets)?;
+    let text = String::from_utf8(bytes).with_context(|| {
         format!(
             "Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
             lexical_path.as_str(),

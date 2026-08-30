@@ -41,7 +41,12 @@ use traversal::build_tree_from_capability;
 /// ancestry are skipped, so cycles cannot synthesize deeper paths indefinitely.
 /// Fixed budgets bound alias edges, queued and processed expansions, generated
 /// entries, and indexing/materialization work. Budget exhaustion returns the
-/// stable `workspace.alias.resource-limit` code.
+/// stable `workspace.alias.resource-limit` code. Independent fixed budgets cap
+/// native directory count, entry count, depth, and cumulative configuration
+/// bytes before the portable request is allocated. Exhaustion returns the
+/// stable `workspace.traversal.resource-limit` code. An unreadable granted
+/// entry is an explicit `workspace.traversal.unreadable` error; discovery does
+/// not silently skip paths that the merged workspace configuration could name.
 ///
 /// ```no_run
 /// use morphir_devkit::{ConfigLoadOptions, discover_workspace};

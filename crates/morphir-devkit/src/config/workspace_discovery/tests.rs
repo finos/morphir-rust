@@ -13,13 +13,16 @@ use super::{
         AliasBudgets, DirectoryAlias, materialize_directory_aliases, record_directory_alias,
     },
     mounts::{apply_user_override_selection, selected_mount},
-    traversal::{BoundaryEvent, build_tree_with},
+    traversal::{BoundaryEvent, TraversalBudgets, build_tree_with},
     *,
 };
 use crate::config::sources::SourceSelection;
 
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
 fn open_capability(path: &Path) -> Dir {
@@ -169,6 +172,7 @@ fn config_replaced_by_external_symlink_before_read_is_rejected() {
         root.path(),
         root.path(),
         AliasBudgets::DEFAULT,
+        TraversalBudgets::DEFAULT,
         &mut |event, path| {
             if !replaced
                 && event == BoundaryEvent::BeforeReadConfig
@@ -201,6 +205,7 @@ fn absolute_internal_config_symlink_is_read_through_the_capability() {
         root.path(),
         root.path(),
         AliasBudgets::DEFAULT,
+        TraversalBudgets::DEFAULT,
         &mut |_, _| {},
     )
     .unwrap();
@@ -223,7 +228,7 @@ fn directory_replaced_by_external_symlink_before_open_is_rejected() {
     let outside = tempfile::tempdir().unwrap();
     fs::write(
         root.path().join("morphir.toml"),
-        "[workspace]\nmembers = ['packages/*']\n",
+        "[workspace]\nmembers = ['packages/*']\nexclude = ['private/**']\n",
     )
     .unwrap();
     let packages = root.path().join("packages");
@@ -243,6 +248,7 @@ fn directory_replaced_by_external_symlink_before_open_is_rejected() {
         root.path(),
         root.path(),
         AliasBudgets::DEFAULT,
+        TraversalBudgets::DEFAULT,
         &mut |event, path| {
             if !replaced
                 && event == BoundaryEvent::BeforeOpenDirectory
@@ -267,6 +273,198 @@ fn directory_replaced_by_external_symlink_before_open_is_rejected() {
 
 #[cfg(unix)]
 #[test]
+fn unreadable_granted_directory_is_an_explicit_discovery_error() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("morphir.toml"),
+        "[workspace]\nmembers = ['packages/*']\n",
+    )
+    .unwrap();
+    let private = root.path().join("private");
+    fs::create_dir(&private).unwrap();
+    let original_permissions = fs::metadata(&private).unwrap().permissions();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o000)).unwrap();
+    let cap = open_capability(root.path());
+
+    let result = build_tree_with(
+        &cap,
+        root.path(),
+        root.path(),
+        AliasBudgets::DEFAULT,
+        TraversalBudgets::DEFAULT,
+        &mut |_, _| {},
+    );
+    fs::set_permissions(&private, original_permissions).unwrap();
+
+    let error = result.expect_err("unreadable granted directories must not be skipped");
+    assert!(error.to_string().contains("workspace.traversal.unreadable"));
+    assert!(error.to_string().contains("private"));
+}
+
+#[cfg(unix)]
+#[test]
+fn traversal_entry_budget_fires_before_buffered_children_are_processed() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("morphir.toml"),
+        "[workspace]\nmembers = ['packages/*']\n",
+    )
+    .unwrap();
+    fs::create_dir(root.path().join("packages")).unwrap();
+    for index in 0..4 {
+        fs::write(root.path().join(format!("unrelated-{index}")), "ignored").unwrap();
+    }
+    let cap = open_capability(root.path());
+    let budgets = TraversalBudgets {
+        real_entries: 2,
+        ..TraversalBudgets::DEFAULT
+    };
+    let mut boundary_events = 0;
+
+    let error = build_tree_with(
+        &cap,
+        root.path(),
+        root.path(),
+        AliasBudgets::DEFAULT,
+        budgets,
+        &mut |_, _| boundary_events += 1,
+    )
+    .unwrap_err();
+
+    assert_eq!(boundary_events, 0);
+    assert!(
+        error
+            .to_string()
+            .contains("workspace.traversal.resource-limit")
+    );
+    assert!(error.to_string().contains("real entries budget 2"));
+}
+
+#[cfg(unix)]
+#[test]
+fn excluded_subtree_is_still_subject_to_traversal_limits() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("morphir.toml"),
+        "[workspace]\nmembers = ['packages/*']\nexclude = ['target/**']\n",
+    )
+    .unwrap();
+    fs::create_dir(root.path().join("packages")).unwrap();
+    let target = root.path().join("target");
+    fs::create_dir(&target).unwrap();
+    for index in 0..4 {
+        fs::write(target.join(format!("cache-{index}")), "ignored").unwrap();
+    }
+    let cap = open_capability(root.path());
+    let budgets = TraversalBudgets {
+        real_entries: 6,
+        ..TraversalBudgets::DEFAULT
+    };
+
+    let error = build_tree_with(
+        &cap,
+        root.path(),
+        root.path(),
+        AliasBudgets::DEFAULT,
+        budgets,
+        &mut |_, _| {},
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("workspace.traversal.resource-limit")
+    );
+    assert!(error.to_string().contains("real entries budget 6"));
+}
+
+#[cfg(unix)]
+#[test]
+fn traversal_directory_depth_and_config_byte_budgets_are_enforced() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("morphir.toml"),
+        "[workspace]\nmembers = ['packages/*']\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("packages/orders/nested")).unwrap();
+    let cap = open_capability(root.path());
+
+    for (budgets, resource) in [
+        (
+            TraversalBudgets {
+                real_directories: 1,
+                ..TraversalBudgets::DEFAULT
+            },
+            "real directories budget 1",
+        ),
+        (
+            TraversalBudgets {
+                max_depth: 1,
+                ..TraversalBudgets::DEFAULT
+            },
+            "depth budget 1",
+        ),
+        (
+            TraversalBudgets {
+                config_bytes: 1,
+                ..TraversalBudgets::DEFAULT
+            },
+            "configuration bytes budget 1",
+        ),
+    ] {
+        let error = build_tree_with(
+            &cap,
+            root.path(),
+            root.path(),
+            AliasBudgets::DEFAULT,
+            budgets,
+            &mut |_, _| {},
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("workspace.traversal.resource-limit")
+        );
+        assert!(
+            error.to_string().contains(resource),
+            "unexpected diagnostic for {resource}: {error}"
+        );
+    }
+}
+
+#[test]
+fn narrow_workspace_with_unrelated_subtree_remains_correct() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("morphir.toml"),
+        "[workspace]\nmembers = ['packages/*']\nexclude = ['target/**']\n",
+    )
+    .unwrap();
+    let member = root.path().join("packages/orders");
+    fs::create_dir_all(&member).unwrap();
+    fs::write(
+        member.join("morphir.toml"),
+        "[project]\nname = 'acme/orders'\n",
+    )
+    .unwrap();
+    for index in 0..32 {
+        fs::create_dir_all(root.path().join(format!("target/cache-{index}/nested"))).unwrap();
+    }
+
+    let snapshot = discover_workspace(root.path(), &ConfigLoadOptions::project_only()).unwrap();
+
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(
+        snapshot.projects[0].relative_path.as_str(),
+        "packages/orders"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn alias_budget_is_fixed_and_reports_a_stable_code() {
     let root = tempfile::tempdir().unwrap();
     fs::write(
@@ -284,8 +482,15 @@ fn alias_budget_is_fixed_and_reports_a_stable_code() {
         ..AliasBudgets::DEFAULT
     };
 
-    let error =
-        build_tree_with(&cap, root.path(), root.path(), budgets, &mut |_, _| {}).unwrap_err();
+    let error = build_tree_with(
+        &cap,
+        root.path(),
+        root.path(),
+        budgets,
+        TraversalBudgets::DEFAULT,
+        &mut |_, _| {},
+    )
+    .unwrap_err();
 
     assert!(error.to_string().contains("workspace.alias.resource-limit"));
     assert!(error.to_string().contains("alias edges budget 0"));
@@ -340,8 +545,15 @@ fn alias_work_budget_is_checked_before_snapshot_cloning() {
         ..AliasBudgets::DEFAULT
     };
 
-    let error =
-        build_tree_with(&cap, root.path(), root.path(), budgets, &mut |_, _| {}).unwrap_err();
+    let error = build_tree_with(
+        &cap,
+        root.path(),
+        root.path(),
+        budgets,
+        TraversalBudgets::DEFAULT,
+        &mut |_, _| {},
+    )
+    .unwrap_err();
 
     assert!(error.to_string().contains("workspace.alias.resource-limit"));
     assert!(error.to_string().contains("total work budget 0"));

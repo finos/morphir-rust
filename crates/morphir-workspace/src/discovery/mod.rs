@@ -28,6 +28,44 @@ use members::discover_member;
 use patterns::member_directories;
 
 /// Discovers a Morphir workspace from portable, root-confined inputs.
+///
+/// The request contains only provider-neutral wire types, so a browser, native
+/// host, or other provider can construct the same discovery input:
+///
+/// ```
+/// use std::collections::BTreeMap;
+///
+/// use morphir_workspace::{
+///     DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
+///     discover,
+/// };
+///
+/// let development_root = FileTree {
+///     entries: BTreeMap::from([
+///         (RelativePath::root(), FileEntry::Directory),
+///         (
+///             RelativePath::parse("morphir.toml").expect("a confined wire path"),
+///             FileEntry::File {
+///                 text: "[project]\nname = 'acme/orders'\n".to_owned(),
+///             },
+///         ),
+///     ]),
+/// };
+/// let request = DiscoveryRequest {
+///     protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+///     development_root,
+///     morphir_home: None,
+///     system_config: None,
+///     environment: BTreeMap::new(),
+///     cli_overlay: serde_json::Value::Object(Default::default()),
+/// };
+///
+/// let snapshot = discover(request)
+///     .into_result()
+///     .expect("the portable request should describe a valid project");
+/// assert_eq!(snapshot.projects.len(), 1);
+/// assert_eq!(snapshot.projects[0].name, "acme/orders");
+/// ```
 #[must_use]
 pub fn discover(request: DiscoveryRequest) -> DiscoveryResponse {
     match discover_internal(request, None) {

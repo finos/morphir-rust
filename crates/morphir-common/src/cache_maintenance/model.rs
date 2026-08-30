@@ -4,6 +4,7 @@ use thiserror::Error;
 
 const MAX_NAMESPACE_BYTES: usize = 64;
 const MAX_ENTRY_PATH_BYTES: usize = 1024;
+const MAX_ENTRY_SEGMENT_UNITS: usize = 255;
 
 /// A malformed namespace or entry identity supplied to the maintenance engine.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -340,11 +341,40 @@ fn valid_entry_path(value: &str) -> bool {
         && !value.starts_with('/')
         && !value.contains('\\')
         && !value.contains(':')
-        && value.split('/').all(|segment| {
-            !segment.is_empty()
-                && !matches!(segment, "." | "..")
-                && !segment.chars().any(char::is_control)
+        && value.split('/').all(valid_entry_segment)
+}
+
+fn valid_entry_segment(segment: &str) -> bool {
+    let windows_stem = segment
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    let windows_reserved = matches!(
+        windows_stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || windows_stem
+        .strip_prefix("COM")
+        .is_some_and(is_windows_device_number)
+        || windows_stem
+            .strip_prefix("LPT")
+            .is_some_and(is_windows_device_number);
+
+    !segment.is_empty()
+        && segment.len() <= MAX_ENTRY_SEGMENT_UNITS
+        && segment.encode_utf16().count() <= MAX_ENTRY_SEGMENT_UNITS
+        && !matches!(segment, "." | "..")
+        && !segment.ends_with(['.', ' '])
+        && !segment.chars().any(|character| {
+            character.is_control() || matches!(character, '<' | '>' | '"' | '|' | '?' | '*')
         })
+        && !windows_reserved
+}
+
+fn is_windows_device_number(number: &str) -> bool {
+    matches!(number, "¹" | "²" | "³")
+        || (number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9'))
 }
 
 #[cfg(test)]
@@ -360,6 +390,18 @@ mod tests {
             "nested/../escape",
             r"C:\escape",
             "C:/escape",
+            "CON",
+            "con.txt",
+            "nested/LPT9.log",
+            "COM¹.exe",
+            "foo.",
+            "foo ",
+            "contains<angle",
+            "contains>angle",
+            "contains\"quote",
+            "contains|pipe",
+            "contains?question",
+            "contains*star",
         ] {
             assert_eq!(
                 CacheEntry::disposable("downloads", path, 1, 1),

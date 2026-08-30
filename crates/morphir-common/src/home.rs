@@ -118,6 +118,11 @@ impl MorphirHome {
         self.cache_dir().join("desktop")
     }
 
+    /// Durable rollback-protection state for authenticated tool repositories.
+    pub fn tool_repository_state_dir(&self) -> PathBuf {
+        self.data_dir().join("distribution/tool-repository")
+    }
+
     /// Directory for component log output.
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
@@ -317,6 +322,10 @@ mod tests {
         assert_eq!(home.downloads_cache_dir(), Path::new("/mh/cache/downloads"));
         assert_eq!(home.indexes_cache_dir(), Path::new("/mh/cache/indexes"));
         assert_eq!(home.desktop_cache_dir(), Path::new("/mh/cache/desktop"));
+        assert_eq!(
+            home.tool_repository_state_dir(),
+            Path::new("/mh/data/distribution/tool-repository")
+        );
         assert_eq!(
             home.cache_maintenance_state_file(),
             Path::new("/mh/data/maintenance/cache-cleanup.json")

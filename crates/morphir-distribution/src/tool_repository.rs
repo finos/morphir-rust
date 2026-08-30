@@ -14,6 +14,8 @@ use url::Url;
 
 const MAX_ROOT_UPDATES_PER_REFRESH: u64 = 32;
 const MAX_TOOL_RELEASE_DESCRIPTOR_BYTES: u64 = 1024 * 1024;
+const MAX_TOOL_RELEASE_DESCRIPTOR_COUNT: usize = 1024;
+const MAX_TOOL_RELEASE_DESCRIPTORS_BYTES: u64 = 16 * 1024 * 1024;
 
 /// A tool artifact selected from TUF-authenticated release metadata.
 #[derive(Debug, Clone)]
@@ -266,11 +268,23 @@ impl TrustedToolRepository {
             .flatten()
             .filter(|(_, custom, _)| &custom.tool_id == tool_id)
             .collect::<Vec<_>>();
+        let aggregate_length =
+            targets
+                .iter()
+                .try_fold(0_u64, |total, (target, _, length)| -> Result<u64> {
+                    validate_release_descriptor_length(target.raw(), *length)?;
+                    total.checked_add(*length).ok_or_else(|| {
+                        invalid_metadata(
+                            "release descriptor set",
+                            "aggregate descriptor length overflow",
+                        )
+                    })
+                })?;
+        validate_release_descriptor_set(targets.len(), aggregate_length)?;
         targets.sort_by(|(left, _, _), (right, _, _)| left.raw().cmp(right.raw()));
 
         let mut releases = Vec::with_capacity(targets.len());
-        for (target, custom, length) in targets {
-            validate_release_descriptor_length(target.raw(), length)?;
+        for (target, custom, _) in targets {
             let bytes = self
                 .repository
                 .read_target(&target)
@@ -445,9 +459,33 @@ fn validate_release_descriptor_length(target: &str, length: u64) -> Result<()> {
     }
 }
 
+fn validate_release_descriptor_set(count: usize, aggregate_length: u64) -> Result<()> {
+    if count > MAX_TOOL_RELEASE_DESCRIPTOR_COUNT {
+        return Err(invalid_metadata(
+            "release descriptor set",
+            format!(
+                "descriptor count {count} exceeds the {MAX_TOOL_RELEASE_DESCRIPTOR_COUNT}-descriptor limit"
+            ),
+        ));
+    }
+    if aggregate_length > MAX_TOOL_RELEASE_DESCRIPTORS_BYTES {
+        return Err(invalid_metadata(
+            "release descriptor set",
+            format!(
+                "aggregate descriptor length {aggregate_length} exceeds the {MAX_TOOL_RELEASE_DESCRIPTORS_BYTES}-byte limit"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod descriptor_size_tests {
-    use super::{MAX_TOOL_RELEASE_DESCRIPTOR_BYTES, validate_release_descriptor_length};
+    use super::{
+        MAX_TOOL_RELEASE_DESCRIPTOR_BYTES, MAX_TOOL_RELEASE_DESCRIPTOR_COUNT,
+        MAX_TOOL_RELEASE_DESCRIPTORS_BYTES, validate_release_descriptor_length,
+        validate_release_descriptor_set,
+    };
     use crate::DistributionError;
 
     #[test]
@@ -469,5 +507,34 @@ mod descriptor_size_tests {
             DistributionError::InvalidToolMetadata { .. }
         ));
         assert!(error.to_string().contains("exceeds the 1048576-byte limit"));
+    }
+
+    #[test]
+    fn release_descriptor_sets_bound_count_and_aggregate_bytes_before_reads() {
+        validate_release_descriptor_set(
+            MAX_TOOL_RELEASE_DESCRIPTOR_COUNT,
+            MAX_TOOL_RELEASE_DESCRIPTORS_BYTES,
+        )
+        .unwrap();
+
+        for (count, bytes, expected) in [
+            (
+                MAX_TOOL_RELEASE_DESCRIPTOR_COUNT + 1,
+                MAX_TOOL_RELEASE_DESCRIPTORS_BYTES,
+                "descriptor count",
+            ),
+            (
+                MAX_TOOL_RELEASE_DESCRIPTOR_COUNT,
+                MAX_TOOL_RELEASE_DESCRIPTORS_BYTES + 1,
+                "aggregate descriptor length",
+            ),
+        ] {
+            let error = validate_release_descriptor_set(count, bytes).unwrap_err();
+            assert!(matches!(
+                error,
+                DistributionError::InvalidToolMetadata { .. }
+            ));
+            assert!(error.to_string().contains(expected));
+        }
     }
 }

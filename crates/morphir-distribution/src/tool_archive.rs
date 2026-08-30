@@ -59,6 +59,8 @@ pub(crate) fn extract_zip(
         let relative = portable_archive_path(&enclosed)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
         let is_directory = entry.is_dir();
+        let unix_mode = entry.unix_mode().unwrap_or(0);
+        validate_zip_entry_kind(&raw_name, is_directory, unix_mode)?;
         if !names.insert(
             &relative,
             if is_directory {
@@ -70,14 +72,6 @@ pub(crate) fn extract_zip(
             return Err(unsafe_archive(
                 &raw_name,
                 "entry collides with another portable path",
-            ));
-        }
-        let unix_mode = entry.unix_mode().unwrap_or(0);
-        let mode_kind = unix_mode & 0o170000;
-        if mode_kind != 0 && mode_kind != 0o040000 && mode_kind != 0o100000 {
-            return Err(unsafe_archive(
-                &raw_name,
-                "links, devices, and special files are not allowed",
             ));
         }
         let output = destination.join(relative.as_path());
@@ -369,6 +363,23 @@ pub(crate) fn portable_archive_path(path: &Path) -> Result<RelativeArtifactPath>
     Ok(relative)
 }
 
+fn validate_zip_entry_kind(entry: &str, is_directory: bool, unix_mode: u32) -> Result<()> {
+    let mode_kind = unix_mode & 0o170000;
+    if mode_kind != 0 && mode_kind != 0o040000 && mode_kind != 0o100000 {
+        return Err(unsafe_archive(
+            entry,
+            "links, devices, and special files are not allowed",
+        ));
+    }
+    if (mode_kind == 0o040000 && !is_directory) || (mode_kind == 0o100000 && is_directory) {
+        return Err(unsafe_archive(
+            entry,
+            "entry name and Unix mode describe different entry kinds",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn unsafe_archive(
     entry: impl Into<String>,
     reason: impl Into<String>,
@@ -376,5 +387,24 @@ pub(crate) fn unsafe_archive(
     DistributionError::UnsafeToolArchive {
         entry: entry.into(),
         reason: reason.into(),
+    }
+}
+
+#[cfg(test)]
+mod zip_entry_kind_tests {
+    use super::validate_zip_entry_kind;
+    use crate::DistributionError;
+
+    #[test]
+    fn zip_names_and_unix_modes_must_describe_the_same_entry_kind() {
+        for (is_directory, unix_mode) in [(false, 0o040755), (true, 0o100644)] {
+            assert!(matches!(
+                validate_zip_entry_kind("runtime", is_directory, unix_mode).unwrap_err(),
+                DistributionError::UnsafeToolArchive { .. }
+            ));
+        }
+
+        validate_zip_entry_kind("runtime/", true, 0o040755).unwrap();
+        validate_zip_entry_kind("runtime/app", false, 0o100755).unwrap();
     }
 }

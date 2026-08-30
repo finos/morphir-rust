@@ -50,16 +50,17 @@
 //!     TrustedToolRepository, activate_installed_tool,
 //! };
 //! use semver::Version;
-//! use std::{fs, path::Path};
+//! use std::fs;
 //!
 //! # async fn acquire_tool() -> Result<(), Box<dyn std::error::Error>> {
 //! let home = MorphirHome::resolve()?;
-//! let trusted_root = fs::read("./trusted-root.json")?;
+//! let repository_root = fs::canonicalize("./repository")?;
+//! let trusted_root = fs::read(repository_root.join("trusted-root.json"))?;
 //! let repository = TrustedToolRepository::load_filesystem(
 //!     &trusted_root,
-//!     Path::new("./repository/metadata"),
-//!     Path::new("./repository/targets"),
-//!     &home.indexes_cache_dir().join("tools"),
+//!     &repository_root.join("metadata"),
+//!     &repository_root.join("targets"),
+//!     &home.tool_repository_state_dir(),
 //! )
 //! .await?;
 //! let id = ToolId::parse("desktop")?;

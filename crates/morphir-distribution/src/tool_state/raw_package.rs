@@ -43,16 +43,20 @@ pub(super) fn prepare(
     )?;
     verify_one_file(stored.path(), resolved.digest(), resolved.length(), false)?;
 
-    let digest_directory = stored
-        .path()
+    let digest_directory = home.tools_store_dir().join(resolved.digest().to_string());
+    let destination = extracted_package_path(&digest_directory, resolved.artifact());
+    let package_directory = destination
         .parent()
-        .expect("CAS artifact has a digest directory");
-    let destination = extracted_package_path(digest_directory, resolved.artifact());
+        .expect("tool package destination has a parent");
+    fs::create_dir_all(package_directory).map_err(|source| DistributionError::Io {
+        path: package_directory.to_path_buf(),
+        source,
+    })?;
     let staging = tempfile::Builder::new()
         .prefix(".package-")
-        .tempdir_in(digest_directory)
+        .tempdir_in(package_directory)
         .map_err(|source| DistributionError::Io {
-            path: digest_directory.to_path_buf(),
+            path: package_directory.to_path_buf(),
             source,
         })?;
     let staging_root = staging.path().join("root");

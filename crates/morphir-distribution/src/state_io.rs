@@ -110,7 +110,8 @@ pub(crate) fn commit_state_pair(
             writer,
         );
     }
-    writer.cleanup_journal(&journal_path)
+    cleanup_committed_journal(writer, &journal_path);
+    Ok(())
 }
 
 pub(crate) fn remove_state_pair(
@@ -152,7 +153,18 @@ pub(crate) fn remove_state_pair(
             writer,
         );
     }
-    writer.cleanup_journal(&journal_path)
+    cleanup_committed_journal(writer, &journal_path);
+    Ok(())
+}
+
+fn cleanup_committed_journal(writer: &impl StateWriter, journal_path: &Path) {
+    if let Err(error) = writer.cleanup_journal(journal_path) {
+        tracing::warn!(
+            path = %journal_path.display(),
+            error = %error,
+            "state update committed; transaction journal cleanup deferred"
+        );
+    }
 }
 
 fn rollback_state_error(
@@ -393,6 +405,8 @@ mod tests {
         catalog_path: PathBuf,
     }
 
+    struct FailingJournalCleanup;
+
     impl StateWriter for FailingCatalogAndJournalCleanup {
         fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
             atomic_write_bytes(path, bytes)?;
@@ -403,6 +417,19 @@ mod tests {
                 });
             }
             Ok(())
+        }
+
+        fn cleanup_journal(&self, path: &Path) -> Result<()> {
+            Err(DistributionError::Io {
+                path: path.to_path_buf(),
+                source: std::io::Error::other("injected journal cleanup failure"),
+            })
+        }
+    }
+
+    impl StateWriter for FailingJournalCleanup {
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            atomic_write_bytes(path, bytes)
         }
 
         fn cleanup_journal(&self, path: &Path) -> Result<()> {
@@ -463,5 +490,54 @@ mod tests {
 
         assert_eq!(fs::read(lock).unwrap(), b"old lock");
         assert_eq!(fs::read(catalog).unwrap(), b"old catalog");
+    }
+
+    #[test]
+    fn committed_state_pair_succeeds_when_journal_cleanup_is_deferred() {
+        let root = tempfile::tempdir().unwrap();
+        let locks = root.path().join("locks");
+        let lock = locks.join("desktop.json");
+        let catalog = root.path().join("catalog.json");
+        atomic_write_bytes(&lock, b"old lock").unwrap();
+        atomic_write_bytes(&catalog, b"old catalog").unwrap();
+        let journal = state_pair_journal_path(&lock);
+
+        commit_state_pair(
+            &lock,
+            b"new lock",
+            &catalog,
+            b"new catalog",
+            &FailingJournalCleanup,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&lock).unwrap(), b"new lock");
+        assert_eq!(fs::read(&catalog).unwrap(), b"new catalog");
+        assert!(journal.exists());
+        recover_state_pairs(&locks, &catalog).unwrap();
+        assert_eq!(fs::read(lock).unwrap(), b"new lock");
+        assert_eq!(fs::read(catalog).unwrap(), b"new catalog");
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn removed_state_pair_succeeds_when_journal_cleanup_is_deferred() {
+        let root = tempfile::tempdir().unwrap();
+        let locks = root.path().join("locks");
+        let lock = locks.join("desktop.json");
+        let catalog = root.path().join("catalog.json");
+        atomic_write_bytes(&lock, b"old lock").unwrap();
+        atomic_write_bytes(&catalog, b"old catalog").unwrap();
+        let journal = state_pair_journal_path(&lock);
+
+        remove_state_pair(&lock, &catalog, b"new catalog", &FailingJournalCleanup).unwrap();
+
+        assert!(!lock.exists());
+        assert_eq!(fs::read(&catalog).unwrap(), b"new catalog");
+        assert!(journal.exists());
+        recover_state_pairs(&locks, &catalog).unwrap();
+        assert!(!lock.exists());
+        assert_eq!(fs::read(catalog).unwrap(), b"new catalog");
+        assert!(!journal.exists());
     }
 }

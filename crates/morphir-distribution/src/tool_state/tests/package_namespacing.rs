@@ -1,10 +1,18 @@
+use super::super::package_key::package_path;
 use super::super::{ToolInstaller, ToolPackageStore, activate_installed_tool};
 use super::support::write_zip;
-use crate::{Channel, Selection, Sha256Digest, ToolId, ToolReleaseRecord};
+use crate::{
+    ArchiveFormat, Channel, RelativeArtifactPath, Selection, Sha256Digest, ToolId,
+    ToolReleaseRecord,
+};
 use morphir_common::home::MorphirHome;
 use std::fs;
 
 fn zip_release(id: &str, name: &str, entry_point: &str) -> ToolReleaseRecord {
+    zip_release_named(id, name, entry_point, "bundle.zip")
+}
+
+fn zip_release_named(id: &str, name: &str, entry_point: &str, filename: &str) -> ToolReleaseRecord {
     serde_json::from_value(serde_json::json!({
         "schemaVersion": 1,
         "kind": "morphir-tool-release",
@@ -14,13 +22,48 @@ fn zip_release(id: &str, name: &str, entry_point: &str) -> ToolReleaseRecord {
         "status": "active",
         "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
         "artifacts": [{
-            "targetPath": format!("artifacts/{id}/1.0.0/bundle.zip"),
+            "targetPath": format!("artifacts/{id}/1.0.0/{filename}"),
             "platform": { "os": "windows", "arch": "x86_64" },
             "archive": { "format": "zip", "entryPoint": entry_point },
             "launch": { "kind": "executable", "path": entry_point, "args": [] }
         }]
     }))
     .unwrap()
+}
+
+#[test]
+fn archive_source_filename_cannot_collide_with_its_package_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let entry_point = RelativeArtifactPath::parse("desktop.exe").unwrap();
+    let colliding_name = package_path(
+        std::path::Path::new("digest"),
+        ArchiveFormat::Zip,
+        &entry_point,
+    )
+    .file_name()
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_owned();
+    let download = root.path().join(&colliding_name);
+    write_zip(&download, &[("desktop.exe", b"desktop")]);
+    let bytes = fs::read(&download).unwrap();
+    let package = ToolPackageStore::new(&home)
+        .prepare(
+            crate::ResolvedTrustedToolArtifact::test_fixture(
+                zip_release_named("desktop", "Morphir Desktop", "desktop.exe", &colliding_name),
+                Selection::Channel(Channel::Stable),
+                Sha256Digest::of_bytes(&bytes),
+                bytes.len() as u64,
+            ),
+            crate::DownloadedToolArtifact::test_fixture(download),
+        )
+        .unwrap();
+
+    ToolInstaller::new(&home).install(package).unwrap();
+    let launch = activate_installed_tool(&home, &ToolId::parse("desktop").unwrap()).unwrap();
+    assert_eq!(fs::read(launch.program()).unwrap(), b"desktop");
 }
 
 fn raw_release(id: &str, name: &str, filename: &str) -> ToolReleaseRecord {

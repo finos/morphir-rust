@@ -172,7 +172,7 @@ fn tools_and_extensions_share_verification_but_not_store_namespaces() {
 
     assert_eq!(
         tool.store_path().to_string_lossy().replace('\\', "/"),
-        format!("store/tools/sha256/{digest}/example")
+        format!("store/tools/sha256/{digest}/objects/example")
     );
     assert_eq!(
         extension.store_path().to_string_lossy().replace('\\', "/"),

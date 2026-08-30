@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 pub struct ArtifactStore {
     home_root: PathBuf,
     root: PathBuf,
+    object_namespace: Option<&'static str>,
 }
 
 impl ArtifactStore {
@@ -29,6 +30,7 @@ impl ArtifactStore {
         Self {
             home_root: home.root().to_path_buf(),
             root: home.extensions_store_dir(),
+            object_namespace: None,
         }
     }
 
@@ -37,6 +39,7 @@ impl ArtifactStore {
         Self {
             home_root: home.root().to_path_buf(),
             root: home.tools_store_dir(),
+            object_namespace: Some("objects"),
         }
     }
 
@@ -121,7 +124,24 @@ impl ArtifactStore {
                 root: canonical_home.clone(),
             }
         })?;
-        let destination = digest_directory.join(filename.as_str());
+        let requested_object_directory = self.object_namespace.map_or_else(
+            || digest_directory.clone(),
+            |name| digest_directory.join(name),
+        );
+        fs::create_dir_all(&requested_object_directory).map_err(|source| {
+            DistributionError::Io {
+                path: requested_object_directory.clone(),
+                source,
+            }
+        })?;
+        let object_directory = canonicalize(&requested_object_directory)?;
+        ensure_home_contained(&digest_directory, &object_directory).map_err(|_| {
+            DistributionError::InstalledPathEscape {
+                path: object_directory.clone(),
+                root: canonical_home.clone(),
+            }
+        })?;
+        let destination = object_directory.join(filename.as_str());
 
         if destination.exists() {
             let canonical_destination = canonicalize(&destination)?;
@@ -138,9 +158,9 @@ impl ArtifactStore {
 
         let mut staged = tempfile::Builder::new()
             .prefix(".stage-")
-            .tempfile_in(&digest_directory)
+            .tempfile_in(&object_directory)
             .map_err(|source| DistributionError::Io {
-                path: digest_directory.clone(),
+                path: object_directory.clone(),
                 source,
             })?;
         let actual = copy_and_hash(&canonical_source, staged.as_file_mut())?;

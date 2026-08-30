@@ -30,5 +30,7 @@ pub(super) fn package_path(
         entry_point.as_str()
     );
     let key = Sha256Digest::of_bytes(contract.as_bytes());
-    digest_directory.join(format!("package-{key}"))
+    digest_directory
+        .join("packages")
+        .join(format!("package-{key}"))
 }

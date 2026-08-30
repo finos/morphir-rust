@@ -126,16 +126,23 @@ impl<'home> ToolPackageStore<'home> {
             });
         }
 
-        let digest_directory = stored
-            .path()
+        let digest_directory = self
+            .home
+            .tools_store_dir()
+            .join(resolved.digest().to_string());
+        let destination = extracted_package_path(&digest_directory, resolved.artifact());
+        let package_directory = destination
             .parent()
-            .expect("CAS artifact has a digest directory");
-        let destination = extracted_package_path(digest_directory, resolved.artifact());
+            .expect("tool package destination has a parent");
+        fs::create_dir_all(package_directory).map_err(|source| DistributionError::Io {
+            path: package_directory.to_path_buf(),
+            source,
+        })?;
         let staging = tempfile::Builder::new()
             .prefix(".package-")
-            .tempdir_in(digest_directory)
+            .tempdir_in(package_directory)
             .map_err(|source| DistributionError::Io {
-                path: digest_directory.to_path_buf(),
+                path: package_directory.to_path_buf(),
                 source,
             })?;
         let staging_root = staging.path().join("root");
@@ -215,16 +222,23 @@ impl<'home> ToolPackageStore<'home> {
             });
         }
 
-        let digest_directory = stored
-            .path()
+        let digest_directory = self
+            .home
+            .tools_store_dir()
+            .join(resolved.digest().to_string());
+        let destination = extracted_package_path(&digest_directory, resolved.artifact());
+        let package_directory = destination
             .parent()
-            .expect("CAS artifact has a digest directory");
-        let destination = extracted_package_path(digest_directory, resolved.artifact());
+            .expect("tool package destination has a parent");
+        fs::create_dir_all(package_directory).map_err(|source| DistributionError::Io {
+            path: package_directory.to_path_buf(),
+            source,
+        })?;
         let staging = tempfile::Builder::new()
             .prefix(".package-")
-            .tempdir_in(digest_directory)
+            .tempdir_in(package_directory)
             .map_err(|source| DistributionError::Io {
-                path: digest_directory.to_path_buf(),
+                path: package_directory.to_path_buf(),
                 source,
             })?;
         let staging_root = staging.path().join("root");
@@ -321,12 +335,16 @@ pub(super) fn home_relative(home: &MorphirHome, path: &Path) -> Result<RelativeA
         path: home.root().to_path_buf(),
         source,
     })?;
-    let relative =
-        path.strip_prefix(&canonical_home)
-            .map_err(|_| DistributionError::InstalledPathEscape {
-                path: path.to_path_buf(),
-                root: canonical_home,
-            })?;
+    let canonical_path = fs::canonicalize(path).map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let relative = canonical_path.strip_prefix(&canonical_home).map_err(|_| {
+        DistributionError::InstalledPathEscape {
+            path: canonical_path.clone(),
+            root: canonical_home,
+        }
+    })?;
     RelativeArtifactPath::from_native_path(relative)
 }
 

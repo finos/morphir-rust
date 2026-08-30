@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A shared, side-effect-free cache maintenance policy planner with portable owned-entry identities,
   active-lease and unclassified protections, deterministic age-then-LRU selection, bounded byte
   accounting, stable decision reasons, and serializable dry-run results.
+- A bounded Morphir Home cache inventory that measures registered namespace entries without
+  following links or junctions and reports unknown or unsafe content as protected, unclassified
+  data.
 - Morphir Home paths for the verified tool store, exact tool locks, and the shared tool-state
   transaction lock.
 - A shared verified-file publication boundary for tool and extension content-addressed stores,

@@ -3113,6 +3113,8 @@ name = "morphir-common"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "cap-fs-ext",
+ "cap-std",
  "cucumber",
  "dirs",
  "flate2",
@@ -3121,6 +3123,7 @@ dependencies = [
  "morphir-core",
  "nbformat",
  "reqwest",
+ "same-file",
  "secrecy",
  "serde",
  "serde-saphyr",
@@ -3131,6 +3134,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml 1.1.0+spec-1.1.0",
+ "unicode-casefold",
+ "unicode-normalization",
  "uuid",
  "vfs",
  "zip",

@@ -50,6 +50,7 @@ mod state_io;
 mod store;
 mod tool_repository;
 mod tool_resolver;
+mod tool_state;
 
 pub use domain::{
     ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability,
@@ -71,3 +72,8 @@ pub use tool_repository::{
     DownloadedToolArtifact, ResolvedTrustedToolArtifact, TrustedToolRepository,
 };
 pub use tool_resolver::{ResolvedToolRelease, resolve_tool};
+pub use tool_state::{
+    InstalledTool, InstalledToolSnapshot, ToolInstaller, ToolLock, ToolPackageStore,
+    VerifiedToolPackage, VerifiedToolProcess, activate_installed_tool, list_installed_tools,
+    read_tool_lock,
+};

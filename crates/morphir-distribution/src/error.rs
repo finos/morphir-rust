@@ -111,6 +111,30 @@ pub enum DistributionError {
         /// Required target path.
         target: String,
     },
+    /// Installed tool bytes do not have the authenticated target length.
+    #[error("length mismatch for {path}: expected {expected} bytes, got {actual}")]
+    ToolLengthMismatch {
+        /// Installed tool path.
+        path: PathBuf,
+        /// Length authenticated by TUF targets metadata.
+        expected: u64,
+        /// Observed file length.
+        actual: u64,
+    },
+    /// The selected packaging format is not supported by this installation path.
+    #[error("tool archive format {format} is not supported by this installer")]
+    UnsupportedToolArchive {
+        /// Unsupported archive format.
+        format: String,
+    },
+    /// A raw tool's launch path does not name the downloaded target file.
+    #[error("raw tool launch path {entry_point} does not match target file {target}")]
+    ToolEntryPointMismatch {
+        /// Downloaded target filename.
+        target: String,
+        /// Declared launch entry point.
+        entry_point: String,
+    },
     /// A release declared multiple artifacts for one platform.
     #[error("release {version} contains more than one artifact for platform {platform}")]
     AmbiguousPlatform {
@@ -174,11 +198,23 @@ pub enum DistributionError {
         /// Requested extension identity.
         id: crate::ExtensionId,
     },
+    /// No installed tool catalog entry exists for the requested identity.
+    #[error("tool {id} is not installed")]
+    ToolNotInstalled {
+        /// Requested tool identity.
+        id: crate::ToolId,
+    },
     /// Catalog and lock records disagree about exact installed content.
     #[error("installed catalog and lock disagree for extension {id}")]
     StateMismatch {
         /// Extension whose durable records disagree.
         id: crate::ExtensionId,
+    },
+    /// Tool catalog and exact lock disagree about active content.
+    #[error("installed catalog and lock disagree for tool {id}")]
+    ToolStateMismatch {
+        /// Tool whose durable records disagree.
+        id: crate::ToolId,
     },
     /// A state transaction failed and its previous files could not be restored.
     #[error("distribution state update failed ({original}); rollback also failed ({rollback})")]

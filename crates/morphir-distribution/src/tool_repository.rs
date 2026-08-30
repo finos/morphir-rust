@@ -56,6 +56,26 @@ impl ResolvedTrustedToolArtifact {
     pub fn targets_version(&self) -> u64 {
         self.targets_version
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture(
+        release: ToolReleaseRecord,
+        selection: Selection,
+        digest: Sha256Digest,
+        length: u64,
+    ) -> Self {
+        let artifact = release.artifacts()[0].clone();
+        let target = TargetName::new(artifact.target_path().as_str()).unwrap();
+        Self {
+            release,
+            artifact,
+            selection,
+            target,
+            digest,
+            length,
+            targets_version: 1,
+        }
+    }
 }
 
 /// A fully downloaded target whose length and digest were verified by TUF.
@@ -68,6 +88,15 @@ impl DownloadedToolArtifact {
     /// Return the verified downloaded target path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn into_path(self) -> PathBuf {
+        self.path
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture(path: PathBuf) -> Self {
+        Self { path }
     }
 }
 

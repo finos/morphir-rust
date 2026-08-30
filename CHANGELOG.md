@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro
+  JSON schemas, JSON protocols, or Avro IDL. The backend supports schema-only, entry-point protocol,
+  and public protocol modes; represents constants as zero-argument messages with
+  `morphir.value-kind=constant`; and can be released independently with versioned extension tags.
+- Bounded Extism hosting and installed-extension activation for MEP backends, including exact
+  artifact verification, locked backend capability metadata, and configurable generation options.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

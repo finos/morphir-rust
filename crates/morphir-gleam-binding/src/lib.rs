@@ -53,6 +53,11 @@ impl Extension for GleamExtension {
                 incremental: false,
                 fragments: false,
             }),
+            backend: Some(BackendCapability {
+                targets: vec!["gleam".into()],
+                ir_versions: vec![GLEAM_IR_VERSION.into()],
+                generate: true,
+            }),
             ..Default::default()
         }
     }
@@ -819,6 +824,14 @@ mod tests {
                 "compile": true,
                 "incremental": false,
                 "fragments": false
+            })
+        );
+        assert_eq!(
+            capabilities["backend"],
+            serde_json::json!({
+                "targets": ["gleam"],
+                "irVersions": [IR_VERSION],
+                "generate": true
             })
         );
     }

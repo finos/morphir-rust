@@ -15,7 +15,7 @@ use super::super::{
     discovery::discover_config_candidates,
     sources::{ConfigLoadOptions, EnvSelection, SourceSelection},
 };
-use super::budget::{PayloadBudget, read_utf8_file};
+use super::budget::{PayloadBudget, PayloadKind, read_utf8_file};
 
 pub(super) fn selected_mount(
     selection: &SourceSelection,
@@ -105,11 +105,7 @@ pub(super) fn apply_user_override_selection(
         SourceSelection::Explicit(source) => {
             let primary = modern_root_primary(tree, source)?;
             let candidates = morphir_workspace::config::adjacent_user_candidates(&primary);
-            for candidate in &candidates {
-                if matches!(tree.entries.get(candidate), Some(FileEntry::File { .. })) {
-                    tree.entries.remove(candidate);
-                }
-            }
+            remove_user_override_files(tree, payload, |path| candidates.contains(path));
             materialize_explicit_user_override(tree, source, &primary, payload)
         }
     }
@@ -122,12 +118,30 @@ pub(super) fn is_user_override_path(path: &RelativePath) -> bool {
     )
 }
 
-pub(super) fn config_is_retained(selection: &SourceSelection, path: &RelativePath) -> bool {
+pub(super) fn config_payload_kind(selection: &SourceSelection, path: &RelativePath) -> PayloadKind {
     match selection {
-        SourceSelection::Discover => true,
-        SourceSelection::Skip => !is_user_override_path(path),
-        SourceSelection::Explicit(_) => !is_root_user_override_path(path),
+        SourceSelection::Discover => PayloadKind::Final,
+        SourceSelection::Skip if is_user_override_path(path) => PayloadKind::Omit,
+        SourceSelection::Explicit(_) if is_root_user_override_path(path) => PayloadKind::Transient,
+        SourceSelection::Skip | SourceSelection::Explicit(_) => PayloadKind::Final,
     }
+}
+
+fn remove_user_override_files(
+    tree: &mut FileTree,
+    payload: &mut PayloadBudget,
+    remove: impl Fn(&RelativePath) -> bool,
+) {
+    tree.entries.retain(|path, entry| {
+        if remove(path) && matches!(entry, FileEntry::File { .. }) {
+            if let FileEntry::File { text } = entry {
+                payload.release_transient(text.len());
+            }
+            false
+        } else {
+            true
+        }
+    });
 }
 
 fn is_root_user_override_path(path: &RelativePath) -> bool {

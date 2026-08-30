@@ -30,7 +30,7 @@ use super::{
 use aliases::AliasBudgets;
 use budget::PayloadBudget;
 use mounts::{
-    apply_user_override_selection, config_is_retained, selected_environment, selected_mount,
+    apply_user_override_selection, config_payload_kind, selected_environment, selected_mount,
 };
 use traversal::{TraversalBudgets, build_tree_from_capability};
 
@@ -234,7 +234,7 @@ fn bind_workspace_discovery_request_with(
         );
     }
     let mut payload = PayloadBudget::new(traversal_budgets.config_bytes);
-    let account_config = |path: &RelativePath| config_is_retained(&options.user_override, path);
+    let classify_config = |path: &RelativePath| config_payload_kind(&options.user_override, path);
     let mut development_root = build_tree_from_capability(
         &root_capability,
         &canonical_root,
@@ -242,7 +242,7 @@ fn bind_workspace_discovery_request_with(
         alias_budgets,
         traversal_budgets,
         &mut payload,
-        &account_config,
+        &classify_config,
     )?;
     apply_user_override_selection(&mut development_root, &options.user_override, &mut payload)?;
 

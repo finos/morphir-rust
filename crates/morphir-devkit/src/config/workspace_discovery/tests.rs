@@ -12,7 +12,7 @@ use super::{
     aliases::{
         AliasBudgets, DirectoryAlias, materialize_directory_aliases, record_directory_alias,
     },
-    budget::{PayloadBudget, entry_bytes},
+    budget::{PayloadBudget, PayloadKind, entry_bytes},
     mounts::{apply_user_override_selection, selected_mount},
     traversal::{BoundaryEvent, TraversalBudgets, build_tree_with},
     *,
@@ -582,6 +582,127 @@ fn replaced_natural_override_does_not_count_toward_final_payload() {
 }
 
 #[test]
+fn replaced_override_bodies_have_a_separate_resident_cap() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = "[project]\nname = 'a'\n";
+    let natural_toml = "x = '12345678901234567890'\n";
+    let natural_yaml = "x: 123456789012345678901234\n";
+    let explicit = "[project]\nversion = '2'\n";
+    fs::write(root.path().join("morphir.toml"), workspace).unwrap();
+    fs::write(root.path().join("morphir.user.toml"), natural_toml).unwrap();
+    fs::write(root.path().join("morphir.user.yaml"), natural_yaml).unwrap();
+    let explicit_path = root.path().join("selected.toml");
+    fs::write(&explicit_path, explicit).unwrap();
+    let options = ConfigLoadOptions {
+        user_override: SourceSelection::Explicit(explicit_path),
+        ..ConfigLoadOptions::project_only()
+    };
+    let limit = workspace.len() + explicit.len();
+    assert!(natural_toml.len() <= limit);
+    assert!(natural_yaml.len() <= limit);
+    assert!(natural_toml.len() + natural_yaml.len() > limit);
+
+    let error = bind_workspace_discovery_request_with_budgets(
+        root.path(),
+        &options,
+        AliasBudgets::DEFAULT,
+        TraversalBudgets {
+            config_bytes: limit,
+            ..TraversalBudgets::DEFAULT
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("workspace.traversal.resource-limit")
+    );
+}
+
+#[test]
+fn skipped_override_bodies_are_not_transiently_materialized() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = "[workspace]\nmembers = ['packages/*']\n";
+    fs::write(root.path().join("morphir.toml"), workspace).unwrap();
+    let packages = root.path().join("packages");
+    fs::create_dir(&packages).unwrap();
+    for index in 0..32 {
+        let package = packages.join(format!("package-{index:02}"));
+        fs::create_dir(&package).unwrap();
+        fs::write(
+            package.join("morphir.user.toml"),
+            "[project]\ndescription = 'this skipped body must never be resident'\n",
+        )
+        .unwrap();
+    }
+    let options = ConfigLoadOptions {
+        user_override: SourceSelection::Skip,
+        ..ConfigLoadOptions::project_only()
+    };
+
+    let (_, request) = bind_workspace_discovery_request_with_budgets(
+        root.path(),
+        &options,
+        AliasBudgets::DEFAULT,
+        TraversalBudgets {
+            config_bytes: workspace.len(),
+            ..TraversalBudgets::DEFAULT
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        request
+            .development_root
+            .entries
+            .values()
+            .map(entry_bytes)
+            .sum::<usize>(),
+        workspace.len()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn aliases_do_not_materialize_skipped_override_bodies() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = "[workspace]\nmembers = ['alias']\n";
+    fs::write(root.path().join("morphir.toml"), workspace).unwrap();
+    let real = root.path().join("real");
+    fs::create_dir(&real).unwrap();
+    fs::write(
+        real.join("morphir.user.toml"),
+        "[project]\ndescription = 'large skipped alias body'\n",
+    )
+    .unwrap();
+    symlink(&real, root.path().join("alias")).unwrap();
+    let options = ConfigLoadOptions {
+        user_override: SourceSelection::Skip,
+        ..ConfigLoadOptions::project_only()
+    };
+
+    let (_, request) = bind_workspace_discovery_request_with_budgets(
+        root.path(),
+        &options,
+        AliasBudgets::DEFAULT,
+        TraversalBudgets {
+            config_bytes: workspace.len(),
+            ..TraversalBudgets::DEFAULT
+        },
+    )
+    .unwrap();
+
+    assert!(
+        !request
+            .development_root
+            .entries
+            .keys()
+            .any(|path| { path.as_str().ends_with("morphir.user.toml") })
+    );
+}
+
+#[test]
 fn payload_budget_accepts_exact_limit_and_rejects_overflow() {
     let mut exact = PayloadBudget::new(usize::MAX);
     exact.reserve(usize::MAX).unwrap();
@@ -911,8 +1032,10 @@ fn many_distinct_shallow_alias_targets_use_bounded_subtree_index_work() {
     };
 
     let mut payload = payload_for_entries(&entries);
-    materialize_directory_aliases(&mut aliases, &mut entries, budgets, &mut payload, &|_| true)
-        .unwrap();
+    materialize_directory_aliases(&mut aliases, &mut entries, budgets, &mut payload, &|_| {
+        PayloadKind::Final
+    })
+    .unwrap();
 
     assert_eq!(
         entries
@@ -953,7 +1076,7 @@ fn punctuation_sibling_does_not_hide_direct_alias_descendants() {
         &mut entries,
         AliasBudgets::DEFAULT,
         &mut payload,
-        &|_| true,
+        &|_| PayloadKind::Final,
     )
     .unwrap();
 
@@ -1002,7 +1125,7 @@ fn punctuation_sibling_does_not_hide_nested_alias_edges() {
         &mut entries,
         AliasBudgets::DEFAULT,
         &mut payload,
-        &|_| true,
+        &|_| PayloadKind::Final,
     )
     .unwrap();
 

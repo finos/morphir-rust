@@ -9,30 +9,57 @@ use morphir_workspace::FileEntry;
 #[derive(Debug)]
 pub(super) struct PayloadBudget {
     limit: usize,
-    used: usize,
+    final_used: usize,
+    transient_used: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PayloadKind {
+    Final,
+    Transient,
+    Omit,
 }
 
 impl PayloadBudget {
     pub(super) const fn new(limit: usize) -> Self {
-        Self { limit, used: 0 }
+        Self {
+            limit,
+            final_used: 0,
+            transient_used: 0,
+        }
     }
 
     pub(super) const fn remaining(&self) -> usize {
-        self.limit - self.used
-    }
-
-    pub(super) const fn limit(&self) -> usize {
-        self.limit
+        self.limit - self.final_used
     }
 
     pub(super) fn reserve(&mut self, bytes: usize) -> Result<()> {
-        let Some(next) = self.used.checked_add(bytes) else {
-            return resource_limit(self.limit);
+        Self::reserve_counter(&mut self.final_used, self.limit, bytes)
+    }
+
+    pub(super) const fn transient_remaining(&self) -> usize {
+        self.limit - self.transient_used
+    }
+
+    pub(super) fn reserve_transient(&mut self, bytes: usize) -> Result<()> {
+        Self::reserve_counter(&mut self.transient_used, self.limit, bytes)
+    }
+
+    pub(super) fn release_transient(&mut self, bytes: usize) {
+        self.transient_used = self
+            .transient_used
+            .checked_sub(bytes)
+            .expect("only resident transient payloads are released");
+    }
+
+    fn reserve_counter(counter: &mut usize, limit: usize, bytes: usize) -> Result<()> {
+        let Some(next) = counter.checked_add(bytes) else {
+            return resource_limit(limit);
         };
-        if next > self.limit {
-            return resource_limit(self.limit);
+        if next > limit {
+            return resource_limit(limit);
         }
-        self.used = next;
+        *counter = next;
         Ok(())
     }
 }

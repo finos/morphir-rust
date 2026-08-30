@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, anyhow, bail};
 use morphir_workspace::{FileEntry, RelativePath};
 
-use super::budget::PayloadBudget;
+use super::budget::{PayloadBudget, PayloadKind};
 
 #[derive(Debug)]
 pub(super) struct DirectoryAlias {
@@ -30,7 +30,7 @@ pub(super) fn materialize_directory_aliases(
     entries: &mut BTreeMap<RelativePath, FileEntry>,
     budgets: AliasBudgets,
     payload: &mut PayloadBudget,
-    account_config: &dyn Fn(&RelativePath) -> bool,
+    classify_config: &dyn Fn(&RelativePath) -> PayloadKind,
 ) -> Result<()> {
     aliases.sort_by(|left, right| left.lexical_path.cmp(&right.lexical_path));
     if aliases.len() > budgets.alias_edges {
@@ -107,8 +107,10 @@ pub(super) fn materialize_directory_aliases(
                         target: target.clone(),
                     },
                     IndexedEntry::File { source, bytes } => {
-                        if account_config(&alias_path) {
-                            payload.reserve(*bytes)?;
+                        match classify_config(&alias_path) {
+                            PayloadKind::Final => payload.reserve(*bytes)?,
+                            PayloadKind::Transient => payload.reserve_transient(*bytes)?,
+                            PayloadKind::Omit => continue,
                         }
                         entries
                             .get(source)

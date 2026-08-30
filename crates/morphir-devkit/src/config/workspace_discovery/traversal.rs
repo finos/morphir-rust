@@ -14,7 +14,7 @@ use morphir_workspace::{FileEntry, FileTree, RelativePath};
 use super::aliases::{
     AliasBudgets, DirectoryAlias, materialize_directory_aliases, record_directory_alias,
 };
-use super::budget::{PayloadBudget, resource_limit};
+use super::budget::{PayloadBudget, PayloadKind, resource_limit};
 
 pub(super) fn build_tree_from_capability(
     root: &Dir,
@@ -23,7 +23,7 @@ pub(super) fn build_tree_from_capability(
     alias_budgets: AliasBudgets,
     traversal_budgets: TraversalBudgets,
     payload: &mut PayloadBudget,
-    account_config: &dyn Fn(&RelativePath) -> bool,
+    classify_config: &dyn Fn(&RelativePath) -> PayloadKind,
 ) -> Result<FileTree> {
     build_tree_with_payload(
         root,
@@ -32,7 +32,7 @@ pub(super) fn build_tree_from_capability(
         alias_budgets,
         traversal_budgets,
         payload,
-        account_config,
+        classify_config,
         &mut |_, _| {},
     )
 }
@@ -47,7 +47,7 @@ pub(super) fn build_tree_with(
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<FileTree> {
     let mut payload = PayloadBudget::new(traversal_budgets.config_bytes);
-    let account_all = |_: &RelativePath| true;
+    let account_all = |_: &RelativePath| PayloadKind::Final;
     build_tree_with_payload(
         root,
         canonical_root,
@@ -68,7 +68,7 @@ fn build_tree_with_payload(
     alias_budgets: AliasBudgets,
     traversal_budgets: TraversalBudgets,
     payload: &mut PayloadBudget,
-    account_config: &dyn Fn(&RelativePath) -> bool,
+    classify_config: &dyn Fn(&RelativePath) -> PayloadKind,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<FileTree> {
     let mut entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
@@ -86,7 +86,7 @@ fn build_tree_with_payload(
         traversal_budgets,
         stats: &mut stats,
         payload,
-        account_config,
+        classify_config,
         boundary_hook,
     }
     .walk(root, &RelativePath::root(), &RelativePath::root(), 0)?;
@@ -95,7 +95,7 @@ fn build_tree_with_payload(
         &mut entries,
         alias_budgets,
         payload,
-        account_config,
+        classify_config,
     )?;
     Ok(FileTree { entries })
 }
@@ -183,7 +183,7 @@ struct Traversal<'a> {
     traversal_budgets: TraversalBudgets,
     stats: &'a mut TraversalStats,
     payload: &'a mut PayloadBudget,
-    account_config: &'a dyn Fn(&RelativePath) -> bool,
+    classify_config: &'a dyn Fn(&RelativePath) -> PayloadKind,
     boundary_hook: &'a mut dyn FnMut(BoundaryEvent, &RelativePath),
 }
 
@@ -278,7 +278,7 @@ impl Traversal<'_> {
                     })?;
                 } else if target_metadata.is_file() && is_recognized_config(&lexical_path) {
                     let confined_target = relative_native_path(&canonical_target).to_path_buf();
-                    let account_payload = (self.account_config)(&lexical_path);
+                    let payload_kind = (self.classify_config)(&lexical_path);
                     insert_config_file(
                         self.root,
                         self.entries,
@@ -286,7 +286,7 @@ impl Traversal<'_> {
                         confined_target,
                         self.traversal_budgets,
                         self.payload,
-                        account_payload,
+                        payload_kind,
                         self.boundary_hook,
                     )?;
                 }
@@ -325,7 +325,7 @@ impl Traversal<'_> {
                         .insert(lexical_path.clone(), FileEntry::Directory);
                 }
             } else if link_metadata.is_file() && is_recognized_config(&lexical_path) {
-                let account_payload = (self.account_config)(&lexical_path);
+                let payload_kind = (self.classify_config)(&lexical_path);
                 insert_config_file(
                     self.root,
                     self.entries,
@@ -333,7 +333,7 @@ impl Traversal<'_> {
                     canonical_child,
                     self.traversal_budgets,
                     self.payload,
-                    account_payload,
+                    payload_kind,
                     self.boundary_hook,
                 )?;
             }
@@ -414,13 +414,13 @@ fn insert_config_file(
     confined_path: PathBuf,
     budgets: TraversalBudgets,
     payload: &mut PayloadBudget,
-    account_payload: bool,
+    payload_kind: PayloadKind,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<()> {
-    let remaining = if account_payload {
-        payload.remaining()
-    } else {
-        payload.limit()
+    let remaining = match payload_kind {
+        PayloadKind::Final => payload.remaining(),
+        PayloadKind::Transient => payload.transient_remaining(),
+        PayloadKind::Omit => return Ok(()),
     };
     let metadata = root.metadata(&confined_path).with_context(|| {
         format!(
@@ -449,8 +449,10 @@ fn insert_config_file(
             confined_path.display()
         )
     })?;
-    if account_payload {
-        payload.reserve(bytes.len())?;
+    match payload_kind {
+        PayloadKind::Final => payload.reserve(bytes.len())?,
+        PayloadKind::Transient => payload.reserve_transient(bytes.len())?,
+        PayloadKind::Omit => unreachable!("omitted payload returned before reading"),
     }
     let text = String::from_utf8(bytes).with_context(|| {
         format!(

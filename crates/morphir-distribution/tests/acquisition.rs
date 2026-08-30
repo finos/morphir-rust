@@ -78,7 +78,11 @@ impl DistributionMother {
             "channels": ["stable"],
             "mepVersions": ["0.1"],
             "capabilities": ["backend"],
-            "backend": { "targets": ["avro"], "irVersions": ["3", "4"] },
+            "backend": {
+                "targets": ["avro"],
+                "irVersions": ["3", "4"],
+                "generate": false
+            },
             "artifacts": [{
                 "runtime": "wasm",
                 "source": {
@@ -445,6 +449,7 @@ fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
     assert_eq!(lock.digest(), &mother.digest);
     assert_eq!(lock.backend().unwrap().targets(), ["avro"]);
     assert_eq!(lock.backend().unwrap().ir_versions(), ["3", "4"]);
+    assert!(!lock.backend().unwrap().generate());
     assert!(!lock.executable());
 
     let catalog = InstalledCatalog::load(&mother.home).unwrap();
@@ -454,6 +459,7 @@ fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
     assert_eq!(catalog_entry.digest(), &mother.digest);
     assert_eq!(catalog_entry.backend().unwrap().targets(), ["avro"]);
     assert_eq!(catalog_entry.backend().unwrap().ir_versions(), ["3", "4"]);
+    assert!(!catalog_entry.backend().unwrap().generate());
     assert!(!catalog_entry.executable());
     assert!(expected_canonical_path.starts_with(fs::canonicalize(mother.home.root()).unwrap()));
 
@@ -470,6 +476,7 @@ fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
         lock_json["backend"]["irVersions"],
         serde_json::json!(["3", "4"])
     );
+    assert_eq!(lock_json["backend"]["generate"], false);
     assert_eq!(lock_json["executable"], false);
 
     let catalog_json: serde_json::Value =
@@ -484,6 +491,7 @@ fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
         catalog_json["extensions"][0]["backend"]["targets"],
         serde_json::json!(["avro"])
     );
+    assert_eq!(catalog_json["extensions"][0]["backend"]["generate"], false);
     assert_eq!(catalog_json["extensions"][0]["executable"], false);
 
     fs::remove_dir_all(&mother.index).unwrap();
@@ -496,7 +504,7 @@ fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
             let backend = wasm.extension_capabilities().backend.unwrap();
             assert_eq!(backend.targets, ["avro"]);
             assert_eq!(backend.ir_versions, ["3", "4"]);
-            assert!(backend.generate);
+            assert!(!backend.generate);
         }
         VerifiedExtensionArtifact::Process(_) => panic!("expected wasm artifact"),
     }

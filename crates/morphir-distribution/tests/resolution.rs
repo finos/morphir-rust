@@ -615,6 +615,10 @@ fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
 
     assert_eq!(backend.targets(), ["avro"]);
     assert_eq!(backend.ir_versions(), ["3", "4"]);
+    assert!(
+        backend.generate(),
+        "omitted generate must remain compatible"
+    );
 }
 
 #[test]

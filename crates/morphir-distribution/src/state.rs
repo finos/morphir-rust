@@ -952,7 +952,7 @@ fn extension_capabilities(backend: Option<&BackendRecord>) -> ExtensionCapabilit
         backend: backend.map(|backend| BackendCapability {
             targets: backend.targets().to_vec(),
             ir_versions: backend.ir_versions().to_vec(),
-            generate: true,
+            generate: backend.generate(),
         }),
         ..ExtensionCapabilities::default()
     }

@@ -161,6 +161,7 @@ pub enum Capability {
 pub struct BackendRecord {
     targets: Vec<String>,
     ir_versions: Vec<String>,
+    generate: bool,
 }
 
 #[derive(Deserialize)]
@@ -168,6 +169,12 @@ pub struct BackendRecord {
 struct BackendRecordWire {
     targets: Vec<String>,
     ir_versions: Vec<String>,
+    #[serde(default = "default_backend_generate")]
+    generate: bool,
+}
+
+fn default_backend_generate() -> bool {
+    true
 }
 
 impl<'de> Deserialize<'de> for BackendRecord {
@@ -198,6 +205,7 @@ impl<'de> Deserialize<'de> for BackendRecord {
         Ok(Self {
             targets: wire.targets,
             ir_versions: wire.ir_versions,
+            generate: wire.generate,
         })
     }
 }
@@ -211,6 +219,11 @@ impl BackendRecord {
     /// Return the non-empty unique Morphir IR versions supported by the backend.
     pub fn ir_versions(&self) -> &[String] {
         &self.ir_versions
+    }
+
+    /// Return whether this backend accepts generate requests.
+    pub fn generate(&self) -> bool {
+        self.generate
     }
 }
 

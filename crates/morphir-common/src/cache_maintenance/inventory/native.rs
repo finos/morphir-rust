@@ -7,6 +7,21 @@ use same_file::Handle;
 use std::ffi::OsStr;
 use std::io;
 
+#[cfg(unix)]
+use cap_std::fs::MetadataExt;
+
+#[cfg(unix)]
+pub(super) fn crosses_filesystem_boundary(parent: &Dir, child: &Metadata) -> bool {
+    parent
+        .dir_metadata()
+        .map_or(true, |metadata| metadata.dev() != child.dev())
+}
+
+#[cfg(not(unix))]
+pub(super) fn crosses_filesystem_boundary(_parent: &Dir, _child: &Metadata) -> bool {
+    false
+}
+
 pub(super) fn spelling_matches(
     directory: &Dir,
     siblings: &[DirEntry],
@@ -108,5 +123,14 @@ mod tests {
         let _listener = UnixListener::bind(&path).unwrap();
 
         assert!(object_handle(&directory, OsStr::new("artifact"), &stale).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mounted_filesystems_are_distinguished_from_their_parent() {
+        let root = Dir::open_ambient_dir("/", ambient_authority()).unwrap();
+        let proc_metadata = root.symlink_metadata("proc").unwrap();
+
+        assert!(crosses_filesystem_boundary(&root, &proc_metadata));
     }
 }

@@ -1,4 +1,4 @@
-use super::CacheExecutionError;
+use super::{CacheExecutionError, CacheExecutionLimits};
 use crate::home::MorphirHome;
 #[cfg(unix)]
 use cap_fs_ext::OpenOptionsSyncExt;
@@ -20,10 +20,22 @@ pub(super) fn remove_revalidated_entry(
     namespace: &str,
     relative: &str,
     expected: &Handle,
+    expected_bytes: u64,
     trash_run: &TrashRun,
     index: usize,
 ) -> Result<RemovalOutcome, CacheExecutionError> {
-    remove_revalidated_entry_with_hook(home, namespace, relative, expected, trash_run, index, || {})
+    remove_revalidated_entry_with_hook(
+        RemovalTarget {
+            home,
+            namespace,
+            relative,
+            expected,
+            expected_bytes,
+        },
+        trash_run,
+        index,
+        || {},
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,11 +44,16 @@ pub(super) enum RemovalOutcome {
     Changed,
 }
 
+struct RemovalTarget<'a> {
+    home: &'a MorphirHome,
+    namespace: &'a str,
+    relative: &'a str,
+    expected: &'a Handle,
+    expected_bytes: u64,
+}
+
 fn remove_revalidated_entry_with_hook<F>(
-    home: &MorphirHome,
-    namespace: &str,
-    relative: &str,
-    expected: &Handle,
+    target: RemovalTarget<'_>,
     trash_run: &TrashRun,
     index: usize,
     before_rename: F,
@@ -44,9 +61,10 @@ fn remove_revalidated_entry_with_hook<F>(
 where
     F: FnOnce(),
 {
-    let (parent, leaf, source) = open_removal_parent(home, namespace, relative)?;
+    let (parent, leaf, source) =
+        open_removal_parent(target.home, target.namespace, target.relative)?;
     let source_object = pin_object(&parent, &leaf, &source)?;
-    if source_object.handle != *expected {
+    if source_object.handle != *target.expected {
         return Ok(RemovalOutcome::Changed);
     }
     before_rename();
@@ -64,17 +82,14 @@ where
         });
     }
 
-    let verified_name = format!("verified-{staging_name}");
+    let verified_name = format!("verified-{staging_name}-{:016x}", target.expected_bytes);
     let verified_path = trash_run.path.join(&verified_name);
     trash_run
         .dir
         .rename(&staging_name, &trash_run.dir, &verified_name)
         .map_err(|source| io_error(&staging_path, source))?;
     if staged_object.is_dir {
-        trash_run
-            .dir
-            .remove_dir_all(&verified_name)
-            .map_err(|source| io_error(&verified_path, source))?;
+        remove_tree(&trash_run.dir, Path::new(&verified_name), &verified_path)?;
     } else {
         trash_run
             .dir
@@ -219,7 +234,17 @@ fn open_or_create_directory(
     }
 }
 
-pub(super) fn sweep_existing_trash(trash: &MaintenanceTrash) -> Result<(), CacheExecutionError> {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct RecoveryBudget {
+    pub(super) removals: usize,
+    pub(super) bytes: u64,
+}
+
+pub(super) fn sweep_existing_trash(
+    trash: &MaintenanceTrash,
+    limits: CacheExecutionLimits,
+) -> Result<RecoveryBudget, CacheExecutionError> {
+    let mut recovered = RecoveryBudget::default();
     let mut entries = trash
         .dir
         .entries()
@@ -247,8 +272,19 @@ pub(super) fn sweep_existing_trash(trash: &MaintenanceTrash) -> Result<(), Cache
             .dir
             .open_dir_nofollow(&name)
             .map_err(|source| io_error(&path, source))?;
-        ensure_run_is_verified(&run, &path)?;
-        remove_directory_contents(&run, &path)?;
+        let verified_entries = verified_run_entries(&run, &path)?;
+        for (verified_name, bytes) in verified_entries {
+            let next_bytes = recovered
+                .bytes
+                .checked_add(bytes)
+                .ok_or(CacheExecutionError::ByteCountOverflow)?;
+            if recovered.removals == limits.max_removals || next_bytes > limits.max_bytes {
+                return Ok(recovered);
+            }
+            remove_tree(&run, Path::new(&verified_name), &path.join(&verified_name))?;
+            recovered.removals += 1;
+            recovered.bytes = next_bytes;
+        }
         drop(run);
         trash
             .dir
@@ -259,53 +295,71 @@ pub(super) fn sweep_existing_trash(trash: &MaintenanceTrash) -> Result<(), Cache
             "recovered interrupted trash run"
         );
     }
-    Ok(())
+    Ok(recovered)
 }
 
-fn ensure_run_is_verified(directory: &Dir, display_path: &Path) -> Result<(), CacheExecutionError> {
-    let entries = directory
-        .entries()
-        .map_err(|source| io_error(display_path, source))?;
-    for entry in entries {
-        let entry = entry.map_err(|source| io_error(display_path, source))?;
-        let name = entry.file_name();
-        let verified = name.to_str().is_some_and(is_verified_entry_name);
-        if !verified {
-            return Err(CacheExecutionError::UnsafeMaintenancePath {
-                path: display_path.join(name),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn remove_directory_contents(
+fn verified_run_entries(
     directory: &Dir,
     display_path: &Path,
-) -> Result<(), CacheExecutionError> {
+) -> Result<Vec<(String, u64)>, CacheExecutionError> {
     let mut entries = directory
         .entries()
         .map_err(|source| io_error(display_path, source))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|source| io_error(display_path, source))?;
     entries.sort_by_key(cap_std::fs::DirEntry::file_name);
+    let mut verified = Vec::with_capacity(entries.len());
     for entry in entries {
         let name = entry.file_name();
-        let path = display_path.join(&name);
-        let metadata = directory
-            .symlink_metadata(&name)
-            .map_err(|source| io_error(&path, source))?;
-        if metadata.is_dir() && !cap_is_link_like(&metadata) {
-            directory
-                .remove_dir_all(&name)
-                .map_err(|source| io_error(&path, source))?;
-        } else {
-            directory
-                .remove_file(&name)
-                .map_err(|source| io_error(&path, source))?;
-        }
+        let Some((name, bytes)) = name
+            .to_str()
+            .and_then(|name| verified_entry_bytes(name).map(|bytes| (name.to_owned(), bytes)))
+        else {
+            return Err(CacheExecutionError::UnsafeMaintenancePath {
+                path: display_path.join(name),
+            });
+        };
+        verified.push((name, bytes));
     }
-    Ok(())
+    Ok(verified)
+}
+
+fn remove_tree(parent: &Dir, name: &Path, path: &Path) -> Result<(), CacheExecutionError> {
+    let metadata = parent
+        .symlink_metadata(name)
+        .map_err(|source| io_error(path, source))?;
+    if metadata.is_dir() && !cap_is_link_like(&metadata) {
+        if crosses_filesystem_boundary(parent, &metadata, path)? {
+            return Err(CacheExecutionError::UnsafeMaintenancePath {
+                path: path.to_path_buf(),
+            });
+        }
+        let directory = parent
+            .open_dir_nofollow(name)
+            .map_err(|source| io_error(path, source))?;
+        let mut entries = directory
+            .entries()
+            .map_err(|source| io_error(path, source))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| io_error(path, source))?;
+        entries.sort_by_key(cap_std::fs::DirEntry::file_name);
+        for entry in entries {
+            let child = entry.file_name();
+            remove_tree(&directory, Path::new(&child), &path.join(&child))?;
+        }
+        drop(directory);
+        parent
+            .remove_dir(name)
+            .map_err(|source| io_error(path, source))
+    } else if metadata.is_file() || cap_is_link_like(&metadata) {
+        parent
+            .remove_file(name)
+            .map_err(|source| io_error(path, source))
+    } else {
+        Err(CacheExecutionError::UnsafeMaintenancePath {
+            path: path.to_path_buf(),
+        })
+    }
 }
 
 fn is_trash_run_name(value: &str) -> bool {
@@ -315,13 +369,38 @@ fn is_trash_run_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
-fn is_verified_entry_name(value: &str) -> bool {
-    value.strip_prefix("verified-").is_some_and(|suffix| {
-        suffix.len() == 8
-            && suffix
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    })
+fn verified_entry_bytes(value: &str) -> Option<u64> {
+    let (index, bytes) = value.strip_prefix("verified-")?.split_once('-')?;
+    (index.len() == 8 && index.bytes().all(is_lower_hex) && bytes.len() == 16)
+        .then(|| u64::from_str_radix(bytes, 16).ok())
+        .flatten()
+}
+
+fn is_lower_hex(byte: u8) -> bool {
+    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+}
+
+#[cfg(unix)]
+fn crosses_filesystem_boundary(
+    parent: &Dir,
+    child: &CapMetadata,
+    path: &Path,
+) -> Result<bool, CacheExecutionError> {
+    use cap_std::fs::MetadataExt;
+
+    let parent_metadata = parent
+        .dir_metadata()
+        .map_err(|source| io_error(path, source))?;
+    Ok(parent_metadata.dev() != child.dev())
+}
+
+#[cfg(not(unix))]
+fn crosses_filesystem_boundary(
+    _parent: &Dir,
+    _child: &CapMetadata,
+    _path: &Path,
+) -> Result<bool, CacheExecutionError> {
+    Ok(false)
 }
 
 pub(super) fn create_trash_run(trash: &MaintenanceTrash) -> Result<TrashRun, CacheExecutionError> {

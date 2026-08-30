@@ -81,6 +81,12 @@ pub enum CacheInventoryError {
         /// Namespace root that failed the type check.
         path: PathBuf,
     },
+    /// Inventory refuses to cross into another mounted filesystem.
+    #[error("refusing to inspect mounted cache subtree {path}")]
+    FilesystemBoundary {
+        /// Mounted path that crossed the cache filesystem boundary.
+        path: PathBuf,
+    },
     /// The entry-count budget was exhausted.
     #[error("cache inventory entry limit of {limit} was exceeded")]
     EntryLimitExceeded {
@@ -184,6 +190,9 @@ fn inventory_cache_namespace_inner(
     if !cache_metadata.is_dir() {
         return Err(CacheInventoryError::InvalidCacheRoot { path: cache_root });
     }
+    if native::crosses_filesystem_boundary(&home_dir, &cache_metadata) {
+        return Err(CacheInventoryError::FilesystemBoundary { path: cache_root });
+    }
     let cache_dir = home_dir
         .open_dir_nofollow("cache")
         .map_err(|source| io_error(&cache_root, source))?;
@@ -199,6 +208,9 @@ fn inventory_cache_namespace_inner(
     }
     if !metadata.is_dir() {
         return Err(CacheInventoryError::InvalidNamespaceRoot { path: root });
+    }
+    if native::crosses_filesystem_boundary(&cache_dir, &metadata) {
+        return Err(CacheInventoryError::FilesystemBoundary { path: root });
     }
     let root_dir = cache_dir
         .open_dir_nofollow(namespace.name())
@@ -332,7 +344,7 @@ impl InventoryWalk<'_> {
         metadata: &Metadata,
         depth: usize,
     ) -> Result<MeasuredEntry, CacheInventoryError> {
-        if is_link_like(metadata) {
+        if is_link_like(metadata) || native::crosses_filesystem_boundary(parent, metadata) {
             return Ok(MeasuredEntry {
                 bytes: metadata.len(),
                 safe: false,

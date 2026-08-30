@@ -290,7 +290,11 @@ fn execution_recovers_content_from_an_interrupted_trash_run() {
         .maintenance_trash_dir()
         .join("0123456789abcdef0123456789abcdef");
     std::fs::create_dir_all(&stranded_run).unwrap();
-    std::fs::write(stranded_run.join("verified-00000000"), b"stranded").unwrap();
+    std::fs::write(
+        stranded_run.join("verified-00000000-0000000000000008"),
+        b"stranded",
+    )
+    .unwrap();
 
     execute_cache_cleanup(
         &home,
@@ -302,6 +306,76 @@ fn execution_recovers_content_from_an_interrupted_trash_run() {
     .unwrap();
 
     assert!(!stranded_run.exists());
+}
+
+#[test]
+fn execution_defers_recovery_that_exceeds_the_byte_budget() {
+    let (_root, home) = a_morphir_home();
+    let stranded_run = home
+        .maintenance_trash_dir()
+        .join("0123456789abcdef0123456789abcdef");
+    std::fs::create_dir_all(&stranded_run).unwrap();
+    let stranded = stranded_run.join("verified-00000000-0000000000000008");
+    std::fs::write(&stranded, b"stranded").unwrap();
+
+    execute_cache_cleanup(
+        &home,
+        &a_policy_plan(Vec::new()),
+        &[],
+        CacheInventoryLimits::default(),
+        CacheExecutionLimits::new(10, 1).unwrap(),
+    )
+    .unwrap();
+
+    assert!(stranded.exists());
+    execute_cache_cleanup(
+        &home,
+        &a_policy_plan(Vec::new()),
+        &[],
+        CacheInventoryLimits::default(),
+        CacheExecutionLimits::new(10, 8).unwrap(),
+    )
+    .unwrap();
+    assert!(!stranded_run.exists());
+}
+
+#[test]
+fn execution_charges_recovery_against_the_removal_budget() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    let active_candidate = home.downloads_cache_dir().join("old.pkg");
+    std::fs::write(&active_candidate, b"old").unwrap();
+    let stranded_run = home
+        .maintenance_trash_dir()
+        .join("0123456789abcdef0123456789abcdef");
+    std::fs::create_dir_all(&stranded_run).unwrap();
+    std::fs::write(
+        stranded_run.join("verified-00000000-0000000000000001"),
+        b"x",
+    )
+    .unwrap();
+    let ownership = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("old.pkg", 0)
+        .unwrap();
+
+    let report = execute_cache_cleanup(
+        &home,
+        &a_policy_plan(vec![
+            CacheEntry::disposable("downloads", "old.pkg", 3, 0).unwrap(),
+        ]),
+        &[ownership],
+        CacheInventoryLimits::default(),
+        CacheExecutionLimits::new(1, 1_024).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!stranded_run.exists());
+    assert!(active_candidate.exists());
+    assert_eq!(
+        report.items()[0].disposition(),
+        CacheExecutionDisposition::DeferredLimit
+    );
 }
 
 #[cfg(unix)]

@@ -289,7 +289,7 @@ fn execute_cache_cleanup_inner(
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
     let _guard = MaintenanceGuard::acquire(home)?;
     let trash = open_maintenance_trash(home)?;
-    sweep_existing_trash(&trash)?;
+    let recovered = sweep_existing_trash(&trash, limits)?;
     let inventories =
         inventory_for_execution(home, ownership, inventory_limits, plan, limits.max_removals)?;
     let selected = plan
@@ -297,8 +297,8 @@ fn execute_cache_cleanup_inner(
         .iter()
         .filter(|decision| decision.will_remove());
     let mut items = Vec::new();
-    let mut attempted = 0_usize;
-    let mut budgeted_bytes = 0_u64;
+    let mut attempted = recovered.removals;
+    let mut budgeted_bytes = recovered.bytes;
     let mut removed_bytes = 0_u64;
     let mut deferred = false;
     let mut trash_run: Option<TrashRun> = None;
@@ -356,6 +356,7 @@ fn execute_cache_cleanup_inner(
                     entry.namespace(),
                     entry.path(),
                     handle,
+                    entry.bytes(),
                     run,
                     items.len(),
                 )? {

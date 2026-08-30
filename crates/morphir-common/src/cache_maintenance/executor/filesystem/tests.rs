@@ -3,7 +3,7 @@ use super::open_removal_parent;
 use super::pin_object;
 #[cfg(unix)]
 use super::{
-    CacheExecutionError, RemovalOutcome, create_trash_run, open_maintenance_trash,
+    CacheExecutionError, RemovalOutcome, RemovalTarget, create_trash_run, open_maintenance_trash,
     remove_revalidated_entry, remove_revalidated_entry_with_hook, sweep_existing_trash,
 };
 use crate::home::MorphirHome;
@@ -42,10 +42,13 @@ fn removal_preserves_a_leaf_replaced_after_it_was_pinned() {
     let staged = trash_run.path.join("00000000");
 
     let error = remove_revalidated_entry_with_hook(
-        &home,
-        "downloads",
-        "owned.pkg",
-        &expected,
+        RemovalTarget {
+            home: &home,
+            namespace: "downloads",
+            relative: "owned.pkg",
+            expected: &expected,
+            expected_bytes: 7,
+        },
         &trash_run,
         0,
         || {
@@ -61,7 +64,7 @@ fn removal_preserves_a_leaf_replaced_after_it_was_pinned() {
     ));
     assert_eq!(std::fs::read(&staged).unwrap(), b"current");
     drop(trash_run);
-    assert!(sweep_existing_trash(&trash).is_err());
+    assert!(sweep_existing_trash(&trash, super::CacheExecutionLimits::new(1, 1).unwrap()).is_err());
     assert_eq!(std::fs::read(staged).unwrap(), b"current");
 }
 
@@ -81,7 +84,7 @@ fn removal_refuses_a_leaf_replaced_since_inventory() {
     let trash_run = create_trash_run(&trash).unwrap();
 
     let outcome =
-        remove_revalidated_entry(&home, "downloads", "owned.pkg", &expected, &trash_run, 0)
+        remove_revalidated_entry(&home, "downloads", "owned.pkg", &expected, 7, &trash_run, 0)
             .unwrap();
 
     assert_eq!(outcome, RemovalOutcome::Changed);

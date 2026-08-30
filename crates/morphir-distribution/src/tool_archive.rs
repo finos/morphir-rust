@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
+use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
@@ -307,9 +308,10 @@ impl PortableArchivePaths {
             } else {
                 kind
             };
-            let folded = prefix
-                .nfc()
-                .flat_map(char::to_lowercase)
+            let normalized = prefix.nfc().collect::<String>();
+            let folded = normalized
+                .as_str()
+                .case_fold()
                 .collect::<String>()
                 .nfc()
                 .collect::<String>();

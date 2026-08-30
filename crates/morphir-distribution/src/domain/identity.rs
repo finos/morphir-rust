@@ -286,7 +286,7 @@ impl<'de> Deserialize<'de> for ArtifactFilename {
 pub struct RelativeArtifactPath(String);
 
 impl RelativeArtifactPath {
-    /// Parse a forward-slash relative path without empty or special segments.
+    /// Parse a forward-slash relative path with portable filename components.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         let valid = !value.is_empty()
@@ -295,14 +295,14 @@ impl RelativeArtifactPath {
             && !value.bytes().any(|byte| byte < 32)
             && value
                 .split('/')
-                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+                .all(|segment| ArtifactFilename::parse(segment).is_ok());
         if valid {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "local artifact path",
                 value,
-                "expected a normalized UTF-8 relative path with forward slashes",
+                "expected a normalized UTF-8 relative path with portable filename components",
             ))
         }
     }

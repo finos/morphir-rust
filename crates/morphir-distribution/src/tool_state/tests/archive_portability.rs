@@ -11,10 +11,13 @@ fn zip_non_portable_components_are_rejected_before_extraction() {
         let home =
             MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
         let download = root.path().join("desktop.zip");
-        write_zip(&download, &[(entry, b"desktop")]);
+        write_zip(
+            &download,
+            &[("desktop.exe", b"desktop"), (entry, b"invalid")],
+        );
         let bytes = fs::read(&download).unwrap();
         let resolved = crate::ResolvedTrustedToolArtifact::test_fixture(
-            zip_release(entry),
+            zip_release("desktop.exe"),
             Selection::Channel(Channel::Stable),
             Sha256Digest::of_bytes(&bytes),
             bytes.len() as u64,

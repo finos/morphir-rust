@@ -196,6 +196,9 @@ fn relative_artifact_paths_use_a_normalized_portable_utf8_grammar() {
         "./artifacts/tool",
         "artifacts//tool",
         "artifacts\\tool",
+        "artifacts/AUX/tool",
+        "artifacts/trailing./tool",
+        "artifacts/a*b/tool",
     ] {
         assert!(
             RelativeArtifactPath::parse(invalid).is_err(),

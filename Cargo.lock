@@ -3261,6 +3261,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "morphir-workspace"
+version = "0.2.0"
+dependencies = [
+ "globset",
+ "morphir-config",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nbformat"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

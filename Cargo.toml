@@ -21,6 +21,7 @@ default-members = [
     "crates/morphir-okf",
     "crates/morphir-runtime",
     "crates/morphir-wasm-binding",
+    "crates/morphir-workspace",
 ]
 
 [workspace.package]

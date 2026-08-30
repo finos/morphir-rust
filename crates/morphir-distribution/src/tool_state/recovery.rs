@@ -48,12 +48,12 @@ impl<'home> ToolRepairer<'home> {
     ) -> Result<InstalledTool> {
         let _transaction = tool_state_guard(self.home)?;
         let tools = load_catalog_unlocked(self.home)?;
-        let active = tools
+        let entry = tools
             .get(id)
-            .map(|entry| entry.active.clone())
             .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+        let active = entry.active.clone();
         let lock = read_tool_lock_unlocked(self.home, id)?;
-        validate_active_pair(&active, &lock)?;
+        validate_active_pair(&active, &entry.rollback, &lock)?;
         let shared_files = shared_digest_files(self.home, &tools, &active);
         validate_repair_resolution(&active, &resolved)?;
         let transaction = begin_repair(self.home, &active)?;
@@ -247,6 +247,8 @@ pub(super) fn rollback_with_writer(
     let mut entry = tools
         .remove(id)
         .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+    let current_lock = read_tool_lock_unlocked(home, id)?;
+    validate_active_pair(&entry.active, &entry.rollback, &current_lock)?;
     if entry.rollback.is_empty() {
         return Err(DistributionError::NoToolRollback { id: id.clone() });
     }
@@ -262,7 +264,7 @@ pub(super) fn rollback_with_writer(
     let previous = entry.active;
     entry.active = next.clone();
     entry.rollback.insert(0, previous);
-    let lock = ToolLock::from_installed(&next);
+    let lock = ToolLock::from_installed(&next, &entry.rollback);
     tools.insert(id.clone(), entry);
     let stored = ToolCatalogFile {
         schema_version: TOOL_CATALOG_SCHEMA_VERSION,

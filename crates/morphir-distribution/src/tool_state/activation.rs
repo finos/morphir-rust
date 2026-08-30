@@ -50,12 +50,12 @@ impl VerifiedToolProcess {
 pub fn activate_installed_tool(home: &MorphirHome, id: &ToolId) -> Result<VerifiedToolProcess> {
     let _transaction = tool_state_guard(home)?;
     let tools = load_catalog_unlocked(home)?;
-    let active = tools
+    let entry = tools
         .get(id)
-        .map(|entry| entry.active.clone())
         .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
     let lock = read_tool_lock_unlocked(home, id)?;
-    validate_active_pair(&active, &lock)?;
+    validate_active_pair(&entry.active, &entry.rollback, &lock)?;
+    let active = entry.active.clone();
     let program = verify_installed(
         home,
         active.store_path.as_path(),

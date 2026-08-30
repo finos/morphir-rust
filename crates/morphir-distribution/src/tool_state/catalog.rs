@@ -44,10 +44,11 @@ pub struct ToolLock {
     package_root: Option<RelativeArtifactPath>,
     args: Vec<String>,
     files: Vec<ToolPackageFile>,
+    rollback: Vec<InstalledTool>,
 }
 
 impl ToolLock {
-    fn from_package(package: &VerifiedToolPackage) -> Self {
+    fn from_package(package: &VerifiedToolPackage, rollback: &[InstalledTool]) -> Self {
         Self {
             schema_version: TOOL_LOCK_SCHEMA_VERSION,
             selection: package.selection.clone(),
@@ -64,10 +65,11 @@ impl ToolLock {
             package_root: package.package_root.clone(),
             args: package.args.clone(),
             files: package.files.clone(),
+            rollback: rollback.to_vec(),
         }
     }
 
-    pub(super) fn from_installed(installed: &InstalledTool) -> Self {
+    pub(super) fn from_installed(installed: &InstalledTool, rollback: &[InstalledTool]) -> Self {
         Self {
             schema_version: TOOL_LOCK_SCHEMA_VERSION,
             selection: installed.selection.clone(),
@@ -84,6 +86,7 @@ impl ToolLock {
             package_root: installed.package_root.clone(),
             args: installed.args.clone(),
             files: installed.files.clone(),
+            rollback: rollback.to_vec(),
         }
     }
 
@@ -276,10 +279,10 @@ impl<'home> ToolInstaller<'home> {
         }
 
         let mut tools = load_catalog_unlocked(self.home)?;
-        let lock = ToolLock::from_package(&package);
         let active = InstalledTool::from_package(&package);
         let previous = tools.remove(&active.tool_id);
         let rollback = next_rollback(previous, &active);
+        let lock = ToolLock::from_package(&package, &rollback);
         tools.insert(
             active.tool_id.clone(),
             ToolCatalogEntry {
@@ -363,7 +366,7 @@ pub fn list_installed_tools(home: &MorphirHome) -> Result<Vec<InstalledToolSnaps
         .into_values()
         .map(|entry| {
             let lock = read_tool_lock_unlocked(home, entry.active.tool_id())?;
-            validate_active_pair(&entry.active, &lock)?;
+            validate_active_pair(&entry.active, &entry.rollback, &lock)?;
             Ok(InstalledToolSnapshot {
                 active: entry.active,
                 rollback: entry.rollback,
@@ -397,7 +400,11 @@ pub(super) fn load_catalog_unlocked(
     Ok(tools)
 }
 
-pub(super) fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> Result<()> {
+pub(super) fn validate_active_pair(
+    active: &InstalledTool,
+    rollback: &[InstalledTool],
+    lock: &ToolLock,
+) -> Result<()> {
     let matches = lock.schema_version == TOOL_LOCK_SCHEMA_VERSION
         && lock.selection == active.selection
         && lock.tool_id == active.tool_id
@@ -412,7 +419,8 @@ pub(super) fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> R
         && lock.store_path == active.store_path
         && lock.package_root == active.package_root
         && lock.args == active.args
-        && lock.files == active.files;
+        && lock.files == active.files
+        && lock.rollback == rollback;
     if matches {
         Ok(())
     } else {

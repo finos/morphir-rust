@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fs};
 
-use morphir_workspace::{FileEntry, RelativePath};
+use morphir_workspace::{FileEntry, FileTree, RelativePath};
 
 #[cfg(unix)]
 use std::path::Path;
@@ -12,7 +12,7 @@ use super::{
     aliases::{
         AliasBudgets, DirectoryAlias, materialize_directory_aliases, record_directory_alias,
     },
-    mounts::selected_mount,
+    mounts::{apply_user_override_selection, selected_mount},
     traversal::{BoundaryEvent, build_tree_with},
     *,
 };
@@ -69,6 +69,52 @@ fn explicit_mounts_preserve_unsupported_extension_diagnostics() {
             path.display()
         )
     );
+}
+
+#[test]
+fn explicit_user_overrides_accept_supported_extension_variants() {
+    let directory = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "selected.yml",
+            "project:\n  version: 2.0.0\n",
+            "morphir.user.yaml",
+        ),
+        (
+            "selected.YAML",
+            "project:\n  version: 3.0.0\n",
+            "morphir.user.yaml",
+        ),
+        (
+            "selected.TOML",
+            "[project]\nversion = \"4.0.0\"\n",
+            "morphir.user.toml",
+        ),
+    ];
+
+    for (file_name, contents, virtual_name) in cases {
+        let source = directory.path().join(file_name);
+        fs::write(&source, contents).unwrap();
+        let mut tree = FileTree {
+            entries: BTreeMap::from([
+                (RelativePath::root(), FileEntry::Directory),
+                (
+                    RelativePath::parse("morphir.toml").unwrap(),
+                    FileEntry::File {
+                        text: "[project]\nname = \"acme/root\"\n".to_owned(),
+                    },
+                ),
+            ]),
+        };
+
+        apply_user_override_selection(&mut tree, &SourceSelection::Explicit(source)).unwrap();
+
+        assert_eq!(
+            tree.file_text(&RelativePath::parse(virtual_name).unwrap()),
+            Some(contents),
+            "explicit user override {file_name} should be normalized to {virtual_name}"
+        );
+    }
 }
 
 #[cfg(unix)]

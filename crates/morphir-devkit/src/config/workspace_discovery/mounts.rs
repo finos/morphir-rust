@@ -136,9 +136,14 @@ fn materialize_explicit_user_override(
     primary: &RelativePath,
 ) -> Result<()> {
     let source_name = source.display();
-    let serialization = match source.extension().and_then(OsStr::to_str) {
+    let serialization = match source
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("toml") => "toml",
-        Some("yaml") => "yaml",
+        Some("yaml" | "yml") => "yaml",
         _ => {
             bail!(
                 "Explicit user override {source_name} is unsupported; explicit user overrides require a modern TOML/YAML root config and TOML/YAML override"

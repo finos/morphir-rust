@@ -112,6 +112,16 @@ impl TrustedToolRepository {
     /// The datastore persists rollback protection metadata. Expiration enforcement
     /// remains in TUF's safe default mode, and one refresh accepts at most 32
     /// sequential root updates as required by the Morphir tool repository profile.
+    #[tracing::instrument(
+        name = "morphir.tool.repository.load",
+        skip(trusted_root),
+        fields(
+            metadata_directory = %metadata_directory.display(),
+            targets_directory = %targets_directory.display(),
+            datastore = %datastore.display()
+        ),
+        err
+    )]
     pub async fn load_filesystem(
         trusted_root: &[u8],
         metadata_directory: &Path,
@@ -134,10 +144,25 @@ impl TrustedToolRepository {
             .load()
             .await
             .map_err(repository_error)?;
+        tracing::info!(
+            targets_version = repository.targets().signed.version.get(),
+            "authenticated tool repository loaded"
+        );
         Ok(Self { repository })
     }
 
     /// Resolve an authenticated tool descriptor and its exact target metadata.
+    #[tracing::instrument(
+        name = "morphir.tool.resolve",
+        skip(self),
+        fields(
+            tool_id = %tool_id,
+            selection = %selection,
+            platform = %platform,
+            morphir_cli = %morphir_cli
+        ),
+        err
+    )]
     pub async fn resolve(
         &self,
         tool_id: &ToolId,
@@ -178,7 +203,7 @@ impl TrustedToolRepository {
             .as_ref()
             .try_into()
             .map_err(|_| invalid_metadata(target.raw(), "SHA-256 digest was not 32 bytes"))?;
-        Ok(ResolvedTrustedToolArtifact {
+        let resolved = ResolvedTrustedToolArtifact {
             release: resolved.release().clone(),
             artifact: resolved.artifact().clone(),
             selection: resolved.selection().clone(),
@@ -186,10 +211,28 @@ impl TrustedToolRepository {
             digest: Sha256Digest::from_bytes(digest_bytes),
             length: target_metadata.length,
             targets_version: self.repository.targets().signed.version.get(),
-        })
+        };
+        tracing::info!(
+            version = %resolved.release.version(),
+            target = %resolved.target.raw(),
+            digest = %resolved.digest,
+            "authenticated tool artifact resolved"
+        );
+        Ok(resolved)
     }
 
     /// Download and verify the selected target into an existing staging directory.
+    #[tracing::instrument(
+        name = "morphir.tool.download",
+        skip(self),
+        fields(
+            tool_id = %resolved.release.tool_id(),
+            version = %resolved.release.version(),
+            target = %resolved.target.raw(),
+            digest = %resolved.digest
+        ),
+        err
+    )]
     pub async fn download(
         &self,
         resolved: &ResolvedTrustedToolArtifact,
@@ -203,9 +246,9 @@ impl TrustedToolRepository {
             .save_target(&resolved.target, staging_directory, Prefix::None)
             .await
             .map_err(repository_error)?;
-        Ok(DownloadedToolArtifact {
-            path: staging_directory.join(resolved.target.resolved()),
-        })
+        let path = staging_directory.join(resolved.target.resolved());
+        tracing::info!(path = %path.display(), "verified tool target downloaded");
+        Ok(DownloadedToolArtifact { path })
     }
 
     async fn release_descriptors(&self, tool_id: &ToolId) -> Result<Vec<AuthenticatedRelease>> {

@@ -71,13 +71,24 @@ impl<'home> ToolPackageStore<'home> {
     }
 
     /// Reverify and publish a raw executable, AppImage, or ZIP package into the tool CAS.
+    #[tracing::instrument(
+        name = "morphir.tool.package.prepare",
+        skip(self, downloaded),
+        fields(
+            tool_id = %resolved.release().tool_id(),
+            version = %resolved.release().version(),
+            digest = %resolved.digest(),
+            format = ?resolved.artifact().archive().format()
+        ),
+        err
+    )]
     pub fn prepare(
         &self,
         resolved: ResolvedTrustedToolArtifact,
         downloaded: DownloadedToolArtifact,
     ) -> Result<VerifiedToolPackage> {
         let format = resolved.artifact().archive().format();
-        match format {
+        let package = match format {
             ArchiveFormat::Raw | ArchiveFormat::Appimage => {
                 self.prepare_raw(resolved, downloaded.into_path())
             }
@@ -85,7 +96,13 @@ impl<'home> ToolPackageStore<'home> {
             ArchiveFormat::TarGzip => Err(DistributionError::UnsupportedToolArchive {
                 format: "tar-gzip".to_owned(),
             }),
-        }
+        }?;
+        tracing::info!(
+            program = %package.store_path.as_str(),
+            file_count = package.files.len(),
+            "verified tool package prepared"
+        );
+        Ok(package)
     }
 
     fn prepare_raw(
@@ -578,6 +595,16 @@ impl<'home> ToolInstaller<'home> {
     }
 
     /// Verify the candidate again, then atomically replace its lock and catalog entry.
+    #[tracing::instrument(
+        name = "morphir.tool.install",
+        skip(self),
+        fields(
+            tool_id = %package.tool_id,
+            version = %package.version,
+            digest = %package.digest
+        ),
+        err
+    )]
     pub fn install(&self, package: VerifiedToolPackage) -> Result<InstalledTool> {
         self.install_with_writer(package, &FilesystemStateWriter)
     }
@@ -619,6 +646,16 @@ impl<'home> ToolInstaller<'home> {
             &encode_json(&stored)?,
             writer,
         )?;
+        tracing::info!(
+            tool_id = %active.tool_id,
+            version = %active.version,
+            rollback_count = stored
+                .tools
+                .iter()
+                .find(|entry| entry.active.tool_id == active.tool_id)
+                .map_or(0, |entry| entry.rollback.len()),
+            "tool catalog activation committed"
+        );
         Ok(active)
     }
 }
@@ -713,6 +750,12 @@ impl VerifiedToolProcess {
 }
 
 /// Resolve one active catalog entry without repository or network access and reverify its bytes.
+#[tracing::instrument(
+    name = "morphir.tool.activate",
+    skip(home),
+    fields(tool_id = %id),
+    err
+)]
 pub fn activate_installed_tool(home: &MorphirHome, id: &ToolId) -> Result<VerifiedToolProcess> {
     let (active, lock) = {
         let _transaction = tool_state_guard(home)?;
@@ -726,6 +769,12 @@ pub fn activate_installed_tool(home: &MorphirHome, id: &ToolId) -> Result<Verifi
     };
     validate_active_pair(&active, &lock)?;
     let program = verify_installed(home, active.store_path.as_path(), &active.files)?;
+    tracing::info!(
+        tool_id = %active.tool_id,
+        version = %active.version,
+        program = %program.display(),
+        "installed tool verified for offline launch"
+    );
     Ok(VerifiedToolProcess {
         program,
         args: active.args,

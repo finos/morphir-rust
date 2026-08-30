@@ -68,34 +68,38 @@ impl CacheNamespace {
     }
 
     fn insert(&mut self, path: String, entry: CacheEntry) -> Result<(), CacheRegistrationError> {
-        if let Some(other) = self
-            .entries
-            .keys()
-            .find(|other| paths_overlap(other, &path))
-        {
+        let comparison_key = portable_comparison_key(&path);
+        if let Some(other) = self.entries.iter().find_map(|(other_key, other)| {
+            comparison_keys_overlap(other_key, &comparison_key).then_some(other)
+        }) {
             return Err(CacheRegistrationError::OverlappingEntries {
-                first: other.clone(),
+                first: other.path().to_owned(),
                 second: path,
             });
         }
-        self.entries.insert(path, entry);
+        self.entries.insert(comparison_key, entry);
         Ok(())
     }
 }
 
+#[cfg(test)]
 fn paths_overlap(first: &str, second: &str) -> bool {
     let first = portable_comparison_key(first);
     let second = portable_comparison_key(second);
+    comparison_keys_overlap(&first, &second)
+}
+
+fn comparison_keys_overlap(first: &str, second: &str) -> bool {
     first == second
         || first
-            .strip_prefix(&second)
+            .strip_prefix(second)
             .is_some_and(|rest| rest.starts_with('/'))
         || second
-            .strip_prefix(&first)
+            .strip_prefix(first)
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-fn portable_comparison_key(path: &str) -> String {
+pub(super) fn portable_comparison_key(path: &str) -> String {
     path.nfc()
         .collect::<String>()
         .as_str()

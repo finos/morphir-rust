@@ -70,6 +70,33 @@ fn inventory_preserves_active_lease_classification() {
 }
 
 #[test]
+fn inventory_matches_registered_paths_by_portable_comparison_key() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir().join("Packages/CAF\u{c9}")).unwrap();
+    std::fs::write(
+        home.downloads_cache_dir()
+            .join("Packages/CAF\u{c9}/archive"),
+        b"owned",
+    )
+    .unwrap();
+
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("packages/cafe\u{301}", 100)
+        .unwrap();
+    let entries =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path(), "packages/cafe\u{301}");
+    assert_eq!(entries[0].bytes(), 5);
+    assert_eq!(
+        entries[0].state(),
+        CacheEntryState::Disposable { last_used: 100 }
+    );
+}
+
+#[test]
 fn inventory_limits_fail_closed_before_an_unbounded_walk() {
     let (_root, home) = a_morphir_home();
     std::fs::create_dir_all(home.indexes_cache_dir()).unwrap();

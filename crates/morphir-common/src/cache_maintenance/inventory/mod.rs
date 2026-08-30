@@ -3,7 +3,7 @@ mod registration;
 
 pub use registration::{CacheNamespace, CacheRegistrationError};
 
-use self::identity::portable_identity;
+use self::{identity::portable_identity, registration::portable_comparison_key};
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
 use cap_fs_ext::DirExt;
@@ -210,11 +210,12 @@ impl InventoryWalk<'_> {
             let child_path = display_path.join(child.file_name());
             let child_relative = relative.join(child.file_name());
             let identity = portable_identity(&child_relative);
+            let comparison_key = portable_comparison_key(&identity);
             let metadata = directory
                 .symlink_metadata(child.file_name())
                 .map_err(|source| io_error(&child_path, source))?;
 
-            if let Some(template) = self.namespace.entries.get(&identity) {
+            if let Some(template) = self.namespace.entries.get(&comparison_key) {
                 let measured =
                     self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
                 let entry = if measured.safe {
@@ -312,7 +313,7 @@ impl InventoryWalk<'_> {
     }
 
     fn has_registered_descendant(&self, identity: &str) -> bool {
-        let prefix = format!("{identity}/");
+        let prefix = format!("{}/", portable_comparison_key(identity));
         self.namespace
             .entries
             .keys()

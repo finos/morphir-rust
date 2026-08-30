@@ -234,6 +234,7 @@ impl ArtifactFilename {
             .split('.')
             .next()
             .unwrap_or_default()
+            .trim_end_matches(' ')
             .to_ascii_uppercase();
         let windows_reserved = matches!(
             windows_stem.as_str(),

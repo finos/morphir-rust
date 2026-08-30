@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downloads, package staging, catalog activation, and offline launch verification.
 - Atomic tool rollback to the most recently retained release, including byte re-verification,
   restoration of its original selection, and lock/catalog rollback after write failures.
+- Exact-release tool repair that quarantines corrupt or missing active content, rebuilds it from a
+  TUF-authenticated download, preserves the installed selection and state, and restores the prior
+  bytes if replacement validation fails.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

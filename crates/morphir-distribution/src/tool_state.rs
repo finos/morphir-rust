@@ -777,6 +777,207 @@ impl<'home> ToolInstaller<'home> {
     }
 }
 
+/// Rebuilds the bytes for an installed exact release without changing its durable selection.
+#[derive(Debug)]
+pub struct ToolRepairer<'home> {
+    home: &'home MorphirHome,
+}
+
+impl<'home> ToolRepairer<'home> {
+    /// Construct a repairer for one Morphir Home.
+    pub fn new(home: &'home MorphirHome) -> Self {
+        Self { home }
+    }
+
+    /// Replace missing or corrupt active bytes from an authenticated exact-release download.
+    ///
+    /// The installed catalog and lock remain unchanged. The old bytes are quarantined until
+    /// the replacement has been materialized and verified, then restored if any step fails.
+    #[tracing::instrument(
+        name = "morphir.tool.repair",
+        skip(self, resolved, downloaded),
+        fields(tool_id = %id),
+        err
+    )]
+    pub fn repair(
+        &self,
+        id: &ToolId,
+        resolved: ResolvedTrustedToolArtifact,
+        downloaded: DownloadedToolArtifact,
+    ) -> Result<InstalledTool> {
+        let _transaction = tool_state_guard(self.home)?;
+        let tools = load_catalog_unlocked(self.home)?;
+        let active = tools
+            .get(id)
+            .map(|entry| entry.active.clone())
+            .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+        let lock = read_tool_lock_unlocked(self.home, id)?;
+        validate_active_pair(&active, &lock)?;
+
+        let temp_root = self.home.temp_dir();
+        fs::create_dir_all(&temp_root).map_err(|source| DistributionError::Io {
+            path: temp_root.clone(),
+            source,
+        })?;
+        let quarantine = tempfile::Builder::new()
+            .prefix("tool-repair-")
+            .tempdir_in(&temp_root)
+            .map_err(|source| DistributionError::Io {
+                path: temp_root,
+                source,
+            })?;
+        let digest_path = self.home.tools_store_dir().join(active.digest.to_string());
+        let previous_path = quarantine.path().join("previous");
+        let had_previous = move_to_quarantine(&digest_path, &previous_path)?;
+
+        let repair = validate_repair_resolution(&active, &resolved)
+            .and_then(|()| ToolPackageStore::new(self.home).prepare(resolved, downloaded))
+            .and_then(|package| {
+                validate_repair_package(&active, &package)?;
+                verify_package(self.home, &package)?;
+                Ok(())
+            });
+
+        if let Err(original) = repair {
+            if let Err(rollback) = restore_quarantined_package(
+                &digest_path,
+                had_previous.then_some(previous_path.as_path()),
+            ) {
+                return Err(DistributionError::StateRollback {
+                    original: Box::new(original),
+                    rollback: Box::new(rollback),
+                });
+            }
+            return Err(original);
+        }
+
+        tracing::info!(
+            tool_id = %active.tool_id,
+            version = %active.version,
+            digest = %active.digest,
+            "installed tool bytes repaired"
+        );
+        Ok(active)
+    }
+}
+
+fn validate_repair_resolution(
+    active: &InstalledTool,
+    resolved: &ResolvedTrustedToolArtifact,
+) -> Result<()> {
+    let release = resolved.release();
+    let artifact = resolved.artifact();
+    let mismatch = if release.tool_id() != &active.tool_id {
+        Some("tool identity differs")
+    } else if release.tool_name() != active.tool_name {
+        Some("tool name differs")
+    } else if release.version() != &active.version {
+        Some("version differs")
+    } else if artifact.platform() != &active.platform {
+        Some("platform differs")
+    } else if resolved.digest() != &active.digest {
+        Some("artifact digest differs")
+    } else if resolved.length() != active.length {
+        Some("artifact length differs")
+    } else if artifact.target_path() != &active.target_path {
+        Some("target path differs")
+    } else if artifact.launch().args() != active.args {
+        Some("launch arguments differ")
+    } else {
+        None
+    };
+    match mismatch {
+        Some(reason) => Err(repair_mismatch(active, reason)),
+        None => Ok(()),
+    }
+}
+
+fn validate_repair_package(active: &InstalledTool, package: &VerifiedToolPackage) -> Result<()> {
+    let mismatch = if package.tool_id != active.tool_id {
+        Some("tool identity differs after materialization")
+    } else if package.tool_name != active.tool_name {
+        Some("tool name differs after materialization")
+    } else if package.version != active.version {
+        Some("version differs after materialization")
+    } else if package.platform != active.platform {
+        Some("platform differs after materialization")
+    } else if package.digest != active.digest {
+        Some("artifact digest differs after materialization")
+    } else if package.length != active.length {
+        Some("artifact length differs after materialization")
+    } else if package.target_path != active.target_path {
+        Some("target path differs after materialization")
+    } else if package.store_path != active.store_path {
+        Some("installed launch path differs")
+    } else if package.args != active.args {
+        Some("launch arguments differ after materialization")
+    } else if package.files != active.files {
+        Some("installed file manifest differs")
+    } else {
+        None
+    };
+    match mismatch {
+        Some(reason) => Err(repair_mismatch(active, reason)),
+        None => Ok(()),
+    }
+}
+
+fn repair_mismatch(active: &InstalledTool, reason: &'static str) -> DistributionError {
+    DistributionError::ToolRepairMismatch {
+        id: active.tool_id.clone(),
+        version: active.version.clone(),
+        reason,
+    }
+}
+
+fn move_to_quarantine(path: &Path, destination: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            fs::rename(path, destination).map_err(|source| DistributionError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            Ok(true)
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn restore_quarantined_package(path: &Path, previous: Option<&Path>) -> Result<()> {
+    remove_tool_store_entry(path)?;
+    if let Some(previous) = previous {
+        fs::rename(previous, path).map_err(|source| DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn remove_tool_store_entry(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
+            fs::remove_file(path).map_err(|source| DistributionError::Io {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+        Ok(_) => fs::remove_dir_all(path).map_err(|source| DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 fn next_rollback(previous: Option<ToolCatalogEntry>, active: &InstalledTool) -> Vec<InstalledTool> {
     let Some(previous) = previous else {
         return Vec::new();
@@ -924,16 +1125,13 @@ impl VerifiedToolProcess {
     err
 )]
 pub fn activate_installed_tool(home: &MorphirHome, id: &ToolId) -> Result<VerifiedToolProcess> {
-    let (active, lock) = {
-        let _transaction = tool_state_guard(home)?;
-        let tools = load_catalog_unlocked(home)?;
-        let active = tools
-            .get(id)
-            .map(|entry| entry.active.clone())
-            .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
-        let lock = read_tool_lock_unlocked(home, id)?;
-        (active, lock)
-    };
+    let _transaction = tool_state_guard(home)?;
+    let tools = load_catalog_unlocked(home)?;
+    let active = tools
+        .get(id)
+        .map(|entry| entry.active.clone())
+        .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+    let lock = read_tool_lock_unlocked(home, id)?;
     validate_active_pair(&active, &lock)?;
     let program = verify_installed(home, active.store_path.as_path(), &active.files)?;
     tracing::info!(
@@ -1416,6 +1614,69 @@ mod tests {
         assert_eq!(fs::read(launch.program()).unwrap(), b"desktop-v2");
     }
 
+    #[test]
+    fn exact_release_repair_replaces_corrupt_bytes_without_changing_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ToolId::parse("desktop").unwrap();
+        ToolInstaller::new(&home)
+            .install(package(&home, "1.0.0", b"desktop-v1"))
+            .unwrap();
+        let launch = activate_installed_tool(&home, &id).unwrap();
+        fs::write(launch.program(), b"corrupt").unwrap();
+        let (resolved, downloaded) = raw_download(root.path(), "1.0.0", b"desktop-v1");
+
+        let repaired = ToolRepairer::new(&home)
+            .repair(&id, resolved, downloaded)
+            .unwrap();
+
+        assert_eq!(repaired.version(), &Version::parse("1.0.0").unwrap());
+        let snapshot = &list_installed_tools(&home).unwrap()[0];
+        assert_eq!(snapshot.selection(), &Selection::Channel(Channel::Stable));
+        assert_eq!(
+            fs::read(activate_installed_tool(&home, &id).unwrap().program()).unwrap(),
+            b"desktop-v1"
+        );
+    }
+
+    #[test]
+    fn mismatched_repair_candidate_restores_quarantined_active_bytes_and_state() {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ToolId::parse("desktop").unwrap();
+        ToolInstaller::new(&home)
+            .install(package(&home, "1.0.0", b"desktop-v1"))
+            .unwrap();
+        let launch = activate_installed_tool(&home, &id).unwrap();
+        fs::write(launch.program(), b"corrupt").unwrap();
+        let catalog_before = fs::read(home.tools_catalog_file()).unwrap();
+        let lock_before = fs::read(home.tools_locks_dir().join("desktop.json")).unwrap();
+        let (resolved, downloaded) = raw_download(root.path(), "2.0.0", b"desktop-v2");
+
+        assert!(matches!(
+            ToolRepairer::new(&home)
+                .repair(&id, resolved, downloaded)
+                .unwrap_err(),
+            crate::DistributionError::ToolRepairMismatch { .. }
+        ));
+
+        assert_eq!(fs::read(home.tools_catalog_file()).unwrap(), catalog_before);
+        assert_eq!(
+            fs::read(home.tools_locks_dir().join("desktop.json")).unwrap(),
+            lock_before
+        );
+        assert_eq!(
+            list_installed_tools(&home).unwrap()[0].active().version(),
+            &Version::parse("1.0.0").unwrap()
+        );
+        assert!(matches!(
+            activate_installed_tool(&home, &id).unwrap_err(),
+            crate::DistributionError::DigestMismatch { .. }
+        ));
+    }
+
     struct FailingCatalogWriter {
         catalog_path: PathBuf,
     }
@@ -1470,6 +1731,49 @@ mod tests {
             args: vec!["--morphir-home".to_owned()],
             files: vec![file],
         }
+    }
+
+    fn raw_download(
+        root: &Path,
+        version: &str,
+        bytes: &[u8],
+    ) -> (
+        crate::ResolvedTrustedToolArtifact,
+        crate::DownloadedToolArtifact,
+    ) {
+        let download_root = root.join(format!("repair-{version}"));
+        fs::create_dir_all(&download_root).unwrap();
+        let download = download_root.join("desktop.exe");
+        fs::write(&download, bytes).unwrap();
+        let release: crate::ToolReleaseRecord = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "morphir-tool-release",
+            "tool": { "id": "desktop", "name": "Morphir Desktop" },
+            "version": version,
+            "channels": [],
+            "status": "active",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "artifacts": [{
+                "targetPath": format!("artifacts/desktop/{version}/desktop.exe"),
+                "platform": { "os": "windows", "arch": "x86_64" },
+                "archive": { "format": "raw", "entryPoint": "desktop.exe" },
+                "launch": {
+                    "kind": "executable",
+                    "path": "desktop.exe",
+                    "args": ["--morphir-home"]
+                }
+            }]
+        }))
+        .unwrap();
+        (
+            crate::ResolvedTrustedToolArtifact::test_fixture(
+                release,
+                Selection::Exact(Version::parse(version).unwrap()),
+                Sha256Digest::of_bytes(bytes),
+                bytes.len() as u64,
+            ),
+            crate::DownloadedToolArtifact::test_fixture(download),
+        )
     }
 
     fn zip_release(entry_point: &str) -> crate::ToolReleaseRecord {

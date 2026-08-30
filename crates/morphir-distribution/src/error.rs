@@ -224,6 +224,16 @@ pub enum DistributionError {
         /// Requested tool identity.
         id: crate::ToolId,
     },
+    /// Authenticated repair bytes do not describe the installed exact release.
+    #[error("repair candidate for tool {id} does not match installed release {version}: {reason}")]
+    ToolRepairMismatch {
+        /// Installed tool identity.
+        id: crate::ToolId,
+        /// Installed exact semantic version.
+        version: semver::Version,
+        /// Metadata or package field that did not match.
+        reason: &'static str,
+    },
     /// Catalog and lock records disagree about exact installed content.
     #[error("installed catalog and lock disagree for extension {id}")]
     StateMismatch {

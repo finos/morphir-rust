@@ -14,6 +14,7 @@ const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 const MAX_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_TAR_EXTENSION_BYTES: u64 = 1024 * 1024;
 const MAX_TAR_STREAM_BYTES: u64 = MAX_UNPACKED_BYTES + (MAX_ARCHIVE_ENTRIES as u64 * 1024);
+const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 64 * 1024 * 1024;
 const ZIP_EOCD_MINIMUM_BYTES: usize = 22;
 const ZIP_EOCD_SEARCH_BYTES: u64 = ZIP_EOCD_MINIMUM_BYTES as u64 + u16::MAX as u64;
 
@@ -287,6 +288,20 @@ fn preflight_zip(file: &mut fs::File) -> Result<()> {
                 return Err(unsafe_archive(
                     "",
                     format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"),
+                ));
+            }
+            let directory_bytes = u32::from_le_bytes([
+                tail[position + 12],
+                tail[position + 13],
+                tail[position + 14],
+                tail[position + 15],
+            ]);
+            if u64::from(directory_bytes) > MAX_ZIP_CENTRAL_DIRECTORY_BYTES {
+                return Err(unsafe_archive(
+                    "",
+                    format!(
+                        "ZIP central directory exceeds {MAX_ZIP_CENTRAL_DIRECTORY_BYTES} bytes"
+                    ),
                 ));
             }
         }
@@ -573,8 +588,8 @@ pub(crate) fn unsafe_archive(
 #[cfg(test)]
 mod zip_entry_kind_tests {
     use super::{
-        MAX_ARCHIVE_ENTRIES, MAX_TAR_EXTENSION_BYTES, preflight_tar_gzip, preflight_zip,
-        validate_tar_directory_entry, validate_zip_entry_kind,
+        MAX_ARCHIVE_ENTRIES, MAX_TAR_EXTENSION_BYTES, MAX_ZIP_CENTRAL_DIRECTORY_BYTES,
+        preflight_tar_gzip, preflight_zip, validate_tar_directory_entry, validate_zip_entry_kind,
     };
     use crate::DistributionError;
     use flate2::Compression;
@@ -618,6 +633,31 @@ mod zip_entry_kind_tests {
                 .unwrap();
         }
         writer.finish().unwrap();
+
+        let mut file = fs::File::open(path).unwrap();
+        assert!(matches!(
+            preflight_zip(&mut file).unwrap_err(),
+            DistributionError::UnsafeToolArchive { .. }
+        ));
+    }
+
+    #[test]
+    fn zip_central_directory_size_is_rejected_before_archive_indexing() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("oversized-directory.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        writer
+            .start_file("desktop.exe", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.finish().unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        let footer = bytes
+            .windows(4)
+            .rposition(|window| window == b"PK\x05\x06")
+            .unwrap();
+        bytes[footer + 12..footer + 16]
+            .copy_from_slice(&((MAX_ZIP_CENTRAL_DIRECTORY_BYTES + 1) as u32).to_le_bytes());
+        fs::write(&path, bytes).unwrap();
 
         let mut file = fs::File::open(path).unwrap();
         assert!(matches!(

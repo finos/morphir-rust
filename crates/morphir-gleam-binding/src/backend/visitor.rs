@@ -152,8 +152,8 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                         output.push_str("  ");
                     }
                     // Gleam type constructors must start with uppercase. Render from the
-                    // Name's words: Display gives the canonical v4 encoding, which
-                    // parenthesizes acronyms ("(gc)") and is not a Gleam identifier.
+                    // Name's segments: Display gives the canonical v4 encoding, which
+                    // is hyphen separated ("my-API-client") and is not a Gleam identifier.
                     output.push_str(&constructor.name.to_title_case());
 
                     if !constructor.args.is_empty() {

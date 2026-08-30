@@ -7,7 +7,7 @@ use morphir_core::naming::{FQName, Name};
 fn reference() -> Type {
     Type::Reference(
         TypeAttributes::default(),
-        FQName::from_canonical_string("morphir/(sdk):basics#int").unwrap(),
+        FQName::from_canonical_string("morphir/SDK:basics#int").unwrap(),
         Vec::new(),
     )
 }
@@ -17,7 +17,7 @@ fn compact_encoding_uses_type_shorthand() {
     let encoded = with_type_encoding(TypeEncoding::Compact, || {
         serde_json::to_string(&reference()).unwrap()
     });
-    assert_eq!(encoded, r#""morphir/(sdk):basics#int""#);
+    assert_eq!(encoded, r#""morphir/SDK:basics#int""#);
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn expanded_encoding_preserves_explicit_type_nodes() {
 fn compact_parameterized_references_round_trip() {
     let value = Type::Reference(
         TypeAttributes::default(),
-        FQName::from_canonical_string("morphir/(sdk):list#list").unwrap(),
+        FQName::from_canonical_string("morphir/SDK:list#list").unwrap(),
         vec![Type::Variable(TypeAttributes::default(), Name::from("a"))],
     );
     let encoded = with_type_encoding(TypeEncoding::Compact, || {
@@ -40,7 +40,7 @@ fn compact_parameterized_references_round_trip() {
     });
     assert_eq!(
         encoded,
-        serde_json::json!({"Reference": ["morphir/(sdk):list#list", "a"]})
+        serde_json::json!({"Reference": ["morphir/SDK:list#list", "a"]})
     );
     assert_eq!(serde_json::from_value::<Type>(encoded).unwrap(), value);
 }

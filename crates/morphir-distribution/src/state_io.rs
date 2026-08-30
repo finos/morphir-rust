@@ -24,10 +24,7 @@ pub(crate) struct StateGuard {
 impl StateGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self> {
         let parent = path.parent().expect("durable lock path has a parent");
-        fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+        create_dir_all_durable(parent)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -324,10 +321,7 @@ pub(crate) fn encode_json(value: &impl Serialize) -> Result<Vec<u8>> {
 
 pub(crate) fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().expect("durable state path has a parent");
-    fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
-        path: parent.to_path_buf(),
-        source,
-    })?;
+    create_dir_all_durable(parent)?;
     let mut staged = tempfile::Builder::new()
         .prefix(".stage-")
         .tempfile_in(parent)
@@ -351,6 +345,22 @@ pub(crate) fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
             source: error.error,
         })?;
     sync_parent_directory(path)
+}
+
+pub(crate) fn create_dir_all_durable(path: &Path) -> Result<()> {
+    let missing = path
+        .ancestors()
+        .take_while(|ancestor| !ancestor.exists())
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    fs::create_dir_all(path).map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    for created in missing.iter().rev() {
+        sync_parent_directory(created)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {

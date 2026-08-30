@@ -3,6 +3,7 @@
 mod activation;
 mod catalog;
 mod package;
+mod package_key;
 mod recovery;
 mod repair_journal;
 mod verification;

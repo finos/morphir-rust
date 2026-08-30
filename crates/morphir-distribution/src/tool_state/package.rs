@@ -1,5 +1,6 @@
 //! Authenticated package materialization into the tool content-addressed store.
 
+use super::package_key::extracted_package_path;
 use super::verification::verify_one_file;
 use crate::store::{add_owner_executable, hash_file};
 use crate::tool_archive::{extract_tar_gzip, portable_archive_path, unsafe_archive};
@@ -177,7 +178,7 @@ impl<'home> ToolPackageStore<'home> {
             .path()
             .parent()
             .expect("CAS artifact has a digest directory");
-        let destination = digest_directory.join("package");
+        let destination = extracted_package_path(digest_directory, resolved.artifact());
         let staging = tempfile::Builder::new()
             .prefix(".package-")
             .tempdir_in(digest_directory)
@@ -266,7 +267,7 @@ impl<'home> ToolPackageStore<'home> {
             .path()
             .parent()
             .expect("CAS artifact has a digest directory");
-        let destination = digest_directory.join("package");
+        let destination = extracted_package_path(digest_directory, resolved.artifact());
         let staging = tempfile::Builder::new()
             .prefix(".package-")
             .tempdir_in(digest_directory)

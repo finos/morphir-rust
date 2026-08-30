@@ -1,7 +1,9 @@
 //! Crash recovery for exact-release tool repairs.
 
 use super::catalog::InstalledTool;
-use crate::state_io::{atomic_write_json, read_json, remove_file, sync_parent_directory};
+use crate::state_io::{
+    atomic_write_json, create_dir_all_durable, read_json, remove_file, sync_parent_directory,
+};
 use crate::{DistributionError, Result, Sha256Digest, ToolId};
 use morphir_common::home::MorphirHome;
 use serde::{Deserialize, Serialize};
@@ -169,10 +171,7 @@ fn rename_durable(source: &Path, destination: &Path) -> Result<()> {
     let parent = destination
         .parent()
         .expect("repair quarantine destination has a parent");
-    fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
-        path: parent.to_path_buf(),
-        source,
-    })?;
+    create_dir_all_durable(parent)?;
     fs::rename(source, destination).map_err(|error| DistributionError::Io {
         path: source.to_path_buf(),
         source: error,

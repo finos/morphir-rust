@@ -321,6 +321,9 @@ fn next_rollback(previous: Option<ToolCatalogEntry>, active: &InstalledTool) -> 
     let mut seen = BTreeSet::new();
     candidates
         .into_iter()
+        .filter(|candidate| {
+            candidate.version != active.version || candidate.digest != active.digest
+        })
         .filter(|candidate| seen.insert((candidate.version.clone(), candidate.digest.clone())))
         .collect()
 }

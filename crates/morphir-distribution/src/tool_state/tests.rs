@@ -1,4 +1,6 @@
 mod archive_portability;
+mod package_namespacing;
+mod rollback_history;
 mod support;
 
 use super::*;

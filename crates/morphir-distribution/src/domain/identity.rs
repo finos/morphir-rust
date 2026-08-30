@@ -259,7 +259,8 @@ impl ArtifactFilename {
 }
 
 fn is_windows_device_number(number: &str) -> bool {
-    number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9')
+    matches!(number, "¹" | "²" | "³")
+        || (number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9'))
 }
 
 impl Serialize for ArtifactFilename {

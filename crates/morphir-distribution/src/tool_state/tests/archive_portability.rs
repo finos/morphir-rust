@@ -1,8 +1,31 @@
 use super::super::ToolPackageStore;
+use super::super::package::copy_zip_entry;
 use super::support::{tar_gzip_release, write_tar_gzip, write_zip, zip_release};
-use crate::{Channel, Selection, Sha256Digest};
+use crate::{Channel, DistributionError, Selection, Sha256Digest};
 use morphir_common::home::MorphirHome;
 use std::fs;
+use std::io::Cursor;
+use std::path::Path;
+
+#[test]
+fn zip_copy_stops_after_one_byte_beyond_an_understated_size() {
+    let mut input = Cursor::new(b"understated");
+    let mut output = Vec::new();
+
+    assert!(matches!(
+        copy_zip_entry(
+            &mut input,
+            &mut output,
+            1,
+            100,
+            "desktop.exe",
+            Path::new("desktop.exe")
+        )
+        .unwrap_err(),
+        DistributionError::UnsafeToolArchive { .. }
+    ));
+    assert_eq!(output.len(), 2);
+}
 
 #[test]
 fn zip_non_portable_components_are_rejected_before_extraction() {

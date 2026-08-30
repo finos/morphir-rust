@@ -111,6 +111,9 @@ fn artifact_filename_is_one_portable_path_component() {
         "CON",
         "con.exe",
         "LPT9.log",
+        "COM¹.exe",
+        "LPT²",
+        "com³.txt",
     ] {
         assert!(
             ArtifactFilename::parse(invalid).is_err(),

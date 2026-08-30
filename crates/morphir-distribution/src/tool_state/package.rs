@@ -14,7 +14,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
@@ -384,15 +384,6 @@ fn extract_zip(
             })?;
             continue;
         }
-        unpacked = unpacked
-            .checked_add(entry.size())
-            .ok_or_else(|| unsafe_archive(&raw_name, "unpacked size overflow".to_owned()))?;
-        if unpacked > MAX_UNPACKED_BYTES {
-            return Err(unsafe_archive(
-                &raw_name,
-                format!("archive expands beyond {MAX_UNPACKED_BYTES} bytes"),
-            ));
-        }
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
                 path: parent.to_path_buf(),
@@ -407,10 +398,16 @@ fn extract_zip(
                 path: output.clone(),
                 source,
             })?;
-        io::copy(&mut entry, &mut output_file).map_err(|source| DistributionError::Io {
-            path: output.clone(),
-            source,
-        })?;
+        let remaining = MAX_UNPACKED_BYTES - unpacked;
+        let declared_size = entry.size();
+        unpacked += copy_zip_entry(
+            &mut entry,
+            &mut output_file,
+            declared_size,
+            remaining,
+            &raw_name,
+            &output,
+        )?;
         output_file
             .sync_all()
             .map_err(|source| DistributionError::Io {
@@ -441,6 +438,35 @@ fn extract_zip(
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
+}
+
+pub(super) fn copy_zip_entry<R: Read, W: io::Write>(
+    input: &mut R,
+    output: &mut W,
+    declared_size: u64,
+    remaining_budget: u64,
+    entry_name: &str,
+    output_path: &Path,
+) -> Result<u64> {
+    if declared_size > remaining_budget {
+        return Err(unsafe_archive(
+            entry_name,
+            format!("archive expands beyond {MAX_UNPACKED_BYTES} bytes"),
+        ));
+    }
+    let actual = io::copy(&mut input.take(declared_size + 1), output).map_err(|source| {
+        DistributionError::Io {
+            path: output_path.to_path_buf(),
+            source,
+        }
+    })?;
+    if actual != declared_size {
+        return Err(unsafe_archive(
+            entry_name,
+            format!("declared {declared_size} bytes but expanded to at least {actual}"),
+        ));
+    }
+    Ok(actual)
 }
 
 pub(super) fn verify_relative_files(root: &Path, files: &[ToolPackageFile]) -> Result<()> {

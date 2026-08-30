@@ -74,7 +74,7 @@ fn inventory_preserves_active_lease_classification() {
 }
 
 #[test]
-fn inventory_matches_registered_paths_by_portable_comparison_key() {
+fn inventory_matches_portable_aliases_only_when_the_filesystem_resolves_them() {
     let (_root, home) = a_morphir_home();
     std::fs::create_dir_all(home.downloads_cache_dir().join("Packages/CAF\u{c9}")).unwrap();
     std::fs::write(
@@ -94,10 +94,37 @@ fn inventory_matches_registered_paths_by_portable_comparison_key() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path(), "Packages/CAF\u{c9}");
     assert_eq!(entries[0].bytes(), 5);
+    let registered_spelling_resolves = home
+        .downloads_cache_dir()
+        .join("packages/cafe\u{301}")
+        .exists();
     assert_eq!(
         entries[0].state(),
-        CacheEntryState::Disposable { last_used: 100 }
+        if registered_spelling_resolves {
+            CacheEntryState::Disposable { last_used: 100 }
+        } else {
+            CacheEntryState::Unclassified
+        }
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lone_portable_alias_is_unclassified_when_its_registered_spelling_is_absent() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    std::fs::write(home.downloads_cache_dir().join("ARTIFACT"), b"unregistered").unwrap();
+
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("artifact", 100)
+        .unwrap();
+    let entries =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path(), "ARTIFACT");
+    assert_eq!(entries[0].state(), CacheEntryState::Unclassified);
 }
 
 #[cfg(unix)]

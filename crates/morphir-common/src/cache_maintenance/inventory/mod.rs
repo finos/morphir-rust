@@ -6,12 +6,13 @@ pub use registration::{CacheNamespace, CacheRegistrationError};
 use self::{identity::portable_identity, registration::portable_comparison_key};
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
-use cap_fs_ext::DirExt;
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt;
-use cap_std::fs::{Dir, DirEntry, Metadata};
-use std::collections::BTreeMap;
+use cap_std::fs::{Dir, DirEntry, Metadata, OpenOptions};
+use same_file::Handle;
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -207,30 +208,17 @@ impl InventoryWalk<'_> {
         depth: usize,
     ) -> Result<(), CacheInventoryError> {
         self.check_depth(depth)?;
-        let children = self.read_children(directory, display_path)?;
-        let comparison_key_counts = children
-            .iter()
-            .map(|child| {
-                let relative = relative.join(child.file_name());
-                portable_comparison_key(&portable_identity(&relative))
-            })
-            .fold(BTreeMap::new(), |mut counts, key| {
-                *counts.entry(key).or_insert(0_usize) += 1;
-                counts
-            });
-
-        for child in children {
+        for child in self.read_children(directory, display_path)? {
             let child_path = display_path.join(child.file_name());
             let child_relative = relative.join(child.file_name());
             let identity = portable_identity(&child_relative);
             let comparison_key = portable_comparison_key(&identity);
-            let portable_alias_is_ambiguous = comparison_key_counts[&comparison_key] > 1;
             let metadata = directory
                 .symlink_metadata(child.file_name())
                 .map_err(|source| io_error(&child_path, source))?;
 
             if let Some(template) = self
-                .registered_entry(&identity, &comparison_key, portable_alias_is_ambiguous)
+                .registered_entry(directory, &child, &metadata, &identity, &comparison_key)
                 .cloned()
             {
                 let measured =
@@ -241,7 +229,7 @@ impl InventoryWalk<'_> {
                     CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)?
                 };
                 self.entries.push(entry);
-            } else if self.has_registered_descendant(&identity, portable_alias_is_ambiguous) {
+            } else if self.has_registered_descendant(directory, &child, &metadata, &identity) {
                 if is_link_like(&metadata) || !metadata.is_dir() {
                     let measured =
                         self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
@@ -331,34 +319,57 @@ impl InventoryWalk<'_> {
 
     fn registered_entry(
         &self,
+        directory: &Dir,
+        child: &DirEntry,
+        metadata: &Metadata,
         identity: &str,
         comparison_key: &str,
-        portable_alias_is_ambiguous: bool,
     ) -> Option<&CacheEntry> {
-        if portable_alias_is_ambiguous {
-            self.namespace
-                .entries
-                .values()
-                .find(|entry| entry.path() == identity)
-        } else {
-            self.namespace.entries.get(comparison_key)
-        }
+        let entry = self.namespace.entries.get(comparison_key)?;
+        self.native_spelling_matches(directory, child, metadata, identity, entry.path())
+            .then_some(entry)
     }
 
-    fn has_registered_descendant(&self, identity: &str, portable_alias_is_ambiguous: bool) -> bool {
-        if portable_alias_is_ambiguous {
-            let prefix = format!("{identity}/");
-            self.namespace
-                .entries
-                .values()
-                .any(|entry| entry.path().starts_with(&prefix))
-        } else {
-            let prefix = format!("{}/", portable_comparison_key(identity));
-            self.namespace
-                .entries
-                .keys()
-                .any(|path| path.starts_with(&prefix))
+    fn has_registered_descendant(
+        &self,
+        directory: &Dir,
+        child: &DirEntry,
+        metadata: &Metadata,
+        identity: &str,
+    ) -> bool {
+        let prefix = format!("{}/", portable_comparison_key(identity));
+        self.namespace.entries.iter().any(|(path, entry)| {
+            path.starts_with(&prefix)
+                && self.native_spelling_matches(directory, child, metadata, identity, entry.path())
+        })
+    }
+
+    fn native_spelling_matches(
+        &self,
+        directory: &Dir,
+        child: &DirEntry,
+        metadata: &Metadata,
+        observed_identity: &str,
+        registered_path: &str,
+    ) -> bool {
+        let depth = observed_identity.split('/').count();
+        let registered_prefix = registered_path
+            .split('/')
+            .take(depth)
+            .collect::<Vec<_>>()
+            .join("/");
+        if registered_prefix == observed_identity {
+            return true;
         }
+        let Some(registered_component) = registered_prefix.rsplit('/').next() else {
+            return false;
+        };
+        same_object(
+            directory,
+            OsStr::new(registered_component),
+            child.file_name().as_os_str(),
+            metadata,
+        )
     }
 
     fn visit(&mut self) -> Result<(), CacheInventoryError> {
@@ -406,6 +417,41 @@ impl InventoryWalk<'_> {
 struct MeasuredEntry {
     bytes: u64,
     safe: bool,
+}
+
+fn same_object(
+    directory: &Dir,
+    registered_name: &OsStr,
+    observed_name: &OsStr,
+    observed_metadata: &Metadata,
+) -> bool {
+    if is_link_like(observed_metadata) {
+        return false;
+    }
+    let Ok(registered_metadata) = directory.symlink_metadata(registered_name) else {
+        return false;
+    };
+    if is_link_like(&registered_metadata)
+        || registered_metadata.is_dir() != observed_metadata.is_dir()
+        || registered_metadata.is_file() != observed_metadata.is_file()
+    {
+        return false;
+    }
+
+    let registered = object_handle(directory, registered_name, &registered_metadata);
+    let observed = object_handle(directory, observed_name, observed_metadata);
+    matches!((registered, observed), (Ok(left), Ok(right)) if left == right)
+}
+
+fn object_handle(directory: &Dir, name: &OsStr, metadata: &Metadata) -> io::Result<Handle> {
+    let file = if metadata.is_dir() {
+        directory.open_dir_nofollow(name)?.into_std_file()
+    } else {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        directory.open_with(name, &options)?.into_std()
+    };
+    Handle::from_file(file)
 }
 
 fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {

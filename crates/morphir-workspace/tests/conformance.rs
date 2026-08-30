@@ -137,6 +137,22 @@ fn root_project_can_come_from_the_cli_overlay() {
 }
 
 #[test]
+fn non_object_cli_overlays_are_rejected() {
+    for overlay in [
+        json!("replace everything"),
+        json!(["replace", "everything"]),
+    ] {
+        let mut request = request_with_root_config("[workspace]\nmembers = []\n");
+        request.cli_overlay = overlay;
+
+        let error = discover(request).into_result().unwrap_err();
+
+        assert_eq!(error.code, WORKSPACE_CONFIG_INVALID);
+        assert_eq!(error.path, None);
+    }
+}
+
+#[test]
 fn shared_discovery_corpus_matches_structurally() {
     let corpus: Vec<CorpusCase> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

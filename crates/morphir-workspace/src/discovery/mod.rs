@@ -16,8 +16,9 @@ use serde_json::{Map, Value};
 
 use crate::{
     DiscoveryFailure, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree, ProjectState,
-    RelativePath, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED,
-    WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
+    RelativePath, WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL,
+    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails,
+    WorkspaceSnapshot, WorkspaceState,
 };
 use decoding::{decode_root_project, decode_workspace};
 use diagnostics::{duplicate_name_diagnostics, failure, sort_diagnostics};
@@ -139,6 +140,13 @@ fn discover_internal(
                 "unsupported workspace discovery protocol {}; supported version is {}",
                 request.protocol_version, WORKSPACE_DISCOVERY_PROTOCOL
             ),
+            None,
+        ));
+    }
+    if !request.cli_overlay.is_null() && !request.cli_overlay.is_object() {
+        return Err(failure(
+            WORKSPACE_CONFIG_INVALID,
+            "CLI overlay must be a JSON object or null".to_owned(),
             None,
         ));
     }

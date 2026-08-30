@@ -1,5 +1,7 @@
 mod identity;
+mod measurement;
 mod native;
+mod pinned;
 mod registration;
 
 pub use registration::{CacheNamespace, CacheRegistrationError};
@@ -12,6 +14,8 @@ use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt;
 use cap_std::fs::{Dir, DirEntry, Metadata};
+pub(crate) use pinned::PinnedCacheEntry;
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -78,6 +82,12 @@ pub enum CacheInventoryError {
         /// Namespace root that failed the type check.
         path: PathBuf,
     },
+    /// Inventory refuses to cross into another mounted filesystem.
+    #[error("refusing to inspect mounted cache subtree {path}")]
+    FilesystemBoundary {
+        /// Mounted path that crossed the cache filesystem boundary.
+        path: PathBuf,
+    },
     /// The entry-count budget was exhausted.
     #[error("cache inventory entry limit of {limit} was exceeded")]
     EntryLimitExceeded {
@@ -139,6 +149,29 @@ pub fn inventory_cache_namespace(
     namespace: &CacheNamespace,
     limits: CacheInventoryLimits,
 ) -> Result<Vec<CacheEntry>, CacheInventoryError> {
+    Ok(
+        inventory_cache_namespace_inner(home, namespace, limits, None)?
+            .into_iter()
+            .map(PinnedCacheEntry::into_entry)
+            .collect(),
+    )
+}
+
+pub(crate) fn inventory_cache_namespace_pinned(
+    home: &MorphirHome,
+    namespace: &CacheNamespace,
+    limits: CacheInventoryLimits,
+    pinned_paths: &BTreeSet<String>,
+) -> Result<Vec<PinnedCacheEntry>, CacheInventoryError> {
+    inventory_cache_namespace_inner(home, namespace, limits, Some(pinned_paths))
+}
+
+fn inventory_cache_namespace_inner(
+    home: &MorphirHome,
+    namespace: &CacheNamespace,
+    limits: CacheInventoryLimits,
+    pinned_paths: Option<&BTreeSet<String>>,
+) -> Result<Vec<PinnedCacheEntry>, CacheInventoryError> {
     let home_root = home.root();
     let home_dir = match Dir::open_ambient_dir(home_root, ambient_authority()) {
         Ok(directory) => directory,
@@ -158,6 +191,9 @@ pub fn inventory_cache_namespace(
     if !cache_metadata.is_dir() {
         return Err(CacheInventoryError::InvalidCacheRoot { path: cache_root });
     }
+    if native::crosses_filesystem_boundary(&home_dir, &cache_metadata) {
+        return Err(CacheInventoryError::FilesystemBoundary { path: cache_root });
+    }
     let cache_dir = home_dir
         .open_dir_nofollow("cache")
         .map_err(|source| io_error(&cache_root, source))?;
@@ -174,6 +210,9 @@ pub fn inventory_cache_namespace(
     if !metadata.is_dir() {
         return Err(CacheInventoryError::InvalidNamespaceRoot { path: root });
     }
+    if native::crosses_filesystem_boundary(&cache_dir, &metadata) {
+        return Err(CacheInventoryError::FilesystemBoundary { path: root });
+    }
     let root_dir = cache_dir
         .open_dir_nofollow(namespace.name())
         .map_err(|source| io_error(&root, source))?;
@@ -181,21 +220,23 @@ pub fn inventory_cache_namespace(
     let mut inventory = InventoryWalk {
         namespace,
         limits,
+        pinned_paths,
         visited: 0,
         entries: Vec::new(),
     };
     inventory.scan_children(&root_dir, &root, Path::new(""), 0)?;
     inventory
         .entries
-        .sort_by(|left, right| left.path().cmp(right.path()));
+        .sort_by(|left, right| left.entry().path().cmp(right.entry().path()));
     Ok(inventory.entries)
 }
 
 struct InventoryWalk<'a> {
     namespace: &'a CacheNamespace,
     limits: CacheInventoryLimits,
+    pinned_paths: Option<&'a BTreeSet<String>>,
     visited: usize,
-    entries: Vec<CacheEntry>,
+    entries: Vec<PinnedCacheEntry>,
 }
 
 impl InventoryWalk<'_> {
@@ -228,100 +269,82 @@ impl InventoryWalk<'_> {
                 )
                 .cloned()
             {
+                let pin_required = self
+                    .pinned_paths
+                    .is_some_and(|paths| paths.contains(&identity));
+                let handle = pin_required
+                    .then(|| {
+                        native::object_handle(directory, child.file_name().as_os_str(), &metadata)
+                    })
+                    .transpose()
+                    .ok()
+                    .flatten();
                 let measured = self.measure(directory, child, &child_path, &metadata, depth + 1)?;
-                let entry = if measured.safe {
-                    template.with_observation(identity, measured.bytes)?
-                } else {
-                    CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)?
-                };
-                self.entries.push(entry);
+                let (entry, handle, fingerprint) =
+                    if measured.safe && (!pin_required || handle.is_some()) {
+                        (
+                            template.with_observation(identity, measured.bytes)?,
+                            handle,
+                            pin_required.then_some(measured.fingerprint),
+                        )
+                    } else {
+                        (
+                            CacheEntry::unclassified(
+                                self.namespace.name.clone(),
+                                identity,
+                                measured.bytes,
+                            )?,
+                            None,
+                            None,
+                        )
+                    };
+                self.entries
+                    .push(PinnedCacheEntry::new(entry, handle, fingerprint));
             } else if self
                 .has_registered_descendant(directory, &children, child, &metadata, &identity)
             {
                 if is_link_like(&metadata) || !metadata.is_dir() {
                     let measured =
                         self.measure(directory, child, &child_path, &metadata, depth + 1)?;
-                    self.entries.push(CacheEntry::unclassified(
-                        self.namespace.name.clone(),
-                        identity,
-                        measured.bytes,
-                    )?);
+                    self.entries.push(PinnedCacheEntry::new(
+                        CacheEntry::unclassified(
+                            self.namespace.name.clone(),
+                            identity,
+                            measured.bytes,
+                        )?,
+                        None,
+                        None,
+                    ));
                 } else {
                     match directory.open_dir_nofollow(child.file_name()) {
                         Ok(child_dir) => {
                             self.scan_children(&child_dir, &child_path, &child_relative, depth + 1)?
                         }
-                        Err(_) => self.entries.push(CacheEntry::unclassified(
-                            self.namespace.name.clone(),
-                            identity,
-                            metadata.len(),
-                        )?),
+                        Err(_) => self.entries.push(PinnedCacheEntry::new(
+                            CacheEntry::unclassified(
+                                self.namespace.name.clone(),
+                                identity,
+                                metadata.len(),
+                            )?,
+                            None,
+                            None,
+                        )),
                     }
                 }
             } else {
                 let measured = self.measure(directory, child, &child_path, &metadata, depth + 1)?;
-                self.entries.push(CacheEntry::unclassified(
-                    self.namespace.name.clone(),
-                    identity,
-                    measured.bytes,
-                )?);
+                self.entries.push(PinnedCacheEntry::new(
+                    CacheEntry::unclassified(
+                        self.namespace.name.clone(),
+                        identity,
+                        measured.bytes,
+                    )?,
+                    None,
+                    None,
+                ));
             }
         }
         Ok(())
-    }
-
-    fn measure(
-        &mut self,
-        parent: &Dir,
-        entry: &DirEntry,
-        path: &Path,
-        metadata: &Metadata,
-        depth: usize,
-    ) -> Result<MeasuredEntry, CacheInventoryError> {
-        if is_link_like(metadata) {
-            return Ok(MeasuredEntry {
-                bytes: metadata.len(),
-                safe: false,
-            });
-        }
-        if metadata.is_file() {
-            return Ok(MeasuredEntry {
-                bytes: metadata.len(),
-                safe: true,
-            });
-        }
-        if !metadata.is_dir() {
-            return Ok(MeasuredEntry {
-                bytes: metadata.len(),
-                safe: false,
-            });
-        }
-
-        self.check_depth(depth)?;
-        let directory = match parent.open_dir_nofollow(entry.file_name()) {
-            Ok(directory) => directory,
-            Err(_) => {
-                return Ok(MeasuredEntry {
-                    bytes: metadata.len(),
-                    safe: false,
-                });
-            }
-        };
-        let mut bytes = 0_u64;
-        let mut safe = true;
-        for child in self.read_children(&directory, path)? {
-            let child_path = path.join(child.file_name());
-            let child_metadata = directory
-                .symlink_metadata(child.file_name())
-                .map_err(|source| io_error(&child_path, source))?;
-            let measured =
-                self.measure(&directory, &child, &child_path, &child_metadata, depth + 1)?;
-            bytes = bytes
-                .checked_add(measured.bytes)
-                .ok_or(CacheInventoryError::ByteCountOverflow)?;
-            safe &= measured.safe;
-        }
-        Ok(MeasuredEntry { bytes, safe })
     }
 
     fn registered_entry(
@@ -400,11 +423,6 @@ impl InventoryWalk<'_> {
         }
         Ok(())
     }
-}
-
-struct MeasuredEntry {
-    bytes: u64,
-    safe: bool,
 }
 
 fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {

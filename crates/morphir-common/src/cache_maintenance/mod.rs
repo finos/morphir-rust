@@ -22,10 +22,16 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod executor;
+mod fingerprint;
 mod inventory;
 mod model;
 mod planner;
 
+pub use executor::{
+    CacheExecutionDisposition, CacheExecutionError, CacheExecutionItem, CacheExecutionLimits,
+    CacheExecutionReport, CacheMutationGuard, execute_cache_cleanup,
+};
 pub use inventory::{
     CacheInventoryError, CacheInventoryLimits, CacheNamespace, CacheRegistrationError,
     inventory_cache_namespace,

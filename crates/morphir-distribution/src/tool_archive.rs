@@ -57,7 +57,15 @@ pub(crate) fn extract_zip(
         })?;
         let relative = portable_archive_path(&enclosed)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
-        if !names.insert(&relative) {
+        let is_directory = entry.is_dir();
+        if !names.insert(
+            &relative,
+            if is_directory {
+                ArchivePathKind::Directory
+            } else {
+                ArchivePathKind::File
+            },
+        ) {
             return Err(unsafe_archive(
                 &raw_name,
                 "entry collides with another portable path",
@@ -72,7 +80,7 @@ pub(crate) fn extract_zip(
             ));
         }
         let output = destination.join(relative.as_path());
-        if entry.is_dir() {
+        if is_directory {
             fs::create_dir_all(&output).map_err(|source| DistributionError::Io {
                 path: output,
                 source,
@@ -165,7 +173,18 @@ pub(crate) fn extract_tar_gzip(
         let raw_name = raw_path.to_string_lossy().into_owned();
         let relative = portable_archive_path(&raw_path)
             .map_err(|error| unsafe_archive(&raw_name, error.to_string()))?;
-        if !names.insert(&relative) {
+        let entry_type = entry.header().entry_type();
+        let path_kind = if entry_type.is_dir() {
+            ArchivePathKind::Directory
+        } else if entry_type.is_file() {
+            ArchivePathKind::File
+        } else {
+            return Err(unsafe_archive(
+                &raw_name,
+                "links, devices, and special files are not allowed",
+            ));
+        };
+        if !names.insert(&relative, path_kind) {
             return Err(unsafe_archive(
                 &raw_name,
                 "entry collides with another portable path",
@@ -173,7 +192,6 @@ pub(crate) fn extract_tar_gzip(
         }
 
         let output = destination.join(relative.as_path());
-        let entry_type = entry.header().entry_type();
         if entry_type.is_dir() {
             fs::create_dir_all(&output).map_err(|source| DistributionError::Io {
                 path: output,
@@ -182,13 +200,6 @@ pub(crate) fn extract_tar_gzip(
             directories.push(relative);
             continue;
         }
-        if !entry_type.is_file() {
-            return Err(unsafe_archive(
-                &raw_name,
-                "links, devices, and special files are not allowed",
-            ));
-        }
-
         let declared_length = entry.size();
         unpacked = unpacked
             .checked_add(declared_length)
@@ -269,32 +280,49 @@ fn finish_extraction(
 #[derive(Default)]
 struct PortableArchivePaths {
     entries: BTreeSet<String>,
-    component_spellings: BTreeMap<String, String>,
+    components: BTreeMap<String, (String, ArchivePathKind)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchivePathKind {
+    File,
+    Directory,
 }
 
 impl PortableArchivePaths {
-    fn insert(&mut self, path: &RelativeArtifactPath) -> bool {
+    fn insert(&mut self, path: &RelativeArtifactPath, kind: ArchivePathKind) -> bool {
         if !self.entries.insert(path.as_str().to_owned()) {
             return false;
         }
 
         let mut prefix = String::new();
-        for component in path.as_str().split('/') {
+        let mut components = path.as_str().split('/').peekable();
+        while let Some(component) = components.next() {
             if !prefix.is_empty() {
                 prefix.push('/');
             }
             prefix.push_str(component);
+            let component_kind = if components.peek().is_some() {
+                ArchivePathKind::Directory
+            } else {
+                kind
+            };
             let folded = prefix
                 .nfc()
                 .flat_map(char::to_lowercase)
                 .collect::<String>()
                 .nfc()
                 .collect::<String>();
-            match self.component_spellings.get(&folded) {
-                Some(existing) if existing != &prefix => return false,
+            match self.components.get(&folded) {
+                Some((existing, existing_kind))
+                    if existing != &prefix || *existing_kind != component_kind =>
+                {
+                    return false;
+                }
                 Some(_) => {}
                 None => {
-                    self.component_spellings.insert(folded, prefix.clone());
+                    self.components
+                        .insert(folded, (prefix.clone(), component_kind));
                 }
             }
         }

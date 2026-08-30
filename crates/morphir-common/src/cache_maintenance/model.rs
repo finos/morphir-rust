@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -37,13 +37,33 @@ pub enum CacheEntryState {
 }
 
 /// One cache entry observed beneath a registered namespace.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheEntry {
     namespace: String,
     path: String,
     bytes: u64,
     state: CacheEntryState,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheEntryWire {
+    namespace: String,
+    path: String,
+    bytes: u64,
+    state: CacheEntryState,
+}
+
+impl<'de> Deserialize<'de> for CacheEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = CacheEntryWire::deserialize(deserializer)?;
+        Self::new(wire.namespace, wire.path, wire.bytes, wire.state)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl CacheEntry {
@@ -203,7 +223,7 @@ impl CacheDecisionReason {
 }
 
 /// The deterministic decision for one inventoried entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheDecision {
     entry: CacheEntry,
@@ -231,8 +251,12 @@ impl CacheDecision {
     }
 }
 
-/// A side-effect-free cleanup plan suitable for dry runs and execution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A side-effect-free, output-only cleanup plan suitable for dry runs and execution.
+///
+/// Plans deliberately support serialization but not deserialization. Execute the
+/// in-memory value returned by the planner rather than trusting decisions supplied
+/// by an external JSON document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanupPlan {
     policy: CachePolicy,
@@ -346,5 +370,18 @@ mod tests {
             CacheEntry::disposable("Desktop", "entry", 1, 1),
             Err(CacheModelError::InvalidNamespace)
         );
+    }
+
+    #[test]
+    fn deserialization_cannot_bypass_entry_identity_validation() {
+        let error = serde_json::from_value::<CacheEntry>(serde_json::json!({
+            "namespace": "downloads",
+            "path": "../outside",
+            "bytes": 1,
+            "state": { "kind": "disposable", "lastUsed": 1 }
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("portable relative path"));
     }
 }

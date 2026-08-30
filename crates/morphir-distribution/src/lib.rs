@@ -47,6 +47,7 @@ mod local;
 mod resolver;
 mod state;
 mod store;
+mod tool_repository;
 mod tool_resolver;
 
 pub use domain::{
@@ -65,4 +66,7 @@ pub use state::{
     read_extension_lock, uninstall_extension, write_extension_lock,
 };
 pub use store::{ArtifactStore, StoredArtifact, VerifiedArtifact};
+pub use tool_repository::{
+    DownloadedToolArtifact, ResolvedTrustedToolArtifact, TrustedToolRepository,
+};
 pub use tool_resolver::{ResolvedToolRelease, resolve_tool};

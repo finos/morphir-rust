@@ -90,6 +90,27 @@ pub enum DistributionError {
         /// Revoked exact semantic version.
         version: semver::Version,
     },
+    /// TUF rejected repository metadata or target bytes.
+    #[error("tool repository verification failed: {source}")]
+    ToolRepository {
+        /// Underlying TUF client failure.
+        #[source]
+        source: Box<tough::error::Error>,
+    },
+    /// Authenticated Morphir-specific target metadata is malformed or inconsistent.
+    #[error("invalid authenticated tool metadata for {target}: {reason}")]
+    InvalidToolMetadata {
+        /// Authenticated target path.
+        target: String,
+        /// Concise consistency or decoding failure.
+        reason: String,
+    },
+    /// Authenticated repository metadata does not list a required target.
+    #[error("authenticated tool target {target} is missing")]
+    MissingToolTarget {
+        /// Required target path.
+        target: String,
+    },
     /// A release declared multiple artifacts for one platform.
     #[error("release {version} contains more than one artifact for platform {platform}")]
     AmbiguousPlatform {

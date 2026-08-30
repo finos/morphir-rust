@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with separate namespaces and common containment, hashing, staging, and reuse checks.
 - Strict tool release descriptor types and deterministic stable, preview, insiders, segmented
   preview, and exact-version resolution with CLI compatibility and revocation enforcement.
+- TUF-authenticated tool repository loading with bounded root rotation, safe expiration checks,
+  descriptor and target metadata cross-checks, and verified artifact downloads.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

@@ -1,6 +1,7 @@
 //! Confined native filesystem adapter for portable workspace discovery.
 
 mod aliases;
+mod budget;
 mod mounts;
 mod traversal;
 
@@ -26,8 +27,12 @@ use super::{
     discovery::{native_global_config_candidates, native_system_config_candidates},
     sources::ConfigLoadOptions,
 };
-use mounts::{apply_user_override_selection, selected_environment, selected_mount};
-use traversal::build_tree_from_capability;
+use aliases::AliasBudgets;
+use budget::PayloadBudget;
+use mounts::{
+    apply_user_override_selection, config_is_retained, selected_environment, selected_mount,
+};
+use traversal::{TraversalBudgets, build_tree_from_capability};
 
 /// Discover a workspace by adapting a confined native directory to the
 /// provider-neutral workspace protocol.
@@ -42,11 +47,13 @@ use traversal::build_tree_from_capability;
 /// Fixed budgets bound alias edges, queued and processed expansions, generated
 /// entries, and indexing/materialization work. Budget exhaustion returns the
 /// stable `workspace.alias.resource-limit` code. Independent fixed budgets cap
-/// native directory count, entry count, depth, and cumulative configuration
-/// bytes before the portable request is allocated. Exhaustion returns the
-/// stable `workspace.traversal.resource-limit` code. An unreadable granted
-/// entry is an explicit `workspace.traversal.unreadable` error; discovery does
-/// not silently skip paths that the merged workspace configuration could name.
+/// native directory count, entry count, and depth. One request-wide byte budget
+/// covers every retained configuration file across the development tree,
+/// materialized alias copies, an explicit user override, Morphir Home, and the
+/// system mount. Exhaustion returns the stable
+/// `workspace.traversal.resource-limit` code. An unreadable granted entry is an
+/// explicit `workspace.traversal.unreadable` error; discovery does not silently
+/// skip paths that the merged workspace configuration could name.
 ///
 /// ```no_run
 /// use morphir_devkit::{ConfigLoadOptions, discover_workspace};
@@ -152,6 +159,38 @@ fn bind_workspace_discovery_request_with_hook(
     options: &ConfigLoadOptions,
     root_opened_hook: &mut dyn FnMut(&Path),
 ) -> Result<(PathBuf, DiscoveryRequest)> {
+    bind_workspace_discovery_request_with(
+        root,
+        options,
+        AliasBudgets::DEFAULT,
+        TraversalBudgets::DEFAULT,
+        root_opened_hook,
+    )
+}
+
+#[cfg(test)]
+fn bind_workspace_discovery_request_with_budgets(
+    root: &Path,
+    options: &ConfigLoadOptions,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+) -> Result<(PathBuf, DiscoveryRequest)> {
+    bind_workspace_discovery_request_with(
+        root,
+        options,
+        alias_budgets,
+        traversal_budgets,
+        &mut |_| {},
+    )
+}
+
+fn bind_workspace_discovery_request_with(
+    root: &Path,
+    options: &ConfigLoadOptions,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+    root_opened_hook: &mut dyn FnMut(&Path),
+) -> Result<(PathBuf, DiscoveryRequest)> {
     let granted_root = if root.is_absolute() {
         root.to_path_buf()
     } else {
@@ -194,9 +233,18 @@ fn bind_workspace_discovery_request_with_hook(
             canonical_root.display()
         );
     }
-    let mut development_root =
-        build_tree_from_capability(&root_capability, &canonical_root, &granted_root)?;
-    apply_user_override_selection(&mut development_root, &options.user_override)?;
+    let mut payload = PayloadBudget::new(traversal_budgets.config_bytes);
+    let account_config = |path: &RelativePath| config_is_retained(&options.user_override, path);
+    let mut development_root = build_tree_from_capability(
+        &root_capability,
+        &canonical_root,
+        &granted_root,
+        alias_budgets,
+        traversal_budgets,
+        &mut payload,
+        &account_config,
+    )?;
+    apply_user_override_selection(&mut development_root, &options.user_override, &mut payload)?;
 
     let request = DiscoveryRequest {
         protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
@@ -205,11 +253,13 @@ fn bind_workspace_discovery_request_with_hook(
             &options.global,
             native_global_config_candidates,
             "global user",
+            &mut payload,
         )?,
         system_config: selected_mount(
             &options.system,
             || native_system_config_candidates().to_vec(),
             "system",
+            &mut payload,
         )?,
         environment: selected_environment(options),
         cli_overlay: serde_json::json!({}),

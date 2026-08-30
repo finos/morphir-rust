@@ -15,11 +15,13 @@ use super::super::{
     discovery::discover_config_candidates,
     sources::{ConfigLoadOptions, EnvSelection, SourceSelection},
 };
+use super::budget::{PayloadBudget, read_utf8_file};
 
 pub(super) fn selected_mount(
     selection: &SourceSelection,
     candidates: impl FnOnce() -> Vec<PathBuf>,
     description: &str,
+    payload: &mut PayloadBudget,
 ) -> Result<Option<FileTree>> {
     let selected = match selection {
         SourceSelection::Skip => return Ok(None),
@@ -37,11 +39,11 @@ pub(super) fn selected_mount(
         SourceSelection::Discover => discover_config_candidates(&candidates())?,
     };
     selected
-        .map(|path| config_mount(&path, description))
+        .map(|path| config_mount(&path, description, payload))
         .transpose()
 }
 
-fn config_mount(path: &Path, description: &str) -> Result<FileTree> {
+fn config_mount(path: &Path, description: &str, payload: &mut PayloadBudget) -> Result<FileTree> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("Failed to inspect {description} config: {}", path.display()))?;
     let read_path = if metadata.file_type().is_symlink() {
@@ -57,8 +59,11 @@ fn config_mount(path: &Path, description: &str) -> Result<FileTree> {
             path.display()
         )
     })?;
-    let text = fs::read_to_string(&read_path)
-        .with_context(|| format!("Failed to read {description} config: {}", path.display()))?;
+    let text = read_utf8_file(
+        &read_path,
+        &format!("{description} config selected at {}", path.display()),
+        payload,
+    )?;
     Ok(FileTree {
         entries: BTreeMap::from([
             (RelativePath::root(), FileEntry::Directory),
@@ -87,6 +92,7 @@ fn virtual_primary_name(path: &Path) -> Option<&'static str> {
 pub(super) fn apply_user_override_selection(
     tree: &mut FileTree,
     selection: &SourceSelection,
+    payload: &mut PayloadBudget,
 ) -> Result<()> {
     match selection {
         SourceSelection::Discover => Ok(()),
@@ -104,15 +110,33 @@ pub(super) fn apply_user_override_selection(
                     tree.entries.remove(candidate);
                 }
             }
-            materialize_explicit_user_override(tree, source, &primary)
+            materialize_explicit_user_override(tree, source, &primary, payload)
         }
     }
 }
 
-fn is_user_override_path(path: &RelativePath) -> bool {
+pub(super) fn is_user_override_path(path: &RelativePath) -> bool {
     matches!(
         path.as_str().rsplit('/').next(),
         Some("morphir.user.toml" | "morphir.user.yaml" | "config.user.toml" | "config.user.yaml")
+    )
+}
+
+pub(super) fn config_is_retained(selection: &SourceSelection, path: &RelativePath) -> bool {
+    match selection {
+        SourceSelection::Discover => true,
+        SourceSelection::Skip => !is_user_override_path(path),
+        SourceSelection::Explicit(_) => !is_root_user_override_path(path),
+    }
+}
+
+fn is_root_user_override_path(path: &RelativePath) -> bool {
+    matches!(
+        path.as_str(),
+        "morphir.user.toml"
+            | "morphir.user.yaml"
+            | ".config/morphir/config.user.toml"
+            | ".config/morphir/config.user.yaml"
     )
 }
 
@@ -134,6 +158,7 @@ fn materialize_explicit_user_override(
     tree: &mut FileTree,
     source: &Path,
     primary: &RelativePath,
+    payload: &mut PayloadBudget,
 ) -> Result<()> {
     let source_name = source.display();
     let serialization = match source
@@ -150,8 +175,7 @@ fn materialize_explicit_user_override(
             )
         }
     };
-    let text = fs::read_to_string(source)
-        .with_context(|| format!("Failed to read explicit user override: {source_name}"))?;
+    let text = read_utf8_file(source, "explicit user override", payload)?;
     morphir_config::parse_config(&source.to_string_lossy(), &text)
         .with_context(|| format!("Invalid explicit user override: {source_name}"))?;
 

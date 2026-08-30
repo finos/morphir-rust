@@ -14,28 +14,61 @@ use morphir_workspace::{FileEntry, FileTree, RelativePath};
 use super::aliases::{
     AliasBudgets, DirectoryAlias, materialize_directory_aliases, record_directory_alias,
 };
+use super::budget::{PayloadBudget, resource_limit};
 
 pub(super) fn build_tree_from_capability(
     root: &Dir,
     canonical_root: &Path,
     granted_root: &Path,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+    payload: &mut PayloadBudget,
+    account_config: &dyn Fn(&RelativePath) -> bool,
 ) -> Result<FileTree> {
-    build_tree_with(
+    build_tree_with_payload(
         root,
         canonical_root,
         granted_root,
-        AliasBudgets::DEFAULT,
-        TraversalBudgets::DEFAULT,
+        alias_budgets,
+        traversal_budgets,
+        payload,
+        account_config,
         &mut |_, _| {},
     )
 }
 
+#[cfg(test)]
 pub(super) fn build_tree_with(
     root: &Dir,
     canonical_root: &Path,
     granted_root: &Path,
     alias_budgets: AliasBudgets,
     traversal_budgets: TraversalBudgets,
+    boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
+) -> Result<FileTree> {
+    let mut payload = PayloadBudget::new(traversal_budgets.config_bytes);
+    let account_all = |_: &RelativePath| true;
+    build_tree_with_payload(
+        root,
+        canonical_root,
+        granted_root,
+        alias_budgets,
+        traversal_budgets,
+        &mut payload,
+        &account_all,
+        boundary_hook,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_tree_with_payload(
+    root: &Dir,
+    canonical_root: &Path,
+    granted_root: &Path,
+    alias_budgets: AliasBudgets,
+    traversal_budgets: TraversalBudgets,
+    payload: &mut PayloadBudget,
+    account_config: &dyn Fn(&RelativePath) -> bool,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<FileTree> {
     let mut entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
@@ -52,10 +85,18 @@ pub(super) fn build_tree_with(
         alias_budgets,
         traversal_budgets,
         stats: &mut stats,
+        payload,
+        account_config,
         boundary_hook,
     }
     .walk(root, &RelativePath::root(), &RelativePath::root(), 0)?;
-    materialize_directory_aliases(&mut directory_aliases, &mut entries, alias_budgets)?;
+    materialize_directory_aliases(
+        &mut directory_aliases,
+        &mut entries,
+        alias_budgets,
+        payload,
+        account_config,
+    )?;
     Ok(FileTree { entries })
 }
 
@@ -80,7 +121,6 @@ impl TraversalBudgets {
 struct TraversalStats {
     real_directories: usize,
     real_entries: usize,
-    config_bytes: usize,
 }
 
 impl TraversalStats {
@@ -108,19 +148,6 @@ impl TraversalStats {
         }
         Ok(())
     }
-
-    fn remaining_config_bytes(&self, budgets: TraversalBudgets) -> usize {
-        budgets.config_bytes.saturating_sub(self.config_bytes)
-    }
-
-    fn record_config_bytes(&mut self, bytes: usize, budgets: TraversalBudgets) -> Result<()> {
-        let remaining = self.remaining_config_bytes(budgets);
-        if bytes > remaining {
-            return traversal_resource_limit("configuration bytes", budgets.config_bytes);
-        }
-        self.config_bytes += bytes;
-        Ok(())
-    }
 }
 
 fn increment_bounded(value: &mut usize, limit: usize, resource: &str) -> Result<()> {
@@ -139,8 +166,10 @@ fn traversal_resource_limit<T>(resource: &str, limit: usize) -> Result<T> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BoundaryEvent {
-    BeforeOpenDirectory,
-    BeforeReadConfig,
+    InspectEntry,
+    InspectSymlinkTarget,
+    OpenDirectory,
+    ReadConfig,
 }
 
 struct Traversal<'a> {
@@ -153,6 +182,8 @@ struct Traversal<'a> {
     alias_budgets: AliasBudgets,
     traversal_budgets: TraversalBudgets,
     stats: &'a mut TraversalStats,
+    payload: &'a mut PayloadBudget,
+    account_config: &'a dyn Fn(&RelativePath) -> bool,
     boundary_hook: &'a mut dyn FnMut(BoundaryEvent, &RelativePath),
 }
 
@@ -186,10 +217,21 @@ impl Traversal<'_> {
         for child in buffered_children {
             let file_name = child.file_name();
             let canonical_child = join_native_path(canonical_directory, &file_name);
-            let link_metadata = self
-                .root
-                .symlink_metadata(&canonical_child)
-                .with_context(|| format!("Failed to inspect `{}`", canonical_child.display()))?;
+            let lexical_path = file_name
+                .to_str()
+                .and_then(|file_name| lexical_directory.join(file_name).ok());
+            if let Some(lexical_path) = &lexical_path {
+                (self.boundary_hook)(BoundaryEvent::InspectEntry, lexical_path);
+            }
+            let link_metadata =
+                self.root
+                    .symlink_metadata(&canonical_child)
+                    .with_context(|| {
+                        format!(
+                            "workspace.traversal.unreadable: Failed to inspect confined entry `{}`",
+                            canonical_child.display()
+                        )
+                    })?;
             let Some(file_name) = file_name.to_str() else {
                 if link_metadata.file_type().is_symlink() {
                     confined_canonicalize(
@@ -216,12 +258,13 @@ impl Traversal<'_> {
                     &canonical_child,
                     Some(&lexical_path),
                 )?;
+                (self.boundary_hook)(BoundaryEvent::InspectSymlinkTarget, &lexical_path);
                 let target_metadata = self
                     .root
                     .metadata(relative_native_path(&canonical_target))
                     .with_context(|| {
                         format!(
-                            "Failed to inspect symlink target `{}` for `{}`",
+                            "workspace.traversal.unreadable: Failed to inspect confined symlink target `{}` for `{}`",
                             canonical_target.as_str(),
                             lexical_path.as_str()
                         )
@@ -235,13 +278,15 @@ impl Traversal<'_> {
                     })?;
                 } else if target_metadata.is_file() && is_recognized_config(&lexical_path) {
                     let confined_target = relative_native_path(&canonical_target).to_path_buf();
+                    let account_payload = (self.account_config)(&lexical_path);
                     insert_config_file(
                         self.root,
                         self.entries,
                         lexical_path,
                         confined_target,
                         self.traversal_budgets,
-                        self.stats,
+                        self.payload,
+                        account_payload,
                         self.boundary_hook,
                     )?;
                 }
@@ -264,7 +309,7 @@ impl Traversal<'_> {
                     self.visited_directories.insert(canonical_directory.clone());
                     self.entries
                         .insert(lexical_path.clone(), FileEntry::Directory);
-                    (self.boundary_hook)(BoundaryEvent::BeforeOpenDirectory, &lexical_path);
+                    (self.boundary_hook)(BoundaryEvent::OpenDirectory, &lexical_path);
                     let opened = self
                         .root
                         .open_dir(relative_native_path(&canonical_directory))
@@ -280,13 +325,15 @@ impl Traversal<'_> {
                         .insert(lexical_path.clone(), FileEntry::Directory);
                 }
             } else if link_metadata.is_file() && is_recognized_config(&lexical_path) {
+                let account_payload = (self.account_config)(&lexical_path);
                 insert_config_file(
                     self.root,
                     self.entries,
                     lexical_path,
                     canonical_child,
                     self.traversal_budgets,
-                    self.stats,
+                    self.payload,
+                    account_payload,
                     self.boundary_hook,
                 )?;
             }
@@ -359,16 +406,22 @@ fn join_native_path(directory: &RelativePath, name: &OsStr) -> PathBuf {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_config_file(
     root: &Dir,
     entries: &mut BTreeMap<RelativePath, FileEntry>,
     lexical_path: RelativePath,
     confined_path: PathBuf,
     budgets: TraversalBudgets,
-    stats: &mut TraversalStats,
+    payload: &mut PayloadBudget,
+    account_payload: bool,
     boundary_hook: &mut dyn FnMut(BoundaryEvent, &RelativePath),
 ) -> Result<()> {
-    let remaining = stats.remaining_config_bytes(budgets);
+    let remaining = if account_payload {
+        payload.remaining()
+    } else {
+        payload.limit()
+    };
     let metadata = root.metadata(&confined_path).with_context(|| {
         format!(
             "workspace.traversal.unreadable: Failed to inspect confined Morphir configuration `{}` from `{}`",
@@ -377,9 +430,9 @@ fn insert_config_file(
         )
     })?;
     if metadata.len() > remaining as u64 {
-        return traversal_resource_limit("configuration bytes", budgets.config_bytes);
+        return resource_limit(budgets.config_bytes);
     }
-    boundary_hook(BoundaryEvent::BeforeReadConfig, &lexical_path);
+    boundary_hook(BoundaryEvent::ReadConfig, &lexical_path);
     let file = root.open(&confined_path).with_context(|| {
         format!(
             "workspace.traversal.unreadable: Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
@@ -396,10 +449,12 @@ fn insert_config_file(
             confined_path.display()
         )
     })?;
-    stats.record_config_bytes(bytes.len(), budgets)?;
+    if account_payload {
+        payload.reserve(bytes.len())?;
+    }
     let text = String::from_utf8(bytes).with_context(|| {
         format!(
-            "Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
+            "workspace.traversal.unreadable: Failed to read confined UTF-8 Morphir configuration `{}` from `{}`",
             lexical_path.as_str(),
             confined_path.display()
         )

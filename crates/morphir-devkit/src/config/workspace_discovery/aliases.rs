@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, anyhow, bail};
 use morphir_workspace::{FileEntry, RelativePath};
 
+use super::budget::PayloadBudget;
+
 #[derive(Debug)]
 pub(super) struct DirectoryAlias {
     pub(super) lexical_path: RelativePath,
@@ -27,6 +29,8 @@ pub(super) fn materialize_directory_aliases(
     aliases: &mut [DirectoryAlias],
     entries: &mut BTreeMap<RelativePath, FileEntry>,
     budgets: AliasBudgets,
+    payload: &mut PayloadBudget,
+    account_config: &dyn Fn(&RelativePath) -> bool,
 ) -> Result<()> {
     aliases.sort_by(|left, right| left.lexical_path.cmp(&right.lexical_path));
     if aliases.len() > budgets.alias_edges {
@@ -39,7 +43,7 @@ pub(super) fn materialize_directory_aliases(
     let mut real_entries = BTreeMap::new();
     for (path, entry) in entries.iter() {
         stats.work(budgets)?;
-        real_entries.insert(path.clone(), entry.clone());
+        real_entries.insert(path.clone(), IndexedEntry::from_entry(path, entry));
     }
     let mut edges = Vec::with_capacity(aliases.len());
     for alias in aliases {
@@ -82,7 +86,7 @@ pub(super) fn materialize_directory_aliases(
         let index = indexes
             .get(&edge.real_target)
             .expect("alias target index was just built");
-        for (suffix, entry) in &index.entries {
+        for (suffix, indexed_entry) in &index.entries {
             stats.work(budgets)?;
             let alias_path =
                 if suffix.is_empty() {
@@ -95,9 +99,24 @@ pub(super) fn materialize_directory_aliases(
                     )
                 })?
                 };
-            if let std::collections::btree_map::Entry::Vacant(slot) = entries.entry(alias_path) {
+            if !entries.contains_key(&alias_path) {
                 stats.generate(budgets)?;
-                slot.insert(entry.clone());
+                let entry = match indexed_entry {
+                    IndexedEntry::Directory => FileEntry::Directory,
+                    IndexedEntry::Symlink { target } => FileEntry::Symlink {
+                        target: target.clone(),
+                    },
+                    IndexedEntry::File { source, bytes } => {
+                        if account_config(&alias_path) {
+                            payload.reserve(*bytes)?;
+                        }
+                        entries
+                            .get(source)
+                            .expect("indexed file remains in the real-entry snapshot")
+                            .clone()
+                    }
+                };
+                entries.insert(alias_path, entry);
             }
         }
 
@@ -208,13 +227,13 @@ fn alias_resource_limit<T>(resource: &str, limit: usize) -> Result<T> {
 }
 
 struct AliasIndex {
-    entries: Vec<(String, FileEntry)>,
+    entries: Vec<(String, IndexedEntry)>,
     nested_aliases: Vec<(String, usize)>,
 }
 
 fn build_alias_index(
     target: &RelativePath,
-    real_entries: &BTreeMap<RelativePath, FileEntry>,
+    real_entries: &BTreeMap<RelativePath, IndexedEntry>,
     edge_index: &BTreeMap<RelativePath, usize>,
     budgets: AliasBudgets,
     stats: &mut AliasStats,
@@ -272,10 +291,10 @@ fn index_alias_subtree(
 
 fn index_real_subtree(
     target: &RelativePath,
-    real_entries: &BTreeMap<RelativePath, FileEntry>,
+    real_entries: &BTreeMap<RelativePath, IndexedEntry>,
     budgets: AliasBudgets,
     stats: &mut AliasStats,
-) -> Result<Vec<(String, FileEntry)>> {
+) -> Result<Vec<(String, IndexedEntry)>> {
     if target == &RelativePath::root() {
         return real_entries
             .iter()
@@ -318,6 +337,28 @@ fn index_real_subtree(
 struct ResolvedAlias {
     lexical_path: RelativePath,
     real_target: RelativePath,
+}
+
+#[derive(Clone)]
+enum IndexedEntry {
+    Directory,
+    Symlink { target: RelativePath },
+    File { source: RelativePath, bytes: usize },
+}
+
+impl IndexedEntry {
+    fn from_entry(path: &RelativePath, entry: &FileEntry) -> Self {
+        match entry {
+            FileEntry::Directory => Self::Directory,
+            FileEntry::Symlink { target } => Self::Symlink {
+                target: target.clone(),
+            },
+            FileEntry::File { text } => Self::File {
+                source: path.clone(),
+                bytes: text.len(),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

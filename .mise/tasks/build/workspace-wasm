@@ -13,7 +13,7 @@ CRATE_NAME="morphir-workspace-wasm"
 METADATA_BIN="morphir-workspace-wasm-metadata"
 OUT_NAME="morphir_workspace_wasm"
 CORPUS_SOURCE="$REPO_ROOT/tests/fixtures/workspace-discovery/corpus.json"
-WASM_BINDGEN_VERSION="0.2.108"
+WASM_BINDGEN_VERSION="0.2.127"
 
 WORK_DIR=""
 STAGING_DIR=""
@@ -285,7 +285,7 @@ awk '/^[[:space:]]*\(import / {
 }' "$WAT_FILE" | LC_ALL=C sort -u >"$ACTUAL_IMPORTS_FILE"
 
 printf '%s\t%s\n' \
-    "./${OUT_NAME}_bg.js" "__wbg_Error_8c4e43fe74559d73" \
+    "./${OUT_NAME}_bg.js" "__wbg_Error_408e67f47ca7b58b" \
     "./${OUT_NAME}_bg.js" "__wbindgen_init_externref_table" |
     LC_ALL=C sort -u >"$EXPECTED_IMPORTS_FILE"
 

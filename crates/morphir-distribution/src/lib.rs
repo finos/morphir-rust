@@ -39,6 +39,46 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! A trusted tool repository composes authentication, exact resolution,
+//! verified download, package staging, installation, and offline activation:
+//!
+//! ```no_run
+//! use morphir_common::home::MorphirHome;
+//! use morphir_distribution::{
+//!     Channel, Platform, Selection, ToolId, ToolInstaller, ToolPackageStore,
+//!     TrustedToolRepository, activate_installed_tool,
+//! };
+//! use semver::Version;
+//! use std::fs;
+//!
+//! # async fn acquire_tool() -> Result<(), Box<dyn std::error::Error>> {
+//! let home = MorphirHome::resolve()?;
+//! let repository_root = fs::canonicalize("./repository")?;
+//! let trusted_root = fs::read(repository_root.join("trusted-root.json"))?;
+//! let repository = TrustedToolRepository::load_filesystem(
+//!     &trusted_root,
+//!     &repository_root.join("metadata"),
+//!     &repository_root.join("targets"),
+//!     &home.tool_repository_state_dir(),
+//! )
+//! .await?;
+//! let id = ToolId::parse("desktop")?;
+//! let selection = Selection::Channel(Channel::Stable);
+//! let resolved = repository
+//!     .resolve(&id, &selection, &Platform::current(), &Version::parse("0.4.0")?)
+//!     .await?;
+//! let staging = home.temp_dir().join("desktop-download");
+//! let downloaded = repository.download(&resolved, &staging).await?;
+//! let package = ToolPackageStore::new(&home).prepare(resolved, downloaded)?;
+//! ToolInstaller::new(&home).install(package)?;
+//!
+//! // Installed activation is offline and verifies the complete package manifest.
+//! let process = activate_installed_tool(&home, &id)?;
+//! assert_eq!(process.tool_id(), &id);
+//! # Ok(())
+//! # }
+//! ```
 
 mod domain;
 mod error;
@@ -46,12 +86,18 @@ mod index;
 mod local;
 mod resolver;
 mod state;
+mod state_io;
 mod store;
+mod tool_archive;
+mod tool_repository;
+mod tool_resolver;
+mod tool_state;
 
 pub use domain::{
-    ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability, Channel,
-    ChannelSegment, ExtensionId, Platform, RelativeArtifactPath, ReleaseRecord, Selection,
-    Sha256Digest,
+    ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability,
+    Channel, ChannelSegment, ExtensionId, Platform, RelativeArtifactPath, ReleaseRecord, Selection,
+    Sha256Digest, ToolArchive, ToolArtifactRecord, ToolId, ToolLaunch, ToolReleaseRecord,
+    ToolReleaseStatus,
 };
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
@@ -62,4 +108,13 @@ pub use state::{
     InstalledExtensionSnapshot, VerifiedProcessArtifact, activate_installed, list_installed,
     read_extension_lock, uninstall_extension, write_extension_lock,
 };
-pub use store::{ArtifactStore, VerifiedArtifact};
+pub use store::{ArtifactStore, StoredArtifact, VerifiedArtifact};
+pub use tool_repository::{
+    DownloadedToolArtifact, ResolvedTrustedToolArtifact, TrustedToolRepository,
+};
+pub use tool_resolver::{ResolvedToolRelease, resolve_tool};
+pub use tool_state::{
+    InstalledTool, InstalledToolSnapshot, ToolInstaller, ToolLock, ToolPackageStore, ToolRepairer,
+    VerifiedToolPackage, VerifiedToolProcess, activate_installed_tool, list_installed_tools,
+    read_tool_lock, rollback_tool,
+};

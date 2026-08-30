@@ -15,9 +15,9 @@ use morphir_config::{builtin_defaults, env_config_value, merge_all};
 use serde_json::{Map, Value};
 
 use crate::{
-    DiscoveryFailure, DiscoveryRequest, DiscoveryResponse, ProjectState, RelativePath,
-    WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceDiscoveryDetails,
-    WorkspaceSnapshot, WorkspaceState,
+    DiscoveryFailure, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree, ProjectState,
+    RelativePath, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED,
+    WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
 };
 use decoding::{decode_root_project, decode_workspace};
 use diagnostics::{duplicate_name_diagnostics, failure, sort_diagnostics};
@@ -103,6 +103,13 @@ fn discover_internal(
             ),
             None,
         ));
+    }
+    reject_unmaterialized_symlinks(&request.development_root, "development root")?;
+    if let Some(tree) = request.morphir_home.as_ref() {
+        reject_unmaterialized_symlinks(tree, "Morphir Home")?;
+    }
+    if let Some(tree) = request.system_config.as_ref() {
+        reject_unmaterialized_symlinks(tree, "system configuration")?;
     }
 
     let root = RelativePath::root();
@@ -209,4 +216,23 @@ fn discover_internal(
         projects,
         diagnostics,
     })
+}
+
+fn reject_unmaterialized_symlinks(tree: &FileTree, mount: &str) -> Result<(), DiscoveryFailure> {
+    if let Some((path, FileEntry::Symlink { target })) = tree
+        .entries
+        .iter()
+        .find(|(_, entry)| matches!(entry, FileEntry::Symlink { .. }))
+    {
+        return Err(failure(
+            WORKSPACE_SYMLINK_UNSUPPORTED,
+            format!(
+                "unmaterialized symlink `{}` to `{}` in {mount}; protocol-v1 hosts must materialize confined symlink targets before discovery",
+                path.as_str(),
+                target.as_str()
+            ),
+            Some(path.clone()),
+        ));
+    }
+    Ok(())
 }

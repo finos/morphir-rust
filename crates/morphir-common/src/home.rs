@@ -118,6 +118,11 @@ impl MorphirHome {
         self.cache_dir().join("desktop")
     }
 
+    /// Durable rollback-protection state for authenticated tool repositories.
+    pub fn tool_repository_state_dir(&self) -> PathBuf {
+        self.data_dir().join("distribution/tool-repository")
+    }
+
     /// Directory for component log output.
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
@@ -171,6 +176,21 @@ impl MorphirHome {
     /// Durable catalog of installed tool artifacts.
     pub fn tools_catalog_file(&self) -> PathBuf {
         self.catalog_dir().join("tools.json")
+    }
+
+    /// Content-addressed store for verified tool artifacts.
+    pub fn tools_store_dir(&self) -> PathBuf {
+        self.store_dir().join("tools/sha256")
+    }
+
+    /// Directory containing exact tool selection locks.
+    pub fn tools_locks_dir(&self) -> PathBuf {
+        self.locks_dir().join("tools")
+    }
+
+    /// Interprocess lock serializing installed tool state transactions.
+    pub fn tools_state_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("tools.state.lock")
     }
 
     /// Durable catalog of installed distributions.
@@ -303,6 +323,10 @@ mod tests {
         assert_eq!(home.indexes_cache_dir(), Path::new("/mh/cache/indexes"));
         assert_eq!(home.desktop_cache_dir(), Path::new("/mh/cache/desktop"));
         assert_eq!(
+            home.tool_repository_state_dir(),
+            Path::new("/mh/data/distribution/tool-repository")
+        );
+        assert_eq!(
             home.cache_maintenance_state_file(),
             Path::new("/mh/data/maintenance/cache-cleanup.json")
         );
@@ -323,6 +347,12 @@ mod tests {
         assert_eq!(
             home.tools_catalog_file(),
             Path::new("/mh/catalog/tools.json")
+        );
+        assert_eq!(home.tools_store_dir(), Path::new("/mh/store/tools/sha256"));
+        assert_eq!(home.tools_locks_dir(), Path::new("/mh/locks/tools"));
+        assert_eq!(
+            home.tools_state_lock_file(),
+            Path::new("/mh/locks/tools.state.lock")
         );
         assert_eq!(
             home.distributions_catalog_file(),

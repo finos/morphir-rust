@@ -4,7 +4,18 @@ use crate::error::{Result, invalid_value};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
-use std::path::Path;
+use std::path::{Component, Path};
+
+const MAX_PORTABLE_FILENAME_UNITS: usize = 255;
+const MAX_PORTABLE_PATH_UTF8_BYTES: usize = 4_096;
+const MAX_PORTABLE_PATH_UTF16_UNITS: usize = 1_024;
+const MAX_DECLARED_PATH_UTF8_BYTES: usize = 512;
+const MAX_DECLARED_PATH_UTF16_UNITS: usize = 240;
+const SHA256_HEX_LEN: usize = 64;
+// `{id}.json.transaction` is the longest derived extension state filename.
+const MAX_EXTENSION_ID_LEN: usize = MAX_PORTABLE_FILENAME_UNITS - ".json.transaction".len();
+// `.repair-{id}-{sha256}` is the longest derived tool state filename.
+const MAX_TOOL_ID_LEN: usize = MAX_PORTABLE_FILENAME_UNITS - ".repair--".len() - SHA256_HEX_LEN;
 
 pub(crate) fn portable_token(value: &str) -> bool {
     !value.is_empty()
@@ -23,13 +34,16 @@ impl ExtensionId {
     /// Parse and validate an extension identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        if portable_token(&value) {
+        if value.len() <= MAX_EXTENSION_ID_LEN
+            && portable_token(&value)
+            && ArtifactFilename::parse(&value).is_ok()
+        {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "extension id",
                 value,
-                "expected a lowercase portable token beginning with a letter",
+                "expected a lowercase portable filename token beginning with a letter and at most 238 characters",
             ))
         }
     }
@@ -56,6 +70,59 @@ impl Serialize for ExtensionId {
 }
 
 impl<'de> Deserialize<'de> for ExtensionId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A lowercase portable tool identifier such as `desktop`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ToolId(String);
+
+impl ToolId {
+    /// Parse and validate a tool identifier.
+    pub fn parse(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        if value.len() <= MAX_TOOL_ID_LEN
+            && portable_token(&value)
+            && ArtifactFilename::parse(&value).is_ok()
+        {
+            Ok(Self(value))
+        } else {
+            Err(invalid_value(
+                "tool id",
+                value,
+                "expected a lowercase portable filename token of at most 182 characters",
+            ))
+        }
+    }
+
+    /// Return the portable identifier.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ToolId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ToolId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolId {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -171,15 +238,20 @@ impl ArtifactFilename {
             .split('.')
             .next()
             .unwrap_or_default()
+            .trim_end_matches(' ')
             .to_ascii_uppercase();
-        let windows_reserved = matches!(windows_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-            || windows_stem
-                .strip_prefix("COM")
-                .is_some_and(is_windows_device_number)
+        let windows_reserved = matches!(
+            windows_stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || windows_stem
+            .strip_prefix("COM")
+            .is_some_and(is_windows_device_number)
             || windows_stem
                 .strip_prefix("LPT")
                 .is_some_and(is_windows_device_number);
         let invalid = value.is_empty()
+            || value.len() > MAX_PORTABLE_FILENAME_UNITS
+            || value.encode_utf16().count() > MAX_PORTABLE_FILENAME_UNITS
             || value == "."
             || value == ".."
             || value.ends_with(['.', ' '])
@@ -209,7 +281,8 @@ impl ArtifactFilename {
 }
 
 fn is_windows_device_number(number: &str) -> bool {
-    number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9')
+    matches!(number, "¹" | "²" | "³")
+        || (number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9'))
 }
 
 impl Serialize for ArtifactFilename {
@@ -231,28 +304,67 @@ impl<'de> Deserialize<'de> for ArtifactFilename {
     }
 }
 
-/// A normalized UTF-8 relative path declared by a local-file source or catalog.
+/// A normalized UTF-8 relative path used by a manifest or Morphir-owned store.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelativeArtifactPath(String);
 
 impl RelativeArtifactPath {
-    /// Parse a forward-slash relative path without empty or special segments.
+    /// Parse a forward-slash relative path with portable filename components.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         let valid = !value.is_empty()
+            && value.len() <= MAX_PORTABLE_PATH_UTF8_BYTES
+            && value.encode_utf16().count() <= MAX_PORTABLE_PATH_UTF16_UNITS
             && !value.starts_with('/')
             && !value.contains(['\\', ':', '\0'])
             && !value.bytes().any(|byte| byte < 32)
             && value
                 .split('/')
-                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+                .all(|segment| ArtifactFilename::parse(segment).is_ok());
         if valid {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "local artifact path",
                 value,
-                "expected a normalized UTF-8 relative path with forward slashes",
+                "expected a normalized relative path of at most 4096 UTF-8 bytes and 1024 UTF-16 units with portable filename components",
+            ))
+        }
+    }
+
+    /// Convert a native relative path into its portable forward-slash spelling.
+    pub fn from_native_path(path: &Path) -> Result<Self> {
+        let segments = path
+            .components()
+            .map(|component| match component {
+                Component::Normal(segment) => segment.to_str().ok_or_else(|| {
+                    invalid_value(
+                        "local artifact path",
+                        path.to_string_lossy(),
+                        "expected a UTF-8 relative path",
+                    )
+                }),
+                _ => Err(invalid_value(
+                    "local artifact path",
+                    path.to_string_lossy(),
+                    "expected a relative path without special segments",
+                )),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::parse(segments.join("/"))
+    }
+
+    /// Validate the tighter bound applied to publisher- or user-declared paths.
+    pub(crate) fn validate_declared(&self) -> Result<()> {
+        if self.0.len() <= MAX_DECLARED_PATH_UTF8_BYTES
+            && self.0.encode_utf16().count() <= MAX_DECLARED_PATH_UTF16_UNITS
+        {
+            Ok(())
+        } else {
+            Err(invalid_value(
+                "declared artifact path",
+                &self.0,
+                "expected at most 512 UTF-8 bytes and 240 UTF-16 units",
             ))
         }
     }
@@ -284,5 +396,64 @@ impl<'de> Deserialize<'de> for RelativeArtifactPath {
     {
         let value = String::deserialize(deserializer)?;
         Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAX_DECLARED_PATH_UTF8_BYTES, MAX_DECLARED_PATH_UTF16_UNITS, RelativeArtifactPath,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn native_relative_paths_are_stored_with_portable_separators() {
+        let native = PathBuf::from("store")
+            .join("extensions")
+            .join("sha256")
+            .join("digest")
+            .join("example");
+
+        let path = RelativeArtifactPath::from_native_path(&native).unwrap();
+
+        assert_eq!(path.as_str(), "store/extensions/sha256/digest/example");
+    }
+
+    #[test]
+    fn complete_portable_paths_are_bounded_in_both_encodings() {
+        let longest_portable = format!("{}/{}", "a".repeat(119), "b".repeat(120));
+        assert_eq!(
+            longest_portable.encode_utf16().count(),
+            MAX_DECLARED_PATH_UTF16_UNITS
+        );
+        RelativeArtifactPath::parse(longest_portable)
+            .and_then(|path| path.validate_declared())
+            .unwrap();
+
+        let too_many_utf16_units = format!("{}/{}", "a".repeat(120), "b".repeat(120));
+        assert!(
+            RelativeArtifactPath::parse(too_many_utf16_units)
+                .and_then(|path| path.validate_declared())
+                .is_err()
+        );
+
+        let too_many_utf8_bytes = ["界".repeat(79), "文".repeat(79), "字".repeat(79)].join("/");
+        assert!(too_many_utf8_bytes.len() > MAX_DECLARED_PATH_UTF8_BYTES);
+        assert!(too_many_utf8_bytes.encode_utf16().count() <= MAX_DECLARED_PATH_UTF16_UNITS);
+        assert!(
+            RelativeArtifactPath::parse(too_many_utf8_bytes)
+                .and_then(|path| path.validate_declared())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn morphir_owned_paths_reserve_room_for_derived_store_prefixes() {
+        let derived = format!("{}/{}", "p".repeat(165), "a".repeat(75));
+        assert_eq!(
+            derived.encode_utf16().count(),
+            MAX_DECLARED_PATH_UTF16_UNITS + 1
+        );
+        RelativeArtifactPath::parse(derived).unwrap();
     }
 }

@@ -42,13 +42,13 @@ impl Default for MigrationContext {
 }
 
 fn migrate_name(name: &classic::Name) -> Name {
-    Name {
-        words: name
-            .words
+    // Classic words are letter-fragmented for acronyms; `from_words` collapses a
+    // run of two or more single-letter words back into one initialism.
+    Name::from_words(
+        name.words
             .iter()
-            .map(|word| crate::resolve(*word).to_owned())
-            .collect(),
-    }
+            .map(|word| crate::resolve(*word).to_owned()),
+    )
 }
 
 #[derive(Debug, Clone)]

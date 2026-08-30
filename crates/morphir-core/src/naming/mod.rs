@@ -11,7 +11,7 @@ pub mod qname;
 pub use fqname::FQName;
 pub use interner::{Word, intern, resolve};
 pub use module_name::ModuleName;
-pub use name::Name;
+pub use name::{CANONICAL_STYLE, Name, NameStyle, Segment};
 pub use package_name::PackageName;
 pub use path::Path;
 pub use qname::QName;
@@ -28,7 +28,7 @@ pub mod codecs {
             S: Serializer,
         {
             // Legacy Name: ["word", "word"]
-            serializer.collect_seq(&name.words)
+            serializer.collect_seq(name.words())
         }
 
         pub fn serialize_path<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
@@ -36,7 +36,7 @@ pub mod codecs {
             S: Serializer,
         {
             // Legacy Path: [Name, Name] where Name is ["word", "word"]
-            let parts: Vec<&Vec<String>> = path.segments.iter().map(|n| &n.words).collect();
+            let parts: Vec<Vec<String>> = path.segments.iter().map(Name::words).collect();
             serializer.collect_seq(parts)
         }
     }

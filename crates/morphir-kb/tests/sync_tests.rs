@@ -849,16 +849,19 @@ fn relative_links_in_mirrored_documents_resolve_to_paths_that_exist() {
         .filter_map(|l| store::resolve_link(guide, l))
         .collect();
     assert_eq!(resolved.len(), 2, "got {resolved:?}");
+    // Compare with Path::ends_with, which matches whole components. A string
+    // suffix would hardcode "/" and never match on Windows, where the resolved
+    // path is spelled with backslashes.
     assert!(
         resolved
             .iter()
-            .any(|p| p.exists() && p.to_string_lossy().ends_with("/sources/docs/types.md")),
+            .any(|p| p.exists() && p.ends_with("sources/docs/types.md")),
         "got {resolved:?}"
     );
     assert!(
         resolved
             .iter()
-            .any(|p| !p.exists() && p.to_string_lossy().ends_with("missing.md")),
+            .any(|p| !p.exists() && p.ends_with("missing.md")),
         "and a real miss still misses"
     );
 }
@@ -1796,6 +1799,7 @@ fn render_diff_raw_produces_a_patch_that_git_apply_lands_upstream() {
     fs::write(&patch_file, sync::render_diff_raw(&changed)).unwrap();
     let checked = std::process::Command::new("git")
         .current_dir(repo.path())
+        .args(GIT_PIN)
         .args(["apply", "--check", "kb.patch"])
         .output()
         .unwrap();
@@ -1812,10 +1816,18 @@ fn render_diff_raw_produces_a_patch_that_git_apply_lands_upstream() {
     assert_eq!(fs::read_to_string(&target).unwrap(), projected);
 }
 
+/// Git config these tests must not inherit from the developer's global config.
+///
+/// `core.autocrlf=true` is the default on a Windows git install, and it rewrites
+/// line endings on both `add` and `apply`. The assertions below compare mirrored
+/// files byte for byte, so an inherited setting would decide whether they pass.
+const GIT_PIN: [&str; 4] = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"];
+
 /// Runs git in `dir` and insists it succeeded.
 fn run_git(dir: &Path, args: &[&str]) {
     let out = std::process::Command::new("git")
         .current_dir(dir)
+        .args(GIT_PIN)
         .args(args)
         .output()
         .unwrap();
@@ -1920,6 +1932,7 @@ fn apply_patch(repo: &Path, patch: &str) {
     fs::write(&patch_file, patch).unwrap();
     let checked = std::process::Command::new("git")
         .current_dir(repo)
+        .args(GIT_PIN)
         .args(["apply", "--check", "kb.patch"])
         .output()
         .unwrap();

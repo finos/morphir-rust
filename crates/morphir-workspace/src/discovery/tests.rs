@@ -6,7 +6,10 @@ use super::{
     EffectiveConfigCollector, discover_internal,
     layers::{MemberConfigLayers, member_effective_config, without_project_or_workspace},
 };
-use crate::{DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL};
+use crate::{
+    DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
+    WORKSPACE_SYMLINK_UNSUPPORTED,
+};
 
 #[derive(Default)]
 struct CountingCollector {
@@ -73,6 +76,23 @@ fn effective_configs_are_collected_only_when_a_sink_is_supplied() {
             RelativePath::parse("packages/orders").unwrap(),
         ]
     );
+}
+
+#[test]
+fn portable_discovery_rejects_unmaterialized_symlinks_explicitly() {
+    let mut request = collection_request();
+    let link = RelativePath::parse("linked-morphir.toml").unwrap();
+    request.development_root.entries.insert(
+        link.clone(),
+        FileEntry::Symlink {
+            target: RelativePath::parse("morphir.toml").unwrap(),
+        },
+    );
+
+    let failure = discover_internal(request, None).unwrap_err();
+
+    assert_eq!(failure.code, WORKSPACE_SYMLINK_UNSUPPORTED);
+    assert_eq!(failure.path, Some(link));
 }
 
 #[test]

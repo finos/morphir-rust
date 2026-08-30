@@ -23,6 +23,9 @@ pub const WORKSPACE_PATH_NOT_CONFINED: &str = "workspace.path.not-confined";
 /// Stable diagnostic code for an unsupported discovery protocol version.
 pub const WORKSPACE_PROTOCOL_UNSUPPORTED: &str = "workspace.protocol.unsupported";
 
+/// Stable diagnostic code for a symlink that a protocol-v1 host did not materialize.
+pub const WORKSPACE_SYMLINK_UNSUPPORTED: &str = "workspace.symlink.unsupported";
+
 /// The severity of a workspace discovery diagnostic.
 ///
 /// When severity participates in a stable diagnostic ordering key, producers

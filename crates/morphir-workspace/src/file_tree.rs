@@ -19,6 +19,10 @@ pub enum FileEntry {
         text: String,
     },
     /// A symbolic link whose target is confined to the same named mount.
+    ///
+    /// Protocol-v1 discovery rejects unresolved link entries explicitly. Hosts
+    /// must materialize confined targets into directory and file entries before
+    /// invoking discovery.
     Symlink {
         /// The canonical target path under the named mount.
         target: RelativePath,

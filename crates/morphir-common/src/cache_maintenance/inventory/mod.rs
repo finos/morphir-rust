@@ -449,13 +449,16 @@ fn same_object(
     observed_name: &OsStr,
     observed_metadata: &Metadata,
 ) -> bool {
-    if is_link_like(observed_metadata) {
+    if is_link_like(observed_metadata)
+        || (!observed_metadata.is_dir() && !observed_metadata.is_file())
+    {
         return false;
     }
     let Ok(registered_metadata) = directory.symlink_metadata(registered_name) else {
         return false;
     };
     if is_link_like(&registered_metadata)
+        || (!registered_metadata.is_dir() && !registered_metadata.is_file())
         || registered_metadata.is_dir() != observed_metadata.is_dir()
         || registered_metadata.is_file() != observed_metadata.is_file()
     {

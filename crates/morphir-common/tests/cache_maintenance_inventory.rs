@@ -201,6 +201,32 @@ fn hard_link_aliases_do_not_inherit_disposable_ownership() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn special_file_aliases_are_never_opened_for_ownership_matching() {
+    use std::os::unix::net::UnixListener;
+
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    let registered = home.downloads_cache_dir().join("artifact");
+    let _listener = UnixListener::bind(&registered).unwrap();
+    std::fs::hard_link(&registered, home.downloads_cache_dir().join("ARTIFACT")).unwrap();
+
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("artifact", 100)
+        .unwrap();
+    let entries =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
+
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.state() == CacheEntryState::Unclassified)
+    );
+}
+
 #[test]
 fn inventory_limits_fail_closed_before_an_unbounded_walk() {
     let (_root, home) = a_morphir_home();

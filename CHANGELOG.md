@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expansion-size, atomic publication, and offline manifest verification guarantees as ZIP.
 - Structured tracing spans and outcome events for tool repository loading, resolution, verified
   downloads, package staging, catalog activation, and offline launch verification.
+- Atomic tool rollback to the most recently retained release, including byte re-verification,
+  restoration of its original selection, and lock/catalog rollback after write failures.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

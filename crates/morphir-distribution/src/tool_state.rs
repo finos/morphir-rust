@@ -541,6 +541,25 @@ impl ToolLock {
         }
     }
 
+    fn from_installed(installed: &InstalledTool) -> Self {
+        Self {
+            schema_version: TOOL_LOCK_SCHEMA_VERSION,
+            selection: installed.selection.clone(),
+            tool_id: installed.tool_id.clone(),
+            tool_name: installed.tool_name.clone(),
+            version: installed.version.clone(),
+            status: installed.status,
+            platform: installed.platform.clone(),
+            digest: installed.digest.clone(),
+            length: installed.length,
+            targets_version: installed.targets_version,
+            target_path: installed.target_path.clone(),
+            store_path: installed.store_path.clone(),
+            args: installed.args.clone(),
+            files: installed.files.clone(),
+        }
+    }
+
     /// Return the requested channel or exact version.
     pub fn selection(&self) -> &Selection {
         &self.selection
@@ -566,6 +585,7 @@ impl ToolLock {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstalledTool {
+    selection: Selection,
     tool_id: ToolId,
     tool_name: String,
     version: Version,
@@ -583,6 +603,7 @@ pub struct InstalledTool {
 impl InstalledTool {
     fn from_package(package: &VerifiedToolPackage) -> Self {
         Self {
+            selection: package.selection.clone(),
             tool_id: package.tool_id.clone(),
             tool_name: package.tool_name.clone(),
             version: package.version.clone(),
@@ -601,6 +622,11 @@ impl InstalledTool {
     /// Return the stable tool identity.
     pub fn tool_id(&self) -> &ToolId {
         &self.tool_id
+    }
+
+    /// Return the channel or exact version request that selected this release.
+    pub fn selection(&self) -> &Selection {
+        &self.selection
     }
 
     /// Return the human-readable tool name.
@@ -769,6 +795,56 @@ fn next_rollback(previous: Option<ToolCatalogEntry>, active: &InstalledTool) -> 
         .collect()
 }
 
+/// Atomically activate the most recently retained release for one installed tool.
+#[tracing::instrument(
+    name = "morphir.tool.rollback",
+    skip(home),
+    fields(tool_id = %id),
+    err
+)]
+pub fn rollback_tool(home: &MorphirHome, id: &ToolId) -> Result<InstalledTool> {
+    rollback_with_writer(home, id, &FilesystemStateWriter)
+}
+
+fn rollback_with_writer(
+    home: &MorphirHome,
+    id: &ToolId,
+    writer: &impl StateWriter,
+) -> Result<InstalledTool> {
+    let _transaction = tool_state_guard(home)?;
+    let mut tools = load_catalog_unlocked(home)?;
+    let mut entry = tools
+        .remove(id)
+        .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+    if entry.rollback.is_empty() {
+        return Err(DistributionError::NoToolRollback { id: id.clone() });
+    }
+    let next = entry.rollback.remove(0);
+    verify_installed(home, next.store_path.as_path(), &next.files)?;
+    let previous = entry.active;
+    entry.active = next.clone();
+    entry.rollback.insert(0, previous);
+    let lock = ToolLock::from_installed(&next);
+    tools.insert(id.clone(), entry);
+    let stored = ToolCatalogFile {
+        schema_version: TOOL_CATALOG_SCHEMA_VERSION,
+        tools: tools.into_values().collect(),
+    };
+    commit_state_pair(
+        &tool_lock_path(home, id),
+        &encode_json(&lock)?,
+        &home.tools_catalog_file(),
+        &encode_json(&stored)?,
+        writer,
+    )?;
+    tracing::info!(
+        tool_id = %next.tool_id,
+        version = %next.version,
+        "tool rollback committed"
+    );
+    Ok(next)
+}
+
 /// Read and validate the exact active lock for one tool.
 pub fn read_tool_lock(home: &MorphirHome, id: &ToolId) -> Result<ToolLock> {
     let _transaction = tool_state_guard(home)?;
@@ -898,6 +974,7 @@ fn load_catalog_unlocked(home: &MorphirHome) -> Result<BTreeMap<ToolId, ToolCata
 
 fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> Result<()> {
     let matches = lock.schema_version == TOOL_LOCK_SCHEMA_VERSION
+        && lock.selection == active.selection
         && lock.tool_id == active.tool_id
         && lock.tool_name == active.tool_name
         && lock.version == active.version
@@ -1286,6 +1363,57 @@ mod tests {
             crate::DistributionError::InvalidToolManifest { .. }
         ));
         assert!(!home.tools_catalog_file().exists());
+    }
+
+    #[test]
+    fn explicit_tool_rollback_swaps_active_and_most_recent_retained_release() {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ToolId::parse("desktop").unwrap();
+        ToolInstaller::new(&home)
+            .install(package(&home, "1.0.0", b"desktop-v1"))
+            .unwrap();
+        let mut update = package(&home, "2.0.0", b"desktop-v2");
+        update.selection = Selection::Channel(Channel::Preview(None));
+        ToolInstaller::new(&home).install(update).unwrap();
+
+        let rolled_back = rollback_tool(&home, &id).unwrap();
+        assert_eq!(rolled_back.version(), &Version::parse("1.0.0").unwrap());
+        let snapshot = &list_installed_tools(&home).unwrap()[0];
+        assert_eq!(snapshot.active().version(), rolled_back.version());
+        assert_eq!(
+            snapshot.rollback()[0].version(),
+            &Version::parse("2.0.0").unwrap()
+        );
+        assert_eq!(snapshot.selection(), &Selection::Channel(Channel::Stable));
+        assert_eq!(
+            fs::read(activate_installed_tool(&home, &id).unwrap().program()).unwrap(),
+            b"desktop-v1"
+        );
+    }
+
+    #[test]
+    fn failed_tool_rollback_restores_the_previous_lock_and_catalog() {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ToolId::parse("desktop").unwrap();
+        ToolInstaller::new(&home)
+            .install(package(&home, "1.0.0", b"desktop-v1"))
+            .unwrap();
+        ToolInstaller::new(&home)
+            .install(package(&home, "2.0.0", b"desktop-v2"))
+            .unwrap();
+        let writer = FailingCatalogWriter {
+            catalog_path: home.tools_catalog_file(),
+        };
+
+        rollback_with_writer(&home, &id, &writer).unwrap_err();
+
+        let launch = activate_installed_tool(&home, &id).unwrap();
+        assert_eq!(launch.version(), &Version::parse("2.0.0").unwrap());
+        assert_eq!(fs::read(launch.program()).unwrap(), b"desktop-v2");
     }
 
     struct FailingCatalogWriter {

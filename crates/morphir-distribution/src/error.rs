@@ -218,6 +218,12 @@ pub enum DistributionError {
         /// Requested tool identity.
         id: crate::ToolId,
     },
+    /// An installed tool has no retained release eligible for rollback.
+    #[error("tool {id} has no retained rollback release")]
+    NoToolRollback {
+        /// Requested tool identity.
+        id: crate::ToolId,
+    },
     /// Catalog and lock records disagree about exact installed content.
     #[error("installed catalog and lock disagree for extension {id}")]
     StateMismatch {

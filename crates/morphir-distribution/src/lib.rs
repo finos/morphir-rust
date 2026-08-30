@@ -76,5 +76,5 @@ pub use tool_resolver::{ResolvedToolRelease, resolve_tool};
 pub use tool_state::{
     InstalledTool, InstalledToolSnapshot, ToolInstaller, ToolLock, ToolPackageStore,
     VerifiedToolPackage, VerifiedToolProcess, activate_installed_tool, list_installed_tools,
-    read_tool_lock,
+    read_tool_lock, rollback_tool,
 };

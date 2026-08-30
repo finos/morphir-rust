@@ -39,8 +39,8 @@ pub use morphir_config::{
 impl MorphirConfig {
     /// Load configuration from a file path
     pub fn load(path: &Path) -> crate::Result<Self> {
-        Ok(serde_json::from_value(load_config_value(path)?)
-            .with_context(|| format!("Failed to decode Morphir config: {}", path.display()))?)
+        serde_json::from_value(load_config_value(path)?)
+            .with_context(|| format!("Failed to decode Morphir config: {}", path.display()))
     }
 }
 

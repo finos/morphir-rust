@@ -3276,6 +3276,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "morphir-workspace-wasm"
+version = "0.2.0"
+dependencies = [
+ "morphir-workspace",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "nbformat"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

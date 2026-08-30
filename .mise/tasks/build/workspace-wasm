@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+#MISE description="Build and verify the browser workspace-discovery package"
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+TARGET="wasm32-unknown-unknown"
+TARGET_DIR="$REPO_ROOT/target"
+PACKAGE_DIR="$TARGET_DIR/workspace-wasm-package"
+LOCK_DIR="$TARGET_DIR/.workspace-wasm-package.lock"
+CRATE_NAME="morphir-workspace-wasm"
+METADATA_BIN="morphir-workspace-wasm-metadata"
+OUT_NAME="morphir_workspace_wasm"
+CORPUS_SOURCE="$REPO_ROOT/tests/fixtures/workspace-discovery/corpus.json"
+WASM_BINDGEN_VERSION="0.2.108"
+
+WORK_DIR=""
+STAGING_DIR=""
+BACKUP_DIR=""
+LOCK_HELD=0
+BACKUP_CREATED=0
+STAGING_INSTALLED=0
+PRESERVE_WORK_DIR=0
+# Failure-only hooks used to verify publication rollback. They never permit export.
+PUBLISH_FAULT=${MORPHIR_WORKSPACE_WASM_TEST_FAULT:-}
+RESTORE_FAULT=${MORPHIR_WORKSPACE_WASM_TEST_RESTORE_FAULT:-0}
+
+path_exists() {
+    [ -e "$1" ] || [ -L "$1" ]
+}
+
+source_status() {
+    git status --porcelain=v1 --untracked-files=all -- \
+        . \
+        ':(exclude)target' \
+        ':(exclude)target/**' \
+        ':(exclude).beads/backup' \
+        ':(exclude).beads/backup/**' \
+        ':(exclude).beads/embeddeddolt' \
+        ':(exclude).beads/embeddeddolt/**'
+}
+
+assert_clean_source() {
+    local dirty
+    dirty=$(source_status)
+    if [ -n "$dirty" ]; then
+        echo "Refusing workspace WASM export from a dirty source tree:" >&2
+        printf '%s\n' "$dirty" >&2
+        return 1
+    fi
+}
+
+retain_backup() {
+    local recovery_dir
+    local recovery_path
+
+    if recovery_dir=$(mktemp -d "$TARGET_DIR/.workspace-wasm-recovery.XXXXXX"); then
+        recovery_path="$recovery_dir/workspace-wasm-package"
+        if mv "$BACKUP_DIR" "$recovery_path"; then
+            BACKUP_CREATED=0
+            echo "Last-good workspace WASM package retained at: $recovery_path" >&2
+            return 0
+        fi
+        rmdir "$recovery_dir" 2>/dev/null || true
+    fi
+
+    PRESERVE_WORK_DIR=1
+    echo "Last-good workspace WASM package retained at: $BACKUP_DIR" >&2
+    return 1
+}
+
+cleanup() {
+    local exit_status=$?
+    trap - EXIT INT TERM
+
+    if [ "$BACKUP_CREATED" -eq 1 ]; then
+        if [ "$STAGING_INSTALLED" -eq 1 ] && path_exists "$PACKAGE_DIR"; then
+            if mv "$PACKAGE_DIR" "$WORK_DIR/uncommitted-package"; then
+                STAGING_INSTALLED=0
+            else
+                echo "Failed to quarantine the uncommitted workspace WASM package" >&2
+            fi
+        fi
+
+        if ! path_exists "$PACKAGE_DIR"; then
+            if [ "$RESTORE_FAULT" = "1" ]; then
+                echo "Injected workspace WASM backup restoration failure" >&2
+            elif mv "$BACKUP_DIR" "$PACKAGE_DIR"; then
+                BACKUP_CREATED=0
+            else
+                echo "Failed to restore the last-good workspace WASM package" >&2
+            fi
+        else
+            echo "Cannot restore the last-good workspace WASM package because the publication path is occupied" >&2
+        fi
+
+        if [ "$BACKUP_CREATED" -eq 1 ]; then
+            retain_backup || true
+            exit_status=1
+        fi
+    elif [ "$STAGING_INSTALLED" -eq 1 ] && path_exists "$PACKAGE_DIR"; then
+        if ! mv "$PACKAGE_DIR" "$WORK_DIR/uncommitted-package"; then
+            echo "Failed to quarantine the uncommitted workspace WASM package" >&2
+            PRESERVE_WORK_DIR=1
+            exit_status=1
+        fi
+    fi
+
+    if [ "$PRESERVE_WORK_DIR" -eq 0 ] && [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
+        case "$WORK_DIR" in
+            "$TARGET_DIR"/.workspace-wasm-build.*)
+                if ! rm -rf -- "$WORK_DIR"; then
+                    echo "Failed to clean workspace WASM work directory: $WORK_DIR" >&2
+                    exit_status=1
+                fi
+                ;;
+            *)
+                echo "Refusing to clean unexpected work directory: $WORK_DIR" >&2
+                exit_status=1
+                ;;
+        esac
+    fi
+
+    if [ "$LOCK_HELD" -eq 1 ] && ! rmdir "$LOCK_DIR"; then
+        echo "Failed to release workspace WASM export lock: $LOCK_DIR" >&2
+        exit_status=1
+    fi
+
+    exit "$exit_status"
+}
+
+audit_forbidden_path() {
+    local label=$1
+    local path=$2
+    local wat_file=$3
+    local strings_file=$4
+
+    [ -n "$path" ] || return 0
+    if grep -F -- "$path" "$wat_file" "$strings_file" >/dev/null; then
+        echo "WASM contains the original $label path: $path" >&2
+        return 1
+    fi
+}
+
+cd "$REPO_ROOT"
+
+for required_tool in cargo git jq rustc rustup shasum strings wasm-tools; do
+    if ! command -v "$required_tool" >/dev/null 2>&1; then
+        echo "Required tool is unavailable: $required_tool" >&2
+        exit 1
+    fi
+done
+
+case "$PUBLISH_FAULT" in
+    "" | backup-move | staging-move | after-staging) ;;
+    *)
+        echo "Unknown workspace WASM publication fault: $PUBLISH_FAULT" >&2
+        exit 1
+        ;;
+esac
+
+case "$RESTORE_FAULT" in
+    0 | 1) ;;
+    *)
+        echo "Invalid workspace WASM restoration fault value: $RESTORE_FAULT" >&2
+        exit 1
+        ;;
+esac
+
+assert_clean_source
+SOURCE_COMMIT=$(git rev-parse HEAD)
+
+mkdir -p "$TARGET_DIR"
+if ! mkdir "$LOCK_DIR"; then
+    echo "Workspace WASM export lock is already held: $LOCK_DIR" >&2
+    exit 1
+fi
+LOCK_HELD=1
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+WORK_DIR=$(mktemp -d "$TARGET_DIR/.workspace-wasm-build.XXXXXX")
+STAGING_DIR="$WORK_DIR/package"
+BACKUP_DIR="$WORK_DIR/previous-package"
+BUILD_TARGET_DIR="$WORK_DIR/cargo-target"
+WASM_FILE="$STAGING_DIR/${OUT_NAME}_bg.wasm"
+JS_FILE="$STAGING_DIR/${OUT_NAME}.js"
+CORPUS_EXPORT="$STAGING_DIR/workspace-discovery-corpus.json"
+PROVENANCE_FILE="$STAGING_DIR/provenance.json"
+WAT_FILE="$WORK_DIR/module.wat"
+STRINGS_FILE="$WORK_DIR/module.strings"
+ACTUAL_IMPORTS_FILE="$WORK_DIR/actual-imports.txt"
+EXPECTED_IMPORTS_FILE="$WORK_DIR/expected-imports.txt"
+
+mkdir -p "$STAGING_DIR"
+
+RESOLVED_WASM_BINDGEN_VERSION=$(cargo metadata --locked --format-version=1 |
+    jq -er '.packages[] | select(.name == "wasm-bindgen") | .version')
+
+if [ "$RESOLVED_WASM_BINDGEN_VERSION" != "$WASM_BINDGEN_VERSION" ]; then
+    echo "wasm-bindgen runtime $RESOLVED_WASM_BINDGEN_VERSION does not match required CLI $WASM_BINDGEN_VERSION" >&2
+    exit 1
+fi
+
+if ! rustup target list --installed | grep -qx "$TARGET"; then
+    echo "Installing Rust target $TARGET..." >&2
+    rustup target add "$TARGET"
+fi
+
+if ! command -v wasm-bindgen >/dev/null 2>&1 ||
+    [ "$(wasm-bindgen --version)" != "wasm-bindgen $WASM_BINDGEN_VERSION" ]; then
+    echo "Installing wasm-bindgen-cli $WASM_BINDGEN_VERSION..." >&2
+    cargo install --locked wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
+fi
+
+METADATA_JSON=$(CARGO_TARGET_DIR="$BUILD_TARGET_DIR" cargo run \
+    --quiet \
+    --locked \
+    -p "$CRATE_NAME" \
+    --features metadata-helper \
+    --bin "$METADATA_BIN")
+
+jq -e '
+    type == "object" and
+    (.crateVersion | type == "string" and length > 0) and
+    (.protocolVersion | type == "number" and . >= 0 and . == floor)
+' <<<"$METADATA_JSON" >/dev/null
+CRATE_VERSION=$(jq -er '.crateVersion' <<<"$METADATA_JSON")
+PROTOCOL_VERSION=$(jq -er '.protocolVersion' <<<"$METADATA_JSON")
+
+TASK_USER_HOME=${HOME:?HOME must be set to derive reproducible path remapping}
+TASK_USER_HOME=$(cd "$TASK_USER_HOME" && pwd -P)
+CARGO_HOME_PATH=${CARGO_HOME:-"$TASK_USER_HOME/.cargo"}
+CARGO_HOME_PATH=$(cd "$CARGO_HOME_PATH" && pwd -P)
+RUST_SYSROOT=$(rustc --print sysroot)
+RUST_SYSROOT=$(cd "$RUST_SYSROOT" && pwd -P)
+
+printf -v ENCODED_RUSTFLAGS '%s\037%s\037%s\037%s' \
+    "--remap-path-prefix=$TASK_USER_HOME=/user-home" \
+    "--remap-path-prefix=$REPO_ROOT=/morphir-rust" \
+    "--remap-path-prefix=$CARGO_HOME_PATH=/cargo" \
+    "--remap-path-prefix=$RUST_SYSROOT=/rust"
+unset RUSTFLAGS
+export CARGO_ENCODED_RUSTFLAGS="$ENCODED_RUSTFLAGS"
+
+CARGO_TARGET_DIR="$BUILD_TARGET_DIR" cargo build \
+    --locked \
+    -p "$CRATE_NAME" \
+    --lib \
+    --release \
+    --target "$TARGET"
+
+wasm-bindgen \
+    --target web \
+    --typescript \
+    --out-dir "$STAGING_DIR" \
+    --out-name "$OUT_NAME" \
+    "$BUILD_TARGET_DIR/$TARGET/release/${OUT_NAME}.wasm"
+
+cp "$CORPUS_SOURCE" "$CORPUS_EXPORT"
+
+wasm-tools print "$WASM_FILE" >"$WAT_FILE"
+strings -a "$WASM_FILE" >"$STRINGS_FILE"
+
+audit_forbidden_path "repository" "$REPO_ROOT" "$WAT_FILE" "$STRINGS_FILE"
+audit_forbidden_path "Cargo home" "$CARGO_HOME_PATH" "$WAT_FILE" "$STRINGS_FILE"
+audit_forbidden_path "Rust sysroot" "$RUST_SYSROOT" "$WAT_FILE" "$STRINGS_FILE"
+audit_forbidden_path "user home" "$TASK_USER_HOME" "$WAT_FILE" "$STRINGS_FILE"
+audit_forbidden_path "temporary build" "$WORK_DIR" "$WAT_FILE" "$STRINGS_FILE"
+
+if grep -E '(/Users/[^/[:space:]"]+|/home/[^/[:space:]"]+|[[:alpha:]]:[/\\]Users[/\\][^/\\[:space:]"]+)' \
+    "$WAT_FILE" "$STRINGS_FILE" >/dev/null; then
+    echo "WASM contains a machine-specific home-directory path" >&2
+    exit 1
+fi
+
+awk '/^[[:space:]]*\(import / {
+    module=$2
+    name=$3
+    gsub(/"/, "", module)
+    gsub(/"/, "", name)
+    print module "\t" name
+}' "$WAT_FILE" | LC_ALL=C sort -u >"$ACTUAL_IMPORTS_FILE"
+
+printf '%s\t%s\n' \
+    "./${OUT_NAME}_bg.js" "__wbg_Error_8c4e43fe74559d73" \
+    "./${OUT_NAME}_bg.js" "__wbindgen_init_externref_table" |
+    LC_ALL=C sort -u >"$EXPECTED_IMPORTS_FILE"
+
+if [ ! -s "$ACTUAL_IMPORTS_FILE" ]; then
+    echo "No WebAssembly imports were parsed" >&2
+    exit 1
+fi
+
+if ! cmp "$EXPECTED_IMPORTS_FILE" "$ACTUAL_IMPORTS_FILE"; then
+    echo "Unexpected WebAssembly import set:" >&2
+    diff -u "$EXPECTED_IMPORTS_FILE" "$ACTUAL_IMPORTS_FILE" >&2 || true
+    exit 1
+fi
+
+grep -F 'const ret = Error(getStringFromWasm0(arg0, arg1));' "$JS_FILE" >/dev/null
+grep -F 'throw takeFromExternrefTable0(ret[2]);' "$JS_FILE" >/dev/null
+
+assert_clean_source
+if [ "$(git rev-parse HEAD)" != "$SOURCE_COMMIT" ]; then
+    echo "Source commit changed during workspace WASM export" >&2
+    exit 1
+fi
+
+WASM_SHA256=$(shasum -a 256 "$WASM_FILE" | awk '{ print $1 }')
+if [[ ! "$WASM_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Invalid lowercase SHA-256: $WASM_SHA256" >&2
+    exit 1
+fi
+
+jq --sort-keys --indent 2 -n \
+    --arg crateVersion "$CRATE_VERSION" \
+    --argjson protocolVersion "$PROTOCOL_VERSION" \
+    --arg rustSourceCommit "$SOURCE_COMMIT" \
+    --arg wasmSha256 "$WASM_SHA256" \
+    '{
+        protocolVersion: $protocolVersion,
+        crateVersion: $crateVersion,
+        rustSourceCommit: $rustSourceCommit,
+        wasmSha256: $wasmSha256
+    }' >"$PROVENANCE_FILE"
+
+cmp "$CORPUS_SOURCE" "$CORPUS_EXPORT"
+
+ACTUAL_SHA256=$(shasum -a 256 "$WASM_FILE" | awk '{ print $1 }')
+jq -e \
+    --arg crateVersion "$CRATE_VERSION" \
+    --argjson protocolVersion "$PROTOCOL_VERSION" \
+    --arg rustSourceCommit "$SOURCE_COMMIT" \
+    --arg wasmSha256 "$ACTUAL_SHA256" \
+    '.protocolVersion == $protocolVersion and
+     .crateVersion == $crateVersion and
+     .rustSourceCommit == $rustSourceCommit and
+     .wasmSha256 == $wasmSha256' \
+    "$PROVENANCE_FILE" >/dev/null
+
+EXPECTED_FILES=$(printf '%s\n' \
+    "${OUT_NAME}.d.ts" \
+    "${OUT_NAME}.js" \
+    "${OUT_NAME}_bg.wasm" \
+    "${OUT_NAME}_bg.wasm.d.ts" \
+    "provenance.json" \
+    "workspace-discovery-corpus.json" | sort)
+ACTUAL_FILES=$(find "$STAGING_DIR" -type f | sed "s|^$STAGING_DIR/||" | sort)
+
+if [ "$ACTUAL_FILES" != "$EXPECTED_FILES" ]; then
+    echo "Unexpected workspace WASM package contents:" >&2
+    diff -u <(printf '%s\n' "$EXPECTED_FILES") <(printf '%s\n' "$ACTUAL_FILES") >&2 || true
+    exit 1
+fi
+
+if path_exists "$PACKAGE_DIR"; then
+    if [ "$PUBLISH_FAULT" = "backup-move" ]; then
+        echo "Injected workspace WASM old-package move failure" >&2
+        exit 91
+    fi
+    mv "$PACKAGE_DIR" "$BACKUP_DIR"
+    BACKUP_CREATED=1
+fi
+if [ "$PUBLISH_FAULT" = "staging-move" ]; then
+    echo "Injected workspace WASM staging-package move failure" >&2
+    exit 92
+fi
+mv "$STAGING_DIR" "$PACKAGE_DIR"
+STAGING_INSTALLED=1
+if [ "$PUBLISH_FAULT" = "after-staging" ]; then
+    echo "Injected workspace WASM post-install failure" >&2
+    exit 93
+fi
+
+if [ "$BACKUP_CREATED" -eq 1 ]; then
+    rm -rf -- "$BACKUP_DIR"
+    BACKUP_CREATED=0
+fi
+STAGING_INSTALLED=0
+
+echo "Workspace WASM package written to $PACKAGE_DIR" >&2

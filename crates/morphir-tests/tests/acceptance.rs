@@ -741,9 +741,7 @@ fn is_pending(
 ) -> bool {
     let tagged = |tags: &[String]| tags.iter().any(|tag| tag == PENDING_TAG);
 
-    tagged(&feature.tags)
-        || rule.is_some_and(|rule| tagged(&rule.tags))
-        || tagged(&scenario.tags)
+    tagged(&feature.tags) || rule.is_some_and(|rule| tagged(&rule.tags)) || tagged(&scenario.tags)
 }
 
 fn main() {

@@ -13,6 +13,7 @@ use tough::{FilesystemTransport, IntoVec, Limits, Prefix, RepositoryLoader, Targ
 use url::Url;
 
 const MAX_ROOT_UPDATES_PER_REFRESH: u64 = 32;
+const MAX_TOOL_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_TOOL_RELEASE_DESCRIPTOR_BYTES: u64 = 1024 * 1024;
 const MAX_TOOL_RELEASE_DESCRIPTOR_COUNT: usize = 1024;
 const MAX_TOOL_RELEASE_DESCRIPTORS_BYTES: u64 = 16 * 1024 * 1024;
@@ -85,6 +86,7 @@ impl ResolvedTrustedToolArtifact {
 #[derive(Debug)]
 pub struct DownloadedToolArtifact {
     path: PathBuf,
+    _cleanup: Option<tempfile::TempDir>,
 }
 
 impl DownloadedToolArtifact {
@@ -93,13 +95,12 @@ impl DownloadedToolArtifact {
         &self.path
     }
 
-    pub(crate) fn into_path(self) -> PathBuf {
-        self.path
-    }
-
     #[cfg(test)]
     pub(crate) fn test_fixture(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            _cleanup: None,
+        }
     }
 }
 
@@ -194,6 +195,7 @@ impl TrustedToolRepository {
             .map_err(|_| DistributionError::MissingToolTarget {
                 target: target.raw().to_owned(),
             })?;
+        validate_tool_artifact_length(target.raw(), target_metadata.length)?;
         validate_artifact_custom(
             target.raw(),
             target_metadata.custom.get("morphir"),
@@ -248,10 +250,11 @@ impl TrustedToolRepository {
             .save_target(&resolved.target, download_directory.path(), Prefix::None)
             .await
             .map_err(repository_error)?;
-        let retained_directory = download_directory.keep();
-        debug_assert!(path.starts_with(retained_directory));
         tracing::info!(path = %path.display(), "verified tool target downloaded");
-        Ok(DownloadedToolArtifact { path })
+        Ok(DownloadedToolArtifact {
+            path,
+            _cleanup: Some(download_directory),
+        })
     }
 
     async fn release_descriptors(&self, tool_id: &ToolId) -> Result<Vec<AuthenticatedRelease>> {
@@ -482,6 +485,17 @@ fn validate_release_descriptor_length(target: &str, length: u64) -> Result<()> {
     }
 }
 
+fn validate_tool_artifact_length(target: &str, length: u64) -> Result<()> {
+    if length <= MAX_TOOL_ARTIFACT_BYTES {
+        Ok(())
+    } else {
+        Err(invalid_metadata(
+            target,
+            format!("artifact length {length} exceeds the {MAX_TOOL_ARTIFACT_BYTES}-byte limit"),
+        ))
+    }
+}
+
 fn validate_release_descriptor_set(count: usize, aggregate_length: u64) -> Result<()> {
     if count > MAX_TOOL_RELEASE_DESCRIPTOR_COUNT {
         return Err(invalid_metadata(
@@ -505,9 +519,10 @@ fn validate_release_descriptor_set(count: usize, aggregate_length: u64) -> Resul
 #[cfg(test)]
 mod descriptor_size_tests {
     use super::{
-        MAX_TOOL_RELEASE_DESCRIPTOR_BYTES, MAX_TOOL_RELEASE_DESCRIPTOR_COUNT,
-        MAX_TOOL_RELEASE_DESCRIPTORS_BYTES, validate_release_descriptor_length,
-        validate_release_descriptor_set,
+        MAX_TOOL_ARTIFACT_BYTES, MAX_TOOL_RELEASE_DESCRIPTOR_BYTES,
+        MAX_TOOL_RELEASE_DESCRIPTOR_COUNT, MAX_TOOL_RELEASE_DESCRIPTORS_BYTES,
+        validate_release_descriptor_length, validate_release_descriptor_set,
+        validate_tool_artifact_length,
     };
     use crate::DistributionError;
 
@@ -560,11 +575,32 @@ mod descriptor_size_tests {
             assert!(error.to_string().contains(expected));
         }
     }
+
+    #[test]
+    fn authenticated_artifact_lengths_are_bounded_before_download() {
+        validate_tool_artifact_length(
+            "artifacts/desktop/1.0.0/desktop.zip",
+            MAX_TOOL_ARTIFACT_BYTES,
+        )
+        .unwrap();
+
+        let error = validate_tool_artifact_length(
+            "artifacts/desktop/1.0.0/desktop.zip",
+            MAX_TOOL_ARTIFACT_BYTES + 1,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            DistributionError::InvalidToolMetadata { .. }
+        ));
+        assert!(error.to_string().contains("artifact length"));
+    }
 }
 
 #[cfg(test)]
 mod download_path_tests {
-    use super::prepare_download_destination;
+    use super::{DownloadedToolArtifact, prepare_download_destination};
     use std::fs;
     use std::path::Path;
 
@@ -591,6 +627,14 @@ mod download_path_tests {
         );
         assert_ne!(destination, staging.join("artifacts/desktop/desktop.zip"));
         assert!(!outside.join("desktop/desktop.zip").exists());
+
+        let isolated_root = download_directory.path().to_path_buf();
+        let downloaded = DownloadedToolArtifact {
+            path: destination,
+            _cleanup: Some(download_directory),
+        };
+        drop(downloaded);
+        assert!(!isolated_root.exists());
     }
 
     #[cfg(unix)]

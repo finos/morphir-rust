@@ -78,8 +78,8 @@ impl<'home> ToolPackageStore<'home> {
             ArchiveFormat::Raw | ArchiveFormat::Appimage => {
                 super::raw_package::prepare(self.home, resolved, downloaded)
             }
-            ArchiveFormat::Zip => self.prepare_zip(resolved, downloaded.into_path()),
-            ArchiveFormat::TarGzip => self.prepare_tar_gzip(resolved, downloaded.into_path()),
+            ArchiveFormat::Zip => self.prepare_zip(resolved, downloaded),
+            ArchiveFormat::TarGzip => self.prepare_tar_gzip(resolved, downloaded),
         }?;
         tracing::info!(
             program = %package.store_path.as_str(),
@@ -92,12 +92,13 @@ impl<'home> ToolPackageStore<'home> {
     fn prepare_zip(
         &self,
         resolved: ResolvedTrustedToolArtifact,
-        downloaded: PathBuf,
+        downloaded: DownloadedToolArtifact,
     ) -> Result<VerifiedToolPackage> {
+        let downloaded = downloaded.path();
         let source_root = downloaded
             .parent()
             .expect("downloaded TUF target has a parent");
-        let source_name = portable_filename(&downloaded)?;
+        let source_name = portable_filename(downloaded)?;
         let filename = ArtifactFilename::parse(source_name)?;
         let source = RelativeArtifactPath::parse(source_name)?;
         let stored = ArtifactStore::for_tools(self.home).materialize_file(
@@ -203,12 +204,13 @@ impl<'home> ToolPackageStore<'home> {
     fn prepare_tar_gzip(
         &self,
         resolved: ResolvedTrustedToolArtifact,
-        downloaded: PathBuf,
+        downloaded: DownloadedToolArtifact,
     ) -> Result<VerifiedToolPackage> {
+        let downloaded = downloaded.path();
         let source_root = downloaded
             .parent()
             .expect("downloaded TUF target has a parent");
-        let source_name = portable_filename(&downloaded)?;
+        let source_name = portable_filename(downloaded)?;
         let filename = ArtifactFilename::parse(source_name)?;
         let source = RelativeArtifactPath::parse(source_name)?;
         let stored = ArtifactStore::for_tools(self.home).materialize_file(

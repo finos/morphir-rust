@@ -20,11 +20,11 @@ pub(super) fn prepare(
     resolved: ResolvedTrustedToolArtifact,
     downloaded: DownloadedToolArtifact,
 ) -> Result<VerifiedToolPackage> {
-    let downloaded = downloaded.into_path();
+    let downloaded = downloaded.path();
     let source_root = downloaded
         .parent()
         .expect("downloaded TUF target has a parent");
-    let source_name = portable_filename(&downloaded)?;
+    let source_name = portable_filename(downloaded)?;
     let filename = ArtifactFilename::parse(source_name)?;
     let source = RelativeArtifactPath::parse(source_name)?;
     let entry_point = resolved.artifact().launch().path();

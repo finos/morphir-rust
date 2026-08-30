@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase
+  segment (`value-in-USD`) instead of a run of single letters wrapped in parentheses
+  (`value-in-(usd)`), and the parenthesized form is no longer accepted. Existing v4 artifacts
+  carrying it will fail to load. The rationale, including the alternatives rejected, is recorded as
+  Decision Records 0001 and 0002 in the finos/morphir knowledge base.
+
+  `Name` now holds `Segment::Word` or `Segment::Initialism` values rather than a word list, so a
+  backend applies its own convention: Go renders `HTMLParser` where Rust renders `HtmlParser`.
+  `Name::from_segments` returns `Result` and validates, `Name::words()` replaces the public `words`
+  field, and names project onto a document tree through `to_file_stem`, which is lowercase and
+  handles the Windows reserved device names. Decoding accepts the uppercase encoding, the case-free
+  doubled-hyphen alternative, and the legacy v1-v3 array; `CANONICAL_STYLE` selects which is written
+
 ### Added
 
 - Morphir Home paths for the verified tool store, exact tool locks, and the shared tool-state

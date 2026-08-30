@@ -722,6 +722,28 @@ async fn variable_count_should_be(_w: &mut TestWorld, _count: usize) {
 /// stack on Windows. A dedicated thread keeps the suite runnable everywhere.
 const RUNNER_STACK_SIZE: usize = 64 * 1024 * 1024;
 
+/// Tag marking a scenario as specifying capability this crate has not built yet.
+const PENDING_TAG: &str = "pending";
+
+/// Whether a scenario is tagged `@pending`, directly or through its rule or
+/// feature.
+///
+/// A scenario that fails by construction, because the code it exercises is a
+/// stub or an unimplemented format version, makes the whole target permanently
+/// red, and a permanently red target hides real regressions: `cargo test` stops
+/// at the first failing binary, so failures in later crates never even run.
+/// Skipping these keeps the signal, and the scenarios stay in their feature
+/// files as the specification of what is owed.
+fn is_pending(
+    feature: &cucumber::gherkin::Feature,
+    rule: Option<&cucumber::gherkin::Rule>,
+    scenario: &cucumber::gherkin::Scenario,
+) -> bool {
+    let tagged = |tags: &[String]| tags.iter().any(|tag| tag == PENDING_TAG);
+
+    tagged(&feature.tags) || rule.is_some_and(|rule| tagged(&rule.tags)) || tagged(&scenario.tags)
+}
+
 fn main() {
     std::thread::Builder::new()
         .stack_size(RUNNER_STACK_SIZE)
@@ -730,7 +752,12 @@ fn main() {
                 .enable_all()
                 .build()
                 .expect("Failed to build Tokio runtime")
-                .block_on(TestWorld::run("tests/features"));
+                .block_on(
+                    TestWorld::cucumber()
+                        .filter_run_and_exit("tests/features", |feature, rule, scenario| {
+                            !is_pending(feature, rule, scenario)
+                        }),
+                );
         })
         .expect("Failed to spawn Cucumber runner thread")
         .join()

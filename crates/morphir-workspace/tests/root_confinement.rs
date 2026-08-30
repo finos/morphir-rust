@@ -5,7 +5,8 @@ use morphir_workspace::{
     ProjectSnapshot, ProjectState, RelativePath, RelativePathError, WORKSPACE_CONFIG_AMBIGUOUS,
     WORKSPACE_CONFIG_INVALID, WORKSPACE_CONFIG_MISSING, WORKSPACE_DISCOVERY_PROTOCOL,
     WORKSPACE_MEMBER_DUPLICATE_NAME, WORKSPACE_MEMBER_INVALID, WORKSPACE_PATH_NOT_CONFINED,
-    WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceDiagnostic, WorkspaceSnapshot, WorkspaceState,
+    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiagnostic,
+    WorkspaceSnapshot, WorkspaceState,
 };
 use serde_json::json;
 
@@ -209,6 +210,10 @@ fn diagnostic_codes_are_exact_and_stable() {
     assert_eq!(
         WORKSPACE_PROTOCOL_UNSUPPORTED,
         "workspace.protocol.unsupported"
+    );
+    assert_eq!(
+        WORKSPACE_SYMLINK_UNSUPPORTED,
+        "workspace.symlink.unsupported"
     );
 }
 

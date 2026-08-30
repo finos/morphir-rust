@@ -1,0 +1,4 @@
+[project]
+name = "acme/risk"
+version = "2.0.0"
+source_directory = "src"

@@ -53,7 +53,7 @@ pub struct ProjectSnapshot {
     pub relative_path: RelativePath,
     /// The project configuration path, when one exists.
     pub config_anchor: Option<RelativePath>,
-    /// The source directory relative to the development root.
+    /// The source directory relative to this project's [`Self::relative_path`].
     pub source_directory: RelativePath,
     /// The project state.
     pub state: ProjectState,

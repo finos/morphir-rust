@@ -1,0 +1,12 @@
+[workspace]
+members = ["packages/*"]
+exclude = ["packages/ignored"]
+default_member = "packages/orders"
+
+[project]
+name = "acme/root"
+version = "1.0.0"
+source_directory = "root-src"
+
+[ir]
+format_version = 3

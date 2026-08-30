@@ -1,0 +1,5 @@
+[ir]
+format_version = 4
+
+[codegen]
+output_format = "compact"

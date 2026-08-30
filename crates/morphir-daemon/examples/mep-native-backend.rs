@@ -2,8 +2,8 @@
 
 use morphir_extension_sdk::protocol::{ExtensionRequest, ExtensionResponse, methods};
 use morphir_extension_sdk::{
-    Artifact, Backend, Diagnostic, DiagnosticSeverity, Extension, ExtensionCapabilities,
-    ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult, Result,
+    Artifact, Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension,
+    ExtensionCapabilities, ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult, Result,
 };
 use std::io::{self, BufRead, Write};
 
@@ -24,7 +24,14 @@ impl Extension for NativeBackend {
     }
 
     fn capabilities() -> ExtensionCapabilities {
-        ExtensionCapabilities::default()
+        ExtensionCapabilities {
+            backend: Some(BackendCapability {
+                targets: vec!["json".into()],
+                ir_versions: vec!["3".into(), "4".into()],
+                generate: true,
+            }),
+            ..ExtensionCapabilities::default()
+        }
     }
 }
 

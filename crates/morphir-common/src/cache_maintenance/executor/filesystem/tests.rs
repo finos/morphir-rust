@@ -1,11 +1,11 @@
 use super::open_removal_parent;
 #[cfg(unix)]
-use super::pin_object;
-#[cfg(unix)]
 use super::{
     CacheExecutionError, RemovalOutcome, RemovalTarget, create_trash_run, open_maintenance_trash,
     remove_revalidated_entry, remove_revalidated_entry_with_hook, sweep_existing_trash,
 };
+#[cfg(unix)]
+use super::{observe_tree, pin_object};
 use crate::home::MorphirHome;
 use tempfile::TempDir;
 
@@ -37,6 +37,9 @@ fn removal_preserves_a_leaf_replaced_after_it_was_pinned() {
     std::fs::write(&target, b"planned").unwrap();
     let (parent, leaf, source) = open_removal_parent(&home, "downloads", "owned.pkg").unwrap();
     let expected = pin_object(&parent, &leaf, &source).unwrap().handle;
+    let expected_fingerprint = observe_tree(&parent, leaf.as_ref(), &source)
+        .unwrap()
+        .fingerprint;
     let trash = open_maintenance_trash(&home).unwrap();
     let trash_run = create_trash_run(&trash).unwrap();
     let staged = trash_run.path.join("00000000");
@@ -48,6 +51,7 @@ fn removal_preserves_a_leaf_replaced_after_it_was_pinned() {
             relative: "owned.pkg",
             expected: &expected,
             expected_bytes: 7,
+            expected_fingerprint,
         },
         &trash_run,
         0,
@@ -78,18 +82,70 @@ fn removal_refuses_a_leaf_replaced_since_inventory() {
     std::fs::write(&target, b"planned").unwrap();
     let (parent, leaf, source) = open_removal_parent(&home, "downloads", "owned.pkg").unwrap();
     let expected = pin_object(&parent, &leaf, &source).unwrap().handle;
+    let expected_fingerprint = observe_tree(&parent, leaf.as_ref(), &source)
+        .unwrap()
+        .fingerprint;
     std::fs::remove_file(&target).unwrap();
     std::fs::write(&target, b"current").unwrap();
     let trash = open_maintenance_trash(&home).unwrap();
     let trash_run = create_trash_run(&trash).unwrap();
 
-    let outcome =
-        remove_revalidated_entry(&home, "downloads", "owned.pkg", &expected, 7, &trash_run, 0)
-            .unwrap();
+    let outcome = remove_revalidated_entry(
+        RemovalTarget {
+            home: &home,
+            namespace: "downloads",
+            relative: "owned.pkg",
+            expected: &expected,
+            expected_bytes: 7,
+            expected_fingerprint,
+        },
+        &trash_run,
+        0,
+    )
+    .unwrap();
 
     assert_eq!(outcome, RemovalOutcome::Changed);
     assert_eq!(std::fs::read(&target).unwrap(), b"current");
     trash_run.finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn removal_preserves_content_mutated_in_place_after_inventory() {
+    let root = TempDir::new().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().as_os_str()), None).unwrap();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    let target = home.downloads_cache_dir().join("owned.pkg");
+    std::fs::write(&target, b"planned").unwrap();
+    let (parent, leaf, source) = open_removal_parent(&home, "downloads", "owned.pkg").unwrap();
+    let expected = pin_object(&parent, &leaf, &source).unwrap().handle;
+    let expected_fingerprint = observe_tree(&parent, leaf.as_ref(), &source)
+        .unwrap()
+        .fingerprint;
+    let trash = open_maintenance_trash(&home).unwrap();
+    let trash_run = create_trash_run(&trash).unwrap();
+    let staged = trash_run.path.join("00000000");
+
+    let error = remove_revalidated_entry_with_hook(
+        RemovalTarget {
+            home: &home,
+            namespace: "downloads",
+            relative: "owned.pkg",
+            expected: &expected,
+            expected_bytes: 7,
+            expected_fingerprint,
+        },
+        &trash_run,
+        0,
+        || std::fs::write(&target, b"changed").unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CacheExecutionError::EntryChangedDuringRemoval { .. }
+    ));
+    assert_eq!(std::fs::read(staged).unwrap(), b"changed");
 }
 
 #[cfg(unix)]

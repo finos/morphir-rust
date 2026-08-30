@@ -2,8 +2,8 @@ mod filesystem;
 mod revalidation;
 
 use self::filesystem::{
-    MaintenanceGuard, RemovalOutcome, TrashRun, create_trash_run, open_maintenance_trash,
-    remove_revalidated_entry, sweep_existing_trash,
+    MaintenanceGuard, RemovalOutcome, RemovalTarget, TrashRun, create_trash_run,
+    open_maintenance_trash, remove_revalidated_entry, sweep_existing_trash,
 };
 use self::revalidation::{RevalidatedEntry, inventory_for_execution, revalidate_entry};
 use super::{CacheInventoryError, CacheInventoryLimits, CacheNamespace, CleanupPlan};
@@ -346,17 +346,23 @@ fn execute_cache_cleanup_inner(
                 Some(observed_bytes),
                 CacheExecutionDisposition::Stale,
             )),
-            RevalidatedEntry::Ready { handle } => {
+            RevalidatedEntry::Ready {
+                handle,
+                fingerprint,
+            } => {
                 if trash_run.is_none() {
                     trash_run = Some(create_trash_run(&trash)?);
                 }
                 let run = trash_run.as_ref().expect("trash run was just initialized");
                 match remove_revalidated_entry(
-                    home,
-                    entry.namespace(),
-                    entry.path(),
-                    handle,
-                    entry.bytes(),
+                    RemovalTarget {
+                        home,
+                        namespace: entry.namespace(),
+                        relative: entry.path(),
+                        expected: handle,
+                        expected_bytes: entry.bytes(),
+                        expected_fingerprint: fingerprint,
+                    },
                     run,
                     items.len(),
                 )? {

@@ -1,4 +1,5 @@
 mod identity;
+mod measurement;
 mod native;
 mod pinned;
 mod registration;
@@ -279,19 +280,26 @@ impl InventoryWalk<'_> {
                     .ok()
                     .flatten();
                 let measured = self.measure(directory, child, &child_path, &metadata, depth + 1)?;
-                let (entry, handle) = if measured.safe && (!pin_required || handle.is_some()) {
-                    (template.with_observation(identity, measured.bytes)?, handle)
-                } else {
-                    (
-                        CacheEntry::unclassified(
-                            self.namespace.name.clone(),
-                            identity,
-                            measured.bytes,
-                        )?,
-                        None,
-                    )
-                };
-                self.entries.push(PinnedCacheEntry::new(entry, handle));
+                let (entry, handle, fingerprint) =
+                    if measured.safe && (!pin_required || handle.is_some()) {
+                        (
+                            template.with_observation(identity, measured.bytes)?,
+                            handle,
+                            pin_required.then_some(measured.fingerprint),
+                        )
+                    } else {
+                        (
+                            CacheEntry::unclassified(
+                                self.namespace.name.clone(),
+                                identity,
+                                measured.bytes,
+                            )?,
+                            None,
+                            None,
+                        )
+                    };
+                self.entries
+                    .push(PinnedCacheEntry::new(entry, handle, fingerprint));
             } else if self
                 .has_registered_descendant(directory, &children, child, &metadata, &identity)
             {
@@ -304,6 +312,7 @@ impl InventoryWalk<'_> {
                             identity,
                             measured.bytes,
                         )?,
+                        None,
                         None,
                     ));
                 } else {
@@ -318,6 +327,7 @@ impl InventoryWalk<'_> {
                                 metadata.len(),
                             )?,
                             None,
+                            None,
                         )),
                     }
                 }
@@ -330,64 +340,11 @@ impl InventoryWalk<'_> {
                         measured.bytes,
                     )?,
                     None,
+                    None,
                 ));
             }
         }
         Ok(())
-    }
-
-    fn measure(
-        &mut self,
-        parent: &Dir,
-        entry: &DirEntry,
-        path: &Path,
-        metadata: &Metadata,
-        depth: usize,
-    ) -> Result<MeasuredEntry, CacheInventoryError> {
-        if is_link_like(metadata) || native::crosses_filesystem_boundary(parent, metadata) {
-            return Ok(MeasuredEntry {
-                bytes: metadata.len(),
-                safe: false,
-            });
-        }
-        if metadata.is_file() {
-            return Ok(MeasuredEntry {
-                bytes: metadata.len(),
-                safe: true,
-            });
-        }
-        if !metadata.is_dir() {
-            return Ok(MeasuredEntry {
-                bytes: metadata.len(),
-                safe: false,
-            });
-        }
-
-        self.check_depth(depth)?;
-        let directory = match parent.open_dir_nofollow(entry.file_name()) {
-            Ok(directory) => directory,
-            Err(_) => {
-                return Ok(MeasuredEntry {
-                    bytes: metadata.len(),
-                    safe: false,
-                });
-            }
-        };
-        let mut bytes = 0_u64;
-        let mut safe = true;
-        for child in self.read_children(&directory, path)? {
-            let child_path = path.join(child.file_name());
-            let child_metadata = directory
-                .symlink_metadata(child.file_name())
-                .map_err(|source| io_error(&child_path, source))?;
-            let measured =
-                self.measure(&directory, &child, &child_path, &child_metadata, depth + 1)?;
-            bytes = bytes
-                .checked_add(measured.bytes)
-                .ok_or(CacheInventoryError::ByteCountOverflow)?;
-            safe &= measured.safe;
-        }
-        Ok(MeasuredEntry { bytes, safe })
     }
 
     fn registered_entry(
@@ -466,11 +423,6 @@ impl InventoryWalk<'_> {
         }
         Ok(())
     }
-}
-
-struct MeasuredEntry {
-    bytes: u64,
-    safe: bool,
 }
 
 fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {

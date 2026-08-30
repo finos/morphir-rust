@@ -23,6 +23,7 @@
 //! ```
 
 mod executor;
+mod fingerprint;
 mod inventory;
 mod model;
 mod planner;

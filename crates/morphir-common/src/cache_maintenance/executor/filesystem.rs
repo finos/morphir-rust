@@ -1,3 +1,6 @@
+mod observation;
+
+use self::observation::{observe_tree, remove_tree};
 use super::{CacheExecutionError, CacheExecutionLimits};
 use crate::home::MorphirHome;
 #[cfg(unix)]
@@ -16,26 +19,11 @@ use tracing::debug;
 use uuid::Uuid;
 
 pub(super) fn remove_revalidated_entry(
-    home: &MorphirHome,
-    namespace: &str,
-    relative: &str,
-    expected: &Handle,
-    expected_bytes: u64,
+    target: RemovalTarget<'_>,
     trash_run: &TrashRun,
     index: usize,
 ) -> Result<RemovalOutcome, CacheExecutionError> {
-    remove_revalidated_entry_with_hook(
-        RemovalTarget {
-            home,
-            namespace,
-            relative,
-            expected,
-            expected_bytes,
-        },
-        trash_run,
-        index,
-        || {},
-    )
+    remove_revalidated_entry_with_hook(target, trash_run, index, || {})
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,12 +32,13 @@ pub(super) enum RemovalOutcome {
     Changed,
 }
 
-struct RemovalTarget<'a> {
-    home: &'a MorphirHome,
-    namespace: &'a str,
-    relative: &'a str,
-    expected: &'a Handle,
-    expected_bytes: u64,
+pub(super) struct RemovalTarget<'a> {
+    pub(super) home: &'a MorphirHome,
+    pub(super) namespace: &'a str,
+    pub(super) relative: &'a str,
+    pub(super) expected: &'a Handle,
+    pub(super) expected_bytes: u64,
+    pub(super) expected_fingerprint: u64,
 }
 
 fn remove_revalidated_entry_with_hook<F>(
@@ -75,6 +64,17 @@ where
         .map_err(|error| io_error(&source, error))?;
     let staged_object = pin_object(&trash_run.dir, &staging_name, &staging_path)?;
     if source_object.handle != staged_object.handle || source_object.is_dir != staged_object.is_dir
+    {
+        return Err(CacheExecutionError::EntryChangedDuringRemoval {
+            path: source,
+            staged_path: staging_path,
+        });
+    }
+    let observation = observe_tree(&trash_run.dir, Path::new(&staging_name), &staging_path)?;
+    let confirmed_object = pin_object(&trash_run.dir, &staging_name, &staging_path)?;
+    if staged_object.handle != confirmed_object.handle
+        || observation.bytes != target.expected_bytes
+        || observation.fingerprint != target.expected_fingerprint
     {
         return Err(CacheExecutionError::EntryChangedDuringRemoval {
             path: source,
@@ -322,44 +322,6 @@ fn verified_run_entries(
         verified.push((name, bytes));
     }
     Ok(verified)
-}
-
-fn remove_tree(parent: &Dir, name: &Path, path: &Path) -> Result<(), CacheExecutionError> {
-    let metadata = parent
-        .symlink_metadata(name)
-        .map_err(|source| io_error(path, source))?;
-    if metadata.is_dir() && !cap_is_link_like(&metadata) {
-        if crosses_filesystem_boundary(parent, &metadata, path)? {
-            return Err(CacheExecutionError::UnsafeMaintenancePath {
-                path: path.to_path_buf(),
-            });
-        }
-        let directory = parent
-            .open_dir_nofollow(name)
-            .map_err(|source| io_error(path, source))?;
-        let mut entries = directory
-            .entries()
-            .map_err(|source| io_error(path, source))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|source| io_error(path, source))?;
-        entries.sort_by_key(cap_std::fs::DirEntry::file_name);
-        for entry in entries {
-            let child = entry.file_name();
-            remove_tree(&directory, Path::new(&child), &path.join(&child))?;
-        }
-        drop(directory);
-        parent
-            .remove_dir(name)
-            .map_err(|source| io_error(path, source))
-    } else if metadata.is_file() || cap_is_link_like(&metadata) {
-        parent
-            .remove_file(name)
-            .map_err(|source| io_error(path, source))
-    } else {
-        Err(CacheExecutionError::UnsafeMaintenancePath {
-            path: path.to_path_buf(),
-        })
-    }
 }
 
 fn is_trash_run_name(value: &str) -> bool {

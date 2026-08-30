@@ -9,11 +9,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) enum RevalidatedEntry<'a> {
     Missing,
-    ActiveLease { observed_bytes: u64 },
-    Unclassified { observed_bytes: u64 },
+    ActiveLease {
+        observed_bytes: u64,
+    },
+    Unclassified {
+        observed_bytes: u64,
+    },
     Unregistered,
-    Stale { observed_bytes: u64 },
-    Ready { handle: &'a Handle },
+    Stale {
+        observed_bytes: u64,
+    },
+    Ready {
+        handle: &'a Handle,
+        fingerprint: u64,
+    },
 }
 
 pub(super) fn inventory_for_execution(
@@ -75,9 +84,12 @@ pub(super) fn revalidate_entry<'a>(
                 if observed_entry.bytes() == planned.bytes()
                     && observed_entry.state() == planned.state() =>
             {
-                match observed.handle() {
-                    Some(handle) => RevalidatedEntry::Ready { handle },
-                    None => RevalidatedEntry::Unclassified {
+                match (observed.handle(), observed.fingerprint()) {
+                    (Some(handle), Some(fingerprint)) => RevalidatedEntry::Ready {
+                        handle,
+                        fingerprint,
+                    },
+                    _ => RevalidatedEntry::Unclassified {
                         observed_bytes: observed_entry.bytes(),
                     },
                 }

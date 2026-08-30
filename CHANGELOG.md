@@ -24,6 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Morphir Home paths for the verified tool store, exact tool locks, and the shared tool-state
+  transaction lock.
+- A shared verified-file publication boundary for tool and extension content-addressed stores,
+  with separate namespaces and common containment, hashing, staging, and reuse checks.
+- Strict tool release descriptor types and deterministic stable, preview, insiders, segmented
+  preview, and exact-version resolution with CLI compatibility and revocation enforcement.
+- TUF-authenticated tool repository loading with bounded root rotation, safe expiration checks,
+  descriptor and target metadata cross-checks, and verified artifact downloads.
+- Transactional exact tool locks and active catalogs with offline byte re-verification, retained
+  rollback releases, failure-safe catalog replacement, and raw executable/AppImage publication.
+- Atomic ZIP package staging with traversal, special-file, collision, entry-count, and expanded-size
+  defenses plus a durable per-file integrity manifest used by offline activation.
+- Safe tar.gz package staging with the same portable-path, collision, special-file, entry-count,
+  expansion-size, atomic publication, and offline manifest verification guarantees as ZIP.
+- Structured tracing spans and outcome events for tool repository loading, resolution, verified
+  downloads, package staging, catalog activation, and offline launch verification.
+- Atomic tool rollback to the most recently retained release, including byte re-verification,
+  restoration of its original selection, and lock/catalog rollback after write failures.
+- Exact-release tool repair that quarantines corrupt or missing active content, rebuilds it from a
+  TUF-authenticated download, preserves the installed selection and state, and restores the prior
+  bytes if replacement validation fails or the repair process is interrupted.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)
@@ -85,6 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Content-addressed artifact paths are now serialized with portable forward slashes on Windows,
+  keeping extension installation and offline activation compatible across platforms.
 - Native process hosts now complete MEP shutdown by sending the required `morphir.exit`
   notification after the extension acknowledges `morphir.shutdown`
 - `kb sync diff` compares an asset as bytes rather than as text. Every mirrored file was decoded as

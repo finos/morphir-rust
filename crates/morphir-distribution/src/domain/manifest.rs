@@ -186,6 +186,11 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
         D: Deserializer<'de>,
     {
         let wire = ArtifactRecordWire::deserialize(deserializer)?;
+        match &wire.source {
+            ArtifactSource::LocalFile { path } => {
+                path.validate_declared().map_err(serde::de::Error::custom)?
+            }
+        }
         if wire.args.iter().any(|argument| argument.contains('\0')) {
             return Err(serde::de::Error::custom(
                 "process arguments cannot contain NUL",

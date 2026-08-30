@@ -44,6 +44,14 @@ pub enum DistributionError {
         /// One-based JSONL line number.
         line: usize,
     },
+    /// Tool releases for more than one identity were supplied to one resolution.
+    #[error("tool releases mix identities {expected} and {actual}")]
+    MixedToolIdentity {
+        /// Identity established by the first release.
+        expected: crate::ToolId,
+        /// Different identity found later in the input.
+        actual: crate::ToolId,
+    },
     /// Two records declared the same exact version.
     #[error("duplicate version {version} in extension history")]
     DuplicateVersion {
@@ -73,6 +81,81 @@ pub enum DistributionError {
         selection: String,
         /// Host-supported MEP versions.
         supported: String,
+    },
+    /// Matching tool releases do not support the invoking Morphir CLI.
+    #[error("no release matching {selection} supports Morphir CLI {cli_version}")]
+    NoCompatibleCliVersion {
+        /// Requested channel or exact version.
+        selection: String,
+        /// Invoking Morphir CLI version.
+        cli_version: semver::Version,
+    },
+    /// An exact tool release has been revoked by its publisher.
+    #[error("tool {tool} version {version} is revoked")]
+    RevokedToolRelease {
+        /// Revoked tool identity.
+        tool: crate::ToolId,
+        /// Revoked exact semantic version.
+        version: semver::Version,
+    },
+    /// TUF rejected repository metadata or target bytes.
+    #[error("tool repository verification failed: {source}")]
+    ToolRepository {
+        /// Underlying TUF client failure.
+        #[source]
+        source: Box<tough::error::Error>,
+    },
+    /// Authenticated Morphir-specific target metadata is malformed or inconsistent.
+    #[error("invalid authenticated tool metadata for {target}: {reason}")]
+    InvalidToolMetadata {
+        /// Authenticated target path.
+        target: String,
+        /// Concise consistency or decoding failure.
+        reason: String,
+    },
+    /// Authenticated repository metadata does not list a required target.
+    #[error("authenticated tool target {target} is missing")]
+    MissingToolTarget {
+        /// Required target path.
+        target: String,
+    },
+    /// Installed tool bytes do not have the authenticated target length.
+    #[error("length mismatch for {path}: expected {expected} bytes, got {actual}")]
+    ToolLengthMismatch {
+        /// Installed tool path.
+        path: PathBuf,
+        /// Length authenticated by TUF targets metadata.
+        expected: u64,
+        /// Observed file length.
+        actual: u64,
+    },
+    /// The selected packaging format is not supported by this installation path.
+    #[error("tool archive format {format} is not supported by this installer")]
+    UnsupportedToolArchive {
+        /// Unsupported archive format.
+        format: String,
+    },
+    /// A raw tool's launch path does not name the downloaded target file.
+    #[error("raw tool launch path {entry_point} does not match target file {target}")]
+    ToolEntryPointMismatch {
+        /// Downloaded target filename.
+        target: String,
+        /// Declared launch entry point.
+        entry_point: String,
+    },
+    /// An archive entry violates portable and contained extraction rules.
+    #[error("unsafe tool archive entry {entry:?}: {reason}")]
+    UnsafeToolArchive {
+        /// Entry name as supplied by the archive.
+        entry: String,
+        /// Rejected archive property.
+        reason: String,
+    },
+    /// Installed package manifest is incomplete or internally inconsistent.
+    #[error("invalid installed tool package manifest: {reason}")]
+    InvalidToolManifest {
+        /// Violated manifest invariant.
+        reason: String,
     },
     /// A release declared multiple artifacts for one platform.
     #[error("release {version} contains more than one artifact for platform {platform}")]
@@ -137,11 +220,39 @@ pub enum DistributionError {
         /// Requested extension identity.
         id: crate::ExtensionId,
     },
+    /// No installed tool catalog entry exists for the requested identity.
+    #[error("tool {id} is not installed")]
+    ToolNotInstalled {
+        /// Requested tool identity.
+        id: crate::ToolId,
+    },
+    /// An installed tool has no retained release eligible for rollback.
+    #[error("tool {id} has no retained rollback release")]
+    NoToolRollback {
+        /// Requested tool identity.
+        id: crate::ToolId,
+    },
+    /// Authenticated repair bytes do not describe the installed exact release.
+    #[error("repair candidate for tool {id} does not match installed release {version}: {reason}")]
+    ToolRepairMismatch {
+        /// Installed tool identity.
+        id: crate::ToolId,
+        /// Installed exact semantic version.
+        version: semver::Version,
+        /// Metadata or package field that did not match.
+        reason: &'static str,
+    },
     /// Catalog and lock records disagree about exact installed content.
     #[error("installed catalog and lock disagree for extension {id}")]
     StateMismatch {
         /// Extension whose durable records disagree.
         id: crate::ExtensionId,
+    },
+    /// Tool catalog and exact lock disagree about active content.
+    #[error("installed catalog and lock disagree for tool {id}")]
+    ToolStateMismatch {
+        /// Tool whose durable records disagree.
+        id: crate::ToolId,
     },
     /// A state transaction failed and its previous files could not be restored.
     #[error("distribution state update failed ({original}); rollback also failed ({rollback})")]

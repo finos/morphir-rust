@@ -5,7 +5,10 @@ use super::catalog::{
     read_tool_lock_unlocked, tool_lock_path, tool_state_guard, validate_active_pair,
 };
 use super::package::{ToolPackageStore, VerifiedToolPackage};
-use super::verification::{verify_installed, verify_package};
+use super::repair_journal::{
+    begin_repair, commit_repair, quarantined_digest_path, rollback_repair,
+};
+use super::verification::{sync_installed_file, sync_package, verify_installed, verify_package};
 use crate::state_io::{FilesystemStateWriter, StateWriter, commit_state_pair, encode_json};
 use crate::{
     DistributionError, DownloadedToolArtifact, RelativeArtifactPath, ResolvedTrustedToolArtifact,
@@ -13,7 +16,6 @@ use crate::{
 };
 use morphir_common::home::MorphirHome;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 /// Rebuilds the bytes for an installed exact release without changing its durable selection.
@@ -53,37 +55,23 @@ impl<'home> ToolRepairer<'home> {
         let lock = read_tool_lock_unlocked(self.home, id)?;
         validate_active_pair(&active, &lock)?;
         let shared_files = shared_digest_files(self.home, &tools, &active);
-
-        let temp_root = self.home.temp_dir();
-        fs::create_dir_all(&temp_root).map_err(|source| DistributionError::Io {
-            path: temp_root.clone(),
-            source,
-        })?;
-        let quarantine = tempfile::Builder::new()
-            .prefix("tool-repair-")
-            .tempdir_in(&temp_root)
-            .map_err(|source| DistributionError::Io {
-                path: temp_root,
-                source,
-            })?;
+        validate_repair_resolution(&active, &resolved)?;
+        let transaction = begin_repair(self.home, &active)?;
         let digest_path = self.home.tools_store_dir().join(active.digest.to_string());
-        let previous_path = quarantine.path().join("previous");
-        let had_previous = move_to_quarantine(&digest_path, &previous_path)?;
+        let previous_path = quarantined_digest_path(self.home, id, &active.digest);
 
-        let repair = validate_repair_resolution(&active, &resolved)
-            .and_then(|()| ToolPackageStore::new(self.home).prepare(resolved, downloaded))
+        let repair = ToolPackageStore::new(self.home)
+            .prepare(resolved, downloaded)
             .and_then(|package| {
                 validate_repair_package(&active, &package)?;
                 verify_package(self.home, &package)?;
-                restore_shared_files(&digest_path, &previous_path, &shared_files)?;
+                sync_package(self.home, &package)?;
+                restore_shared_files(self.home, &digest_path, &previous_path, &shared_files)?;
                 Ok(())
             });
 
         if let Err(original) = repair {
-            if let Err(rollback) = restore_quarantined_package(
-                &digest_path,
-                had_previous.then_some(previous_path.as_path()),
-            ) {
+            if let Err(rollback) = rollback_repair(self.home, &transaction) {
                 return Err(DistributionError::StateRollback {
                     original: Box::new(original),
                     rollback: Box::new(rollback),
@@ -91,6 +79,7 @@ impl<'home> ToolRepairer<'home> {
             }
             return Err(original);
         }
+        commit_repair(self.home, transaction)?;
 
         tracing::info!(
             tool_id = %active.tool_id,
@@ -193,7 +182,12 @@ fn shared_digest_files(
     files
 }
 
-fn restore_shared_files(digest_path: &Path, previous_path: &Path, files: &[PathBuf]) -> Result<()> {
+fn restore_shared_files(
+    home: &MorphirHome,
+    digest_path: &Path,
+    previous_path: &Path,
+    files: &[PathBuf],
+) -> Result<()> {
     for relative in files {
         let source = previous_path.join(relative);
         let destination = digest_path.join(relative);
@@ -206,10 +200,11 @@ fn restore_shared_files(digest_path: &Path, previous_path: &Path, files: &[PathB
                 source,
             })?;
         }
-        fs::rename(&source, &destination).map_err(|source| DistributionError::Io {
-            path: destination,
+        fs::copy(&source, &destination).map_err(|source| DistributionError::Io {
+            path: destination.clone(),
             source,
         })?;
+        sync_installed_file(home, &destination)?;
     }
     Ok(())
 }
@@ -222,52 +217,13 @@ fn repair_mismatch(active: &InstalledTool, reason: &'static str) -> Distribution
     }
 }
 
-fn move_to_quarantine(path: &Path, destination: &Path) -> Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => {
-            fs::rename(path, destination).map_err(|source| DistributionError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            Ok(true)
-        }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(DistributionError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-fn restore_quarantined_package(path: &Path, previous: Option<&Path>) -> Result<()> {
-    remove_tool_store_entry(path)?;
-    if let Some(previous) = previous {
-        fs::rename(previous, path).map_err(|source| DistributionError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    }
+#[cfg(test)]
+pub(super) fn simulate_interrupted_repair(
+    home: &MorphirHome,
+    active: &InstalledTool,
+) -> Result<()> {
+    let _transaction = begin_repair(home, active)?;
     Ok(())
-}
-
-fn remove_tool_store_entry(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
-            fs::remove_file(path).map_err(|source| DistributionError::Io {
-                path: path.to_path_buf(),
-                source,
-            })
-        }
-        Ok(_) => fs::remove_dir_all(path).map_err(|source| DistributionError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(DistributionError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
 }
 
 /// Atomically activate the most recently retained release for one installed tool.

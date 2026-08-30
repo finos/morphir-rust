@@ -1,6 +1,7 @@
 //! Installed package manifest and content verification.
 
 use super::package::{ToolPackageFile, VerifiedToolPackage};
+use crate::state_io::sync_parent_directory;
 use crate::store::{verify_executable_mode, verify_file};
 use crate::{DistributionError, RelativeArtifactPath, Result, Sha256Digest};
 use morphir_common::home::MorphirHome;
@@ -18,6 +19,44 @@ pub(super) fn verify_package(home: &MorphirHome, package: &VerifiedToolPackage) 
             .map(RelativeArtifactPath::as_path),
         &package.files,
     )
+}
+
+pub(super) fn sync_package(home: &MorphirHome, package: &VerifiedToolPackage) -> Result<()> {
+    for file in &package.files {
+        sync_installed_file(home, &home.root().join(file.path.as_path()))?;
+    }
+    Ok(())
+}
+
+pub(super) fn sync_installed_file(home: &MorphirHome, path: &Path) -> Result<()> {
+    sync_file(path).map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let store = home.tools_store_dir();
+    let mut child = path;
+    while let Some(parent) = child.parent() {
+        if !parent.starts_with(&store) {
+            break;
+        }
+        sync_parent_directory(child)?;
+        if parent == store {
+            sync_parent_directory(parent)?;
+            break;
+        }
+        child = parent;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn sync_file(path: &Path) -> std::io::Result<()> {
+    fs::OpenOptions::new().write(true).open(path)?.sync_all()
+}
+
+#[cfg(not(windows))]
+fn sync_file(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
 }
 
 pub(super) fn verify_installed(

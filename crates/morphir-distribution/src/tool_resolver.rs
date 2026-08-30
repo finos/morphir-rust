@@ -38,6 +38,7 @@ pub fn resolve_tool(
     platform: &Platform,
     morphir_cli: &Version,
 ) -> Result<ResolvedToolRelease> {
+    validate_distinct_precedence(releases)?;
     let matching = releases
         .iter()
         .filter(|release| matches_selection(release, selection))
@@ -100,6 +101,29 @@ pub fn resolve_tool(
         selection: selection.to_string(),
         platform: platform.to_string(),
     })
+}
+
+fn validate_distinct_precedence(releases: &[ToolReleaseRecord]) -> Result<()> {
+    for (index, release) in releases.iter().enumerate() {
+        if let Some(previous) = releases[..index]
+            .iter()
+            .find(|previous| previous.version() == release.version())
+        {
+            return Err(DistributionError::DuplicateVersion {
+                version: previous.version().clone(),
+            });
+        }
+        if let Some(previous) = releases[..index]
+            .iter()
+            .find(|previous| previous.version().cmp_precedence(release.version()).is_eq())
+        {
+            return Err(DistributionError::DuplicatePrecedence {
+                first: previous.version().clone(),
+                second: release.version().clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn matches_selection(release: &ToolReleaseRecord, selection: &Selection) -> bool {

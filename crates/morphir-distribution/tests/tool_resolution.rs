@@ -141,3 +141,26 @@ fn channel_resolution_skips_incompatible_tools_and_exact_revocation_is_terminal(
         DistributionError::RevokedToolRelease { .. }
     ));
 }
+
+#[test]
+fn tool_resolution_rejects_versions_with_equal_semver_precedence() {
+    let releases = vec![
+        a_tool_release("1.0.0+desktop.1", &["stable"], "active", ">=0.4.0, <0.5.0"),
+        a_tool_release("1.0.0+desktop.2", &["stable"], "active", ">=0.4.0, <0.5.0"),
+    ];
+
+    let error = resolve_tool(
+        &releases,
+        &Selection::Channel(Channel::Stable),
+        &Platform::new("windows", "aarch64").unwrap(),
+        &Version::parse("0.4.0").unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        DistributionError::DuplicatePrecedence { first, second }
+            if first == Version::parse("1.0.0+desktop.1").unwrap()
+                && second == Version::parse("1.0.0+desktop.2").unwrap()
+    ));
+}

@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restoration of its original selection, and lock/catalog rollback after write failures.
 - Exact-release tool repair that quarantines corrupt or missing active content, rebuilds it from a
   TUF-authenticated download, preserves the installed selection and state, and restores the prior
-  bytes if replacement validation fails.
+  bytes if replacement validation fails or the repair process is interrupted.
 - Shared `formatVersion` normalization, support-table validation, and replayable JSON/YAML
   root transport probes in `morphir-core` and `morphir-common`, aligned with the parent Morphir
   specification (morphir-l2p9.2)

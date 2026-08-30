@@ -39,6 +39,45 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! A trusted tool repository composes authentication, exact resolution,
+//! verified download, package staging, installation, and offline activation:
+//!
+//! ```no_run
+//! use morphir_common::home::MorphirHome;
+//! use morphir_distribution::{
+//!     Channel, Platform, Selection, ToolId, ToolInstaller, ToolPackageStore,
+//!     TrustedToolRepository, activate_installed_tool,
+//! };
+//! use semver::Version;
+//! use std::{fs, path::Path};
+//!
+//! # async fn acquire_tool() -> Result<(), Box<dyn std::error::Error>> {
+//! let home = MorphirHome::resolve()?;
+//! let trusted_root = fs::read("./trusted-root.json")?;
+//! let repository = TrustedToolRepository::load_filesystem(
+//!     &trusted_root,
+//!     Path::new("./repository/metadata"),
+//!     Path::new("./repository/targets"),
+//!     &home.indexes_cache_dir().join("tools"),
+//! )
+//! .await?;
+//! let id = ToolId::parse("desktop")?;
+//! let selection = Selection::Channel(Channel::Stable);
+//! let resolved = repository
+//!     .resolve(&id, &selection, &Platform::current(), &Version::parse("0.4.0")?)
+//!     .await?;
+//! let staging = home.temp_dir().join("desktop-download");
+//! let downloaded = repository.download(&resolved, &staging).await?;
+//! let package = ToolPackageStore::new(&home).prepare(resolved, downloaded)?;
+//! ToolInstaller::new(&home).install(package)?;
+//!
+//! // Installed activation is offline and verifies the complete package manifest.
+//! let process = activate_installed_tool(&home, &id)?;
+//! assert_eq!(process.tool_id(), &id);
+//! # Ok(())
+//! # }
+//! ```
 
 mod domain;
 mod error;

@@ -457,3 +457,19 @@ fn mismatched_repair_candidate_restores_quarantined_active_bytes_and_state() {
         crate::DistributionError::DigestMismatch { .. }
     ));
 }
+
+#[test]
+fn activation_recovers_an_interrupted_repair_quarantine() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let id = ToolId::parse("desktop").unwrap();
+    let installed = ToolInstaller::new(&home)
+        .install(package(&home, "1.0.0", b"desktop-v1"))
+        .unwrap();
+
+    super::recovery::simulate_interrupted_repair(&home, &installed).unwrap();
+
+    let launch = activate_installed_tool(&home, &id).unwrap();
+    assert_eq!(fs::read(launch.program()).unwrap(), b"desktop-v1");
+    assert!(!super::repair_journal::repair_journal_path(&home, &id).exists());
+}

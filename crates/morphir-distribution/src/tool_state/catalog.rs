@@ -1,7 +1,7 @@
 //! Installed tool catalog types and atomic state transactions.
 
 use super::package::{ToolPackageFile, VerifiedToolPackage};
-use super::verification::verify_package;
+use super::verification::{sync_package, verify_package};
 use crate::state_io::{
     FilesystemStateWriter, StateGuard, StateWriter, commit_state_pair, decode_state, encode_json,
     read_json, read_state_bytes, recover_state_pairs,
@@ -260,7 +260,9 @@ impl<'home> ToolInstaller<'home> {
         package: VerifiedToolPackage,
         writer: &impl StateWriter,
     ) -> Result<InstalledTool> {
+        let _transaction = tool_state_guard(self.home)?;
         verify_package(self.home, &package)?;
+        sync_package(self.home, &package)?;
         if package.status == ToolReleaseStatus::Revoked {
             return Err(DistributionError::RevokedToolRelease {
                 tool: package.tool_id,
@@ -268,7 +270,6 @@ impl<'home> ToolInstaller<'home> {
             });
         }
 
-        let _transaction = tool_state_guard(self.home)?;
         let mut tools = load_catalog_unlocked(self.home)?;
         let lock = ToolLock::from_package(&package);
         let active = InstalledTool::from_package(&package);
@@ -416,6 +417,7 @@ pub(super) fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> R
 pub(super) fn tool_state_guard(home: &MorphirHome) -> Result<StateGuard> {
     let guard = StateGuard::acquire(&home.tools_state_lock_file())?;
     recover_state_pairs(&home.tools_locks_dir(), &home.tools_catalog_file())?;
+    super::repair_journal::recover_tool_repairs(home)?;
     Ok(guard)
 }
 

@@ -4,6 +4,7 @@ mod activation;
 mod catalog;
 mod package;
 mod recovery;
+mod repair_journal;
 mod verification;
 
 pub use activation::{VerifiedToolProcess, activate_installed_tool};

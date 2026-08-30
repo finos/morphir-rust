@@ -262,7 +262,7 @@ fn restore_file(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
 
 pub(crate) fn remove_file(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => sync_parent_directory(path),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(DistributionError::Io {
             path: path.to_path_buf(),
@@ -328,6 +328,28 @@ pub(crate) fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
             path: path.to_path_buf(),
             source: error.error,
         })?;
+    sync_parent_directory(path)
+}
+
+pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
+    let parent = path.parent().expect("durable path has a parent");
+    sync_directory(parent)
+}
+
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> Result<()> {
+    File::open(directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|source| DistributionError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> Result<()> {
+    // Windows does not expose a portable directory-sync operation through std.
+    // Atomic replacement still flushes the staged file before the rename.
     Ok(())
 }
 

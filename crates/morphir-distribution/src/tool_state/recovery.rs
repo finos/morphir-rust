@@ -36,6 +36,40 @@ impl<'home> ToolRepairer<'home> {
     ///
     /// The installed catalog and lock remain unchanged. The old bytes are quarantined until
     /// the replacement has been materialized and verified, then restored if any step fails.
+    ///
+    /// ```no_run
+    /// use morphir_common::home::MorphirHome;
+    /// use morphir_distribution::{
+    ///     Platform, Selection, ToolId, ToolRepairer, TrustedToolRepository,
+    ///     list_installed_tools,
+    /// };
+    /// use semver::Version;
+    ///
+    /// # async fn repair_desktop(
+    /// #     home: &MorphirHome,
+    /// #     repository: &TrustedToolRepository,
+    /// # ) -> Result<(), Box<dyn std::error::Error>> {
+    /// let id = ToolId::parse("desktop")?;
+    /// let installed = list_installed_tools(home)?
+    ///     .into_iter()
+    ///     .find(|entry| entry.active().tool_id() == &id)
+    ///     .ok_or("desktop is not installed")?;
+    /// let version = installed.active().version().clone();
+    /// let resolved = repository
+    ///     .resolve(
+    ///         &id,
+    ///         &Selection::Exact(version.clone()),
+    ///         &Platform::current(),
+    ///         &Version::parse("0.4.0")?,
+    ///     )
+    ///     .await?;
+    /// let staging = home.temp_dir().join("desktop-repair");
+    /// let downloaded = repository.download(&resolved, &staging).await?;
+    /// let repaired = ToolRepairer::new(home).repair(&id, resolved, downloaded)?;
+    /// assert_eq!(repaired.version(), &version);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(
         name = "morphir.tool.repair",
         skip(self, resolved, downloaded),

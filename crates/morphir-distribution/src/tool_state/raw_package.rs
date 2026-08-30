@@ -2,7 +2,7 @@
 
 use super::package::{
     ToolPackageFile, VerifiedToolPackage, home_relative, package_from_resolved, portable_filename,
-    verify_relative_package,
+    verified_package_namespace, verify_relative_package,
 };
 use super::package_key::extracted_package_path;
 use super::verification::verify_one_file;
@@ -44,19 +44,18 @@ pub(super) fn prepare(
     verify_one_file(stored.path(), resolved.digest(), resolved.length(), false)?;
 
     let digest_directory = home.tools_store_dir().join(resolved.digest().to_string());
-    let destination = extracted_package_path(&digest_directory, resolved.artifact());
-    let package_directory = destination
-        .parent()
-        .expect("tool package destination has a parent");
-    fs::create_dir_all(package_directory).map_err(|source| DistributionError::Io {
-        path: package_directory.to_path_buf(),
-        source,
-    })?;
+    let requested_destination = extracted_package_path(&digest_directory, resolved.artifact());
+    let destination_name = requested_destination
+        .file_name()
+        .expect("tool package destination has a filename")
+        .to_owned();
+    let package_directory = verified_package_namespace(home, &digest_directory)?;
+    let destination = package_directory.join(destination_name);
     let staging = tempfile::Builder::new()
         .prefix(".package-")
-        .tempdir_in(package_directory)
+        .tempdir_in(&package_directory)
         .map_err(|source| DistributionError::Io {
-            path: package_directory.to_path_buf(),
+            path: package_directory.clone(),
             source,
         })?;
     let staging_root = staging.path().join("root");

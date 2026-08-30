@@ -125,19 +125,18 @@ impl<'home> ToolPackageStore<'home> {
             .home
             .tools_store_dir()
             .join(resolved.digest().to_string());
-        let destination = extracted_package_path(&digest_directory, resolved.artifact());
-        let package_directory = destination
-            .parent()
-            .expect("tool package destination has a parent");
-        fs::create_dir_all(package_directory).map_err(|source| DistributionError::Io {
-            path: package_directory.to_path_buf(),
-            source,
-        })?;
+        let requested_destination = extracted_package_path(&digest_directory, resolved.artifact());
+        let destination_name = requested_destination
+            .file_name()
+            .expect("tool package destination has a filename")
+            .to_owned();
+        let package_directory = verified_package_namespace(self.home, &digest_directory)?;
+        let destination = package_directory.join(destination_name);
         let staging = tempfile::Builder::new()
             .prefix(".package-")
-            .tempdir_in(package_directory)
+            .tempdir_in(&package_directory)
             .map_err(|source| DistributionError::Io {
-                path: package_directory.to_path_buf(),
+                path: package_directory.clone(),
                 source,
             })?;
         let staging_root = staging.path().join("root");
@@ -237,19 +236,18 @@ impl<'home> ToolPackageStore<'home> {
             .home
             .tools_store_dir()
             .join(resolved.digest().to_string());
-        let destination = extracted_package_path(&digest_directory, resolved.artifact());
-        let package_directory = destination
-            .parent()
-            .expect("tool package destination has a parent");
-        fs::create_dir_all(package_directory).map_err(|source| DistributionError::Io {
-            path: package_directory.to_path_buf(),
-            source,
-        })?;
+        let requested_destination = extracted_package_path(&digest_directory, resolved.artifact());
+        let destination_name = requested_destination
+            .file_name()
+            .expect("tool package destination has a filename")
+            .to_owned();
+        let package_directory = verified_package_namespace(self.home, &digest_directory)?;
+        let destination = package_directory.join(destination_name);
         let staging = tempfile::Builder::new()
             .prefix(".package-")
-            .tempdir_in(package_directory)
+            .tempdir_in(&package_directory)
             .map_err(|source| DistributionError::Io {
-                path: package_directory.to_path_buf(),
+                path: package_directory.clone(),
                 source,
             })?;
         let staging_root = staging.path().join("root");
@@ -348,6 +346,73 @@ pub(super) fn portable_filename(path: &Path) -> Result<&str> {
             value: path.to_string_lossy().into_owned(),
             reason: "expected one portable UTF-8 filename",
         })
+}
+
+pub(super) fn verified_package_namespace(
+    home: &MorphirHome,
+    digest_directory: &Path,
+) -> Result<PathBuf> {
+    let canonical_store =
+        fs::canonicalize(home.tools_store_dir()).map_err(|source| DistributionError::Io {
+            path: home.tools_store_dir(),
+            source,
+        })?;
+    let canonical_digest =
+        fs::canonicalize(digest_directory).map_err(|source| DistributionError::Io {
+            path: digest_directory.to_path_buf(),
+            source,
+        })?;
+    if !canonical_digest.starts_with(&canonical_store) {
+        return Err(DistributionError::InstalledPathEscape {
+            path: canonical_digest,
+            root: canonical_store,
+        });
+    }
+
+    let namespace = canonical_digest.join("packages");
+    match fs::create_dir(&namespace) {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(source) => {
+            return Err(DistributionError::Io {
+                path: namespace,
+                source,
+            });
+        }
+    }
+    let metadata = fs::symlink_metadata(&namespace).map_err(|source| DistributionError::Io {
+        path: namespace.clone(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() {
+        let path = fs::canonicalize(&namespace).unwrap_or_else(|_| namespace.clone());
+        return Err(DistributionError::InstalledPathEscape {
+            path,
+            root: canonical_digest,
+        });
+    }
+    if !metadata.is_dir() {
+        return Err(DistributionError::Io {
+            path: namespace,
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "tool package namespace is not a directory",
+            ),
+        });
+    }
+
+    let canonical_namespace =
+        fs::canonicalize(&namespace).map_err(|source| DistributionError::Io {
+            path: namespace,
+            source,
+        })?;
+    if !canonical_namespace.starts_with(&canonical_digest) {
+        return Err(DistributionError::InstalledPathEscape {
+            path: canonical_namespace,
+            root: canonical_digest,
+        });
+    }
+    Ok(canonical_namespace)
 }
 
 pub(super) fn home_relative(home: &MorphirHome, path: &Path) -> Result<RelativeArtifactPath> {

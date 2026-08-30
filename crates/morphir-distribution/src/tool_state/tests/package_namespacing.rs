@@ -108,6 +108,56 @@ fn cached_archive_reuse_rejects_a_missing_declared_directory() {
     ));
 }
 
+#[test]
+fn symlinked_package_namespace_is_rejected_before_staging() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let download = root.path().join("bundle.zip");
+    write_zip(&download, &[("desktop.exe", b"desktop")]);
+    let bytes = fs::read(&download).unwrap();
+    let digest = Sha256Digest::of_bytes(&bytes);
+    let digest_directory = home.tools_store_dir().join(digest.to_string());
+    let outside = root.path().join("outside");
+    fs::create_dir_all(&digest_directory).unwrap();
+    fs::create_dir(&outside).unwrap();
+    if !symlink_directory(&outside, &digest_directory.join("packages")) {
+        return;
+    }
+
+    let error = ToolPackageStore::new(&home)
+        .prepare(
+            crate::ResolvedTrustedToolArtifact::test_fixture(
+                zip_release("desktop", "Morphir Desktop", "desktop.exe"),
+                Selection::Channel(Channel::Stable),
+                digest,
+                bytes.len() as u64,
+            ),
+            crate::DownloadedToolArtifact::test_fixture(download),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::DistributionError::InstalledPathEscape { .. }
+    ));
+    assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+fn symlink_directory(target: &std::path::Path, link: &std::path::Path) -> bool {
+    std::os::unix::fs::symlink(target, link).unwrap();
+    true
+}
+
+#[cfg(windows)]
+fn symlink_directory(target: &std::path::Path, link: &std::path::Path) -> bool {
+    match std::os::windows::fs::symlink_dir(target, link) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
+        Err(error) => panic!("failed to create package-namespace symlink: {error}"),
+    }
+}
+
 fn raw_release(id: &str, name: &str, filename: &str) -> ToolReleaseRecord {
     serde_json::from_value(serde_json::json!({
         "schemaVersion": 1,

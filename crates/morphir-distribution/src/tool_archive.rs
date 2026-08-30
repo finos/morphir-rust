@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
+use unicode_normalization::UnicodeNormalization;
 
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 const MAX_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -283,7 +284,12 @@ impl PortableArchivePaths {
                 prefix.push('/');
             }
             prefix.push_str(component);
-            let folded = prefix.to_lowercase();
+            let folded = prefix
+                .nfc()
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+                .nfc()
+                .collect::<String>();
             match self.component_spellings.get(&folded) {
                 Some(existing) if existing != &prefix => return false,
                 Some(_) => {}

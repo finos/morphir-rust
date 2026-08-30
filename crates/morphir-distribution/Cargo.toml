@@ -26,5 +26,6 @@ tar = "0.4"
 thiserror = { workspace = true }
 tough = "0.24"
 tracing = "0.1"
+unicode-normalization = { workspace = true }
 url = "2.5.8"
 zip = "8.0"

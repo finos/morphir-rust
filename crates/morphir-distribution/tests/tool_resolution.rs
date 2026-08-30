@@ -105,6 +105,32 @@ fn tool_release_descriptors_reject_impossible_raw_launch_paths() {
 }
 
 #[test]
+fn tool_release_descriptors_restrict_appimages_to_linux() {
+    let descriptor = serde_json::json!({
+        "schemaVersion": 1,
+        "kind": "morphir-tool-release",
+        "tool": { "id": "desktop", "name": "Morphir Desktop" },
+        "version": "1.0.0",
+        "channels": ["stable"],
+        "status": "active",
+        "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+        "artifacts": [{
+            "targetPath": "artifacts/desktop/1.0.0/desktop.AppImage",
+            "platform": { "os": "windows", "arch": "x86_64" },
+            "archive": { "format": "appimage", "entryPoint": "desktop.AppImage" },
+            "launch": { "kind": "executable", "path": "desktop.AppImage", "args": [] }
+        }]
+    });
+
+    let error = serde_json::from_value::<ToolReleaseRecord>(descriptor).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("AppImage artifacts require Linux")
+    );
+}
+
+#[test]
 fn tool_channels_and_exact_versions_resolve_deterministically() {
     let releases = vec![
         a_tool_release("1.0.0", &["stable"], "active", ">=0.4.0, <0.5.0"),

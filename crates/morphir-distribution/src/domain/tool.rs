@@ -274,6 +274,13 @@ impl<'de> Deserialize<'de> for ToolReleaseRecord {
             ));
         }
         if wire.artifacts.iter().any(|artifact| {
+            artifact.archive.format == ArchiveFormat::Appimage && artifact.platform.os() != "linux"
+        }) {
+            return Err(serde::de::Error::custom(
+                "AppImage artifacts require Linux platforms",
+            ));
+        }
+        if wire.artifacts.iter().any(|artifact| {
             matches!(
                 artifact.archive.format,
                 ArchiveFormat::Raw | ArchiveFormat::Appimage

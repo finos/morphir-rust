@@ -30,7 +30,7 @@ mod planner;
 
 pub use executor::{
     CacheExecutionDisposition, CacheExecutionError, CacheExecutionItem, CacheExecutionLimits,
-    CacheExecutionReport, execute_cache_cleanup,
+    CacheExecutionReport, CacheMutationGuard, execute_cache_cleanup,
 };
 pub use inventory::{
     CacheInventoryError, CacheInventoryLimits, CacheNamespace, CacheRegistrationError,

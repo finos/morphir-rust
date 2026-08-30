@@ -1,6 +1,7 @@
 mod filesystem;
 mod revalidation;
 
+pub use self::filesystem::CacheMutationGuard;
 use self::filesystem::{
     MaintenanceGuard, RemovalOutcome, RemovalTarget, TrashRun, create_trash_run,
     open_maintenance_trash, remove_revalidated_entry, sweep_existing_trash,
@@ -194,6 +195,8 @@ impl CacheExecutionError {
 /// or unsafe paths, and moves removals beneath Morphir Home's maintenance trash
 /// before deleting them. The per-run limits make the same operation suitable
 /// for manual and opportunistic automatic cleanup.
+/// Cache producers must hold [`CacheMutationGuard`] for the full lifetime of
+/// any open handle that can mutate a registered cache namespace.
 ///
 /// # Example
 ///

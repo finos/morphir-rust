@@ -1,6 +1,7 @@
 use morphir_common::cache_maintenance::{
     CacheEntry, CacheExecutionDisposition, CacheExecutionLimits, CacheInventoryLimits,
-    CacheNamespace, CachePolicy, CleanupMode, execute_cache_cleanup, plan_cache_cleanup,
+    CacheMutationGuard, CacheNamespace, CachePolicy, CleanupMode, execute_cache_cleanup,
+    plan_cache_cleanup,
 };
 use morphir_common::home::MorphirHome;
 use std::time::Duration;
@@ -281,6 +282,36 @@ fn execution_refuses_a_link_like_maintenance_lock() {
     .unwrap_err();
 
     assert!(error.to_string().contains("unsafe maintenance path"));
+}
+
+#[test]
+fn cache_mutation_leases_block_cleanup_through_deletion() {
+    let (_root, home) = a_morphir_home();
+    let mutation = CacheMutationGuard::acquire(&home).unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    let cleanup_home = home.clone();
+    let cleanup = std::thread::spawn(move || {
+        let result = execute_cache_cleanup(
+            &cleanup_home,
+            &a_policy_plan(Vec::new()),
+            &[],
+            CacheInventoryLimits::default(),
+            CacheExecutionLimits::new(1, 1).unwrap(),
+        );
+        sent.send(result).unwrap();
+    });
+
+    assert!(
+        received
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err()
+    );
+    drop(mutation);
+    received
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    cleanup.join().unwrap();
 }
 
 #[test]

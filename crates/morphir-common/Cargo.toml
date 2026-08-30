@@ -29,6 +29,7 @@ indexmap = { version = "2", features = ["serde"] }
 nbformat = "~1.2"
 uuid = { version = "1.0", features = ["v4"] }
 vfs = { workspace = true }
+unicode-casefold = { workspace = true }
 
 # Remote source support
 reqwest = { version = "0.13", default-features = false, features = [
@@ -48,4 +49,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[test]]
 name = "streaming_migration_acceptance"
+harness = false
+
+[[test]]
+name = "cache_maintenance_inventory_acceptance"
 harness = false

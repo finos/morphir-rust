@@ -1,3 +1,9 @@
+mod identity;
+mod registration;
+
+pub use registration::{CacheNamespace, CacheRegistrationError};
+
+use self::identity::portable_identity;
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
 use cap_fs_ext::DirExt;
@@ -5,93 +11,12 @@ use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt;
 use cap_std::fs::{Dir, DirEntry, Metadata};
-use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 const DEFAULT_MAX_INVENTORY_ENTRIES: usize = 100_000;
 const DEFAULT_MAX_INVENTORY_DEPTH: usize = 64;
-
-/// Invalid ownership metadata supplied by a cache namespace.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum CacheRegistrationError {
-    /// Namespace or entry identity violates the portable grammar.
-    #[error(transparent)]
-    InvalidIdentity(#[from] CacheModelError),
-    /// Registered entries may not duplicate or contain one another.
-    #[error("cache entries overlap: {first} and {second}")]
-    OverlappingEntries {
-        /// First registered portable path.
-        first: String,
-        /// Second registered portable path.
-        second: String,
-    },
-}
-
-/// Trusted ownership declarations for one Morphir Home cache namespace.
-#[derive(Debug, Clone)]
-pub struct CacheNamespace {
-    name: String,
-    entries: BTreeMap<String, CacheEntry>,
-}
-
-impl CacheNamespace {
-    /// Register a namespace rooted at `<MORPHIR_HOME>/cache/<name>`.
-    pub fn new(name: impl Into<String>) -> Result<Self, CacheRegistrationError> {
-        let name = name.into();
-        CacheEntry::unclassified(name.clone(), "identity-probe", 0)?;
-        Ok(Self {
-            name,
-            entries: BTreeMap::new(),
-        })
-    }
-
-    /// Register one owned disposable entry and its last-use timestamp.
-    pub fn with_disposable(
-        mut self,
-        path: impl Into<String>,
-        last_used: u64,
-    ) -> Result<Self, CacheRegistrationError> {
-        let path = path.into();
-        let entry = CacheEntry::disposable(self.name.clone(), path.clone(), 0, last_used)?;
-        self.insert(path, entry)?;
-        Ok(self)
-    }
-
-    /// Register one owned entry currently protected by an active lease.
-    pub fn with_lease(
-        mut self,
-        path: impl Into<String>,
-        last_used: u64,
-    ) -> Result<Self, CacheRegistrationError> {
-        let path = path.into();
-        let entry = CacheEntry::leased(self.name.clone(), path.clone(), 0, last_used)?;
-        self.insert(path, entry)?;
-        Ok(self)
-    }
-
-    /// Stable namespace owner identifier.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn insert(&mut self, path: String, entry: CacheEntry) -> Result<(), CacheRegistrationError> {
-        if let Some(other) = self
-            .entries
-            .keys()
-            .find(|other| paths_overlap(other, &path))
-        {
-            return Err(CacheRegistrationError::OverlappingEntries {
-                first: other.clone(),
-                second: path,
-            });
-        }
-        self.entries.insert(path, entry);
-        Ok(())
-    }
-}
 
 /// Hard bounds for a single namespace inventory walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -441,59 +366,6 @@ struct MeasuredEntry {
     safe: bool,
 }
 
-fn paths_overlap(first: &str, second: &str) -> bool {
-    first == second
-        || first
-            .strip_prefix(second)
-            .is_some_and(|rest| rest.starts_with('/'))
-        || second
-            .strip_prefix(first)
-            .is_some_and(|rest| rest.starts_with('/'))
-}
-
-fn portable_identity(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(portable_component(value)),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn portable_component(value: &OsStr) -> String {
-    if let Some(value) = value.to_str() {
-        if super::model::valid_entry_path(value) {
-            return value.to_owned();
-        }
-        return value
-            .as_bytes()
-            .iter()
-            .map(|byte| format!("%{byte:02X}"))
-            .collect();
-    }
-    portable_non_unicode_component(value)
-}
-
-#[cfg(unix)]
-fn portable_non_unicode_component(value: &OsStr) -> String {
-    use std::os::unix::ffi::OsStrExt;
-    value
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("%{byte:02X}"))
-        .collect()
-}
-
-#[cfg(windows)]
-fn portable_non_unicode_component(value: &OsStr) -> String {
-    use std::os::windows::ffi::OsStrExt;
-    value
-        .encode_wide()
-        .map(|unit| format!("%u{unit:04X}"))
-        .collect()
-}
-
 fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {
     CacheInventoryError::Io {
         path: path.to_path_buf(),
@@ -511,32 +383,4 @@ fn is_link_like(metadata: &Metadata) -> bool {
 #[cfg(not(windows))]
 fn is_link_like(metadata: &Metadata) -> bool {
     metadata.file_type().is_symlink()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{CacheNamespace, CacheRegistrationError, paths_overlap, portable_component};
-    use std::ffi::OsStr;
-
-    #[test]
-    fn registration_rejects_duplicate_and_nested_ownership() {
-        let error = CacheNamespace::new("downloads")
-            .unwrap()
-            .with_disposable("packages/tool", 1)
-            .unwrap()
-            .with_disposable("packages/tool/nested", 2)
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            CacheRegistrationError::OverlappingEntries { .. }
-        ));
-        assert!(paths_overlap("a", "a/b"));
-        assert!(!paths_overlap("a", "ab"));
-    }
-
-    #[test]
-    fn nonportable_observed_separators_use_protected_identities() {
-        assert_eq!(portable_component(OsStr::new("a:b")), "%61%3A%62");
-        assert_eq!(portable_component(OsStr::new(r"a\b")), "%61%5C%62");
-    }
 }

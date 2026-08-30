@@ -361,6 +361,8 @@ fn valid_unclassified_path(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_UNCLASSIFIED_PATH_BYTES
         && !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.contains(':')
         && value.split('/').all(|segment| {
             (!segment.contains('%') && valid_entry_segment(segment))
                 || valid_escaped_segment(segment)
@@ -480,7 +482,7 @@ mod tests {
             CacheEntry::disposable("downloads", "%43%4F%4E", 1, 1),
             Err(CacheModelError::InvalidEntryPath)
         );
-        for malformed in ["%", "%4", "%GG", "name%20part"] {
+        for malformed in ["%", "%4", "%GG", "name%20part", "a:b", r"a\b", "C:/escape"] {
             assert_eq!(
                 CacheEntry::unclassified("downloads", malformed, 1),
                 Err(CacheModelError::InvalidEntryPath)

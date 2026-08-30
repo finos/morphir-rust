@@ -1251,6 +1251,32 @@ mod tests {
     }
 
     #[test]
+    fn backend_accepts_the_v4_ir_file_root_emitted_by_the_frontend() {
+        let (request, _compile_output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let compiled = GleamExtension
+            .compile(request)
+            .expect("compile valid Gleam document");
+        let output_dir = tempfile::tempdir().expect("create backend output directory");
+
+        let generated = GleamExtension
+            .generate(GenerateRequest {
+                ir: compiled.ir.expect("successful compile contains IR"),
+                options: [("outputDir".to_owned(), serde_json::json!(output_dir.path()))]
+                    .into_iter()
+                    .collect(),
+            })
+            .expect("return a typed generation result");
+
+        assert!(generated.success, "{:?}", generated.diagnostics);
+        assert_eq!(generated.artifacts.len(), 1);
+        assert!(generated.artifacts[0].content.contains("pub fn hello"));
+    }
+
+    #[test]
     fn malformed_document_returns_a_failed_result_at_its_uri() {
         let uri = "untitled:broken%20module.gleam";
         let (request, _output_dir) = compile_request(uri, "pub fn broken(", IR_VERSION);

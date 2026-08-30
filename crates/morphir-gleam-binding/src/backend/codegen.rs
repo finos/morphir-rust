@@ -1,7 +1,7 @@
 //! Gleam code generation from Morphir IR
 
 use morphir_common::vfs::{OsVfs, Vfs};
-use morphir_core::ir::v4::PackageDefinition;
+use morphir_core::ir::v4::{Distribution as MorphirDistribution, IRFile, PackageDefinition};
 use morphir_core::naming::ModuleName;
 use morphir_extension_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,20 @@ pub fn generate_gleam(
     ir: &serde_json::Value,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
+    if let Ok(ir_file) = serde_json::from_value::<IRFile>(ir.clone()) {
+        return match ir_file.distribution {
+            MorphirDistribution::Library(content) => {
+                generate_from_package_definition(content.def, options)
+            }
+            MorphirDistribution::Application(content) => {
+                generate_from_package_definition(content.def, options)
+            }
+            MorphirDistribution::Specs(_) => Err(ExtensionError::execution(
+                "Gleam generation requires a V4 Library or Application distribution",
+            )),
+        };
+    }
+
     // Try to parse as V4 PackageDefinition first
     if let Ok(package_def) = serde_json::from_value::<PackageDefinition>(ir.clone()) {
         return generate_from_package_definition(package_def, options);

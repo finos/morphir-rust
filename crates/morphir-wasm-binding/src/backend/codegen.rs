@@ -12,10 +12,9 @@ use wasm_encoder::{
 
 /// Morphir distribution IR (simplified)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Distribution {
-    #[serde(default)]
     pub name: String,
-    #[serde(default)]
     pub modules: Vec<ModuleIR>,
 }
 

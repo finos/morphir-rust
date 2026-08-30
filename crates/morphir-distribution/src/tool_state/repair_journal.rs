@@ -34,6 +34,24 @@ pub(super) struct RepairTransaction {
     journal: RepairJournal,
 }
 
+trait RepairCleanup {
+    fn discard_previous(&self, home: &MorphirHome, journal: &RepairJournal) -> Result<()>;
+
+    fn finish_journal(&self, home: &MorphirHome, id: &ToolId) -> Result<()>;
+}
+
+struct FilesystemRepairCleanup;
+
+impl RepairCleanup for FilesystemRepairCleanup {
+    fn discard_previous(&self, home: &MorphirHome, journal: &RepairJournal) -> Result<()> {
+        discard_previous(home, journal)
+    }
+
+    fn finish_journal(&self, home: &MorphirHome, id: &ToolId) -> Result<()> {
+        finish_journal(home, id)
+    }
+}
+
 pub(super) fn begin_repair(
     home: &MorphirHome,
     active: &InstalledTool,
@@ -60,13 +78,37 @@ pub(super) fn rollback_repair(home: &MorphirHome, transaction: &RepairTransactio
 }
 
 pub(super) fn commit_repair(home: &MorphirHome, transaction: RepairTransaction) -> Result<()> {
+    commit_repair_with_cleanup(home, transaction, &FilesystemRepairCleanup)
+}
+
+fn commit_repair_with_cleanup(
+    home: &MorphirHome,
+    transaction: RepairTransaction,
+    cleanup: &impl RepairCleanup,
+) -> Result<()> {
     let committed = RepairJournal {
         phase: RepairPhase::Committed,
         ..transaction.journal
     };
     atomic_write_json(&repair_journal_path(home, &committed.tool_id), &committed)?;
-    discard_previous(home, &committed)?;
-    finish_journal(home, &committed.tool_id)
+    if let Err(error) = cleanup.discard_previous(home, &committed) {
+        tracing::warn!(
+            tool_id = %committed.tool_id,
+            digest = %committed.digest,
+            error = %error,
+            "tool repair committed; quarantine cleanup deferred"
+        );
+        return Ok(());
+    }
+    if let Err(error) = cleanup.finish_journal(home, &committed.tool_id) {
+        tracing::warn!(
+            tool_id = %committed.tool_id,
+            digest = %committed.digest,
+            error = %error,
+            "tool repair committed; journal cleanup deferred"
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn recover_tool_repairs(home: &MorphirHome) -> Result<()> {
@@ -202,4 +244,88 @@ fn remove_entry(path: &Path) -> Result<()> {
         source,
     })?;
     sync_parent_directory(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    enum CleanupFailure {
+        Quarantine,
+        Journal,
+    }
+
+    struct FailingCleanup(CleanupFailure);
+
+    impl RepairCleanup for FailingCleanup {
+        fn discard_previous(&self, home: &MorphirHome, journal: &RepairJournal) -> Result<()> {
+            if matches!(self.0, CleanupFailure::Quarantine) {
+                return Err(injected_cleanup_error(quarantined_digest_path(
+                    home,
+                    &journal.tool_id,
+                    &journal.digest,
+                )));
+            }
+            discard_previous(home, journal)
+        }
+
+        fn finish_journal(&self, home: &MorphirHome, id: &ToolId) -> Result<()> {
+            if matches!(self.0, CleanupFailure::Journal) {
+                return Err(injected_cleanup_error(repair_journal_path(home, id)));
+            }
+            finish_journal(home, id)
+        }
+    }
+
+    #[test]
+    fn committed_repair_defers_quarantine_cleanup_failure() {
+        assert_committed_cleanup_is_recovered(CleanupFailure::Quarantine);
+    }
+
+    #[test]
+    fn committed_repair_defers_journal_cleanup_failure() {
+        assert_committed_cleanup_is_recovered(CleanupFailure::Journal);
+    }
+
+    fn assert_committed_cleanup_is_recovered(failure: CleanupFailure) {
+        let root = tempfile::tempdir().unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        let id = ToolId::parse("desktop").unwrap();
+        let digest = Sha256Digest::of_bytes(b"desktop");
+        let live = digest_path(&home, &digest);
+        let quarantine = quarantined_digest_path(&home, &id, &digest);
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("replacement"), b"replacement").unwrap();
+        fs::create_dir_all(&quarantine).unwrap();
+        fs::write(quarantine.join("previous"), b"previous").unwrap();
+        let transaction = RepairTransaction {
+            journal: RepairJournal {
+                schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+                tool_id: id.clone(),
+                digest,
+                had_previous: true,
+                phase: RepairPhase::Prepared,
+            },
+        };
+
+        commit_repair_with_cleanup(&home, transaction, &FailingCleanup(failure)).unwrap();
+
+        let journal_path = repair_journal_path(&home, &id);
+        let journal: RepairJournal = read_json(&journal_path).unwrap();
+        assert_eq!(journal.phase, RepairPhase::Committed);
+        assert!(live.join("replacement").exists());
+        recover_tool_repairs(&home).unwrap();
+        assert!(live.join("replacement").exists());
+        assert!(!quarantine.exists());
+        assert!(!journal_path.exists());
+    }
+
+    fn injected_cleanup_error(path: PathBuf) -> DistributionError {
+        DistributionError::Io {
+            path,
+            source: io::Error::other("injected committed repair cleanup failure"),
+        }
+    }
 }

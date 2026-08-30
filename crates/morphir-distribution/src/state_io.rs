@@ -17,6 +17,7 @@ struct StatePairJournal {
     next_catalog: Option<Vec<u8>>,
 }
 
+#[derive(Debug)]
 pub(crate) struct StateGuard {
     file: File,
 }

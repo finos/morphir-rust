@@ -8,7 +8,40 @@ use crate::{Channel, RelativeArtifactPath, Selection, Sha256Digest, ToolId};
 use morphir_common::home::MorphirHome;
 use semver::Version;
 use std::fs;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use support::*;
+
+#[test]
+fn verified_launch_contract_holds_state_guard_until_released() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let tool_id = ToolId::parse("desktop").unwrap();
+    ToolInstaller::new(&home)
+        .install(package(&home, "1.0.0", b"desktop-v1"))
+        .unwrap();
+    let launch = activate_installed_tool(&home, &tool_id).unwrap();
+
+    let competing_home = home.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (acquired_tx, acquired_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let _guard = super::catalog::tool_state_guard(&competing_home).unwrap();
+        acquired_tx.send(()).unwrap();
+    });
+    started_rx.recv().unwrap();
+
+    assert!(
+        acquired_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
+    drop(launch);
+    acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    waiter.join().unwrap();
+}
 
 #[test]
 fn verified_tool_install_activates_offline_and_retains_rollback_release() {
@@ -21,6 +54,7 @@ fn verified_tool_install_activates_offline_and_retains_rollback_release() {
     let launch = activate_installed_tool(&home, &tool_id).unwrap();
     assert_eq!(fs::read(launch.program()).unwrap(), b"desktop-v1");
     assert_eq!(launch.version(), &Version::parse("1.0.0").unwrap());
+    drop(launch);
 
     let second = package(&home, "2.0.0", b"desktop-v2");
     ToolInstaller::new(&home).install(second).unwrap();
@@ -95,6 +129,7 @@ fn authenticated_raw_download_is_reverified_and_published_before_activation() {
         b"untrusted",
     )
     .unwrap();
+    drop(launch);
     assert!(matches!(
         activate_installed_tool(&home, &id).unwrap_err(),
         crate::DistributionError::InvalidToolManifest { .. }
@@ -133,18 +168,19 @@ fn authenticated_zip_is_atomically_expanded_and_every_file_is_reverified_offline
     assert_eq!(fs::read(launch.program()).unwrap(), b"signed-desktop");
 
     let unexpected = launch.program().parent().unwrap().join("unexpected.dll");
+    let support_file = launch
+        .program()
+        .parent()
+        .unwrap()
+        .join("resources/config.json");
     fs::write(&unexpected, b"unmanifested").unwrap();
+    drop(launch);
     assert!(matches!(
         activate_installed_tool(&home, &id).unwrap_err(),
         crate::DistributionError::InvalidToolManifest { .. }
     ));
     fs::remove_file(unexpected).unwrap();
 
-    let support_file = launch
-        .program()
-        .parent()
-        .unwrap()
-        .join("resources/config.json");
     fs::write(support_file, b"tampered").unwrap();
     assert!(matches!(
         activate_installed_tool(&home, &id).unwrap_err(),
@@ -367,6 +403,7 @@ fn exact_release_repair_replaces_corrupt_bytes_without_changing_selection() {
         .unwrap();
     let launch = activate_installed_tool(&home, &id).unwrap();
     fs::write(launch.program(), b"corrupt").unwrap();
+    drop(launch);
     let (resolved, downloaded) = raw_download(root.path(), "1.0.0", b"desktop-v1");
 
     let repaired = ToolRepairer::new(&home)
@@ -454,6 +491,7 @@ fn mismatched_repair_candidate_restores_quarantined_active_bytes_and_state() {
         .unwrap();
     let launch = activate_installed_tool(&home, &id).unwrap();
     fs::write(launch.program(), b"corrupt").unwrap();
+    drop(launch);
     let catalog_before = fs::read(home.tools_catalog_file()).unwrap();
     let lock_before = fs::read(home.tools_locks_dir().join("desktop.json")).unwrap();
     let (resolved, downloaded) = raw_download(root.path(), "2.0.0", b"desktop-v2");

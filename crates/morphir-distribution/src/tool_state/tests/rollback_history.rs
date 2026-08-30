@@ -1,9 +1,31 @@
-use super::super::{ToolInstaller, rollback_tool};
+use super::super::{ToolInstaller, list_installed_tools, rollback_tool};
 use super::support::package;
 use crate::{Selection, ToolId};
 use morphir_common::home::MorphirHome;
 use semver::Version;
 use std::fs;
+
+#[test]
+fn upgrades_retain_only_the_configured_rollback_release() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    for (version, bytes) in [
+        ("1.0.0", b"desktop-v1".as_slice()),
+        ("2.0.0", b"desktop-v2".as_slice()),
+        ("3.0.0", b"desktop-v3".as_slice()),
+    ] {
+        ToolInstaller::new(&home)
+            .install(package(&home, version, bytes))
+            .unwrap();
+    }
+
+    let installed = list_installed_tools(&home).unwrap();
+    assert_eq!(installed[0].rollback().len(), 1);
+    assert_eq!(
+        installed[0].rollback()[0].version(),
+        &Version::parse("2.0.0").unwrap()
+    );
+}
 
 #[test]
 fn reinstalling_the_active_release_does_not_add_it_to_rollback_history() {

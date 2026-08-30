@@ -213,8 +213,9 @@ fn identical_archives_with_distinct_entry_points_have_distinct_packages() {
     ToolInstaller::new(&home).install(second).unwrap();
 
     let first = activate_installed_tool(&home, &ToolId::parse("first").unwrap()).unwrap();
-    let second = activate_installed_tool(&home, &ToolId::parse("second").unwrap()).unwrap();
     assert_eq!(fs::read(first.program()).unwrap(), b"first");
+    drop(first);
+    let second = activate_installed_tool(&home, &ToolId::parse("second").unwrap()).unwrap();
     assert_eq!(fs::read(second.program()).unwrap(), b"second");
 }
 

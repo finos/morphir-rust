@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 const TOOL_LOCK_SCHEMA_VERSION: u32 = 1;
 pub(super) const TOOL_CATALOG_SCHEMA_VERSION: u32 = 1;
+const MAX_ROLLBACK_RELEASES: usize = 1;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -338,6 +339,7 @@ fn next_rollback(previous: Option<ToolCatalogEntry>, active: &InstalledTool) -> 
             candidate.version != active.version || candidate.digest != active.digest
         })
         .filter(|candidate| seen.insert((candidate.version.clone(), candidate.digest.clone())))
+        .take(MAX_ROLLBACK_RELEASES)
         .collect()
 }
 

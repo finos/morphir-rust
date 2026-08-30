@@ -1,7 +1,9 @@
 use super::super::package::{ToolPackageFile, VerifiedToolPackage};
+use super::super::package_key::package_path;
 use crate::state_io::{StateWriter, atomic_write_bytes};
 use crate::{
-    Channel, Platform, RelativeArtifactPath, Selection, Sha256Digest, ToolId, ToolReleaseStatus,
+    ArchiveFormat, Channel, Platform, RelativeArtifactPath, Selection, Sha256Digest, ToolId,
+    ToolReleaseStatus,
 };
 use morphir_common::home::MorphirHome;
 use semver::Version;
@@ -46,9 +48,10 @@ pub(super) fn package_for(
     bytes: &[u8],
 ) -> VerifiedToolPackage {
     let digest = Sha256Digest::of_bytes(bytes);
-    let relative =
-        RelativeArtifactPath::parse(format!("store/tools/sha256/{digest}/{filename}")).unwrap();
-    let path = home.root().join(relative.as_path());
+    let digest_directory = home.tools_store_dir().join(digest.to_string());
+    let entry_point = RelativeArtifactPath::parse(filename).unwrap();
+    let package_directory = package_path(&digest_directory, ArchiveFormat::Raw, &entry_point);
+    let path = package_directory.join(filename);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, bytes).unwrap();
     #[cfg(unix)]
@@ -56,6 +59,12 @@ pub(super) fn package_for(
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
+    let package_root = RelativeArtifactPath::from_native_path(
+        package_directory.strip_prefix(home.root()).unwrap(),
+    )
+    .unwrap();
+    let relative =
+        RelativeArtifactPath::from_native_path(path.strip_prefix(home.root()).unwrap()).unwrap();
     let file = ToolPackageFile {
         path: relative.clone(),
         digest: digest.clone(),
@@ -75,7 +84,7 @@ pub(super) fn package_for(
         target_path: RelativeArtifactPath::parse(format!("artifacts/{id}/{version}/{filename}"))
             .unwrap(),
         store_path: relative,
-        package_root: None,
+        package_root: Some(package_root),
         args: vec!["--morphir-home".to_owned()],
         files: vec![file],
     }

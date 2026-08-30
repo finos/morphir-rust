@@ -4,6 +4,7 @@ mod activation;
 mod catalog;
 mod package;
 mod package_key;
+mod raw_package;
 mod recovery;
 mod repair_journal;
 mod verification;

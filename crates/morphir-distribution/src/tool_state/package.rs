@@ -81,7 +81,7 @@ impl<'home> ToolPackageStore<'home> {
         let format = resolved.artifact().archive().format();
         let package = match format {
             ArchiveFormat::Raw | ArchiveFormat::Appimage => {
-                self.prepare_raw(resolved, downloaded.into_path())
+                super::raw_package::prepare(self.home, resolved, downloaded)
             }
             ArchiveFormat::Zip => self.prepare_zip(resolved, downloaded.into_path()),
             ArchiveFormat::TarGzip => self.prepare_tar_gzip(resolved, downloaded.into_path()),
@@ -92,54 +92,6 @@ impl<'home> ToolPackageStore<'home> {
             "verified tool package prepared"
         );
         Ok(package)
-    }
-
-    fn prepare_raw(
-        &self,
-        resolved: ResolvedTrustedToolArtifact,
-        downloaded: PathBuf,
-    ) -> Result<VerifiedToolPackage> {
-        let source_root = downloaded
-            .parent()
-            .expect("downloaded TUF target has a parent");
-        let source_name = portable_filename(&downloaded)?;
-        let filename = ArtifactFilename::parse(source_name)?;
-        let source = RelativeArtifactPath::parse(source_name)?;
-        let entry_point = resolved.artifact().launch().path();
-        if entry_point.as_str() != source_name {
-            return Err(DistributionError::ToolEntryPointMismatch {
-                target: source_name.to_owned(),
-                entry_point: entry_point.as_str().to_owned(),
-            });
-        }
-        let stored = ArtifactStore::for_tools(self.home).materialize_file(
-            source_root,
-            &source,
-            resolved.digest(),
-            &filename,
-            true,
-        )?;
-        let actual_length = fs::metadata(stored.path())
-            .map_err(|source| DistributionError::Io {
-                path: stored.path().to_path_buf(),
-                source,
-            })?
-            .len();
-        if actual_length != resolved.length() {
-            return Err(DistributionError::ToolLengthMismatch {
-                path: stored.path().to_path_buf(),
-                expected: resolved.length(),
-                actual: actual_length,
-            });
-        }
-        let store_path = RelativeArtifactPath::from_native_path(stored.store_path())?;
-        let files = vec![ToolPackageFile {
-            path: store_path.clone(),
-            digest: resolved.digest().clone(),
-            length: resolved.length(),
-            executable: true,
-        }];
-        Ok(package_from_resolved(resolved, store_path, None, files))
     }
 
     fn prepare_zip(
@@ -330,7 +282,7 @@ impl<'home> ToolPackageStore<'home> {
     }
 }
 
-fn package_from_resolved(
+pub(super) fn package_from_resolved(
     resolved: ResolvedTrustedToolArtifact,
     store_path: RelativeArtifactPath,
     package_root: Option<RelativeArtifactPath>,
@@ -354,7 +306,7 @@ fn package_from_resolved(
     }
 }
 
-fn portable_filename(path: &Path) -> Result<&str> {
+pub(super) fn portable_filename(path: &Path) -> Result<&str> {
     path.file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| DistributionError::InvalidValue {
@@ -364,7 +316,7 @@ fn portable_filename(path: &Path) -> Result<&str> {
         })
 }
 
-fn home_relative(home: &MorphirHome, path: &Path) -> Result<RelativeArtifactPath> {
+pub(super) fn home_relative(home: &MorphirHome, path: &Path) -> Result<RelativeArtifactPath> {
     let canonical_home = fs::canonicalize(home.root()).map_err(|source| DistributionError::Io {
         path: home.root().to_path_buf(),
         source,
@@ -491,7 +443,7 @@ fn extract_zip(
     Ok(files)
 }
 
-fn verify_relative_files(root: &Path, files: &[ToolPackageFile]) -> Result<()> {
+pub(super) fn verify_relative_files(root: &Path, files: &[ToolPackageFile]) -> Result<()> {
     for file in files {
         let path = root.join(file.path.as_path());
         verify_one_file(&path, &file.digest, file.length, file.executable)?;

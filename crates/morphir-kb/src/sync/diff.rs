@@ -230,8 +230,12 @@ fn ensure_parent(p: &Path) -> Result<&Path> {
 /// One `git diff --no-index` invocation, with the two paths always behind `--`
 /// so a name beginning with a dash cannot be read as an option.
 ///
-/// `diff.noprefix` and `diff.mnemonicPrefix` are pinned off: a user's global
-/// config must not decide whether the patch we hand back is applicable.
+/// `diff.noprefix`, `diff.mnemonicPrefix` and `core.autocrlf` are pinned off: a
+/// user's global config must not decide whether the patch we hand back is
+/// applicable. `core.autocrlf` is the one that bites hardest, because it is on
+/// by default on Windows and changes the blob hashes a binary patch records as
+/// its preimage, so an unpinned patch fails `git apply` on the very repository
+/// it was generated from.
 fn git_diff(cwd: Option<&Path>, opts: &[&str], old: &OsStr, new: &OsStr) -> Result<String> {
     let mut cmd = std::process::Command::new("git");
     if let Some(dir) = cwd {
@@ -242,6 +246,10 @@ fn git_diff(cwd: Option<&Path>, opts: &[&str], old: &OsStr, new: &OsStr) -> Resu
         .arg("diff.noprefix=false")
         .arg("-c")
         .arg("diff.mnemonicPrefix=false")
+        .arg("-c")
+        .arg("core.autocrlf=false")
+        .arg("-c")
+        .arg("core.eol=lf")
         .arg("diff")
         .arg("--no-index")
         .args(opts)
@@ -250,23 +258,26 @@ fn git_diff(cwd: Option<&Path>, opts: &[&str], old: &OsStr, new: &OsStr) -> Resu
         .arg(new)
         .output()
         .map_err(|_| Error::msg("git diff failed — is git on PATH?"))?;
-    // `--no-index` exits 1 to say "the two files differ", which is the ordinary
-    // outcome here, so the exit status cannot tell that apart from a real
-    // failure — checking `status.success()` would reject every diff that found
-    // something. Where the words come out can tell them apart: git writes the
-    // diff to stdout and its complaints to stderr, so nothing on stdout
-    // together with something on stderr is a failure. Dropping both, as this
-    // used to, turned each such failure into an empty diff, and an empty diff
-    // reads as "identical".
+    // `--no-index` exits 0 when the two files match and 1 when they differ, so
+    // `status.success()` alone would reject every diff that found something.
+    // Anything above 1 is a real failure. Dropping the status entirely, as this
+    // used to, turned each failure into an empty diff, and an empty diff reads
+    // as "identical".
+    //
+    // The discriminator has to be the exit code rather than stderr: git writes
+    // advisory warnings there even on success, so treating any stderr output as
+    // failure misreads them. On Windows with `core.autocrlf` enabled, comparing
+    // two identical LF files emits "LF will be replaced by CRLF" and nothing on
+    // stdout, which is exactly the shape a stderr-based check calls an error.
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stdout.is_empty() && !stderr.trim().is_empty() {
-        return Err(Error::msg(format!(
+    match out.status.code() {
+        Some(0 | 1) => Ok(stdout),
+        _ => Err(Error::msg(format!(
             "`git diff --no-index` failed — {}",
             stderr.trim()
-        )));
+        ))),
     }
-    Ok(stdout)
 }
 
 // ------------------------------------------------------------ diff: many

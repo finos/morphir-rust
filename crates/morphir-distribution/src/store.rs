@@ -152,16 +152,28 @@ impl ArtifactStore {
                 path: path.clone(),
                 root: canonical_home,
             })?;
-        Ok(VerifiedArtifact {
-            selected,
-            path,
-            store_path: RelativeArtifactPath::parse(relative.to_str().ok_or_else(|| {
+        // RelativeArtifactPath is the portable spelling, so join the components
+        // with "/" rather than reusing the native rendering, which separates with
+        // "\" on Windows and is rejected as not normalized.
+        let mut store_path = String::new();
+        for component in relative.components() {
+            let segment = component.as_os_str().to_str().ok_or_else(|| {
                 crate::error::invalid_value(
                     "store path",
                     relative.to_string_lossy(),
                     "expected a UTF-8 path beneath Morphir home",
                 )
-            })?)?,
+            })?;
+            if !store_path.is_empty() {
+                store_path.push('/');
+            }
+            store_path.push_str(segment);
+        }
+
+        Ok(VerifiedArtifact {
+            selected,
+            path,
+            store_path: RelativeArtifactPath::parse(store_path)?,
         })
     }
 }

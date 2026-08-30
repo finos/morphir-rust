@@ -238,6 +238,18 @@ pub mod mothers {
                                         }
                                     })
                                 ),
+                                "curried-with-normalized-explicit": documented(
+                                    "An Avro-normalized colliding explicit name.",
+                                    json!({
+                                        "inputs": { "arg-1": STRING },
+                                        "output": {
+                                            "Function": {
+                                                "argumentType": STRING,
+                                                "returnType": BOOL
+                                            }
+                                        }
+                                    })
+                                ),
                                 "default-customer": documented(
                                     "The default customer.",
                                     json!({ "inputs": {}, "output": CUSTOMER })

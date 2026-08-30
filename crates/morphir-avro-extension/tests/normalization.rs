@@ -220,6 +220,25 @@ fn synthesized_curried_input_names_skip_explicit_collisions() {
 }
 
 #[test]
+fn synthesized_curried_input_names_skip_avro_normalized_explicit_collisions() {
+    let package = normalize(&mothers::v4_customer_specs()).unwrap();
+    let value = package.modules[0]
+        .values
+        .iter()
+        .find(|value| value.name == "curried-with-normalized-explicit")
+        .unwrap();
+
+    assert_eq!(
+        value
+            .inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect::<Vec<_>>(),
+        ["arg-1", "arg2"]
+    );
+}
+
+#[test]
 fn v3_and_v4_normalize_all_shared_type_expression_forms_equivalently() {
     let v3 = normalize(&mothers::classic_customer_library()).unwrap();
     let v4 = normalize(&mothers::v4_customer_library()).unwrap();

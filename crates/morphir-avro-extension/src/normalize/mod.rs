@@ -4,7 +4,7 @@ mod v4;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::model::ProjectionPackage;
+use crate::{model::ProjectionPackage, naming::lower_camel};
 
 /// Failure to decode the supplied Morphir IR generation.
 #[derive(Debug, Error)]
@@ -226,7 +226,7 @@ pub(crate) fn normalize_signature(
     {
         while inputs
             .iter()
-            .any(|input| input.name == format!("arg{next_argument}"))
+            .any(|input| lower_camel(&input.name) == format!("arg{next_argument}"))
         {
             next_argument += 1;
         }

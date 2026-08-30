@@ -347,7 +347,7 @@ fn valid_namespace(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn valid_entry_path(value: &str) -> bool {
+pub(crate) fn valid_entry_path(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_ENTRY_PATH_BYTES
         && !value.starts_with('/')
@@ -389,7 +389,7 @@ fn canonical_hex(byte: u8) -> bool {
     byte.is_ascii_digit() || matches!(byte, b'A'..=b'F')
 }
 
-pub(crate) fn valid_entry_segment(segment: &str) -> bool {
+fn valid_entry_segment(segment: &str) -> bool {
     let windows_stem = segment
         .split('.')
         .next()

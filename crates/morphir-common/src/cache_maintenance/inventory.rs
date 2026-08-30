@@ -1,5 +1,6 @@
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
+use cap_fs_ext::DirExt;
 use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt;
@@ -232,7 +233,7 @@ pub fn inventory_cache_namespace(
         return Err(CacheInventoryError::InvalidCacheRoot { path: cache_root });
     }
     let cache_dir = home_dir
-        .open_dir("cache")
+        .open_dir_nofollow("cache")
         .map_err(|source| io_error(&cache_root, source))?;
 
     let root = cache_root.join(namespace.name());
@@ -248,7 +249,7 @@ pub fn inventory_cache_namespace(
         return Err(CacheInventoryError::InvalidNamespaceRoot { path: root });
     }
     let root_dir = cache_dir
-        .open_dir(namespace.name())
+        .open_dir_nofollow(namespace.name())
         .map_err(|source| io_error(&root, source))?;
 
     let mut inventory = InventoryWalk {
@@ -289,7 +290,8 @@ impl InventoryWalk<'_> {
                 .map_err(|source| io_error(&child_path, source))?;
 
             if let Some(template) = self.namespace.entries.get(&identity) {
-                let measured = self.measure(&child, &child_path, &metadata, depth + 1)?;
+                let measured =
+                    self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
                 let entry = if measured.safe {
                     template.clone().with_observed_bytes(measured.bytes)
                 } else {
@@ -298,14 +300,15 @@ impl InventoryWalk<'_> {
                 self.entries.push(entry);
             } else if self.has_registered_descendant(&identity) {
                 if is_link_like(&metadata) || !metadata.is_dir() {
-                    let measured = self.measure(&child, &child_path, &metadata, depth + 1)?;
+                    let measured =
+                        self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
                     self.entries.push(CacheEntry::unclassified(
                         self.namespace.name.clone(),
                         identity,
                         measured.bytes,
                     )?);
                 } else {
-                    match child.open_dir() {
+                    match directory.open_dir_nofollow(child.file_name()) {
                         Ok(child_dir) => {
                             self.scan_children(&child_dir, &child_path, &child_relative, depth + 1)?
                         }
@@ -317,7 +320,8 @@ impl InventoryWalk<'_> {
                     }
                 }
             } else {
-                let measured = self.measure(&child, &child_path, &metadata, depth + 1)?;
+                let measured =
+                    self.measure(directory, &child, &child_path, &metadata, depth + 1)?;
                 self.entries.push(CacheEntry::unclassified(
                     self.namespace.name.clone(),
                     identity,
@@ -330,6 +334,7 @@ impl InventoryWalk<'_> {
 
     fn measure(
         &mut self,
+        parent: &Dir,
         entry: &DirEntry,
         path: &Path,
         metadata: &Metadata,
@@ -355,7 +360,7 @@ impl InventoryWalk<'_> {
         }
 
         self.check_depth(depth)?;
-        let directory = match entry.open_dir() {
+        let directory = match parent.open_dir_nofollow(entry.file_name()) {
             Ok(directory) => directory,
             Err(_) => {
                 return Ok(MeasuredEntry {
@@ -371,7 +376,8 @@ impl InventoryWalk<'_> {
             let child_metadata = directory
                 .symlink_metadata(child.file_name())
                 .map_err(|source| io_error(&child_path, source))?;
-            let measured = self.measure(&child, &child_path, &child_metadata, depth + 1)?;
+            let measured =
+                self.measure(&directory, &child, &child_path, &child_metadata, depth + 1)?;
             bytes = bytes
                 .checked_add(measured.bytes)
                 .ok_or(CacheInventoryError::ByteCountOverflow)?;
@@ -457,7 +463,7 @@ fn portable_identity(path: &Path) -> String {
 
 fn portable_component(value: &OsStr) -> String {
     if let Some(value) = value.to_str() {
-        if !value.contains('%') && super::model::valid_entry_segment(value) {
+        if super::model::valid_entry_path(value) {
             return value.to_owned();
         }
         return value
@@ -509,7 +515,8 @@ fn is_link_like(metadata: &Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheNamespace, CacheRegistrationError, paths_overlap};
+    use super::{CacheNamespace, CacheRegistrationError, paths_overlap, portable_component};
+    use std::ffi::OsStr;
 
     #[test]
     fn registration_rejects_duplicate_and_nested_ownership() {
@@ -525,5 +532,11 @@ mod tests {
         ));
         assert!(paths_overlap("a", "a/b"));
         assert!(!paths_overlap("a", "ab"));
+    }
+
+    #[test]
+    fn nonportable_observed_separators_use_protected_identities() {
+        assert_eq!(portable_component(OsStr::new("a:b")), "%61%3A%62");
+        assert_eq!(portable_component(OsStr::new(r"a\b")), "%61%5C%62");
     }
 }

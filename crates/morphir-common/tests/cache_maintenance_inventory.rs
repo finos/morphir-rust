@@ -163,6 +163,27 @@ fn windows_reserved_unknown_names_are_encoded_on_unix() {
 }
 
 #[cfg(unix)]
+#[test]
+fn platform_specific_separators_in_unknown_names_are_encoded_on_unix() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    std::fs::write(home.downloads_cache_dir().join("a:b"), b"colon").unwrap();
+    std::fs::write(home.downloads_cache_dir().join(r"a\b"), b"backslash").unwrap();
+
+    let entries = inventory_cache_namespace(
+        &home,
+        &CacheNamespace::new("downloads").unwrap(),
+        CacheInventoryLimits::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        entries.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
+        ["%61%3A%62", "%61%5C%62"]
+    );
+}
+
+#[cfg(unix)]
 fn create_directory_link(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }

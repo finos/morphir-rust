@@ -1,20 +1,22 @@
 //! Exact locks, installed catalog state, and offline activation.
 
+use crate::state_io::{
+    FilesystemStateWriter, StateGuard, StateWriter, atomic_write_json, commit_state_pair,
+    decode_state, encode_json, read_json, read_state_bytes, remove_state_pair,
+};
 use crate::store::{verify_executable_mode, verify_file};
 use crate::{
     ArtifactRuntime, ArtifactSource, ArtifactStore, Capability, DistributionError, ExtensionId,
     IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result, Selection,
     Sha256Digest, VerifiedArtifact,
 };
-use fs2::FileExt;
 use morphir_common::home::MorphirHome;
 use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
 use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 const EXTENSION_LOCK_SCHEMA_VERSION: u32 = 2;
@@ -138,14 +140,14 @@ impl ExtensionLock {
 
 /// Write an exact extension lock after artifact verification.
 pub fn write_extension_lock(home: &MorphirHome, artifact: &VerifiedArtifact) -> Result<()> {
-    let _transaction = InstalledStateGuard::acquire(home)?;
+    let _transaction = extension_state_guard(home)?;
     let lock = ExtensionLock::from_verified(artifact);
     atomic_write_json(&extension_lock_path(home, &lock.extension_id), &lock)
 }
 
 /// Read and validate one exact extension lock.
 pub fn read_extension_lock(home: &MorphirHome, id: &ExtensionId) -> Result<ExtensionLock> {
-    let _transaction = InstalledStateGuard::acquire(home)?;
+    let _transaction = extension_state_guard(home)?;
     read_extension_lock_unlocked(home, id)
 }
 
@@ -319,7 +321,7 @@ pub struct InstalledCatalog {
 impl InstalledCatalog {
     /// Load the durable catalog, or create an empty in-memory catalog if absent.
     pub fn load(home: &MorphirHome) -> Result<Self> {
-        let _transaction = InstalledStateGuard::acquire(home)?;
+        let _transaction = extension_state_guard(home)?;
         Self::load_unlocked(home)
     }
 
@@ -366,7 +368,7 @@ impl InstalledCatalog {
     /// The parameter cannot be constructed from an unchecked path. This write
     /// is deliberately the final step of [`ExtensionInstaller::install`].
     pub fn register(&mut self, artifact: VerifiedArtifact) -> Result<InstalledExtension> {
-        let _transaction = InstalledStateGuard::acquire(&self.home)?;
+        let _transaction = extension_state_guard(&self.home)?;
         let latest = Self::load_unlocked(&self.home)?;
         let entry = InstalledExtension::from_verified(&artifact);
         let mut next = latest.extensions;
@@ -404,7 +406,7 @@ impl<'home> ExtensionInstaller<'home> {
         writer: &impl StateWriter,
     ) -> Result<InstalledExtension> {
         let verified = ArtifactStore::from_home(self.home).materialize(selected)?;
-        let _transaction = InstalledStateGuard::acquire(self.home)?;
+        let _transaction = extension_state_guard(self.home)?;
         let catalog = InstalledCatalog::load_unlocked(self.home)?;
         let lock = ExtensionLock::from_verified(&verified);
         let entry = InstalledExtension::from_verified(&verified);
@@ -440,7 +442,7 @@ fn uninstall_with_writer(
     id: &ExtensionId,
     writer: &impl StateWriter,
 ) -> Result<InstalledExtension> {
-    let _transaction = InstalledStateGuard::acquire(home)?;
+    let _transaction = extension_state_guard(home)?;
     let catalog = InstalledCatalog::load_unlocked(home)?;
     let mut extensions = catalog.extensions;
     let removed = extensions
@@ -468,7 +470,7 @@ fn list_installed_with_catalog_observer(
     home: &MorphirHome,
     after_catalog: impl FnOnce(),
 ) -> Result<Vec<InstalledExtensionSnapshot>> {
-    let _transaction = InstalledStateGuard::acquire(home)?;
+    let _transaction = extension_state_guard(home)?;
     let catalog = InstalledCatalog::load_unlocked(home)?;
     after_catalog();
     list_installed_catalog_unlocked(home, catalog)
@@ -544,7 +546,7 @@ impl VerifiedProcessArtifact {
 /// beneath Morphir home and rehashed before this function returns.
 pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<VerifiedProcessArtifact> {
     let (installed, lock) = {
-        let _transaction = InstalledStateGuard::acquire(home)?;
+        let _transaction = extension_state_guard(home)?;
         let catalog = InstalledCatalog::load_unlocked(home)?;
         let installed = catalog
             .get(id)
@@ -619,226 +621,14 @@ fn extension_type(capability: Capability) -> ExtensionType {
     }
 }
 
-struct InstalledStateGuard {
-    file: File,
-}
-
-impl InstalledStateGuard {
-    fn acquire(home: &MorphirHome) -> Result<Self> {
-        let path = home.extensions_state_lock_file();
-        let parent = path.parent().expect("durable lock path has a parent");
-        fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|source| DistributionError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        file.lock_exclusive()
-            .map_err(|source| DistributionError::Io { path, source })?;
-        Ok(Self { file })
-    }
-}
-
-impl Drop for InstalledStateGuard {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
-    }
-}
-
-trait StateWriter {
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<()>;
-
-    fn remove(&self, path: &Path) -> Result<()> {
-        remove_file(path)
-    }
-}
-
-struct FilesystemStateWriter;
-
-impl StateWriter for FilesystemStateWriter {
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
-        atomic_write_bytes(path, bytes)
-    }
-}
-
-fn commit_state_pair(
-    lock_path: &Path,
-    lock_bytes: &[u8],
-    catalog_path: &Path,
-    catalog_bytes: &[u8],
-    writer: &impl StateWriter,
-) -> Result<()> {
-    let previous_lock = read_optional(lock_path)?;
-    let previous_catalog = read_optional(catalog_path)?;
-    writer.write(lock_path, lock_bytes)?;
-    if let Err(original) = writer.write(catalog_path, catalog_bytes) {
-        return rollback_state_error(
-            original,
-            lock_path,
-            previous_lock.as_deref(),
-            catalog_path,
-            previous_catalog.as_deref(),
-        );
-    }
-    Ok(())
-}
-
-fn remove_state_pair(
-    lock_path: &Path,
-    catalog_path: &Path,
-    catalog_bytes: &[u8],
-    writer: &impl StateWriter,
-) -> Result<()> {
-    let previous_lock = read_optional(lock_path)?;
-    let previous_catalog = read_optional(catalog_path)?;
-    if let Err(original) = writer.remove(lock_path) {
-        return rollback_state_error(
-            original,
-            lock_path,
-            previous_lock.as_deref(),
-            catalog_path,
-            previous_catalog.as_deref(),
-        );
-    }
-    if let Err(original) = writer.write(catalog_path, catalog_bytes) {
-        return rollback_state_error(
-            original,
-            lock_path,
-            previous_lock.as_deref(),
-            catalog_path,
-            previous_catalog.as_deref(),
-        );
-    }
-    Ok(())
-}
-
-fn rollback_state_error(
-    original: DistributionError,
-    lock_path: &Path,
-    lock_bytes: Option<&[u8]>,
-    catalog_path: &Path,
-    catalog_bytes: Option<&[u8]>,
-) -> Result<()> {
-    match restore_state_pair(lock_path, lock_bytes, catalog_path, catalog_bytes) {
-        Ok(()) => Err(original),
-        Err(rollback) => Err(DistributionError::StateRollback {
-            original: Box::new(original),
-            rollback: Box::new(rollback),
-        }),
-    }
-}
-
-fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(DistributionError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-fn restore_state_pair(
-    lock_path: &Path,
-    lock_bytes: Option<&[u8]>,
-    catalog_path: &Path,
-    catalog_bytes: Option<&[u8]>,
-) -> Result<()> {
-    let lock_result = restore_file(lock_path, lock_bytes);
-    let catalog_result = restore_file(catalog_path, catalog_bytes);
-    lock_result.and(catalog_result)
-}
-
-fn restore_file(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
-    if let Some(bytes) = bytes {
-        return atomic_write_bytes(path, bytes);
-    }
-    remove_file(path)
-}
-
-fn remove_file(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(DistributionError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    let bytes = read_state_bytes(path)?;
-    decode_state(path, &bytes)
-}
-
-fn read_state_bytes(path: &Path) -> Result<Vec<u8>> {
-    fs::read(path).map_err(|source| DistributionError::Io {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn decode_state<T: for<'de> Deserialize<'de>>(path: &Path, bytes: &[u8]) -> Result<T> {
-    serde_json::from_slice(bytes).map_err(|source| DistributionError::InvalidState {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    atomic_write_bytes(path, &encode_json(value)?)
-}
-
-fn encode_json(value: &impl Serialize) -> Result<Vec<u8>> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(DistributionError::StateEncoding)?;
-    bytes.push(b'\n');
-    Ok(bytes)
-}
-
-fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().expect("durable state path has a parent");
-    fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    let mut staged = tempfile::Builder::new()
-        .prefix(".stage-")
-        .tempfile_in(parent)
-        .map_err(|source| DistributionError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    staged
-        .as_file_mut()
-        .write_all(bytes)
-        .and_then(|()| staged.as_file_mut().flush())
-        .and_then(|()| staged.as_file().sync_all())
-        .map_err(|source| DistributionError::Io {
-            path: staged.path().to_path_buf(),
-            source,
-        })?;
-    staged
-        .persist(path)
-        .map_err(|error| DistributionError::Io {
-            path: path.to_path_buf(),
-            source: error.error,
-        })?;
-    Ok(())
+fn extension_state_guard(home: &MorphirHome) -> Result<StateGuard> {
+    StateGuard::acquire(&home.extensions_state_lock_file())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state_io::{atomic_write_bytes, remove_file};
     use crate::{Channel, LocalIndex};
     use std::sync::{Mutex, mpsc};
     use std::thread;

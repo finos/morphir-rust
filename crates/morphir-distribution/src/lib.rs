@@ -46,6 +46,7 @@ mod index;
 mod local;
 mod resolver;
 mod state;
+mod state_io;
 mod store;
 mod tool_repository;
 mod tool_resolver;

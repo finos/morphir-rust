@@ -14,7 +14,7 @@ const STATE_PAIR_JOURNAL_SCHEMA_VERSION: u32 = 1;
 struct StatePairJournal {
     schema_version: u32,
     next_lock: Option<Vec<u8>>,
-    next_catalog: Vec<u8>,
+    next_catalog: Option<Vec<u8>>,
 }
 
 pub(crate) struct StateGuard {
@@ -59,6 +59,10 @@ pub(crate) trait StateWriter {
     fn remove(&self, path: &Path) -> Result<()> {
         remove_file(path)
     }
+
+    fn cleanup_journal(&self, path: &Path) -> Result<()> {
+        remove_file(path)
+    }
 }
 
 pub(crate) struct FilesystemStateWriter;
@@ -84,7 +88,7 @@ pub(crate) fn commit_state_pair(
         &StatePairJournal {
             schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
             next_lock: Some(lock_bytes.to_vec()),
-            next_catalog: catalog_bytes.to_vec(),
+            next_catalog: Some(catalog_bytes.to_vec()),
         },
     )?;
     if let Err(original) = writer.write(lock_path, lock_bytes) {
@@ -95,6 +99,7 @@ pub(crate) fn commit_state_pair(
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
+            writer,
         );
     }
     if let Err(original) = writer.write(catalog_path, catalog_bytes) {
@@ -105,9 +110,10 @@ pub(crate) fn commit_state_pair(
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
+            writer,
         );
     }
-    remove_file(&journal_path)
+    writer.cleanup_journal(&journal_path)
 }
 
 pub(crate) fn remove_state_pair(
@@ -124,7 +130,7 @@ pub(crate) fn remove_state_pair(
         &StatePairJournal {
             schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
             next_lock: None,
-            next_catalog: catalog_bytes.to_vec(),
+            next_catalog: Some(catalog_bytes.to_vec()),
         },
     )?;
     if let Err(original) = writer.remove(lock_path) {
@@ -135,6 +141,7 @@ pub(crate) fn remove_state_pair(
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
+            writer,
         );
     }
     if let Err(original) = writer.write(catalog_path, catalog_bytes) {
@@ -145,9 +152,10 @@ pub(crate) fn remove_state_pair(
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
+            writer,
         );
     }
-    remove_file(&journal_path)
+    writer.cleanup_journal(&journal_path)
 }
 
 fn rollback_state_error(
@@ -157,9 +165,23 @@ fn rollback_state_error(
     lock_bytes: Option<&[u8]>,
     catalog_path: &Path,
     catalog_bytes: Option<&[u8]>,
+    writer: &impl StateWriter,
 ) -> Result<()> {
+    if let Err(rollback) = atomic_write_json(
+        journal_path,
+        &StatePairJournal {
+            schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
+            next_lock: lock_bytes.map(ToOwned::to_owned),
+            next_catalog: catalog_bytes.map(ToOwned::to_owned),
+        },
+    ) {
+        return Err(DistributionError::StateRollback {
+            original: Box::new(original),
+            rollback: Box::new(rollback),
+        });
+    }
     match restore_state_pair(lock_path, lock_bytes, catalog_path, catalog_bytes) {
-        Ok(()) => match remove_file(journal_path) {
+        Ok(()) => match writer.cleanup_journal(journal_path) {
             Ok(()) => Err(original),
             Err(rollback) => Err(DistributionError::StateRollback {
                 original: Box::new(original),
@@ -216,7 +238,7 @@ pub(crate) fn recover_state_pairs(lock_directory: &Path, catalog_path: &Path) ->
         }
         let lock_path = lock_directory.join(lock_filename);
         restore_file(&lock_path, journal.next_lock.as_deref())?;
-        atomic_write_bytes(catalog_path, &journal.next_catalog)?;
+        restore_file(catalog_path, journal.next_catalog.as_deref())?;
         remove_file(&journal_path)?;
     }
     Ok(())
@@ -357,6 +379,30 @@ fn sync_directory(_directory: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    struct FailingCatalogAndJournalCleanup {
+        catalog_path: PathBuf,
+    }
+
+    impl StateWriter for FailingCatalogAndJournalCleanup {
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            atomic_write_bytes(path, bytes)?;
+            if path == self.catalog_path {
+                return Err(DistributionError::Io {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::other("injected catalog failure"),
+                });
+            }
+            Ok(())
+        }
+
+        fn cleanup_journal(&self, path: &Path) -> Result<()> {
+            Err(DistributionError::Io {
+                path: path.to_path_buf(),
+                source: std::io::Error::other("injected journal cleanup failure"),
+            })
+        }
+    }
+
     #[test]
     fn recovery_completes_an_interrupted_state_pair_commit() {
         let root = tempfile::tempdir().unwrap();
@@ -371,7 +417,7 @@ mod tests {
             &StatePairJournal {
                 schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
                 next_lock: Some(b"new lock".to_vec()),
-                next_catalog: b"new catalog".to_vec(),
+                next_catalog: Some(b"new catalog".to_vec()),
             },
         )
         .unwrap();
@@ -382,5 +428,30 @@ mod tests {
         assert_eq!(fs::read(lock).unwrap(), b"new lock");
         assert_eq!(fs::read(catalog).unwrap(), b"new catalog");
         assert!(!journal.exists());
+    }
+
+    #[test]
+    fn failed_rollback_cleanup_can_only_replay_the_restored_state() {
+        let root = tempfile::tempdir().unwrap();
+        let locks = root.path().join("locks");
+        let lock = locks.join("desktop.json");
+        let catalog = root.path().join("catalog.json");
+        atomic_write_bytes(&lock, b"old lock").unwrap();
+        atomic_write_bytes(&catalog, b"old catalog").unwrap();
+        let writer = FailingCatalogAndJournalCleanup {
+            catalog_path: catalog.clone(),
+        };
+
+        assert!(matches!(
+            commit_state_pair(&lock, b"new lock", &catalog, b"new catalog", &writer),
+            Err(DistributionError::StateRollback { .. })
+        ));
+        assert_eq!(fs::read(&lock).unwrap(), b"old lock");
+        assert_eq!(fs::read(&catalog).unwrap(), b"old catalog");
+
+        recover_state_pairs(&locks, &catalog).unwrap();
+
+        assert_eq!(fs::read(lock).unwrap(), b"old lock");
+        assert_eq!(fs::read(catalog).unwrap(), b"old catalog");
     }
 }

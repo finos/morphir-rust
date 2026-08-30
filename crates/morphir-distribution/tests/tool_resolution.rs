@@ -57,6 +57,32 @@ fn tool_release_descriptors_validate_the_v1_domain_contract() {
 }
 
 #[test]
+fn tool_release_descriptors_reject_nul_in_fixed_launch_arguments() {
+    let descriptor = serde_json::json!({
+        "schemaVersion": 1,
+        "kind": "morphir-tool-release",
+        "tool": { "id": "desktop", "name": "Morphir Desktop" },
+        "version": "1.0.0",
+        "channels": ["stable"],
+        "status": "active",
+        "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+        "artifacts": [{
+            "targetPath": "artifacts/desktop/1.0.0/windows-aarch64.zip",
+            "platform": { "os": "windows", "arch": "aarch64" },
+            "archive": { "format": "zip", "entryPoint": "Morphir Desktop.exe" },
+            "launch": {
+                "kind": "executable",
+                "path": "Morphir Desktop.exe",
+                "args": ["--profile=stable\0preview"]
+            }
+        }]
+    });
+
+    let error = serde_json::from_value::<ToolReleaseRecord>(descriptor).unwrap_err();
+    assert!(error.to_string().contains("arguments cannot contain NUL"));
+}
+
+#[test]
 fn tool_channels_and_exact_versions_resolve_deterministically() {
     let releases = vec![
         a_tool_release("1.0.0", &["stable"], "active", ">=0.4.0, <0.5.0"),

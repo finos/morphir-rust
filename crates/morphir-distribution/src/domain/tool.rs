@@ -58,12 +58,39 @@ enum ToolLaunchKind {
 }
 
 /// Direct process launch contract for an installed tool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolLaunch {
     kind: ToolLaunchKind,
     path: RelativeArtifactPath,
     args: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ToolLaunchWire {
+    kind: ToolLaunchKind,
+    path: RelativeArtifactPath,
+    args: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for ToolLaunch {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ToolLaunchWire::deserialize(deserializer)?;
+        if wire.args.iter().any(|argument| argument.contains('\0')) {
+            return Err(serde::de::Error::custom(
+                "tool launch arguments cannot contain NUL",
+            ));
+        }
+        Ok(Self {
+            kind: wire.kind,
+            path: wire.path,
+            args: wire.args,
+        })
+    }
 }
 
 impl ToolLaunch {

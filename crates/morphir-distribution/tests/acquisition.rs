@@ -517,6 +517,37 @@ fn installed_wasm_rejects_tampered_bytes() {
 }
 
 #[test]
+fn installed_wasm_rejects_oversized_bytes_before_buffering() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let path = mother.home.root().join(installed.store_path());
+    let oversized = 256 * 1024 * 1024 + 1;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(oversized)
+        .unwrap();
+
+    let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+
+    match error {
+        DistributionError::ArtifactTooLarge {
+            path: actual_path,
+            actual,
+            limit,
+        } => {
+            assert_eq!(actual_path, fs::canonicalize(path).unwrap());
+            assert_eq!(actual, oversized);
+            assert_eq!(limit, 256 * 1024 * 1024);
+        }
+        other => panic!("expected ArtifactTooLarge, got {other}"),
+    }
+}
+
+#[test]
 fn installed_wasm_rejects_backend_lock_catalog_mismatch() {
     let mother = DistributionMother::a_local_wasm_artifact();
     ExtensionInstaller::new(&mother.home)

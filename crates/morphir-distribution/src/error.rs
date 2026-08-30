@@ -183,6 +183,16 @@ pub enum DistributionError {
         /// Digest computed from the file bytes.
         actual: crate::Sha256Digest,
     },
+    /// An installed extension artifact exceeds the activation memory budget.
+    #[error("artifact {path:?} is {actual} bytes, exceeding the {limit}-byte activation limit")]
+    ArtifactTooLarge {
+        /// Installed artifact path.
+        path: PathBuf,
+        /// Observed byte length.
+        actual: u64,
+        /// Maximum accepted byte length.
+        limit: u64,
+    },
     /// Existing content has different executable semantics than the manifest.
     #[error(
         "executable mode mismatch for {path}: expected executable={expected}, got executable={actual}"

@@ -11,6 +11,8 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+const MAX_EXTENSION_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Content-addressed artifact store rooted in a Morphir home directory.
 #[derive(Debug, Clone)]
 pub struct ArtifactStore {
@@ -328,12 +330,16 @@ pub(crate) fn read_verified_file(
         source,
     })?;
     verify_executable_metadata(path, &metadata, expected_executable)?;
+    ensure_activation_size(path, metadata.len())?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    (&mut file)
+        .take(MAX_EXTENSION_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|source| DistributionError::Io {
             path: path.to_path_buf(),
             source,
         })?;
+    ensure_activation_size(path, bytes.len() as u64)?;
     let actual = Sha256Digest::of_bytes(&bytes);
     if &actual == expected_digest {
         Ok(bytes)
@@ -342,6 +348,18 @@ pub(crate) fn read_verified_file(
             path: path.to_path_buf(),
             expected: expected_digest.clone(),
             actual,
+        })
+    }
+}
+
+fn ensure_activation_size(path: &Path, actual: u64) -> Result<()> {
+    if actual <= MAX_EXTENSION_ARTIFACT_BYTES {
+        Ok(())
+    } else {
+        Err(DistributionError::ArtifactTooLarge {
+            path: path.to_path_buf(),
+            actual,
+            limit: MAX_EXTENSION_ARTIFACT_BYTES,
         })
     }
 }

@@ -83,6 +83,33 @@ fn tool_release_descriptors_reject_nul_in_fixed_launch_arguments() {
 }
 
 #[test]
+fn tool_release_descriptors_keep_publisher_paths_within_the_declared_budget() {
+    let oversized_entry_point = format!("{}/{}", "a".repeat(120), "b".repeat(120));
+    let descriptor = serde_json::json!({
+        "schemaVersion": 1,
+        "kind": "morphir-tool-release",
+        "tool": { "id": "desktop", "name": "Morphir Desktop" },
+        "version": "1.0.0",
+        "channels": ["stable"],
+        "status": "active",
+        "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+        "artifacts": [{
+            "targetPath": "artifacts/desktop/1.0.0/windows-aarch64.zip",
+            "platform": { "os": "windows", "arch": "aarch64" },
+            "archive": { "format": "zip", "entryPoint": oversized_entry_point },
+            "launch": {
+                "kind": "executable",
+                "path": oversized_entry_point,
+                "args": []
+            }
+        }]
+    });
+
+    let error = serde_json::from_value::<ToolReleaseRecord>(descriptor).unwrap_err();
+    assert!(error.to_string().contains("declared artifact path"));
+}
+
+#[test]
 fn tool_release_descriptors_reject_impossible_raw_launch_paths() {
     let descriptor = serde_json::json!({
         "schemaVersion": 1,

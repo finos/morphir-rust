@@ -32,11 +32,34 @@ pub enum ArchiveFormat {
 }
 
 /// Archive expansion contract for one platform artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolArchive {
     format: ArchiveFormat,
     entry_point: RelativeArtifactPath,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ToolArchiveWire {
+    format: ArchiveFormat,
+    entry_point: RelativeArtifactPath,
+}
+
+impl<'de> Deserialize<'de> for ToolArchive {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ToolArchiveWire::deserialize(deserializer)?;
+        wire.entry_point
+            .validate_declared()
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            format: wire.format,
+            entry_point: wire.entry_point,
+        })
+    }
 }
 
 impl ToolArchive {
@@ -80,6 +103,9 @@ impl<'de> Deserialize<'de> for ToolLaunch {
         D: Deserializer<'de>,
     {
         let wire = ToolLaunchWire::deserialize(deserializer)?;
+        wire.path
+            .validate_declared()
+            .map_err(serde::de::Error::custom)?;
         if wire.args.iter().any(|argument| argument.contains('\0')) {
             return Err(serde::de::Error::custom(
                 "tool launch arguments cannot contain NUL",
@@ -106,13 +132,40 @@ impl ToolLaunch {
 }
 
 /// One platform package declared by an authenticated tool release.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolArtifactRecord {
     target_path: RelativeArtifactPath,
     platform: Platform,
     archive: ToolArchive,
     launch: ToolLaunch,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ToolArtifactRecordWire {
+    target_path: RelativeArtifactPath,
+    platform: Platform,
+    archive: ToolArchive,
+    launch: ToolLaunch,
+}
+
+impl<'de> Deserialize<'de> for ToolArtifactRecord {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ToolArtifactRecordWire::deserialize(deserializer)?;
+        wire.target_path
+            .validate_declared()
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            target_path: wire.target_path,
+            platform: wire.platform,
+            archive: wire.archive,
+            launch: wire.launch,
+        })
+    }
 }
 
 impl ToolArtifactRecord {

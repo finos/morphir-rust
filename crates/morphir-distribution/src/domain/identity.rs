@@ -7,8 +7,10 @@ use std::fmt;
 use std::path::{Component, Path};
 
 const MAX_PORTABLE_FILENAME_UNITS: usize = 255;
-const MAX_PORTABLE_PATH_UTF8_BYTES: usize = 512;
-const MAX_PORTABLE_PATH_UTF16_UNITS: usize = 240;
+const MAX_PORTABLE_PATH_UTF8_BYTES: usize = 4_096;
+const MAX_PORTABLE_PATH_UTF16_UNITS: usize = 1_024;
+const MAX_DECLARED_PATH_UTF8_BYTES: usize = 512;
+const MAX_DECLARED_PATH_UTF16_UNITS: usize = 240;
 const SHA256_HEX_LEN: usize = 64;
 // `{id}.json.transaction` is the longest derived extension state filename.
 const MAX_EXTENSION_ID_LEN: usize = MAX_PORTABLE_FILENAME_UNITS - ".json.transaction".len();
@@ -302,7 +304,7 @@ impl<'de> Deserialize<'de> for ArtifactFilename {
     }
 }
 
-/// A normalized UTF-8 relative path declared by a local-file source or catalog.
+/// A normalized UTF-8 relative path used by a manifest or Morphir-owned store.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelativeArtifactPath(String);
 
@@ -325,7 +327,7 @@ impl RelativeArtifactPath {
             Err(invalid_value(
                 "local artifact path",
                 value,
-                "expected a normalized relative path of at most 512 UTF-8 bytes and 240 UTF-16 units with portable filename components",
+                "expected a normalized relative path of at most 4096 UTF-8 bytes and 1024 UTF-16 units with portable filename components",
             ))
         }
     }
@@ -350,6 +352,21 @@ impl RelativeArtifactPath {
             })
             .collect::<Result<Vec<_>>>()?;
         Self::parse(segments.join("/"))
+    }
+
+    /// Validate the tighter bound applied to publisher- or user-declared paths.
+    pub(crate) fn validate_declared(&self) -> Result<()> {
+        if self.0.len() <= MAX_DECLARED_PATH_UTF8_BYTES
+            && self.0.encode_utf16().count() <= MAX_DECLARED_PATH_UTF16_UNITS
+        {
+            Ok(())
+        } else {
+            Err(invalid_value(
+                "declared artifact path",
+                &self.0,
+                "expected at most 512 UTF-8 bytes and 240 UTF-16 units",
+            ))
+        }
     }
 
     /// Return the portable path spelling.
@@ -385,7 +402,7 @@ impl<'de> Deserialize<'de> for RelativeArtifactPath {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_PORTABLE_PATH_UTF8_BYTES, MAX_PORTABLE_PATH_UTF16_UNITS, RelativeArtifactPath,
+        MAX_DECLARED_PATH_UTF8_BYTES, MAX_DECLARED_PATH_UTF16_UNITS, RelativeArtifactPath,
     };
     use std::path::PathBuf;
 
@@ -407,16 +424,36 @@ mod tests {
         let longest_portable = format!("{}/{}", "a".repeat(119), "b".repeat(120));
         assert_eq!(
             longest_portable.encode_utf16().count(),
-            MAX_PORTABLE_PATH_UTF16_UNITS
+            MAX_DECLARED_PATH_UTF16_UNITS
         );
-        RelativeArtifactPath::parse(longest_portable).unwrap();
+        RelativeArtifactPath::parse(longest_portable)
+            .and_then(|path| path.validate_declared())
+            .unwrap();
 
         let too_many_utf16_units = format!("{}/{}", "a".repeat(120), "b".repeat(120));
-        assert!(RelativeArtifactPath::parse(too_many_utf16_units).is_err());
+        assert!(
+            RelativeArtifactPath::parse(too_many_utf16_units)
+                .and_then(|path| path.validate_declared())
+                .is_err()
+        );
 
         let too_many_utf8_bytes = ["界".repeat(79), "文".repeat(79), "字".repeat(79)].join("/");
-        assert!(too_many_utf8_bytes.len() > MAX_PORTABLE_PATH_UTF8_BYTES);
-        assert!(too_many_utf8_bytes.encode_utf16().count() <= MAX_PORTABLE_PATH_UTF16_UNITS);
-        assert!(RelativeArtifactPath::parse(too_many_utf8_bytes).is_err());
+        assert!(too_many_utf8_bytes.len() > MAX_DECLARED_PATH_UTF8_BYTES);
+        assert!(too_many_utf8_bytes.encode_utf16().count() <= MAX_DECLARED_PATH_UTF16_UNITS);
+        assert!(
+            RelativeArtifactPath::parse(too_many_utf8_bytes)
+                .and_then(|path| path.validate_declared())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn morphir_owned_paths_reserve_room_for_derived_store_prefixes() {
+        let derived = format!("{}/{}", "p".repeat(165), "a".repeat(75));
+        assert_eq!(
+            derived.encode_utf16().count(),
+            MAX_DECLARED_PATH_UTF16_UNITS + 1
+        );
+        RelativeArtifactPath::parse(derived).unwrap();
     }
 }

@@ -358,6 +358,7 @@ pub(crate) fn copy_zip_entry<R: Read, W: io::Write>(
 
 pub(crate) fn portable_archive_path(path: &Path) -> Result<RelativeArtifactPath> {
     let relative = RelativeArtifactPath::from_native_path(path)?;
+    relative.validate_declared()?;
     for segment in relative.as_str().split('/') {
         ArtifactFilename::parse(segment)?;
     }

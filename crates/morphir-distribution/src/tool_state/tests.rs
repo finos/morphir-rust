@@ -121,6 +121,14 @@ fn authenticated_zip_is_atomically_expanded_and_every_file_is_reverified_offline
     let launch = activate_installed_tool(&home, &id).unwrap();
     assert_eq!(fs::read(launch.program()).unwrap(), b"signed-desktop");
 
+    let unexpected = launch.program().parent().unwrap().join("unexpected.dll");
+    fs::write(&unexpected, b"unmanifested").unwrap();
+    assert!(matches!(
+        activate_installed_tool(&home, &id).unwrap_err(),
+        crate::DistributionError::InvalidToolManifest { .. }
+    ));
+    fs::remove_file(unexpected).unwrap();
+
     let support_file = launch
         .program()
         .parent()
@@ -190,6 +198,41 @@ fn authenticated_tar_gzip_is_expanded_and_reverified_offline() {
 
     let launch = activate_installed_tool(&home, &ToolId::parse("desktop").unwrap()).unwrap();
     assert_eq!(fs::read(launch.program()).unwrap(), b"signed-linux-desktop");
+}
+
+#[test]
+fn tar_gzip_preserves_safe_executable_bits_for_bundled_helpers() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let download = root.path().join("desktop.tar.gz");
+    write_tar_gzip_with_modes(
+        &download,
+        &[
+            ("morphir-desktop", b"desktop", 0o755),
+            ("bin/helper", b"helper", 0o755),
+        ],
+    );
+    let bytes = fs::read(&download).unwrap();
+    let resolved = crate::ResolvedTrustedToolArtifact::test_fixture(
+        tar_gzip_release(),
+        Selection::Channel(Channel::Stable),
+        Sha256Digest::of_bytes(&bytes),
+        bytes.len() as u64,
+    );
+
+    let package = ToolPackageStore::new(&home)
+        .prepare(
+            resolved,
+            crate::DownloadedToolArtifact::test_fixture(download),
+        )
+        .unwrap();
+
+    assert!(
+        package
+            .files
+            .iter()
+            .any(|file| file.path.as_str().ends_with("bin/helper") && file.executable)
+    );
 }
 
 #[test]
@@ -325,6 +368,57 @@ fn exact_release_repair_replaces_corrupt_bytes_without_changing_selection() {
     assert_eq!(
         fs::read(activate_installed_tool(&home, &id).unwrap().program()).unwrap(),
         b"desktop-v1"
+    );
+}
+
+#[test]
+fn repair_preserves_other_tools_that_share_the_digest_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let desktop_id = ToolId::parse("desktop").unwrap();
+    let companion_id = ToolId::parse("companion").unwrap();
+    let bytes = b"shared-release";
+    ToolInstaller::new(&home)
+        .install(package_for(
+            &home,
+            "desktop",
+            "Morphir Desktop",
+            "desktop.exe",
+            "1.0.0",
+            bytes,
+        ))
+        .unwrap();
+    ToolInstaller::new(&home)
+        .install(package_for(
+            &home,
+            "companion",
+            "Morphir Companion",
+            "companion.exe",
+            "1.0.0",
+            bytes,
+        ))
+        .unwrap();
+    fs::write(
+        activate_installed_tool(&home, &desktop_id)
+            .unwrap()
+            .program(),
+        b"corrupt",
+    )
+    .unwrap();
+    let (resolved, downloaded) = raw_download(root.path(), "1.0.0", bytes);
+
+    ToolRepairer::new(&home)
+        .repair(&desktop_id, resolved, downloaded)
+        .unwrap();
+
+    assert_eq!(
+        fs::read(
+            activate_installed_tool(&home, &companion_id)
+                .unwrap()
+                .program()
+        )
+        .unwrap(),
+        bytes
     );
 }
 

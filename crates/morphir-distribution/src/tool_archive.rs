@@ -118,7 +118,12 @@ pub(crate) fn extract_tar_gzip(
                 path: output.clone(),
                 source,
             })?;
-        let executable = &relative == entry_point;
+        let declared_executable = entry
+            .header()
+            .mode()
+            .map(|mode| mode & 0o111 != 0)
+            .unwrap_or(false);
+        let executable = &relative == entry_point || declared_executable;
         if executable {
             add_owner_executable(&output)?;
         }
@@ -140,7 +145,10 @@ pub(crate) fn extract_tar_gzip(
     Ok(files)
 }
 
-fn unsafe_archive(entry: impl Into<String>, reason: impl Into<String>) -> DistributionError {
+pub(crate) fn unsafe_archive(
+    entry: impl Into<String>,
+    reason: impl Into<String>,
+) -> DistributionError {
     DistributionError::UnsafeToolArchive {
         entry: entry.into(),
         reason: reason.into(),

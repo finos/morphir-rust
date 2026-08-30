@@ -2,22 +2,32 @@
 
 use super::package::{ToolPackageFile, VerifiedToolPackage};
 use crate::store::{verify_executable_mode, verify_file};
-use crate::{DistributionError, Result, Sha256Digest};
+use crate::{DistributionError, RelativeArtifactPath, Result, Sha256Digest};
 use morphir_common::home::MorphirHome;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(super) fn verify_package(home: &MorphirHome, package: &VerifiedToolPackage) -> Result<PathBuf> {
-    verify_installed(home, package.store_path.as_path(), &package.files)
+    verify_installed(
+        home,
+        package.store_path.as_path(),
+        package
+            .package_root
+            .as_ref()
+            .map(RelativeArtifactPath::as_path),
+        &package.files,
+    )
 }
 
 pub(super) fn verify_installed(
     home: &MorphirHome,
     store_path: &Path,
+    package_root: Option<&Path>,
     files: &[ToolPackageFile],
 ) -> Result<PathBuf> {
-    validate_manifest(store_path, files)?;
+    validate_manifest(store_path, package_root, files)?;
+    verify_manifest_scope(home, package_root, files)?;
     let home_root = fs::canonicalize(home.root()).map_err(|source| DistributionError::Io {
         path: home.root().to_path_buf(),
         source,
@@ -53,7 +63,11 @@ pub(super) fn verify_installed(
     Ok(program)
 }
 
-fn validate_manifest(store_path: &Path, files: &[ToolPackageFile]) -> Result<()> {
+fn validate_manifest(
+    store_path: &Path,
+    package_root: Option<&Path>,
+    files: &[ToolPackageFile],
+) -> Result<()> {
     if files.is_empty() {
         return Err(invalid_manifest("manifest cannot be empty"));
     }
@@ -68,6 +82,72 @@ fn validate_manifest(store_path: &Path, files: &[ToolPackageFile]) -> Result<()>
         return Err(invalid_manifest(
             "manifest must contain the executable launch path",
         ));
+    }
+    if let Some(package_root) = package_root
+        && files
+            .iter()
+            .any(|file| !file.path.as_path().starts_with(package_root))
+    {
+        return Err(invalid_manifest(
+            "every archived file must remain beneath the package root",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_manifest_scope(
+    home: &MorphirHome,
+    package_root: Option<&Path>,
+    files: &[ToolPackageFile],
+) -> Result<()> {
+    let Some(package_root) = package_root else {
+        return Ok(());
+    };
+    let root = home.root().join(package_root);
+    let expected = files
+        .iter()
+        .map(|file| {
+            file.path
+                .as_path()
+                .strip_prefix(package_root)
+                .map(Path::to_path_buf)
+                .map_err(|_| invalid_manifest("package file escaped its declared root"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let mut pending = vec![root.clone()];
+    while let Some(directory) = pending.pop() {
+        let entries = fs::read_dir(&directory).map_err(|source| DistributionError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| DistributionError::Io {
+                path: directory.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(&root)
+                .expect("walked package entry remains beneath its root");
+            let file_type = entry.file_type().map_err(|source| DistributionError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if file_type.is_symlink() {
+                return Err(invalid_manifest(format!(
+                    "package contains an unmanifested link: {}",
+                    relative.display()
+                )));
+            }
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if !file_type.is_file() || !expected.contains(relative) {
+                return Err(invalid_manifest(format!(
+                    "package contains an unmanifested entry: {}",
+                    relative.display()
+                )));
+            }
+        }
     }
     Ok(())
 }

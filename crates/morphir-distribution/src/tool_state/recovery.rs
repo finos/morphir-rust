@@ -8,12 +8,13 @@ use super::package::{ToolPackageStore, VerifiedToolPackage};
 use super::verification::{verify_installed, verify_package};
 use crate::state_io::{FilesystemStateWriter, StateWriter, commit_state_pair, encode_json};
 use crate::{
-    DistributionError, DownloadedToolArtifact, ResolvedTrustedToolArtifact, Result, ToolId,
+    DistributionError, DownloadedToolArtifact, RelativeArtifactPath, ResolvedTrustedToolArtifact,
+    Result, ToolId,
 };
 use morphir_common::home::MorphirHome;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Rebuilds the bytes for an installed exact release without changing its durable selection.
 #[derive(Debug)]
@@ -51,6 +52,7 @@ impl<'home> ToolRepairer<'home> {
             .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
         let lock = read_tool_lock_unlocked(self.home, id)?;
         validate_active_pair(&active, &lock)?;
+        let shared_files = shared_digest_files(self.home, &tools, &active);
 
         let temp_root = self.home.temp_dir();
         fs::create_dir_all(&temp_root).map_err(|source| DistributionError::Io {
@@ -73,6 +75,7 @@ impl<'home> ToolRepairer<'home> {
             .and_then(|package| {
                 validate_repair_package(&active, &package)?;
                 verify_package(self.home, &package)?;
+                restore_shared_files(&digest_path, &previous_path, &shared_files)?;
                 Ok(())
             });
 
@@ -147,6 +150,8 @@ fn validate_repair_package(active: &InstalledTool, package: &VerifiedToolPackage
         Some("target path differs after materialization")
     } else if package.store_path != active.store_path {
         Some("installed launch path differs")
+    } else if package.package_root != active.package_root {
+        Some("installed package root differs")
     } else if package.args != active.args {
         Some("launch arguments differ after materialization")
     } else if package.files != active.files {
@@ -158,6 +163,55 @@ fn validate_repair_package(active: &InstalledTool, package: &VerifiedToolPackage
         Some(reason) => Err(repair_mismatch(active, reason)),
         None => Ok(()),
     }
+}
+
+fn shared_digest_files(
+    home: &MorphirHome,
+    tools: &std::collections::BTreeMap<ToolId, super::catalog::ToolCatalogEntry>,
+    active: &InstalledTool,
+) -> Vec<PathBuf> {
+    let digest_path = home.tools_store_dir().join(active.digest.to_string());
+    let mut files = tools
+        .values()
+        .flat_map(|entry| std::iter::once(&entry.active).chain(entry.rollback.iter()))
+        .filter(|installed| {
+            installed.tool_id != active.tool_id
+                || installed.version != active.version
+                || installed.digest != active.digest
+        })
+        .flat_map(|installed| installed.files.iter())
+        .filter_map(|file| {
+            home.root()
+                .join(file.path.as_path())
+                .strip_prefix(&digest_path)
+                .ok()
+                .map(Path::to_path_buf)
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn restore_shared_files(digest_path: &Path, previous_path: &Path, files: &[PathBuf]) -> Result<()> {
+    for relative in files {
+        let source = previous_path.join(relative);
+        let destination = digest_path.join(relative);
+        if destination.exists() || !source.exists() {
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::rename(&source, &destination).map_err(|source| DistributionError::Io {
+            path: destination,
+            source,
+        })?;
+    }
+    Ok(())
 }
 
 fn repair_mismatch(active: &InstalledTool, reason: &'static str) -> DistributionError {
@@ -241,7 +295,14 @@ pub(super) fn rollback_with_writer(
         return Err(DistributionError::NoToolRollback { id: id.clone() });
     }
     let next = entry.rollback.remove(0);
-    verify_installed(home, next.store_path.as_path(), &next.files)?;
+    verify_installed(
+        home,
+        next.store_path.as_path(),
+        next.package_root
+            .as_ref()
+            .map(RelativeArtifactPath::as_path),
+        &next.files,
+    )?;
     let previous = entry.active;
     entry.active = next.clone();
     entry.rollback.insert(0, previous);

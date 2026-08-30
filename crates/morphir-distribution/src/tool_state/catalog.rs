@@ -4,7 +4,7 @@ use super::package::{ToolPackageFile, VerifiedToolPackage};
 use super::verification::verify_package;
 use crate::state_io::{
     FilesystemStateWriter, StateGuard, StateWriter, commit_state_pair, decode_state, encode_json,
-    read_json, read_state_bytes,
+    read_json, read_state_bytes, recover_state_pairs,
 };
 use crate::{
     DistributionError, Platform, RelativeArtifactPath, Result, Selection, Sha256Digest, ToolId,
@@ -41,6 +41,7 @@ pub struct ToolLock {
     targets_version: u64,
     target_path: RelativeArtifactPath,
     store_path: RelativeArtifactPath,
+    package_root: Option<RelativeArtifactPath>,
     args: Vec<String>,
     files: Vec<ToolPackageFile>,
 }
@@ -60,6 +61,7 @@ impl ToolLock {
             targets_version: package.targets_version,
             target_path: package.target_path.clone(),
             store_path: package.store_path.clone(),
+            package_root: package.package_root.clone(),
             args: package.args.clone(),
             files: package.files.clone(),
         }
@@ -79,6 +81,7 @@ impl ToolLock {
             targets_version: installed.targets_version,
             target_path: installed.target_path.clone(),
             store_path: installed.store_path.clone(),
+            package_root: installed.package_root.clone(),
             args: installed.args.clone(),
             files: installed.files.clone(),
         }
@@ -120,6 +123,7 @@ pub struct InstalledTool {
     pub(super) targets_version: u64,
     pub(super) target_path: RelativeArtifactPath,
     pub(super) store_path: RelativeArtifactPath,
+    pub(super) package_root: Option<RelativeArtifactPath>,
     pub(super) args: Vec<String>,
     pub(super) files: Vec<ToolPackageFile>,
 }
@@ -138,6 +142,7 @@ impl InstalledTool {
             targets_version: package.targets_version,
             target_path: package.target_path.clone(),
             store_path: package.store_path.clone(),
+            package_root: package.package_root.clone(),
             args: package.args.clone(),
             files: package.files.clone(),
         }
@@ -396,6 +401,7 @@ pub(super) fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> R
         && lock.targets_version == active.targets_version
         && lock.target_path == active.target_path
         && lock.store_path == active.store_path
+        && lock.package_root == active.package_root
         && lock.args == active.args
         && lock.files == active.files;
     if matches {
@@ -408,7 +414,9 @@ pub(super) fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> R
 }
 
 pub(super) fn tool_state_guard(home: &MorphirHome) -> Result<StateGuard> {
-    StateGuard::acquire(&home.tools_state_lock_file())
+    let guard = StateGuard::acquire(&home.tools_state_lock_file())?;
+    recover_state_pairs(&home.tools_locks_dir(), &home.tools_catalog_file())?;
+    Ok(guard)
 }
 
 pub(super) fn tool_lock_path(home: &MorphirHome, id: &ToolId) -> PathBuf {

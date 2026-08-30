@@ -4,7 +4,7 @@ use super::catalog::{
     load_catalog_unlocked, read_tool_lock_unlocked, tool_state_guard, validate_active_pair,
 };
 use super::verification::verify_installed;
-use crate::{DistributionError, Result, ToolId};
+use crate::{DistributionError, RelativeArtifactPath, Result, ToolId};
 use morphir_common::home::MorphirHome;
 use semver::Version;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,15 @@ pub fn activate_installed_tool(home: &MorphirHome, id: &ToolId) -> Result<Verifi
         .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
     let lock = read_tool_lock_unlocked(home, id)?;
     validate_active_pair(&active, &lock)?;
-    let program = verify_installed(home, active.store_path.as_path(), &active.files)?;
+    let program = verify_installed(
+        home,
+        active.store_path.as_path(),
+        active
+            .package_root
+            .as_ref()
+            .map(RelativeArtifactPath::as_path),
+        &active.files,
+    )?;
     tracing::info!(
         tool_id = %active.tool_id,
         version = %active.version,

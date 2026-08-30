@@ -27,9 +27,27 @@ impl StateWriter for FailingCatalogWriter {
 }
 
 pub(super) fn package(home: &MorphirHome, version: &str, bytes: &[u8]) -> VerifiedToolPackage {
+    package_for(
+        home,
+        "desktop",
+        "Morphir Desktop",
+        "desktop.exe",
+        version,
+        bytes,
+    )
+}
+
+pub(super) fn package_for(
+    home: &MorphirHome,
+    id: &str,
+    name: &str,
+    filename: &str,
+    version: &str,
+    bytes: &[u8],
+) -> VerifiedToolPackage {
     let digest = Sha256Digest::of_bytes(bytes);
     let relative =
-        RelativeArtifactPath::parse(format!("store/tools/sha256/{digest}/desktop.exe")).unwrap();
+        RelativeArtifactPath::parse(format!("store/tools/sha256/{digest}/{filename}")).unwrap();
     let path = home.root().join(relative.as_path());
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, bytes).unwrap();
@@ -46,19 +64,18 @@ pub(super) fn package(home: &MorphirHome, version: &str, bytes: &[u8]) -> Verifi
     };
     VerifiedToolPackage {
         selection: Selection::Channel(Channel::Stable),
-        tool_id: ToolId::parse("desktop").unwrap(),
-        tool_name: "Morphir Desktop".to_owned(),
+        tool_id: ToolId::parse(id).unwrap(),
+        tool_name: name.to_owned(),
         version: Version::parse(version).unwrap(),
         status: ToolReleaseStatus::Active,
         platform: Platform::new("windows", "x86_64").unwrap(),
         digest,
         length: bytes.len() as u64,
         targets_version: 1,
-        target_path: RelativeArtifactPath::parse(format!(
-            "artifacts/desktop/{version}/desktop.exe"
-        ))
-        .unwrap(),
+        target_path: RelativeArtifactPath::parse(format!("artifacts/{id}/{version}/{filename}"))
+            .unwrap(),
         store_path: relative,
+        package_root: None,
         args: vec!["--morphir-home".to_owned()],
         files: vec![file],
     }
@@ -166,13 +183,21 @@ pub(super) fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
 }
 
 pub(super) fn write_tar_gzip(path: &Path, entries: &[(&str, &[u8])]) {
+    let entries = entries
+        .iter()
+        .map(|(name, bytes)| (*name, *bytes, 0o644))
+        .collect::<Vec<_>>();
+    write_tar_gzip_with_modes(path, &entries);
+}
+
+pub(super) fn write_tar_gzip_with_modes(path: &Path, entries: &[(&str, &[u8], u32)]) {
     let gzip =
         flate2::write::GzEncoder::new(fs::File::create(path).unwrap(), flate2::Compression::none());
     let mut archive = tar::Builder::new(gzip);
-    for (name, bytes) in entries {
+    for (name, bytes, mode) in entries {
         let mut header = tar::Header::new_gnu();
         header.set_size(bytes.len() as u64);
-        header.set_mode(0o644);
+        header.set_mode(*mode);
         header.set_cksum();
         archive.append_data(&mut header, *name, *bytes).unwrap();
     }

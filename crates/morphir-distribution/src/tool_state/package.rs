@@ -2,7 +2,7 @@
 
 use super::verification::verify_one_file;
 use crate::store::{add_owner_executable, hash_file};
-use crate::tool_archive::extract_tar_gzip;
+use crate::tool_archive::{extract_tar_gzip, unsafe_archive};
 use crate::{
     ArchiveFormat, ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
     Platform, RelativeArtifactPath, ResolvedTrustedToolArtifact, Result, Selection, Sha256Digest,
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 const MAX_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
-///
+/// Verified immutable bytes and authenticated metadata ready for catalog activation.
 /// Fields are private so durable state cannot be built from an unchecked path.
 #[derive(Debug)]
 pub struct VerifiedToolPackage {
@@ -34,6 +34,7 @@ pub struct VerifiedToolPackage {
     pub(super) targets_version: u64,
     pub(super) target_path: RelativeArtifactPath,
     pub(super) store_path: RelativeArtifactPath,
+    pub(super) package_root: Option<RelativeArtifactPath>,
     pub(super) args: Vec<String>,
     pub(super) files: Vec<ToolPackageFile>,
 }
@@ -137,7 +138,7 @@ impl<'home> ToolPackageStore<'home> {
             length: resolved.length(),
             executable: true,
         }];
-        Ok(package_from_resolved(resolved, store_path, files))
+        Ok(package_from_resolved(resolved, store_path, None, files))
     }
 
     fn prepare_zip(
@@ -209,6 +210,7 @@ impl<'home> ToolPackageStore<'home> {
 
         let program = destination.join(resolved.artifact().launch().path().as_path());
         let store_path = home_relative(self.home, &program)?;
+        let package_root = home_relative(self.home, &destination)?;
         let files = relative_files
             .into_iter()
             .map(|file| {
@@ -220,7 +222,12 @@ impl<'home> ToolPackageStore<'home> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(package_from_resolved(resolved, store_path, files))
+        Ok(package_from_resolved(
+            resolved,
+            store_path,
+            Some(package_root),
+            files,
+        ))
     }
 
     fn prepare_tar_gzip(
@@ -301,6 +308,7 @@ impl<'home> ToolPackageStore<'home> {
 
         let program = destination.join(resolved.artifact().launch().path().as_path());
         let store_path = home_relative(self.home, &program)?;
+        let package_root = home_relative(self.home, &destination)?;
         let files = relative_files
             .into_iter()
             .map(|file| {
@@ -312,13 +320,19 @@ impl<'home> ToolPackageStore<'home> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(package_from_resolved(resolved, store_path, files))
+        Ok(package_from_resolved(
+            resolved,
+            store_path,
+            Some(package_root),
+            files,
+        ))
     }
 }
 
 fn package_from_resolved(
     resolved: ResolvedTrustedToolArtifact,
     store_path: RelativeArtifactPath,
+    package_root: Option<RelativeArtifactPath>,
     files: Vec<ToolPackageFile>,
 ) -> VerifiedToolPackage {
     VerifiedToolPackage {
@@ -333,6 +347,7 @@ fn package_from_resolved(
         targets_version: resolved.targets_version(),
         target_path: resolved.artifact().target_path().clone(),
         store_path,
+        package_root,
         args: resolved.artifact().launch().args().to_vec(),
         files,
     }
@@ -400,7 +415,8 @@ fn extract_zip(
                 "entry collides with another portable path".to_owned(),
             ));
         }
-        let mode_kind = entry.unix_mode().unwrap_or(0) & 0o170000;
+        let unix_mode = entry.unix_mode().unwrap_or(0);
+        let mode_kind = unix_mode & 0o170000;
         if mode_kind != 0 && mode_kind != 0o040000 && mode_kind != 0o100000 {
             return Err(unsafe_archive(
                 &raw_name,
@@ -448,7 +464,7 @@ fn extract_zip(
                 path: output.clone(),
                 source,
             })?;
-        let executable = &relative == entry_point;
+        let executable = &relative == entry_point || unix_mode & 0o111 != 0;
         if executable {
             add_owner_executable(&output)?;
         }
@@ -480,11 +496,4 @@ fn verify_relative_files(root: &Path, files: &[ToolPackageFile]) -> Result<()> {
         verify_one_file(&path, &file.digest, file.length, file.executable)?;
     }
     Ok(())
-}
-
-fn unsafe_archive(entry: impl Into<String>, reason: impl Into<String>) -> DistributionError {
-    DistributionError::UnsafeToolArchive {
-        entry: entry.into(),
-        reason: reason.into(),
-    }
 }

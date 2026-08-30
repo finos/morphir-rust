@@ -1,0 +1,243 @@
+#!/bin/sh
+#MISE description="Validate Avro IDL goldens with Apache Avro Tools 1.12.2"
+
+set -eu
+
+VERSION="1.12.2"
+BASE_URL="https://repo.maven.apache.org/maven2/org/apache/avro/avro-tools/$VERSION"
+CACHE_DIR="${MORPHIR_AVRO_CACHE_DIR:-.morphir/cache/avro/$VERSION}"
+JAR_NAME="avro-tools-$VERSION.jar"
+JAR="$CACHE_DIR/$JAR_NAME"
+CHECKSUM="$CACHE_DIR/$JAR_NAME.sha512"
+EXPECTED_SHA512="546d4c252c4f70dce043f48f4ae03e433686263e7e5b500fbdd4025ac3587b035df3ddbe1eee1dbebd4c321d66bec6f05a217734a6a659ae84e614840c9e1ec8"
+JAVACC_NOTICE="// Avro Tools 1.12.2 requires \`idl --useJavaCC\` for message annotations with named responses."
+
+mkdir -p "$CACHE_DIR"
+DOWNLOAD_TMP=""
+WORK_DIR=""
+cleanup() {
+    if [ -n "$DOWNLOAD_TMP" ] && [ -e "$DOWNLOAD_TMP" ]; then
+        rm -f "$DOWNLOAD_TMP"
+    fi
+    if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
+        rm -rf "$WORK_DIR"
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+
+jar_digest() {
+    shasum -a 512 "$1" | awk '{print $1}'
+}
+
+jar_is_verified() {
+    [ -f "$1" ] && [ "$(jar_digest "$1")" = "$EXPECTED_SHA512" ]
+}
+
+download_verified_jar() {
+    # Download beside the final cache path so the verified rename is atomic.
+    # The trap removes only this unique temporary sibling on interruption.
+    DOWNLOAD_TMP="$(mktemp "$CACHE_DIR/.$JAR_NAME.download.XXXXXX")"
+    curl --fail --location --silent --show-error \
+        --output "$DOWNLOAD_TMP" "$BASE_URL/$JAR_NAME"
+    if ! jar_is_verified "$DOWNLOAD_TMP"; then
+        echo "SHA-512 mismatch for downloaded $JAR_NAME" >&2
+        return 1
+    fi
+    mv "$DOWNLOAD_TMP" "$JAR"
+    DOWNLOAD_TMP=""
+}
+
+# A corrupt cached jar is never executed and cannot poison later runs. Remove
+# only that exact file, then replace it once through the verified temp sibling.
+if [ -f "$JAR" ] && ! jar_is_verified "$JAR"; then
+    echo "replacing corrupt cached $JAR" >&2
+    rm -f "$JAR"
+fi
+if [ ! -f "$JAR" ]; then
+    download_verified_jar
+fi
+# Maven Central does not publish a .sha512 sidecar for this artifact. Keep the
+# reviewed digest in source and create a local shasum manifest on cache miss.
+printf '%s  %s\n' "$EXPECTED_SHA512" "$JAR_NAME" > "$CHECKSUM"
+
+# Verify the local manifest and independently compare against the reviewed
+# digest every run. A modified jar and manifest therefore cannot pass together.
+(
+    cd "$CACHE_DIR"
+    shasum -a 512 -c "$JAR_NAME.sha512"
+)
+ACTUAL_SHA512="$(jar_digest "$JAR")"
+if [ "$ACTUAL_SHA512" != "$EXPECTED_SHA512" ]; then
+    echo "SHA-512 mismatch for $JAR" >&2
+    exit 1
+fi
+
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/morphir-avro-idl.XXXXXX")"
+INPUT_DIR="$WORK_DIR/input"
+OUTPUT_DIR="$WORK_DIR/output"
+mkdir -p "$INPUT_DIR" "$OUTPUT_DIR/converted" "$OUTPUT_DIR/default" "$OUTPUT_DIR/schemas"
+
+GOLDEN_DIR="crates/morphir-avro-extension/tests/golden"
+DISCOVERED="$WORK_DIR/discovered"
+STAGED="$WORK_DIR/staged"
+CONVERTED="$WORK_DIR/converted"
+find "$GOLDEN_DIR" -maxdepth 1 -type f -name '*.avdl' | sort > "$DISCOVERED"
+: > "$STAGED"
+: > "$CONVERTED"
+
+discovered_count="$(wc -l < "$DISCOVERED" | tr -d ' ')"
+if [ "$discovered_count" -lt 1 ]; then
+    echo "no Avro IDL goldens found under $GOLDEN_DIR" >&2
+    exit 1
+fi
+
+artifact_relative_path() {
+    source_file="$1"
+    namespace="$(awk -F'"' '/^@namespace\("/ { print $2; exit }' "$source_file")"
+    protocol="$(awk '$1 == "protocol" { gsub(/`/, "", $2); print $2; exit }' "$source_file")"
+    if [ -z "$namespace" ] || [ -z "$protocol" ]; then
+        echo "cannot derive protocol artifact path from $source_file" >&2
+        return 1
+    fi
+    namespace_dir="$(printf '%s' "$namespace" | tr '.' '/')"
+    printf '%s/%s.avdl\n' "$namespace_dir" "$protocol"
+}
+
+# Give each golden its own case root, stage every discovered file as a possible
+# import, then overwrite the target last. This handles equal protocol paths in
+# different goldens while ensuring a newly added golden can never be omitted.
+while IFS= read -r target; do
+    target_name="$(basename "$target" .avdl)"
+    case_root="$INPUT_DIR/$target_name"
+    while IFS= read -r support; do
+        support_relative="$(artifact_relative_path "$support")"
+        support_staged="$case_root/$support_relative"
+        mkdir -p "$(dirname "$support_staged")"
+        if [ ! -f "$support_staged" ]; then
+            cp "$support" "$support_staged"
+        fi
+    done < "$DISCOVERED"
+
+    target_relative="$(artifact_relative_path "$target")"
+    target_staged="$case_root/$target_relative"
+    cp "$target" "$target_staged"
+    printf '%s\n' "$target_staged" >> "$STAGED"
+done < "$DISCOVERED"
+
+staged_count="$(wc -l < "$STAGED" | tr -d ' ')"
+if [ "$staged_count" -ne "$discovered_count" ]; then
+    echo "IDL golden staging coverage mismatch: discovered=$discovered_count staged=$staged_count" >&2
+    exit 1
+fi
+
+index=0
+schema_default_count=0
+affected_default_failure_count=0
+unaffected_default_success_count=0
+while IFS= read -r input; do
+    index=$((index + 1))
+    case_path="${input#"$INPUT_DIR"/}"
+    case_name="${case_path%%/*}"
+    case "$input" in
+        *Schemas.avdl)
+            schema_dir="$OUTPUT_DIR/schemas/$index"
+            mkdir -p "$schema_dir"
+            java -jar "$JAR" idl "$input" "$OUTPUT_DIR/default/$index.avpr"
+            schema_default_count=$((schema_default_count + 1))
+            java -jar "$JAR" idl2schemata "$input" "$schema_dir"
+            schema_count="$(find "$schema_dir" -type f -name '*.avsc' | wc -l | tr -d ' ')"
+            if [ "$schema_count" -lt 1 ]; then
+                echo "idl2schemata emitted no .avsc files for $input" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            default_output="$OUTPUT_DIR/default/$index.avpr"
+            default_error="$OUTPUT_DIR/default/$index.stderr"
+            requires_javacc=false
+            if grep -Fq "$JAVACC_NOTICE" "$input"; then
+                requires_javacc=true
+            fi
+            if java -jar "$JAR" idl "$input" "$default_output" 2> "$default_error"; then
+                if [ "$requires_javacc" = true ]; then
+                    echo "default Avro IDL reader unexpectedly accepted affected protocol $input" >&2
+                    exit 1
+                fi
+                unaffected_default_success_count=$((unaffected_default_success_count + 1))
+            else
+                if [ "$requires_javacc" != true ]; then
+                    echo "default Avro IDL reader rejected unaffected protocol $input" >&2
+                    cat "$default_error" >&2
+                    exit 1
+                fi
+                exception_count="$(grep -c '^Exception in thread "main" org.apache.avro.SchemaParseException:' "$default_error" || true)"
+                all_exception_count="$(grep -c '^Exception in thread' "$default_error" || true)"
+                exception_line="$(grep '^Exception in thread "main" org.apache.avro.SchemaParseException:' "$default_error" || true)"
+                if [ "$exception_count" -ne 1 ] || [ "$all_exception_count" -ne 1 ]; then
+                    echo "default Avro IDL reader did not emit exactly one schema exception for $input" >&2
+                    cat "$default_error" >&2
+                    exit 1
+                fi
+                case "$exception_line" in
+                    'Exception in thread "main" org.apache.avro.SchemaParseException: Type references may not be annotated, at line '*', column '*) ;;
+                    *)
+                        echo "unexpected default Avro IDL reader failure for $input" >&2
+                        cat "$default_error" >&2
+                        exit 1
+                        ;;
+                esac
+                if [ "$(grep -Fc 'Type references may not be annotated' "$default_error")" -ne 1 ]; then
+                    echo "default Avro IDL reader failure was not the single known 1.12.2 incompatibility for $input" >&2
+                    cat "$default_error" >&2
+                    exit 1
+                fi
+                affected_default_failure_count=$((affected_default_failure_count + 1))
+            fi
+            ;;
+    esac
+    # JavaCC is the supported Avro Tools 1.12.2 reader for every protocol and
+    # also provides a second official-reader check for schema wrappers.
+    converted="$OUTPUT_DIR/converted/$case_name.avpr"
+    java -jar "$JAR" idl --useJavaCC "$input" "$converted"
+    printf '%s\n' "$converted" >> "$CONVERTED"
+done < "$STAGED"
+
+converted_count="$(wc -l < "$CONVERTED" | tr -d ' ')"
+if [ "$converted_count" -ne "$discovered_count" ]; then
+    echo "IDL golden conversion coverage mismatch: discovered=$discovered_count converted=$converted_count" >&2
+    exit 1
+fi
+
+if ! grep -q '"morphir.value-kind" : "constant"' "$OUTPUT_DIR"/converted/*.avpr; then
+    echo "converted protocols lost the morphir.value-kind constant annotation" >&2
+    exit 1
+fi
+
+custom_protocol="$OUTPUT_DIR/converted/edge-custom-types.avpr"
+compact_custom="$(tr -d '[:space:]' < "$custom_protocol")"
+for expected in \
+    '"name":"mappedAmount","type":{"type":"bytes","logicalType":"decimal","precision":20,"scale":4,"morphir.fqname":"acme/customer:customer#money"}' \
+    '"name":"mappedDate","type":{"type":"long","logicalType":"date","morphir.fqname":"acme/customer:customer#legacy-date"}' \
+    '"name":"mappedIdentifier","type":{"type":"bytes","logicalType":"uuid","morphir.fqname":"acme/customer:customer#binary-id"}'
+do
+    case "$compact_custom" in
+        *"$expected"*) ;;
+        *)
+            echo "converted custom protocol lost exact physical/logical/custom properties: $expected" >&2
+            exit 1
+            ;;
+    esac
+done
+
+escaping_protocol="$OUTPUT_DIR/converted/edge-escaping.avpr"
+if ! grep -Fq '"morphir.doc" : "Protocol */ docs\\path\ncontrol\u0001line"' "$escaping_protocol"; then
+    echo "converted escaping protocol lost JSON-escaped documentation" >&2
+    exit 1
+fi
+
+printf 'validated %s IDL goldens: default schema success=%s, default unaffected protocol success=%s, known default affected-protocol failure=%s, JavaCC success=%s\n' \
+    "$discovered_count" \
+    "$schema_default_count" \
+    "$unaffected_default_success_count" \
+    "$affected_default_failure_count" \
+    "$converted_count"

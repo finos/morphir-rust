@@ -1,75 +1,38 @@
 ---
 layout: default
-title: Morphir Extension System Design Documents
-nav_order: 1
-parent: Morphir Extensions
-has_children: true
+title: "Historical: Actor-Based Extension Design"
+nav_exclude: true
+search_exclude: true
+has_toc: false
 ---
 
-# Morphir Extension System Design Documents
+# Historical actor-based extension design
 
-This directory contains the complete design documentation for the Morphir Extension System, an actor-based, multi-protocol architecture for extending Morphir functionality.
+> **Historical design, not a supported extension contract.** This directory
+> preserves a superseded actor-based, multi-protocol proposal. Current
+> extensions use Extism plus MEP JSON-RPC and install by ID from a controlled
+> index. See the [current extension guide](../README.md).
 
-## Document Index
+These pages retain design rationale about isolation, lifecycle, transport, and
+capability boundaries. They do not describe the current CLI or extension ABI.
+The gRPC, HTTP JSON-RPC, JSON Lines, Kameo actor, WIT Component Model, and
+`morphir.toml` extension configuration examples were never released.
 
-### Core Architecture
+## Historical document set
 
-- **[00-overview.md](00-overview.md)** - System overview, goals, and key concepts
-- **[01-architecture.md](01-architecture.md)** - Detailed architecture, components, and data flow
-- **[02-extension-host-interface.md](02-extension-host-interface.md)** - Common interface for all extension hosts
+- [Overview](00-overview.md)
+- [Architecture](01-architecture.md)
+- [Extension host interface](02-extension-host-interface.md)
+- [JSON-RPC host](03-jsonrpc-host.md)
+- [gRPC host](04-grpc-host.md)
+- [Stdio host](05-stdio-host.md)
+- [Extism WASM host](06-extism-wasm-host.md)
+- [WASM Component Model host](07-wasm-component-host.md)
+- [Extension manager](08-extension-manager.md)
+- [Security and isolation](09-security-and-isolation.md)
+- [Protocol specifications](10-protocol-specifications.md)
+- [Examples and recipes](11-examples-and-recipes.md)
+- [WASM architecture session](12-wasm-extension-architecture-session.md)
 
-### Protocol Implementations
-
-- **[03-jsonrpc-host.md](03-jsonrpc-host.md)** - JSON-RPC 2.0 over HTTP
-- **[04-grpc-host.md](04-grpc-host.md)** - gRPC with Protocol Buffers
-- **[05-stdio-host.md](05-stdio-host.md)** - JSON Lines over stdin/stdout
-- **[06-extism-wasm-host.md](06-extism-wasm-host.md)** - Extism WASM runtime
-- **[07-wasm-component-host.md](07-wasm-component-host.md)** - WASM Component Model
-
-### Integration & Operations
-
-- **[08-extension-manager.md](08-extension-manager.md)** - Central coordinator actor
-- **[09-security-and-isolation.md](09-security-and-isolation.md)** - Security model and sandboxing
-- **[10-protocol-specifications.md](10-protocol-specifications.md)** - Wire protocol details
-- **[11-examples-and-recipes.md](11-examples-and-recipes.md)** - Practical examples and patterns
-
-## Quick Start
-
-For a quick understanding of the system:
-
-1. Read [00-overview.md](00-overview.md) for the big picture
-2. Read [01-architecture.md](01-architecture.md) for component details
-3. Choose your protocol (likely [05-stdio-host.md](05-stdio-host.md) for simplicity)
-4. Follow examples in [11-examples-and-recipes.md](11-examples-and-recipes.md)
-
-## Key Technologies
-
-- **Actor Framework**: Kameo (Rust)
-- **Protocols**: JSON-RPC 2.0, gRPC, Stdio (JSON Lines), WASM (Extism, Component Model)
-- **Concurrency**: Tokio async runtime
-- **Security**: Process isolation, WASM sandboxing, capability-based permissions
-
-## Design Status
-
-**Status**: Draft  
-**Version**: 0.1.0  
-**Last Updated**: 2025-01-23
-
-These documents are design drafts intended for incorporation into the FINOS Morphir project documentation.
-
-## Contributing
-
-When implementing these designs:
-
-1. Maintain actor-based isolation
-2. Follow the `ExtensionHost` trait contract
-3. Implement all protocol lifecycle methods
-4. Add comprehensive tests
-5. Update security documentation as needed
-
-## Related Resources
-
-- [FINOS Morphir Project](https://github.com/finos/morphir)
-- [Kameo Actor Framework](https://github.com/tqwewe/kameo)
-- [Extism WASM Framework](https://extism.org)
-- [WASM Component Model](https://component-model.bytecodealliance.org)
+For current work, use the [extension system overview](../../../extension-system.md)
+and the current guide linked above.

@@ -1,0 +1,15 @@
+{
+  "fields": [
+    {
+      "name": "value",
+      "type": {
+        "items": "string",
+        "type": "array"
+      }
+    }
+  ],
+  "morphir.fqname": "acme/customer:customer#customer-labels",
+  "name": "CustomerLabels",
+  "namespace": "acme.customer.customer",
+  "type": "record"
+}

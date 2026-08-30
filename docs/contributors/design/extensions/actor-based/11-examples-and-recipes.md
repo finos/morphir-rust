@@ -2,10 +2,17 @@
 layout: default
 title: Examples and Recipes
 nav_order: 13
-parent: Morphir Extensions
+nav_exclude: true
+search_exclude: true
+has_toc: false
 ---
 
 # Examples and Recipes
+
+> **Historical design, not a supported extension contract.** This page belongs
+> to the superseded actor-based, multi-protocol design set. Current extensions
+> use Extism plus MEP JSON-RPC and install by ID from a controlled index. See
+> the [current extension guide](../README.md).
 
 **Status:** Draft  
 **Version:** 0.1.0
@@ -49,7 +56,7 @@ if __name__ == "__main__":
 **Configuration:**
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "hello-python"
 protocol = "stdio"
 source = { type = "process", command = "python3", args = ["./hello.py"] }
@@ -81,7 +88,7 @@ console.log("Extension listening on port 3000");
 **Configuration:**
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "hello-typescript"
 protocol = "jsonrpc"
 source = { type = "http", url = "http://localhost:3000" }
@@ -132,7 +139,7 @@ cargo build --target wasm32-unknown-unknown --release
 **Configuration:**
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "hello-rust"
 protocol = "extism"
 source = { type = "wasm", path = "./target/wasm32-unknown-unknown/release/hello.wasm" }
@@ -579,7 +586,7 @@ echo '{"id":3,"method":"echo","params":{"message":"test"}}' | python3 extension.
 ### Development Configuration
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "dev-generator"
 enabled = true
 protocol = "stdio"
@@ -591,7 +598,7 @@ restart = { strategy = "immediate", max_retries = 0 }
 ### Production Configuration
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "prod-generator"
 enabled = true
 protocol = "grpc"
@@ -603,7 +610,7 @@ restart = { strategy = "exponential", initial_delay = "1s", max_delay = "60s", m
 ### Sandboxed Configuration (WASM)
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "untrusted-transformer"
 enabled = true
 protocol = "extism"

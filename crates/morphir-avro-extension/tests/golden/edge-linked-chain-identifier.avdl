@@ -1,0 +1,8 @@
+@namespace("acme.chain.identity")
+protocol IdentifierSchemas {
+  @namespace("acme.chain.identity")
+  @morphir.fqname("acme/chain:identity#identifier")
+  record Identifier {
+    string value;
+  }
+}

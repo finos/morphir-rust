@@ -143,6 +143,14 @@ pub enum DistributionError {
         /// Extension whose durable records disagree.
         id: crate::ExtensionId,
     },
+    /// One installed record violates its runtime-specific state invariants.
+    #[error("invalid installed state for extension {id}: {reason}")]
+    InvalidInstalledState {
+        /// Extension whose persisted runtime state is malformed.
+        id: crate::ExtensionId,
+        /// Runtime invariant that the record violates.
+        reason: &'static str,
+    },
     /// A state transaction failed and its previous files could not be restored.
     #[error("distribution state update failed ({original}); rollback also failed ({rollback})")]
     StateRollback {

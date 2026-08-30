@@ -3,7 +3,7 @@
 use crate::DaemonError;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use async_trait::async_trait;
-use morphir_extension_sdk::ExtensionInfo;
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 
 /// The transport's knowledge after an exchange or termination attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,7 @@ impl TransportError {
 pub struct ExpectedExtension {
     pub(super) id: String,
     pub(super) discovered: Option<ExtensionInfo>,
+    pub(super) capabilities: Option<ExtensionCapabilities>,
 }
 
 impl ExpectedExtension {
@@ -41,6 +42,7 @@ impl ExpectedExtension {
         Self {
             id: id.into(),
             discovered: None,
+            capabilities: None,
         }
     }
 
@@ -49,7 +51,39 @@ impl ExpectedExtension {
         Self {
             id: info.id.clone(),
             discovered: Some(info),
+            capabilities: None,
         }
+    }
+
+    /// Require initialization metadata to agree with discovery.
+    ///
+    /// Negotiation currently enforces the typed backend member of `capabilities`.
+    pub fn discovered_with_capabilities(
+        info: ExtensionInfo,
+        capabilities: ExtensionCapabilities,
+    ) -> Self {
+        Self {
+            id: info.id.clone(),
+            discovered: Some(info),
+            capabilities: Some(capabilities),
+        }
+    }
+
+    /// Return the stable extension identifier known before negotiation.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Return exact identity metadata obtained during discovery, when available.
+    pub fn extension_info(&self) -> Option<&ExtensionInfo> {
+        self.discovered.as_ref()
+    }
+
+    /// Return discovery capabilities, when supplied.
+    ///
+    /// Negotiation currently enforces only their typed backend member.
+    pub fn capabilities(&self) -> Option<&ExtensionCapabilities> {
+        self.capabilities.as_ref()
     }
 }
 

@@ -10,5 +10,7 @@ if ! rustup target list --installed | grep -qx "$TARGET"; then
     rustup target add "$TARGET"
 fi
 
-cargo build --release -p morphir-wasm-binding --target "$TARGET"
-cargo test -p morphir-daemon --test extism_extension -- --ignored
+cargo build --locked --release -p morphir-wasm-binding --target "$TARGET"
+cargo test --locked -p morphir-daemon --test extism_extension -- --ignored
+cargo build --locked --release -p morphir-avro-extension --target "$TARGET"
+cargo test --locked -p morphir-daemon --test installed_wasm_extension -- --ignored

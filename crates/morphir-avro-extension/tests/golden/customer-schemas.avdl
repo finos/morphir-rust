@@ -1,0 +1,13 @@
+@namespace("acme.customer.customer")
+protocol CustomerSchemas {
+  /**
+   * A customer record.
+   */
+  @namespace("acme.customer.customer")
+  @morphir.fqname("Acme:Customer:Customer")
+  record Customer {
+    boolean active;
+    long age;
+    string name;
+  }
+}

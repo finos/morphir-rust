@@ -7,5 +7,6 @@ mod manifest;
 pub use digest::Sha256Digest;
 pub use identity::{ArtifactFilename, Channel, ChannelSegment, ExtensionId, RelativeArtifactPath};
 pub use manifest::{
-    ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability, Platform, ReleaseRecord, Selection,
+    ArtifactRecord, ArtifactRuntime, ArtifactSource, BackendRecord, Capability, Platform,
+    ReleaseRecord, Selection,
 };

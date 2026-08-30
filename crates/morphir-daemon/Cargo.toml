@@ -58,13 +58,15 @@ reqwest = { version = "0.13", default-features = false, features = [
 
 # Directory utilities
 dirs = "6"
+tempfile = "3"
 
 # Internal crates
 morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
 morphir-devkit = { path = "../morphir-devkit" }
+morphir-distribution = { path = "../morphir-distribution" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 
 [dev-dependencies]
 base64 = "0.23"
-tempfile = "3"
+wat = "1"

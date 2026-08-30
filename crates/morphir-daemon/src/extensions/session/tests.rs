@@ -6,7 +6,8 @@ use crate::extensions::protocol::{
 };
 use async_trait::async_trait;
 use morphir_extension_sdk::{
-    CompileResult, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
+    BackendCapability, CompileResult, ExtensionCapabilities, ExtensionInfo, ExtensionType,
+    FrontendCapability, GenerateRequest, GenerateResult,
 };
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -16,6 +17,12 @@ struct FakeTransport {
     expected: ExpectedExtension,
     responses: VecDeque<std::result::Result<ExtensionResponse, TransportError>>,
     termination: TransportState,
+}
+
+struct ScriptedTransport {
+    expected: ExpectedExtension,
+    responses: VecDeque<std::result::Result<ExtensionResponse, TransportError>>,
+    requests: Vec<ExtensionRequest>,
 }
 
 #[async_trait]
@@ -35,6 +42,27 @@ impl MepTransport for FakeTransport {
 
     async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
         Ok(self.termination)
+    }
+}
+
+#[async_trait]
+impl MepTransport for ScriptedTransport {
+    fn expected_extension(&self) -> ExpectedExtension {
+        self.expected.clone()
+    }
+
+    async fn exchange(
+        &mut self,
+        request: ExtensionRequest,
+    ) -> std::result::Result<ExtensionResponse, TransportError> {
+        self.requests.push(request);
+        self.responses
+            .pop_front()
+            .expect("a response should be arranged")
+    }
+
+    async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
+        Ok(TransportState::Stopped)
     }
 }
 
@@ -63,6 +91,24 @@ fn frontend_initialization(compile: bool) -> InitializeResult {
         ..FrontendCapability::default()
     });
     result
+}
+
+fn backend_initialization(generate: bool) -> InitializeResult {
+    let mut result = initialization(extension(vec![ExtensionType::Backend]));
+    result.capabilities.backend = Some(BackendCapability {
+        targets: vec!["avro".into()],
+        ir_versions: vec!["3".into(), "4".into()],
+        generate,
+    });
+    result
+}
+
+fn scripted_transport(responses: impl IntoIterator<Item = ExtensionResponse>) -> ScriptedTransport {
+    ScriptedTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: responses.into_iter().map(Ok).collect(),
+        requests: Vec::new(),
+    }
 }
 
 fn params() -> InitializeParams {
@@ -137,8 +183,8 @@ async fn rejects_duplicate_capability_kinds() {
     let response = ExtensionResponse::success(
         1,
         initialization(extension(vec![
-            ExtensionType::Backend,
-            ExtensionType::Backend,
+            ExtensionType::Validator,
+            ExtensionType::Validator,
         ])),
     )
     .unwrap();
@@ -182,7 +228,7 @@ async fn rejects_declared_frontend_without_frontend_capabilities() {
 
 #[tokio::test]
 async fn rejects_frontend_capabilities_without_declared_frontend() {
-    let mut result = initialization(extension(vec![ExtensionType::Backend]));
+    let mut result = initialization(extension(vec![ExtensionType::Validator]));
     result.capabilities.frontend = Some(FrontendCapability::default());
     let response = ExtensionResponse::success(1, result).unwrap();
     let failure = Session::loaded(transport(
@@ -200,6 +246,225 @@ async fn rejects_frontend_capabilities_without_declared_frontend() {
             .to_string()
             .contains("frontend capabilities without declaring Frontend")
     );
+}
+
+#[tokio::test]
+async fn rejects_declared_backend_without_backend_capabilities() {
+    let response =
+        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
+            .unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::identified("example"),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("missing backend capabilities should fail");
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("declared Backend without backend capabilities")
+    );
+}
+
+#[tokio::test]
+async fn rejects_backend_capabilities_without_declared_backend() {
+    let mut result = initialization(extension(vec![ExtensionType::Validator]));
+    result.capabilities.backend = Some(BackendCapability {
+        targets: vec!["avro".into()],
+        ir_versions: vec!["3".into(), "4".into()],
+        generate: true,
+    });
+    let response = ExtensionResponse::success(1, result).unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::identified("example"),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("undeclared backend capabilities should fail");
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("backend capabilities without declaring Backend")
+    );
+}
+
+#[tokio::test]
+async fn rejects_each_backend_metadata_drift_before_generate() {
+    let locked_backend = BackendCapability {
+        targets: vec!["avro".into(), "json-schema".into()],
+        ir_versions: vec!["3".into(), "4".into()],
+        generate: true,
+    };
+    let cases = [
+        ("missing backend", None),
+        (
+            "changed target",
+            Some(BackendCapability {
+                targets: vec!["avro".into(), "protobuf".into()],
+                ..locked_backend.clone()
+            }),
+        ),
+        (
+            "changed target order",
+            Some(BackendCapability {
+                targets: vec!["json-schema".into(), "avro".into()],
+                ..locked_backend.clone()
+            }),
+        ),
+        (
+            "changed IR version",
+            Some(BackendCapability {
+                ir_versions: vec!["3".into(), "5".into()],
+                ..locked_backend.clone()
+            }),
+        ),
+        (
+            "changed IR version order",
+            Some(BackendCapability {
+                ir_versions: vec!["4".into(), "3".into()],
+                ..locked_backend.clone()
+            }),
+        ),
+        (
+            "changed generate flag",
+            Some(BackendCapability {
+                generate: false,
+                ..locked_backend.clone()
+            }),
+        ),
+    ];
+
+    for (case, initialized_backend) in cases {
+        let locked = ExtensionCapabilities {
+            backend: Some(locked_backend.clone()),
+            ..ExtensionCapabilities::default()
+        };
+        let mut initialized = initialization(extension(vec![ExtensionType::Backend]));
+        initialized.capabilities.backend = initialized_backend;
+        let response = ExtensionResponse::success(1, initialized).unwrap();
+        let transport = ScriptedTransport {
+            expected: ExpectedExtension::discovered_with_capabilities(
+                extension(vec![ExtensionType::Backend]),
+                locked,
+            ),
+            responses: [Ok(response)].into(),
+            requests: Vec::new(),
+        };
+
+        let failure = Session::loaded(transport)
+            .initialize(params())
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{case} should fail initialization"));
+
+        assert!(
+            failure
+                .error()
+                .to_string()
+                .contains("backend capabilities disagreed with discovery"),
+            "{case}: {}",
+            failure.error()
+        );
+        match failure {
+            FailedSession::Stopped(session, _) => {
+                assert_eq!(session.transport_internal().requests.len(), 1, "{case}");
+                assert_eq!(
+                    session.transport_internal().requests[0].method,
+                    methods::INITIALIZE,
+                    "{case}"
+                );
+            }
+            FailedSession::Indeterminate(_, error) => {
+                panic!("{case}: fake transport abort should prove stopped: {error}")
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn discovered_backend_without_locked_metadata_accepts_valid_initialization() {
+    let initialized = ExtensionResponse::success(1, backend_initialization(true)).unwrap();
+    let transport = ScriptedTransport {
+        expected: ExpectedExtension::discovered(extension(vec![ExtensionType::Backend])),
+        responses: [Ok(initialized)].into(),
+        requests: Vec::new(),
+    };
+
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    assert_eq!(session.transport_internal().requests.len(), 1);
+    assert_eq!(
+        session.transport_internal().requests[0].method,
+        methods::INITIALIZE
+    );
+}
+
+#[tokio::test]
+async fn rejects_generate_when_the_backend_did_not_enable_it_without_sending() {
+    let initialized = ExtensionResponse::success(1, backend_initialization(false)).unwrap();
+    let session = Session::loaded(scripted_transport([initialized]))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<GenerateResult>(methods::GENERATE, GenerateRequest::default())
+        .await
+    {
+        InvokeOutcome::Rejected(session, error) => {
+            assert!(error.to_string().contains("does not support capability"));
+            assert_eq!(session.transport_internal().requests.len(), 1);
+            assert_eq!(
+                session.transport_internal().requests[0].method,
+                methods::INITIALIZE
+            );
+        }
+        InvokeOutcome::Success(_, _) => panic!("disabled generation must be rejected locally"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("local rejection should preserve Ready: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
+async fn permits_generate_when_the_backend_enabled_it() {
+    let initialized = ExtensionResponse::success(1, backend_initialization(true)).unwrap();
+    let generated = ExtensionResponse::success(
+        2,
+        serde_json::json!({"success": true, "artifacts": [], "diagnostics": []}),
+    )
+    .unwrap();
+    let session = Session::loaded(scripted_transport([initialized, generated]))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<GenerateResult>(methods::GENERATE, GenerateRequest::default())
+        .await
+    {
+        InvokeOutcome::Success(session, result) => {
+            assert!(result.success);
+            assert_eq!(session.transport_internal().requests.len(), 2);
+            assert_eq!(
+                session.transport_internal().requests[1].method,
+                methods::GENERATE
+            );
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("enabled generation should be sent: {error}"),
+        InvokeOutcome::Failed(failure) => panic!("generation should succeed: {}", failure.error()),
+    }
 }
 
 #[tokio::test]
@@ -247,9 +512,7 @@ async fn local_serialization_failure_preserves_the_ready_session() {
         }
     }
 
-    let initialized =
-        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
-            .unwrap();
+    let initialized = ExtensionResponse::success(1, backend_initialization(true)).unwrap();
     let session = Session::loaded(transport(
         ExpectedExtension::identified("example"),
         initialized,
@@ -275,9 +538,7 @@ async fn local_serialization_failure_preserves_the_ready_session() {
 
 #[tokio::test]
 async fn rejects_exit_as_a_ready_request_without_sending() {
-    let initialized =
-        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
-            .unwrap();
+    let initialized = ExtensionResponse::success(1, backend_initialization(true)).unwrap();
     let exit_response = ExtensionResponse::success(2, serde_json::json!({})).unwrap();
     let transport = FakeTransport {
         expected: ExpectedExtension::identified("example"),

@@ -29,7 +29,11 @@ impl Extension for WasmExtension {
 
     fn capabilities() -> ExtensionCapabilities {
         ExtensionCapabilities {
-            frontend: None,
+            backend: Some(BackendCapability {
+                targets: vec!["wasm".into(), "wat".into()],
+                ir_versions: vec!["3".into(), "4".into()],
+                generate: true,
+            }),
             ..ExtensionCapabilities::default()
         }
     }
@@ -76,6 +80,22 @@ impl Backend for WasmExtension {
 
     fn target_languages() -> Vec<String> {
         vec!["wasm".into(), "wat".into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_advertise_wasm_backend_contract() {
+        let backend = WasmExtension::capabilities()
+            .backend
+            .expect("WASM extension should advertise backend capabilities");
+
+        assert_eq!(backend.targets, ["wasm", "wat"]);
+        assert_eq!(backend.ir_versions, ["3", "4"]);
+        assert!(backend.generate);
     }
 }
 

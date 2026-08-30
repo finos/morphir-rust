@@ -1,23 +1,30 @@
 //! Exact locks, installed catalog state, and offline activation.
 
-use crate::store::{verify_executable_mode, verify_file};
+use crate::store::read_verified_file;
 use crate::{
-    ArtifactRuntime, ArtifactSource, ArtifactStore, Capability, DistributionError, ExtensionId,
-    IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result, Selection,
-    Sha256Digest, VerifiedArtifact,
+    ArtifactRuntime, ArtifactSource, ArtifactStore, BackendRecord, Capability, DistributionError,
+    ExtensionId, IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result,
+    Selection, Sha256Digest, VerifiedArtifact,
 };
 use fs2::FileExt;
 use morphir_common::home::MorphirHome;
 use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
-use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{
+    BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-const EXTENSION_LOCK_SCHEMA_VERSION: u32 = 2;
+const EXTENSION_LOCK_SCHEMA_VERSION: u32 = 3;
+const LEGACY_EXTENSION_LOCK_SCHEMA_VERSION: u32 = 2;
+const CATALOG_SCHEMA_VERSION: u32 = 2;
+const LEGACY_CATALOG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +44,27 @@ pub struct ExtensionLock {
     index: IndexProvenance,
     source: ArtifactSource,
     runtime: ArtifactRuntime,
+    platform: Option<Platform>,
+    args: Vec<String>,
+    digest: Sha256Digest,
+    capabilities: Vec<Capability>,
+    mep_versions: Vec<String>,
+    #[serde(default)]
+    backend: Option<BackendRecord>,
+    executable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyExtensionLock {
+    schema_version: u32,
+    selection: Selection,
+    extension_id: ExtensionId,
+    name: String,
+    version: Version,
+    index: IndexProvenance,
+    source: ArtifactSource,
+    runtime: ArtifactRuntime,
     platform: Platform,
     args: Vec<String>,
     digest: Sha256Digest,
@@ -45,9 +73,32 @@ pub struct ExtensionLock {
     executable: bool,
 }
 
-impl ExtensionLock {
-    fn from_verified(artifact: &VerifiedArtifact) -> Self {
+impl From<LegacyExtensionLock> for ExtensionLock {
+    fn from(legacy: LegacyExtensionLock) -> Self {
         Self {
+            schema_version: legacy.schema_version,
+            selection: legacy.selection,
+            extension_id: legacy.extension_id,
+            name: legacy.name,
+            version: legacy.version,
+            index: legacy.index,
+            source: legacy.source,
+            runtime: legacy.runtime,
+            platform: Some(legacy.platform),
+            args: legacy.args,
+            digest: legacy.digest,
+            capabilities: legacy.capabilities,
+            mep_versions: legacy.mep_versions,
+            backend: None,
+            executable: legacy.executable,
+        }
+    }
+}
+
+impl ExtensionLock {
+    fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
+        let runtime = artifact.selected.artifact.runtime();
+        let lock = Self {
             schema_version: EXTENSION_LOCK_SCHEMA_VERSION,
             selection: artifact.selected.selection.clone(),
             extension_id: artifact.selected.release.extension_id().clone(),
@@ -55,14 +106,25 @@ impl ExtensionLock {
             version: artifact.selected.release.version().clone(),
             index: artifact.selected.index.clone(),
             source: artifact.selected.artifact.source().clone(),
-            runtime: artifact.selected.artifact.runtime(),
-            platform: artifact.selected.artifact.platform().clone(),
+            runtime,
+            platform: artifact.selected.artifact.platform().cloned(),
             args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
+            backend: artifact.selected.release.backend().cloned(),
             executable: artifact.selected.artifact.executable(),
-        }
+        };
+        validate_runtime_state(
+            &lock.extension_id,
+            lock.runtime,
+            lock.platform.as_ref(),
+            &lock.args,
+            lock.executable,
+            &lock.capabilities,
+            lock.backend.as_ref(),
+        )?;
+        Ok(lock)
     }
 
     /// Return the lock schema version.
@@ -106,8 +168,8 @@ impl ExtensionLock {
     }
 
     /// Return the selected artifact platform.
-    pub fn platform(&self) -> &Platform {
-        &self.platform
+    pub fn platform(&self) -> Option<&Platform> {
+        self.platform.as_ref()
     }
 
     /// Return immutable arguments passed to the extension process.
@@ -130,6 +192,11 @@ impl ExtensionLock {
         &self.mep_versions
     }
 
+    /// Return backend-specific metadata fixed by this lock, when declared.
+    pub fn backend(&self) -> Option<&BackendRecord> {
+        self.backend.as_ref()
+    }
+
     /// Return the executable state declared by the exact selection.
     pub fn executable(&self) -> bool {
         self.executable
@@ -139,7 +206,7 @@ impl ExtensionLock {
 /// Write an exact extension lock after artifact verification.
 pub fn write_extension_lock(home: &MorphirHome, artifact: &VerifiedArtifact) -> Result<()> {
     let _transaction = InstalledStateGuard::acquire(home)?;
-    let lock = ExtensionLock::from_verified(artifact);
+    let lock = ExtensionLock::from_verified(artifact)?;
     atomic_write_json(&extension_lock_path(home, &lock.extension_id), &lock)
 }
 
@@ -153,16 +220,31 @@ fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<
     let path = extension_lock_path(home, id);
     let bytes = read_state_bytes(&path)?;
     let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
-    if envelope.schema_version != EXTENSION_LOCK_SCHEMA_VERSION {
-        return Err(DistributionError::UnsupportedStateSchema {
-            kind: "extension lock",
-            version: envelope.schema_version,
-        });
-    }
-    let lock: ExtensionLock = decode_state(&path, &bytes)?;
+    let lock: ExtensionLock = match envelope.schema_version {
+        EXTENSION_LOCK_SCHEMA_VERSION => decode_state(&path, &bytes)?,
+        LEGACY_EXTENSION_LOCK_SCHEMA_VERSION => {
+            let legacy: LegacyExtensionLock = decode_state(&path, &bytes)?;
+            legacy.into()
+        }
+        version => {
+            return Err(DistributionError::UnsupportedStateSchema {
+                kind: "extension lock",
+                version,
+            });
+        }
+    };
     if &lock.extension_id != id {
         return Err(DistributionError::StateMismatch { id: id.clone() });
     }
+    validate_runtime_state(
+        id,
+        lock.runtime,
+        lock.platform.as_ref(),
+        &lock.args,
+        lock.executable,
+        &lock.capabilities,
+        lock.backend.as_ref(),
+    )?;
     Ok(lock)
 }
 
@@ -178,6 +260,25 @@ pub struct InstalledExtension {
     name: String,
     version: Version,
     runtime: ArtifactRuntime,
+    platform: Option<Platform>,
+    args: Vec<String>,
+    digest: Sha256Digest,
+    store_path: RelativeArtifactPath,
+    capabilities: Vec<Capability>,
+    mep_versions: Vec<String>,
+    index: IndexProvenance,
+    #[serde(default)]
+    backend: Option<BackendRecord>,
+    executable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyInstalledExtension {
+    extension_id: ExtensionId,
+    name: String,
+    version: Version,
+    runtime: ArtifactRuntime,
     platform: Platform,
     args: Vec<String>,
     digest: Sha256Digest,
@@ -188,22 +289,46 @@ pub struct InstalledExtension {
     executable: bool,
 }
 
-impl InstalledExtension {
-    fn from_verified(artifact: &VerifiedArtifact) -> Self {
+impl From<LegacyInstalledExtension> for InstalledExtension {
+    fn from(legacy: LegacyInstalledExtension) -> Self {
         Self {
+            extension_id: legacy.extension_id,
+            name: legacy.name,
+            version: legacy.version,
+            runtime: legacy.runtime,
+            platform: Some(legacy.platform),
+            args: legacy.args,
+            digest: legacy.digest,
+            store_path: legacy.store_path,
+            capabilities: legacy.capabilities,
+            mep_versions: legacy.mep_versions,
+            index: legacy.index,
+            backend: None,
+            executable: legacy.executable,
+        }
+    }
+}
+
+impl InstalledExtension {
+    fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
+        let runtime = artifact.selected.artifact.runtime();
+        let installed = Self {
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
             version: artifact.selected.release.version().clone(),
-            runtime: artifact.selected.artifact.runtime(),
-            platform: artifact.selected.artifact.platform().clone(),
+            runtime,
+            platform: artifact.selected.artifact.platform().cloned(),
             args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
             store_path: artifact.store_path.clone(),
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
             index: artifact.selected.index.clone(),
+            backend: artifact.selected.release.backend().cloned(),
             executable: artifact.selected.artifact.executable(),
-        }
+        };
+        validate_installed_runtime(&installed)?;
+        Ok(installed)
     }
 
     /// Return the stable extension identity.
@@ -221,14 +346,14 @@ impl InstalledExtension {
         &self.version
     }
 
-    /// Return the process runtime.
+    /// Return the installed artifact runtime.
     pub fn runtime(&self) -> ArtifactRuntime {
         self.runtime
     }
 
     /// Return the installed platform.
-    pub fn platform(&self) -> &Platform {
-        &self.platform
+    pub fn platform(&self) -> Option<&Platform> {
+        self.platform.as_ref()
     }
 
     /// Return immutable launch arguments.
@@ -259,6 +384,11 @@ impl InstalledExtension {
     /// Return exact index provenance.
     pub fn index(&self) -> &IndexProvenance {
         &self.index
+    }
+
+    /// Return backend-specific metadata, when declared.
+    pub fn backend(&self) -> Option<&BackendRecord> {
+        self.backend.as_ref()
     }
 
     /// Return the executable state registered for the artifact.
@@ -309,6 +439,13 @@ struct CatalogFile {
     extensions: Vec<InstalledExtension>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyCatalogFile {
+    schema_version: u32,
+    extensions: Vec<LegacyInstalledExtension>,
+}
+
 /// Durable installed extension catalog.
 #[derive(Debug)]
 pub struct InstalledCatalog {
@@ -331,15 +468,27 @@ impl InstalledCatalog {
                 extensions: BTreeMap::new(),
             });
         }
-        let stored: CatalogFile = read_json(&path)?;
-        if stored.schema_version != 1 {
-            return Err(DistributionError::UnsupportedStateSchema {
-                kind: "installed extension catalog",
-                version: stored.schema_version,
-            });
-        }
+        let bytes = read_state_bytes(&path)?;
+        let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
+        let stored = match envelope.schema_version {
+            CATALOG_SCHEMA_VERSION => decode_state(&path, &bytes)?,
+            LEGACY_CATALOG_SCHEMA_VERSION => {
+                let legacy: LegacyCatalogFile = decode_state(&path, &bytes)?;
+                CatalogFile {
+                    schema_version: legacy.schema_version,
+                    extensions: legacy.extensions.into_iter().map(Into::into).collect(),
+                }
+            }
+            version => {
+                return Err(DistributionError::UnsupportedStateSchema {
+                    kind: "installed extension catalog",
+                    version,
+                });
+            }
+        };
         let mut extensions = BTreeMap::new();
         for extension in stored.extensions {
+            validate_installed_runtime(&extension)?;
             let id = extension.extension_id.clone();
             if extensions.insert(id.clone(), extension).is_some() {
                 return Err(DistributionError::StateMismatch { id });
@@ -368,11 +517,11 @@ impl InstalledCatalog {
     pub fn register(&mut self, artifact: VerifiedArtifact) -> Result<InstalledExtension> {
         let _transaction = InstalledStateGuard::acquire(&self.home)?;
         let latest = Self::load_unlocked(&self.home)?;
-        let entry = InstalledExtension::from_verified(&artifact);
+        let entry = InstalledExtension::from_verified(&artifact)?;
         let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: 1,
+            schema_version: CATALOG_SCHEMA_VERSION,
             extensions: next.values().cloned().collect(),
         };
         atomic_write_json(&self.home.extensions_catalog_file(), &stored)?;
@@ -406,12 +555,12 @@ impl<'home> ExtensionInstaller<'home> {
         let verified = ArtifactStore::from_home(self.home).materialize(selected)?;
         let _transaction = InstalledStateGuard::acquire(self.home)?;
         let catalog = InstalledCatalog::load_unlocked(self.home)?;
-        let lock = ExtensionLock::from_verified(&verified);
-        let entry = InstalledExtension::from_verified(&verified);
+        let lock = ExtensionLock::from_verified(&verified)?;
+        let entry = InstalledExtension::from_verified(&verified)?;
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: 1,
+            schema_version: CATALOG_SCHEMA_VERSION,
             extensions: extensions.into_values().collect(),
         };
         let lock_bytes = encode_json(&lock)?;
@@ -447,7 +596,7 @@ fn uninstall_with_writer(
         .remove(id)
         .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
     let stored = CatalogFile {
-        schema_version: 1,
+        schema_version: CATALOG_SCHEMA_VERSION,
         extensions: extensions.into_values().collect(),
     };
     let lock_path = extension_lock_path(home, id);
@@ -517,14 +666,27 @@ fn list_installed_with_reacquisition_after_catalog(
 #[derive(Debug, Clone)]
 pub struct VerifiedProcessArtifact {
     program: PathBuf,
+    bytes: Arc<[u8]>,
+    filename: OsString,
     args: Vec<String>,
     extension_info: ExtensionInfo,
+    backend: Option<BackendRecord>,
 }
 
 impl VerifiedProcessArtifact {
     /// Return the verified absolute process path.
     pub fn program(&self) -> &Path {
         &self.program
+    }
+
+    /// Return the exact process bytes whose digest was verified.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Return the installed executable basename used for private staging.
+    pub fn filename(&self) -> &OsStr {
+        &self.filename
     }
 
     /// Return immutable installed launch arguments.
@@ -536,14 +698,90 @@ impl VerifiedProcessArtifact {
     pub fn extension_info(&self) -> &ExtensionInfo {
         &self.extension_info
     }
+
+    /// Return stored backend metadata, when declared.
+    pub fn backend(&self) -> Option<&BackendRecord> {
+        self.backend.as_ref()
+    }
+
+    /// Return typed capabilities reconstructed from installed metadata.
+    pub fn extension_capabilities(&self) -> ExtensionCapabilities {
+        extension_capabilities(self.backend.as_ref())
+    }
+}
+
+/// Offline WebAssembly activation whose installed bytes have just been rehashed.
+#[derive(Debug, Clone)]
+pub struct VerifiedWasmArtifact {
+    path: PathBuf,
+    bytes: Arc<[u8]>,
+    extension_info: ExtensionInfo,
+    backend: Option<BackendRecord>,
+}
+
+impl VerifiedWasmArtifact {
+    /// Return the verified absolute WebAssembly module path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Return the exact WebAssembly bytes whose digest was verified.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Return exact metadata that MEP initialization must reproduce.
+    pub fn extension_info(&self) -> &ExtensionInfo {
+        &self.extension_info
+    }
+
+    /// Return stored backend metadata, when declared.
+    pub fn backend(&self) -> Option<&BackendRecord> {
+        self.backend.as_ref()
+    }
+
+    /// Return typed capabilities reconstructed from installed metadata.
+    pub fn extension_capabilities(&self) -> ExtensionCapabilities {
+        extension_capabilities(self.backend.as_ref())
+    }
+}
+
+/// A runtime-tagged installed artifact whose exact bytes were reverified offline.
+#[derive(Debug, Clone)]
+pub enum VerifiedExtensionArtifact {
+    /// A native child-process artifact.
+    Process(VerifiedProcessArtifact),
+    /// A portable WebAssembly module.
+    Wasm(VerifiedWasmArtifact),
+}
+
+impl VerifiedExtensionArtifact {
+    /// Return exact metadata that MEP initialization must reproduce.
+    pub fn extension_info(&self) -> &ExtensionInfo {
+        match self {
+            Self::Process(process) => process.extension_info(),
+            Self::Wasm(wasm) => wasm.extension_info(),
+        }
+    }
+
+    /// Return typed capabilities reconstructed from installed metadata.
+    pub fn extension_capabilities(&self) -> ExtensionCapabilities {
+        match self {
+            Self::Process(process) => process.extension_capabilities(),
+            Self::Wasm(wasm) => wasm.extension_capabilities(),
+        }
+    }
 }
 
 /// Activate one catalog entry without consulting its source index.
 ///
 /// The catalog and exact lock must agree. The artifact is then canonicalized
 /// beneath Morphir home and rehashed before this function returns.
-pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<VerifiedProcessArtifact> {
-    let (installed, lock) = {
+pub fn activate_installed(
+    home: &MorphirHome,
+    id: &ExtensionId,
+) -> Result<VerifiedExtensionArtifact> {
+    let snapshot = {
         let _transaction = InstalledStateGuard::acquire(home)?;
         let catalog = InstalledCatalog::load_unlocked(home)?;
         let installed = catalog
@@ -551,33 +789,66 @@ pub fn activate_installed(home: &MorphirHome, id: &ExtensionId) -> Result<Verifi
             .cloned()
             .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
         let lock = read_extension_lock_unlocked(home, id)?;
-        (installed, lock)
+        validate_installed_pair(&installed, &lock)?;
+        InstalledExtensionSnapshot {
+            installed,
+            selection: lock.selection,
+        }
     };
-    validate_installed_pair(&installed, &lock)?;
+    activate_installed_snapshot(home, &snapshot)
+}
+
+/// Activate the exact atomically validated snapshot selected by a caller.
+///
+/// Later catalog replacements cannot change the selected version, digest,
+/// capabilities, arguments, or backend metadata used for this activation.
+pub fn activate_installed_snapshot(
+    home: &MorphirHome,
+    snapshot: &InstalledExtensionSnapshot,
+) -> Result<VerifiedExtensionArtifact> {
+    let installed = snapshot.installed().clone();
+    validate_installed_runtime(&installed)?;
 
     let home_root = fs::canonicalize(home.root()).map_err(|source| DistributionError::Io {
         path: home.root().to_path_buf(),
         source,
     })?;
     let requested = home.root().join(installed.store_path());
-    let program = fs::canonicalize(&requested).map_err(|source| DistributionError::Io {
+    let artifact_path = fs::canonicalize(&requested).map_err(|source| DistributionError::Io {
         path: requested,
         source,
     })?;
-    if !program.starts_with(&home_root) {
+    if !artifact_path.starts_with(&home_root) {
         return Err(DistributionError::InstalledPathEscape {
-            path: program,
+            path: artifact_path,
             root: home_root,
         });
     }
-    verify_file(&program, &lock.digest)?;
-    verify_executable_mode(&program, lock.executable)?;
+    let bytes = read_verified_file(&artifact_path, &installed.digest, installed.executable)?;
+    let filename = artifact_path
+        .file_name()
+        .expect("an installed artifact path has a filename")
+        .to_os_string();
 
-    Ok(VerifiedProcessArtifact {
-        program,
-        args: installed.args.clone(),
-        extension_info: installed.extension_info(),
-    })
+    let extension_info = installed.extension_info();
+    match installed.runtime {
+        ArtifactRuntime::Process => Ok(VerifiedExtensionArtifact::Process(
+            VerifiedProcessArtifact {
+                program: artifact_path,
+                bytes: bytes.into(),
+                filename,
+                args: installed.args,
+                extension_info,
+                backend: installed.backend,
+            },
+        )),
+        ArtifactRuntime::Wasm => Ok(VerifiedExtensionArtifact::Wasm(VerifiedWasmArtifact {
+            path: artifact_path,
+            bytes: bytes.into(),
+            extension_info,
+            backend: installed.backend,
+        })),
+    }
 }
 
 fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock) -> Result<()> {
@@ -591,12 +862,14 @@ fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock)
         || lock.capabilities != installed.capabilities
         || lock.mep_versions != installed.mep_versions
         || lock.index != installed.index
+        || lock.backend != installed.backend
         || lock.executable != installed.executable
     {
         return Err(DistributionError::StateMismatch {
             id: installed.extension_id.clone(),
         });
     }
+    validate_installed_runtime(installed)?;
     if !lock
         .mep_versions
         .iter()
@@ -608,6 +881,68 @@ fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock)
         });
     }
     Ok(())
+}
+
+fn validate_installed_runtime(installed: &InstalledExtension) -> Result<()> {
+    validate_runtime_state(
+        &installed.extension_id,
+        installed.runtime,
+        installed.platform.as_ref(),
+        &installed.args,
+        installed.executable,
+        &installed.capabilities,
+        installed.backend.as_ref(),
+    )
+}
+
+fn validate_runtime_state(
+    id: &ExtensionId,
+    runtime: ArtifactRuntime,
+    platform: Option<&Platform>,
+    args: &[String],
+    executable: bool,
+    capabilities: &[Capability],
+    backend: Option<&BackendRecord>,
+) -> Result<()> {
+    let declares_backend = capabilities.contains(&Capability::Backend);
+    if backend.is_some() && !declares_backend {
+        return Err(DistributionError::InvalidInstalledState {
+            id: id.clone(),
+            reason: "backend metadata requires the backend capability",
+        });
+    }
+    match runtime {
+        ArtifactRuntime::Process if platform.is_none() => {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: "process artifacts require a platform",
+            })
+        }
+        ArtifactRuntime::Wasm if platform.is_some() || !args.is_empty() || executable => {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: "wasm artifacts must be portable, argument-free, and non-executable",
+            })
+        }
+        ArtifactRuntime::Wasm if declares_backend && backend.is_none() => {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: "wasm backend artifacts require backend metadata",
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+fn extension_capabilities(backend: Option<&BackendRecord>) -> ExtensionCapabilities {
+    ExtensionCapabilities {
+        backend: backend.map(|backend| BackendCapability {
+            targets: backend.targets().to_vec(),
+            ir_versions: backend.ir_versions().to_vec(),
+            generate: true,
+        }),
+        ..ExtensionCapabilities::default()
+    }
 }
 
 fn extension_type(capability: Capability) -> ExtensionType {
@@ -774,11 +1109,6 @@ fn remove_file(path: &Path) -> Result<()> {
             source,
         }),
     }
-}
-
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    let bytes = read_state_bytes(path)?;
-    decode_state(path, &bytes)
 }
 
 fn read_state_bytes(path: &Path) -> Result<Vec<u8>> {
@@ -1155,6 +1485,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn activation_uses_the_selected_snapshot_after_a_concurrent_replacement() {
+        let (root, home, id) = installed_extension();
+        let snapshot = list_installed(&home).unwrap().remove(0);
+        let replacement_bytes = b"replacement extension";
+        fs::write(
+            root.path().join("index/artifacts/example"),
+            replacement_bytes,
+        )
+        .unwrap();
+        let replacement_digest = Sha256Digest::of_bytes(replacement_bytes);
+        write_release(&root.path().join("index"), "2.0.0", &replacement_digest);
+        let selected = LocalIndex::open(root.path().join("index"))
+            .unwrap()
+            .resolve(
+                &id,
+                Selection::Channel(Channel::Stable),
+                &Platform::new("linux", "x86_64").unwrap(),
+            )
+            .unwrap();
+        let update_home = home.clone();
+        thread::spawn(move || ExtensionInstaller::new(&update_home).install(selected))
+            .join()
+            .unwrap()
+            .unwrap();
+
+        let activated = activate_installed_snapshot(&home, &snapshot).unwrap();
+
+        assert_eq!(activated.extension_info().version, "1.0.0");
+        assert_eq!(
+            expect_process_bytes(&activated),
+            b"example extension",
+            "activation must use the bytes and metadata selected before replacement"
+        );
+    }
+
     fn assert_failed_uninstall_restores_state(failure: UninstallFailure) {
         let (root, home, id) = installed_extension();
         let lock_path = extension_lock_path(&home, &id);
@@ -1198,6 +1564,13 @@ mod tests {
             .unwrap();
         ExtensionInstaller::new(&home).install(selected).unwrap();
         (root, home, id)
+    }
+
+    fn expect_process_bytes(artifact: &VerifiedExtensionArtifact) -> &[u8] {
+        match artifact {
+            VerifiedExtensionArtifact::Process(process) => process.bytes(),
+            VerifiedExtensionArtifact::Wasm(_) => panic!("expected process artifact"),
+        }
     }
 
     fn injected_uninstall_error(path: &Path) -> DistributionError {

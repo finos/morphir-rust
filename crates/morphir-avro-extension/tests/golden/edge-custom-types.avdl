@@ -1,0 +1,66 @@
+// Avro Tools 1.12.2 requires `idl --useJavaCC` for message annotations with named responses.
+@morphir.module("customer")
+@morphir.package("acme/customer")
+@namespace("acme.customer")
+protocol Customer {
+  @namespace("acme.customer.customer")
+  @morphir.fqname("acme/customer:customer#custom-values")
+  record CustomValues {
+    decimal(38, 10) amount;
+    date asOf;
+    uuid identifier;
+    @morphir.type("Char") string initial;
+    map<string> labels;
+    @morphir.fqname("acme/customer:customer#money") decimal(20, 4) mappedAmount;
+    @logicalType("date") @morphir.fqname("acme/customer:customer#legacy-date") long mappedDate;
+    @logicalType("uuid") @morphir.fqname("acme/customer:customer#binary-id") bytes mappedIdentifier;
+    union { null, string } nickname;
+    @logicalType("timestamp-micros") long observedAt;
+    @logicalType("time-micros") long opensAt;
+    string `record`;
+    @morphir.collection-kind("set") array<string> tags;
+  }
+
+  @namespace("acme.customer.customer.Shape")
+  @morphir.fqname("acme/customer:customer#circle")
+  record Circle {
+    long radius;
+  }
+
+  @namespace("acme.customer.customer.Shape")
+  @morphir.fqname("acme/customer:customer#point")
+  record Point {
+  }
+
+  /**
+   * A shape with payload constructors.
+   */
+  @namespace("acme.customer.customer")
+  @morphir.fqname("acme/customer:customer#shape")
+  record Shape {
+    union { acme.customer.customer.Shape.Circle, acme.customer.customer.Shape.Point } value;
+  }
+
+  /**
+   * Customer status.
+   */
+  @namespace("acme.customer.customer")
+  @morphir.fqname("acme/customer:customer#status")
+  enum Status { Active, Inactive }
+
+  /**
+   * Documentation for custom-defaults.
+   */
+  @morphir.doc("Documentation for custom-defaults.")
+  @morphir.fqname("acme/customer:customer#custom-defaults")
+  @morphir.value-kind("constant")
+  acme.customer.customer.CustomValues customDefaults();
+
+  /**
+   * Documentation for error.
+   */
+  @morphir.doc("Documentation for error.")
+  @morphir.fqname("acme/customer:customer#error")
+  @morphir.value-kind("function")
+  string `error`();
+}

@@ -10,11 +10,13 @@ use crate::extensions::session::{
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
 use serde::{Serialize, de::DeserializeOwned};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
@@ -31,11 +33,21 @@ const MAX_STDERR_BYTES: usize = 256 * 1024;
 pub struct ProcessLaunch {
     extension_id: String,
     discovered: Option<ExtensionInfo>,
-    program: PathBuf,
+    capabilities: Option<ExtensionCapabilities>,
+    program: ProcessProgram,
     args: Vec<OsString>,
     working_directory: PathBuf,
     environment: Vec<(OsString, OsString)>,
     request_timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+enum ProcessProgram {
+    Path(PathBuf),
+    VerifiedBytes {
+        filename: OsString,
+        bytes: Arc<[u8]>,
+    },
 }
 
 impl ProcessLaunch {
@@ -48,7 +60,8 @@ impl ProcessLaunch {
         Self {
             extension_id: extension_id.into(),
             discovered: None,
-            program: program.into(),
+            capabilities: None,
+            program: ProcessProgram::Path(program.into()),
             args: Vec::new(),
             working_directory: working_directory.into(),
             environment: Vec::new(),
@@ -69,7 +82,72 @@ impl ProcessLaunch {
         Self {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
-            program: program.into(),
+            capabilities: None,
+            program: ProcessProgram::Path(program.into()),
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a verified process launch with exact discovery capabilities.
+    pub fn from_discovered_capabilities(
+        discovered: ExtensionInfo,
+        capabilities: ExtensionCapabilities,
+        program: impl Into<PathBuf>,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
+            capabilities: Some(capabilities),
+            program: ProcessProgram::Path(program.into()),
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a verified process launch from immutable executable bytes.
+    pub fn from_verified_bytes(
+        discovered: ExtensionInfo,
+        filename: &OsStr,
+        bytes: &[u8],
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
+            capabilities: None,
+            program: ProcessProgram::VerifiedBytes {
+                filename: filename.to_os_string(),
+                bytes: Arc::from(bytes),
+            },
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a verified process launch from immutable bytes and capabilities.
+    pub fn from_verified_bytes_with_capabilities(
+        discovered: ExtensionInfo,
+        capabilities: ExtensionCapabilities,
+        filename: &OsStr,
+        bytes: &[u8],
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
+            capabilities: Some(capabilities),
+            program: ProcessProgram::VerifiedBytes {
+                filename: filename.to_os_string(),
+                bytes: Arc::from(bytes),
+            },
             args: Vec::new(),
             working_directory: working_directory.into(),
             environment: Vec::new(),
@@ -117,6 +195,7 @@ enum ProcessSessionData {
 pub struct SpawnedProcessSession {
     expected_extension_id: String,
     discovered: Option<ExtensionInfo>,
+    capabilities: Option<ExtensionCapabilities>,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -125,6 +204,7 @@ pub struct SpawnedProcessSession {
     next_request_id: u64,
     request_timeout: Duration,
     state: ProcessSessionData,
+    _staged_program: Option<tempfile::TempDir>,
 }
 
 impl SpawnedProcessSession {
@@ -132,7 +212,8 @@ impl SpawnedProcessSession {
     pub async fn spawn(launch: ProcessLaunch) -> Result<Self> {
         validate_launch(&launch)?;
 
-        let mut command = Command::new(&launch.program);
+        let (program, staged_program) = prepare_program(&launch.program)?;
+        let mut command = Command::new(&program);
         command
             .args(&launch.args)
             .current_dir(&launch.working_directory)
@@ -163,6 +244,7 @@ impl SpawnedProcessSession {
         Ok(Self {
             expected_extension_id: launch.extension_id,
             discovered: launch.discovered,
+            capabilities: launch.capabilities,
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
@@ -171,6 +253,7 @@ impl SpawnedProcessSession {
             next_request_id: 1,
             request_timeout: launch.request_timeout,
             state: ProcessSessionData::Starting,
+            _staged_program: staged_program,
         })
     }
 
@@ -178,9 +261,9 @@ impl SpawnedProcessSession {
     pub async fn spawn_typestate(
         launch: ProcessLaunch,
     ) -> Result<Session<SpawnedProcessTransport, Loaded>> {
-        Ok(Session::loaded(SpawnedProcessTransport {
-            session: Self::spawn(launch).await?,
-        }))
+        Ok(Session::loaded(
+            SpawnedProcessTransport::spawn(launch).await?,
+        ))
     }
 
     /// Return captured standard error after the process exits.
@@ -318,16 +401,28 @@ pub struct SpawnedProcessTransport {
     session: SpawnedProcessSession,
 }
 
+impl SpawnedProcessTransport {
+    /// Start a native extension as a fresh shared MEP transport.
+    pub async fn spawn(launch: ProcessLaunch) -> Result<Self> {
+        Ok(Self {
+            session: SpawnedProcessSession::spawn(launch).await?,
+        })
+    }
+}
+
 #[async_trait]
 impl MepTransport for SpawnedProcessTransport {
     fn expected_extension(&self) -> ExpectedExtension {
-        self.session
-            .discovered
-            .clone()
-            .map(ExpectedExtension::discovered)
-            .unwrap_or_else(|| {
-                ExpectedExtension::identified(self.session.expected_extension_id.clone())
-            })
+        match (&self.session.discovered, &self.session.capabilities) {
+            (Some(discovered), Some(capabilities)) => {
+                ExpectedExtension::discovered_with_capabilities(
+                    discovered.clone(),
+                    capabilities.clone(),
+                )
+            }
+            (Some(discovered), None) => ExpectedExtension::discovered(discovered.clone()),
+            (None, _) => ExpectedExtension::identified(self.session.expected_extension_id.clone()),
+        }
     }
 
     async fn exchange(
@@ -586,10 +681,12 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
             "Extension process identity cannot be empty".to_string(),
         ));
     }
-    if !Path::new(&launch.program).is_file() {
+    if let ProcessProgram::Path(program) = &launch.program
+        && !program.is_file()
+    {
         return Err(DaemonError::Extension(format!(
             "Extension executable does not exist: {}",
-            launch.program.display()
+            program.display()
         )));
     }
     if !launch.working_directory.is_dir() {
@@ -598,6 +695,42 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
             launch.working_directory.display()
         )));
     }
+    Ok(())
+}
+
+fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+    match program {
+        ProcessProgram::Path(path) => Ok((path.clone(), None)),
+        ProcessProgram::VerifiedBytes { filename, bytes } => {
+            let directory = tempfile::Builder::new()
+                .prefix("morphir-extension-")
+                .tempdir()
+                .map_err(DaemonError::from)?;
+            let path = directory.path().join(filename);
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(DaemonError::from)?;
+            std::io::Write::write_all(&mut file, bytes).map_err(DaemonError::from)?;
+            file.sync_all().map_err(DaemonError::from)?;
+            make_owner_executable(&path)?;
+            Ok((path, Some(directory)))
+        }
+    }
+}
+
+#[cfg(unix)]
+fn make_owner_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions).map_err(Into::into)
+}
+
+#[cfg(not(unix))]
+fn make_owner_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 

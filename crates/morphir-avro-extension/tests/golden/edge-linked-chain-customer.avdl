@@ -1,0 +1,10 @@
+@namespace("acme.chain.model")
+protocol CustomerSchemas {
+  import idl "../identity/IdentifierSchemas.avdl";
+
+  @namespace("acme.chain.model")
+  @morphir.fqname("acme/chain:model#customer")
+  record Customer {
+    acme.chain.identity.Identifier identifier;
+  }
+}

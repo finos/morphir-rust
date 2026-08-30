@@ -194,6 +194,14 @@ pub(super) fn validate_negotiation(
             expected.id
         )));
     }
+    if let Some(discovered) = expected.capabilities
+        && result.capabilities.backend != discovered.backend
+    {
+        return Err(DaemonError::Extension(format!(
+            "Extension '{}' backend capabilities disagreed with discovery",
+            expected.id
+        )));
+    }
     if unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_none() {
         return Err(DaemonError::Extension(
             "Extension declared Frontend without frontend capabilities".into(),
@@ -202,6 +210,16 @@ pub(super) fn validate_negotiation(
     if !unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_some() {
         return Err(DaemonError::Extension(
             "Extension advertised frontend capabilities without declaring Frontend".into(),
+        ));
+    }
+    if unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_none() {
+        return Err(DaemonError::Extension(
+            "Extension declared Backend without backend capabilities".into(),
+        ));
+    }
+    if !unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_some() {
+        return Err(DaemonError::Extension(
+            "Extension advertised backend capabilities without declaring Backend".into(),
         ));
     }
     Ok(NegotiatedSession {

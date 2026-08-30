@@ -4,6 +4,7 @@ use super::{ExpectedExtension, Loaded, MepTransport, Session, TransportError, Tr
 use crate::extensions::ExtensionContainer;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use async_trait::async_trait;
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 
 /// Factory for Extism-backed typestate sessions.
 pub struct ExtismSession;
@@ -11,19 +12,44 @@ pub struct ExtismSession;
 impl ExtismSession {
     /// Create a loaded MEP session around an Extism container.
     pub fn connect(container: ExtensionContainer) -> Session<ExtismTransport, Loaded> {
-        Session::loaded(ExtismTransport { container })
+        Session::loaded(ExtismTransport {
+            container,
+            locked_extension: None,
+        })
     }
 }
 
 /// Extism implementation of the object-safe MEP transport.
 pub struct ExtismTransport {
     container: ExtensionContainer,
+    locked_extension: Option<ExpectedExtension>,
+}
+
+impl ExtismTransport {
+    /// Attach exact installed identity and optional backend metadata to a container.
+    pub(crate) fn new_with_expected_capabilities(
+        container: ExtensionContainer,
+        info: ExtensionInfo,
+        capabilities: Option<ExtensionCapabilities>,
+    ) -> Self {
+        let locked_extension = capabilities
+            .map(|capabilities| {
+                ExpectedExtension::discovered_with_capabilities(info.clone(), capabilities)
+            })
+            .unwrap_or_else(|| ExpectedExtension::discovered(info));
+        Self {
+            container,
+            locked_extension: Some(locked_extension),
+        }
+    }
 }
 
 #[async_trait]
 impl MepTransport for ExtismTransport {
     fn expected_extension(&self) -> ExpectedExtension {
-        ExpectedExtension::discovered(self.container.info().clone())
+        self.locked_extension
+            .clone()
+            .unwrap_or_else(|| ExpectedExtension::discovered(self.container.info().clone()))
     }
 
     async fn exchange(

@@ -1,0 +1,32 @@
+// Avro Tools 1.12.2 requires `idl --useJavaCC` for message annotations with named responses.
+/**
+ * Customer operations.
+ */
+@morphir.doc("Customer operations.")
+@morphir.module("customer")
+@morphir.package("acme/customer")
+@namespace("acme.customer")
+protocol Customer {
+  /**
+   * A customer record.
+   */
+  @namespace("acme.customer.customer")
+  @morphir.fqname("Acme:Customer:Customer")
+  record Customer {
+    boolean active;
+    long age;
+    string name;
+  }
+
+  /**
+   * Documentation for find-customer.
+   */
+  @morphir.doc("Documentation for find-customer.")
+  @morphir.entry-point(true)
+  @morphir.entry-point-doc("Query a customer by ID.")
+  @morphir.entry-point-id("customer-query")
+  @morphir.entry-point-kind("command")
+  @morphir.fqname("acme/customer:customer#find-customer")
+  @morphir.value-kind("function")
+  acme.customer.customer.Customer findCustomer(string id);
+}

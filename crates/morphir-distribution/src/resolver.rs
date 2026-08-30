@@ -2,7 +2,8 @@
 
 use crate::DistributionError;
 use crate::{
-    ArtifactRecord, Channel, ExtensionHistory, Platform, ReleaseRecord, Result, Selection,
+    ArtifactRecord, ArtifactRuntime, Channel, ExtensionHistory, Platform, ReleaseRecord, Result,
+    Selection,
 };
 use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
 
@@ -59,7 +60,10 @@ pub fn resolve(
         let artifacts = release
             .artifacts()
             .iter()
-            .filter(|artifact| artifact.platform() == platform)
+            .filter(|artifact| match artifact.runtime() {
+                ArtifactRuntime::Process => artifact.platform() == Some(platform),
+                ArtifactRuntime::Wasm => true,
+            })
             .collect::<Vec<_>>();
         match artifacts.as_slice() {
             [] => continue,

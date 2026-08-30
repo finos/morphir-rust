@@ -7,89 +7,85 @@ parent: For Contributors
 
 # Extension System Design
 
-This document describes the Morphir extension system, including current implementation and future vision.
+Morphir extensions provide frontends, backends, validators, and transforms
+through the Morphir Extension Protocol (MEP). The current host uses JSON-RPC
+2.0 envelopes for both supported runtime kinds: `process` and `wasm`.
 
-## Overview
+The extension and Avro release work described here is available for contributor
+testing but has not produced a public release.
 
-The Morphir extension system allows adding support for new languages and targets through WASM-based extensions. Extensions implement the `Frontend` and/or `Backend` traits to provide language-specific functionality.
+## Runtime boundary
 
-## Current Implementation
+- Process extensions exchange `Content-Length` framed MEP messages over
+  standard input and output. They retain the ambient rights of the user who
+  starts Morphir.
+- WASM extensions run through Extism. The guest has no direct filesystem or
+  network access. It returns artifacts to the host, which validates their
+  relative paths and writes them.
 
-### Architecture
+Extism is the current WASM engine, not a protocol runtime name. The current
+guest ABI does not use WIT or the WebAssembly Component Model.
 
-The current implementation uses:
-- **Extism**: WASM runtime for loading and executing extensions
-- **Extension Registry**: Manages loaded extensions
-- **Extension Container**: Wraps Extism plugin with Morphir-specific functionality
+## Protocol contract
 
-### Extension Types
+Every extension declares its identity, supported MEP versions, and typed
+capabilities during initialization. The host compares the initialized backend
+capability with the installed catalog and lock state before generation. That
+comparison includes `generate`, targets, and supported Morphir IR versions.
 
-Extensions can implement:
-- **Frontend**: Converts source code → Morphir IR V4
-- **Backend**: Converts Morphir IR V4 → Generated code
-- **Transform**: IR-to-IR transformations
-- **Validator**: IR validation
+A backend accepts the exact `GenerateRequest { ir, options }` operation and
+returns artifacts and diagnostics. Artifact fields are `path`, `content`, and
+`binary`.
 
-### Extension Discovery
+## Installation
 
-Extensions are discovered in this order:
-1. **Builtin Extensions**: Bundled with CLI (e.g., Gleam)
-2. **Config Extensions**: Specified in `morphir.toml`
-3. **Registry Extensions**: Installed from extension registry
+The CLI installs extensions only by ID from a controlled index:
 
-### Extension Loading
-
-```rust
-// Discover extension
-let extension = registry.find_extension_by_language("gleam").await?;
-
-// Call extension method
-let result: serde_json::Value = extension
-    .call("morphir.frontend.compile", params)
-    .await?;
+```console
+morphir extension install --index <INDEX> <NAME>
+morphir extension list
+morphir extension update --index <INDEX> <NAME>
+morphir extension uninstall <NAME>
 ```
 
-## Future Vision: Actor Model
+`<INDEX>` is a directory containing schema-v2 JSONL release histories under
+`extensions/` and artifact bytes below the same controlled root. Installation
+verifies the artifact digest and records matching catalog and lock state.
 
-The design documents describe a sophisticated actor-based architecture:
+The CLI does not discover extension entries in `morphir.toml` and does not
+install raw WASM files, archives, URLs, or directories. It has no `--global`
+installation mode. `MORPHIR_HOME` selects an isolated state root for local
+testing.
 
-### Extension Manager
+## Contributor workflow
 
-Central coordinator as a singleton Kameo actor:
-- Manages extension lifecycle
-- Routes extension requests
-- Coordinates extension hosts
+The portable protocol types and extension traits in
+`morphir-extension-sdk` compile for native and WASM targets. The Extism PDK and
+guest exports compile only for `wasm32`. Keep generation logic in native Rust
+and use a thin exported guest adapter.
 
-### Extension Hosts
+The Avro backend is the complete in-tree example. From the `morphir-rust`
+repository root:
 
-One actor per protocol type:
-- **JSON-RPC Host**: JSON-RPC protocol extensions
-- **gRPC Host**: gRPC protocol extensions
-- **Stdio Host**: Standard I/O extensions
-- **Extism WASM Host**: Current WASM extensions
-- **WASM Component Host**: Future WASM Component Model extensions
+```console
+cargo test -p morphir-extension-sdk
+cargo test -p morphir-avro-extension
+cargo build --release -p morphir-avro-extension --target wasm32-unknown-unknown
+mise run extension:artifact:avro
+```
 
-### Benefits of Actor Model
+The artifact task creates a local bundle. It does not create an install index,
+Git tag, or public release.
 
-- **Isolation**: Each component is an independent actor
-- **Concurrency**: Parallel processing across actors
-- **Supervision**: Automatic failure recovery
-- **Scalability**: Easy to add new protocol types
+## Further reading
 
-## Migration Path
+- [Current extension contributor guide](design/extensions/README.md)
+- [Morphir Extension Protocol](https://github.com/finos/morphir/blob/main/docs/design/draft/extensions/protocol.md)
+- [Distribution and acquisition](https://github.com/finos/morphir/blob/main/docs/design/draft/extensions/distribution-and-acquisition.md)
+- [Accepted WASM runtime and Avro proposal](https://github.com/finos/morphir/blob/main/docs/design/proposals/wasm-extension-runtime-and-avro-backend.md)
+- [Avro generation guide](https://github.com/finos/morphir/blob/main/docs/generate/avro.md)
 
-The current implementation is designed to be compatible with the future actor model:
-
-1. **Current**: Direct `ExtensionRegistry` usage
-2. **Future**: Extension Manager actor routes requests
-3. **Compatibility**: Current API can be wrapped in actor messages
-
-## Extension Development
-
-See [Extension Development Tutorial](../tutorials/extension-tutorial) for how to create extensions.
-
-## Next Steps
-
-- Read [Extension Host Interface](design/extension-host-interface)
-- See [Extism WASM Host](design/extism-wasm-host)
-- Check [Extension Manager](design/extension-manager)
+The actor-based, multi-protocol documents under
+`design/extensions/actor-based/` are preserved as historical design input.
+They are excluded from navigation and search and are not an implementation or
+installation guide.

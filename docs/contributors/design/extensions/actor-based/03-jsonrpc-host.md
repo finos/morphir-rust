@@ -2,10 +2,17 @@
 layout: default
 title: JSON-RPC Extension Host
 nav_order: 5
-parent: Morphir Extensions
+nav_exclude: true
+search_exclude: true
+has_toc: false
 ---
 
 # JSON-RPC Extension Host
+
+> **Historical design, not a supported extension contract.** This page belongs
+> to the superseded actor-based, multi-protocol design set. Current extensions
+> use Extism plus MEP JSON-RPC and install by ID from a controlled index. See
+> the [current extension guide](../README.md).
 
 **Status:** Draft  
 **Version:** 0.1.0
@@ -154,7 +161,7 @@ server.http().listen(3000);
 ## Configuration Example
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "typescript-generator"
 enabled = true
 protocol = "jsonrpc"

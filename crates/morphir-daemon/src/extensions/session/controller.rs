@@ -55,7 +55,14 @@ impl NegotiatedSession {
                         .as_ref()
                         .is_some_and(|frontend| frontend.compile)
             }
-            methods::GENERATE => self.extension.types.contains(&ExtensionType::Backend),
+            methods::GENERATE => {
+                self.extension.types.contains(&ExtensionType::Backend)
+                    && self
+                        .capabilities
+                        .backend
+                        .as_ref()
+                        .is_some_and(|backend| backend.generate)
+            }
             methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
             methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),
             _ => true,

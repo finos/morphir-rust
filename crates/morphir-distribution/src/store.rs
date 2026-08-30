@@ -243,6 +243,63 @@ pub(crate) fn verify_file(path: &Path, expected: &Sha256Digest) -> Result<()> {
     }
 }
 
+pub(crate) fn read_verified_file(
+    path: &Path,
+    expected_digest: &Sha256Digest,
+    expected_executable: bool,
+) -> Result<Vec<u8>> {
+    let mut file = File::open(path).map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    verify_executable_metadata(path, &metadata, expected_executable)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|source| DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let actual = Sha256Digest::of_bytes(&bytes);
+    if &actual == expected_digest {
+        Ok(bytes)
+    } else {
+        Err(DistributionError::DigestMismatch {
+            path: path.to_path_buf(),
+            expected: expected_digest.clone(),
+            actual,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn verify_executable_metadata(path: &Path, metadata: &fs::Metadata, expected: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let actual = metadata.permissions().mode() & 0o100 != 0;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(DistributionError::ExecutableModeMismatch {
+            path: path.to_path_buf(),
+            expected,
+            actual,
+        })
+    }
+}
+
+#[cfg(not(unix))]
+fn verify_executable_metadata(
+    _path: &Path,
+    _metadata: &fs::Metadata,
+    _expected: bool,
+) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(unix)]
 pub(crate) fn verify_executable_mode(path: &Path, expected: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;

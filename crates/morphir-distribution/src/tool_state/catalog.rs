@@ -38,7 +38,7 @@ pub struct ToolLock {
     platform: Platform,
     digest: Sha256Digest,
     length: u64,
-    targets_version: u64,
+    snapshot_version: u64,
     target_path: RelativeArtifactPath,
     store_path: RelativeArtifactPath,
     package_root: Option<RelativeArtifactPath>,
@@ -58,7 +58,7 @@ impl ToolLock {
             platform: package.platform.clone(),
             digest: package.digest.clone(),
             length: package.length,
-            targets_version: package.targets_version,
+            snapshot_version: package.snapshot_version,
             target_path: package.target_path.clone(),
             store_path: package.store_path.clone(),
             package_root: package.package_root.clone(),
@@ -78,7 +78,7 @@ impl ToolLock {
             platform: installed.platform.clone(),
             digest: installed.digest.clone(),
             length: installed.length,
-            targets_version: installed.targets_version,
+            snapshot_version: installed.snapshot_version,
             target_path: installed.target_path.clone(),
             store_path: installed.store_path.clone(),
             package_root: installed.package_root.clone(),
@@ -120,7 +120,7 @@ pub struct InstalledTool {
     pub(super) platform: Platform,
     pub(super) digest: Sha256Digest,
     pub(super) length: u64,
-    pub(super) targets_version: u64,
+    pub(super) snapshot_version: u64,
     pub(super) target_path: RelativeArtifactPath,
     pub(super) store_path: RelativeArtifactPath,
     pub(super) package_root: Option<RelativeArtifactPath>,
@@ -139,7 +139,7 @@ impl InstalledTool {
             platform: package.platform.clone(),
             digest: package.digest.clone(),
             length: package.length,
-            targets_version: package.targets_version,
+            snapshot_version: package.snapshot_version,
             target_path: package.target_path.clone(),
             store_path: package.store_path.clone(),
             package_root: package.package_root.clone(),
@@ -176,6 +176,11 @@ impl InstalledTool {
     /// Return the artifact digest authenticated at installation time.
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
+    }
+
+    /// Return the TUF snapshot version that authenticated this installation.
+    pub fn snapshot_version(&self) -> u64 {
+        self.snapshot_version
     }
 
     /// Return the installed program path relative to Morphir Home.
@@ -402,7 +407,7 @@ pub(super) fn validate_active_pair(active: &InstalledTool, lock: &ToolLock) -> R
         && lock.platform == active.platform
         && lock.digest == active.digest
         && lock.length == active.length
-        && lock.targets_version == active.targets_version
+        && lock.snapshot_version == active.snapshot_version
         && lock.target_path == active.target_path
         && lock.store_path == active.store_path
         && lock.package_root == active.package_root

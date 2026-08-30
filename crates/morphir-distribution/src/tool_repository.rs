@@ -23,7 +23,7 @@ pub struct ResolvedTrustedToolArtifact {
     target: TargetName,
     digest: Sha256Digest,
     length: u64,
-    targets_version: u64,
+    snapshot_version: u64,
 }
 
 impl ResolvedTrustedToolArtifact {
@@ -52,9 +52,9 @@ impl ResolvedTrustedToolArtifact {
         self.length
     }
 
-    /// Return the exact targets metadata version used for resolution.
-    pub fn targets_version(&self) -> u64 {
-        self.targets_version
+    /// Return the exact snapshot metadata version used for resolution.
+    pub fn snapshot_version(&self) -> u64 {
+        self.snapshot_version
     }
 
     #[cfg(test)]
@@ -73,7 +73,7 @@ impl ResolvedTrustedToolArtifact {
             target,
             digest,
             length,
-            targets_version: 1,
+            snapshot_version: 1,
         }
     }
 }
@@ -146,6 +146,7 @@ impl TrustedToolRepository {
             .map_err(repository_error)?;
         tracing::info!(
             targets_version = repository.targets().signed.version.get(),
+            snapshot_version = repository.snapshot().signed.version.get(),
             "authenticated tool repository loaded"
         );
         Ok(Self { repository })
@@ -210,7 +211,7 @@ impl TrustedToolRepository {
             target,
             digest: Sha256Digest::from_bytes(digest_bytes),
             length: target_metadata.length,
-            targets_version: self.repository.targets().signed.version.get(),
+            snapshot_version: self.repository.snapshot().signed.version.get(),
         };
         tracing::info!(
             version = %resolved.release.version(),

@@ -85,6 +85,7 @@ fn authenticated_raw_download_is_reverified_and_published_before_activation() {
     let installed = ToolInstaller::new(&home).install(package).unwrap();
     assert!(installed.store_path().starts_with("store/tools/sha256"));
     assert_eq!(installed.digest(), &digest);
+    assert_eq!(installed.snapshot_version(), 1);
     assert_eq!(
         activate_installed_tool(&home, &ToolId::parse("desktop").unwrap())
             .unwrap()

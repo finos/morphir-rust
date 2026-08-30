@@ -71,7 +71,7 @@ pub(super) fn package_for(
         platform: Platform::new("windows", "x86_64").unwrap(),
         digest,
         length: bytes.len() as u64,
-        targets_version: 1,
+        snapshot_version: 1,
         target_path: RelativeArtifactPath::parse(format!("artifacts/{id}/{version}/{filename}"))
             .unwrap(),
         store_path: relative,

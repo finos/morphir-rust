@@ -27,6 +27,8 @@ use tokio::time::timeout;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_STDERR_BYTES: usize = 256 * 1024;
+const EXECUTABLE_BUSY_RETRIES: usize = 4;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 /// A native extension command with an explicit identity and working directory.
 #[derive(Debug, Clone)]
@@ -276,7 +278,7 @@ impl SpawnedProcessSession {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = command.spawn().map_err(|error| {
+        let mut child = spawn_child(&mut command).await.map_err(|error| {
             DaemonError::Extension(format!(
                 "Failed to start extension '{}': {}",
                 launch.extension_id, error
@@ -441,6 +443,22 @@ impl SpawnedProcessSession {
     fn cancel_stderr(&mut self) {
         if let Some(stderr_task) = self.stderr_task.take() {
             stderr_task.abort();
+        }
+    }
+}
+
+async fn spawn_child(command: &mut Command) -> std::io::Result<Child> {
+    let mut retries = 0;
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && retries < EXECUTABLE_BUSY_RETRIES =>
+            {
+                retries += 1;
+                tokio::time::sleep(EXECUTABLE_BUSY_RETRY_DELAY).await;
+            }
+            result => return result,
         }
     }
 }

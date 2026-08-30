@@ -1,4 +1,5 @@
 mod identity;
+mod native;
 mod registration;
 
 pub use registration::{CacheNamespace, CacheRegistrationError};
@@ -6,13 +7,11 @@ pub use registration::{CacheNamespace, CacheRegistrationError};
 use self::{identity::portable_identity, registration::portable_comparison_key};
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
-use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_fs_ext::DirExt;
 use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt;
-use cap_std::fs::{Dir, DirEntry, Metadata, OpenOptions};
-use same_file::Handle;
-use std::ffi::OsStr;
+use cap_std::fs::{Dir, DirEntry, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -335,7 +334,7 @@ impl InventoryWalk<'_> {
         comparison_key: &str,
     ) -> Option<&CacheEntry> {
         let entry = self.namespace.entries.get(comparison_key)?;
-        self.native_spelling_matches(directory, siblings, child, metadata, identity, entry.path())
+        native::spelling_matches(directory, siblings, child, metadata, identity, entry.path())
             .then_some(entry)
     }
 
@@ -350,7 +349,7 @@ impl InventoryWalk<'_> {
         let prefix = format!("{}/", portable_comparison_key(identity));
         self.namespace.entries.iter().any(|(path, entry)| {
             path.starts_with(&prefix)
-                && self.native_spelling_matches(
+                && native::spelling_matches(
                     directory,
                     siblings,
                     child,
@@ -359,41 +358,6 @@ impl InventoryWalk<'_> {
                     entry.path(),
                 )
         })
-    }
-
-    fn native_spelling_matches(
-        &self,
-        directory: &Dir,
-        siblings: &[DirEntry],
-        child: &DirEntry,
-        metadata: &Metadata,
-        observed_identity: &str,
-        registered_path: &str,
-    ) -> bool {
-        let depth = observed_identity.split('/').count();
-        let registered_prefix = registered_path
-            .split('/')
-            .take(depth)
-            .collect::<Vec<_>>()
-            .join("/");
-        if registered_prefix == observed_identity {
-            return true;
-        }
-        let Some(registered_component) = registered_prefix.rsplit('/').next() else {
-            return false;
-        };
-        if siblings.iter().any(|sibling| {
-            sibling.file_name() == OsStr::new(registered_component)
-                && sibling.file_name() != child.file_name()
-        }) {
-            return false;
-        }
-        same_object(
-            directory,
-            OsStr::new(registered_component),
-            child.file_name().as_os_str(),
-            metadata,
-        )
     }
 
     fn visit(&mut self) -> Result<(), CacheInventoryError> {
@@ -441,44 +405,6 @@ impl InventoryWalk<'_> {
 struct MeasuredEntry {
     bytes: u64,
     safe: bool,
-}
-
-fn same_object(
-    directory: &Dir,
-    registered_name: &OsStr,
-    observed_name: &OsStr,
-    observed_metadata: &Metadata,
-) -> bool {
-    if is_link_like(observed_metadata)
-        || (!observed_metadata.is_dir() && !observed_metadata.is_file())
-    {
-        return false;
-    }
-    let Ok(registered_metadata) = directory.symlink_metadata(registered_name) else {
-        return false;
-    };
-    if is_link_like(&registered_metadata)
-        || (!registered_metadata.is_dir() && !registered_metadata.is_file())
-        || registered_metadata.is_dir() != observed_metadata.is_dir()
-        || registered_metadata.is_file() != observed_metadata.is_file()
-    {
-        return false;
-    }
-
-    let registered = object_handle(directory, registered_name, &registered_metadata);
-    let observed = object_handle(directory, observed_name, observed_metadata);
-    matches!((registered, observed), (Ok(left), Ok(right)) if left == right)
-}
-
-fn object_handle(directory: &Dir, name: &OsStr, metadata: &Metadata) -> io::Result<Handle> {
-    let file = if metadata.is_dir() {
-        directory.open_dir_nofollow(name)?.into_std_file()
-    } else {
-        let mut options = OpenOptions::new();
-        options.read(true).follow(FollowSymlinks::No);
-        directory.open_with(name, &options)?.into_std()
-    };
-    Handle::from_file(file)
 }
 
 fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {

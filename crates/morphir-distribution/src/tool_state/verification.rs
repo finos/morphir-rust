@@ -33,20 +33,27 @@ pub(super) fn sync_installed_file(home: &MorphirHome, path: &Path) -> Result<()>
         path: path.to_path_buf(),
         source,
     })?;
-    let store = home.tools_store_dir();
+    for entry in durability_entries(home.root(), path) {
+        sync_parent_directory(&entry)?;
+    }
+    Ok(())
+}
+
+fn durability_entries(home: &Path, path: &Path) -> Vec<PathBuf> {
+    let mut entries = Vec::new();
     let mut child = path;
     while let Some(parent) = child.parent() {
-        if !parent.starts_with(&store) {
+        if !parent.starts_with(home) {
             break;
         }
-        sync_parent_directory(child)?;
-        if parent == store {
-            sync_parent_directory(parent)?;
+        entries.push(child.to_path_buf());
+        if parent == home {
+            entries.push(parent.to_path_buf());
             break;
         }
         child = parent;
     }
-    Ok(())
+    entries
 }
 
 #[cfg(windows)]
@@ -218,4 +225,29 @@ pub(super) fn verify_one_file(
         });
     }
     verify_executable_mode(path, executable)
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::durability_entries;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn fresh_tool_store_syncs_every_entry_through_the_home_parent() {
+        let home = Path::new("morphir-home");
+        let file = home.join("store/tools/sha256/digest/desktop.exe");
+
+        assert_eq!(
+            durability_entries(home, &file),
+            [
+                "morphir-home/store/tools/sha256/digest/desktop.exe",
+                "morphir-home/store/tools/sha256/digest",
+                "morphir-home/store/tools/sha256",
+                "morphir-home/store/tools",
+                "morphir-home/store",
+                "morphir-home",
+            ]
+            .map(PathBuf::from)
+        );
+    }
 }

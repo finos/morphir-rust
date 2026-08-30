@@ -1,6 +1,6 @@
 use morphir_distribution::{
     ArtifactFilename, Channel, DistributionError, ExtensionHistory, ExtensionId, Platform,
-    RelativeArtifactPath, Selection, Sha256Digest, resolve,
+    RelativeArtifactPath, Selection, Sha256Digest, ToolId, resolve,
 };
 use morphir_extension_sdk::protocol::MEP_VERSION;
 use semver::Version;
@@ -44,8 +44,24 @@ fn portable_extension_identity_rejects_path_like_values() {
         ExtensionId::parse("morphir-elm").unwrap().as_str(),
         "morphir-elm"
     );
-    for invalid in ["", "Morphir Elm", "../morphir-elm", "morphir/elm", "-elm"] {
+    for invalid in [
+        "",
+        "Morphir Elm",
+        "../morphir-elm",
+        "morphir/elm",
+        "-elm",
+        "con",
+        "com1",
+    ] {
         assert!(ExtensionId::parse(invalid).is_err(), "accepted {invalid:?}");
+    }
+}
+
+#[test]
+fn portable_tool_identity_rejects_windows_device_names() {
+    assert_eq!(ToolId::parse("desktop").unwrap().as_str(), "desktop");
+    for invalid in ["con", "aux", "nul", "com1", "lpt9"] {
+        assert!(ToolId::parse(invalid).is_err(), "accepted {invalid:?}");
     }
 }
 

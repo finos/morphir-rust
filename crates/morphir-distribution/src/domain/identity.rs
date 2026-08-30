@@ -23,13 +23,13 @@ impl ExtensionId {
     /// Parse and validate an extension identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        if portable_token(&value) {
+        if portable_token(&value) && ArtifactFilename::parse(&value).is_ok() {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "extension id",
                 value,
-                "expected a lowercase portable token beginning with a letter",
+                "expected a lowercase portable filename token beginning with a letter",
             ))
         }
     }
@@ -73,13 +73,13 @@ impl ToolId {
     /// Parse and validate a tool identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        if portable_token(&value) {
+        if portable_token(&value) && ArtifactFilename::parse(&value).is_ok() {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "tool id",
                 value,
-                "expected a lowercase portable token",
+                "expected a lowercase portable filename token",
             ))
         }
     }

@@ -9,7 +9,9 @@ use super::repair_journal::{
     begin_repair, commit_repair, quarantined_digest_path, rollback_repair,
 };
 use super::verification::{sync_installed_file, sync_package, verify_installed, verify_package};
-use crate::state_io::{FilesystemStateWriter, StateWriter, commit_state_pair, encode_json};
+use crate::state_io::{
+    FilesystemStateWriter, StateWriter, commit_state_pair, create_dir_all_durable, encode_json,
+};
 use crate::{
     DistributionError, DownloadedToolArtifact, RelativeArtifactPath, ResolvedTrustedToolArtifact,
     Result, ToolId,
@@ -55,6 +57,7 @@ impl<'home> ToolRepairer<'home> {
         let lock = read_tool_lock_unlocked(self.home, id)?;
         validate_active_pair(&active, &entry.rollback, &lock)?;
         let shared_files = shared_digest_files(self.home, &tools, &active);
+        let shared_package_roots = shared_digest_package_roots(self.home, &tools, &active);
         validate_repair_resolution(&active, &resolved)?;
         let transaction = begin_repair(self.home, &active)?;
         let digest_path = self.home.tools_store_dir().join(active.digest.to_string());
@@ -66,6 +69,7 @@ impl<'home> ToolRepairer<'home> {
                 validate_repair_package(&active, &package)?;
                 verify_package(self.home, &package)?;
                 sync_package(self.home, &package)?;
+                restore_shared_directories(&digest_path, &previous_path, &shared_package_roots)?;
                 restore_shared_files(self.home, &digest_path, &previous_path, &shared_files)?;
                 Ok(())
             });
@@ -180,6 +184,89 @@ fn shared_digest_files(
     files.sort();
     files.dedup();
     files
+}
+
+fn shared_digest_package_roots(
+    home: &MorphirHome,
+    tools: &std::collections::BTreeMap<ToolId, super::catalog::ToolCatalogEntry>,
+    active: &InstalledTool,
+) -> Vec<PathBuf> {
+    let digest_path = home.tools_store_dir().join(active.digest.to_string());
+    let mut roots = tools
+        .values()
+        .flat_map(|entry| std::iter::once(&entry.active).chain(entry.rollback.iter()))
+        .filter(|installed| {
+            installed.tool_id != active.tool_id
+                || installed.version != active.version
+                || installed.digest != active.digest
+        })
+        .filter_map(|installed| installed.package_root.as_ref())
+        .filter_map(|root| {
+            home.root()
+                .join(root.as_path())
+                .strip_prefix(&digest_path)
+                .ok()
+                .map(Path::to_path_buf)
+        })
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn restore_shared_directories(
+    digest_path: &Path,
+    previous_path: &Path,
+    package_roots: &[PathBuf],
+) -> Result<()> {
+    for relative_root in package_roots {
+        restore_directory_tree(
+            &previous_path.join(relative_root),
+            &digest_path.join(relative_root),
+        )?;
+    }
+    Ok(())
+}
+
+fn restore_directory_tree(source_root: &Path, destination_root: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(source_root) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(DistributionError::Io {
+                path: source_root.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Ok(());
+    }
+    create_dir_all_durable(destination_root)?;
+    let mut pending = vec![(source_root.to_path_buf(), destination_root.to_path_buf())];
+    while let Some((source_directory, destination_directory)) = pending.pop() {
+        let entries = fs::read_dir(&source_directory).map_err(|source| DistributionError::Io {
+            path: source_directory.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| DistributionError::Io {
+                path: source_directory.clone(),
+                source,
+            })?;
+            let file_type = entry.file_type().map_err(|source| DistributionError::Io {
+                path: entry.path(),
+                source,
+            })?;
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
+            }
+            let destination = destination_directory.join(entry.file_name());
+            create_dir_all_durable(&destination)?;
+            pending.push((entry.path(), destination));
+        }
+    }
+    Ok(())
 }
 
 fn restore_shared_files(

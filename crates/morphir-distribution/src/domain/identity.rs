@@ -235,10 +235,12 @@ impl ArtifactFilename {
             .next()
             .unwrap_or_default()
             .to_ascii_uppercase();
-        let windows_reserved = matches!(windows_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-            || windows_stem
-                .strip_prefix("COM")
-                .is_some_and(is_windows_device_number)
+        let windows_reserved = matches!(
+            windows_stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || windows_stem
+            .strip_prefix("COM")
+            .is_some_and(is_windows_device_number)
             || windows_stem
                 .strip_prefix("LPT")
                 .is_some_and(is_windows_device_number);

@@ -399,16 +399,20 @@ fn repair_preserves_other_tools_that_share_the_digest_directory() {
             bytes,
         ))
         .unwrap();
-    ToolInstaller::new(&home)
-        .install(package_for(
-            &home,
-            "companion",
-            "Morphir Companion",
-            "companion.exe",
-            "1.0.0",
-            bytes,
-        ))
-        .unwrap();
+    let companion = package_for(
+        &home,
+        "companion",
+        "Morphir Companion",
+        "companion.exe",
+        "1.0.0",
+        bytes,
+    );
+    let empty_runtime_directory = home
+        .root()
+        .join(companion.package_root.as_ref().unwrap().as_path())
+        .join("empty-runtime-directory");
+    fs::create_dir(&empty_runtime_directory).unwrap();
+    ToolInstaller::new(&home).install(companion).unwrap();
     fs::write(
         activate_installed_tool(&home, &desktop_id)
             .unwrap()
@@ -431,6 +435,7 @@ fn repair_preserves_other_tools_that_share_the_digest_directory() {
         .unwrap(),
         bytes
     );
+    assert!(empty_runtime_directory.is_dir());
 }
 
 #[test]

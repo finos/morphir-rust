@@ -117,6 +117,8 @@ fn artifact_filename_is_one_portable_path_component() {
         "COM¹.exe",
         "LPT²",
         "com³.txt",
+        "CONIN$",
+        "conout$.log",
         &"a".repeat(256),
     ] {
         assert!(

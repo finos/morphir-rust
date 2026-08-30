@@ -27,7 +27,7 @@ pub type ProvenanceMap<T> = BTreeMap<ValuePath, T>;
 /// Deep-merge `overlay` onto `base`, returning a new value.
 ///
 /// ```
-/// use morphir_common::config::merge::deep_merge;
+/// use morphir_config::merge::deep_merge;
 /// use serde_json::json;
 ///
 /// let base = json!({"ir": {"format_version": 3, "strict_mode": false}, "codegen": {"targets": ["go"]}});
@@ -50,7 +50,7 @@ pub fn deep_merge(base: &Value, overlay: &Value) -> Value {
 /// Deep-merge configuration values while tracking the source of each winning leaf.
 ///
 /// ```
-/// use morphir_common::config::{ProvenanceMap, deep_merge_with_provenance};
+/// use morphir_config::{ProvenanceMap, deep_merge_with_provenance};
 /// use serde_json::json;
 ///
 /// let base = json!({"registry": {"endpoint": "https://old", "token": "old"}});

@@ -8,6 +8,7 @@ resolver = "2"
 default-members = [
     "crates/morphir-builtins",
     "crates/morphir-common",
+    "crates/morphir-config",
     "crates/morphir-core",
     "crates/morphir-daemon",
     "crates/morphir-devkit",

@@ -6,31 +6,68 @@
 //! environment variables onto the configuration model, and [`redact`] hides
 //! credentials before a configuration value is displayed.
 
-pub mod env;
-pub mod legacy;
-pub mod merge;
+/// Environment-variable configuration rules.
+pub mod env {
+    pub use morphir_config::env::*;
+}
+/// Legacy `morphir.json` normalization.
+pub mod legacy {
+    pub use morphir_config::legacy::*;
+}
+/// Serialization-independent configuration merge rules.
+pub mod merge {
+    pub use morphir_config::merge::*;
+}
 pub mod model;
 pub mod redact;
-pub mod secret;
+/// External secret-reference recognition.
+pub mod secret {
+    pub use morphir_config::secret::*;
+}
 
-use self::legacy::LegacyProjectConfig;
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use serde_json::Value;
 use std::path::Path;
 
-pub use self::merge::{
-    ProvenanceMap, ValuePath, deep_merge, deep_merge_with_provenance, merge_all,
-};
 pub use self::model::*;
 pub use self::redact::redact_secrets;
-pub use self::secret::{SecretReference, SecretReferenceError, is_secret_reference};
-pub use secrecy::{ExposeSecret, SecretString};
+pub use morphir_config::{
+    ExposeSecret, ProvenanceMap, SecretReference, SecretReferenceError, SecretString, ValuePath,
+    deep_merge, deep_merge_with_provenance, is_secret_reference, merge_all,
+};
 
 impl MorphirConfig {
     /// Load configuration from a file path
     pub fn load(path: &Path) -> crate::Result<Self> {
-        serde_json::from_value(load_config_value(path)?)
-            .with_context(|| format!("Failed to decode Morphir config: {}", path.display()))
+        Ok(serde_json::from_value(load_config_value(path)?)
+            .with_context(|| format!("Failed to decode Morphir config: {}", path.display()))?)
+    }
+}
+
+impl From<legacy::LegacyProjectConfig> for MorphirConfig {
+    fn from(legacy: legacy::LegacyProjectConfig) -> Self {
+        let project = ProjectSection {
+            name: legacy.name,
+            source_directory: legacy.source_directory,
+            exposed_modules: legacy.exposed_modules,
+            version: "0.1.0".to_string(),
+            authors: vec![],
+            description: None,
+            license: None,
+            repository: None,
+            output_directory: model::default_output_dir(),
+        };
+        let dependencies = legacy
+            .dependencies
+            .into_iter()
+            .map(|(name, version)| (name, DependencySpec::Version(version)))
+            .collect();
+
+        Self {
+            project: Some(project),
+            dependencies,
+            ..Default::default()
+        }
     }
 }
 
@@ -49,73 +86,10 @@ impl MorphirConfig {
 pub fn load_config_value(path: &Path) -> crate::Result<Value> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read Morphir config: {}", path.display()))?;
-    let extension = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase);
-
-    match extension.as_deref() {
-        Some("toml") => {
-            let value: toml::Value = toml::from_str(&content)
-                .with_context(|| format!("Failed to parse TOML config: {}", path.display()))?;
-            serde_json::to_value(value).context("Failed to normalize TOML config")
-        }
-        Some("yaml" | "yml") => {
-            let value = crate::ir_transport::yaml::decode_json_value(content.as_bytes())
-                .map_err(config_yaml_error)?;
-            validate_yaml_value(&value, true)?;
-            Ok(value)
-        }
-        Some("json") => {
-            let legacy: LegacyProjectConfig =
-                serde_json::from_str(&content).with_context(|| {
-                    format!("Failed to parse legacy JSON config: {}", path.display())
-                })?;
-            serde_json::to_value(MorphirConfig::from(legacy))
-                .context("Failed to normalize legacy JSON config")
-        }
-        _ => Err(anyhow!(
-            "Unsupported Morphir config format for {} (expected .toml, .yaml, .yml, or .json)",
-            path.display()
-        )),
-    }
-}
-
-fn config_yaml_error(diagnostic: crate::ir_transport::TransportDiagnostic) -> anyhow::Error {
-    match diagnostic.code() {
-        "morphir::ir::yaml::alias_not_allowed" => {
-            anyhow!("YAML config must not contain anchors or aliases")
-        }
-        "morphir::ir::yaml::unsupported_tag" => {
-            anyhow!("YAML config must not contain custom tags")
-        }
-        _ => anyhow!("{}: {}", diagnostic.code(), diagnostic.message()),
-    }
-}
-
-fn validate_yaml_value(value: &serde_json::Value, at_root: bool) -> crate::Result<()> {
-    match value {
-        serde_json::Value::Null => Err(anyhow!("YAML config must not contain null values")),
-        serde_json::Value::Object(mapping) => {
-            for (key, value) in mapping {
-                if key == "<<" {
-                    return Err(anyhow!("YAML config must not use merge keys"));
-                }
-                validate_yaml_value(value, false)?;
-            }
-            Ok(())
-        }
-        serde_json::Value::Array(values) => {
-            if at_root {
-                return Err(anyhow!("YAML config root must be a mapping"));
-            }
-            values
-                .iter()
-                .try_for_each(|value| validate_yaml_value(value, false))
-        }
-        _ if at_root => Err(anyhow!("YAML config root must be a mapping")),
-        _ => Ok(()),
-    }
+    Ok(morphir_config::parse_config(
+        &path.to_string_lossy(),
+        &content,
+    )?)
 }
 
 #[cfg(test)]

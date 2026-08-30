@@ -21,7 +21,7 @@ pub const DEFAULT_ENV_PREFIX: &str = "MORPHIR";
 
 /// Operational variables that control Morphir itself and are therefore never
 /// interpreted as configuration keys, even though they carry the prefix.
-pub const RESERVED_ENV_VARS: &[&str] = &[crate::home::MORPHIR_HOME_ENV, "MORPHIR_LOG_DIR"];
+pub const RESERVED_ENV_VARS: &[&str] = &["MORPHIR_HOME", "MORPHIR_LOG_DIR"];
 
 /// Convert prefixed environment variables into a configuration value.
 ///
@@ -31,7 +31,7 @@ pub const RESERVED_ENV_VARS: &[&str] = &[crate::home::MORPHIR_HOME_ENV, "MORPHIR
 /// path wins and the nested entry is dropped.
 ///
 /// ```
-/// use morphir_common::config::env::env_config_value;
+/// use morphir_config::env::env_config_value;
 /// use serde_json::json;
 ///
 /// let value = env_config_value(
@@ -98,7 +98,7 @@ pub fn process_env_config_value(prefix: &str) -> Value {
 /// Split an un-prefixed environment key into lower-case path segments.
 ///
 /// ```
-/// use morphir_common::config::env::env_key_to_path;
+/// use morphir_config::env::env_key_to_path;
 ///
 /// assert_eq!(env_key_to_path("IR__FORMAT_VERSION"), vec!["ir", "format_version"]);
 /// assert_eq!(env_key_to_path("_CODEGEN__GO__PACKAGE"), vec!["codegen", "go", "package"]);
@@ -115,7 +115,7 @@ pub fn env_key_to_path(key: &str) -> Vec<String> {
 /// Interpret an environment-variable value as a configuration scalar.
 ///
 /// ```
-/// use morphir_common::config::env::parse_env_value;
+/// use morphir_config::env::parse_env_value;
 /// use serde_json::json;
 ///
 /// assert_eq!(parse_env_value("TRUE"), json!(true));

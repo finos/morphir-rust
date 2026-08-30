@@ -3134,6 +3134,7 @@ dependencies = [
  "tokio",
  "toml 1.1.0+spec-1.1.0",
  "unicode-casefold",
+ "unicode-normalization",
  "uuid",
  "vfs",
  "zip",

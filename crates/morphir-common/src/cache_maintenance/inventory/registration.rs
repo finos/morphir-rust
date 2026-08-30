@@ -2,6 +2,7 @@ use super::super::{CacheEntry, CacheModelError};
 use std::collections::BTreeMap;
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
+use unicode_normalization::UnicodeNormalization;
 
 /// Invalid ownership metadata supplied by a cache namespace.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -83,8 +84,8 @@ impl CacheNamespace {
 }
 
 fn paths_overlap(first: &str, second: &str) -> bool {
-    let first = first.case_fold().collect::<String>();
-    let second = second.case_fold().collect::<String>();
+    let first = portable_comparison_key(first);
+    let second = portable_comparison_key(second);
     first == second
         || first
             .strip_prefix(&second)
@@ -92,6 +93,16 @@ fn paths_overlap(first: &str, second: &str) -> bool {
         || second
             .strip_prefix(&first)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn portable_comparison_key(path: &str) -> String {
+    path.nfc()
+        .collect::<String>()
+        .as_str()
+        .case_fold()
+        .collect::<String>()
+        .nfc()
+        .collect()
 }
 
 #[cfg(test)]
@@ -118,6 +129,16 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             case_folded,
+            CacheRegistrationError::OverlappingEntries { .. }
+        ));
+        let normalized = CacheNamespace::new("downloads")
+            .unwrap()
+            .with_disposable("caf\u{e9}/artifact", 1)
+            .unwrap()
+            .with_lease("cafe\u{301}/artifact", 2)
+            .unwrap_err();
+        assert!(matches!(
+            normalized,
             CacheRegistrationError::OverlappingEntries { .. }
         ));
         assert!(paths_overlap("a", "a/b"));

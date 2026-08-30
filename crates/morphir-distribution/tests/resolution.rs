@@ -44,6 +44,7 @@ fn portable_extension_identity_rejects_path_like_values() {
         ExtensionId::parse("morphir-elm").unwrap().as_str(),
         "morphir-elm"
     );
+    assert!(ExtensionId::parse("e".repeat(238)).is_ok());
     for invalid in [
         "",
         "Morphir Elm",
@@ -52,6 +53,7 @@ fn portable_extension_identity_rejects_path_like_values() {
         "-elm",
         "con",
         "com1",
+        &"e".repeat(239),
     ] {
         assert!(ExtensionId::parse(invalid).is_err(), "accepted {invalid:?}");
     }
@@ -60,7 +62,8 @@ fn portable_extension_identity_rejects_path_like_values() {
 #[test]
 fn portable_tool_identity_rejects_windows_device_names() {
     assert_eq!(ToolId::parse("desktop").unwrap().as_str(), "desktop");
-    for invalid in ["con", "aux", "nul", "com1", "lpt9"] {
+    assert!(ToolId::parse("t".repeat(182)).is_ok());
+    for invalid in ["con", "aux", "nul", "com1", "lpt9", &"t".repeat(183)] {
         assert!(ToolId::parse(invalid).is_err(), "accepted {invalid:?}");
     }
 }
@@ -114,6 +117,7 @@ fn artifact_filename_is_one_portable_path_component() {
         "COM¹.exe",
         "LPT²",
         "com³.txt",
+        &"a".repeat(256),
     ] {
         assert!(
             ArtifactFilename::parse(invalid).is_err(),

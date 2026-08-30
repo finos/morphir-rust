@@ -376,8 +376,15 @@ pub(crate) fn create_dir_all_durable(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
-    let parent = path.parent().expect("durable path has a parent");
-    sync_directory(parent)
+    sync_directory(parent_directory(path))
+}
+
+fn parent_directory(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
+        Some(parent) => parent,
+        None => path,
+    }
 }
 
 #[cfg(unix)]
@@ -400,6 +407,11 @@ fn sync_directory(_directory: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_component_paths_sync_through_the_current_directory() {
+        assert_eq!(parent_directory(Path::new("mh")), Path::new("."));
+    }
 
     struct FailingCatalogAndJournalCleanup {
         catalog_path: PathBuf,

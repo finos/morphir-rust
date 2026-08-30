@@ -6,6 +6,13 @@ use std::borrow::Cow;
 use std::fmt;
 use std::path::{Component, Path};
 
+const MAX_PORTABLE_FILENAME_UNITS: usize = 255;
+const SHA256_HEX_LEN: usize = 64;
+// `{id}.json.transaction` is the longest derived extension state filename.
+const MAX_EXTENSION_ID_LEN: usize = MAX_PORTABLE_FILENAME_UNITS - ".json.transaction".len();
+// `.repair-{id}-{sha256}` is the longest derived tool state filename.
+const MAX_TOOL_ID_LEN: usize = MAX_PORTABLE_FILENAME_UNITS - ".repair--".len() - SHA256_HEX_LEN;
+
 pub(crate) fn portable_token(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -23,13 +30,16 @@ impl ExtensionId {
     /// Parse and validate an extension identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        if portable_token(&value) && ArtifactFilename::parse(&value).is_ok() {
+        if value.len() <= MAX_EXTENSION_ID_LEN
+            && portable_token(&value)
+            && ArtifactFilename::parse(&value).is_ok()
+        {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "extension id",
                 value,
-                "expected a lowercase portable filename token beginning with a letter",
+                "expected a lowercase portable filename token beginning with a letter and at most 238 characters",
             ))
         }
     }
@@ -73,13 +83,16 @@ impl ToolId {
     /// Parse and validate a tool identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
-        if portable_token(&value) && ArtifactFilename::parse(&value).is_ok() {
+        if value.len() <= MAX_TOOL_ID_LEN
+            && portable_token(&value)
+            && ArtifactFilename::parse(&value).is_ok()
+        {
             Ok(Self(value))
         } else {
             Err(invalid_value(
                 "tool id",
                 value,
-                "expected a lowercase portable filename token",
+                "expected a lowercase portable filename token of at most 182 characters",
             ))
         }
     }
@@ -230,6 +243,8 @@ impl ArtifactFilename {
                 .strip_prefix("LPT")
                 .is_some_and(is_windows_device_number);
         let invalid = value.is_empty()
+            || value.len() > MAX_PORTABLE_FILENAME_UNITS
+            || value.encode_utf16().count() > MAX_PORTABLE_FILENAME_UNITS
             || value == "."
             || value == ".."
             || value.ends_with(['.', ' '])

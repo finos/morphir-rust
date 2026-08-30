@@ -58,7 +58,7 @@ if [ ! -f "$JAR" ]; then
 fi
 # Maven Central does not publish a .sha512 sidecar for this artifact. Keep the
 # reviewed digest in source and create a local shasum manifest on cache miss.
-printf '%s  %s\n' "$EXPECTED_SHA512" "$JAR_NAME" > "$CHECKSUM"
+printf '%s  %s\n' "$EXPECTED_SHA512" "$JAR_NAME" >"$CHECKSUM"
 
 # Verify the local manifest and independently compare against the reviewed
 # digest every run. A modified jar and manifest therefore cannot pass together.
@@ -81,11 +81,11 @@ GOLDEN_DIR="crates/morphir-avro-extension/tests/golden"
 DISCOVERED="$WORK_DIR/discovered"
 STAGED="$WORK_DIR/staged"
 CONVERTED="$WORK_DIR/converted"
-find "$GOLDEN_DIR" -maxdepth 1 -type f -name '*.avdl' | sort > "$DISCOVERED"
-: > "$STAGED"
-: > "$CONVERTED"
+find "$GOLDEN_DIR" -maxdepth 1 -type f -name '*.avdl' | sort >"$DISCOVERED"
+: >"$STAGED"
+: >"$CONVERTED"
 
-discovered_count="$(wc -l < "$DISCOVERED" | tr -d ' ')"
+discovered_count="$(wc -l <"$DISCOVERED" | tr -d ' ')"
 if [ "$discovered_count" -lt 1 ]; then
     echo "no Avro IDL goldens found under $GOLDEN_DIR" >&2
     exit 1
@@ -116,15 +116,15 @@ while IFS= read -r target; do
         if [ ! -f "$support_staged" ]; then
             cp "$support" "$support_staged"
         fi
-    done < "$DISCOVERED"
+    done <"$DISCOVERED"
 
     target_relative="$(artifact_relative_path "$target")"
     target_staged="$case_root/$target_relative"
     cp "$target" "$target_staged"
-    printf '%s\n' "$target_staged" >> "$STAGED"
-done < "$DISCOVERED"
+    printf '%s\n' "$target_staged" >>"$STAGED"
+done <"$DISCOVERED"
 
-staged_count="$(wc -l < "$STAGED" | tr -d ' ')"
+staged_count="$(wc -l <"$STAGED" | tr -d ' ')"
 if [ "$staged_count" -ne "$discovered_count" ]; then
     echo "IDL golden staging coverage mismatch: discovered=$discovered_count staged=$staged_count" >&2
     exit 1
@@ -158,7 +158,7 @@ while IFS= read -r input; do
             if grep -Fq "$JAVACC_NOTICE" "$input"; then
                 requires_javacc=true
             fi
-            if java -jar "$JAR" idl "$input" "$default_output" 2> "$default_error"; then
+            if java -jar "$JAR" idl "$input" "$default_output" 2>"$default_error"; then
                 if [ "$requires_javacc" = true ]; then
                     echo "default Avro IDL reader unexpectedly accepted affected protocol $input" >&2
                     exit 1
@@ -199,10 +199,10 @@ while IFS= read -r input; do
     # also provides a second official-reader check for schema wrappers.
     converted="$OUTPUT_DIR/converted/$case_name.avpr"
     java -jar "$JAR" idl --useJavaCC "$input" "$converted"
-    printf '%s\n' "$converted" >> "$CONVERTED"
-done < "$STAGED"
+    printf '%s\n' "$converted" >>"$CONVERTED"
+done <"$STAGED"
 
-converted_count="$(wc -l < "$CONVERTED" | tr -d ' ')"
+converted_count="$(wc -l <"$CONVERTED" | tr -d ' ')"
 if [ "$converted_count" -ne "$discovered_count" ]; then
     echo "IDL golden conversion coverage mismatch: discovered=$discovered_count converted=$converted_count" >&2
     exit 1
@@ -214,12 +214,11 @@ if ! grep -q '"morphir.value-kind" : "constant"' "$OUTPUT_DIR"/converted/*.avpr;
 fi
 
 custom_protocol="$OUTPUT_DIR/converted/edge-custom-types.avpr"
-compact_custom="$(tr -d '[:space:]' < "$custom_protocol")"
+compact_custom="$(tr -d '[:space:]' <"$custom_protocol")"
 for expected in \
     '"name":"mappedAmount","type":{"type":"bytes","logicalType":"decimal","precision":20,"scale":4,"morphir.fqname":"acme/customer:customer#money"}' \
     '"name":"mappedDate","type":{"type":"long","logicalType":"date","morphir.fqname":"acme/customer:customer#legacy-date"}' \
-    '"name":"mappedIdentifier","type":{"type":"bytes","logicalType":"uuid","morphir.fqname":"acme/customer:customer#binary-id"}'
-do
+    '"name":"mappedIdentifier","type":{"type":"bytes","logicalType":"uuid","morphir.fqname":"acme/customer:customer#binary-id"}'; do
     case "$compact_custom" in
         *"$expected"*) ;;
         *)

@@ -242,15 +242,14 @@ impl TrustedToolRepository {
         resolved: &ResolvedTrustedToolArtifact,
         staging_directory: &Path,
     ) -> Result<DownloadedToolArtifact> {
-        fs::create_dir_all(staging_directory).map_err(|source| DistributionError::Io {
-            path: staging_directory.to_path_buf(),
-            source,
-        })?;
+        let (download_directory, path) =
+            prepare_download_destination(staging_directory, Path::new(resolved.target.resolved()))?;
         self.repository
-            .save_target(&resolved.target, staging_directory, Prefix::None)
+            .save_target(&resolved.target, download_directory.path(), Prefix::None)
             .await
             .map_err(repository_error)?;
-        let path = staging_directory.join(resolved.target.resolved());
+        let retained_directory = download_directory.keep();
+        debug_assert!(path.starts_with(retained_directory));
         tracing::info!(path = %path.display(), "verified tool target downloaded");
         Ok(DownloadedToolArtifact { path })
     }
@@ -433,6 +432,30 @@ fn directory_url(path: &Path, kind: &'static str) -> Result<Url> {
     })
 }
 
+fn prepare_download_destination(
+    staging_directory: &Path,
+    target: &Path,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    fs::create_dir_all(staging_directory).map_err(|source| DistributionError::Io {
+        path: staging_directory.to_path_buf(),
+        source,
+    })?;
+    let canonical_staging =
+        fs::canonicalize(staging_directory).map_err(|source| DistributionError::Io {
+            path: staging_directory.to_path_buf(),
+            source,
+        })?;
+    let download_directory = tempfile::Builder::new()
+        .prefix(".morphir-download-")
+        .tempdir_in(&canonical_staging)
+        .map_err(|source| DistributionError::Io {
+            path: canonical_staging,
+            source,
+        })?;
+    let path = download_directory.path().join(target);
+    Ok((download_directory, path))
+}
+
 fn repository_error(source: tough::error::Error) -> DistributionError {
     DistributionError::ToolRepository {
         source: Box::new(source),
@@ -536,5 +559,47 @@ mod descriptor_size_tests {
             ));
             assert!(error.to_string().contains(expected));
         }
+    }
+}
+
+#[cfg(test)]
+mod download_path_tests {
+    use super::prepare_download_destination;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn nested_downloads_are_isolated_from_a_reused_symlinked_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join("staging");
+        let outside = root.path().join("outside");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        make_dir_symlink(&outside, &staging.join("artifacts"));
+
+        let (download_directory, destination) =
+            prepare_download_destination(&staging, Path::new("artifacts/desktop/desktop.zip"))
+                .unwrap();
+
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, b"verified target").unwrap();
+
+        assert!(
+            download_directory
+                .path()
+                .starts_with(fs::canonicalize(&staging).unwrap())
+        );
+        assert_ne!(destination, staging.join("artifacts/desktop/desktop.zip"));
+        assert!(!outside.join("desktop/desktop.zip").exists());
+    }
+
+    #[cfg(unix)]
+    fn make_dir_symlink(source: &Path, destination: &Path) {
+        std::os::unix::fs::symlink(source, destination).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn make_dir_symlink(source: &Path, destination: &Path) {
+        std::os::windows::fs::symlink_dir(source, destination).unwrap();
     }
 }

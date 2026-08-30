@@ -2,7 +2,8 @@
 
 use crate::local::ensure_contained;
 use crate::{
-    ArtifactSource, DistributionError, RelativeArtifactPath, ResolvedArtifact, Result, Sha256Digest,
+    ArtifactFilename, ArtifactSource, DistributionError, RelativeArtifactPath, ResolvedArtifact,
+    Result, Sha256Digest,
 };
 use morphir_common::home::MorphirHome;
 use sha2::{Digest, Sha256};
@@ -15,14 +16,30 @@ use std::path::{Path, PathBuf};
 pub struct ArtifactStore {
     home_root: PathBuf,
     root: PathBuf,
+    object_namespace: Option<&'static str>,
 }
 
 impl ArtifactStore {
     /// Construct the extension artifact store for one Morphir home.
     pub fn from_home(home: &MorphirHome) -> Self {
+        Self::for_extensions(home)
+    }
+
+    /// Construct the extension artifact store for one Morphir home.
+    pub fn for_extensions(home: &MorphirHome) -> Self {
         Self {
             home_root: home.root().to_path_buf(),
             root: home.extensions_store_dir(),
+            object_namespace: None,
+        }
+    }
+
+    /// Construct the tool artifact store for one Morphir home.
+    pub fn for_tools(home: &MorphirHome) -> Self {
+        Self {
+            home_root: home.root().to_path_buf(),
+            root: home.tools_store_dir(),
+            object_namespace: Some("objects"),
         }
     }
 
@@ -36,15 +53,45 @@ impl ArtifactStore {
     /// Existing objects are hashed before reuse. A mismatch never overwrites
     /// the object because it may be evidence of local tampering.
     pub fn materialize(&self, selected: ResolvedArtifact) -> Result<VerifiedArtifact> {
-        let source_path = match selected.artifact.source() {
-            ArtifactSource::LocalFile { path } => selected.index.identity().join(path.as_path()),
+        let source = match selected.artifact.source() {
+            ArtifactSource::LocalFile { path } => path,
         };
+        let stored = self.materialize_file(
+            selected.index.identity(),
+            source,
+            selected.artifact.digest(),
+            selected.artifact.filename(),
+            selected.artifact.executable(),
+        )?;
+        Ok(VerifiedArtifact {
+            selected,
+            path: stored.path,
+            store_path: stored.store_path,
+        })
+    }
+
+    /// Verify one declared local file and atomically publish it into this store.
+    ///
+    /// This is the shared acquisition boundary for tool and extension records.
+    /// Callers supply metadata only after authenticating it according to their
+    /// own domain policy. The store independently enforces containment, digest,
+    /// executable-mode, and content-addressed publication invariants.
+    pub fn materialize_file(
+        &self,
+        source_root: &Path,
+        source: &RelativeArtifactPath,
+        digest: &Sha256Digest,
+        filename: &ArtifactFilename,
+        executable: bool,
+    ) -> Result<StoredArtifact> {
+        let canonical_source_root = canonicalize(source_root)?;
+        let source_path = canonical_source_root.join(source.as_path());
         let canonical_source =
             fs::canonicalize(&source_path).map_err(|source| DistributionError::Io {
                 path: source_path,
                 source,
             })?;
-        ensure_contained(selected.index.identity(), &canonical_source)?;
+        ensure_contained(&canonical_source_root, &canonical_source)?;
         if !canonical_source.is_file() {
             return Err(DistributionError::Io {
                 path: canonical_source,
@@ -63,7 +110,7 @@ impl ArtifactStore {
         let canonical_store = canonicalize(&self.root)?;
         ensure_home_contained(&canonical_home, &canonical_store)?;
 
-        let requested_digest_directory = self.root.join(selected.artifact.digest().to_string());
+        let requested_digest_directory = self.root.join(digest.to_string());
         fs::create_dir_all(&requested_digest_directory).map_err(|source| {
             DistributionError::Io {
                 path: requested_digest_directory.clone(),
@@ -77,7 +124,24 @@ impl ArtifactStore {
                 root: canonical_home.clone(),
             }
         })?;
-        let destination = digest_directory.join(selected.artifact.filename().as_str());
+        let requested_object_directory = self.object_namespace.map_or_else(
+            || digest_directory.clone(),
+            |name| digest_directory.join(name),
+        );
+        fs::create_dir_all(&requested_object_directory).map_err(|source| {
+            DistributionError::Io {
+                path: requested_object_directory.clone(),
+                source,
+            }
+        })?;
+        let object_directory = canonicalize(&requested_object_directory)?;
+        ensure_home_contained(&digest_directory, &object_directory).map_err(|_| {
+            DistributionError::InstalledPathEscape {
+                path: object_directory.clone(),
+                root: canonical_home.clone(),
+            }
+        })?;
+        let destination = object_directory.join(filename.as_str());
 
         if destination.exists() {
             let canonical_destination = canonicalize(&destination)?;
@@ -87,23 +151,23 @@ impl ArtifactStore {
                     root: canonical_home,
                 }
             })?;
-            verify_file(&canonical_destination, selected.artifact.digest())?;
-            verify_executable_mode(&canonical_destination, selected.artifact.executable())?;
-            return self.verified(selected, canonical_destination);
+            verify_file(&canonical_destination, digest)?;
+            verify_executable_mode(&canonical_destination, executable)?;
+            return self.stored(digest, canonical_destination);
         }
 
         let mut staged = tempfile::Builder::new()
             .prefix(".stage-")
-            .tempfile_in(&digest_directory)
+            .tempfile_in(&object_directory)
             .map_err(|source| DistributionError::Io {
-                path: digest_directory.clone(),
+                path: object_directory.clone(),
                 source,
             })?;
         let actual = copy_and_hash(&canonical_source, staged.as_file_mut())?;
-        if &actual != selected.artifact.digest() {
+        if &actual != digest {
             return Err(DistributionError::DigestMismatch {
                 path: canonical_source,
-                expected: selected.artifact.digest().clone(),
+                expected: digest.clone(),
                 actual,
             });
         }
@@ -115,14 +179,14 @@ impl ArtifactStore {
                 path: staged.path().to_path_buf(),
                 source,
             })?;
-        if selected.artifact.executable() {
+        if executable {
             add_owner_executable(staged.path())?;
         }
 
         match staged.persist_noclobber(&destination) {
             Ok(_) => {
-                verify_executable_mode(&destination, selected.artifact.executable())?;
-                self.verified(selected, destination)
+                verify_executable_mode(&destination, executable)?;
+                self.stored(digest, destination)
             }
             Err(_error) if destination.exists() => {
                 let canonical_destination = canonicalize(&destination)?;
@@ -132,9 +196,9 @@ impl ArtifactStore {
                         root: canonical_home,
                     }
                 })?;
-                verify_file(&canonical_destination, selected.artifact.digest())?;
-                verify_executable_mode(&canonical_destination, selected.artifact.executable())?;
-                self.verified(selected, canonical_destination)
+                verify_file(&canonical_destination, digest)?;
+                verify_executable_mode(&canonical_destination, executable)?;
+                self.stored(digest, canonical_destination)
             }
             Err(error) => Err(DistributionError::Io {
                 path: destination,
@@ -143,7 +207,7 @@ impl ArtifactStore {
         }
     }
 
-    fn verified(&self, selected: ResolvedArtifact, path: PathBuf) -> Result<VerifiedArtifact> {
+    fn stored(&self, digest: &Sha256Digest, path: PathBuf) -> Result<StoredArtifact> {
         let canonical_home = canonicalize(&self.home_root)?;
         let relative = path
             .strip_prefix(&canonical_home)
@@ -152,29 +216,36 @@ impl ArtifactStore {
                 path: path.clone(),
                 root: canonical_home,
             })?;
-        // RelativeArtifactPath is the portable spelling, so join the components
-        // with "/" rather than reusing the native rendering, which separates with
-        // "\" on Windows and is rejected as not normalized.
-        let mut store_path = String::new();
-        for component in relative.components() {
-            let segment = component.as_os_str().to_str().ok_or_else(|| {
-                crate::error::invalid_value(
-                    "store path",
-                    relative.to_string_lossy(),
-                    "expected a UTF-8 path beneath Morphir home",
-                )
-            })?;
-            if !store_path.is_empty() {
-                store_path.push('/');
-            }
-            store_path.push_str(segment);
-        }
-
-        Ok(VerifiedArtifact {
-            selected,
+        Ok(StoredArtifact {
+            digest: digest.clone(),
             path,
-            store_path: RelativeArtifactPath::parse(store_path)?,
+            store_path: RelativeArtifactPath::from_native_path(&relative)?,
         })
+    }
+}
+
+/// Verified bytes published into a content-addressed Morphir store.
+#[derive(Debug)]
+pub struct StoredArtifact {
+    digest: Sha256Digest,
+    path: PathBuf,
+    store_path: RelativeArtifactPath,
+}
+
+impl StoredArtifact {
+    /// Return the verified materialized path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Return the verified SHA-256 digest.
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+
+    /// Return the materialized path relative to Morphir home.
+    pub fn store_path(&self) -> &Path {
+        self.store_path.as_path()
     }
 }
 
@@ -329,7 +400,7 @@ pub(crate) fn verify_executable_mode(_path: &Path, _expected: bool) -> Result<()
     Ok(())
 }
 
-fn hash_file(path: &Path) -> Result<Sha256Digest> {
+pub(crate) fn hash_file(path: &Path) -> Result<Sha256Digest> {
     let mut file = File::open(path).map_err(|source| DistributionError::Io {
         path: path.to_path_buf(),
         source,
@@ -380,7 +451,7 @@ fn copy_and_hash(source: &Path, destination: &mut File) -> Result<Sha256Digest> 
 }
 
 #[cfg(unix)]
-fn add_owner_executable(path: &Path) -> Result<()> {
+pub(crate) fn add_owner_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let metadata = fs::metadata(path).map_err(|source| DistributionError::Io {
@@ -396,6 +467,6 @@ fn add_owner_executable(path: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn add_owner_executable(_path: &Path) -> Result<()> {
+pub(crate) fn add_owner_executable(_path: &Path) -> Result<()> {
     Ok(())
 }

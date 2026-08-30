@@ -3,10 +3,17 @@
 mod digest;
 mod identity;
 mod manifest;
+mod tool;
 
 pub use digest::Sha256Digest;
-pub use identity::{ArtifactFilename, Channel, ChannelSegment, ExtensionId, RelativeArtifactPath};
+pub use identity::{
+    ArtifactFilename, Channel, ChannelSegment, ExtensionId, RelativeArtifactPath, ToolId,
+};
 pub use manifest::{
     ArtifactRecord, ArtifactRuntime, ArtifactSource, BackendRecord, Capability, Platform,
     ReleaseRecord, Selection,
+};
+pub use tool::{
+    ArchiveFormat, ToolArchive, ToolArtifactRecord, ToolLaunch, ToolReleaseRecord,
+    ToolReleaseStatus,
 };

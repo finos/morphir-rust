@@ -1,6 +1,6 @@
 use morphir_distribution::{
     ArtifactFilename, Channel, DistributionError, ExtensionHistory, ExtensionId, Platform,
-    RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, resolve,
+    RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolId, resolve,
 };
 use morphir_extension_sdk::protocol::MEP_VERSION;
 use semver::Version;
@@ -72,8 +72,27 @@ fn portable_extension_identity_rejects_path_like_values() {
         ExtensionId::parse("morphir-elm").unwrap().as_str(),
         "morphir-elm"
     );
-    for invalid in ["", "Morphir Elm", "../morphir-elm", "morphir/elm", "-elm"] {
+    assert!(ExtensionId::parse("e".repeat(238)).is_ok());
+    for invalid in [
+        "",
+        "Morphir Elm",
+        "../morphir-elm",
+        "morphir/elm",
+        "-elm",
+        "con",
+        "com1",
+        &"e".repeat(239),
+    ] {
         assert!(ExtensionId::parse(invalid).is_err(), "accepted {invalid:?}");
+    }
+}
+
+#[test]
+fn portable_tool_identity_rejects_windows_device_names() {
+    assert_eq!(ToolId::parse("desktop").unwrap().as_str(), "desktop");
+    assert!(ToolId::parse("t".repeat(182)).is_ok());
+    for invalid in ["con", "aux", "nul", "com1", "lpt9", &"t".repeat(183)] {
+        assert!(ToolId::parse(invalid).is_err(), "accepted {invalid:?}");
     }
 }
 
@@ -123,6 +142,15 @@ fn artifact_filename_is_one_portable_path_component() {
         "CON",
         "con.exe",
         "LPT9.log",
+        "COM¹.exe",
+        "LPT²",
+        "com³.txt",
+        "CONIN$",
+        "conout$.log",
+        "CON .txt",
+        "COM1 .exe",
+        "CONIN$ .json",
+        &"a".repeat(256),
     ] {
         assert!(
             ArtifactFilename::parse(invalid).is_err(),
@@ -258,6 +286,9 @@ fn relative_artifact_paths_use_a_normalized_portable_utf8_grammar() {
         "./artifacts/tool",
         "artifacts//tool",
         "artifacts\\tool",
+        "artifacts/AUX/tool",
+        "artifacts/trailing./tool",
+        "artifacts/a*b/tool",
     ] {
         assert!(
             RelativeArtifactPath::parse(invalid).is_err(),

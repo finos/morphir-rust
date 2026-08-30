@@ -89,7 +89,7 @@ impl<'package> JsonRenderer<'package> {
             }
         }
         for root in self.package.roots() {
-            if (!self.package.protocols().is_empty() && matches!(root.tpe(), AvroType::Named(_)))
+            if self.package.named_root_is_carried_by_a_protocol(root)
                 || paths.contains(&schema_path(root.full_name()))
             {
                 continue;

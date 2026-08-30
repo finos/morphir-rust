@@ -4,7 +4,8 @@ use morphir_avro_extension::{
     Aliases, AvroOptions, AvroType, AvroUnion, Constructor, Dependencies, DistributionKind,
     EntryPointKind, EntryPointMetadata, IncompletenessKind, NamedSchema, Projection,
     ProjectionDependency, ProjectionModule, TypeDeclaration, TypeExpr, TypeMapping, UnionError,
-    Unsupported, ValueKind, ValueSpecification, escape_idl_identifier, project,
+    Unsupported, ValueKind, ValueSpecification, escape_idl_identifier, project, render_idl,
+    render_json,
 };
 use pretty_assertions::assert_eq;
 use serde_json::json;

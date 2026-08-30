@@ -145,7 +145,7 @@ impl DistributionMother {
                 "sha256": digest,
                 "filename": filename,
                 "args": [],
-                "executable": false
+                "executable": true
             }]
         });
         fs::write(

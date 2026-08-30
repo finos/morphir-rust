@@ -316,13 +316,21 @@ fn protocol_and_message_collisions_quarantine_all_counterparts_but_keep_independ
         let mut modules = vec![
             ProjectionModule {
                 path: vec!["foo-bar".to_owned()],
-                types: Vec::new(),
+                types: vec![alias(
+                    "acme/customer:foo-bar#left-record",
+                    "left-record",
+                    TypeExpr::Record(Vec::new()),
+                )],
                 values: Vec::new(),
                 doc: None,
             },
             ProjectionModule {
                 path: vec!["foo_bar".to_owned()],
-                types: Vec::new(),
+                types: vec![alias(
+                    "acme/customer:foo_bar#right-record",
+                    "right-record",
+                    TypeExpr::Record(Vec::new()),
+                )],
                 values: Vec::new(),
                 doc: None,
             },
@@ -394,6 +402,21 @@ fn protocol_and_message_collisions_quarantine_all_counterparts_but_keep_independ
     let valid = first.protocol("acme.customer.Valid").unwrap();
     assert_eq!(valid.messages().len(), 1);
     assert!(valid.message("healthy").is_some());
+    let json = render_json(&first, Dependencies::SelfContained).unwrap();
+    assert_eq!(
+        json.iter()
+            .filter(|artifact| artifact.path.ends_with(".avsc"))
+            .count(),
+        2,
+        "named roots from quarantined protocols must remain as JSON schemas"
+    );
+    assert_eq!(
+        render_idl(&first, Dependencies::SelfContained)
+            .unwrap()
+            .len(),
+        3,
+        "named roots from quarantined protocols need independent IDL wrappers"
+    );
     assert_eq!(first.diagnostics().len(), 4);
     assert!(
         first
@@ -655,4 +678,3 @@ fn warn_and_skip_indexes_collisions_transactionally_and_is_input_order_independe
             && diagnostic.severity() == morphir_extension_sdk::DiagnosticSeverity::Warning
     }));
 }
-

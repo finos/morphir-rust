@@ -927,6 +927,10 @@ fn validate_runtime_state(
                 reason: "process artifacts require a platform",
             })
         }
+        ArtifactRuntime::Process if !executable => Err(DistributionError::InvalidInstalledState {
+            id: id.clone(),
+            reason: "process artifacts must be executable",
+        }),
         ArtifactRuntime::Wasm if platform.is_some() || !args.is_empty() || executable => {
             Err(DistributionError::InvalidInstalledState {
                 id: id.clone(),
@@ -980,6 +984,25 @@ mod tests {
     use std::sync::{Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn process_runtime_state_requires_an_executable_artifact() {
+        let id = ExtensionId::parse("example").unwrap();
+        let platform = Platform::new("linux", "x86_64").unwrap();
+
+        let error = validate_runtime_state(
+            &id,
+            ArtifactRuntime::Process,
+            Some(&platform),
+            &[],
+            false,
+            &[Capability::Frontend],
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("must be executable"));
+    }
 
     struct FailingWriter {
         fail_path: PathBuf,
@@ -1403,7 +1426,7 @@ mod tests {
                 "sha256": digest,
                 "filename": "example",
                 "args": [],
-                "executable": false
+                "executable": true
             }]
         });
         fs::write(

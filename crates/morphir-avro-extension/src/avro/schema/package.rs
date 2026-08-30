@@ -131,6 +131,15 @@ impl AvroPackage {
         &self.protocols
     }
 
+    pub(crate) fn named_root_is_carried_by_a_protocol(&self, root: &AvroRoot) -> bool {
+        let AvroType::Named(name) = root.tpe() else {
+            return false;
+        };
+        self.protocols
+            .iter()
+            .any(|protocol| protocol.referenced_named_declarations().contains(name))
+    }
+
     /// Find a projected protocol by dotted Avro full name.
     pub fn protocol(&self, full_name: &str) -> Option<&Protocol> {
         self.protocols

@@ -2,7 +2,7 @@
 
 use crate::state_io::{
     FilesystemStateWriter, StateGuard, StateWriter, atomic_write_json, commit_state_pair,
-    decode_state, encode_json, read_json, read_state_bytes, remove_state_pair,
+    decode_state, encode_json, read_json, read_state_bytes, recover_state_pairs, remove_state_pair,
 };
 use crate::store::{verify_executable_mode, verify_file};
 use crate::{
@@ -622,7 +622,12 @@ fn extension_type(capability: Capability) -> ExtensionType {
 }
 
 fn extension_state_guard(home: &MorphirHome) -> Result<StateGuard> {
-    StateGuard::acquire(&home.extensions_state_lock_file())
+    let guard = StateGuard::acquire(&home.extensions_state_lock_file())?;
+    recover_state_pairs(
+        &home.extensions_locks_dir(),
+        &home.extensions_catalog_file(),
+    )?;
+    Ok(guard)
 }
 
 #[cfg(test)]

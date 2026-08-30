@@ -5,7 +5,17 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+const STATE_PAIR_JOURNAL_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StatePairJournal {
+    schema_version: u32,
+    next_lock: Option<Vec<u8>>,
+    next_catalog: Vec<u8>,
+}
 
 pub(crate) struct StateGuard {
     file: File,
@@ -68,17 +78,36 @@ pub(crate) fn commit_state_pair(
 ) -> Result<()> {
     let previous_lock = read_optional(lock_path)?;
     let previous_catalog = read_optional(catalog_path)?;
-    writer.write(lock_path, lock_bytes)?;
-    if let Err(original) = writer.write(catalog_path, catalog_bytes) {
+    let journal_path = state_pair_journal_path(lock_path);
+    atomic_write_json(
+        &journal_path,
+        &StatePairJournal {
+            schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
+            next_lock: Some(lock_bytes.to_vec()),
+            next_catalog: catalog_bytes.to_vec(),
+        },
+    )?;
+    if let Err(original) = writer.write(lock_path, lock_bytes) {
         return rollback_state_error(
             original,
+            &journal_path,
             lock_path,
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
         );
     }
-    Ok(())
+    if let Err(original) = writer.write(catalog_path, catalog_bytes) {
+        return rollback_state_error(
+            original,
+            &journal_path,
+            lock_path,
+            previous_lock.as_deref(),
+            catalog_path,
+            previous_catalog.as_deref(),
+        );
+    }
+    remove_file(&journal_path)
 }
 
 pub(crate) fn remove_state_pair(
@@ -89,9 +118,19 @@ pub(crate) fn remove_state_pair(
 ) -> Result<()> {
     let previous_lock = read_optional(lock_path)?;
     let previous_catalog = read_optional(catalog_path)?;
+    let journal_path = state_pair_journal_path(lock_path);
+    atomic_write_json(
+        &journal_path,
+        &StatePairJournal {
+            schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
+            next_lock: None,
+            next_catalog: catalog_bytes.to_vec(),
+        },
+    )?;
     if let Err(original) = writer.remove(lock_path) {
         return rollback_state_error(
             original,
+            &journal_path,
             lock_path,
             previous_lock.as_deref(),
             catalog_path,
@@ -101,29 +140,95 @@ pub(crate) fn remove_state_pair(
     if let Err(original) = writer.write(catalog_path, catalog_bytes) {
         return rollback_state_error(
             original,
+            &journal_path,
             lock_path,
             previous_lock.as_deref(),
             catalog_path,
             previous_catalog.as_deref(),
         );
     }
-    Ok(())
+    remove_file(&journal_path)
 }
 
 fn rollback_state_error(
     original: DistributionError,
+    journal_path: &Path,
     lock_path: &Path,
     lock_bytes: Option<&[u8]>,
     catalog_path: &Path,
     catalog_bytes: Option<&[u8]>,
 ) -> Result<()> {
     match restore_state_pair(lock_path, lock_bytes, catalog_path, catalog_bytes) {
-        Ok(()) => Err(original),
+        Ok(()) => match remove_file(journal_path) {
+            Ok(()) => Err(original),
+            Err(rollback) => Err(DistributionError::StateRollback {
+                original: Box::new(original),
+                rollback: Box::new(rollback),
+            }),
+        },
         Err(rollback) => Err(DistributionError::StateRollback {
             original: Box::new(original),
             rollback: Box::new(rollback),
         }),
     }
+}
+
+pub(crate) fn recover_state_pairs(lock_directory: &Path, catalog_path: &Path) -> Result<()> {
+    let entries = match fs::read_dir(lock_directory) {
+        Ok(entries) => entries,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(DistributionError::Io {
+                path: lock_directory.to_path_buf(),
+                source,
+            });
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|source| DistributionError::Io {
+            path: lock_directory.to_path_buf(),
+            source,
+        })?;
+        let file_type = entry.file_type().map_err(|source| DistributionError::Io {
+            path: entry.path(),
+            source,
+        })?;
+        if !file_type.is_file() || file_type.is_symlink() {
+            continue;
+        }
+        let filename = entry.file_name();
+        let Some(filename) = filename.to_str() else {
+            continue;
+        };
+        let Some(lock_filename) = filename.strip_suffix(".transaction") else {
+            continue;
+        };
+        if !lock_filename.ends_with(".json") {
+            continue;
+        }
+        let journal_path = entry.path();
+        let journal: StatePairJournal = read_json(&journal_path)?;
+        if journal.schema_version != STATE_PAIR_JOURNAL_SCHEMA_VERSION {
+            return Err(DistributionError::UnsupportedStateSchema {
+                kind: "state pair transaction journal",
+                version: journal.schema_version,
+            });
+        }
+        let lock_path = lock_directory.join(lock_filename);
+        restore_file(&lock_path, journal.next_lock.as_deref())?;
+        atomic_write_bytes(catalog_path, &journal.next_catalog)?;
+        remove_file(&journal_path)?;
+    }
+    Ok(())
+}
+
+fn state_pair_journal_path(lock_path: &Path) -> PathBuf {
+    let mut filename = lock_path
+        .file_name()
+        .expect("exact state lock has a filename")
+        .to_os_string();
+    filename.push(".transaction");
+    lock_path.with_file_name(filename)
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -224,4 +329,36 @@ pub(crate) fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
             source: error.error,
         })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_completes_an_interrupted_state_pair_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let locks = root.path().join("locks");
+        let lock = locks.join("desktop.json");
+        let catalog = root.path().join("catalog.json");
+        atomic_write_bytes(&lock, b"old lock").unwrap();
+        atomic_write_bytes(&catalog, b"old catalog").unwrap();
+        let journal = state_pair_journal_path(&lock);
+        atomic_write_json(
+            &journal,
+            &StatePairJournal {
+                schema_version: STATE_PAIR_JOURNAL_SCHEMA_VERSION,
+                next_lock: Some(b"new lock".to_vec()),
+                next_catalog: b"new catalog".to_vec(),
+            },
+        )
+        .unwrap();
+        atomic_write_bytes(&lock, b"new lock").unwrap();
+
+        recover_state_pairs(&locks, &catalog).unwrap();
+
+        assert_eq!(fs::read(lock).unwrap(), b"new lock");
+        assert_eq!(fs::read(catalog).unwrap(), b"new catalog");
+        assert!(!journal.exists());
+    }
 }

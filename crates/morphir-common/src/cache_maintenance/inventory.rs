@@ -1,0 +1,439 @@
+use super::{CacheEntry, CacheModelError};
+use crate::home::MorphirHome;
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::fs::{self, Metadata};
+use std::io;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+const DEFAULT_MAX_INVENTORY_ENTRIES: usize = 100_000;
+const DEFAULT_MAX_INVENTORY_DEPTH: usize = 64;
+
+/// Invalid ownership metadata supplied by a cache namespace.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum CacheRegistrationError {
+    /// Namespace or entry identity violates the portable grammar.
+    #[error(transparent)]
+    InvalidIdentity(#[from] CacheModelError),
+    /// Registered entries may not duplicate or contain one another.
+    #[error("cache entries overlap: {first} and {second}")]
+    OverlappingEntries {
+        /// First registered portable path.
+        first: String,
+        /// Second registered portable path.
+        second: String,
+    },
+}
+
+/// Trusted ownership declarations for one Morphir Home cache namespace.
+#[derive(Debug, Clone)]
+pub struct CacheNamespace {
+    name: String,
+    entries: BTreeMap<String, CacheEntry>,
+}
+
+impl CacheNamespace {
+    /// Register a namespace rooted at `<MORPHIR_HOME>/cache/<name>`.
+    pub fn new(name: impl Into<String>) -> Result<Self, CacheRegistrationError> {
+        let name = name.into();
+        CacheEntry::unclassified(name.clone(), "identity-probe", 0)?;
+        Ok(Self {
+            name,
+            entries: BTreeMap::new(),
+        })
+    }
+
+    /// Register one owned disposable entry and its last-use timestamp.
+    pub fn with_disposable(
+        mut self,
+        path: impl Into<String>,
+        last_used: u64,
+    ) -> Result<Self, CacheRegistrationError> {
+        let path = path.into();
+        let entry = CacheEntry::disposable(self.name.clone(), path.clone(), 0, last_used)?;
+        self.insert(path, entry)?;
+        Ok(self)
+    }
+
+    /// Register one owned entry currently protected by an active lease.
+    pub fn with_lease(
+        mut self,
+        path: impl Into<String>,
+        last_used: u64,
+    ) -> Result<Self, CacheRegistrationError> {
+        let path = path.into();
+        let entry = CacheEntry::leased(self.name.clone(), path.clone(), 0, last_used)?;
+        self.insert(path, entry)?;
+        Ok(self)
+    }
+
+    /// Stable namespace owner identifier.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn insert(&mut self, path: String, entry: CacheEntry) -> Result<(), CacheRegistrationError> {
+        if let Some(other) = self
+            .entries
+            .keys()
+            .find(|other| paths_overlap(other, &path))
+        {
+            return Err(CacheRegistrationError::OverlappingEntries {
+                first: other.clone(),
+                second: path,
+            });
+        }
+        self.entries.insert(path, entry);
+        Ok(())
+    }
+}
+
+/// Hard bounds for a single namespace inventory walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheInventoryLimits {
+    max_entries: usize,
+    max_depth: usize,
+}
+
+impl CacheInventoryLimits {
+    /// Construct nonzero entry-count and depth limits.
+    pub fn new(max_entries: usize, max_depth: usize) -> Result<Self, CacheInventoryError> {
+        if max_entries == 0 || max_depth == 0 {
+            return Err(CacheInventoryError::InvalidLimits);
+        }
+        Ok(Self {
+            max_entries,
+            max_depth,
+        })
+    }
+}
+
+impl Default for CacheInventoryLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: DEFAULT_MAX_INVENTORY_ENTRIES,
+            max_depth: DEFAULT_MAX_INVENTORY_DEPTH,
+        }
+    }
+}
+
+/// A fail-closed inventory error. No cleanup plan should execute after this.
+#[derive(Debug, Error)]
+pub enum CacheInventoryError {
+    /// Inventory limits must both be nonzero.
+    #[error("cache inventory limits must be nonzero")]
+    InvalidLimits,
+    /// A namespace root must be an ordinary directory, not a link or junction.
+    #[error("refusing to inspect link-like namespace root {path}")]
+    LinkLikeNamespaceRoot {
+        /// Namespace root that failed the safety check.
+        path: PathBuf,
+    },
+    /// A namespace root exists but is not a directory.
+    #[error("cache namespace root is not a directory: {path}")]
+    InvalidNamespaceRoot {
+        /// Namespace root that failed the type check.
+        path: PathBuf,
+    },
+    /// The entry-count budget was exhausted.
+    #[error("cache inventory entry limit of {limit} was exceeded")]
+    EntryLimitExceeded {
+        /// Configured entry-count limit.
+        limit: usize,
+    },
+    /// The directory-depth budget was exhausted.
+    #[error("cache inventory depth limit of {limit} was exceeded")]
+    DepthLimitExceeded {
+        /// Configured directory-depth limit.
+        limit: usize,
+    },
+    /// Observed byte totals exceeded the supported range.
+    #[error("cache inventory byte total exceeds the supported range")]
+    ByteCountOverflow,
+    /// Filesystem inspection failed.
+    #[error("failed to inspect cache path {path}: {source}")]
+    Io {
+        /// Path being inspected.
+        path: PathBuf,
+        /// Underlying filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// Inventory one registered namespace without following links or junctions.
+pub fn inventory_cache_namespace(
+    home: &MorphirHome,
+    namespace: &CacheNamespace,
+    limits: CacheInventoryLimits,
+) -> Result<Vec<CacheEntry>, CacheInventoryError> {
+    let root = home.cache_dir().join(namespace.name());
+    let metadata = match fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(io_error(&root, source)),
+    };
+    if is_link_like(&metadata) {
+        return Err(CacheInventoryError::LinkLikeNamespaceRoot { path: root });
+    }
+    if !metadata.is_dir() {
+        return Err(CacheInventoryError::InvalidNamespaceRoot { path: root });
+    }
+
+    let mut inventory = InventoryWalk {
+        namespace,
+        limits,
+        visited: 0,
+        entries: Vec::new(),
+    };
+    inventory.scan_children(&root, Path::new(""), 0)?;
+    inventory
+        .entries
+        .sort_by(|left, right| left.path().cmp(right.path()));
+    Ok(inventory.entries)
+}
+
+struct InventoryWalk<'a> {
+    namespace: &'a CacheNamespace,
+    limits: CacheInventoryLimits,
+    visited: usize,
+    entries: Vec<CacheEntry>,
+}
+
+impl InventoryWalk<'_> {
+    fn scan_children(
+        &mut self,
+        directory: &Path,
+        relative: &Path,
+        depth: usize,
+    ) -> Result<(), CacheInventoryError> {
+        self.check_depth(depth)?;
+        for child in self.read_children(directory)? {
+            let child_path = child.path();
+            let child_relative = relative.join(child.file_name());
+            let identity = portable_identity(&child_relative);
+            let metadata = fs::symlink_metadata(&child_path)
+                .map_err(|source| io_error(&child_path, source))?;
+
+            if let Some(template) = self.namespace.entries.get(&identity) {
+                let measured = self.measure(&child_path, &metadata, depth + 1)?;
+                let entry = if measured.safe {
+                    template.clone().with_observed_bytes(measured.bytes)
+                } else {
+                    CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)
+                        .expect("inventoried identities are portable")
+                };
+                self.entries.push(entry);
+            } else if self.has_registered_descendant(&identity) {
+                if is_link_like(&metadata) || !metadata.is_dir() {
+                    let measured = self.measure(&child_path, &metadata, depth + 1)?;
+                    self.entries.push(
+                        CacheEntry::unclassified(
+                            self.namespace.name.clone(),
+                            identity,
+                            measured.bytes,
+                        )
+                        .expect("inventoried identities are portable"),
+                    );
+                } else {
+                    self.scan_children(&child_path, &child_relative, depth + 1)?;
+                }
+            } else {
+                let measured = self.measure(&child_path, &metadata, depth + 1)?;
+                self.entries.push(
+                    CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)
+                        .expect("inventoried identities are portable"),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn measure(
+        &mut self,
+        path: &Path,
+        metadata: &Metadata,
+        depth: usize,
+    ) -> Result<MeasuredEntry, CacheInventoryError> {
+        if is_link_like(metadata) {
+            return Ok(MeasuredEntry {
+                bytes: metadata.len(),
+                safe: false,
+            });
+        }
+        if metadata.is_file() {
+            return Ok(MeasuredEntry {
+                bytes: metadata.len(),
+                safe: true,
+            });
+        }
+        if !metadata.is_dir() {
+            return Ok(MeasuredEntry {
+                bytes: metadata.len(),
+                safe: false,
+            });
+        }
+
+        self.check_depth(depth)?;
+        let mut bytes = 0_u64;
+        let mut safe = true;
+        for child in self.read_children(path)? {
+            let child_path = child.path();
+            let child_metadata = fs::symlink_metadata(&child_path)
+                .map_err(|source| io_error(&child_path, source))?;
+            let measured = self.measure(&child_path, &child_metadata, depth + 1)?;
+            bytes = bytes
+                .checked_add(measured.bytes)
+                .ok_or(CacheInventoryError::ByteCountOverflow)?;
+            safe &= measured.safe;
+        }
+        Ok(MeasuredEntry { bytes, safe })
+    }
+
+    fn has_registered_descendant(&self, identity: &str) -> bool {
+        let prefix = format!("{identity}/");
+        self.namespace
+            .entries
+            .keys()
+            .any(|path| path.starts_with(&prefix))
+    }
+
+    fn visit(&mut self) -> Result<(), CacheInventoryError> {
+        self.visited =
+            self.visited
+                .checked_add(1)
+                .ok_or(CacheInventoryError::EntryLimitExceeded {
+                    limit: self.limits.max_entries,
+                })?;
+        if self.visited > self.limits.max_entries {
+            return Err(CacheInventoryError::EntryLimitExceeded {
+                limit: self.limits.max_entries,
+            });
+        }
+        Ok(())
+    }
+
+    fn read_children(&mut self, path: &Path) -> Result<Vec<fs::DirEntry>, CacheInventoryError> {
+        let reader = fs::read_dir(path).map_err(|source| io_error(path, source))?;
+        let mut entries = Vec::new();
+        for entry in reader {
+            self.visit()?;
+            entries.push(entry.map_err(|source| io_error(path, source))?);
+        }
+        entries.sort_by_key(fs::DirEntry::file_name);
+        Ok(entries)
+    }
+
+    fn check_depth(&self, depth: usize) -> Result<(), CacheInventoryError> {
+        if depth > self.limits.max_depth {
+            return Err(CacheInventoryError::DepthLimitExceeded {
+                limit: self.limits.max_depth,
+            });
+        }
+        Ok(())
+    }
+}
+
+struct MeasuredEntry {
+    bytes: u64,
+    safe: bool,
+}
+
+fn paths_overlap(first: &str, second: &str) -> bool {
+    first == second
+        || first
+            .strip_prefix(second)
+            .is_some_and(|rest| rest.starts_with('/'))
+        || second
+            .strip_prefix(first)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn portable_identity(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(portable_component(value)),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn portable_component(value: &OsStr) -> String {
+    if let Some(value) = value.to_str() {
+        return value
+            .chars()
+            .flat_map(|character| match character {
+                '%' => "%25".chars().collect::<Vec<_>>(),
+                ':' => "%3A".chars().collect(),
+                '\\' => "%5C".chars().collect(),
+                character if character.is_control() => {
+                    format!("%{:02X}", character as u32).chars().collect()
+                }
+                character => vec![character],
+            })
+            .collect();
+    }
+    portable_non_unicode_component(value)
+}
+
+#[cfg(unix)]
+fn portable_non_unicode_component(value: &OsStr) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect()
+}
+
+#[cfg(windows)]
+fn portable_non_unicode_component(value: &OsStr) -> String {
+    use std::os::windows::ffi::OsStrExt;
+    value
+        .encode_wide()
+        .map(|unit| format!("%u{unit:04X}"))
+        .collect()
+}
+
+fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {
+    CacheInventoryError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+#[cfg(windows)]
+fn is_link_like(metadata: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_like(metadata: &Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CacheNamespace, CacheRegistrationError, paths_overlap};
+
+    #[test]
+    fn registration_rejects_duplicate_and_nested_ownership() {
+        let error = CacheNamespace::new("downloads")
+            .unwrap()
+            .with_disposable("packages/tool", 1)
+            .unwrap()
+            .with_disposable("packages/tool/nested", 2)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CacheRegistrationError::OverlappingEntries { .. }
+        ));
+        assert!(paths_overlap("a", "a/b"));
+        assert!(!paths_overlap("a", "ab"));
+    }
+}

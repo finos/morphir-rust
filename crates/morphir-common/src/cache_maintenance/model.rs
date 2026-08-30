@@ -159,6 +159,11 @@ impl CacheEntry {
             CacheEntryState::Unclassified => None,
         }
     }
+
+    pub(crate) fn with_observed_bytes(mut self, bytes: u64) -> Self {
+        self.bytes = bytes;
+        self
+    }
 }
 
 /// Time and size limits applied by policy cleanup.
@@ -341,6 +346,7 @@ fn valid_entry_path(value: &str) -> bool {
         && !value.starts_with('/')
         && !value.contains('\\')
         && !value.contains(':')
+        && !value.contains('%')
         && value.split('/').all(valid_entry_segment)
 }
 
@@ -402,6 +408,7 @@ mod tests {
             "contains|pipe",
             "contains?question",
             "contains*star",
+            "escaped%2Fidentity",
         ] {
             assert_eq!(
                 CacheEntry::disposable("downloads", path, 1, 1),

@@ -104,8 +104,7 @@ pub(super) fn apply_user_override_selection(
         }
         SourceSelection::Explicit(source) => {
             let primary = modern_root_primary(tree, source)?;
-            let candidates = morphir_workspace::config::adjacent_user_candidates(&primary);
-            remove_user_override_files(tree, payload, |path| candidates.contains(path));
+            remove_user_override_files(tree, payload, is_root_user_override_path);
             materialize_explicit_user_override(tree, source, &primary, payload)
         }
     }

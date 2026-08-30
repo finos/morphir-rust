@@ -582,6 +582,90 @@ fn replaced_natural_override_does_not_count_toward_final_payload() {
 }
 
 #[test]
+fn explicit_root_override_removes_stray_dot_config_override() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = "[project]\nname = 'acme/root'\n";
+    let stray = "[project]\nversion = '1'\n";
+    let explicit = "[project]\nversion = '2'\n";
+    fs::write(root.path().join("morphir.toml"), workspace).unwrap();
+    let dot_config = root.path().join(".config/morphir");
+    fs::create_dir_all(&dot_config).unwrap();
+    fs::write(dot_config.join("config.user.yaml"), stray).unwrap();
+    let explicit_path = root.path().join("selected.toml");
+    fs::write(&explicit_path, explicit).unwrap();
+    let options = ConfigLoadOptions {
+        user_override: SourceSelection::Explicit(explicit_path),
+        ..ConfigLoadOptions::project_only()
+    };
+
+    let (_, request) = bind_workspace_discovery_request_with_budgets(
+        root.path(),
+        &options,
+        AliasBudgets::DEFAULT,
+        TraversalBudgets {
+            config_bytes: workspace.len() + explicit.len(),
+            ..TraversalBudgets::DEFAULT
+        },
+    )
+    .unwrap();
+
+    assert!(
+        !request
+            .development_root
+            .entries
+            .contains_key(&RelativePath::parse(".config/morphir/config.user.yaml").unwrap())
+    );
+    assert_eq!(
+        request
+            .development_root
+            .file_text(&RelativePath::parse("morphir.user.toml").unwrap()),
+        Some(explicit)
+    );
+}
+
+#[test]
+fn explicit_dot_config_override_removes_stray_root_override() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = "project:\n  name: acme/root\n";
+    let stray = "[project]\nversion = '1'\n";
+    let explicit = "project:\n  version: '2'\n";
+    let dot_config = root.path().join(".config/morphir");
+    fs::create_dir_all(&dot_config).unwrap();
+    fs::write(dot_config.join("config.yaml"), workspace).unwrap();
+    fs::write(root.path().join("morphir.user.toml"), stray).unwrap();
+    let explicit_path = root.path().join("selected.yaml");
+    fs::write(&explicit_path, explicit).unwrap();
+    let options = ConfigLoadOptions {
+        user_override: SourceSelection::Explicit(explicit_path),
+        ..ConfigLoadOptions::project_only()
+    };
+
+    let (_, request) = bind_workspace_discovery_request_with_budgets(
+        root.path(),
+        &options,
+        AliasBudgets::DEFAULT,
+        TraversalBudgets {
+            config_bytes: workspace.len() + explicit.len(),
+            ..TraversalBudgets::DEFAULT
+        },
+    )
+    .unwrap();
+
+    assert!(
+        !request
+            .development_root
+            .entries
+            .contains_key(&RelativePath::parse("morphir.user.toml").unwrap())
+    );
+    assert_eq!(
+        request
+            .development_root
+            .file_text(&RelativePath::parse(".config/morphir/config.user.yaml").unwrap()),
+        Some(explicit)
+    );
+}
+
+#[test]
 fn replaced_override_bodies_have_a_separate_resident_cap() {
     let root = tempfile::tempdir().unwrap();
     let workspace = "[project]\nname = 'a'\n";

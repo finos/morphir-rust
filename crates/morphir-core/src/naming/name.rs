@@ -33,6 +33,37 @@ pub enum Segment {
     Initialism(String),
 }
 
+/// Why a [`Segment`] cannot appear in a [`Name`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SegmentError {
+    /// The segment carries no text.
+    Empty,
+    /// The segment carries a character outside `[a-z0-9]`.
+    InvalidCharacter { text: String },
+    /// The initialism carries no letter. The canonical encoding uppercases an
+    /// initialism, and uppercasing digits is a no-op, so a digits-only
+    /// initialism is indistinguishable from the word with the same text and
+    /// cannot survive a round trip.
+    DigitOnlyInitialism { text: String },
+}
+
+impl fmt::Display for SegmentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SegmentError::Empty => write!(f, "a name segment cannot be empty"),
+            SegmentError::InvalidCharacter { text } => {
+                write!(f, "name segment {text:?} is not lowercase alphanumeric")
+            }
+            SegmentError::DigitOnlyInitialism { text } => write!(
+                f,
+                "initialism {text:?} has no letter, so it cannot be distinguished from a word"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SegmentError {}
+
 impl Segment {
     /// The lowercase text of this segment, without its class.
     pub fn text(&self) -> &str {
@@ -43,6 +74,29 @@ impl Segment {
 
     pub fn is_initialism(&self) -> bool {
         matches!(self, Segment::Initialism(_))
+    }
+
+    /// Check the invariant this type documents but cannot enforce, because the
+    /// variants are publicly constructible.
+    pub fn validate(&self) -> Result<(), SegmentError> {
+        let text = self.text();
+        if text.is_empty() {
+            return Err(SegmentError::Empty);
+        }
+        if !text
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            return Err(SegmentError::InvalidCharacter {
+                text: text.to_string(),
+            });
+        }
+        if self.is_initialism() && !text.chars().any(|c| c.is_ascii_lowercase()) {
+            return Err(SegmentError::DigitOnlyInitialism {
+                text: text.to_string(),
+            });
+        }
+        Ok(())
     }
 
     fn titled(&self) -> String {
@@ -109,7 +163,13 @@ impl Name {
         for word in words {
             let word: String = word.into();
             let word = word.to_lowercase();
-            if word.chars().count() == 1 {
+            // Only a run of single *letters* collapses. A single digit stays a
+            // word: the canonical encoding uppercases an initialism, which does
+            // nothing to digits, so a digits-only initialism would decode back as
+            // a word and silently change identity.
+            let is_single_letter = word.chars().count() == 1
+                && word.chars().all(|character| character.is_ascii_lowercase());
+            if is_single_letter {
                 run.push(word);
             } else {
                 flush(&mut run, &mut segments);
@@ -121,8 +181,16 @@ impl Name {
         Name { segments }
     }
 
-    pub fn from_segments(segments: Vec<Segment>) -> Self {
-        Name { segments }
+    /// Build a Name from segments, checking each one.
+    ///
+    /// `Segment`'s variants are publicly constructible, so nothing stops a caller
+    /// from building `Segment::Word("USD".into())`. Validating here means every
+    /// `Name` holds the invariant however its segments were made.
+    pub fn from_segments(segments: Vec<Segment>) -> Result<Self, SegmentError> {
+        for segment in &segments {
+            segment.validate()?;
+        }
+        Ok(Name { segments })
     }
 
     pub fn segments(&self) -> &[Segment] {
@@ -284,11 +352,15 @@ impl Name {
             {
                 return Err(format!("invalid character in file stem: {stem}"));
             }
-            segments.push(if initialism {
+            let segment = if initialism {
                 Segment::Initialism(text.to_string())
             } else {
                 Segment::Word(text.to_string())
-            });
+            };
+            segment
+                .validate()
+                .map_err(|error| format!("{error} in file stem: {stem}"))?;
+            segments.push(segment);
         }
         Ok(Name { segments })
     }
@@ -425,11 +497,15 @@ fn parse_doubled_hyphen(source: &str) -> Result<Name, String> {
             return Err(format!("empty segment in canonical name: {source}"));
         }
         let text = source[start..index].to_string();
-        segments.push(if initialism {
+        let segment = if initialism {
             Segment::Initialism(text)
         } else {
             Segment::Word(text)
-        });
+        };
+        segment
+            .validate()
+            .map_err(|error| format!("{error} in canonical name: {source}"))?;
+        segments.push(segment);
 
         if index == len {
             break;

@@ -110,7 +110,8 @@ fn to_segments(specs: &[SegmentSpec]) -> Vec<Segment> {
 fn round_trip_cases_match_the_corpus() {
     for case in corpus().round_trip_cases {
         let label = &case.name;
-        let name = Name::from_segments(to_segments(&case.segments));
+        let name =
+            Name::from_segments(to_segments(&case.segments)).expect("corpus segments are valid");
 
         assert_eq!(
             name.to_canonical_string_in(NameStyle::Uppercase),

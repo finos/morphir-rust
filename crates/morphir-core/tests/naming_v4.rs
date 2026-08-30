@@ -9,6 +9,53 @@ fn value_in_usd() -> Name {
         Segment::Word("in".into()),
         Segment::Initialism("usd".into()),
     ])
+    .expect("valid segments")
+}
+
+#[test]
+fn from_segments_rejects_segments_that_break_the_invariant() {
+    // Segment's variants are publicly constructible, so Name has to check.
+    assert!(Name::from_segments(vec![Segment::Word("Bad".into())]).is_err());
+    assert!(Name::from_segments(vec![Segment::Word("USD".into())]).is_err());
+    assert!(Name::from_segments(vec![Segment::Word("has space".into())]).is_err());
+    assert!(Name::from_segments(vec![Segment::Word(String::new())]).is_err());
+    // A digits-only initialism cannot round-trip: uppercasing digits is a no-op,
+    // so the decoder would classify it as a word.
+    assert!(Name::from_segments(vec![Segment::Initialism("12".into())]).is_err());
+    // Digits are fine in a word, and in an initialism that carries a letter.
+    assert!(Name::from_segments(vec![Segment::Word("2052".into())]).is_ok());
+    assert!(Name::from_segments(vec![Segment::Initialism("fr2052a".into())]).is_ok());
+}
+
+#[test]
+fn legacy_digit_runs_stay_words_and_round_trip() {
+    // A run of single digits must not collapse into an initialism. Before this
+    // was fixed, ["1","2"] became Initialism("12"), encoded as "12", and decoded
+    // back as Word("12"), silently changing identity.
+    let name = Name::new(&["1", "2"]);
+    assert_eq!(
+        name.segments(),
+        &[Segment::Word("1".into()), Segment::Word("2".into())]
+    );
+    assert_eq!(name.to_canonical_string(), "1-2");
+    assert_eq!(
+        Name::from_canonical_string(&name.to_canonical_string()).unwrap(),
+        name
+    );
+
+    // A digit breaks a letter run rather than joining it.
+    assert_eq!(Name::new(&["u", "1"]).to_canonical_string(), "u-1");
+    assert_eq!(
+        Name::new(&["v", "2", "api"]).to_canonical_string(),
+        "v-2-api"
+    );
+}
+
+#[test]
+fn parsers_reject_a_digits_only_initialism() {
+    assert!(Name::from_canonical_string("--12").is_err());
+    assert!(Name::from_canonical_string("value--12").is_err());
+    assert!(Name::from_file_stem("_12").is_err());
 }
 
 #[test]

@@ -1206,9 +1206,13 @@ mod tests {
             .expect("return a typed dependency failure");
 
         assert_typed_failure(&result);
+        // "Example" is a mixed-case segment, which the v4 name grammar rejects, so
+        // the distribution is invalid rather than merely naming another package.
+        // A mismatch between two well-formed names is covered by
+        // compile_rejects_a_dependency_whose_distribution_has_another_package.
         assert_eq!(
             result.diagnostics[0].code.as_deref(),
-            Some("DEPENDENCY_PACKAGE_MISMATCH")
+            Some("INVALID_DEPENDENCY_DISTRIBUTION")
         );
         assert_directory_empty(&output_dir);
     }

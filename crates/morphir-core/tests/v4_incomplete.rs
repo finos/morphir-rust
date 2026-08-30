@@ -38,7 +38,7 @@ fn documentation_keeps_single_line_string_form() {
 #[test]
 fn value_attributes_hold_a_concrete_inferred_type() {
     let attrs: ValueAttributes =
-        serde_json::from_str(r#"{"inferredType":"morphir/(sdk):basics#int"}"#).unwrap();
+        serde_json::from_str(r#"{"inferredType":"morphir/SDK:basics#int"}"#).unwrap();
 
     assert!(attrs.inferred_type.is_some());
 }

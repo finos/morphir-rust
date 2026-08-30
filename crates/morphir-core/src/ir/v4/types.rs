@@ -614,9 +614,9 @@ mod tests {
 
     #[test]
     fn test_constructor_name_roundtrips_through_canonical_map_key() {
-        // Acronym names serialize to the parenthesized canonical form ("GC" -> "(gc)"),
+        // An initialism serializes as an uppercase canonical segment ("GC" -> "GC"),
         // so the map-key decode must parse the canonical encoding, not treat the key
-        // as a raw word.
+        // as a raw word: decoding "GC" as a word would give the distinct name "gc".
         let def = TypeDefinition::CustomTypeDefinition {
             type_params: vec![],
             constructors: AccessControlled {
@@ -628,10 +628,7 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&def).unwrap();
-        assert!(
-            json.contains("\"(gc)\""),
-            "canonical key expected in {json}"
-        );
+        assert!(json.contains("\"GC\""), "canonical key expected in {json}");
         let back: TypeDefinition = serde_json::from_str(&json).unwrap();
         // Name words lowercase under the canonical encoding, so compare the
         // canonical forms (the serialized shape is the fixed point).
@@ -654,10 +651,7 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&spec).unwrap();
-        assert!(
-            json.contains("\"(gc)\""),
-            "canonical key expected in {json}"
-        );
+        assert!(json.contains("\"GC\""), "canonical key expected in {json}");
         let back: TypeSpecification = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), json);
         match back {

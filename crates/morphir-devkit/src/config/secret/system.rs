@@ -442,7 +442,14 @@ mod tests {
 
     #[test]
     fn file_read_error_does_not_contain_file_contents() {
-        let missing = PathBuf::from("/definitely/not/a/secret/file");
+        // Must be absolute on every platform, or resolution stops at
+        // RelativeFileWithoutDeclaringFile before it ever reaches the read. A
+        // leading `/` is rooted but not absolute on Windows, which needs a drive
+        // prefix, so derive the path from the temp directory instead.
+        let missing = std::env::temp_dir().join("morphir-devkit-missing-secret-file");
+        assert!(missing.is_absolute());
+        assert!(!missing.exists());
+
         let error = read_secret_file(&missing, None).unwrap_err();
 
         assert!(matches!(error, SecretResolutionError::FileRead { .. }));

@@ -1,7 +1,12 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fs};
 
-use cap_std::{ambient_authority, fs::Dir};
 use morphir_workspace::{FileEntry, RelativePath};
+
+#[cfg(unix)]
+use std::path::Path;
+
+#[cfg(unix)]
+use cap_std::{ambient_authority, fs::Dir};
 
 use super::{
     aliases::{

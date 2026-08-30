@@ -12,9 +12,10 @@ pub use diagnostic::{
     WORKSPACE_CONFIG_MISSING, WORKSPACE_MEMBER_DUPLICATE_NAME, WORKSPACE_MEMBER_INVALID,
     WORKSPACE_PATH_NOT_CONFINED, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceDiagnostic,
 };
-pub use discovery::discover;
+pub use discovery::{discover, discover_with_details};
 pub use file_tree::{DiscoveryRequest, FileEntry, FileTree, WORKSPACE_DISCOVERY_PROTOCOL};
 pub use path::{RelativePath, RelativePathError};
 pub use snapshot::{
-    DiscoveryResponse, ProjectSnapshot, ProjectState, WorkspaceSnapshot, WorkspaceState,
+    DiscoveryResponse, ProjectSnapshot, ProjectState, WorkspaceDiscoveryDetails, WorkspaceSnapshot,
+    WorkspaceState,
 };

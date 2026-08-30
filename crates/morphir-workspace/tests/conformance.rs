@@ -4,7 +4,7 @@ use fixtures::fixture_request;
 use morphir_workspace::{
     DiscoveryRequest, DiscoveryResponse, ProjectSnapshot, ProjectState, WORKSPACE_CONFIG_AMBIGUOUS,
     WORKSPACE_CONFIG_INVALID, WORKSPACE_MEMBER_INVALID, WORKSPACE_PATH_NOT_CONFINED,
-    WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceSnapshot, discover,
+    WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceSnapshot, discover, discover_with_details,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,6 +54,36 @@ fn discovers_members_excludes_paths_keeps_root_and_isolates_failures() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "workspace.member.duplicate-name")
+    );
+}
+
+#[test]
+fn discovery_details_reuse_the_exact_pass_and_expose_effective_configs() {
+    let request = fixture_request("valid-monorepo");
+    let response = discover(request.clone());
+    let details = discover_with_details(request).unwrap();
+
+    assert_eq!(
+        response,
+        DiscoveryResponse::Success {
+            snapshot: details.snapshot.clone()
+        }
+    );
+    assert_eq!(details.root_effective["ir"]["format_version"], 4);
+    assert_eq!(
+        details.project_effective
+            [&morphir_workspace::RelativePath::parse("packages/orders").unwrap()]["codegen"]["output_format"],
+        "compact"
+    );
+    assert_eq!(
+        details.project_effective
+            [&morphir_workspace::RelativePath::parse("packages/risk").unwrap()]["codegen"]["output_format"],
+        "risk-compact"
+    );
+    assert!(
+        !details
+            .project_effective
+            .contains_key(&morphir_workspace::RelativePath::parse("packages/broken").unwrap())
     );
 }
 

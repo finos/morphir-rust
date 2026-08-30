@@ -1,4 +1,7 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{DiscoveryFailure, RelativePath, WorkspaceDiagnostic};
 
@@ -39,6 +42,20 @@ pub struct WorkspaceSnapshot {
     /// Workspace diagnostics, sorted by project path, path, code, severity,
     /// and message.
     pub diagnostics: Vec<WorkspaceDiagnostic>,
+}
+
+/// In-memory discovery details for native hosts that need the exact effective
+/// configuration values produced by the portable discovery pass.
+///
+/// This sidecar is deliberately not part of the serialized discovery protocol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceDiscoveryDetails {
+    /// The provider-neutral workspace snapshot.
+    pub snapshot: WorkspaceSnapshot,
+    /// The fully merged effective configuration at the workspace root.
+    pub root_effective: Value,
+    /// Fully merged effective configurations for valid projects, keyed by path.
+    pub project_effective: BTreeMap<RelativePath, Value>,
 }
 
 /// A deterministic, provider-neutral snapshot of a project.

@@ -12,7 +12,8 @@ use crate::{
     ProjectSnapshot, ProjectState, RelativePath, WORKSPACE_CONFIG_AMBIGUOUS,
     WORKSPACE_CONFIG_INVALID, WORKSPACE_CONFIG_MISSING, WORKSPACE_DISCOVERY_PROTOCOL,
     WORKSPACE_MEMBER_DUPLICATE_NAME, WORKSPACE_MEMBER_INVALID, WORKSPACE_PATH_NOT_CONFINED,
-    WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceDiagnostic, WorkspaceSnapshot, WorkspaceState,
+    WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceDiagnostic, WorkspaceDiscoveryDetails,
+    WorkspaceSnapshot, WorkspaceState,
     config::{found_adjacent_user_candidates, found_primary_candidates},
 };
 
@@ -66,13 +67,70 @@ enum ProjectDecodeError {
 /// Discovers a Morphir workspace from portable, root-confined inputs.
 #[must_use]
 pub fn discover(request: DiscoveryRequest) -> DiscoveryResponse {
-    match discover_snapshot(request) {
+    match discover_internal(request, None) {
         Ok(snapshot) => DiscoveryResponse::Success { snapshot },
         Err(error) => DiscoveryResponse::Failure { error },
     }
 }
 
-fn discover_snapshot(request: DiscoveryRequest) -> Result<WorkspaceSnapshot, DiscoveryFailure> {
+/// Discovers a workspace and returns the exact merged configuration values
+/// produced by the same pass as [`discover`].
+pub fn discover_with_details(
+    request: DiscoveryRequest,
+) -> Result<WorkspaceDiscoveryDetails, DiscoveryFailure> {
+    let mut collector = DetailsCollector::default();
+    let snapshot = discover_internal(request, Some(&mut collector))?;
+    Ok(collector.finish(snapshot))
+}
+
+trait EffectiveConfigCollector {
+    fn root(&mut self, effective: &Value);
+    fn project(&mut self, path: &RelativePath, effective: &Value);
+}
+
+#[derive(Default)]
+struct DetailsCollector {
+    root_effective: Option<Value>,
+    root_is_project: bool,
+    project_effective: BTreeMap<RelativePath, Value>,
+}
+
+impl EffectiveConfigCollector for DetailsCollector {
+    fn root(&mut self, effective: &Value) {
+        self.root_effective = Some(effective.clone());
+    }
+
+    fn project(&mut self, path: &RelativePath, effective: &Value) {
+        if path == &RelativePath::root() {
+            self.root_is_project = true;
+        } else {
+            self.project_effective
+                .insert(path.clone(), effective.clone());
+        }
+    }
+}
+
+impl DetailsCollector {
+    fn finish(mut self, snapshot: WorkspaceSnapshot) -> WorkspaceDiscoveryDetails {
+        let root_effective = self
+            .root_effective
+            .expect("successful detailed discovery collects the root config");
+        if self.root_is_project {
+            self.project_effective
+                .insert(RelativePath::root(), root_effective.clone());
+        }
+        WorkspaceDiscoveryDetails {
+            snapshot,
+            root_effective,
+            project_effective: self.project_effective,
+        }
+    }
+}
+
+fn discover_internal(
+    request: DiscoveryRequest,
+    mut collector: Option<&mut dyn EffectiveConfigCollector>,
+) -> Result<WorkspaceSnapshot, DiscoveryFailure> {
     if request.protocol_version != WORKSPACE_DISCOVERY_PROTOCOL {
         return Err(failure(
             WORKSPACE_PROTOCOL_UNSUPPORTED,
@@ -128,11 +186,17 @@ fn discover_snapshot(request: DiscoveryRequest) -> Result<WorkspaceSnapshot, Dis
         &workspace.exclude,
     )?;
     let mut projects = Vec::new();
+    if let Some(collector) = collector.as_deref_mut() {
+        collector.root(&workspace_effective);
+    }
     if root_has_project {
         projects.push(decode_root_project(
             &workspace_effective,
             &workspace_primary.path,
         )?);
+        if let Some(collector) = collector.as_deref_mut() {
+            collector.project(&root, &workspace_effective);
+        }
     }
 
     let shared_workspace = without_project_or_workspace(&workspace_primary.value);
@@ -149,6 +213,7 @@ fn discover_snapshot(request: DiscoveryRequest) -> Result<WorkspaceSnapshot, Dis
             shared_workspace_user.as_ref().unwrap_or(&empty),
             &environment,
             &request.cli_overlay,
+            &mut collector,
         ) {
             projects.push(project);
         }
@@ -327,6 +392,7 @@ fn discover_member(
     shared_workspace_user: &Value,
     environment: &Value,
     cli_overlay: &Value,
+    collector: &mut Option<&mut dyn EffectiveConfigCollector>,
 ) -> Option<ProjectSnapshot> {
     let primary_candidates = found_primary_candidates(tree, directory);
     let primary_path = match primary_candidates.as_slice() {
@@ -398,6 +464,9 @@ fn discover_member(
         }
     };
 
+    if let Some(collector) = collector.as_deref_mut() {
+        collector.project(directory, &effective);
+    }
     Some(ProjectSnapshot {
         name: project.name,
         version: project.version,
@@ -656,9 +725,83 @@ fn failure(code: &str, message: String, path: Option<RelativePath>) -> Discovery
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::json;
 
-    use super::{MemberConfigLayers, member_effective_config, without_project_or_workspace};
+    use super::{
+        EffectiveConfigCollector, MemberConfigLayers, discover_internal, member_effective_config,
+        without_project_or_workspace,
+    };
+    use crate::{
+        DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
+    };
+
+    #[derive(Default)]
+    struct CountingCollector {
+        roots: usize,
+        projects: Vec<RelativePath>,
+    }
+
+    impl EffectiveConfigCollector for CountingCollector {
+        fn root(&mut self, _effective: &serde_json::Value) {
+            self.roots += 1;
+        }
+
+        fn project(&mut self, path: &RelativePath, _effective: &serde_json::Value) {
+            self.projects.push(path.clone());
+        }
+    }
+
+    fn collection_request() -> DiscoveryRequest {
+        DiscoveryRequest {
+            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            development_root: FileTree {
+                entries: BTreeMap::from([
+                    (RelativePath::root(), FileEntry::Directory),
+                    (
+                        RelativePath::parse("morphir.toml").unwrap(),
+                        FileEntry::File {
+                            text: "[workspace]\nmembers = ['packages/*']\n[project]\nname = 'acme/root'\n"
+                                .to_owned(),
+                        },
+                    ),
+                    (
+                        RelativePath::parse("packages/orders").unwrap(),
+                        FileEntry::Directory,
+                    ),
+                    (
+                        RelativePath::parse("packages/orders/morphir.toml").unwrap(),
+                        FileEntry::File {
+                            text: "[project]\nname = 'acme/orders'\n".to_owned(),
+                        },
+                    ),
+                ]),
+            },
+            morphir_home: None,
+            system_config: None,
+            environment: BTreeMap::new(),
+            cli_overlay: json!({}),
+        }
+    }
+
+    #[test]
+    fn effective_configs_are_collected_only_when_a_sink_is_supplied() {
+        let request = collection_request();
+        let ordinary = discover_internal(request.clone(), None).unwrap();
+        let mut collector = CountingCollector::default();
+        let detailed = discover_internal(request, Some(&mut collector)).unwrap();
+
+        assert_eq!(ordinary, detailed);
+        assert_eq!(collector.roots, 1);
+        assert_eq!(
+            collector.projects,
+            [
+                RelativePath::root(),
+                RelativePath::parse("packages/orders").unwrap(),
+            ]
+        );
+    }
 
     #[test]
     fn member_merge_inherits_only_shared_root_user_sections() {

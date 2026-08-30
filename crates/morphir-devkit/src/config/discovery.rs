@@ -292,6 +292,17 @@ pub fn discover_morphir_dir(start_dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    use std::collections::BTreeMap;
+
+    use morphir_workspace::{
+        DiscoveryRequest, FileEntry, FileTree, ProjectState, RelativePath,
+        WORKSPACE_DISCOVERY_PROTOCOL,
+    };
+
+    use crate::{
+        ConfigLoadOptions, SourceSelection, build_workspace_discovery_request, discover_workspace,
+    };
+
     fn write_file(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().expect("config parent")).unwrap();
         std::fs::write(path, content).unwrap();
@@ -299,6 +310,547 @@ mod tests {
 
     fn write_project_config(path: &Path) {
         write_file(path, "project:\n  name: Acme.Project\n  version: 1.0.0\n");
+    }
+
+    fn workspace_fixture_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/workspace-discovery/valid-monorepo")
+    }
+
+    fn fixture_request() -> DiscoveryRequest {
+        fn walk(root: &Path, directory: &Path, entries: &mut BTreeMap<RelativePath, FileEntry>) {
+            let mut children = std::fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            children.sort();
+            for child in children {
+                let relative = child
+                    .strip_prefix(root)
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let relative = RelativePath::parse(relative).unwrap();
+                if child.is_dir() {
+                    entries.insert(relative, FileEntry::Directory);
+                    walk(root, &child, entries);
+                } else {
+                    entries.insert(
+                        relative,
+                        FileEntry::File {
+                            text: std::fs::read_to_string(&child).unwrap(),
+                        },
+                    );
+                }
+            }
+        }
+
+        let root = workspace_fixture_root();
+        let mut entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
+        walk(&root, &root, &mut entries);
+        DiscoveryRequest {
+            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            development_root: FileTree { entries },
+            morphir_home: None,
+            system_config: None,
+            environment: BTreeMap::new(),
+            cli_overlay: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn native_request_and_snapshot_match_portable_fixture_discovery() {
+        let options = ConfigLoadOptions {
+            user_override: SourceSelection::Discover,
+            ..ConfigLoadOptions::project_only()
+        };
+        let expected_request = fixture_request();
+
+        let actual_request = build_workspace_discovery_request(&workspace_fixture_root(), &options)
+            .expect("native request");
+        let actual_snapshot =
+            discover_workspace(&workspace_fixture_root(), &options).expect("native discovery");
+        let expected_snapshot = morphir_workspace::discover(expected_request.clone())
+            .into_result()
+            .expect("portable discovery");
+
+        assert_eq!(actual_request, expected_request);
+        assert_eq!(actual_snapshot, expected_snapshot);
+        assert_eq!(actual_snapshot.projects[0].relative_path.as_str(), ".");
+        assert_eq!(actual_snapshot.projects[0].name, "acme/root");
+        assert!(
+            actual_snapshot
+                .projects
+                .iter()
+                .all(|project| project.relative_path.as_str() != "packages/ignored")
+        );
+        assert_eq!(
+            actual_snapshot
+                .projects
+                .iter()
+                .find(|project| project.relative_path.as_str() == "packages/broken")
+                .unwrap()
+                .state,
+            ProjectState::Error
+        );
+        assert_eq!(
+            actual_snapshot
+                .projects
+                .iter()
+                .filter(|project| project.name == "acme/risk")
+                .map(|project| project.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["packages/duplicate", "packages/risk"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_tree_rejects_symlink_that_escapes_root() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        let outside = base.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            root.join("morphir.toml"),
+            "[workspace]\nmembers = [\"linked\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            outside.join("morphir.toml"),
+            "[project]\nname = \"outside/project\"\n",
+        )
+        .unwrap();
+        symlink(&outside, root.join("linked")).unwrap();
+
+        let error = discover_workspace(&root, &ConfigLoadOptions::project_only()).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("workspace.path.not-confined"));
+        assert!(message.contains("linked"));
+        assert!(message.contains(&outside.display().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_tree_terminates_directory_symlink_cycle() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n",
+        )
+        .unwrap();
+        let member = root.path().join("packages/orders");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        symlink(root.path().join("packages"), member.join("cycle")).unwrap();
+
+        let snapshot = discover_workspace(root.path(), &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(snapshot.projects.len(), 1);
+        assert_eq!(snapshot.projects[0].name, "acme/orders");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn internal_symlink_alias_that_sorts_first_does_not_hide_real_member() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"real/*\"]\n",
+        )
+        .unwrap();
+        let member = root.path().join("real/orders");
+        std::fs::create_dir_all(root.path().join("aliases")).unwrap();
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        symlink(&member, root.path().join("aliases/orders")).unwrap();
+
+        let snapshot = discover_workspace(root.path(), &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(snapshot.projects.len(), 1);
+        assert_eq!(snapshot.projects[0].relative_path.as_str(), "real/orders");
+        assert_eq!(snapshot.projects[0].name, "acme/orders");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn internal_symlink_alias_materializes_an_alias_only_member_once() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"aliases/*\"]\n",
+        )
+        .unwrap();
+        let member = root.path().join("real/orders");
+        std::fs::create_dir_all(root.path().join("aliases")).unwrap();
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        symlink(&member, root.path().join("aliases/orders")).unwrap();
+
+        let snapshot = discover_workspace(root.path(), &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(snapshot.projects.len(), 1);
+        assert_eq!(
+            snapshot.projects[0].relative_path.as_str(),
+            "aliases/orders"
+        );
+        assert_eq!(snapshot.projects[0].name, "acme/orders");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_internal_alias_materializes_an_alias_only_member() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"alias/linked\"]\n",
+        )
+        .unwrap();
+        let outer = root.path().join("real/outer");
+        let project = root.path().join("projects/orders");
+        std::fs::create_dir_all(&outer).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        symlink(&project, outer.join("linked")).unwrap();
+        symlink(&outer, root.path().join("alias")).unwrap();
+
+        let snapshot = discover_workspace(root.path(), &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(snapshot.projects.len(), 1);
+        assert_eq!(snapshot.projects[0].relative_path.as_str(), "alias/linked");
+        assert_eq!(snapshot.projects[0].name, "acme/orders");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_alias_cycle_has_one_bounded_synthetic_layer() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n",
+        )
+        .unwrap();
+        let member = root.path().join("packages/orders");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        symlink(root.path().join("packages"), member.join("cycle")).unwrap();
+
+        let request =
+            build_workspace_discovery_request(root.path(), &ConfigLoadOptions::project_only())
+                .unwrap();
+
+        assert!(
+            request
+                .development_root
+                .entries
+                .keys()
+                .any(|path| path.as_str() == "packages/orders/cycle/orders/morphir.toml")
+        );
+        assert!(request.development_root.entries.keys().all(|path| {
+            path.as_str() != "packages/orders/cycle/orders/cycle/orders/morphir.toml"
+        }));
+        assert!(request.development_root.entries.len() < 16);
+    }
+
+    #[test]
+    fn explicit_user_override_replaces_natural_root_override() {
+        let root = tempfile::tempdir().unwrap();
+        let explicit = root.path().join("selected.yaml");
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("morphir.user.toml"),
+            "[project]\nversion = \"2.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(&explicit, "project:\n  version: 3.0.0\n").unwrap();
+        let options = ConfigLoadOptions {
+            user_override: SourceSelection::Explicit(explicit),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let snapshot = discover_workspace(root.path(), &options).unwrap();
+
+        assert_eq!(snapshot.projects[0].version.as_deref(), Some("3.0.0"));
+    }
+
+    #[test]
+    fn explicit_root_user_override_preserves_member_adjacent_override_precedence() {
+        let root = tempfile::tempdir().unwrap();
+        let explicit = root.path().join("selected.toml");
+        let member = root.path().join("packages/orders");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n\n[project]\nname = \"acme/root\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            member.join("morphir.user.toml"),
+            "[project]\nversion = \"3.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(&explicit, "[project]\nversion = \"2.0.0\"\n").unwrap();
+        let options = ConfigLoadOptions {
+            user_override: SourceSelection::Explicit(explicit),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let snapshot = discover_workspace(root.path(), &options).unwrap();
+
+        assert_eq!(
+            snapshot
+                .projects
+                .iter()
+                .find(|project| project.relative_path.as_str() == ".")
+                .unwrap()
+                .version
+                .as_deref(),
+            Some("2.0.0")
+        );
+        assert_eq!(
+            snapshot
+                .projects
+                .iter()
+                .find(|project| project.relative_path.as_str() == "packages/orders")
+                .unwrap()
+                .version
+                .as_deref(),
+            Some("3.0.0")
+        );
+    }
+
+    #[test]
+    fn explicit_user_override_reports_directory_collision() {
+        let root = tempfile::tempdir().unwrap();
+        let explicit = root.path().join("selected.toml");
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/root\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(root.path().join("morphir.user.toml")).unwrap();
+        std::fs::write(&explicit, "[project]\nversion = \"2.0.0\"\n").unwrap();
+        let options = ConfigLoadOptions {
+            user_override: SourceSelection::Explicit(explicit.clone()),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let error = discover_workspace(root.path(), &options).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(&explicit.display().to_string()));
+        assert!(message.contains("morphir.user.toml"));
+        assert!(message.contains("already occupied"));
+    }
+
+    #[test]
+    fn explicit_user_override_rejects_legacy_root() {
+        let root = tempfile::tempdir().unwrap();
+        let explicit = root.path().join("selected.toml");
+        std::fs::write(
+            root.path().join("morphir.json"),
+            r#"{"name":"acme/legacy","sourceDirectory":"src"}"#,
+        )
+        .unwrap();
+        std::fs::write(&explicit, "[project]\nversion = \"3.0.0\"\n").unwrap();
+        let options = ConfigLoadOptions {
+            user_override: SourceSelection::Explicit(explicit.clone()),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let error = discover_workspace(root.path(), &options).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(&explicit.display().to_string()));
+        assert!(message.contains("modern TOML/YAML root config"));
+    }
+
+    #[test]
+    fn native_request_keeps_only_configuration_environment_variables() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let options = ConfigLoadOptions {
+            env: crate::EnvSelection::Explicit(vec![
+                ("MORPHIR_PROJECT__VERSION".to_owned(), "2.0.0".to_owned()),
+                ("MORPHIR_HOME".to_owned(), "/not/config".to_owned()),
+                ("PATH".to_owned(), "/bin".to_owned()),
+            ]),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let request = build_workspace_discovery_request(root.path(), &options).unwrap();
+        let snapshot = discover_workspace(root.path(), &options).unwrap();
+
+        assert_eq!(
+            request.environment,
+            BTreeMap::from([("MORPHIR_PROJECT__VERSION".to_owned(), "2.0.0".to_owned())])
+        );
+        assert_eq!(snapshot.projects[0].version.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn custom_environment_prefix_preserves_reserved_looking_configuration_keys() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let options = ConfigLoadOptions {
+            env: crate::EnvSelection::Explicit(vec![
+                ("APP_HOME".to_owned(), "project-home".to_owned()),
+                ("APP_LOG_DIR".to_owned(), "project-logs".to_owned()),
+                ("APP_IR__STRICT_MODE".to_owned(), "true".to_owned()),
+                ("APP_PROJECT__VERSION".to_owned(), "2.0.0".to_owned()),
+                ("MORPHIR_HOME".to_owned(), "/operational-home".to_owned()),
+                ("MORPHIR_LOG_DIR".to_owned(), "/operational-logs".to_owned()),
+            ]),
+            env_prefix: "APP".to_owned(),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let request = build_workspace_discovery_request(root.path(), &options).unwrap();
+        let snapshot = discover_workspace(root.path(), &options).unwrap();
+
+        assert_eq!(
+            request.environment,
+            BTreeMap::from([
+                ("MORPHIR__HOME".to_owned(), "project-home".to_owned()),
+                ("MORPHIR__IR__STRICT_MODE".to_owned(), "true".to_owned()),
+                ("MORPHIR__LOG_DIR".to_owned(), "project-logs".to_owned()),
+                ("MORPHIR__PROJECT__VERSION".to_owned(), "2.0.0".to_owned()),
+            ])
+        );
+        assert_eq!(snapshot.projects[0].version.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn missing_explicit_system_config_is_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        let missing = root.path().join("missing-system.toml");
+        let options = ConfigLoadOptions {
+            system: SourceSelection::Explicit(missing.clone()),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let error = build_workspace_discovery_request(root.path(), &options).unwrap_err();
+
+        assert!(error.to_string().contains("explicit system config"));
+        assert!(error.to_string().contains(&missing.display().to_string()));
+    }
+
+    #[test]
+    fn missing_explicit_global_config_is_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        let missing = root.path().join("missing-global.yaml");
+        let options = ConfigLoadOptions {
+            global: SourceSelection::Explicit(missing.clone()),
+            ..ConfigLoadOptions::project_only()
+        };
+
+        let error = build_workspace_discovery_request(root.path(), &options).unwrap_err();
+
+        assert!(error.to_string().contains("explicit global user config"));
+        assert!(error.to_string().contains(&missing.display().to_string()));
+    }
+
+    #[test]
+    fn native_tree_does_not_read_unrecognized_files() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("asset.bin"), [0xff, 0xfe, 0xfd]).unwrap();
+
+        let request =
+            build_workspace_discovery_request(root.path(), &ConfigLoadOptions::project_only())
+                .unwrap();
+
+        assert!(
+            !request
+                .development_root
+                .entries
+                .contains_key(&RelativePath::parse("asset.bin").unwrap())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_tree_ignores_unrecognized_non_utf8_file_names() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join(OsString::from_vec(vec![0xff])), "ignored").unwrap();
+
+        let snapshot = discover_workspace(root.path(), &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(snapshot.projects[0].name, "acme/orders");
     }
 
     #[test]

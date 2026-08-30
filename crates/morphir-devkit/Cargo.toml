@@ -15,6 +15,9 @@ description = "Workspace, configuration, and extension discovery for tools that 
 [dependencies]
 morphir-common = { path = "../morphir-common" }
 morphir-config = { path = "../morphir-config" }
+morphir-workspace = { path = "../morphir-workspace" }
+cap-std = { workspace = true }
+same-file = { workspace = true }
 anyhow = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

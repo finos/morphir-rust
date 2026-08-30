@@ -3092,6 +3092,7 @@ dependencies = [
  "morphir-core",
  "morphir-devkit",
  "morphir-extension-sdk",
+ "morphir-workspace",
  "notify",
  "reqwest",
  "serde",
@@ -3108,10 +3109,13 @@ name = "morphir-devkit"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "cap-std",
  "dirs",
  "keyring",
  "morphir-common",
  "morphir-config",
+ "morphir-workspace",
+ "same-file",
  "secrecy",
  "serde",
  "serde_json",

@@ -102,6 +102,66 @@ fn a_link_like_namespace_root_is_rejected_instead_of_followed() {
     assert!(error.to_string().contains("link-like namespace root"));
 }
 
+#[test]
+fn a_link_like_cache_root_is_rejected_instead_of_followed() {
+    let (_root, home) = a_morphir_home();
+    let outside = TempDir::new().unwrap();
+    std::fs::create_dir_all(outside.path().join("downloads")).unwrap();
+    std::fs::write(outside.path().join("downloads/owned"), b"outside").unwrap();
+    if create_directory_link(outside.path(), &home.cache_dir()).is_err() {
+        return;
+    }
+
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("owned", 1)
+        .unwrap();
+    let error =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap_err();
+
+    assert!(error.to_string().contains("cache root"));
+    assert_eq!(
+        std::fs::read(outside.path().join("downloads/owned")).unwrap(),
+        b"outside"
+    );
+}
+
+#[test]
+fn hostile_unknown_names_are_encoded_as_protected_identities() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    std::fs::write(home.downloads_cache_dir().join("%raw"), b"unknown").unwrap();
+
+    let entries = inventory_cache_namespace(
+        &home,
+        &CacheNamespace::new("downloads").unwrap(),
+        CacheInventoryLimits::default(),
+    )
+    .unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].state(), CacheEntryState::Unclassified);
+    assert_eq!(entries[0].path(), "%25%72%61%77");
+}
+
+#[cfg(unix)]
+#[test]
+fn windows_reserved_unknown_names_are_encoded_on_unix() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    std::fs::write(home.downloads_cache_dir().join("CON"), b"unknown").unwrap();
+
+    let entries = inventory_cache_namespace(
+        &home,
+        &CacheNamespace::new("downloads").unwrap(),
+        CacheInventoryLimits::default(),
+    )
+    .unwrap();
+
+    assert_eq!(entries[0].state(), CacheEntryState::Unclassified);
+    assert_eq!(entries[0].path(), "%43%4F%4E");
+}
+
 #[cfg(unix)]
 fn create_directory_link(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)

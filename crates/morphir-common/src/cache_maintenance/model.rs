@@ -4,6 +4,7 @@ use thiserror::Error;
 
 const MAX_NAMESPACE_BYTES: usize = 64;
 const MAX_ENTRY_PATH_BYTES: usize = 1024;
+const MAX_UNCLASSIFIED_PATH_BYTES: usize = 4096;
 const MAX_ENTRY_SEGMENT_UNITS: usize = 255;
 
 /// A malformed namespace or entry identity supplied to the maintenance engine.
@@ -121,7 +122,13 @@ impl CacheEntry {
         if !valid_namespace(&namespace) {
             return Err(CacheModelError::InvalidNamespace);
         }
-        if !valid_entry_path(&path) {
+        let valid_path = match state {
+            CacheEntryState::Unclassified => valid_unclassified_path(&path),
+            CacheEntryState::Disposable { .. } | CacheEntryState::ActiveLease { .. } => {
+                valid_entry_path(&path)
+            }
+        };
+        if !valid_path {
             return Err(CacheModelError::InvalidEntryPath);
         }
         Ok(Self {
@@ -350,7 +357,39 @@ fn valid_entry_path(value: &str) -> bool {
         && value.split('/').all(valid_entry_segment)
 }
 
-fn valid_entry_segment(segment: &str) -> bool {
+fn valid_unclassified_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_UNCLASSIFIED_PATH_BYTES
+        && !value.starts_with('/')
+        && value.split('/').all(|segment| {
+            (!segment.contains('%') && valid_entry_segment(segment))
+                || valid_escaped_segment(segment)
+        })
+}
+
+fn valid_escaped_segment(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    if bytes.starts_with(b"%u") {
+        let (chunks, remainder) = bytes.as_chunks::<6>();
+        return !chunks.is_empty()
+            && remainder.is_empty()
+            && chunks.iter().all(|chunk| {
+                chunk.starts_with(b"%u") && chunk[2..].iter().copied().all(canonical_hex)
+            });
+    }
+    let (chunks, remainder) = bytes.as_chunks::<3>();
+    !chunks.is_empty()
+        && remainder.is_empty()
+        && chunks
+            .iter()
+            .all(|chunk| chunk[0] == b'%' && chunk[1..].iter().copied().all(canonical_hex))
+}
+
+fn canonical_hex(byte: u8) -> bool {
+    byte.is_ascii_digit() || matches!(byte, b'A'..=b'F')
+}
+
+pub(crate) fn valid_entry_segment(segment: &str) -> bool {
     let windows_stem = segment
         .split('.')
         .next()
@@ -432,5 +471,20 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("portable relative path"));
+    }
+
+    #[test]
+    fn only_unclassified_entries_accept_well_formed_escaped_identities() {
+        assert!(CacheEntry::unclassified("downloads", "%43%4F%4E", 1).is_ok());
+        assert_eq!(
+            CacheEntry::disposable("downloads", "%43%4F%4E", 1, 1),
+            Err(CacheModelError::InvalidEntryPath)
+        );
+        for malformed in ["%", "%4", "%GG", "name%20part"] {
+            assert_eq!(
+                CacheEntry::unclassified("downloads", malformed, 1),
+                Err(CacheModelError::InvalidEntryPath)
+            );
+        }
     }
 }

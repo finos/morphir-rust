@@ -1,8 +1,11 @@
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
+use cap_std::ambient_authority;
+#[cfg(windows)]
+use cap_std::fs::MetadataExt;
+use cap_std::fs::{Dir, DirEntry, Metadata};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -124,6 +127,18 @@ pub enum CacheInventoryError {
     /// Inventory limits must both be nonzero.
     #[error("cache inventory limits must be nonzero")]
     InvalidLimits,
+    /// The shared cache root must be an ordinary directory, not a link or junction.
+    #[error("refusing to inspect link-like cache root {path}")]
+    LinkLikeCacheRoot {
+        /// Shared cache root that failed the safety check.
+        path: PathBuf,
+    },
+    /// The shared cache root exists but is not a directory.
+    #[error("cache root is not a directory: {path}")]
+    InvalidCacheRoot {
+        /// Shared cache root that failed the type check.
+        path: PathBuf,
+    },
     /// A namespace root must be an ordinary directory, not a link or junction.
     #[error("refusing to inspect link-like namespace root {path}")]
     LinkLikeNamespaceRoot {
@@ -151,6 +166,9 @@ pub enum CacheInventoryError {
     /// Observed byte totals exceeded the supported range.
     #[error("cache inventory byte total exceeds the supported range")]
     ByteCountOverflow,
+    /// An observed filesystem name could not be represented as a protected identity.
+    #[error(transparent)]
+    InvalidObservedIdentity(#[from] CacheModelError),
     /// Filesystem inspection failed.
     #[error("failed to inspect cache path {path}: {source}")]
     Io {
@@ -163,13 +181,62 @@ pub enum CacheInventoryError {
 }
 
 /// Inventory one registered namespace without following links or junctions.
+///
+/// The walk is bounded and returns unknown filesystem objects as protected,
+/// unclassified entries. Callers should stop cleanup if inventory returns an
+/// error.
+///
+/// ```no_run
+/// use morphir_common::cache_maintenance::{
+///     CacheInventoryLimits, CacheNamespace, inventory_cache_namespace,
+/// };
+/// use morphir_common::home::MorphirHome;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let home = MorphirHome::resolve()?;
+/// let downloads = CacheNamespace::new("downloads")?
+///     .with_disposable("desktop/1.2.3", 1_735_689_600)?;
+/// let entries = inventory_cache_namespace(
+///     &home,
+///     &downloads,
+///     CacheInventoryLimits::new(10_000, 32)?,
+/// )?;
+/// for entry in entries {
+///     println!("{}: {} bytes", entry.path(), entry.bytes());
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub fn inventory_cache_namespace(
     home: &MorphirHome,
     namespace: &CacheNamespace,
     limits: CacheInventoryLimits,
 ) -> Result<Vec<CacheEntry>, CacheInventoryError> {
-    let root = home.cache_dir().join(namespace.name());
-    let metadata = match fs::symlink_metadata(&root) {
+    let home_root = home.root();
+    let home_dir = match Dir::open_ambient_dir(home_root, ambient_authority()) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(io_error(home_root, source)),
+    };
+
+    let cache_root = home.cache_dir();
+    let cache_metadata = match home_dir.symlink_metadata("cache") {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(io_error(&cache_root, source)),
+    };
+    if is_link_like(&cache_metadata) {
+        return Err(CacheInventoryError::LinkLikeCacheRoot { path: cache_root });
+    }
+    if !cache_metadata.is_dir() {
+        return Err(CacheInventoryError::InvalidCacheRoot { path: cache_root });
+    }
+    let cache_dir = home_dir
+        .open_dir("cache")
+        .map_err(|source| io_error(&cache_root, source))?;
+
+    let root = cache_root.join(namespace.name());
+    let metadata = match cache_dir.symlink_metadata(namespace.name()) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => return Err(io_error(&root, source)),
@@ -180,6 +247,9 @@ pub fn inventory_cache_namespace(
     if !metadata.is_dir() {
         return Err(CacheInventoryError::InvalidNamespaceRoot { path: root });
     }
+    let root_dir = cache_dir
+        .open_dir(namespace.name())
+        .map_err(|source| io_error(&root, source))?;
 
     let mut inventory = InventoryWalk {
         namespace,
@@ -187,7 +257,7 @@ pub fn inventory_cache_namespace(
         visited: 0,
         entries: Vec::new(),
     };
-    inventory.scan_children(&root, Path::new(""), 0)?;
+    inventory.scan_children(&root_dir, &root, Path::new(""), 0)?;
     inventory
         .entries
         .sort_by(|left, right| left.path().cmp(right.path()));
@@ -204,47 +274,55 @@ struct InventoryWalk<'a> {
 impl InventoryWalk<'_> {
     fn scan_children(
         &mut self,
-        directory: &Path,
+        directory: &Dir,
+        display_path: &Path,
         relative: &Path,
         depth: usize,
     ) -> Result<(), CacheInventoryError> {
         self.check_depth(depth)?;
-        for child in self.read_children(directory)? {
-            let child_path = child.path();
+        for child in self.read_children(directory, display_path)? {
+            let child_path = display_path.join(child.file_name());
             let child_relative = relative.join(child.file_name());
             let identity = portable_identity(&child_relative);
-            let metadata = fs::symlink_metadata(&child_path)
+            let metadata = directory
+                .symlink_metadata(child.file_name())
                 .map_err(|source| io_error(&child_path, source))?;
 
             if let Some(template) = self.namespace.entries.get(&identity) {
-                let measured = self.measure(&child_path, &metadata, depth + 1)?;
+                let measured = self.measure(&child, &child_path, &metadata, depth + 1)?;
                 let entry = if measured.safe {
                     template.clone().with_observed_bytes(measured.bytes)
                 } else {
-                    CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)
-                        .expect("inventoried identities are portable")
+                    CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)?
                 };
                 self.entries.push(entry);
             } else if self.has_registered_descendant(&identity) {
                 if is_link_like(&metadata) || !metadata.is_dir() {
-                    let measured = self.measure(&child_path, &metadata, depth + 1)?;
-                    self.entries.push(
-                        CacheEntry::unclassified(
+                    let measured = self.measure(&child, &child_path, &metadata, depth + 1)?;
+                    self.entries.push(CacheEntry::unclassified(
+                        self.namespace.name.clone(),
+                        identity,
+                        measured.bytes,
+                    )?);
+                } else {
+                    match child.open_dir() {
+                        Ok(child_dir) => {
+                            self.scan_children(&child_dir, &child_path, &child_relative, depth + 1)?
+                        }
+                        Err(_) => self.entries.push(CacheEntry::unclassified(
                             self.namespace.name.clone(),
                             identity,
-                            measured.bytes,
-                        )
-                        .expect("inventoried identities are portable"),
-                    );
-                } else {
-                    self.scan_children(&child_path, &child_relative, depth + 1)?;
+                            metadata.len(),
+                        )?),
+                    }
                 }
             } else {
-                let measured = self.measure(&child_path, &metadata, depth + 1)?;
-                self.entries.push(
-                    CacheEntry::unclassified(self.namespace.name.clone(), identity, measured.bytes)
-                        .expect("inventoried identities are portable"),
-                );
+                let measured = self.measure(&child, &child_path, &metadata, depth + 1)?;
+                self.entries.push(CacheEntry::unclassified(
+                    self.namespace.name.clone(),
+                    identity,
+                    measured.bytes,
+                )?);
             }
         }
         Ok(())
@@ -252,6 +330,7 @@ impl InventoryWalk<'_> {
 
     fn measure(
         &mut self,
+        entry: &DirEntry,
         path: &Path,
         metadata: &Metadata,
         depth: usize,
@@ -276,13 +355,23 @@ impl InventoryWalk<'_> {
         }
 
         self.check_depth(depth)?;
+        let directory = match entry.open_dir() {
+            Ok(directory) => directory,
+            Err(_) => {
+                return Ok(MeasuredEntry {
+                    bytes: metadata.len(),
+                    safe: false,
+                });
+            }
+        };
         let mut bytes = 0_u64;
         let mut safe = true;
-        for child in self.read_children(path)? {
-            let child_path = child.path();
-            let child_metadata = fs::symlink_metadata(&child_path)
+        for child in self.read_children(&directory, path)? {
+            let child_path = path.join(child.file_name());
+            let child_metadata = directory
+                .symlink_metadata(child.file_name())
                 .map_err(|source| io_error(&child_path, source))?;
-            let measured = self.measure(&child_path, &child_metadata, depth + 1)?;
+            let measured = self.measure(&child, &child_path, &child_metadata, depth + 1)?;
             bytes = bytes
                 .checked_add(measured.bytes)
                 .ok_or(CacheInventoryError::ByteCountOverflow)?;
@@ -314,14 +403,20 @@ impl InventoryWalk<'_> {
         Ok(())
     }
 
-    fn read_children(&mut self, path: &Path) -> Result<Vec<fs::DirEntry>, CacheInventoryError> {
-        let reader = fs::read_dir(path).map_err(|source| io_error(path, source))?;
+    fn read_children(
+        &mut self,
+        directory: &Dir,
+        display_path: &Path,
+    ) -> Result<Vec<DirEntry>, CacheInventoryError> {
+        let reader = directory
+            .entries()
+            .map_err(|source| io_error(display_path, source))?;
         let mut entries = Vec::new();
         for entry in reader {
             self.visit()?;
-            entries.push(entry.map_err(|source| io_error(path, source))?);
+            entries.push(entry.map_err(|source| io_error(display_path, source))?);
         }
-        entries.sort_by_key(fs::DirEntry::file_name);
+        entries.sort_by_key(DirEntry::file_name);
         Ok(entries)
     }
 
@@ -362,17 +457,13 @@ fn portable_identity(path: &Path) -> String {
 
 fn portable_component(value: &OsStr) -> String {
     if let Some(value) = value.to_str() {
+        if !value.contains('%') && super::model::valid_entry_segment(value) {
+            return value.to_owned();
+        }
         return value
-            .chars()
-            .flat_map(|character| match character {
-                '%' => "%25".chars().collect::<Vec<_>>(),
-                ':' => "%3A".chars().collect(),
-                '\\' => "%5C".chars().collect(),
-                character if character.is_control() => {
-                    format!("%{:02X}", character as u32).chars().collect()
-                }
-                character => vec![character],
-            })
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("%{byte:02X}"))
             .collect();
     }
     portable_non_unicode_component(value)
@@ -406,7 +497,6 @@ fn io_error(path: &Path, source: io::Error) -> CacheInventoryError {
 
 #[cfg(windows)]
 fn is_link_like(metadata: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     metadata.file_type().is_symlink()
         || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0

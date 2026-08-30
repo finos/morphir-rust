@@ -458,7 +458,8 @@ fn finish_extraction(
 #[derive(Default)]
 struct PortableArchivePaths {
     entries: BTreeSet<String>,
-    components: BTreeMap<String, (String, ArchivePathKind)>,
+    case_folded_components: BTreeMap<String, (String, ArchivePathKind)>,
+    uppercase_components: BTreeMap<String, (String, ArchivePathKind)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,20 +493,37 @@ impl PortableArchivePaths {
                 .collect::<String>()
                 .nfc()
                 .collect::<String>();
-            match self.components.get(&folded) {
-                Some((existing, existing_kind))
-                    if existing != &prefix || *existing_kind != component_kind =>
-                {
-                    return false;
-                }
-                Some(_) => {}
-                None => {
-                    self.components
-                        .insert(folded, (prefix.clone(), component_kind));
-                }
+            let uppercase = normalized.to_uppercase().nfc().collect::<String>();
+            if !insert_portable_component(
+                &mut self.case_folded_components,
+                folded,
+                &prefix,
+                component_kind,
+            ) || !insert_portable_component(
+                &mut self.uppercase_components,
+                uppercase,
+                &prefix,
+                component_kind,
+            ) {
+                return false;
             }
         }
         true
+    }
+}
+
+fn insert_portable_component(
+    components: &mut BTreeMap<String, (String, ArchivePathKind)>,
+    key: String,
+    path: &str,
+    kind: ArchivePathKind,
+) -> bool {
+    match components.get(&key) {
+        Some((existing, existing_kind)) => existing == path && *existing_kind == kind,
+        None => {
+            components.insert(key, (path.to_owned(), kind));
+            true
+        }
     }
 }
 

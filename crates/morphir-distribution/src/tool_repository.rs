@@ -244,6 +244,31 @@ impl TrustedToolRepository {
         resolved: &ResolvedTrustedToolArtifact,
         staging_directory: &Path,
     ) -> Result<DownloadedToolArtifact> {
+        let target_metadata = self
+            .repository
+            .targets()
+            .signed
+            .find_target(&resolved.target, false)
+            .map_err(|_| DistributionError::MissingToolTarget {
+                target: resolved.target.raw().to_owned(),
+            })?;
+        validate_tool_artifact_length(resolved.target.raw(), target_metadata.length)?;
+        let digest_bytes: [u8; 32] =
+            target_metadata
+                .hashes
+                .sha256
+                .as_ref()
+                .try_into()
+                .map_err(|_| {
+                    invalid_metadata(resolved.target.raw(), "SHA-256 digest was not 32 bytes")
+                })?;
+        validate_resolved_target_metadata(
+            resolved.target.raw(),
+            resolved.length,
+            &resolved.digest,
+            target_metadata.length,
+            &Sha256Digest::from_bytes(digest_bytes),
+        )?;
         let (download_directory, path) =
             prepare_download_destination(staging_directory, Path::new(resolved.target.resolved()))?;
         self.repository
@@ -503,6 +528,25 @@ fn validate_tool_artifact_length(target: &str, length: u64) -> Result<()> {
     }
 }
 
+fn validate_resolved_target_metadata(
+    target: &str,
+    resolved_length: u64,
+    resolved_digest: &Sha256Digest,
+    current_length: u64,
+    current_digest: &Sha256Digest,
+) -> Result<()> {
+    if current_length == resolved_length && current_digest == resolved_digest {
+        return Ok(());
+    }
+
+    Err(invalid_metadata(
+        target,
+        format!(
+            "current repository target does not match resolved artifact: expected {resolved_length} bytes with SHA-256 {resolved_digest}, found {current_length} bytes with SHA-256 {current_digest}"
+        ),
+    ))
+}
+
 fn validate_release_descriptor_set(count: usize, aggregate_length: u64) -> Result<()> {
     if count > MAX_TOOL_RELEASE_DESCRIPTOR_COUNT {
         return Err(invalid_metadata(
@@ -602,6 +646,39 @@ mod descriptor_size_tests {
             DistributionError::InvalidToolMetadata { .. }
         ));
         assert!(error.to_string().contains("artifact length"));
+    }
+}
+
+#[cfg(test)]
+mod resolved_target_tests {
+    use super::validate_resolved_target_metadata;
+    use crate::{DistributionError, Sha256Digest};
+
+    #[test]
+    fn download_rejects_target_metadata_from_a_different_repository() {
+        let resolved_digest = Sha256Digest::of_bytes(b"repository-a");
+        let current_digest = Sha256Digest::of_bytes(b"repository-b");
+
+        for (length, digest) in [(12, resolved_digest.clone()), (12_u64 - 1, current_digest)] {
+            let error = validate_resolved_target_metadata(
+                "artifacts/desktop/1.0.0/desktop.zip",
+                12_u64 - 1,
+                &resolved_digest,
+                length,
+                &digest,
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                error,
+                DistributionError::InvalidToolMetadata { .. }
+            ));
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not match resolved artifact")
+            );
+        }
     }
 }
 

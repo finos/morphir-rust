@@ -96,6 +96,37 @@ fn execution_refuses_an_entry_that_changed_after_planning() {
 }
 
 #[test]
+fn execution_refuses_an_entry_used_after_planning() {
+    let (_root, home) = a_morphir_home();
+    std::fs::create_dir_all(home.indexes_cache_dir()).unwrap();
+    let target = home.indexes_cache_dir().join("recent.index");
+    std::fs::write(&target, b"same-size").unwrap();
+    let plan = a_policy_plan(vec![
+        CacheEntry::disposable("indexes", "recent.index", 9, 0).unwrap(),
+    ]);
+    let ownership = CacheNamespace::new("indexes")
+        .unwrap()
+        .with_disposable("recent.index", 10)
+        .unwrap();
+
+    let report = execute_cache_cleanup(
+        &home,
+        &plan,
+        &[ownership],
+        CacheInventoryLimits::default(),
+        CacheExecutionLimits::new(10, 1_024).unwrap(),
+    )
+    .unwrap();
+
+    assert!(target.exists());
+    assert_eq!(report.removed_bytes(), 0);
+    assert_eq!(
+        report.items()[0].disposition(),
+        CacheExecutionDisposition::Stale
+    );
+}
+
+#[test]
 fn execution_stops_at_a_deterministic_entry_budget() {
     let (_root, home) = a_morphir_home();
     std::fs::create_dir_all(home.desktop_cache_dir()).unwrap();
@@ -258,8 +289,8 @@ fn execution_recovers_content_from_an_interrupted_trash_run() {
     let stranded_run = home
         .maintenance_trash_dir()
         .join("0123456789abcdef0123456789abcdef");
-    std::fs::create_dir_all(stranded_run.join("nested")).unwrap();
-    std::fs::write(stranded_run.join("nested/entry"), b"stranded").unwrap();
+    std::fs::create_dir_all(&stranded_run).unwrap();
+    std::fs::write(stranded_run.join("verified-00000000"), b"stranded").unwrap();
 
     execute_cache_cleanup(
         &home,

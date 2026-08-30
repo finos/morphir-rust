@@ -1,16 +1,14 @@
 mod filesystem;
+mod revalidation;
 
 use self::filesystem::{
-    MaintenanceGuard, TrashRun, create_trash_run, open_maintenance_trash, remove_revalidated_entry,
-    sweep_existing_trash,
+    MaintenanceGuard, RemovalOutcome, TrashRun, create_trash_run, open_maintenance_trash,
+    remove_revalidated_entry, sweep_existing_trash,
 };
-use super::{
-    CacheEntryState, CacheInventoryError, CacheInventoryLimits, CacheNamespace, CleanupPlan,
-    inventory_cache_namespace,
-};
+use self::revalidation::{RevalidatedEntry, inventory_for_execution, revalidate_entry};
+use super::{CacheInventoryError, CacheInventoryLimits, CacheNamespace, CleanupPlan};
 use crate::home::MorphirHome;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -44,7 +42,7 @@ pub enum CacheExecutionDisposition {
     Removed,
     /// The entry disappeared after inventory and required no action.
     Missing,
-    /// The entry's observed bytes changed after the plan was created.
+    /// The entry's observed bytes or ownership state changed after planning.
     Stale,
     /// A lease acquired after planning now protects the entry.
     ActiveLease,
@@ -151,6 +149,16 @@ pub enum CacheExecutionError {
         /// Path that failed the safety check.
         path: PathBuf,
     },
+    /// The selected path changed after it was pinned and was preserved for recovery.
+    #[error(
+        "cache entry changed during removal at {path}; preserved staged content at {staged_path}"
+    )]
+    EntryChangedDuringRemoval {
+        /// Active-cache path whose object changed.
+        path: PathBuf,
+        /// Maintenance-trash path holding the unverified replacement.
+        staged_path: PathBuf,
+    },
     /// Execution byte accounting overflowed.
     #[error("cache execution byte total exceeds the supported range")]
     ByteCountOverflow,
@@ -172,6 +180,7 @@ impl CacheExecutionError {
             Self::DuplicateNamespace { .. } => "duplicate-namespace",
             Self::Inventory(_) => "inventory-failed",
             Self::UnsafeMaintenancePath { .. } => "unsafe-maintenance-path",
+            Self::EntryChangedDuringRemoval { .. } => "entry-changed-during-removal",
             Self::ByteCountOverflow => "byte-count-overflow",
             Self::Io { .. } => "io-failed",
         }
@@ -281,7 +290,8 @@ fn execute_cache_cleanup_inner(
     let _guard = MaintenanceGuard::acquire(home)?;
     let trash = open_maintenance_trash(home)?;
     sweep_existing_trash(&trash)?;
-    let inventories = inventory_namespaces(home, ownership, inventory_limits)?;
+    let inventories =
+        inventory_for_execution(home, ownership, inventory_limits, plan, limits.max_removals)?;
     let selected = plan
         .decisions()
         .iter()
@@ -310,7 +320,7 @@ fn execute_cache_cleanup_inner(
         attempted += 1;
         budgeted_bytes = next_budgeted_bytes;
 
-        match revalidate_entry(&inventories, entry.namespace(), entry.path(), entry.bytes()) {
+        match revalidate_entry(&inventories, entry) {
             RevalidatedEntry::Missing => items.push(execution_item(
                 entry,
                 None,
@@ -336,20 +346,35 @@ fn execute_cache_cleanup_inner(
                 Some(observed_bytes),
                 CacheExecutionDisposition::Stale,
             )),
-            RevalidatedEntry::Ready => {
+            RevalidatedEntry::Ready { handle } => {
                 if trash_run.is_none() {
                     trash_run = Some(create_trash_run(&trash)?);
                 }
                 let run = trash_run.as_ref().expect("trash run was just initialized");
-                remove_revalidated_entry(home, entry.namespace(), entry.path(), run, items.len())?;
-                removed_bytes = removed_bytes
-                    .checked_add(entry.bytes())
-                    .ok_or(CacheExecutionError::ByteCountOverflow)?;
-                items.push(execution_item(
-                    entry,
-                    Some(entry.bytes()),
-                    CacheExecutionDisposition::Removed,
-                ));
+                match remove_revalidated_entry(
+                    home,
+                    entry.namespace(),
+                    entry.path(),
+                    handle,
+                    run,
+                    items.len(),
+                )? {
+                    RemovalOutcome::Removed => {
+                        removed_bytes = removed_bytes
+                            .checked_add(entry.bytes())
+                            .ok_or(CacheExecutionError::ByteCountOverflow)?;
+                        items.push(execution_item(
+                            entry,
+                            Some(entry.bytes()),
+                            CacheExecutionDisposition::Removed,
+                        ));
+                    }
+                    RemovalOutcome::Changed => items.push(execution_item(
+                        entry,
+                        Some(entry.bytes()),
+                        CacheExecutionDisposition::Stale,
+                    )),
+                }
             }
         }
     }
@@ -375,72 +400,4 @@ fn execution_item(
         observed_bytes,
         disposition,
     )
-}
-
-enum RevalidatedEntry {
-    Missing,
-    ActiveLease { observed_bytes: u64 },
-    Unclassified { observed_bytes: u64 },
-    Unregistered,
-    Stale { observed_bytes: u64 },
-    Ready,
-}
-
-fn inventory_namespaces(
-    home: &MorphirHome,
-    ownership: &[CacheNamespace],
-    limits: CacheInventoryLimits,
-) -> Result<BTreeMap<String, Vec<super::CacheEntry>>, CacheExecutionError> {
-    let mut inventories = BTreeMap::new();
-    for namespace in ownership {
-        if inventories.contains_key(namespace.name()) {
-            return Err(CacheExecutionError::DuplicateNamespace {
-                namespace: namespace.name().to_owned(),
-            });
-        }
-        inventories.insert(
-            namespace.name().to_owned(),
-            inventory_cache_namespace(home, namespace, limits)?,
-        );
-    }
-    Ok(inventories)
-}
-
-fn revalidate_entry(
-    inventories: &BTreeMap<String, Vec<super::CacheEntry>>,
-    namespace: &str,
-    path: &str,
-    planned_bytes: u64,
-) -> RevalidatedEntry {
-    let Some(inventory) = inventories.get(namespace) else {
-        return RevalidatedEntry::Unregistered;
-    };
-    if let Some(observed) = inventory.iter().find(|entry| entry.path() == path) {
-        return match observed.state() {
-            CacheEntryState::Disposable { .. } if observed.bytes() == planned_bytes => {
-                RevalidatedEntry::Ready
-            }
-            CacheEntryState::Disposable { .. } => RevalidatedEntry::Stale {
-                observed_bytes: observed.bytes(),
-            },
-            CacheEntryState::ActiveLease { .. } => RevalidatedEntry::ActiveLease {
-                observed_bytes: observed.bytes(),
-            },
-            CacheEntryState::Unclassified => RevalidatedEntry::Unclassified {
-                observed_bytes: observed.bytes(),
-            },
-        };
-    }
-    let unsafe_ancestor = inventory.iter().find(|entry| {
-        entry.state() == CacheEntryState::Unclassified
-            && path
-                .strip_prefix(entry.path())
-                .is_some_and(|rest| rest.starts_with('/'))
-    });
-    match unsafe_ancestor {
-        Some(entry) => RevalidatedEntry::Unclassified {
-            observed_bytes: entry.bytes(),
-        },
-        None => RevalidatedEntry::Missing,
-    }
 }

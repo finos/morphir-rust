@@ -76,7 +76,7 @@ impl CacheExecutionDriver {
         let (root, home) = a_morphir_home();
         let run = home.maintenance_trash_dir().join(INTERRUPTED_RUN);
         std::fs::create_dir_all(&run).unwrap();
-        std::fs::write(run.join("orphaned"), b"trash").unwrap();
+        std::fs::write(run.join("verified-00000000"), b"trash").unwrap();
         self.home_root = Some(root);
         self.home = Some(home);
         self.plan = Some(

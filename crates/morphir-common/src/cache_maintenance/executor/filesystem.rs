@@ -1,11 +1,14 @@
 use super::CacheExecutionError;
 use crate::home::MorphirHome;
+#[cfg(unix)]
+use cap_fs_ext::OpenOptionsSyncExt;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt as CapMetadataExt;
 use cap_std::fs::{Dir, Metadata as CapMetadata, OpenOptions as CapOpenOptions};
 use fs2::FileExt;
+use same_file::Handle;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,30 +19,111 @@ pub(super) fn remove_revalidated_entry(
     home: &MorphirHome,
     namespace: &str,
     relative: &str,
+    expected: &Handle,
     trash_run: &TrashRun,
     index: usize,
-) -> Result<(), CacheExecutionError> {
+) -> Result<RemovalOutcome, CacheExecutionError> {
+    remove_revalidated_entry_with_hook(home, namespace, relative, expected, trash_run, index, || {})
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RemovalOutcome {
+    Removed,
+    Changed,
+}
+
+fn remove_revalidated_entry_with_hook<F>(
+    home: &MorphirHome,
+    namespace: &str,
+    relative: &str,
+    expected: &Handle,
+    trash_run: &TrashRun,
+    index: usize,
+    before_rename: F,
+) -> Result<RemovalOutcome, CacheExecutionError>
+where
+    F: FnOnce(),
+{
     let (parent, leaf, source) = open_removal_parent(home, namespace, relative)?;
-    let destination_name = format!("{index:08x}");
-    let destination = trash_run.path.join(&destination_name);
+    let source_object = pin_object(&parent, &leaf, &source)?;
+    if source_object.handle != *expected {
+        return Ok(RemovalOutcome::Changed);
+    }
+    before_rename();
+    let staging_name = format!("{index:08x}");
+    let staging_path = trash_run.path.join(&staging_name);
     parent
-        .rename(&leaf, &trash_run.dir, &destination_name)
+        .rename(&leaf, &trash_run.dir, &staging_name)
         .map_err(|error| io_error(&source, error))?;
-    let metadata = trash_run
+    let staged_object = pin_object(&trash_run.dir, &staging_name, &staging_path)?;
+    if source_object.handle != staged_object.handle || source_object.is_dir != staged_object.is_dir
+    {
+        return Err(CacheExecutionError::EntryChangedDuringRemoval {
+            path: source,
+            staged_path: staging_path,
+        });
+    }
+
+    let verified_name = format!("verified-{staging_name}");
+    let verified_path = trash_run.path.join(&verified_name);
+    trash_run
         .dir
-        .symlink_metadata(&destination_name)
-        .map_err(|source| io_error(&destination, source))?;
-    if metadata.is_dir() && !cap_is_link_like(&metadata) {
+        .rename(&staging_name, &trash_run.dir, &verified_name)
+        .map_err(|source| io_error(&staging_path, source))?;
+    if staged_object.is_dir {
         trash_run
             .dir
-            .remove_dir_all(&destination_name)
-            .map_err(|source| io_error(&destination, source))
+            .remove_dir_all(&verified_name)
+            .map_err(|source| io_error(&verified_path, source))?;
     } else {
         trash_run
             .dir
-            .remove_file(&destination_name)
-            .map_err(|source| io_error(&destination, source))
+            .remove_file(&verified_name)
+            .map_err(|source| io_error(&verified_path, source))?;
     }
+    Ok(RemovalOutcome::Removed)
+}
+
+struct PinnedObject {
+    handle: Handle,
+    is_dir: bool,
+}
+
+fn pin_object(parent: &Dir, name: &str, path: &Path) -> Result<PinnedObject, CacheExecutionError> {
+    let metadata = parent
+        .symlink_metadata(name)
+        .map_err(|source| io_error(path, source))?;
+    if cap_is_link_like(&metadata) || (!metadata.is_dir() && !metadata.is_file()) {
+        return Err(CacheExecutionError::UnsafeMaintenancePath {
+            path: path.to_path_buf(),
+        });
+    }
+    let file = if metadata.is_dir() {
+        parent
+            .open_dir_nofollow(name)
+            .map_err(|source| io_error(path, source))?
+            .into_std_file()
+    } else {
+        let mut options = CapOpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        #[cfg(unix)]
+        options.nonblock(true);
+        parent
+            .open_with(name, &options)
+            .map_err(|source| io_error(path, source))?
+            .into_std()
+    };
+    let opened = file.metadata().map_err(|source| io_error(path, source))?;
+    if opened.is_dir() != metadata.is_dir() || opened.is_file() != metadata.is_file() {
+        return Err(CacheExecutionError::UnsafeMaintenancePath {
+            path: path.to_path_buf(),
+        });
+    }
+    let handle = Handle::from_file(file).map_err(|source| io_error(path, source))?;
+    Ok(PinnedObject {
+        handle,
+        is_dir: opened.is_dir(),
+    })
 }
 
 fn open_removal_parent(
@@ -163,6 +247,7 @@ pub(super) fn sweep_existing_trash(trash: &MaintenanceTrash) -> Result<(), Cache
             .dir
             .open_dir_nofollow(&name)
             .map_err(|source| io_error(&path, source))?;
+        ensure_run_is_verified(&run, &path)?;
         remove_directory_contents(&run, &path)?;
         drop(run);
         trash
@@ -173,6 +258,23 @@ pub(super) fn sweep_existing_trash(trash: &MaintenanceTrash) -> Result<(), Cache
             event = "cache_cleanup_trash_recovered",
             "recovered interrupted trash run"
         );
+    }
+    Ok(())
+}
+
+fn ensure_run_is_verified(directory: &Dir, display_path: &Path) -> Result<(), CacheExecutionError> {
+    let entries = directory
+        .entries()
+        .map_err(|source| io_error(display_path, source))?;
+    for entry in entries {
+        let entry = entry.map_err(|source| io_error(display_path, source))?;
+        let name = entry.file_name();
+        let verified = name.to_str().is_some_and(is_verified_entry_name);
+        if !verified {
+            return Err(CacheExecutionError::UnsafeMaintenancePath {
+                path: display_path.join(name),
+            });
+        }
     }
     Ok(())
 }
@@ -211,6 +313,15 @@ fn is_trash_run_name(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn is_verified_entry_name(value: &str) -> bool {
+    value.strip_prefix("verified-").is_some_and(|suffix| {
+        suffix.len() == 8
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }
 
 pub(super) fn create_trash_run(trash: &MaintenanceTrash) -> Result<TrashRun, CacheExecutionError> {
@@ -309,45 +420,4 @@ fn cap_is_link_like(metadata: &CapMetadata) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{create_trash_run, open_maintenance_trash, remove_revalidated_entry};
-    use crate::home::MorphirHome;
-    use tempfile::TempDir;
-
-    #[test]
-    fn removal_refuses_a_link_like_source_ancestor() {
-        let root = TempDir::new().unwrap();
-        let home = MorphirHome::resolve_from(Some(root.path().as_os_str()), None).unwrap();
-        let outside = TempDir::new().unwrap();
-        std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
-        std::fs::write(outside.path().join("keep"), b"outside").unwrap();
-        if create_directory_link(outside.path(), &home.downloads_cache_dir().join("owned")).is_err()
-        {
-            return;
-        }
-        let trash = open_maintenance_trash(&home).unwrap();
-        let trash_run = create_trash_run(&trash).unwrap();
-
-        assert!(remove_revalidated_entry(&home, "downloads", "owned/keep", &trash_run, 0).is_err());
-        assert_eq!(
-            std::fs::read(outside.path().join("keep")).unwrap(),
-            b"outside"
-        );
-    }
-
-    #[cfg(unix)]
-    fn create_directory_link(
-        target: &std::path::Path,
-        link: &std::path::Path,
-    ) -> std::io::Result<()> {
-        std::os::unix::fs::symlink(target, link)
-    }
-
-    #[cfg(windows)]
-    fn create_directory_link(
-        target: &std::path::Path,
-        link: &std::path::Path,
-    ) -> std::io::Result<()> {
-        std::os::windows::fs::symlink_dir(target, link)
-    }
-}
+mod tests;

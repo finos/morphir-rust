@@ -69,7 +69,11 @@ fn ordinary(metadata: &Metadata) -> bool {
     !is_link_like(metadata) && (metadata.is_dir() || metadata.is_file())
 }
 
-fn object_handle(directory: &Dir, name: &OsStr, expected: &Metadata) -> io::Result<Handle> {
+pub(super) fn object_handle(
+    directory: &Dir,
+    name: &OsStr,
+    expected: &Metadata,
+) -> io::Result<Handle> {
     let file = if expected.is_dir() {
         directory.open_dir_nofollow(name)?.into_std_file()
     } else {

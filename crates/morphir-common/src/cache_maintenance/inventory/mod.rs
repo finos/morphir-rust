@@ -184,7 +184,7 @@ fn inventory_cache_namespace_inner(
     inventory_cache_namespace_from_home(home, &home_dir, namespace, limits, pinned_paths)
 }
 
-fn inventory_cache_namespace_from_home(
+pub(crate) fn inventory_cache_namespace_from_home(
     home: &MorphirHome,
     home_dir: &Dir,
     namespace: &CacheNamespace,

@@ -138,6 +138,11 @@ impl MorphirHome {
         self.data_dir().join("maintenance/cache-cleanup.json")
     }
 
+    /// Durable trusted ownership declarations for disposable cache content.
+    pub fn cache_ownership_registry_file(&self) -> PathBuf {
+        self.data_dir().join("maintenance/cache-ownership.json")
+    }
+
     /// Interprocess lock shared by manual and automatic maintenance runs.
     pub fn maintenance_lock_file(&self) -> PathBuf {
         self.locks_dir().join("maintenance.lock")
@@ -329,6 +334,10 @@ mod tests {
         assert_eq!(
             home.cache_maintenance_state_file(),
             Path::new("/mh/data/maintenance/cache-cleanup.json")
+        );
+        assert_eq!(
+            home.cache_ownership_registry_file(),
+            Path::new("/mh/data/maintenance/cache-ownership.json")
         );
         assert_eq!(
             home.maintenance_lock_file(),

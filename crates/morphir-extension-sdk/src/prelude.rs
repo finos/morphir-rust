@@ -10,11 +10,12 @@ pub use crate::types::{
     CompileResult, Diagnostic, DiagnosticSeverity, ExtensionCapabilities, ExtensionInfo,
     ExtensionType, FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability,
     RelatedInformation, ResourceLimits, SourceDocument, SourceLocation, SourcePosition,
-    SourceRange, TransformRequest, TransformResult, ValidateRequest, ValidateResult, WorkspaceInfo,
+    SourceRange, TransformRequest, TransformResult, ValidateRequest, ValidateResult,
+    WorkspaceCapability, WorkspaceInfo,
 };
 
 // Re-export traits
-pub use crate::traits::{Backend, Extension, Frontend, Transform, Validator};
+pub use crate::traits::{Backend, Extension, Frontend, Transform, Validator, Workspace};
 
 // Re-export error types
 pub use crate::error::{ExtensionError, Result};

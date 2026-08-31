@@ -10,6 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
+use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
 use unicode_normalization::UnicodeNormalization as _;
@@ -57,6 +58,19 @@ pub(super) fn validate_method_result(
     if method == methods::COMPILE {
         return validate_compile_result(request_params, value);
     }
+    if method == methods::WORKSPACE_DISCOVER {
+        let request: DiscoveryRequest = serde_json::from_value(request_params.clone())?;
+        let result: DiscoveryResponse = serde_json::from_value(value)?;
+        if let DiscoveryResponse::Success { snapshot } = &result
+            && snapshot.protocol_version != request.protocol_version
+        {
+            return Err(DaemonError::Extension(format!(
+                "Workspace snapshot protocol version {} did not match requested protocol version {}",
+                snapshot.protocol_version, request.protocol_version
+            )));
+        }
+        return Ok(serde_json::to_value(result)?);
+    }
     Ok(value)
 }
 
@@ -81,6 +95,17 @@ pub(in crate::extensions) async fn validate_method_result_async(
         .await
         .map_err(|error| {
             DaemonError::Extension(format!("Compile result validation worker failed: {error}"))
+        })?;
+    }
+    if method == methods::WORKSPACE_DISCOVER {
+        return tokio::task::spawn_blocking(move || {
+            validate_method_result(methods::WORKSPACE_DISCOVER, &request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            DaemonError::Extension(format!(
+                "Workspace result validation worker failed: {error}"
+            ))
         })?;
     }
     validate_method_result(method, &request_params, value)
@@ -329,6 +354,16 @@ pub(in crate::extensions) fn validate_negotiation(
             "Extension advertised backend capabilities without declaring Backend".into(),
         ));
     }
+    if unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_none() {
+        return Err(DaemonError::Extension(
+            "Extension declared Workspace without workspace capabilities".into(),
+        ));
+    }
+    if !unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_some() {
+        return Err(DaemonError::Extension(
+            "Extension advertised workspace capabilities without declaring Workspace".into(),
+        ));
+    }
     Ok(NegotiatedSession {
         protocol_version: result.protocol_version,
         extension: result.extension,
@@ -340,6 +375,17 @@ pub(in crate::extensions) fn validate_negotiation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace_request(protocol_version: u32) -> serde_json::Value {
+        serde_json::json!({
+            "protocolVersion": protocol_version,
+            "developmentRoot": {"entries": {}},
+            "morphirHome": null,
+            "systemConfig": null,
+            "environment": {},
+            "cliOverlay": {}
+        })
+    }
 
     fn compile_request(ir_version: &str) -> serde_json::Value {
         serde_json::json!({
@@ -369,6 +415,70 @@ mod tests {
                 "def": {"modules": {}}
             }
         })
+    }
+
+    #[test]
+    fn rejects_malformed_workspace_discovery_results() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request(1),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {"protocolVersion": 1}
+            }),
+        )
+        .expect_err("workspace discovery results must match the shared protocol");
+
+        assert!(error.to_string().contains("missing field"), "{error}");
+    }
+
+    #[test]
+    fn accepts_and_normalizes_workspace_discovery_results() {
+        let value = serde_json::json!({
+            "status": "failure",
+            "error": {
+                "code": "workspace.config.missing",
+                "message": "No workspace configuration was found",
+                "path": null
+            }
+        });
+
+        assert_eq!(
+            validate_method_result(
+                methods::WORKSPACE_DISCOVER,
+                &workspace_request(1),
+                value.clone()
+            )
+            .expect("a typed workspace failure is a valid discovery result"),
+            value
+        );
+    }
+
+    #[test]
+    fn rejects_workspace_snapshots_using_a_different_protocol_version() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request(1),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {
+                    "protocolVersion": 2,
+                    "configAnchor": "morphir.toml",
+                    "name": null,
+                    "state": "open",
+                    "projects": [],
+                    "diagnostics": []
+                }
+            }),
+        )
+        .expect_err("snapshot protocol must match the discovery request");
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not match requested protocol version 1"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -501,6 +611,42 @@ mod tests {
             validate_method_result_async(methods::COMPILE, request, value)
                 .await
                 .expect("large compile result should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workspace_validation_runs_off_the_async_worker() {
+        let value = serde_json::json!({
+            "status": "success",
+            "snapshot": {
+                "protocolVersion": 1,
+                "configAnchor": "morphir.toml",
+                "name": null,
+                "state": "open",
+                "projects": [],
+                "diagnostics": [{
+                    "severity": "warning",
+                    "code": "workspace.large-diagnostic",
+                    "message": "M".repeat(8 * 1024 * 1024),
+                    "path": null,
+                    "projectPath": null
+                }]
+            }
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::WORKSPACE_DISCOVER, workspace_request(1), value)
+                .await
+                .expect("large workspace result should validate");
             validation_tx.send("validation").unwrap();
         });
         tokio::spawn(async move {

@@ -7,7 +7,7 @@ use crate::extensions::protocol::{
 use async_trait::async_trait;
 use morphir_extension_sdk::{
     BackendCapability, CompileResult, ExtensionCapabilities, ExtensionInfo, ExtensionType,
-    FrontendCapability, GenerateRequest, GenerateResult,
+    FrontendCapability, GenerateRequest, GenerateResult, WorkspaceCapability,
 };
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -101,6 +101,26 @@ fn backend_initialization(generate: bool) -> InitializeResult {
         generate,
     });
     result
+}
+
+fn workspace_initialization(discover: bool, protocol_versions: Vec<u32>) -> InitializeResult {
+    let mut result = initialization(extension(vec![ExtensionType::Workspace]));
+    result.capabilities.workspace = Some(WorkspaceCapability {
+        protocol_versions,
+        discover,
+    });
+    result
+}
+
+fn workspace_discovery_request(protocol_version: u32) -> serde_json::Value {
+    serde_json::json!({
+        "protocolVersion": protocol_version,
+        "developmentRoot": {"entries": {}},
+        "morphirHome": null,
+        "systemConfig": null,
+        "environment": {},
+        "cliOverlay": {}
+    })
 }
 
 fn scripted_transport(responses: impl IntoIterator<Item = ExtensionResponse>) -> ScriptedTransport {
@@ -293,6 +313,53 @@ async fn rejects_backend_capabilities_without_declared_backend() {
             .error()
             .to_string()
             .contains("backend capabilities without declaring Backend")
+    );
+}
+
+#[tokio::test]
+async fn rejects_declared_workspace_without_workspace_capabilities() {
+    let response =
+        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Workspace])))
+            .unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::identified("example"),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("missing workspace capabilities should fail");
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("declared Workspace without workspace capabilities")
+    );
+}
+
+#[tokio::test]
+async fn rejects_workspace_capabilities_without_declared_workspace() {
+    let mut result = initialization(extension(vec![ExtensionType::Validator]));
+    result.capabilities.workspace = Some(WorkspaceCapability {
+        protocol_versions: vec![1],
+        discover: true,
+    });
+    let response = ExtensionResponse::success(1, result).unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::identified("example"),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("undeclared workspace capabilities should fail");
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("workspace capabilities without declaring Workspace")
     );
 }
 
@@ -657,6 +724,139 @@ async fn permits_generate_when_the_backend_enabled_it() {
         }
         InvokeOutcome::Rejected(_, error) => panic!("enabled generation should be sent: {error}"),
         InvokeOutcome::Failed(failure) => panic!("generation should succeed: {}", failure.error()),
+    }
+}
+
+#[tokio::test]
+async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
+    for initialized in [
+        workspace_initialization(false, vec![1]),
+        workspace_initialization(true, vec![2]),
+    ] {
+        let initialized = ExtensionResponse::success(1, initialized).unwrap();
+        let session = Session::loaded(scripted_transport([initialized]))
+            .initialize(params())
+            .await
+            .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+        match session
+            .invoke::<serde_json::Value>(
+                methods::WORKSPACE_DISCOVER,
+                workspace_discovery_request(1),
+            )
+            .await
+        {
+            InvokeOutcome::Rejected(session, error) => {
+                assert!(error.to_string().contains("does not support capability"));
+                assert_eq!(session.transport_internal().requests.len(), 1);
+            }
+            InvokeOutcome::Success(_, _) => {
+                panic!("disabled workspace discovery must be rejected locally")
+            }
+            InvokeOutcome::Failed(failure) => {
+                panic!("local rejection should preserve Ready: {}", failure.error())
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejects_an_unsupported_workspace_request_protocol_without_sending() {
+    let initialized = ExtensionResponse::success(1, workspace_initialization(true, vec![1]))
+        .expect("workspace initialization should serialize");
+    let session = Session::loaded(scripted_transport([initialized]))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(2))
+        .await
+    {
+        InvokeOutcome::Rejected(session, error) => {
+            assert!(error.to_string().contains("does not support capability"));
+            assert_eq!(session.transport_internal().requests.len(), 1);
+        }
+        InvokeOutcome::Success(_, _) => panic!("protocol 2 must be rejected locally"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("local rejection should preserve Ready: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
+async fn permits_workspace_discovery_for_protocol_v1() {
+    let initialized =
+        ExtensionResponse::success(1, workspace_initialization(true, vec![1])).unwrap();
+    let discovered = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "status": "failure",
+            "error": {
+                "code": "workspace.config.missing",
+                "message": "No workspace configuration was found",
+                "path": null
+            }
+        }),
+    )
+    .unwrap();
+    let session = Session::loaded(scripted_transport([initialized, discovered]))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(1))
+        .await
+    {
+        InvokeOutcome::Success(session, result) => {
+            assert_eq!(result["status"], "failure");
+            assert_eq!(session.transport_internal().requests.len(), 2);
+            assert_eq!(
+                session.transport_internal().requests[1].method,
+                methods::WORKSPACE_DISCOVER
+            );
+        }
+        InvokeOutcome::Rejected(_, error) => {
+            panic!("enabled workspace discovery should be sent: {error}")
+        }
+        InvokeOutcome::Failed(failure) => {
+            panic!("workspace discovery should succeed: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_workspace_discovery_result_fails_the_session() {
+    let initialized =
+        ExtensionResponse::success(1, workspace_initialization(true, vec![1])).unwrap();
+    let malformed = ExtensionResponse::success(
+        2,
+        serde_json::json!({
+            "status": "success",
+            "snapshot": {"protocolVersion": 1}
+        }),
+    )
+    .unwrap();
+    let session = Session::loaded(scripted_transport([initialized, malformed]))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(1))
+        .await
+    {
+        InvokeOutcome::Failed(failure) => {
+            // A malformed result poisons the ready session. This scripted transport
+            // proves abort completed, so `Stopped` is stronger than `Indeterminate`.
+            assert!(matches!(&failure, FailedSession::Stopped(_, _)));
+            assert!(failure.error().to_string().contains("missing field"));
+        }
+        InvokeOutcome::Success(_, _) => panic!("malformed discovery must fail the session"),
+        InvokeOutcome::Rejected(_, error) => {
+            panic!("malformed discovery is not an RPC rejection: {error}")
+        }
     }
 }
 

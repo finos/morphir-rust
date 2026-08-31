@@ -31,6 +31,8 @@ pub mod methods {
     pub const VALIDATE: &str = "morphir.validator.validate";
     /// Transform: transform IR to IR
     pub const TRANSFORM: &str = "morphir.transform.transform";
+    /// Workspace: discover projects from a confined portable file-tree request.
+    pub const WORKSPACE_DISCOVER: &str = "morphir.workspace.discover";
     /// Stop accepting extension operations.
     pub const SHUTDOWN: &str = "morphir.shutdown";
     /// End an acknowledged extension session.

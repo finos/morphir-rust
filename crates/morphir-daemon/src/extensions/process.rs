@@ -6,7 +6,7 @@ use crate::extensions::protocol::{
 };
 use crate::extensions::session::{
     ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
-    Stopped, TransportError, TransportState,
+    Stopped, TransportError, TransportState, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
@@ -342,6 +342,19 @@ impl SpawnedProcessSession {
         }
     }
 
+    fn expected_extension(&self) -> ExpectedExtension {
+        match (&self.discovered, &self.capabilities) {
+            (Some(discovered), Some(capabilities)) => {
+                ExpectedExtension::discovered_with_capabilities(
+                    discovered.clone(),
+                    capabilities.clone(),
+                )
+            }
+            (Some(discovered), None) => ExpectedExtension::discovered(discovered.clone()),
+            (None, _) => ExpectedExtension::identified(self.expected_extension_id.clone()),
+        }
+    }
+
     async fn call<P, R>(&mut self, method: &str, params: P) -> Result<R>
     where
         P: Serialize,
@@ -483,16 +496,7 @@ impl SpawnedProcessTransport {
 #[async_trait]
 impl MepTransport for SpawnedProcessTransport {
     fn expected_extension(&self) -> ExpectedExtension {
-        match (&self.session.discovered, &self.session.capabilities) {
-            (Some(discovered), Some(capabilities)) => {
-                ExpectedExtension::discovered_with_capabilities(
-                    discovered.clone(),
-                    capabilities.clone(),
-                )
-            }
-            (Some(discovered), None) => ExpectedExtension::discovered(discovered.clone()),
-            (None, _) => ExpectedExtension::identified(self.session.expected_extension_id.clone()),
-        }
+        self.session.expected_extension()
     }
 
     async fn exchange(
@@ -636,19 +640,11 @@ impl ExtensionSession for SpawnedProcessSession {
 
         let offered_versions = params.protocol_versions.clone();
         let initialized: InitializeResult = self.call(methods::INITIALIZE, params).await?;
-        let validation = if !offered_versions.contains(&initialized.protocol_version) {
-            Err(DaemonError::Extension(format!(
-                "Extension selected protocol version '{}' that the host did not offer",
-                initialized.protocol_version
-            )))
-        } else if initialized.extension.id != self.expected_extension_id {
-            Err(DaemonError::Extension(format!(
-                "Extension identity changed during initialization: expected '{}', initialized '{}'",
-                self.expected_extension_id, initialized.extension.id
-            )))
-        } else {
-            Ok(())
-        };
+        let validation = validate_compatibility_initialization(
+            self.expected_extension(),
+            &offered_versions,
+            initialized.clone(),
+        );
         if let Err(error) = validation {
             return Err(self.abort_with_error(error).await);
         }
@@ -714,6 +710,14 @@ impl ExtensionSession for SpawnedProcessSession {
 
         Ok(())
     }
+}
+
+fn validate_compatibility_initialization(
+    expected: ExpectedExtension,
+    offered_versions: &[String],
+    initialized: InitializeResult,
+) -> Result<()> {
+    validate_negotiation(expected, offered_versions, initialized).map(|_| ())
 }
 
 async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
@@ -921,7 +925,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use morphir_extension_sdk::ExtensionInfo;
+    use morphir_extension_sdk::{BackendCapability, ExtensionInfo};
     use tokio::io::{BufReader, duplex};
 
     #[test]
@@ -946,6 +950,50 @@ mod tests {
         assert_eq!(retained.name, discovered.name);
         assert_eq!(retained.version, discovered.version);
         assert_eq!(retained.types, discovered.types);
+    }
+
+    #[test]
+    fn compatibility_initialization_rejects_locked_backend_capability_drift() {
+        let discovered = ExtensionInfo {
+            id: "example".into(),
+            name: "Example".into(),
+            version: "1.0.0".into(),
+            types: vec![ExtensionType::Backend],
+            ..ExtensionInfo::default()
+        };
+        let locked_backend = BackendCapability {
+            targets: vec!["avro".into()],
+            ir_versions: vec!["3".into(), "4.0.0".into()],
+            generate: true,
+        };
+        let expected = ExpectedExtension::discovered_with_capabilities(
+            discovered.clone(),
+            ExtensionCapabilities {
+                backend: Some(locked_backend.clone()),
+                ..ExtensionCapabilities::default()
+            },
+        );
+        let initialized = InitializeResult {
+            protocol_version: "0.1".into(),
+            extension: discovered,
+            capabilities: ExtensionCapabilities {
+                backend: Some(BackendCapability {
+                    generate: false,
+                    ..locked_backend
+                }),
+                ..ExtensionCapabilities::default()
+            },
+        };
+
+        let error = validate_compatibility_initialization(expected, &["0.1".into()], initialized)
+            .expect_err("compatibility sessions must enforce discovery-time capability locks");
+
+        assert!(
+            error
+                .to_string()
+                .contains("backend capabilities disagreed with discovery"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

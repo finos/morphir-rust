@@ -179,7 +179,7 @@ fn validate_typed_raw_distribution(ir: &serde_json::Value, requested_version: &s
     })
 }
 
-pub(super) fn validate_negotiation(
+pub(in crate::extensions) fn validate_negotiation(
     expected: ExpectedExtension,
     offered_versions: &[String],
     result: InitializeResult,

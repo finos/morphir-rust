@@ -16,7 +16,7 @@ pub use controller::{
 pub use extism::{ExtismSession, ExtismTransport};
 pub(in crate::extensions) use transport::CapabilityExpectation;
 pub use transport::{ExpectedExtension, MepTransport, TransportError, TransportState};
-pub(in crate::extensions) use validation::validate_negotiation;
+pub(in crate::extensions) use validation::{validate_method_result, validate_negotiation};
 
 #[cfg(test)]
 mod tests;

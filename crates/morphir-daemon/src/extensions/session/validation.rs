@@ -44,7 +44,7 @@ pub(super) fn validate_response(
     }
 }
 
-pub(super) fn validate_method_result(
+pub(in crate::extensions) fn validate_method_result(
     method: &str,
     request_params: &serde_json::Value,
     value: serde_json::Value,

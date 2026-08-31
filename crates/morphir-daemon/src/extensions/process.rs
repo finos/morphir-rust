@@ -7,7 +7,7 @@ use crate::extensions::protocol::{
 use crate::extensions::session::{
     CapabilityExpectation, ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded,
     MepTransport, NegotiatedSession, Session, Stopped, TransportError, TransportState,
-    validate_negotiation,
+    validate_method_result, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
@@ -741,7 +741,12 @@ impl ExtensionSession for SpawnedProcessSession {
             )));
         }
 
-        self.call(method, params).await
+        let request_params = params.clone();
+        let value: serde_json::Value = self.call(method, params).await?;
+        match validate_compatibility_method_result(method, &request_params, value) {
+            Ok(value) => Ok(value),
+            Err(error) => Err(self.abort_with_error(error).await),
+        }
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -780,6 +785,14 @@ fn validate_compatibility_initialization(
     initialized: InitializeResult,
 ) -> Result<NegotiatedSession> {
     validate_negotiation(expected, offered_versions, initialized)
+}
+
+fn validate_compatibility_method_result(
+    method: &str,
+    request_params: &serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    validate_method_result(method, request_params, value)
 }
 
 async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
@@ -1078,6 +1091,22 @@ mod tests {
         .unwrap();
 
         assert!(!negotiated.supports_method(methods::GENERATE));
+    }
+
+    #[test]
+    fn compatibility_invoke_rejects_unsafe_generated_artifacts() {
+        let error = validate_compatibility_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [{"path": "../../escape.avsc", "content": "{}"}],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("compatibility results must use the shared artifact validator");
+
+        assert!(error.to_string().contains("artifact path"), "{error}");
     }
 
     #[tokio::test]

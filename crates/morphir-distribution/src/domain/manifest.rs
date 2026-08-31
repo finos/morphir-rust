@@ -177,27 +177,32 @@ fn default_backend_generate() -> bool {
     true
 }
 
+fn valid_backend_identifiers(values: &[String]) -> bool {
+    !values.is_empty()
+        && values.iter().all(|value| {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed == value
+        })
+        && values
+            .iter()
+            .map(|value| value.trim())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == values.len()
+}
+
 impl<'de> Deserialize<'de> for BackendRecord {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let wire = BackendRecordWire::deserialize(deserializer)?;
-        if wire.targets.is_empty()
-            || wire.targets.iter().any(|target| target.trim().is_empty())
-            || wire.targets.iter().collect::<BTreeSet<_>>().len() != wire.targets.len()
-        {
+        if !valid_backend_identifiers(&wire.targets) {
             return Err(serde::de::Error::custom(
                 "backend targets must be non-empty and unique",
             ));
         }
-        if wire.ir_versions.is_empty()
-            || wire
-                .ir_versions
-                .iter()
-                .any(|ir_version| ir_version.trim().is_empty())
-            || wire.ir_versions.iter().collect::<BTreeSet<_>>().len() != wire.ir_versions.len()
-        {
+        if !valid_backend_identifiers(&wire.ir_versions) {
             return Err(serde::de::Error::custom(
                 "backend IR versions must be non-empty and unique",
             ));

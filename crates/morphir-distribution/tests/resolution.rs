@@ -608,6 +608,23 @@ fn schema_v2_backend_metadata_rejects_blank_values() {
 }
 
 #[test]
+fn schema_v2_backend_metadata_rejects_surrounding_whitespace_and_trimmed_duplicates() {
+    for (field, values, expected_error) in [
+        ("targets", vec![" avro"], "backend targets"),
+        ("targets", vec!["avro", "avro "], "backend targets"),
+        ("irVersions", vec!["4 "], "backend IR versions"),
+        ("irVersions", vec!["4", " 4"], "backend IR versions"),
+    ] {
+        let mut record = portable_wasm_release();
+        record["backend"][field] = serde_json::json!(values);
+        assert!(
+            parse_error(&record).contains(expected_error),
+            "accepted whitespace-padded {field} entries"
+        );
+    }
+}
+
+#[test]
 fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
     let record = portable_wasm_release();
     let history = ExtensionHistory::parse_jsonl(record.to_string().as_bytes()).unwrap();

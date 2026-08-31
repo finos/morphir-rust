@@ -74,10 +74,6 @@ pub(crate) fn validate_yaml_profile(input: &[u8]) -> Result<(), TransportDiagnos
     Ok(())
 }
 
-pub(crate) fn decode_json_value(input: &[u8]) -> Result<serde_json::Value, TransportDiagnostic> {
-    decode_document(input)
-}
-
 pub(crate) fn decode_document<T: DeserializeOwned>(input: &[u8]) -> Result<T, TransportDiagnostic> {
     validate_yaml_profile(input)?;
     stacker::grow(IR_RECURSION_STACK_BYTES, || {

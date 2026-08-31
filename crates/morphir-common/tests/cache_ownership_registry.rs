@@ -313,7 +313,6 @@ fn cleanup_compacts_removed_and_missing_ownership_entries() {
             CacheExecutionLimits::new(10, 1024).unwrap(),
         )
         .unwrap();
-    drop(session);
 
     assert!(report.items().iter().any(|item| {
         item.path() == "removable.pkg" && item.disposition() == CacheExecutionDisposition::Removed

@@ -53,6 +53,23 @@ pub enum CacheOwnershipPersistenceError {
 /// capability is returned. The suite-wide mutation lease and ownership writer
 /// lock remain held until the capability is dropped or finished, so another
 /// producer cannot publish the same identity while it may still be changing.
+///
+/// ```no_run
+/// use morphir_common::cache_maintenance::CacheOwnershipMutationGuard;
+/// use morphir_common::home::MorphirHome;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let home = MorphirHome::resolve()?;
+/// let mutation = CacheOwnershipMutationGuard::begin(
+///     &home,
+///     "downloads",
+///     "desktop/1.2.3.pkg",
+/// )?;
+/// // Write and close cache/downloads/desktop/1.2.3.pkg here.
+/// mutation.finish(1_735_689_600)?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct CacheOwnershipMutationGuard {
     guard: CacheMutationGuard,
     _ownership_guard: CacheOwnershipWriteGuard,

@@ -155,7 +155,7 @@ impl<'home> CacheMaintenanceSession<'home> {
 
     /// Execute a plan using the same ownership snapshot and exclusive lock.
     pub fn execute_cleanup(
-        &self,
+        self,
         plan: &CleanupPlan,
         inventory_limits: CacheInventoryLimits,
         execution_limits: CacheExecutionLimits,

@@ -556,6 +556,45 @@ fn installed_wasm_rejects_oversized_bytes_before_buffering() {
 }
 
 #[test]
+fn installer_rejects_oversized_extension_without_publishing_state() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    let source = mother.index.join("artifacts/morphir_avro_extension.wasm");
+    let oversized = 256 * 1024 * 1024 + 1;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_len(oversized)
+        .unwrap();
+
+    let error = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap_err();
+
+    match error {
+        DistributionError::ArtifactTooLarge {
+            path: actual_path,
+            actual,
+            limit,
+        } => {
+            assert_eq!(actual_path, fs::canonicalize(source).unwrap());
+            assert_eq!(actual, oversized);
+            assert_eq!(limit, 256 * 1024 * 1024);
+        }
+        other => panic!("expected ArtifactTooLarge, got {other}"),
+    }
+    assert!(!mother.home.extensions_store_dir().exists());
+    assert!(!mother.home.extensions_catalog_file().exists());
+    assert!(
+        !mother
+            .home
+            .extensions_locks_dir()
+            .join("morphir-avro.json")
+            .exists()
+    );
+}
+
+#[test]
 fn installed_wasm_rejects_backend_lock_catalog_mismatch() {
     let mother = DistributionMother::a_local_wasm_artifact();
     ExtensionInstaller::new(&mother.home)

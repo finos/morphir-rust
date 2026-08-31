@@ -75,6 +75,42 @@ fn malformed_state_fails_closed_instead_of_resetting_the_schedule() {
 }
 
 #[test]
+fn oversized_state_is_rejected_at_the_read_boundary() {
+    let (_directory, home) = a_morphir_home();
+    let path = home.cache_maintenance_state_file();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, vec![b' '; 64 * 1024 + 1]).unwrap();
+
+    let error = load_cache_maintenance_state(&home).unwrap_err();
+
+    assert!(error.to_string().contains("65536-byte limit"));
+}
+
+#[test]
+fn concurrent_first_saves_share_directory_initialization() {
+    let (_directory, home) = a_morphir_home();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+    let saves = (0..16)
+        .map(|timestamp| {
+            let home = home.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                save_cache_maintenance_state(
+                    &home,
+                    &CacheMaintenanceState::default().completed(timestamp),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for save in saves {
+        save.join().unwrap().unwrap();
+    }
+    assert!(load_cache_maintenance_state(&home).is_ok());
+}
+
+#[test]
 fn zero_automatic_interval_is_rejected() {
     let error =
         automatic_cache_cleanup_decision(&CacheMaintenanceState::default(), 1, Duration::ZERO)

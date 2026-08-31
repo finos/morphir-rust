@@ -2,7 +2,7 @@ use super::CacheModelError;
 use crate::home::MorphirHome;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
@@ -154,6 +154,9 @@ pub enum CacheMaintenanceStateError {
     /// Automatic maintenance intervals must be nonzero.
     #[error("automatic cache cleanup interval must be nonzero")]
     InvalidInterval,
+    /// The suite-wide maintenance lock could not be acquired.
+    #[error("cache maintenance state coordination failed: {0}")]
+    Coordination(#[source] super::CacheExecutionError),
     /// The state file exceeds its bounded input size.
     #[error("cache maintenance state exceeds the {limit}-byte limit at {path}")]
     StateTooLarge {
@@ -255,7 +258,17 @@ pub fn load_cache_maintenance_state(
             limit: MAX_CACHE_MAINTENANCE_STATE_BYTES,
         });
     }
-    let bytes = fs::read(&path).map_err(|source| io_error(&path, source))?;
+    let file = fs::File::open(&path).map_err(|source| io_error(&path, source))?;
+    let mut bytes = Vec::with_capacity((MAX_CACHE_MAINTENANCE_STATE_BYTES + 1) as usize);
+    file.take(MAX_CACHE_MAINTENANCE_STATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| io_error(&path, source))?;
+    if bytes.len() as u64 > MAX_CACHE_MAINTENANCE_STATE_BYTES {
+        return Err(CacheMaintenanceStateError::StateTooLarge {
+            path,
+            limit: MAX_CACHE_MAINTENANCE_STATE_BYTES,
+        });
+    }
     let state = serde_json::from_slice(&bytes).map_err(|source| {
         CacheMaintenanceStateError::InvalidState {
             path: path.clone(),
@@ -275,6 +288,8 @@ pub fn save_cache_maintenance_state(
     home: &MorphirHome,
     state: &CacheMaintenanceState,
 ) -> Result<(), CacheMaintenanceStateError> {
+    let _guard = super::executor::MaintenanceGuard::acquire(home)
+        .map_err(CacheMaintenanceStateError::Coordination)?;
     let path = home.cache_maintenance_state_file();
     let parent = path
         .parent()
@@ -326,9 +341,13 @@ fn create_checked_directory(path: &Path) -> Result<(), CacheMaintenanceStateErro
             })
         }
         Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(path).map_err(|source| io_error(path, source))
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                create_checked_directory(path)
+            }
+            Err(source) => Err(io_error(path, source)),
+        },
         Err(source) => Err(io_error(path, source)),
     }
 }

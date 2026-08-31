@@ -399,12 +399,12 @@ pub(super) fn create_trash_run(trash: &MaintenanceTrash) -> Result<TrashRun, Cac
     ))
 }
 
-pub(super) struct MaintenanceGuard {
+pub(crate) struct MaintenanceGuard {
     file: File,
 }
 
 impl MaintenanceGuard {
-    pub(super) fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
+    pub(crate) fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
         let file = open_maintenance_lock(home)?;
         let path = home.maintenance_lock_file();
         FileExt::lock_exclusive(&file).map_err(|source| io_error(&path, source))?;

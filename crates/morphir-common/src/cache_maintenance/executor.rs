@@ -2,9 +2,10 @@ mod filesystem;
 mod revalidation;
 
 pub use self::filesystem::CacheMutationGuard;
+pub(crate) use self::filesystem::MaintenanceGuard;
 use self::filesystem::{
-    MaintenanceGuard, RemovalOutcome, RemovalTarget, TrashRun, create_trash_run,
-    open_maintenance_trash, remove_revalidated_entry, sweep_existing_trash,
+    RemovalOutcome, RemovalTarget, TrashRun, create_trash_run, open_maintenance_trash,
+    remove_revalidated_entry, sweep_existing_trash,
 };
 use self::revalidation::{RevalidatedEntry, inventory_for_execution, revalidate_entry};
 use super::{CacheInventoryError, CacheInventoryLimits, CacheNamespace, CleanupPlan};

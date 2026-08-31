@@ -37,6 +37,7 @@ pub struct ProcessLaunch {
     extension_id: String,
     discovered: Option<ExtensionInfo>,
     capabilities: Option<CapabilityExpectation>,
+    allows_legacy_backend: bool,
     program: ProcessProgram,
     args: Vec<OsString>,
     working_directory: PathBuf,
@@ -65,6 +66,7 @@ impl ProcessLaunch {
             extension_id: extension_id.into(),
             discovered: None,
             capabilities: None,
+            allows_legacy_backend: false,
             program: ProcessProgram::Path(program.into()),
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -87,6 +89,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: None,
+            allows_legacy_backend: false,
             program: ProcessProgram::Path(program.into()),
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -106,6 +109,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: Some(CapabilityExpectation::Exact(capabilities)),
+            allows_legacy_backend: false,
             program: ProcessProgram::Path(program.into()),
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -125,6 +129,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: None,
+            allows_legacy_backend: false,
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -149,6 +154,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: None,
+            allows_legacy_backend: false,
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -173,6 +179,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: Some(CapabilityExpectation::Exact(capabilities)),
+            allows_legacy_backend: false,
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -198,6 +205,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: Some(CapabilityExpectation::Exact(capabilities)),
+            allows_legacy_backend: false,
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -223,6 +231,7 @@ impl ProcessLaunch {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
             capabilities: Some(CapabilityExpectation::Backend(backend)),
+            allows_legacy_backend: false,
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -233,6 +242,25 @@ impl ProcessLaunch {
             environment: Vec::new(),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
         }
+    }
+
+    /// Define a verified schema-v1 process launch with legacy backend behavior.
+    pub(crate) fn from_legacy_verified_bytes_in(
+        discovered: ExtensionInfo,
+        filename: &OsStr,
+        bytes: &[u8],
+        staging_directory: impl Into<PathBuf>,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        let mut launch = Self::from_verified_bytes_in(
+            discovered,
+            filename,
+            bytes,
+            staging_directory,
+            working_directory,
+        );
+        launch.allows_legacy_backend = true;
+        launch
     }
 
     /// Append one process argument.
@@ -280,6 +308,7 @@ pub struct SpawnedProcessSession {
     expected_extension_id: String,
     discovered: Option<ExtensionInfo>,
     capabilities: Option<CapabilityExpectation>,
+    allows_legacy_backend: bool,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -329,6 +358,7 @@ impl SpawnedProcessSession {
             expected_extension_id: launch.extension_id,
             discovered: launch.discovered,
             capabilities: launch.capabilities,
+            allows_legacy_backend: launch.allows_legacy_backend,
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
@@ -379,6 +409,9 @@ impl SpawnedProcessSession {
                     discovered.clone(),
                     capabilities.clone(),
                 )
+            }
+            (Some(discovered), None) if self.allows_legacy_backend => {
+                ExpectedExtension::legacy_discovered(discovered.clone())
             }
             (Some(discovered), None) => ExpectedExtension::discovered(discovered.clone()),
             (None, _) => ExpectedExtension::identified(self.expected_extension_id.clone()),

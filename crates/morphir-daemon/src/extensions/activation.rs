@@ -29,7 +29,7 @@ pub async fn activate_transport(
                     working_directory,
                 )
             } else {
-                ProcessLaunch::from_verified_bytes_in(
+                ProcessLaunch::from_legacy_verified_bytes_in(
                     process.extension_info().clone(),
                     process.filename(),
                     process.bytes(),

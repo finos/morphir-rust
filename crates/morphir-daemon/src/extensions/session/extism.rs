@@ -36,7 +36,7 @@ impl ExtismTransport {
             .map(|backend| {
                 ExpectedExtension::discovered_with_backend_capability(info.clone(), backend)
             })
-            .unwrap_or_else(|| ExpectedExtension::discovered(info));
+            .unwrap_or_else(|| ExpectedExtension::legacy_discovered(info));
         Self {
             container,
             locked_extension: Some(locked_extension),

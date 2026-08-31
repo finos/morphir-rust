@@ -544,7 +544,30 @@ async fn discovered_backend_without_locked_metadata_accepts_valid_initialization
 }
 
 #[tokio::test]
-async fn discovered_backend_without_locked_metadata_retains_legacy_generation() {
+async fn ordinary_discovery_rejects_a_backend_without_typed_capabilities() {
+    let initialized =
+        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
+            .unwrap();
+    let transport = ScriptedTransport {
+        expected: ExpectedExtension::discovered(extension(vec![ExtensionType::Backend])),
+        responses: [Ok(initialized)].into(),
+        requests: Vec::new(),
+    };
+    let failure = match Session::loaded(transport).initialize(params()).await {
+        Ok(_) => panic!("ordinary discovery must not enable schema-v1 compatibility"),
+        Err(failure) => failure,
+    };
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("declared Backend without backend capabilities")
+    );
+}
+
+#[tokio::test]
+async fn explicit_schema_v1_discovery_retains_legacy_generation() {
     let initialized =
         ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
             .unwrap();
@@ -554,7 +577,7 @@ async fn discovered_backend_without_locked_metadata_retains_legacy_generation() 
     )
     .unwrap();
     let transport = ScriptedTransport {
-        expected: ExpectedExtension::discovered(extension(vec![ExtensionType::Backend])),
+        expected: ExpectedExtension::legacy_discovered(extension(vec![ExtensionType::Backend])),
         responses: [Ok(initialized), Ok(generated)].into(),
         requests: Vec::new(),
     };

@@ -43,6 +43,7 @@ pub struct ExpectedExtension {
     pub(super) id: String,
     pub(super) discovered: Option<ExtensionInfo>,
     pub(super) capabilities: Option<CapabilityExpectation>,
+    pub(super) allows_legacy_backend: bool,
 }
 
 impl ExpectedExtension {
@@ -52,6 +53,7 @@ impl ExpectedExtension {
             id: id.into(),
             discovered: None,
             capabilities: None,
+            allows_legacy_backend: false,
         }
     }
 
@@ -61,6 +63,17 @@ impl ExpectedExtension {
             id: info.id.clone(),
             discovered: Some(info),
             capabilities: None,
+            allows_legacy_backend: false,
+        }
+    }
+
+    /// Preserve schema-v1 backend behavior for installed legacy metadata.
+    pub(in crate::extensions) fn legacy_discovered(info: ExtensionInfo) -> Self {
+        Self {
+            id: info.id.clone(),
+            discovered: Some(info),
+            capabilities: None,
+            allows_legacy_backend: true,
         }
     }
 
@@ -75,6 +88,7 @@ impl ExpectedExtension {
             id: info.id.clone(),
             discovered: Some(info),
             capabilities: Some(CapabilityExpectation::Exact(capabilities)),
+            allows_legacy_backend: false,
         }
     }
 
@@ -87,6 +101,7 @@ impl ExpectedExtension {
             id: info.id.clone(),
             discovered: Some(info),
             capabilities: Some(CapabilityExpectation::Backend(backend)),
+            allows_legacy_backend: false,
         }
     }
 
@@ -98,6 +113,7 @@ impl ExpectedExtension {
             id: info.id.clone(),
             discovered: Some(info),
             capabilities: Some(capabilities),
+            allows_legacy_backend: false,
         }
     }
 

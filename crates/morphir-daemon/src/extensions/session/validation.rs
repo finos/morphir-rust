@@ -194,7 +194,7 @@ pub(in crate::extensions) fn validate_negotiation(
     offered_versions: &[String],
     result: InitializeResult,
 ) -> Result<NegotiatedSession> {
-    let allows_legacy_backend = expected.discovered.is_some() && expected.capabilities.is_none();
+    let allows_legacy_backend = expected.allows_legacy_backend;
     if !offered_versions.contains(&result.protocol_version) {
         return Err(DaemonError::Extension(format!(
             "Extension selected protocol version '{}' that the host did not offer",

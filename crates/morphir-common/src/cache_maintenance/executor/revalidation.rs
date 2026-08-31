@@ -52,15 +52,14 @@ pub(super) fn inventory_for_execution(
         );
     let mut inventories = BTreeMap::new();
     for namespace in ownership {
+        let Some(requested) = pinned_paths.get(namespace.name()).cloned() else {
+            continue;
+        };
         if inventories.contains_key(namespace.name()) {
             return Err(CacheExecutionError::DuplicateNamespace {
                 namespace: namespace.name().to_owned(),
             });
         }
-        let requested = pinned_paths
-            .get(namespace.name())
-            .cloned()
-            .unwrap_or_default();
         inventories.insert(
             namespace.name().to_owned(),
             inventory_cache_namespace_pinned(home, home_dir, namespace, limits, &requested)?,

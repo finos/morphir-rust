@@ -159,7 +159,7 @@ impl CacheOwnershipRegistry {
         let key = comparison_key(&entry.namespace, &entry.path);
         if let Some(existing) = self.entries.get_mut(&key) {
             if replace_exact {
-                *existing = entry;
+                existing.last_used = existing.last_used.max(entry.last_used);
                 return Ok(());
             }
             return Err(CacheOwnershipRegistryError::DuplicateEntry {
@@ -217,6 +217,20 @@ mod tests {
                 CacheRegistrationError::OverlappingEntries { .. }
             )
         ));
+    }
+
+    #[test]
+    fn registration_refreshes_never_move_last_used_backwards() {
+        let mut registry = CacheOwnershipRegistry::default();
+        registry
+            .register_disposable("downloads", "desktop/1.0/pkg", 20)
+            .unwrap();
+        registry
+            .register_disposable("downloads", "desktop/1.0/pkg", 10)
+            .unwrap();
+
+        let serialized = serde_json::to_value(&registry).unwrap();
+        assert_eq!(serialized["entries"][0]["lastUsed"], 20);
     }
 
     #[test]

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Metadata-only changes can skip the expensive Rust/WebAssembly suite, and the README now
+  inventories workspace crates and versioned extensions.
 - **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase
   segment (`value-in-USD`) instead of a run of single letters wrapped in parentheses
   (`value-in-(usd)`), and the parenthesized form is no longer accepted. Existing v4 artifacts

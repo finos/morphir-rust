@@ -47,6 +47,9 @@ zip = "8.0"
 tar = "0.4"
 tempfile = "3"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 cucumber = "0.23"
 tempfile = "3"

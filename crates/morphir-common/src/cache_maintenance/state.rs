@@ -354,37 +354,68 @@ fn open_existing_directory(
 }
 
 /// Atomically replace durable automatic-maintenance state beneath Morphir Home.
+///
+/// ```
+/// use morphir_common::cache_maintenance::{
+///     CacheMaintenanceState, load_cache_maintenance_state,
+///     save_cache_maintenance_state,
+/// };
+/// use morphir_common::home::MorphirHome;
+///
+/// let temporary_home = tempfile::tempdir()?;
+/// let home = MorphirHome::resolve_from(
+///     Some(temporary_home.path().as_os_str()),
+///     None,
+/// )?;
+/// let state = CacheMaintenanceState::default().completed(1_000);
+/// save_cache_maintenance_state(&home, &state)?;
+/// assert_eq!(load_cache_maintenance_state(&home)?, state);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn save_cache_maintenance_state(
     home: &MorphirHome,
     state: &CacheMaintenanceState,
 ) -> Result<(), CacheMaintenanceStateError> {
+    save_cache_maintenance_state_with_hook(home, state, || {})
+}
+
+fn save_cache_maintenance_state_with_hook<F>(
+    home: &MorphirHome,
+    state: &CacheMaintenanceState,
+    after_open: F,
+) -> Result<(), CacheMaintenanceStateError>
+where
+    F: FnOnce(),
+{
     let _guard = super::executor::MaintenanceGuard::acquire(home)
         .map_err(CacheMaintenanceStateError::Coordination)?;
     let path = home.cache_maintenance_state_file();
     let parent = path
         .parent()
         .expect("cache maintenance state path has a parent");
-    create_state_directory(home, parent)?;
-    validate_state_destination(&path)?;
+    let maintenance = create_state_directory(home, parent)?;
+    validate_state_destination(&maintenance, &path)?;
+    after_open();
 
     let mut bytes =
         serde_json::to_vec_pretty(state).map_err(CacheMaintenanceStateError::StateEncoding)?;
     bytes.push(b'\n');
-    let mut staged = tempfile::Builder::new()
-        .prefix(".cache-cleanup-")
-        .tempfile_in(parent)
-        .map_err(|source| io_error(parent, source))?;
-    staged
-        .as_file_mut()
-        .write_all(&bytes)
-        .and_then(|()| staged.as_file_mut().flush())
-        .and_then(|()| staged.as_file().sync_all())
-        .map_err(|source| io_error(staged.path(), source))?;
-    validate_state_destination(&path)?;
-    staged
-        .persist(&path)
-        .map_err(|error| io_error(&path, error.error))?;
-    sync_parent_directory(&path)?;
+    let (staged_name, mut staged) = create_staged_state_file(&maintenance, parent)?;
+    let result = (|| {
+        staged
+            .write_all(&bytes)
+            .and_then(|()| staged.flush())
+            .and_then(|()| staged.sync_all())
+            .map_err(|source| io_error(&parent.join(&staged_name), source))?;
+        drop(staged);
+        validate_state_destination(&maintenance, &path)?;
+        install_staged_state(&maintenance, &staged_name, parent, &path)?;
+        sync_state_directory(&maintenance, parent)
+    })();
+    if result.is_err() {
+        let _ = maintenance.remove_file(&staged_name);
+    }
+    result?;
     debug!(
         event = "cache_maintenance_state_saved",
         has_continuation = state.continuation().is_some(),
@@ -396,35 +427,52 @@ pub fn save_cache_maintenance_state(
 fn create_state_directory(
     home: &MorphirHome,
     maintenance: &Path,
-) -> Result<(), CacheMaintenanceStateError> {
+) -> Result<Dir, CacheMaintenanceStateError> {
     fs::create_dir_all(home.root()).map_err(|source| io_error(home.root(), source))?;
+    let root = Dir::open_ambient_dir(home.root(), ambient_authority())
+        .map_err(|source| io_error(home.root(), source))?;
     let data = home.data_dir();
-    create_checked_directory(&data)?;
-    create_checked_directory(maintenance)
+    let data = open_or_create_state_directory(&root, "data", &data)?;
+    open_or_create_state_directory(&data, "maintenance", maintenance)
 }
 
-fn create_checked_directory(path: &Path) -> Result<(), CacheMaintenanceStateError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if std_is_link_like(&metadata) || !metadata.is_dir() => {
+fn open_or_create_state_directory(
+    parent: &Dir,
+    name: &str,
+    path: &Path,
+) -> Result<Dir, CacheMaintenanceStateError> {
+    match parent.symlink_metadata(name) {
+        Ok(metadata) if cap_is_link_like(&metadata) || !metadata.is_dir() => {
             Err(CacheMaintenanceStateError::UnsafePath {
                 path: path.to_path_buf(),
             })
         }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(path) {
+        Ok(_) => parent
+            .open_dir_nofollow(name)
+            .map_err(|source| io_error(path, source)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match parent.create_dir(name)
+        {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                create_checked_directory(path)
+                return open_or_create_state_directory(parent, name, path);
             }
             Err(source) => Err(io_error(path, source)),
-        },
+        }
+        .and_then(|()| {
+            parent
+                .open_dir_nofollow(name)
+                .map_err(|source| io_error(path, source))
+        }),
         Err(source) => Err(io_error(path, source)),
     }
 }
 
-fn validate_state_destination(path: &Path) -> Result<(), CacheMaintenanceStateError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if std_is_link_like(&metadata) || !metadata.is_file() => {
+fn validate_state_destination(
+    maintenance: &Dir,
+    path: &Path,
+) -> Result<(), CacheMaintenanceStateError> {
+    match maintenance.symlink_metadata("cache-cleanup.json") {
+        Ok(metadata) if cap_is_link_like(&metadata) || !metadata.is_file() => {
             Err(CacheMaintenanceStateError::UnsafePath {
                 path: path.to_path_buf(),
             })
@@ -432,6 +480,81 @@ fn validate_state_destination(path: &Path) -> Result<(), CacheMaintenanceStateEr
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(io_error(path, source)),
+    }
+}
+
+fn create_staged_state_file(
+    maintenance: &Dir,
+    parent: &Path,
+) -> Result<(String, cap_std::fs::File), CacheMaintenanceStateError> {
+    for _ in 0..8 {
+        let name = format!(".cache-cleanup-{}", uuid::Uuid::new_v4().simple());
+        let mut options = CapOpenOptions::new();
+        options
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .follow(FollowSymlinks::No);
+        match maintenance.open_with(&name, &options) {
+            Ok(file) => return Ok((name, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(io_error(&parent.join(name), source)),
+        }
+    }
+    Err(io_error(
+        parent,
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate a unique cache maintenance state file",
+        ),
+    ))
+}
+
+#[cfg(not(windows))]
+fn install_staged_state(
+    maintenance: &Dir,
+    staged_name: &str,
+    _parent: &Path,
+    path: &Path,
+) -> Result<(), CacheMaintenanceStateError> {
+    maintenance
+        .rename(staged_name, maintenance, "cache-cleanup.json")
+        .map_err(|source| io_error(path, source))
+}
+
+#[cfg(windows)]
+fn install_staged_state(
+    _maintenance: &Dir,
+    staged_name: &str,
+    parent: &Path,
+    path: &Path,
+) -> Result<(), CacheMaintenanceStateError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW};
+
+    let staged = parent.join(staged_name);
+    let staged_wide = staged
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: Both UTF-16 buffers are NUL-terminated and remain alive for the call.
+    let moved = unsafe {
+        MoveFileExW(
+            staged_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING,
+        )
+    };
+    if moved == 0 {
+        Err(io_error(path, std::io::Error::last_os_error()))
+    } else {
+        Ok(())
     }
 }
 
@@ -447,32 +570,20 @@ fn cap_is_link_like(metadata: &CapMetadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-#[cfg(windows)]
-fn std_is_link_like(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn std_is_link_like(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
 #[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> Result<(), CacheMaintenanceStateError> {
-    let parent = path
-        .parent()
-        .expect("cache maintenance state path has a parent");
-    fs::File::open(parent)
+fn sync_state_directory(maintenance: &Dir, path: &Path) -> Result<(), CacheMaintenanceStateError> {
+    maintenance
+        .try_clone()
+        .map(cap_std::fs::Dir::into_std_file)
         .and_then(|directory| directory.sync_all())
-        .map_err(|source| io_error(parent, source))
+        .map_err(|source| io_error(path, source))
 }
 
 #[cfg(not(unix))]
-fn sync_parent_directory(_path: &Path) -> Result<(), CacheMaintenanceStateError> {
+fn sync_state_directory(
+    _maintenance: &Dir,
+    _path: &Path,
+) -> Result<(), CacheMaintenanceStateError> {
     Ok(())
 }
 
@@ -480,5 +591,52 @@ fn io_error(path: &Path, source: std::io::Error) -> CacheMaintenanceStateError {
     CacheMaintenanceStateError::Io {
         path: path.to_path_buf(),
         source,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_stays_with_the_pinned_directory_when_its_path_is_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = MorphirHome::resolve_from(Some(directory.path().as_os_str()), None).unwrap();
+        let maintenance = home.data_dir().join("maintenance");
+        let pinned = home.data_dir().join("maintenance-pinned");
+        let outside = directory.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let mut swapped = false;
+
+        save_cache_maintenance_state_with_hook(
+            &home,
+            &CacheMaintenanceState::default().completed(42),
+            || {
+                swapped = replace_directory_path(&maintenance, &pinned, &outside);
+            },
+        )
+        .unwrap();
+
+        let expected_parent = if swapped { &pinned } else { &maintenance };
+        assert!(expected_parent.join("cache-cleanup.json").is_file());
+        assert!(!outside.join("cache-cleanup.json").exists());
+    }
+
+    #[cfg(unix)]
+    fn replace_directory_path(maintenance: &Path, pinned: &Path, outside: &Path) -> bool {
+        fs::rename(maintenance, pinned).unwrap();
+        std::os::unix::fs::symlink(outside, maintenance).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn replace_directory_path(maintenance: &Path, pinned: &Path, outside: &Path) -> bool {
+        match fs::rename(maintenance, pinned) {
+            Ok(()) => {
+                std::os::windows::fs::symlink_dir(outside, maintenance).unwrap();
+                true
+            }
+            Err(_) => false,
+        }
     }
 }

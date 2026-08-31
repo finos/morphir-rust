@@ -3145,6 +3145,7 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "vfs",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

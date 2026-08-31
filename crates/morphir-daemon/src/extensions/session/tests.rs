@@ -411,6 +411,43 @@ async fn discovered_backend_without_locked_metadata_accepts_valid_initialization
 }
 
 #[tokio::test]
+async fn discovered_backend_without_locked_metadata_retains_legacy_generation() {
+    let initialized =
+        ExtensionResponse::success(1, initialization(extension(vec![ExtensionType::Backend])))
+            .unwrap();
+    let generated = ExtensionResponse::success(
+        2,
+        serde_json::json!({"success": true, "artifacts": [], "diagnostics": []}),
+    )
+    .unwrap();
+    let transport = ScriptedTransport {
+        expected: ExpectedExtension::discovered(extension(vec![ExtensionType::Backend])),
+        responses: [Ok(initialized), Ok(generated)].into(),
+        requests: Vec::new(),
+    };
+    let session = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("legacy initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<GenerateResult>(methods::GENERATE, GenerateRequest::default())
+        .await
+    {
+        InvokeOutcome::Success(session, result) => {
+            assert!(result.success);
+            assert_eq!(session.transport_internal().requests.len(), 2);
+        }
+        InvokeOutcome::Rejected(_, error) => {
+            panic!("legacy generation should remain available: {error}")
+        }
+        InvokeOutcome::Failed(failure) => {
+            panic!("legacy generation should succeed: {}", failure.error())
+        }
+    }
+}
+
+#[tokio::test]
 async fn rejects_generate_when_the_backend_did_not_enable_it_without_sending() {
     let initialized = ExtensionResponse::success(1, backend_initialization(false)).unwrap();
     let session = Session::loaded(scripted_transport([initialized]))

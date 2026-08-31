@@ -27,6 +27,7 @@ pub struct NegotiatedSession {
     pub(super) protocol_version: String,
     pub(super) extension: ExtensionInfo,
     pub(super) capabilities: ExtensionCapabilities,
+    pub(super) legacy_backend: bool,
 }
 
 impl NegotiatedSession {
@@ -57,11 +58,12 @@ impl NegotiatedSession {
             }
             methods::GENERATE => {
                 self.extension.types.contains(&ExtensionType::Backend)
-                    && self
-                        .capabilities
-                        .backend
-                        .as_ref()
-                        .is_some_and(|backend| backend.generate)
+                    && (self.legacy_backend
+                        || self
+                            .capabilities
+                            .backend
+                            .as_ref()
+                            .is_some_and(|backend| backend.generate))
             }
             methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
             methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),

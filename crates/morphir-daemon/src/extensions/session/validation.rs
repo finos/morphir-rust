@@ -184,6 +184,7 @@ pub(super) fn validate_negotiation(
     offered_versions: &[String],
     result: InitializeResult,
 ) -> Result<NegotiatedSession> {
+    let allows_legacy_backend = expected.discovered.is_some() && expected.capabilities.is_none();
     if !offered_versions.contains(&result.protocol_version) {
         return Err(DaemonError::Extension(format!(
             "Extension selected protocol version '{}' that the host did not offer",
@@ -230,7 +231,13 @@ pub(super) fn validate_negotiation(
             "Extension advertised frontend capabilities without declaring Frontend".into(),
         ));
     }
-    if unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_none() {
+    let legacy_backend = allows_legacy_backend
+        && unique.contains(&ExtensionType::Backend)
+        && result.capabilities.backend.is_none();
+    if unique.contains(&ExtensionType::Backend)
+        && result.capabilities.backend.is_none()
+        && !legacy_backend
+    {
         return Err(DaemonError::Extension(
             "Extension declared Backend without backend capabilities".into(),
         ));
@@ -244,6 +251,7 @@ pub(super) fn validate_negotiation(
         protocol_version: result.protocol_version,
         extension: result.extension,
         capabilities: result.capabilities,
+        legacy_backend,
     })
 }
 

@@ -191,13 +191,10 @@ impl Projector<'_> {
             {
                 return Ok(AvroType::Named(full_name));
             }
-            if active
-                .last()
-                .is_some_and(|specialization| {
-                    complexity > specialization.complexity
-                        || (complexity == specialization.complexity && !is_named)
-                })
-            {
+            if active.last().is_some_and(|specialization| {
+                complexity > specialization.complexity
+                    || (complexity == specialization.complexity && !is_named)
+            }) {
                 return Err(AvroDiagnostic::unsafe_recursion(source_name));
             }
         }

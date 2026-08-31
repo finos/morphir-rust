@@ -212,19 +212,29 @@ impl Projector<'_> {
             || (alias_value.is_some() && self.options.aliases == Aliases::WrapperRecord)
             || matches!(info.declaration, TypeDeclaration::Custom { .. });
         let ownership = self.declaration_ownership(&info);
-        let specialization = arguments
-            .iter()
-            .map(canonical_type)
-            .collect::<Vec<_>>()
-            .join(",");
+        let complexity = arguments.iter().map(type_complexity).sum();
         if let Some(active) = self.active_declarations.get(source_name) {
-            if is_named && active == &specialization {
+            if active
+                .iter()
+                .any(|specialization| specialization.arguments == arguments)
+                && is_named
+            {
                 return Ok(AvroType::Named(full_name));
             }
-            return Err(AvroDiagnostic::unsafe_recursion(source_name));
+            if active
+                .last()
+                .is_some_and(|specialization| complexity >= specialization.complexity)
+            {
+                return Err(AvroDiagnostic::unsafe_recursion(source_name));
+            }
         }
         self.active_declarations
-            .insert(source_name.to_owned(), specialization);
+            .entry(source_name.to_owned())
+            .or_default()
+            .push(ActiveSpecialization {
+                arguments: arguments.to_vec(),
+                complexity,
+            });
         let result = match (&info.declaration, alias_value) {
             (TypeDeclaration::Alias { .. }, Some(value)) if is_named => self
                 .project_alias_schema(
@@ -255,7 +265,16 @@ impl Projector<'_> {
                 "alias declaration {source_name} lost its substituted value"
             ))),
         };
-        self.active_declarations.remove(source_name);
+        let remove_active_entry =
+            self.active_declarations
+                .get_mut(source_name)
+                .is_some_and(|active| {
+                    active.pop();
+                    active.is_empty()
+                });
+        if remove_active_entry {
+            self.active_declarations.remove(source_name);
+        }
         result
     }
 
@@ -513,5 +532,19 @@ pub(super) fn canonical_type(tpe: &TypeExpr) -> String {
             )
         }
         TypeExpr::Unit => "unit".to_owned(),
+    }
+}
+
+fn type_complexity(tpe: &TypeExpr) -> usize {
+    1 + match tpe {
+        TypeExpr::Variable(_) | TypeExpr::Unit => 0,
+        TypeExpr::Reference { arguments, .. } | TypeExpr::Tuple(arguments) => {
+            arguments.iter().map(type_complexity).sum()
+        }
+        TypeExpr::Record(fields) => fields.iter().map(|field| type_complexity(&field.tpe)).sum(),
+        TypeExpr::ExtensibleRecord { fields, .. } => {
+            fields.iter().map(|field| type_complexity(&field.tpe)).sum()
+        }
+        TypeExpr::Function { input, output } => type_complexity(input) + type_complexity(output),
     }
 }

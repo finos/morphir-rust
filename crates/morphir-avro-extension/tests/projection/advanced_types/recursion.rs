@@ -120,3 +120,49 @@
         assert_eq!(error[0].source(), Some("acme/customer:customer#dangerous"));
     }
 
+    #[test]
+    fn finite_nested_generic_specializations_project_each_named_schema() {
+        let box_source = "acme/shared:types#box";
+        let boxed = alias_with_params(
+            box_source,
+            "box",
+            vec!["a"],
+            TypeExpr::Record(vec![field("value", TypeExpr::Variable("a".to_owned()))]),
+        );
+        let nested = alias(
+            "acme/customer:customer#nested-box",
+            "nested-box",
+            reference(
+                box_source,
+                vec![reference(
+                    box_source,
+                    vec![reference("morphir/SDK:basics#int", vec![])],
+                )],
+            ),
+        );
+        let mut input = package(vec![nested]);
+        input.dependencies = vec![ProjectionDependency {
+            package_name: "acme/shared".to_owned(),
+            modules: vec![ProjectionModule {
+                path: vec!["types".to_owned()],
+                types: vec![boxed],
+                values: Vec::new(),
+                doc: None,
+            }],
+        }];
+
+        let model = project(&input, &AvroOptions::default()).unwrap();
+        let boxes = model
+            .schemas()
+            .iter()
+            .filter(|schema| schema.full_name().name().starts_with("Box"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(boxes.len(), 2);
+        assert!(boxes.iter().any(|schema| {
+            matches!(
+                schema.field("value").unwrap().tpe(),
+                AvroType::Named(name) if name.name().starts_with("BoxInt_")
+            )
+        }));
+    }

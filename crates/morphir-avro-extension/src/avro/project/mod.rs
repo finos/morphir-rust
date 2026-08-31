@@ -93,7 +93,7 @@ struct Projector<'options> {
     protocols: BTreeMap<String, Protocol>,
     declarations: BTreeMap<String, DeclarationInfo>,
     invalid_declarations: BTreeSet<String>,
-    active_declarations: BTreeMap<String, String>,
+    active_declarations: BTreeMap<String, Vec<ActiveSpecialization>>,
     building_schemas: BTreeSet<String>,
     internal_failure: Option<AvroInternalError>,
 }
@@ -109,6 +109,12 @@ struct DeclarationInfo {
     declaration: TypeDeclaration,
     full_name: AvroFullName,
     dependency: bool,
+}
+
+#[derive(Clone)]
+struct ActiveSpecialization {
+    arguments: Vec<TypeExpr>,
+    complexity: usize,
 }
 
 struct DeclarationCandidate {

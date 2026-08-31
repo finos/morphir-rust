@@ -47,19 +47,128 @@ pub enum CacheOwnershipPersistenceError {
     },
 }
 
+/// Ownership-aware mutation lease for one registered cache identity.
+///
+/// Beginning the mutation durably removes any prior registration before this
+/// capability is returned. The suite-wide mutation lease and ownership writer
+/// lock remain held until the capability is dropped or finished, so another
+/// producer cannot publish the same identity while it may still be changing.
+pub struct CacheOwnershipMutationGuard {
+    guard: CacheMutationGuard,
+    _ownership_guard: CacheOwnershipWriteGuard,
+    namespace: String,
+    path: String,
+    previously_owned: bool,
+}
+
+impl CacheOwnershipMutationGuard {
+    /// Begin mutating one cache identity after durably invalidating ownership.
+    ///
+    /// If the producer exits before [`Self::finish`], the entry remains absent
+    /// from the trusted registry and cleanup therefore treats its content as
+    /// unclassified.
+    pub fn begin(
+        home: &MorphirHome,
+        namespace: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Result<Self, CacheOwnershipPersistenceError> {
+        Self::begin_with_hook(home, namespace, path, || {})
+    }
+
+    fn begin_with_hook<F>(
+        home: &MorphirHome,
+        namespace: impl Into<String>,
+        path: impl Into<String>,
+        after_mutation_lock: F,
+    ) -> Result<Self, CacheOwnershipPersistenceError>
+    where
+        F: FnOnce(),
+    {
+        let namespace = namespace.into();
+        let path = path.into();
+        let guard = CacheMutationGuard::acquire(home)
+            .map_err(CacheOwnershipPersistenceError::Coordination)?;
+        after_mutation_lock();
+        let ownership_guard = CacheOwnershipWriteGuard::acquire(home, guard.home_dir())
+            .map_err(CacheOwnershipPersistenceError::Coordination)?;
+        let mut registry = load_cache_ownership_registry_from_home(home, guard.home_dir())?;
+        let previously_owned = registry.unregister(&namespace, &path)?;
+        if previously_owned {
+            save_cache_ownership_registry_to_home(home, &registry, guard.home_dir())?;
+        }
+        debug!(
+            event = "cache_ownership_mutation_begun",
+            namespace,
+            previously_owned,
+            entry_count = registry.len(),
+            "cache ownership invalidated before mutation"
+        );
+        Ok(Self {
+            guard,
+            _ownership_guard: ownership_guard,
+            namespace,
+            path,
+            previously_owned,
+        })
+    }
+
+    /// Namespace whose ownership was invalidated before mutation began.
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    /// Portable path whose ownership was invalidated before mutation began.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Finish the mutation by durably registering the same cache identity.
+    ///
+    /// A failed handoff returns [`CacheOwnershipHandoffError`], which retains
+    /// both coordination locks so cleanup remains excluded during recovery.
+    pub fn finish(self, last_used: u64) -> Result<(), CacheOwnershipHandoffError> {
+        let result = self.publish_ownership(last_used);
+        result.map_err(|source| CacheOwnershipHandoffError {
+            guard: Box::new(self),
+            source,
+        })
+    }
+
+    fn publish_ownership(&self, last_used: u64) -> Result<(), CacheOwnershipPersistenceError> {
+        let mut registry =
+            load_cache_ownership_registry_from_home(self.guard.home(), self.guard.home_dir())?;
+        registry.register_disposable(&self.namespace, &self.path, last_used)?;
+        save_cache_ownership_registry_to_home(self.guard.home(), &registry, self.guard.home_dir())?;
+        debug!(
+            event = "cache_ownership_registered",
+            namespace = self.namespace,
+            entry_count = registry.len(),
+            "cache ownership registered"
+        );
+        Ok(())
+    }
+
+    /// Finish without republishing ownership, leaving the content protected.
+    ///
+    /// Returns whether the identity was registered when the mutation began.
+    pub fn finish_unowned(self) -> bool {
+        self.previously_owned
+    }
+}
+
 /// Failed producer-to-maintenance handoff that retains the mutation lease.
 ///
 /// Call [`Self::into_parts`] to recover the guard and keep cleanup excluded
 /// while retrying, quarantining, or otherwise handling the cache content.
 pub struct CacheOwnershipHandoffError {
-    guard: CacheMutationGuard,
+    guard: Box<CacheOwnershipMutationGuard>,
     source: CacheOwnershipPersistenceError,
 }
 
 impl CacheOwnershipHandoffError {
     /// Recover the still-held mutation lease and the publication failure.
-    pub fn into_parts(self) -> (CacheMutationGuard, CacheOwnershipPersistenceError) {
-        (self.guard, self.source)
+    pub fn into_parts(self) -> (CacheOwnershipMutationGuard, CacheOwnershipPersistenceError) {
+        (*self.guard, self.source)
     }
 }
 
@@ -114,6 +223,14 @@ pub(crate) fn load_cache_ownership_registry_under_guard(
     load_cache_ownership_registry_from_home(home, guard.home_dir())
 }
 
+pub(crate) fn save_cache_ownership_registry_under_guard(
+    home: &MorphirHome,
+    registry: &CacheOwnershipRegistry,
+    guard: &MaintenanceGuard,
+) -> Result<(), CacheOwnershipPersistenceError> {
+    save_cache_ownership_registry_to_home(home, registry, guard.home_dir())
+}
+
 fn load_cache_ownership_registry_from_home(
     home: &MorphirHome,
     home_dir: &Dir,
@@ -156,86 +273,6 @@ fn save_cache_ownership_registry_to_home(
     Ok(())
 }
 
-impl CacheMutationGuard {
-    /// Finish a cache mutation by durably registering or refreshing ownership.
-    ///
-    /// The shared mutation lease remains held until the registry replacement is
-    /// durable, so cleanup cannot act on the previous `last_used` timestamp in
-    /// the handoff between cache use and ownership publication. A failed
-    /// handoff returns [`CacheOwnershipHandoffError`], which retains the lease.
-    pub fn finish_with_ownership(
-        self,
-        namespace: impl Into<String>,
-        path: impl Into<String>,
-        last_used: u64,
-    ) -> Result<(), CacheOwnershipHandoffError> {
-        let result = self.publish_ownership(namespace, path, last_used);
-        result.map_err(|source| CacheOwnershipHandoffError {
-            guard: self,
-            source,
-        })
-    }
-
-    fn publish_ownership(
-        &self,
-        namespace: impl Into<String>,
-        path: impl Into<String>,
-        last_used: u64,
-    ) -> Result<(), CacheOwnershipPersistenceError> {
-        let namespace = namespace.into();
-        let _write_guard = CacheOwnershipWriteGuard::acquire(self.home())
-            .map_err(CacheOwnershipPersistenceError::Coordination)?;
-        let mut registry = load_cache_ownership_registry_from_home(self.home(), self.home_dir())?;
-        registry.register_disposable(&namespace, path, last_used)?;
-        save_cache_ownership_registry_to_home(self.home(), &registry, self.home_dir())?;
-        debug!(
-            event = "cache_ownership_registered",
-            namespace,
-            entry_count = registry.len(),
-            "cache ownership registered"
-        );
-        Ok(())
-    }
-
-    /// Finish a cache mutation by durably releasing ownership of one entry.
-    ///
-    /// Cleanup remains excluded until the entry is unclassified in the durable
-    /// registry. The cache content itself is not modified.
-    pub fn finish_releasing_ownership(
-        self,
-        namespace: &str,
-        path: &str,
-    ) -> Result<bool, CacheOwnershipHandoffError> {
-        let result = self.release_ownership(namespace, path);
-        result.map_err(|source| CacheOwnershipHandoffError {
-            guard: self,
-            source,
-        })
-    }
-
-    fn release_ownership(
-        &self,
-        namespace: &str,
-        path: &str,
-    ) -> Result<bool, CacheOwnershipPersistenceError> {
-        let _write_guard = CacheOwnershipWriteGuard::acquire(self.home())
-            .map_err(CacheOwnershipPersistenceError::Coordination)?;
-        let mut registry = load_cache_ownership_registry_from_home(self.home(), self.home_dir())?;
-        let removed = registry.unregister(namespace, path)?;
-        if removed {
-            save_cache_ownership_registry_to_home(self.home(), &registry, self.home_dir())?;
-        }
-        debug!(
-            event = "cache_ownership_unregistered",
-            namespace,
-            removed,
-            entry_count = registry.len(),
-            "cache ownership unregistered"
-        );
-        Ok(removed)
-    }
-}
-
 impl From<DurableJsonError> for CacheOwnershipPersistenceError {
     fn from(error: DurableJsonError) -> Self {
         match error {
@@ -247,5 +284,46 @@ impl From<DurableJsonError> for CacheOwnershipPersistenceError {
             DurableJsonError::Encoding(source) => Self::RegistryEncoding(source),
             DurableJsonError::Io { path, source } => Self::Io { path, source },
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ownership_mutation_stays_with_the_pinned_home_when_its_path_is_replaced() {
+        let container = tempfile::tempdir().unwrap();
+        let active = container.path().join("active");
+        let pinned = container.path().join("pinned");
+        std::fs::create_dir(&active).unwrap();
+        let home = MorphirHome::resolve_from(Some(active.as_os_str()), None).unwrap();
+
+        let mutation = CacheOwnershipMutationGuard::begin_with_hook(
+            &home,
+            "downloads",
+            "artifact.pkg",
+            || {
+                std::fs::rename(&active, &pinned).unwrap();
+                std::fs::create_dir(&active).unwrap();
+            },
+        )
+        .unwrap();
+
+        assert!(pinned.join("locks/cache-ownership.lock").is_file());
+        assert!(!active.join("locks/cache-ownership.lock").exists());
+        mutation.finish(10).unwrap();
+
+        let pinned_home = MorphirHome::resolve_from(Some(pinned.as_os_str()), None).unwrap();
+        let replacement_home = MorphirHome::resolve_from(Some(active.as_os_str()), None).unwrap();
+        assert_eq!(
+            load_cache_ownership_registry(&pinned_home).unwrap().len(),
+            1
+        );
+        assert!(
+            load_cache_ownership_registry(&replacement_home)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -197,7 +197,9 @@ impl CacheExecutionError {
 /// before deleting them. The per-run limits make the same operation suitable
 /// for manual and opportunistic automatic cleanup.
 /// Cache producers must hold [`CacheMutationGuard`] for the full lifetime of
-/// any open handle that can mutate a registered cache namespace.
+/// any open handle that can mutate cache content. Producers changing a
+/// registered identity must use [`super::CacheOwnershipMutationGuard`] so its
+/// prior ownership is invalidated before the content becomes writable.
 ///
 /// # Example
 ///

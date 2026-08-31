@@ -2,7 +2,8 @@
 
 use morphir_common::cache_maintenance::{
     CacheEntry, CacheEntryState, CacheExecutionLimits, CacheInventoryLimits,
-    CacheMaintenanceSession, CacheMutationGuard, CachePolicy, CleanupMode, plan_cache_cleanup,
+    CacheMaintenanceSession, CacheOwnershipMutationGuard, CachePolicy, CleanupMode,
+    plan_cache_cleanup,
 };
 use morphir_common::home::MorphirHome;
 use std::path::PathBuf;
@@ -45,10 +46,9 @@ impl CacheOwnershipRegistryDriver {
         std::fs::write(&released, b"released").unwrap();
         register(&home, "downloads", "released.pkg", 1);
         assert!(
-            CacheMutationGuard::acquire(&home)
+            CacheOwnershipMutationGuard::begin(&home, "downloads", "released.pkg")
                 .unwrap()
-                .finish_releasing_ownership("downloads", "released.pkg")
-                .unwrap()
+                .finish_unowned()
         );
 
         self.home_root = Some(home_root);
@@ -113,8 +113,8 @@ fn new_home() -> (TempDir, MorphirHome) {
 }
 
 fn register(home: &MorphirHome, namespace: &str, path: &str, last_used: u64) {
-    CacheMutationGuard::acquire(home)
+    CacheOwnershipMutationGuard::begin(home, namespace, path)
         .unwrap()
-        .finish_with_ownership(namespace, path, last_used)
+        .finish(last_used)
         .unwrap();
 }

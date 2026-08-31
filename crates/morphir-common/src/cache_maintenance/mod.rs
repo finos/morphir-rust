@@ -45,8 +45,8 @@ pub use model::{
     CleanupMode, CleanupPlan,
 };
 pub use ownership::{
-    CacheOwnershipHandoffError, CacheOwnershipPersistenceError, CacheOwnershipRegistry,
-    CacheOwnershipRegistryError, load_cache_ownership_registry,
+    CacheOwnershipHandoffError, CacheOwnershipMutationGuard, CacheOwnershipPersistenceError,
+    CacheOwnershipRegistry, CacheOwnershipRegistryError, load_cache_ownership_registry,
 };
 pub use planner::{CachePlanError, plan_cache_cleanup};
 pub use session::{CacheMaintenanceSession, CacheMaintenanceSessionError};

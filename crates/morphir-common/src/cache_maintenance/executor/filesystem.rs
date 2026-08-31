@@ -469,9 +469,10 @@ pub(crate) struct CacheOwnershipWriteGuard {
 }
 
 impl CacheOwnershipWriteGuard {
-    pub(crate) fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
-        let (file, _home_dir) = open_coordination_lock(
+    pub(crate) fn acquire(home: &MorphirHome, home_dir: &Dir) -> Result<Self, CacheExecutionError> {
+        let file = open_coordination_file_from_home(
             home,
+            home_dir,
             "cache-ownership.lock",
             &home.cache_ownership_lock_file(),
         )?;
@@ -499,8 +500,18 @@ fn open_coordination_lock(
     create_directory_tree_durably(home.root())?;
     let home_dir = Dir::open_ambient_dir(home.root(), ambient_authority())
         .map_err(|source| io_error(home.root(), source))?;
+    let file = open_coordination_file_from_home(home, &home_dir, filename, path)?;
+    Ok((file, home_dir))
+}
+
+fn open_coordination_file_from_home(
+    home: &MorphirHome,
+    home_dir: &Dir,
+    filename: &str,
+    path: &Path,
+) -> Result<File, CacheExecutionError> {
     let locks_path = home.locks_dir();
-    let locks_dir = open_or_create_directory(&home_dir, "locks", &locks_path)?;
+    let locks_dir = open_or_create_directory(home_dir, "locks", &locks_path)?;
     match locks_dir.symlink_metadata(filename) {
         Ok(metadata) if cap_is_link_like(&metadata) || !metadata.is_file() => {
             return Err(CacheExecutionError::UnsafeMaintenancePath {
@@ -522,7 +533,7 @@ fn open_coordination_lock(
         .open_with(filename, &options)
         .map(cap_std::fs::File::into_std)
         .map_err(|source| io_error(path, source))?;
-    Ok((file, home_dir))
+    Ok(file)
 }
 
 fn create_directory_tree_durably(path: &Path) -> Result<(), CacheExecutionError> {

@@ -1,13 +1,16 @@
 use super::executor::MaintenanceGuard;
-use super::ownership::load_cache_ownership_registry_under_guard;
+use super::ownership::{
+    load_cache_ownership_registry_under_guard, save_cache_ownership_registry_under_guard,
+};
 use super::{
-    CacheEntry, CacheExecutionError, CacheExecutionLimits, CacheExecutionReport,
-    CacheInventoryError, CacheInventoryLimits, CacheNamespace, CacheOwnershipPersistenceError,
-    CacheOwnershipRegistry, CleanupPlan,
+    CacheEntry, CacheExecutionDisposition, CacheExecutionError, CacheExecutionLimits,
+    CacheExecutionReport, CacheInventoryError, CacheInventoryLimits, CacheNamespace,
+    CacheOwnershipPersistenceError, CacheOwnershipRegistry, CleanupPlan,
 };
 use crate::home::MorphirHome;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
+use tracing::debug;
 
 /// Errors beginning or using an exclusive cache-maintenance session.
 #[derive(Debug, Error)]
@@ -169,14 +172,34 @@ impl<'home> CacheMaintenanceSession<'home> {
             .into_iter()
             .filter(|namespace| selected_names.contains(namespace.name()))
             .collect::<Vec<_>>();
-        super::executor::execute_cache_cleanup_under_guard(
+        let report = super::executor::execute_cache_cleanup_under_guard(
             self.home,
             &self.guard,
             plan,
             &namespaces,
             inventory_limits,
             execution_limits,
-        )
-        .map_err(Into::into)
+        )?;
+        let mut compacted = self.ownership.clone();
+        let mut compacted_entries = 0_usize;
+        for item in report.items() {
+            if matches!(
+                item.disposition(),
+                CacheExecutionDisposition::Removed | CacheExecutionDisposition::Missing
+            ) {
+                compacted_entries +=
+                    usize::from(compacted.unregister(item.namespace(), item.path())?);
+            }
+        }
+        if compacted_entries > 0 {
+            save_cache_ownership_registry_under_guard(self.home, &compacted, &self.guard)?;
+            debug!(
+                event = "cache_ownership_compacted",
+                compacted_entries,
+                remaining_entries = compacted.len(),
+                "terminal cache ownership entries compacted"
+            );
+        }
+        Ok(report)
     }
 }

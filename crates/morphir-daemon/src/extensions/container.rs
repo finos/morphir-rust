@@ -79,12 +79,15 @@ impl ExtensionContainer {
         Self::from_bytes_with_timeout(id, wasm_bytes, host_funcs, DEFAULT_WASM_EXECUTION_TIMEOUT)
     }
 
-    /// Create a container from owned WASM bytes without blocking an async runtime worker.
-    pub async fn from_bytes_async(
+    /// Create a container from WASM bytes owned by the blocking compilation worker.
+    pub async fn from_bytes_async<B>(
         id: String,
-        wasm_bytes: Vec<u8>,
+        wasm_bytes: B,
         host_funcs: MorphirHostFunctions,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        B: AsRef<[u8]> + Send + 'static,
+    {
         Self::from_bytes_with_limits_async(
             id,
             wasm_bytes,
@@ -110,17 +113,20 @@ impl ExtensionContainer {
         )
     }
 
-    async fn from_bytes_with_limits_async(
+    async fn from_bytes_with_limits_async<B>(
         id: String,
-        wasm_bytes: Vec<u8>,
+        wasm_bytes: B,
         host_funcs: MorphirHostFunctions,
         execution_timeout: Duration,
         fuel_limit: u64,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        B: AsRef<[u8]> + Send + 'static,
+    {
         tokio::task::spawn_blocking(move || {
             Self::from_bytes_with_limits(
                 &id,
-                &wasm_bytes,
+                wasm_bytes.as_ref(),
                 host_funcs,
                 execution_timeout,
                 fuel_limit,

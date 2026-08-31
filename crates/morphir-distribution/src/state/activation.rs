@@ -76,6 +76,11 @@ impl VerifiedWasmArtifact {
         &self.bytes
     }
 
+    /// Consume the artifact and return its verified bytes without copying them.
+    pub fn into_bytes(self) -> Arc<[u8]> {
+        self.bytes
+    }
+
     /// Return exact metadata that MEP initialization must reproduce.
     pub fn extension_info(&self) -> &ExtensionInfo {
         &self.extension_info

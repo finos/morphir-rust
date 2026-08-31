@@ -44,16 +44,18 @@ pub async fn activate_transport(
             Box::new(SpawnedProcessTransport::spawn(launch).await?)
         }
         VerifiedExtensionArtifact::Wasm(wasm) => {
+            let extension_info = wasm.extension_info().clone();
+            let backend = wasm.extension_capabilities().backend;
             let container = ExtensionContainer::from_bytes_async(
-                wasm.extension_info().id.clone(),
-                wasm.bytes().to_vec(),
+                extension_info.id.clone(),
+                wasm.into_bytes(),
                 wasm_host_functions(working_directory),
             )
             .await?;
             Box::new(ExtismTransport::new_with_expected_backend_capability(
                 container,
-                wasm.extension_info().clone(),
-                wasm.extension_capabilities().backend,
+                extension_info,
+                backend,
             ))
         }
     };

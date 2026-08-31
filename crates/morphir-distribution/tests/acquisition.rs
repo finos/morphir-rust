@@ -505,6 +505,8 @@ fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
             assert_eq!(backend.targets, ["avro"]);
             assert_eq!(backend.ir_versions, ["3", "4"]);
             assert!(!backend.generate);
+            let verified_bytes = wasm.bytes().as_ptr();
+            assert_eq!(wasm.into_bytes().as_ptr(), verified_bytes);
         }
         VerifiedExtensionArtifact::Process(_) => panic!("expected wasm artifact"),
     }

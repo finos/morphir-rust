@@ -425,6 +425,7 @@ fn validate_release_custom(
         && custom.tool_id == *record.tool_id()
         && custom.version == *record.version()
         && (custom.status == ToolReleaseStatus::Active || custom.channels.is_empty())
+        && (custom.status == ToolReleaseStatus::Revoked || !record.artifacts().is_empty())
         && custom.compatibility.morphir_cli == *record.morphir_cli_requirement()
         && custom_platforms == record_platforms
         && target == expected_target;
@@ -764,6 +765,20 @@ mod release_state_tests {
         .unwrap()
     }
 
+    fn a_revoked_descriptor_without_artifacts() -> ToolReleaseRecord {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "morphir-tool-release",
+            "tool": { "id": "desktop", "name": "Morphir Desktop" },
+            "version": "1.0.0",
+            "channels": [],
+            "status": "revoked",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "artifacts": []
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn authenticated_targets_override_the_descriptors_publication_state() {
         let descriptor = an_active_descriptor();
@@ -782,6 +797,30 @@ mod release_state_tests {
             "releases/desktop/1.0.0.json",
             yanked_targets(&["stable"]),
             an_active_descriptor(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("authenticated release state"));
+    }
+
+    #[test]
+    fn authenticated_targets_cannot_activate_an_artifactless_descriptor() {
+        let targets: ToolReleaseCustom = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "tool-release",
+            "toolId": "desktop",
+            "version": "1.0.0",
+            "channels": [],
+            "status": "yanked",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "platforms": []
+        }))
+        .unwrap();
+
+        let error = authenticate_release(
+            "releases/desktop/1.0.0.json",
+            targets,
+            a_revoked_descriptor_without_artifacts(),
         )
         .unwrap_err();
 

@@ -134,6 +134,43 @@ jobs:
           path: target/wasm32-unknown-unknown/release/morphir_wasm_binding.wasm
           retention-days: 1
 
+  workspace-wasm:
+    name: Build (workspace discovery WASM)
+    runs-on: ubuntu-latest
+    needs: [lint-rust]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install mise
+        uses: jdx/mise-action@v4
+
+      - name: Install WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/wasm-bindgen
+            ~/.cargo/bin/wasm-bindgen-test-runner
+            ~/.cargo/bin/wasm2es6js
+            target
+          key: ${{ runner.os }}-cargo-workspace-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-workspace-wasm-
+
+      - name: Test workspace discovery consumers
+        run: mise exec -- cargo test -p morphir-config -p morphir-workspace -p morphir-workspace-wasm -p morphir-devkit -p morphir-daemon
+
+      - name: Check portable workspace crates for WASM
+        run: mise exec -- cargo check -p morphir-config -p morphir-workspace -p morphir-workspace-wasm --target wasm32-unknown-unknown
+
+      - name: Export browser workspace package
+        run: mise run build:workspace-wasm
+
   test-native-extension:
     name: Test (native process extension)
     runs-on: ubuntu-latest

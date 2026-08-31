@@ -17,7 +17,10 @@ use morphir_common::config::deep_merge;
 use morphir_common::config::env::{env_config_value, process_env_config_value};
 use morphir_common::config::load_config_value;
 use morphir_common::config::model::{MorphirConfig, ProjectSection};
-use serde_json::{Value, json};
+pub use morphir_config::builtin_defaults;
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 /// Configuration context containing loaded config and resolved paths
@@ -39,30 +42,6 @@ pub struct ConfigContext {
     pub project_root: Option<PathBuf>,
     /// Current project if in workspace
     pub current_project: Option<ProjectSection>,
-}
-
-/// Built-in defaults: the lowest-precedence configuration layer.
-///
-/// These are the defaults the typed configuration model applies to the
-/// `frontend`, `ir`, and `codegen` sections. Sections whose presence carries
-/// meaning (`project`, `workspace`) are not seeded; their field defaults apply
-/// only once a source declares the section.
-pub fn builtin_defaults() -> Value {
-    json!({
-        "frontend": {
-            "emit_parse_stage": true,
-            "emit_parse_stage_fatal": false,
-        },
-        "ir": {
-            "format_version": 4,
-            "mode": "vfs",
-            "strict_mode": false,
-        },
-        "codegen": {
-            "targets": [],
-            "output_format": "pretty",
-        },
-    })
 }
 
 fn resolve_file_source(

@@ -66,6 +66,7 @@ morphir-common = { path = "../morphir-common" }
 morphir-devkit = { path = "../morphir-devkit" }
 morphir-distribution = { path = "../morphir-distribution" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+morphir-workspace = { path = "../morphir-workspace" }
 
 [dev-dependencies]
 base64 = "0.23"

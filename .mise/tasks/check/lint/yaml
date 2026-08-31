@@ -6,6 +6,7 @@ set -e
 echo "Checking YAML files..."
 
 # Find all YAML files, excluding generated/vendor directories
+# This exact fixture is deliberately malformed parser-test input.
 YAML_FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \) \
     -not -path "./node_modules/*" \
     -not -path "./target/*" \
@@ -13,6 +14,7 @@ YAML_FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \) \
     -not -path "./.gems/*" \
     -not -path "./docs/_site/*" \
     -not -path "./website/*" \
+    -not -path "./tests/fixtures/workspace-discovery/valid-monorepo/packages/broken/morphir.yaml" \
     2>/dev/null || true)
 
 if [ -z "$YAML_FILES" ]; then

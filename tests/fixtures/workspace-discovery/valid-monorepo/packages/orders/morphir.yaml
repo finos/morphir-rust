@@ -1,0 +1,4 @@
+project:
+  name: acme/orders
+  version: 1.2.0
+  source_directory: elm

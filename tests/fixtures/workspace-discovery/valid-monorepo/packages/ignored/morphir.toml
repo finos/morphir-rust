@@ -1,0 +1,4 @@
+[project]
+name = "acme/ignored"
+version = "1.0.0"
+source_directory = "src"

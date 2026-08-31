@@ -14,6 +14,7 @@ pub mod paths;
 mod provenance;
 pub mod secret;
 pub mod sources;
+mod workspace_discovery;
 
 pub use discovery::{
     ConfigLayout, ConfigPlatform, config_layout, config_root, default_system_config_dir,
@@ -22,9 +23,10 @@ pub use discovery::{
     system_config_candidates, user_override_candidates,
 };
 pub use loader::{
-    ConfigContext, builtin_defaults, load_config_context, load_config_context_with,
-    load_config_context_with_global, load_effective_config,
+    ConfigContext, load_config_context, load_config_context_with, load_config_context_with_global,
+    load_effective_config,
 };
+pub use morphir_config::builtin_defaults;
 pub use paths::{
     ensure_morphir_structure, resolve_compile_output, resolve_dist_output, resolve_generate_output,
     resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
@@ -37,6 +39,10 @@ pub use secret::{
 pub use sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
     EnvSelection, SourceSelection,
+};
+pub use workspace_discovery::{
+    NativeWorkspaceDiscovery, build_workspace_discovery_request, discover_workspace,
+    discover_workspace_detailed,
 };
 
 #[cfg(test)]

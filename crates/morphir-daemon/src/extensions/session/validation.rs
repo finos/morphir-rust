@@ -6,7 +6,8 @@ use crate::extensions::protocol::{
     ExtensionResponse, InitializeResult, JSONRPC_VERSION, RpcError, methods,
 };
 use crate::{DaemonError, Result};
-use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType};
+use morphir_distribution::RelativeArtifactPath;
+use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
 use std::collections::HashSet;
 
 pub(super) enum ResponseFailure {
@@ -46,6 +47,9 @@ pub(super) fn validate_method_result(
     request_params: &serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
+    if method == methods::GENERATE {
+        return validate_generate_result(value);
+    }
     if method == methods::COMPILE {
         let result: CompileResult = serde_json::from_value(value.clone())?;
         if result.success && result.ir_version.is_none() {
@@ -80,6 +84,20 @@ pub(super) fn validate_method_result(
         }
     }
     Ok(value)
+}
+
+fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
+    let mut result: GenerateResult = serde_json::from_value(value)?;
+    for artifact in &mut result.artifacts {
+        let path = RelativeArtifactPath::parse(artifact.path.clone()).map_err(|error| {
+            DaemonError::Extension(format!(
+                "Generated artifact path '{}' is invalid: {error}",
+                artifact.path
+            ))
+        })?;
+        artifact.path = path.as_str().to_owned();
+    }
+    serde_json::to_value(result).map_err(Into::into)
 }
 
 fn validate_compile_ir(ir: &serde_json::Value, requested_version: &str) -> Result<()> {
@@ -261,6 +279,32 @@ mod tests {
                 "def": {"modules": {}}
             }
         })
+    }
+
+    #[test]
+    fn rejects_unsafe_generated_artifact_paths() {
+        for path in [
+            "/tmp/schema.avsc",
+            "../../.ssh/authorized_keys",
+            "nested/../schema.avsc",
+            r"C:\\Users\\Public\\schema.avsc",
+        ] {
+            let error = validate_method_result(
+                methods::GENERATE,
+                &serde_json::json!({}),
+                serde_json::json!({
+                    "success": true,
+                    "artifacts": [{"path": path, "content": "{}"}],
+                    "diagnostics": []
+                }),
+            )
+            .expect_err("unsafe generated artifact paths must fail validation");
+
+            assert!(
+                error.to_string().contains("artifact path"),
+                "unexpected error for {path}: {error}"
+            );
+        }
     }
 
     #[test]

@@ -224,10 +224,15 @@ pub(in crate::extensions) fn validate_negotiation(
         )));
     }
     if let Some(discovered) = expected.capabilities
-        && result.capabilities.backend != discovered.backend
+        && result.capabilities != discovered
     {
+        let capability_scope = if result.capabilities.backend != discovered.backend {
+            "backend capabilities"
+        } else {
+            "capabilities"
+        };
         return Err(DaemonError::Extension(format!(
-            "Extension '{}' backend capabilities disagreed with discovery",
+            "Extension '{}' {capability_scope} disagreed with discovery",
             expected.id
         )));
     }

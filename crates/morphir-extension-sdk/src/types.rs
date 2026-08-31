@@ -65,7 +65,7 @@ impl Default for ExtensionInfo {
 }
 
 /// Source language supported by a frontend extension.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LanguageCapability {
     /// Stable language identifier used in compile requests.
@@ -75,7 +75,7 @@ pub struct LanguageCapability {
 }
 
 /// Compilation features advertised by a frontend extension.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendCapability {
     /// Source languages accepted by the frontend.
@@ -103,7 +103,7 @@ pub struct BackendCapability {
 }
 
 /// Extension capabilities for runtime negotiation
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct ExtensionCapabilities {
     /// Frontend compilation features, when provided by the extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]

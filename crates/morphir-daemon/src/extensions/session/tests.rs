@@ -390,6 +390,62 @@ async fn rejects_each_backend_metadata_drift_before_generate() {
 }
 
 #[tokio::test]
+async fn rejects_each_non_backend_locked_capability_drift() {
+    let locked = ExtensionCapabilities {
+        frontend: Some(FrontendCapability {
+            compile: true,
+            ..FrontendCapability::default()
+        }),
+        streaming: true,
+        extra: [("vendor.feature".to_owned(), serde_json::json!("locked"))]
+            .into_iter()
+            .collect(),
+        ..ExtensionCapabilities::default()
+    };
+    let mut changed_frontend = locked.clone();
+    changed_frontend.frontend.as_mut().unwrap().compile = false;
+    let mut changed_streaming = locked.clone();
+    changed_streaming.streaming = false;
+    let mut changed_extra = locked.clone();
+    changed_extra
+        .extra
+        .insert("vendor.feature".to_owned(), serde_json::json!("changed"));
+
+    for (case, capabilities) in [
+        ("frontend", changed_frontend),
+        ("streaming", changed_streaming),
+        ("extension-specific", changed_extra),
+    ] {
+        let mut initialized = initialization(extension(vec![ExtensionType::Frontend]));
+        initialized.capabilities = capabilities;
+        let response = ExtensionResponse::success(1, initialized).unwrap();
+        let transport = ScriptedTransport {
+            expected: ExpectedExtension::discovered_with_capabilities(
+                extension(vec![ExtensionType::Frontend]),
+                locked.clone(),
+            ),
+            responses: [Ok(response)].into(),
+            requests: Vec::new(),
+        };
+
+        let failure = Session::loaded(transport)
+            .initialize(params())
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{case} capability drift should fail initialization"));
+
+        assert!(
+            failure
+                .error()
+                .to_string()
+                .contains("capabilities disagreed with discovery"),
+            "{case}: {}",
+            failure.error()
+        );
+    }
+}
+
+#[tokio::test]
 async fn discovered_backend_without_locked_metadata_accepts_valid_initialization() {
     let initialized = ExtensionResponse::success(1, backend_initialization(true)).unwrap();
     let transport = ScriptedTransport {

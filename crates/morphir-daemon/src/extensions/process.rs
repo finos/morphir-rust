@@ -266,7 +266,7 @@ impl SpawnedProcessSession {
     pub async fn spawn(launch: ProcessLaunch) -> Result<Self> {
         validate_launch(&launch)?;
 
-        let (program, staged_program) = prepare_program(&launch.program)?;
+        let (program, staged_program) = prepare_program(&launch.program).await?;
         let mut command = Command::new(&program);
         command
             .args(&launch.args)
@@ -768,7 +768,7 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
     Ok(())
 }
 
-fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+async fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
     match program {
         ProcessProgram::Path(path) => Ok((path.clone(), None)),
         ProcessProgram::VerifiedBytes {
@@ -776,29 +776,46 @@ fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile
             bytes,
             staging_directory,
         } => {
-            let mut builder = tempfile::Builder::new();
-            builder.prefix("morphir-extension-");
-            let directory = match staging_directory {
-                Some(staging_directory) => {
-                    fs::create_dir_all(staging_directory).map_err(DaemonError::from)?;
-                    builder
-                        .tempdir_in(staging_directory)
-                        .map_err(DaemonError::from)?
-                }
-                None => builder.tempdir().map_err(DaemonError::from)?,
-            };
-            let path = directory.path().join(filename);
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(DaemonError::from)?;
-            std::io::Write::write_all(&mut file, bytes).map_err(DaemonError::from)?;
-            file.sync_all().map_err(DaemonError::from)?;
-            make_owner_executable(&path)?;
-            Ok((path, Some(directory)))
+            let filename = filename.clone();
+            let bytes = Arc::clone(bytes);
+            let staging_directory = staging_directory.clone();
+            tokio::task::spawn_blocking(move || {
+                stage_verified_program(filename, bytes, staging_directory)
+            })
+            .await
+            .map_err(|error| {
+                DaemonError::Extension(format!("Extension staging worker failed: {error}"))
+            })?
         }
     }
+}
+
+fn stage_verified_program(
+    filename: OsString,
+    bytes: Arc<[u8]>,
+    staging_directory: Option<PathBuf>,
+) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("morphir-extension-");
+    let directory = match staging_directory {
+        Some(staging_directory) => {
+            fs::create_dir_all(&staging_directory).map_err(DaemonError::from)?;
+            builder
+                .tempdir_in(staging_directory)
+                .map_err(DaemonError::from)?
+        }
+        None => builder.tempdir().map_err(DaemonError::from)?,
+    };
+    let path = directory.path().join(filename);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(DaemonError::from)?;
+    std::io::Write::write_all(&mut file, &bytes).map_err(DaemonError::from)?;
+    file.sync_all().map_err(DaemonError::from)?;
+    make_owner_executable(&path)?;
+    Ok((path, Some(directory)))
 }
 
 #[cfg(unix)]
@@ -917,8 +934,8 @@ mod tests {
         assert_eq!(retained.types, discovered.types);
     }
 
-    #[test]
-    fn verified_bytes_stage_under_the_explicit_managed_directory() {
+    #[tokio::test]
+    async fn verified_bytes_stage_under_the_explicit_managed_directory() {
         let root = tempfile::tempdir().unwrap();
         let staging_directory = root.path().join("managed-staging");
         fs::create_dir(&staging_directory).unwrap();
@@ -933,7 +950,7 @@ mod tests {
             root.path(),
         );
 
-        let (program, _retained_directory) = prepare_program(&launch.program).unwrap();
+        let (program, _retained_directory) = prepare_program(&launch.program).await.unwrap();
 
         assert!(program.starts_with(&staging_directory));
     }

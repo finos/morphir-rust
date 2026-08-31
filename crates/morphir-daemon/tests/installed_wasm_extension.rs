@@ -179,6 +179,7 @@ async fn installed_wasm_runs_the_common_mep_lifecycle() {
 
     let valid_request = GenerateRequest {
         ir: supported_v4_distribution(),
+        target: "avro".into(),
         options: [
             ("representation".into(), json!("idl")),
             ("projection".into(), json!("protocol-public")),
@@ -216,6 +217,7 @@ async fn installed_wasm_runs_the_common_mep_lifecycle() {
 
     let invalid_request = GenerateRequest {
         ir: json!({ "formatVersion": 5, "distribution": null }),
+        target: "avro".into(),
         options: Default::default(),
     };
     let ready = match ready

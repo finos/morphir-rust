@@ -104,6 +104,7 @@ async fn completes_mep_through_a_real_http_daemon() {
 
     support::mep::assert_backend_typestate_conformance(
         session,
+        "json",
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
     )
@@ -137,6 +138,7 @@ async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: large_ir,
+                target: "json".into(),
                 options: Default::default(),
             })
             .expect("the generation request should serialize"),
@@ -224,6 +226,7 @@ async fn marks_the_session_indeterminate_when_the_daemon_exceeds_the_request_tim
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: a_distribution_with_one_value(),
+                target: "json".into(),
                 options: Default::default(),
             })
             .expect("the generation request should serialize"),

@@ -61,6 +61,7 @@ async fn completes_mep_through_a_real_child_process() {
 
     let mut session = support::mep::assert_backend_typestate_conformance(
         session,
+        "json",
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
     )
@@ -144,6 +145,7 @@ async fn kills_a_child_that_exceeds_the_request_timeout() {
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: a_distribution_with_one_value(),
+                target: "json".into(),
                 options: Default::default(),
             })
             .expect("the generation request should serialize"),
@@ -345,6 +347,7 @@ async fn shutdown_does_not_wait_for_a_descendant_holding_stderr_open() {
 
     let mut session = support::mep::assert_backend_typestate_conformance(
         session,
+        "json",
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
     )

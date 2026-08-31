@@ -112,6 +112,7 @@ mod tests {
                         }
                     }
                 }),
+                target: "wasm".into(),
                 options: Default::default(),
             })
             .expect("return a typed generation result");

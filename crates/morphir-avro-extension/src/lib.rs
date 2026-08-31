@@ -195,7 +195,12 @@ mod tests {
 
     #[test]
     fn backend_maps_an_injected_invariant_failure_to_execution_failed() {
-        let result = backend_generate_with(GenerateRequest::default(), |_| {
+        let request = GenerateRequest {
+            ir: serde_json::Value::Null,
+            target: "avro".into(),
+            options: Default::default(),
+        };
+        let result = backend_generate_with(request, |_| {
             Err(AvroInternalError::invariant(
                 "injected renderer registry failure",
             ))

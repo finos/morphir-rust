@@ -474,7 +474,7 @@ pub struct RelatedInformation {
 }
 
 /// A generated artifact
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
     /// Output path (relative)
     pub path: String,

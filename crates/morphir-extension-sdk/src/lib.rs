@@ -403,6 +403,7 @@ mod tests {
             methods::GENERATE,
             GenerateRequest {
                 ir: serde_json::json!({ "observed": true }),
+                target: "recording".into(),
                 options: Default::default(),
             },
             7,

@@ -18,7 +18,11 @@ fn options(entries: impl IntoIterator<Item = (&'static str, Value)>) -> HashMap<
 
 fn generate(ir: Value, options: HashMap<String, Value>) -> morphir_extension_sdk::GenerateResult {
     AvroExtension
-        .generate(GenerateRequest { ir, options })
+        .generate(GenerateRequest {
+            ir,
+            target: "avro".into(),
+            options,
+        })
         .expect("backend-domain failures should remain successful MEP calls")
 }
 
@@ -252,4 +256,27 @@ fn option_insertion_order_does_not_change_generation() {
             ))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn a_single_target_backend_ignores_the_requested_target() {
+    let ir = mothers::classic_customer_library();
+
+    let stated = AvroExtension
+        .generate(GenerateRequest {
+            ir: ir.clone(),
+            target: "avro".into(),
+            options: options([("unsupported", json!("warn-and-skip"))]),
+        })
+        .expect("generation succeeds");
+    let unexpected = AvroExtension
+        .generate(GenerateRequest {
+            ir,
+            target: "not-a-target".into(),
+            options: options([("unsupported", json!("warn-and-skip"))]),
+        })
+        .expect("generation succeeds");
+
+    assert!(stated.success);
+    assert_eq!(stated.artifacts, unexpected.artifacts);
 }

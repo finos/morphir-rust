@@ -134,6 +134,7 @@ async fn shutdown_frontend(session: Session<SpawnedProcessTransport, Ready>) {
 #[allow(dead_code)]
 pub async fn assert_backend_typestate_conformance<T>(
     session: morphir_daemon::extensions::Session<T, morphir_daemon::extensions::Loaded>,
+    target: &str,
     valid_ir: serde_json::Value,
     invalid_ir: serde_json::Value,
 ) -> morphir_daemon::extensions::Session<T, morphir_daemon::extensions::Stopped>
@@ -141,12 +142,13 @@ where
     T: morphir_daemon::extensions::MepTransport,
 {
     let session = initialize_backend(session).await;
-    let session = generate_successfully(session, valid_ir).await;
+    let session = generate_successfully(session, target, valid_ir).await;
     let session = match session
         .invoke::<GenerateResult>(
             methods::GENERATE,
             GenerateRequest {
                 ir: invalid_ir,
+                target: target.into(),
                 options: Default::default(),
             },
         )
@@ -184,7 +186,10 @@ where
     assert_eq!(backend.ir_versions, expected_ir_versions);
     assert!(backend.generate, "the backend should support generation");
 
-    shutdown_backend(generate_successfully(session, supported_v4_distribution()).await).await
+    shutdown_backend(
+        generate_successfully(session, expected_target, supported_v4_distribution()).await,
+    )
+    .await
 }
 
 async fn initialize_backend<T>(
@@ -216,6 +221,7 @@ where
 
 async fn generate_successfully<T>(
     session: morphir_daemon::extensions::Session<T, morphir_daemon::extensions::Ready>,
+    target: &str,
     ir: serde_json::Value,
 ) -> morphir_daemon::extensions::Session<T, morphir_daemon::extensions::Ready>
 where
@@ -226,6 +232,7 @@ where
             methods::GENERATE,
             GenerateRequest {
                 ir,
+                target: target.into(),
                 options: Default::default(),
             },
         )
@@ -311,6 +318,7 @@ where
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: valid_ir,
+                target: "conformance".into(),
                 options: Default::default(),
             })
             .expect("the valid generation request should serialize"),
@@ -328,6 +336,7 @@ where
             methods::GENERATE,
             serde_json::to_value(GenerateRequest {
                 ir: invalid_ir,
+                target: "conformance".into(),
                 options: Default::default(),
             })
             .expect("the invalid generation request should serialize"),

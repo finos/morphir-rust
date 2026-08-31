@@ -13,12 +13,41 @@ Morphir Rust is part of the Morphir ecosystem, which includes:
 - [finos/morphir-scala](https://github.com/finos/morphir-scala) - Scala implementation
 - [finos/morphir-dotnet](https://github.com/finos/morphir-dotnet) - .NET implementation
 
-## Project Structure
+## Workspace crates
 
-This is a Rust workspace containing multiple crates:
+This table lists the crates in the Cargo workspace.
 
-- **`morphir-ir`** - Core IR model definitions and utilities
-- **`morphir-common`** - Shared utilities (remote sources, caching)
+| Crate | Description |
+| --- | --- |
+| `morphir-avro-extension` | Apache Avro backend that projects Morphir v3/v4 specifications to Avro JSON schemas, protocols, and IDL. |
+| `morphir-builtins` | Bundled native and WebAssembly extensions, currently including Morphir IR migration. |
+| `morphir-common` | Shared IR transport, loading, virtual filesystem, remote, home, cache, and pipeline utilities. |
+| `morphir-config` | Portable configuration parsing, merging, and environment rules. |
+| `morphir-core` | Morphir IR models, format versions, migration, traversal, and naming. |
+| `morphir-daemon` | Workspace, build, IDE, and extension services for long-running Morphir tooling. |
+| `morphir-devkit` | Workspace, configuration, and extension discovery APIs for developer tools. |
+| `morphir-distribution` | Verified Morphir artifact acquisition, installation, and activation. |
+| `morphir-ext` | Actor-based extension runtime built on Kameo. |
+| `morphir-ext-core` | Core extension ABI and envelope protocol types. |
+| `morphir-ext-example` | Example TEA counter WebAssembly component extension. |
+| `morphir-extension-sdk` | SDK and MEP contracts for WebAssembly extensions. |
+| `morphir-gleam-binding` | Gleam frontend and backend extension integration. |
+| `morphir-kb` | Operational layer for OKF knowledge bundles. |
+| `morphir-okf` | Pure OKF model, parsing, and loading support. |
+| `morphir-runtime` | Reserved runtime crate; currently a minimal scaffold. |
+| `morphir-tests` | Shared acceptance and Cucumber test harness. |
+| `morphir-wasm-binding` | Backend extension that generates WebAssembly and WAT from Morphir IR. |
+| `morphir-workspace` | Portable workspace discovery protocol and algorithms. |
+| `morphir-workspace-wasm` | Browser-facing JSON and WebAssembly adapter for workspace discovery. |
+
+## Extensions
+
+This table lists independently releasable extensions. Registrations come from
+`.github/extensions.toml`, and versions come from package manifests.
+
+| Extension | Package | Version | Description |
+| --- | --- | --- | --- |
+| `morphir-avro` | `morphir-avro-extension` | `0.1.0` | Generates Avro JSON schemas or protocols and Avro IDL from Morphir specifications. |
 
 ## Prerequisites
 

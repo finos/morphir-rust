@@ -12,7 +12,8 @@ use serde_json::json;
 use support::projection::{alias, customer_record, field, package, reference, value_specification};
 
 include!("projection/protocols.rs");
-include!("projection/dependencies.rs");
+#[path = "projection/dependencies/mod.rs"]
+mod dependencies;
 include!("projection/type_mappings.rs");
 include!("projection/naming.rs");
 include!("projection/advanced_types.rs");

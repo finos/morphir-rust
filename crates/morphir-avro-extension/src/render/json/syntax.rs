@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use morphir_extension_sdk::Artifact;
 use serde_json::{Map, Value};
 
+use super::super::portable_artifact_component;
 use crate::{AvroDiagnostic, AvroField, AvroFullName, AvroRoot, AvroType, Properties};
 
 pub(super) fn render_field(
@@ -87,9 +88,13 @@ pub(super) fn protocol_path(name: &AvroFullName) -> String {
 }
 
 pub(super) fn artifact_path(name: &AvroFullName, extension: &str) -> String {
-    let mut components = name.namespace().split('.').collect::<Vec<_>>();
-    components.retain(|component| !component.is_empty());
-    components.push(name.name());
+    let mut components = name
+        .namespace()
+        .split('.')
+        .filter(|component| !component.is_empty())
+        .map(portable_artifact_component)
+        .collect::<Vec<_>>();
+    components.push(portable_artifact_component(name.name()));
     format!("{}.{}", components.join("/"), extension)
 }
 

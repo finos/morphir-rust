@@ -11,6 +11,8 @@ use base64::engine::general_purpose::STANDARD;
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
 use std::collections::HashSet;
+use unicode_casefold::UnicodeCaseFold as _;
+use unicode_normalization::UnicodeNormalization as _;
 
 pub(super) enum ResponseFailure {
     Rpc(DaemonError),
@@ -107,7 +109,8 @@ pub(in crate::extensions) async fn validate_method_result_async(
 
 fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
     let mut result: GenerateResult = serde_json::from_value(value)?;
-    let mut paths = HashSet::new();
+    let mut case_folded_paths = HashSet::new();
+    let mut uppercase_paths = HashSet::new();
     for artifact in &mut result.artifacts {
         let path = RelativeArtifactPath::parse(artifact.path.clone()).map_err(|error| {
             DaemonError::Extension(format!(
@@ -116,7 +119,8 @@ fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Valu
             ))
         })?;
         artifact.path = path.as_str().to_owned();
-        if !paths.insert(artifact.path.clone()) {
+        let (case_folded, uppercase) = portable_artifact_path_keys(&artifact.path);
+        if !case_folded_paths.insert(case_folded) || !uppercase_paths.insert(uppercase) {
             return Err(DaemonError::Extension(format!(
                 "Generated artifact path '{}' is duplicate",
                 artifact.path
@@ -132,6 +136,18 @@ fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Valu
         }
     }
     serde_json::to_value(result).map_err(Into::into)
+}
+
+fn portable_artifact_path_keys(path: &str) -> (String, String) {
+    let normalized = path.nfc().collect::<String>();
+    let case_folded = normalized
+        .as_str()
+        .case_fold()
+        .collect::<String>()
+        .nfc()
+        .collect();
+    let uppercase = normalized.to_uppercase().nfc().collect();
+    (case_folded, uppercase)
 }
 
 fn validate_compile_ir(ir: &serde_json::Value, requested_version: &str) -> Result<()> {
@@ -401,6 +417,30 @@ mod tests {
         .expect_err("duplicate artifact paths must fail validation");
 
         assert!(error.to_string().contains("duplicate"), "{error}");
+    }
+
+    #[test]
+    fn rejects_portably_colliding_generated_artifact_paths() {
+        for paths in [
+            ["Foo.avsc", "foo.avsc"],
+            ["caf\u{e9}.avsc", "cafe\u{301}.avsc"],
+        ] {
+            let error = validate_method_result(
+                methods::GENERATE,
+                &serde_json::json!({}),
+                serde_json::json!({
+                    "success": true,
+                    "artifacts": [
+                        {"path": paths[0], "content": "{}"},
+                        {"path": paths[1], "content": "duplicate"}
+                    ],
+                    "diagnostics": []
+                }),
+            )
+            .expect_err("portable artifact path collisions must fail validation");
+
+            assert!(error.to_string().contains("duplicate"), "{error}");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

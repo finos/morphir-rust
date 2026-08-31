@@ -2,6 +2,19 @@ use super::*;
 use crate::{AvroRequest, AvroRoot, Protocol, RecordSchema};
 
 #[test]
+fn artifact_paths_escape_windows_reserved_avro_names() {
+    for (namespace, name, expected) in [
+        ("con.example", "User", "~con/example/User.avdl"),
+        ("example", "Aux", "example/~Aux.avdl"),
+        ("example", "COM1", "example/~COM1.avdl"),
+        ("example", "Lpt9", "example/~Lpt9.avdl"),
+    ] {
+        let full_name = AvroFullName::new(namespace.to_owned(), name.to_owned()).unwrap();
+        assert_eq!(protocol_path(&full_name), expected);
+    }
+}
+
+#[test]
 fn protocols_keep_non_named_public_roots_as_schema_artifacts() {
     let root_name = AvroFullName::new("example".to_owned(), "UserId".to_owned()).unwrap();
     let root = AvroRoot::new(

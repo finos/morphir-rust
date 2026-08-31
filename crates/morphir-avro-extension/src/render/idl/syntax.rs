@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+use super::super::portable_artifact_component;
 use crate::{
     AvroDiagnostic, AvroFullName, AvroInternalError, AvroMessage, AvroType, NamedSchema,
     Properties, escape_idl_identifier,
@@ -285,9 +286,13 @@ pub(super) fn json_string(value: &str) -> Result<String, AvroDiagnostic> {
 }
 
 pub(super) fn protocol_path(name: &AvroFullName) -> String {
-    let mut components = name.namespace().split('.').collect::<Vec<_>>();
-    components.retain(|component| !component.is_empty());
-    components.push(name.name());
+    let mut components = name
+        .namespace()
+        .split('.')
+        .filter(|component| !component.is_empty())
+        .map(portable_artifact_component)
+        .collect::<Vec<_>>();
+    components.push(portable_artifact_component(name.name()));
     format!("{}.avdl", components.join("/"))
 }
 

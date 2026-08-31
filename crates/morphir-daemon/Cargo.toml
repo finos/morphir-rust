@@ -47,6 +47,8 @@ toml = "1.0"
 
 # Logging
 tracing = "0.1"
+unicode-casefold = { workspace = true }
+unicode-normalization = { workspace = true }
 
 # WASM plugin runtime (Extism)
 extism = "1"

@@ -240,12 +240,13 @@ pub fn execute_cache_cleanup(
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let _guard = MaintenanceGuard::acquire(home)?;
-    execute_cache_cleanup_under_guard(home, plan, ownership, inventory_limits, limits)
+    let guard = MaintenanceGuard::acquire(home)?;
+    execute_cache_cleanup_under_guard(home, &guard, plan, ownership, inventory_limits, limits)
 }
 
 pub(crate) fn execute_cache_cleanup_under_guard(
     home: &MorphirHome,
+    guard: &MaintenanceGuard,
     plan: &CleanupPlan,
     ownership: &[CacheNamespace],
     inventory_limits: CacheInventoryLimits,
@@ -263,7 +264,8 @@ pub(crate) fn execute_cache_cleanup_under_guard(
         max_bytes = limits.max_bytes,
         "cache cleanup started"
     );
-    let result = execute_cache_cleanup_inner(home, plan, ownership, inventory_limits, limits);
+    let result =
+        execute_cache_cleanup_inner(home, guard, plan, ownership, inventory_limits, limits);
     match &result {
         Ok(report) => {
             for (entry_index, item) in report.items().iter().enumerate() {
@@ -297,15 +299,23 @@ pub(crate) fn execute_cache_cleanup_under_guard(
 
 fn execute_cache_cleanup_inner(
     home: &MorphirHome,
+    guard: &MaintenanceGuard,
     plan: &CleanupPlan,
     ownership: &[CacheNamespace],
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let trash = open_maintenance_trash(home)?;
+    let home_dir = guard.home_dir();
+    let trash = open_maintenance_trash(home, home_dir)?;
     let recovered = sweep_existing_trash(&trash, limits)?;
-    let inventories =
-        inventory_for_execution(home, ownership, inventory_limits, plan, limits.max_removals)?;
+    let inventories = inventory_for_execution(
+        home,
+        home_dir,
+        ownership,
+        inventory_limits,
+        plan,
+        limits.max_removals,
+    )?;
     let selected = plan
         .decisions()
         .iter()
@@ -371,6 +381,7 @@ fn execute_cache_cleanup_inner(
                 match remove_revalidated_entry(
                     RemovalTarget {
                         home,
+                        home_dir,
                         namespace: entry.namespace(),
                         relative: entry.path(),
                         expected: handle,

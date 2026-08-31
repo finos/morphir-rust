@@ -1,12 +1,13 @@
 use super::{CacheMaintenanceState, CacheMaintenanceStateError};
 use crate::home::MorphirHome;
-#[cfg(unix)]
-use cap_fs_ext::OpenOptionsMaybeDirExt;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+#[cfg(unix)]
+use cap_fs_ext::{OpenOptionsMaybeDirExt, OpenOptionsSyncExt};
 use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt as CapMetadataExt;
 use cap_std::fs::{Dir, Metadata as CapMetadata, OpenOptions as CapOpenOptions};
+#[cfg(test)]
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -37,8 +38,40 @@ const MAX_CACHE_MAINTENANCE_STATE_BYTES: u64 = 64 * 1024;
 pub fn load_cache_maintenance_state(
     home: &MorphirHome,
 ) -> Result<CacheMaintenanceState, CacheMaintenanceStateError> {
+    let root = match Dir::open_ambient_dir(home.root(), ambient_authority()) {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CacheMaintenanceState::default());
+        }
+        Err(source) => return Err(io_error(home.root(), source)),
+    };
+    load_cache_maintenance_state_from_home(home, &root)
+}
+
+pub(super) fn load_cache_maintenance_state_under_guard(
+    home: &MorphirHome,
+    guard: &super::super::executor::MaintenanceGuard,
+) -> Result<CacheMaintenanceState, CacheMaintenanceStateError> {
+    load_cache_maintenance_state_from_home(home, guard.home_dir())
+}
+
+fn load_cache_maintenance_state_from_home(
+    home: &MorphirHome,
+    root: &Dir,
+) -> Result<CacheMaintenanceState, CacheMaintenanceStateError> {
+    load_cache_maintenance_state_from_home_with_hook(home, root, || {})
+}
+
+fn load_cache_maintenance_state_from_home_with_hook<F>(
+    home: &MorphirHome,
+    root: &Dir,
+    after_metadata: F,
+) -> Result<CacheMaintenanceState, CacheMaintenanceStateError>
+where
+    F: FnOnce(),
+{
     let path = home.cache_maintenance_state_file();
-    let Some(maintenance) = open_state_directory(home)? else {
+    let Some(maintenance) = open_state_directory(home, root)? else {
         return Ok(CacheMaintenanceState::default());
     };
     let metadata = match maintenance.symlink_metadata("cache-cleanup.json") {
@@ -51,8 +84,11 @@ pub fn load_cache_maintenance_state(
         }
         Err(source) => return Err(io_error(&path, source)),
     };
+    after_metadata();
     let mut options = CapOpenOptions::new();
     options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    options.nonblock(true);
     let file = maintenance
         .open_with("cache-cleanup.json", &options)
         .map_err(|source| io_error(&path, source))?;
@@ -92,13 +128,11 @@ pub fn load_cache_maintenance_state(
     Ok(state)
 }
 
-fn open_state_directory(home: &MorphirHome) -> Result<Option<Dir>, CacheMaintenanceStateError> {
-    let root = match Dir::open_ambient_dir(home.root(), ambient_authority()) {
-        Ok(root) => root,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(io_error(home.root(), source)),
-    };
-    let Some(data) = open_existing_directory(&root, "data", &home.data_dir())? else {
+fn open_state_directory(
+    home: &MorphirHome,
+    root: &Dir,
+) -> Result<Option<Dir>, CacheMaintenanceStateError> {
+    let Some(data) = open_existing_directory(root, "data", &home.data_dir())? else {
         return Ok(None);
     };
     let maintenance_path = home.data_dir().join("maintenance");
@@ -148,20 +182,36 @@ pub fn save_cache_maintenance_state(
     home: &MorphirHome,
     state: &CacheMaintenanceState,
 ) -> Result<(), CacheMaintenanceStateError> {
-    let _guard = super::super::executor::MaintenanceGuard::acquire(home)
+    let guard = super::super::executor::MaintenanceGuard::acquire(home)
         .map_err(CacheMaintenanceStateError::Coordination)?;
-    save_cache_maintenance_state_under_guard(home, state)
+    save_cache_maintenance_state_under_guard(home, state, &guard)
 }
 
 pub(super) fn save_cache_maintenance_state_under_guard(
     home: &MorphirHome,
     state: &CacheMaintenanceState,
+    guard: &super::super::executor::MaintenanceGuard,
 ) -> Result<(), CacheMaintenanceStateError> {
-    save_cache_maintenance_state_with_hook(home, state, || {})
+    save_cache_maintenance_state_with_home_hook(home, guard.home_dir(), state, || {})
 }
 
+#[cfg(test)]
 fn save_cache_maintenance_state_with_hook<F>(
     home: &MorphirHome,
+    state: &CacheMaintenanceState,
+    after_open: F,
+) -> Result<(), CacheMaintenanceStateError>
+where
+    F: FnOnce(),
+{
+    let guard = super::super::executor::MaintenanceGuard::acquire(home)
+        .map_err(CacheMaintenanceStateError::Coordination)?;
+    save_cache_maintenance_state_with_home_hook(home, guard.home_dir(), state, after_open)
+}
+
+fn save_cache_maintenance_state_with_home_hook<F>(
+    home: &MorphirHome,
+    root: &Dir,
     state: &CacheMaintenanceState,
     after_open: F,
 ) -> Result<(), CacheMaintenanceStateError>
@@ -172,7 +222,7 @@ where
     let parent = path
         .parent()
         .expect("cache maintenance state path has a parent");
-    let maintenance = create_state_directory(home, parent)?;
+    let maintenance = create_state_directory(home, root, parent)?;
     validate_state_destination(&maintenance, &path)?;
     after_open();
 
@@ -205,58 +255,15 @@ where
 
 fn create_state_directory(
     home: &MorphirHome,
+    root: &Dir,
     maintenance: &Path,
 ) -> Result<Dir, CacheMaintenanceStateError> {
-    create_directory_tree_durably(home.root())?;
-    let root = Dir::open_ambient_dir(home.root(), ambient_authority())
-        .map_err(|source| io_error(home.root(), source))?;
     let data_path = home.data_dir();
-    let data = open_or_create_state_directory(&root, "data", &data_path)?;
-    sync_state_directory(&root, home.root())?;
+    let data = open_or_create_state_directory(root, "data", &data_path)?;
+    sync_state_directory(root, home.root())?;
     let maintenance = open_or_create_state_directory(&data, "maintenance", maintenance)?;
     sync_state_directory(&data, &data_path)?;
     Ok(maintenance)
-}
-
-fn create_directory_tree_durably(path: &Path) -> Result<(), CacheMaintenanceStateError> {
-    create_directory_tree_durably_with(path, sync_ambient_directory)
-}
-
-fn create_directory_tree_durably_with<F>(
-    path: &Path,
-    mut sync_parent: F,
-) -> Result<(), CacheMaintenanceStateError>
-where
-    F: FnMut(&Path) -> Result<(), CacheMaintenanceStateError>,
-{
-    let mut missing = Vec::new();
-    let mut candidate = Some(path);
-    while let Some(directory) = candidate {
-        match fs::symlink_metadata(directory) {
-            Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                missing.push(directory.to_path_buf());
-                candidate = directory.parent();
-            }
-            Err(source) => return Err(io_error(directory, source)),
-        }
-    }
-
-    fs::create_dir_all(path).map_err(|source| io_error(path, source))?;
-    // Persist each new directory entry from the leaf toward the nearest
-    // pre-existing ancestor so no durable parent depends on a lost child.
-    for directory in missing {
-        if let Some(parent) = directory.parent() {
-            sync_parent(parent)?;
-        }
-    }
-    Ok(())
-}
-
-fn sync_ambient_directory(path: &Path) -> Result<(), CacheMaintenanceStateError> {
-    let directory = Dir::open_ambient_dir(path, ambient_authority())
-        .map_err(|source| io_error(path, source))?;
-    sync_state_directory(&directory, path)
 }
 
 fn open_or_create_state_directory(
@@ -440,23 +447,29 @@ fn io_error(path: &Path, source: std::io::Error) -> CacheMaintenanceStateError {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
-    fn durable_directory_creation_syncs_new_entries_from_leaf_to_existing_ancestor() {
-        let existing = tempfile::tempdir().unwrap();
-        let home = existing.path().join("suite").join("home");
-        let mut synced = Vec::new();
+    fn state_open_rejects_a_fifo_swapped_in_after_metadata_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
 
-        create_directory_tree_durably_with(&home, |parent| {
-            synced.push(parent.to_path_buf());
-            Ok(())
+        let directory = tempfile::tempdir().unwrap();
+        let home = MorphirHome::resolve_from(Some(directory.path().as_os_str()), None).unwrap();
+        save_cache_maintenance_state(&home, &CacheMaintenanceState::default()).unwrap();
+        let path = home.cache_maintenance_state_file();
+        let root = Dir::open_ambient_dir(home.root(), ambient_authority()).unwrap();
+
+        let error = load_cache_maintenance_state_from_home_with_hook(&home, &root, || {
+            fs::remove_file(&path).unwrap();
+            let path_bytes = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: `path_bytes` is NUL-terminated and remains valid for the call.
+            assert_eq!(unsafe { libc::mkfifo(path_bytes.as_ptr(), 0o600) }, 0);
         })
-        .unwrap();
+        .unwrap_err();
 
-        assert!(home.is_dir());
-        assert_eq!(
-            synced,
-            vec![existing.path().join("suite"), existing.path().to_path_buf()]
-        );
+        assert!(matches!(
+            error,
+            CacheMaintenanceStateError::UnsafePath { .. }
+        ));
     }
 
     #[test]

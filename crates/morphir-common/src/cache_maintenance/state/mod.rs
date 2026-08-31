@@ -41,9 +41,20 @@ impl<'home> AutomaticCacheMaintenanceTransaction<'home> {
     pub fn begin(
         home: &'home crate::home::MorphirHome,
     ) -> Result<Self, CacheMaintenanceStateError> {
+        Self::begin_with_hook(home, || {})
+    }
+
+    fn begin_with_hook<F>(
+        home: &'home crate::home::MorphirHome,
+        after_lock: F,
+    ) -> Result<Self, CacheMaintenanceStateError>
+    where
+        F: FnOnce(),
+    {
         let guard = super::executor::MaintenanceGuard::acquire(home)
             .map_err(CacheMaintenanceStateError::Coordination)?;
-        let state = persistence::load_cache_maintenance_state(home)?;
+        after_lock();
+        let state = persistence::load_cache_maintenance_state_under_guard(home, &guard)?;
         Ok(Self {
             home,
             state,
@@ -66,6 +77,7 @@ impl<'home> AutomaticCacheMaintenanceTransaction<'home> {
     ) -> Result<super::CacheExecutionReport, super::CacheExecutionError> {
         super::executor::execute_cache_cleanup_under_guard(
             self.home,
+            &self._guard,
             plan,
             ownership,
             inventory_limits,
@@ -75,7 +87,7 @@ impl<'home> AutomaticCacheMaintenanceTransaction<'home> {
 
     /// Durably replace state and release exclusive suite coordination.
     pub fn finish(self, state: CacheMaintenanceState) -> Result<(), CacheMaintenanceStateError> {
-        persistence::save_cache_maintenance_state_under_guard(self.home, &state)
+        persistence::save_cache_maintenance_state_under_guard(self.home, &state, &self._guard)
     }
 }
 
@@ -123,4 +135,59 @@ pub enum CacheMaintenanceStateError {
         #[source]
         source: std::io::Error,
     },
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::home::MorphirHome;
+
+    #[test]
+    fn automatic_transaction_stays_with_the_pinned_home_when_its_path_is_replaced() {
+        let container = tempfile::tempdir().unwrap();
+        let active = container.path().join("active");
+        let pinned = container.path().join("pinned");
+        std::fs::create_dir(&active).unwrap();
+        let home = MorphirHome::resolve_from(Some(active.as_os_str()), None).unwrap();
+        persistence::save_cache_maintenance_state(
+            &home,
+            &CacheMaintenanceState::default().completed(11),
+        )
+        .unwrap();
+
+        let transaction = AutomaticCacheMaintenanceTransaction::begin_with_hook(&home, || {
+            std::fs::rename(&active, &pinned).unwrap();
+            std::fs::create_dir(&active).unwrap();
+            let replacement = MorphirHome::resolve_from(Some(active.as_os_str()), None).unwrap();
+            persistence::save_cache_maintenance_state(
+                &replacement,
+                &CacheMaintenanceState::default().completed(22),
+            )
+            .unwrap();
+        })
+        .unwrap();
+
+        assert_eq!(
+            transaction.state().last_successful_automatic_run(),
+            Some(11)
+        );
+        transaction
+            .finish(CacheMaintenanceState::default().completed(33))
+            .unwrap();
+
+        let pinned_home = MorphirHome::resolve_from(Some(pinned.as_os_str()), None).unwrap();
+        let replacement_home = MorphirHome::resolve_from(Some(active.as_os_str()), None).unwrap();
+        assert_eq!(
+            persistence::load_cache_maintenance_state(&pinned_home)
+                .unwrap()
+                .last_successful_automatic_run(),
+            Some(33)
+        );
+        assert_eq!(
+            persistence::load_cache_maintenance_state(&replacement_home)
+                .unwrap()
+                .last_successful_automatic_run(),
+            Some(22)
+        );
+    }
 }

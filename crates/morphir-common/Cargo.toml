@@ -55,6 +55,9 @@ cucumber = "0.23"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [[test]]
 name = "streaming_migration_acceptance"
 harness = false

@@ -10,7 +10,7 @@ mod diagnostic;
 pub use diagnostic::{SchemaDiagnostic, SchemaGenerationError};
 
 use morphir_extension_sdk::{
-    Backend, BackendCapability, DiagnosticSeverity, Extension, ExtensionCapabilities,
+    Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension, ExtensionCapabilities,
     ExtensionError, ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult,
 };
 
@@ -92,14 +92,26 @@ morphir_extension_sdk::export_extension!(OpenApiExtension, backend);
 ///
 /// Target dispatch runs first: an unadvertised target is a backend-domain
 /// failure, not a protocol failure, and never falls back to a default target.
+/// A malformed-IR failure keeps `morphir_projection::NormalizeError`'s own
+/// stable code, matching `morphir-avro-extension`'s `generate_request`, so a
+/// caller branching on the code can tell bad IR from a bad backend option.
 pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, SchemaGenerationError> {
     let Some(_target) = Target::parse(&request.target) else {
-        return Ok(failed(SchemaDiagnostic::unknown_target(&request.target)));
+        return Ok(failed(
+            SchemaDiagnostic::unknown_target(&request.target)
+                .into_diagnostic(DiagnosticSeverity::Error),
+        ));
     };
     let _package = match morphir_projection::normalize(&request.ir) {
         Ok(package) => package,
         Err(error) => {
-            return Ok(failed(SchemaDiagnostic::invalid_option(error.to_string())));
+            return Ok(failed(Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: Some(error.code().into()),
+                message: error.to_string(),
+                location: None,
+                related: Vec::new(),
+            }));
         }
     };
     Ok(GenerateResult {
@@ -109,10 +121,10 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
     })
 }
 
-fn failed(diagnostic: SchemaDiagnostic) -> GenerateResult {
+fn failed(diagnostic: Diagnostic) -> GenerateResult {
     GenerateResult {
         success: false,
         artifacts: Vec::new(),
-        diagnostics: vec![diagnostic.into_diagnostic(DiagnosticSeverity::Error)],
+        diagnostics: vec![diagnostic],
     }
 }

@@ -62,5 +62,14 @@ fn reports_an_ir_error_rather_than_panicking() {
 
     assert!(!result.success);
     assert!(result.artifacts.is_empty());
-    assert!(!result.diagnostics.is_empty());
+    let diagnostic = result
+        .diagnostics
+        .first()
+        .expect("malformed IR reports a diagnostic");
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    // The normalization error keeps its own stable code so a caller can tell
+    // bad IR apart from a bad backend option (JSC002), rather than both
+    // collapsing onto the same code.
+    assert_eq!(diagnostic.code.as_deref(), Some("missing_format_version"));
+    assert_ne!(diagnostic.code.as_deref(), Some("JSC002"));
 }

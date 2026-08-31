@@ -55,44 +55,14 @@ pub(super) fn validate_method_result(
         return validate_generate_result(value);
     }
     if method == methods::COMPILE {
-        let result: CompileResult = serde_json::from_value(value.clone())?;
-        if result.success && result.ir_version.is_none() {
-            return Err(DaemonError::Extension(
-                "Successful compile result is missing irVersion".into(),
-            ));
-        }
-        if result.success && result.ir.is_none() {
-            return Err(DaemonError::Extension(
-                "Successful compile result is missing ir".into(),
-            ));
-        }
-        if result.success {
-            let request: CompileRequest = serde_json::from_value(request_params.clone())?;
-            let result_version = result
-                .ir_version
-                .as_deref()
-                .expect("successful result version was validated");
-            if result_version != request.options.ir_version {
-                return Err(DaemonError::Extension(format!(
-                    "Successful compile result irVersion '{result_version}' did not match requested irVersion '{}'",
-                    request.options.ir_version
-                )));
-            }
-            validate_compile_ir(
-                result
-                    .ir
-                    .as_ref()
-                    .expect("successful result IR was validated"),
-                &request.options.ir_version,
-            )?;
-        }
+        return validate_compile_result(request_params, value);
     }
     Ok(value)
 }
 
 pub(in crate::extensions) async fn validate_method_result_async(
     method: &str,
-    request_params: &serde_json::Value,
+    request_params: serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
     if method == methods::GENERATE {
@@ -104,7 +74,54 @@ pub(in crate::extensions) async fn validate_method_result_async(
                 ))
             })?;
     }
-    validate_method_result(method, request_params, value)
+    if method == methods::COMPILE {
+        return tokio::task::spawn_blocking(move || {
+            validate_compile_result(&request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            DaemonError::Extension(format!("Compile result validation worker failed: {error}"))
+        })?;
+    }
+    validate_method_result(method, &request_params, value)
+}
+
+fn validate_compile_result(
+    request_params: &serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let result: CompileResult = serde_json::from_value(value.clone())?;
+    if result.success && result.ir_version.is_none() {
+        return Err(DaemonError::Extension(
+            "Successful compile result is missing irVersion".into(),
+        ));
+    }
+    if result.success && result.ir.is_none() {
+        return Err(DaemonError::Extension(
+            "Successful compile result is missing ir".into(),
+        ));
+    }
+    if result.success {
+        let request: CompileRequest = serde_json::from_value(request_params.clone())?;
+        let result_version = result
+            .ir_version
+            .as_deref()
+            .expect("successful result version was validated");
+        if result_version != request.options.ir_version {
+            return Err(DaemonError::Extension(format!(
+                "Successful compile result irVersion '{result_version}' did not match requested irVersion '{}'",
+                request.options.ir_version
+            )));
+        }
+        validate_compile_ir(
+            result
+                .ir
+                .as_ref()
+                .expect("successful result IR was validated"),
+            &request.options.ir_version,
+        )?;
+    }
+    Ok(value)
 }
 
 fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
@@ -458,9 +475,32 @@ mod tests {
         let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
         let validation_tx = order_tx.clone();
         let validation = tokio::spawn(async move {
-            validate_method_result_async(methods::GENERATE, &serde_json::json!({}), value)
+            validate_method_result_async(methods::GENERATE, serde_json::json!({}), value)
                 .await
                 .expect("large binary artifact should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn compile_validation_runs_off_the_async_worker() {
+        let request = compile_request("3");
+        let mut value =
+            successful_result("3", serde_json::json!(["Library", [], [], {"modules": []}]));
+        value["modules"] = serde_json::json!(["M".repeat(8 * 1024 * 1024)]);
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::COMPILE, request, value)
+                .await
+                .expect("large compile result should validate");
             validation_tx.send("validation").unwrap();
         });
         tokio::spawn(async move {

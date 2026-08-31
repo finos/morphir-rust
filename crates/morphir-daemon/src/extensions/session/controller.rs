@@ -244,7 +244,7 @@ impl<T: MepTransport, S> Session<T, S> {
             Err(error) => return CallOutcome::Transport(error),
         };
         match validate_response(response, id) {
-            Ok(value) => match validate_method_result_async(method, &request_params, value)
+            Ok(value) => match validate_method_result_async(method, request_params, value)
                 .await
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
             {

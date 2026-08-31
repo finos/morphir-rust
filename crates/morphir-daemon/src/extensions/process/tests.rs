@@ -103,7 +103,7 @@ fn compatibility_negotiation_retains_disabled_generate_support() {
 async fn compatibility_invoke_rejects_unsafe_generated_artifacts() {
     let error = validate_compatibility_method_result(
         methods::GENERATE,
-        &serde_json::json!({}),
+        serde_json::json!({}),
         serde_json::json!({
             "success": true,
             "artifacts": [{"path": "../../escape.avsc", "content": "{}"}],

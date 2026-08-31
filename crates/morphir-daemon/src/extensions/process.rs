@@ -357,7 +357,7 @@ impl ExtensionSession for SpawnedProcessSession {
 
         let request_params = params.clone();
         let value: serde_json::Value = self.call(method, params).await?;
-        match validate_compatibility_method_result(method, &request_params, value).await {
+        match validate_compatibility_method_result(method, request_params, value).await {
             Ok(value) => Ok(value),
             Err(error) => Err(self.abort_with_error(error).await),
         }
@@ -403,7 +403,7 @@ fn validate_compatibility_initialization(
 
 async fn validate_compatibility_method_result(
     method: &str,
-    request_params: &serde_json::Value,
+    request_params: serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
     validate_method_result_async(method, request_params, value).await

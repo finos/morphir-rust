@@ -207,7 +207,7 @@ fn create_state_directory(
     home: &MorphirHome,
     maintenance: &Path,
 ) -> Result<Dir, CacheMaintenanceStateError> {
-    fs::create_dir_all(home.root()).map_err(|source| io_error(home.root(), source))?;
+    create_directory_tree_durably(home.root())?;
     let root = Dir::open_ambient_dir(home.root(), ambient_authority())
         .map_err(|source| io_error(home.root(), source))?;
     let data_path = home.data_dir();
@@ -216,6 +216,47 @@ fn create_state_directory(
     let maintenance = open_or_create_state_directory(&data, "maintenance", maintenance)?;
     sync_state_directory(&data, &data_path)?;
     Ok(maintenance)
+}
+
+fn create_directory_tree_durably(path: &Path) -> Result<(), CacheMaintenanceStateError> {
+    create_directory_tree_durably_with(path, sync_ambient_directory)
+}
+
+fn create_directory_tree_durably_with<F>(
+    path: &Path,
+    mut sync_parent: F,
+) -> Result<(), CacheMaintenanceStateError>
+where
+    F: FnMut(&Path) -> Result<(), CacheMaintenanceStateError>,
+{
+    let mut missing = Vec::new();
+    let mut candidate = Some(path);
+    while let Some(directory) = candidate {
+        match fs::symlink_metadata(directory) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(directory.to_path_buf());
+                candidate = directory.parent();
+            }
+            Err(source) => return Err(io_error(directory, source)),
+        }
+    }
+
+    fs::create_dir_all(path).map_err(|source| io_error(path, source))?;
+    // Persist each new directory entry from the leaf toward the nearest
+    // pre-existing ancestor so no durable parent depends on a lost child.
+    for directory in missing {
+        if let Some(parent) = directory.parent() {
+            sync_parent(parent)?;
+        }
+    }
+    Ok(())
+}
+
+fn sync_ambient_directory(path: &Path) -> Result<(), CacheMaintenanceStateError> {
+    let directory = Dir::open_ambient_dir(path, ambient_authority())
+        .map_err(|source| io_error(path, source))?;
+    sync_state_directory(&directory, path)
 }
 
 fn open_or_create_state_directory(
@@ -398,6 +439,25 @@ fn io_error(path: &Path, source: std::io::Error) -> CacheMaintenanceStateError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_directory_creation_syncs_new_entries_from_leaf_to_existing_ancestor() {
+        let existing = tempfile::tempdir().unwrap();
+        let home = existing.path().join("suite").join("home");
+        let mut synced = Vec::new();
+
+        create_directory_tree_durably_with(&home, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(home.is_dir());
+        assert_eq!(
+            synced,
+            vec![existing.path().join("suite"), existing.path().to_path_buf()]
+        );
+    }
 
     #[test]
     fn save_stays_with_the_pinned_directory_when_its_path_is_replaced() {

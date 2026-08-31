@@ -43,7 +43,7 @@ pub use model::{
 };
 pub use planner::{CachePlanError, plan_cache_cleanup};
 pub use state::{
-    AutomaticCacheCleanupDecision, CacheCleanupCursor, CacheMaintenanceState,
-    CacheMaintenanceStateError, automatic_cache_cleanup_decision, load_cache_maintenance_state,
-    save_cache_maintenance_state,
+    AutomaticCacheCleanupDecision, AutomaticCacheMaintenanceTransaction, CacheCleanupCursor,
+    CacheMaintenanceState, CacheMaintenanceStateError, automatic_cache_cleanup_decision,
+    load_cache_maintenance_state, save_cache_maintenance_state,
 };

@@ -240,6 +240,17 @@ pub fn execute_cache_cleanup(
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
+    let _guard = MaintenanceGuard::acquire(home)?;
+    execute_cache_cleanup_under_guard(home, plan, ownership, inventory_limits, limits)
+}
+
+pub(crate) fn execute_cache_cleanup_under_guard(
+    home: &MorphirHome,
+    plan: &CleanupPlan,
+    ownership: &[CacheNamespace],
+    inventory_limits: CacheInventoryLimits,
+    limits: CacheExecutionLimits,
+) -> Result<CacheExecutionReport, CacheExecutionError> {
     let selected_entries = plan
         .decisions()
         .iter()
@@ -291,7 +302,6 @@ fn execute_cache_cleanup_inner(
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let _guard = MaintenanceGuard::acquire(home)?;
     let trash = open_maintenance_trash(home)?;
     let recovered = sweep_existing_trash(&trash, limits)?;
     let inventories =

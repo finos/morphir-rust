@@ -1,6 +1,8 @@
 use morphir_common::cache_maintenance::{
-    AutomaticCacheCleanupDecision, CacheCleanupCursor, CacheMaintenanceState,
-    automatic_cache_cleanup_decision, load_cache_maintenance_state, save_cache_maintenance_state,
+    AutomaticCacheCleanupDecision, AutomaticCacheMaintenanceTransaction, CacheCleanupCursor,
+    CacheExecutionLimits, CacheInventoryLimits, CacheMaintenanceState, CacheNamespace, CachePolicy,
+    CleanupMode, automatic_cache_cleanup_decision, inventory_cache_namespace,
+    load_cache_maintenance_state, plan_cache_cleanup, save_cache_maintenance_state,
 };
 use morphir_common::home::MorphirHome;
 use std::time::Duration;
@@ -138,6 +140,48 @@ fn concurrent_first_saves_share_directory_initialization() {
         save.join().unwrap().unwrap();
     }
     assert!(load_cache_maintenance_state(&home).is_ok());
+}
+
+#[test]
+fn automatic_transaction_holds_coordination_across_load_execution_and_save() {
+    let (_directory, home) = a_morphir_home();
+    let cache_file = home.cache_dir().join("downloads/old.pkg");
+    std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
+    std::fs::write(&cache_file, b"old").unwrap();
+    let namespace = CacheNamespace::new("downloads")
+        .unwrap()
+        .with_disposable("old.pkg", 1)
+        .unwrap();
+    let inventory =
+        inventory_cache_namespace(&home, &namespace, CacheInventoryLimits::default()).unwrap();
+    let plan = plan_cache_cleanup(
+        inventory,
+        CachePolicy::new(Duration::from_secs(1), 0),
+        10,
+        CleanupMode::All,
+    )
+    .unwrap();
+    let transaction = AutomaticCacheMaintenanceTransaction::begin(&home).unwrap();
+    let completed = transaction.state().clone().completed(10);
+
+    let report = transaction
+        .execute_cleanup(
+            &plan,
+            std::slice::from_ref(&namespace),
+            CacheInventoryLimits::default(),
+            CacheExecutionLimits::new(1, 1024).unwrap(),
+        )
+        .unwrap();
+    transaction.finish(completed).unwrap();
+
+    assert_eq!(report.removed_bytes(), 3);
+    assert!(!cache_file.exists());
+    assert_eq!(
+        load_cache_maintenance_state(&home)
+            .unwrap()
+            .last_successful_automatic_run(),
+        Some(10)
+    );
 }
 
 #[test]

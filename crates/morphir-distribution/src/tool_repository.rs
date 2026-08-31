@@ -420,10 +420,16 @@ fn validate_release_custom(
         .iter()
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
+    let custom_channels = custom
+        .channels
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
     let valid = custom.schema_version == 1
         && custom.kind == "tool-release"
         && custom.tool_id == *record.tool_id()
         && custom.version == *record.version()
+        && custom_channels.len() == custom.channels.len()
         && (custom.status == ToolReleaseStatus::Active || custom.channels.is_empty())
         && (custom.status == ToolReleaseStatus::Revoked || !record.artifacts().is_empty())
         && custom.compatibility.morphir_cli == *record.morphir_cli_requirement()
@@ -796,6 +802,30 @@ mod release_state_tests {
         let error = authenticate_release(
             "releases/desktop/1.0.0.json",
             yanked_targets(&["stable"]),
+            an_active_descriptor(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("authenticated release state"));
+    }
+
+    #[test]
+    fn authenticated_targets_reject_duplicate_channels() {
+        let targets: ToolReleaseCustom = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "tool-release",
+            "toolId": "desktop",
+            "version": "1.0.0",
+            "channels": ["stable", "stable"],
+            "status": "active",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "platforms": [{ "os": "linux", "arch": "x86_64" }]
+        }))
+        .unwrap();
+
+        let error = authenticate_release(
+            "releases/desktop/1.0.0.json",
+            targets,
             an_active_descriptor(),
         )
         .unwrap_err();

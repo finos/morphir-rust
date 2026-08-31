@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handles the Windows reserved device names. Decoding accepts the uppercase encoding, the case-free
   doubled-hyphen alternative, and the legacy v1-v3 array; `CANONICAL_STYLE` selects which is written
 
+### Fixed
+
+- Avro extension artifact packaging now preserves `gitCommit` provenance in clean tagged builds by
+  preventing Python bytecode caches from making the checkout appear dirty (#130).
+
 ### Added
 
 - A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro

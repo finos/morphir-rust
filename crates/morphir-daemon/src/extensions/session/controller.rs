@@ -9,6 +9,7 @@ use crate::extensions::protocol::{
     ExtensionRequest, InitializeParams, InitializeResult, error_codes, methods,
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
+use morphir_workspace::{DiscoveryRequest, WORKSPACE_DISCOVERY_PROTOCOL};
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
@@ -79,6 +80,23 @@ impl NegotiatedSession {
             }
             _ => true,
         }
+    }
+
+    pub(crate) fn supports_invocation(&self, method: &str, params: &serde_json::Value) -> bool {
+        if method != methods::WORKSPACE_DISCOVER {
+            return true;
+        }
+        let Some(workspace) = self.capabilities.workspace.as_ref() else {
+            return false;
+        };
+        serde_json::from_value::<DiscoveryRequest>(params.clone())
+            .ok()
+            .is_some_and(|request| {
+                request.protocol_version == WORKSPACE_DISCOVERY_PROTOCOL
+                    && workspace
+                        .protocol_versions
+                        .contains(&request.protocol_version)
+            })
     }
 }
 
@@ -172,6 +190,19 @@ impl<T: MepTransport> Session<T, Ready> {
                 self,
                 DaemonError::Extension(format!(
                     "RPC error {}: Extension does not support capability '{method}'",
+                    error_codes::CAPABILITY_UNAVAILABLE
+                )),
+            );
+        }
+        let params = match serde_json::to_value(params) {
+            Ok(params) => params,
+            Err(error) => return InvokeOutcome::Rejected(self, error.into()),
+        };
+        if !self.negotiated().supports_invocation(method, &params) {
+            return InvokeOutcome::Rejected(
+                self,
+                DaemonError::Extension(format!(
+                    "RPC error {}: Extension does not support capability '{method}' for the requested protocol",
                     error_codes::CAPABILITY_UNAVAILABLE
                 )),
             );

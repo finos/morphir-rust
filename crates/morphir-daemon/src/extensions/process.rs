@@ -354,6 +354,14 @@ impl ExtensionSession for SpawnedProcessSession {
                 method
             )));
         }
+        if !ready.negotiated.supports_invocation(method, &params) {
+            return Err(DaemonError::Extension(format!(
+                "RPC error {}: Extension '{}' does not support capability '{}' for the requested protocol",
+                error_codes::CAPABILITY_UNAVAILABLE,
+                ready.negotiated.extension().id,
+                method
+            )));
+        }
 
         let request_params = params.clone();
         let value: serde_json::Value = self.call(method, params).await?;

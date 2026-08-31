@@ -112,9 +112,9 @@ fn workspace_initialization(discover: bool, protocol_versions: Vec<u32>) -> Init
     result
 }
 
-fn workspace_discovery_request() -> serde_json::Value {
+fn workspace_discovery_request(protocol_version: u32) -> serde_json::Value {
     serde_json::json!({
-        "protocolVersion": 1,
+        "protocolVersion": protocol_version,
         "developmentRoot": {"entries": {}},
         "morphirHome": null,
         "systemConfig": null,
@@ -740,7 +740,10 @@ async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
             .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
         match session
-            .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request())
+            .invoke::<serde_json::Value>(
+                methods::WORKSPACE_DISCOVER,
+                workspace_discovery_request(1),
+            )
             .await
         {
             InvokeOutcome::Rejected(session, error) => {
@@ -753,6 +756,30 @@ async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
             InvokeOutcome::Failed(failure) => {
                 panic!("local rejection should preserve Ready: {}", failure.error())
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejects_an_unsupported_workspace_request_protocol_without_sending() {
+    let initialized = ExtensionResponse::success(1, workspace_initialization(true, vec![1]))
+        .expect("workspace initialization should serialize");
+    let session = Session::loaded(scripted_transport([initialized]))
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
+
+    match session
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(2))
+        .await
+    {
+        InvokeOutcome::Rejected(session, error) => {
+            assert!(error.to_string().contains("does not support capability"));
+            assert_eq!(session.transport_internal().requests.len(), 1);
+        }
+        InvokeOutcome::Success(_, _) => panic!("protocol 2 must be rejected locally"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("local rejection should preserve Ready: {}", failure.error())
         }
     }
 }
@@ -779,7 +806,7 @@ async fn permits_workspace_discovery_for_protocol_v1() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request())
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(1))
         .await
     {
         InvokeOutcome::Success(session, result) => {
@@ -817,7 +844,7 @@ async fn malformed_workspace_discovery_result_fails_the_session() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request())
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(1))
         .await
     {
         InvokeOutcome::Failed(failure) => {

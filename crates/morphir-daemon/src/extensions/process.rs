@@ -5,12 +5,12 @@ use crate::extensions::protocol::{
     InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
 use crate::extensions::session::{
-    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
-    Stopped, TransportError, TransportState, validate_negotiation,
+    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport,
+    NegotiatedSession, Session, Stopped, TransportError, TransportState, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 use serde::{Serialize, de::DeserializeOwned};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
@@ -230,8 +230,12 @@ impl ProcessLaunch {
 
 enum ProcessSessionData {
     Starting,
-    Ready(Box<InitializeResult>),
+    Ready(Box<CompatibilityReady>),
     Stopped,
+}
+
+struct CompatibilityReady {
+    negotiated: NegotiatedSession,
 }
 
 /// A runtime-erased MEP session carried over a child process's standard streams.
@@ -333,7 +337,7 @@ impl SpawnedProcessSession {
             .map_err(DaemonError::from)
     }
 
-    fn ready_session(&self) -> Result<&InitializeResult> {
+    fn ready_session(&self) -> Result<&CompatibilityReady> {
         match &self.state {
             ProcessSessionData::Ready(initialized) => Ok(initialized),
             ProcessSessionData::Starting | ProcessSessionData::Stopped => Err(
@@ -640,16 +644,17 @@ impl ExtensionSession for SpawnedProcessSession {
 
         let offered_versions = params.protocol_versions.clone();
         let initialized: InitializeResult = self.call(methods::INITIALIZE, params).await?;
-        let validation = validate_compatibility_initialization(
+        let negotiated = validate_compatibility_initialization(
             self.expected_extension(),
             &offered_versions,
             initialized.clone(),
         );
-        if let Err(error) = validation {
-            return Err(self.abort_with_error(error).await);
-        }
+        let negotiated = match negotiated {
+            Ok(negotiated) => negotiated,
+            Err(error) => return Err(self.abort_with_error(error).await),
+        };
 
-        self.state = ProcessSessionData::Ready(Box::new(initialized.clone()));
+        self.state = ProcessSessionData::Ready(Box::new(CompatibilityReady { negotiated }));
         Ok(initialized)
     }
 
@@ -658,7 +663,7 @@ impl ExtensionSession for SpawnedProcessSession {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let initialized = self.ready_session()?;
+        let ready = self.ready_session()?;
         if matches!(
             method,
             methods::INITIALIZE | methods::SHUTDOWN | methods::EXIT
@@ -668,13 +673,11 @@ impl ExtensionSession for SpawnedProcessSession {
                 method
             )));
         }
-        if let Some(required) = required_capability(method)
-            && !initialized.extension.types.contains(&required)
-        {
+        if !ready.negotiated.supports_method(method) {
             return Err(DaemonError::Extension(format!(
                 "RPC error {}: Extension '{}' does not support capability '{}'",
                 error_codes::CAPABILITY_UNAVAILABLE,
-                initialized.extension.id,
+                ready.negotiated.extension().id,
                 method
             )));
         }
@@ -716,8 +719,8 @@ fn validate_compatibility_initialization(
     expected: ExpectedExtension,
     offered_versions: &[String],
     initialized: InitializeResult,
-) -> Result<()> {
-    validate_negotiation(expected, offered_versions, initialized).map(|_| ())
+) -> Result<NegotiatedSession> {
+    validate_negotiation(expected, offered_versions, initialized)
 }
 
 async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
@@ -850,16 +853,6 @@ fn make_owner_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn required_capability(method: &str) -> Option<ExtensionType> {
-    match method {
-        methods::COMPILE => Some(ExtensionType::Frontend),
-        methods::GENERATE => Some(ExtensionType::Backend),
-        methods::VALIDATE => Some(ExtensionType::Validator),
-        methods::TRANSFORM => Some(ExtensionType::Transform),
-        _ => None,
-    }
-}
-
 async fn write_frame<W, T>(writer: &mut W, value: &T) -> Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -925,7 +918,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use morphir_extension_sdk::{BackendCapability, ExtensionInfo};
+    use morphir_extension_sdk::{BackendCapability, ExtensionInfo, ExtensionType};
     use tokio::io::{BufReader, duplex};
 
     #[test]
@@ -994,6 +987,38 @@ mod tests {
                 .contains("backend capabilities disagreed with discovery"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn compatibility_negotiation_retains_disabled_generate_support() {
+        let extension = ExtensionInfo {
+            id: "example".into(),
+            name: "Example".into(),
+            version: "1.0.0".into(),
+            types: vec![ExtensionType::Backend],
+            ..ExtensionInfo::default()
+        };
+        let initialized = InitializeResult {
+            protocol_version: "0.1".into(),
+            extension: extension.clone(),
+            capabilities: ExtensionCapabilities {
+                backend: Some(BackendCapability {
+                    targets: vec!["avro".into()],
+                    ir_versions: vec!["4".into()],
+                    generate: false,
+                }),
+                ..ExtensionCapabilities::default()
+            },
+        };
+
+        let negotiated = validate_compatibility_initialization(
+            ExpectedExtension::discovered(extension),
+            &["0.1".into()],
+            initialized,
+        )
+        .unwrap();
+
+        assert!(!negotiated.supports_method(methods::GENERATE));
     }
 
     #[tokio::test]

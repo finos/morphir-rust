@@ -46,7 +46,7 @@ impl NegotiatedSession {
         &self.capabilities
     }
 
-    fn supports_method(&self, method: &str) -> bool {
+    pub(crate) fn supports_method(&self, method: &str) -> bool {
         match method {
             methods::COMPILE => {
                 self.extension.types.contains(&ExtensionType::Frontend)

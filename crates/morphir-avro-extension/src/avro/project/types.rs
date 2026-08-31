@@ -75,7 +75,7 @@ impl Projector<'_> {
                 BTreeMap::from([("morphir.collection-kind".to_owned(), json!("set"))]),
             )),
             SDK_DICT if arguments.len() == 2 => {
-                if !is_sdk_string(&arguments[0]) {
+                if !self.dict_key_is_string_compatible(&arguments[0]) {
                     return Err(AvroDiagnostic::unsupported_morphir_type(format!(
                         "Dict key {}",
                         canonical_type(&arguments[0])
@@ -122,6 +122,58 @@ impl Projector<'_> {
                 arguments,
             ),
         }
+    }
+
+    fn dict_key_is_string_compatible(&self, tpe: &TypeExpr) -> bool {
+        self.dict_key_is_string_compatible_inner(tpe, &mut BTreeSet::new())
+    }
+
+    fn dict_key_is_string_compatible_inner(
+        &self,
+        tpe: &TypeExpr,
+        resolving: &mut BTreeSet<String>,
+    ) -> bool {
+        let TypeExpr::Reference {
+            source_name,
+            arguments,
+        } = tpe
+        else {
+            return false;
+        };
+        if let Some(mapping) = self.options.type_mappings.get(source_name) {
+            return mapping.physical_type == "string";
+        }
+        if source_name == SDK_STRING && arguments.is_empty() {
+            return true;
+        }
+        if self.options.aliases != Aliases::Inline {
+            return false;
+        }
+        let identity = canonical_type(tpe);
+        if !resolving.insert(identity.clone()) {
+            return false;
+        }
+        let declaration = self
+            .declarations
+            .get(source_name)
+            .map(|info| info.declaration.clone());
+        let compatible = match declaration {
+            Some(TypeDeclaration::Alias {
+                type_params, value, ..
+            }) if type_params.len() == arguments.len() && !matches!(value, TypeExpr::Record(_)) => {
+                let substitutions = type_params
+                    .into_iter()
+                    .zip(arguments.iter().cloned())
+                    .collect::<BTreeMap<_, _>>();
+                self.dict_key_is_string_compatible_inner(
+                    &substitute(&value, &substitutions),
+                    resolving,
+                )
+            }
+            _ => false,
+        };
+        resolving.remove(&identity);
+        compatible
     }
 
     pub(super) fn project_declared_reference(
@@ -413,14 +465,6 @@ pub(super) fn source_properties(source_name: &str) -> Properties {
         "morphir.fqname".to_owned(),
         Value::String(source_name.to_owned()),
     )])
-}
-
-pub(super) fn is_sdk_string(tpe: &TypeExpr) -> bool {
-    matches!(
-        tpe,
-        TypeExpr::Reference { source_name, arguments }
-            if source_name == SDK_STRING && arguments.is_empty()
-    )
 }
 
 pub(super) fn canonical_type(tpe: &TypeExpr) -> String {

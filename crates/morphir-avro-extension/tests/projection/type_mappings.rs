@@ -170,6 +170,71 @@ fn unit_maybe_list_set_dict_char_and_tuple_use_the_approved_core_mappings() {
 }
 
 #[test]
+fn dict_keys_resolve_inline_aliases_and_explicit_string_mappings() {
+    let alias_key = "acme/customer:customer#user-id";
+    let mapped_key = "acme/customer:customer#external-id";
+    let declarations = vec![
+        alias(
+            alias_key,
+            "user-id",
+            reference("morphir/SDK:string#string", vec![]),
+        ),
+        alias(
+            mapped_key,
+            "external-id",
+            reference("morphir/SDK:basics#int", vec![]),
+        ),
+        alias(
+            "acme/customer:customer#lookups",
+            "lookups",
+            TypeExpr::Record(vec![
+                field(
+                    "by-user",
+                    reference(
+                        "morphir/SDK:dict#dict",
+                        vec![
+                            reference(alias_key, vec![]),
+                            reference("morphir/SDK:basics#int", vec![]),
+                        ],
+                    ),
+                ),
+                field(
+                    "by-external",
+                    reference(
+                        "morphir/SDK:dict#dict",
+                        vec![
+                            reference(mapped_key, vec![]),
+                            reference("morphir/SDK:basics#int", vec![]),
+                        ],
+                    ),
+                ),
+            ]),
+        ),
+    ];
+    let mut options = AvroOptions::default();
+    options.type_mappings.insert(
+        mapped_key.to_owned(),
+        TypeMapping {
+            physical_type: "string".to_owned(),
+            logical_type: None,
+            precision: None,
+            scale: None,
+        },
+    );
+
+    let model = project(&package(declarations), &options).unwrap();
+    let lookups = model
+        .named_schema("acme.customer.customer.Lookups")
+        .unwrap();
+    for field_name in ["byUser", "byExternal"] {
+        assert_eq!(
+            lookups.field(field_name).unwrap().tpe(),
+            &AvroType::Map(Box::new(AvroType::Long), Default::default())
+        );
+    }
+}
+
+#[test]
 fn a_non_sdk_type_named_char_remains_a_named_reference() {
     let source = "acme/customer:domain#char";
     let wrapper = alias(
@@ -376,4 +441,3 @@ fn normalized_full_name_collisions_are_avro003_errors() {
     assert_eq!(error[0].code(), "AVRO003");
     assert!(error[0].message().contains("acme.customer.customer.FooBar"));
 }
-

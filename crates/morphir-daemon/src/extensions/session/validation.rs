@@ -44,7 +44,7 @@ pub(super) fn validate_response(
     }
 }
 
-pub(in crate::extensions) fn validate_method_result(
+pub(super) fn validate_method_result(
     method: &str,
     request_params: &serde_json::Value,
     value: serde_json::Value,
@@ -86,6 +86,23 @@ pub(in crate::extensions) fn validate_method_result(
         }
     }
     Ok(value)
+}
+
+pub(in crate::extensions) async fn validate_method_result_async(
+    method: &str,
+    request_params: &serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    if method == methods::GENERATE {
+        return tokio::task::spawn_blocking(move || validate_generate_result(value))
+            .await
+            .map_err(|error| {
+                DaemonError::Extension(format!(
+                    "Generated artifact validation worker failed: {error}"
+                ))
+            })?;
+    }
+    validate_method_result(method, request_params, value)
 }
 
 fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
@@ -358,6 +375,35 @@ mod tests {
         .expect_err("binary artifact content must be valid base64");
 
         assert!(error.to_string().contains("Base64"), "{error}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn binary_generation_validation_runs_off_the_async_worker() {
+        let content = STANDARD.encode(vec![0_u8; 8 * 1024 * 1024]);
+        let value = serde_json::json!({
+            "success": true,
+            "artifacts": [{
+                "path": "schema.avro",
+                "content": content,
+                "binary": true
+            }],
+            "diagnostics": []
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::GENERATE, &serde_json::json!({}), value)
+                .await
+                .expect("large binary artifact should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
     }
 
     #[test]

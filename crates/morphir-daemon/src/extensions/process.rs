@@ -7,7 +7,7 @@ use crate::extensions::protocol::{
 use crate::extensions::session::{
     CapabilityExpectation, ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded,
     MepTransport, NegotiatedSession, Session, Stopped, TransportError, TransportState,
-    validate_method_result, validate_negotiation,
+    validate_method_result_async, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
@@ -743,7 +743,7 @@ impl ExtensionSession for SpawnedProcessSession {
 
         let request_params = params.clone();
         let value: serde_json::Value = self.call(method, params).await?;
-        match validate_compatibility_method_result(method, &request_params, value) {
+        match validate_compatibility_method_result(method, &request_params, value).await {
             Ok(value) => Ok(value),
             Err(error) => Err(self.abort_with_error(error).await),
         }
@@ -787,12 +787,12 @@ fn validate_compatibility_initialization(
     validate_negotiation(expected, offered_versions, initialized)
 }
 
-fn validate_compatibility_method_result(
+async fn validate_compatibility_method_result(
     method: &str,
     request_params: &serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
-    validate_method_result(method, request_params, value)
+    validate_method_result_async(method, request_params, value).await
 }
 
 async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
@@ -1093,8 +1093,8 @@ mod tests {
         assert!(!negotiated.supports_method(methods::GENERATE));
     }
 
-    #[test]
-    fn compatibility_invoke_rejects_unsafe_generated_artifacts() {
+    #[tokio::test]
+    async fn compatibility_invoke_rejects_unsafe_generated_artifacts() {
         let error = validate_compatibility_method_result(
             methods::GENERATE,
             &serde_json::json!({}),
@@ -1104,6 +1104,7 @@ mod tests {
                 "diagnostics": []
             }),
         )
+        .await
         .expect_err("compatibility results must use the shared artifact validator");
 
         assert!(error.to_string().contains("artifact path"), "{error}");

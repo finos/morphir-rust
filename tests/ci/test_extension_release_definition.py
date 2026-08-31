@@ -214,6 +214,16 @@ class ReleaseWorkflowDefinitionTests(unittest.TestCase):
         self.assertNotIn("contents: write", release_info)
         self.assertNotIn("contents: write", create)
 
+    def test_creation_job_disables_python_bytecode_writes(self) -> None:
+        create = self.job("create-extension-artifacts", "publish-extensions")
+        self.assertIn(
+            '    env:\n      PYTHONDONTWRITEBYTECODE: "1"\n    strategy:',
+            create,
+        )
+        self.assertEqual(
+            1, self.release_workflow.count('PYTHONDONTWRITEBYTECODE: "1"')
+        )
+
     def test_creation_job_builds_validates_and_uploads_seven_day_artifact(self) -> None:
         create = self.job("create-extension-artifacts", "publish-extensions")
         self.assertIn("mise run \"extension:artifact:${SHORT_ID}\"", create)

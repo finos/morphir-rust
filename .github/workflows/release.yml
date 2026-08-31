@@ -56,6 +56,8 @@ jobs:
     needs: release-info
     permissions:
       contents: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.release-info.outputs.matrix) }}

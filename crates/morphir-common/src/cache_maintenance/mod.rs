@@ -26,6 +26,7 @@ mod executor;
 mod fingerprint;
 mod inventory;
 mod model;
+mod ownership;
 mod planner;
 mod state;
 
@@ -41,6 +42,7 @@ pub use model::{
     CacheDecision, CacheDecisionReason, CacheEntry, CacheEntryState, CacheModelError, CachePolicy,
     CleanupMode, CleanupPlan,
 };
+pub use ownership::{CacheOwnershipRegistry, CacheOwnershipRegistryError};
 pub use planner::{CachePlanError, plan_cache_cleanup};
 pub use state::{
     AutomaticCacheCleanupDecision, AutomaticCacheMaintenanceTransaction, CacheCleanupCursor,

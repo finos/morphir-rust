@@ -4,9 +4,10 @@ mod native;
 mod pinned;
 mod registration;
 
+pub(crate) use registration::portable_comparison_key;
 pub use registration::{CacheNamespace, CacheRegistrationError};
 
-use self::{identity::portable_identity, registration::portable_comparison_key};
+use self::identity::portable_identity;
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
 use cap_fs_ext::DirExt;

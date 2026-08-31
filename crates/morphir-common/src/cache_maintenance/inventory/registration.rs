@@ -99,7 +99,7 @@ fn comparison_keys_overlap(first: &str, second: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-pub(super) fn portable_comparison_key(path: &str) -> String {
+pub(crate) fn portable_comparison_key(path: &str) -> String {
     path.nfc()
         .collect::<String>()
         .as_str()

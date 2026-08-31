@@ -37,10 +37,50 @@ fn protocols_keep_non_named_public_roots_as_schema_artifacts() {
 }
 
 #[test]
+fn synthetic_schema_protocol_names_do_not_collide_with_projected_protocols() {
+    let root = AvroRoot::new(
+        "acme:domain#foo".to_owned(),
+        AvroFullName::new("acme.domain".to_owned(), "Foo".to_owned()).unwrap(),
+        AvroType::String,
+        None,
+    )
+    .unwrap();
+    let protocol = Protocol::new(
+        AvroFullName::new("acme.domain".to_owned(), "FooSchemas".to_owned()).unwrap(),
+        Vec::new(),
+        Vec::new(),
+        Properties::new(),
+    )
+    .unwrap();
+    let package = AvroPackage::new(
+        vec![root],
+        Vec::new(),
+        Vec::new(),
+        vec![protocol],
+        Vec::new(),
+    )
+    .unwrap();
+
+    let paths = render_idl(&package, Dependencies::SelfContained)
+        .unwrap()
+        .into_iter()
+        .map(|artifact| artifact.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        [
+            "acme/domain/FooSchemasSchemas.avdl",
+            "acme/domain/FooSchemas.avdl"
+        ]
+    );
+}
+
+#[test]
 fn missing_linked_graph_node_is_an_internal_error_during_validation() {
     let package =
         AvroPackage::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
-    let mut renderer = IdlRenderer::new(&package, Dependencies::Linked);
+    let mut renderer = IdlRenderer::new(&package, Dependencies::Linked).unwrap();
     renderer.linked_names.insert("example.Missing".to_owned());
 
     assert!(matches!(
@@ -53,7 +93,7 @@ fn missing_linked_graph_node_is_an_internal_error_during_validation() {
 fn missing_linked_graph_node_is_an_internal_error_during_rendering() {
     let package =
         AvroPackage::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
-    let renderer = IdlRenderer::new(&package, Dependencies::Linked);
+    let renderer = IdlRenderer::new(&package, Dependencies::Linked).unwrap();
     let schema = NamedSchema::Record(
         RecordSchema::new(
             AvroFullName::new("example".to_owned(), "Missing".to_owned()).unwrap(),

@@ -45,20 +45,24 @@ pub fn render_idl(
     package: &AvroPackage,
     dependencies: Dependencies,
 ) -> Result<Vec<Artifact>, AvroGenerationError> {
-    IdlRenderer::new(package, dependencies).render()
+    IdlRenderer::new(package, dependencies)?.render()
 }
 
 struct IdlRenderer<'package> {
     package: &'package AvroPackage,
     dependencies: Dependencies,
     schemas: BTreeMap<String, &'package NamedSchema>,
+    schema_protocol_names: BTreeMap<String, AvroFullName>,
     owned_names: BTreeSet<String>,
     linked_names: BTreeSet<String>,
     graph: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl<'package> IdlRenderer<'package> {
-    fn new(package: &'package AvroPackage, dependencies: Dependencies) -> Self {
+    fn new(
+        package: &'package AvroPackage,
+        dependencies: Dependencies,
+    ) -> Result<Self, AvroInternalError> {
         let schemas = package
             .schemas()
             .iter()
@@ -84,14 +88,50 @@ impl<'package> IdlRenderer<'package> {
                 (name.clone(), references)
             })
             .collect();
-        Self {
+        let source_names = package
+            .roots()
+            .iter()
+            .map(AvroRoot::full_name)
+            .chain(package.schemas().iter().map(NamedSchema::full_name))
+            .chain(package.linked_schemas().iter().map(NamedSchema::full_name))
+            .map(|name| (name.to_string(), name))
+            .collect::<BTreeMap<_, _>>();
+        let mut reserved_names = package
+            .protocols()
+            .iter()
+            .map(|protocol| protocol.full_name().to_string())
+            .collect::<BTreeSet<_>>();
+        let mut schema_protocol_names = BTreeMap::new();
+        for (source_name, name) in source_names {
+            let mut candidate = next_schema_protocol_name(name)?;
+            while reserved_names.contains(&candidate.to_string()) {
+                candidate = next_schema_protocol_name(&candidate)?;
+            }
+            reserved_names.insert(candidate.to_string());
+            schema_protocol_names.insert(source_name, candidate);
+        }
+        Ok(Self {
             package,
             dependencies,
             schemas,
+            schema_protocol_names,
             owned_names,
             linked_names,
             graph,
-        }
+        })
+    }
+
+    fn schema_protocol_name(
+        &self,
+        name: &AvroFullName,
+    ) -> Result<&AvroFullName, AvroInternalError> {
+        self.schema_protocol_names
+            .get(&name.to_string())
+            .ok_or_else(|| {
+                AvroInternalError::invariant(format!(
+                    "schema wrapper name was not allocated for {name}"
+                ))
+            })
     }
 
     fn render(&self) -> Result<Vec<Artifact>, AvroGenerationError> {
@@ -157,11 +197,11 @@ impl<'package> IdlRenderer<'package> {
             .filter(|dependency| *dependency != &name && self.linked_names.contains(*dependency))
             .cloned()
             .collect::<BTreeSet<_>>();
-        let protocol_name = schema_protocol_name(schema.full_name())?;
-        let path = protocol_path(&protocol_name);
+        let protocol_name = self.schema_protocol_name(schema.full_name())?;
+        let path = protocol_path(protocol_name);
         let properties = Properties::new();
         let content = self.render_protocol_file(ProtocolFile {
-            name: &protocol_name,
+            name: protocol_name,
             properties: &properties,
             doc: None,
             selected: &selected,
@@ -174,8 +214,8 @@ impl<'package> IdlRenderer<'package> {
 
     fn render_root(&self, root: &AvroRoot) -> Result<Artifact, AvroGenerationError> {
         let root_name = root.full_name().to_string();
-        let protocol_name = schema_protocol_name(root.full_name())?;
-        let path = protocol_path(&protocol_name);
+        let protocol_name = self.schema_protocol_name(root.full_name())?;
+        let path = protocol_path(protocol_name);
         let referenced = root
             .referenced_named_declarations()
             .iter()
@@ -202,7 +242,7 @@ impl<'package> IdlRenderer<'package> {
         };
         let properties = Properties::new();
         let content = self.render_protocol_file(ProtocolFile {
-            name: &protocol_name,
+            name: protocol_name,
             properties: &properties,
             doc: None,
             selected: &selected,
@@ -275,7 +315,7 @@ impl<'package> IdlRenderer<'package> {
                 .schemas
                 .get(imported)
                 .ok_or_else(|| AvroDiagnostic::missing_linked_dependency(imported))?;
-            let imported_path = protocol_path(&schema_protocol_name(schema.full_name())?);
+            let imported_path = protocol_path(self.schema_protocol_name(schema.full_name())?);
             output.push_str("  import idl ");
             output.push_str(&json_string(&relative_path(&current_path, &imported_path))?);
             output.push_str(";\n");

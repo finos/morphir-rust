@@ -7,7 +7,9 @@ use crate::{
     Properties, escape_idl_identifier,
 };
 
-pub(super) fn schema_protocol_name(name: &AvroFullName) -> Result<AvroFullName, AvroInternalError> {
+pub(super) fn next_schema_protocol_name(
+    name: &AvroFullName,
+) -> Result<AvroFullName, AvroInternalError> {
     AvroFullName::new(
         name.namespace().to_owned(),
         format!("{}Schemas", name.name()),

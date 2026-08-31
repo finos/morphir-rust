@@ -15,6 +15,18 @@ fn artifact_paths_escape_windows_reserved_avro_names() {
 }
 
 #[test]
+fn artifact_paths_bound_long_names_with_collision_resistant_suffixes() {
+    let first = AvroFullName::new("example".to_owned(), format!("A{}", "a".repeat(250))).unwrap();
+    let second = AvroFullName::new("example".to_owned(), format!("A{}b", "a".repeat(250))).unwrap();
+    let first_path = protocol_path(&first);
+    let second_path = protocol_path(&second);
+
+    assert!(first_path.rsplit('/').next().unwrap().len() <= 255);
+    assert!(second_path.rsplit('/').next().unwrap().len() <= 255);
+    assert_ne!(first_path, second_path);
+}
+
+#[test]
 fn protocols_keep_non_named_public_roots_as_schema_artifacts() {
     let root_name = AvroFullName::new("example".to_owned(), "UserId".to_owned()).unwrap();
     let root = AvroRoot::new(

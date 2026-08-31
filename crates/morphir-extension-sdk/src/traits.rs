@@ -69,6 +69,47 @@ pub trait Transform: Extension {
 }
 
 /// Workspace extension: discovers Morphir projects from a confined portable request.
+///
+/// # Example
+///
+/// ```rust
+/// use morphir_extension_sdk::prelude::*;
+/// use morphir_workspace::{
+///     DiscoveryRequest, DiscoveryResponse, WORKSPACE_DISCOVERY_PROTOCOL,
+/// };
+///
+/// #[derive(Default)]
+/// struct MyWorkspace;
+///
+/// impl Extension for MyWorkspace {
+///     fn info() -> ExtensionInfo {
+///         ExtensionInfo {
+///             id: "my-workspace".into(),
+///             name: "My Workspace".into(),
+///             version: "1.0.0".into(),
+///             ..ExtensionInfo::default()
+///         }
+///     }
+///
+///     fn capabilities() -> ExtensionCapabilities {
+///         ExtensionCapabilities {
+///             workspace: Some(WorkspaceCapability {
+///                 protocol_versions: vec![WORKSPACE_DISCOVERY_PROTOCOL],
+///                 discover: true,
+///             }),
+///             ..ExtensionCapabilities::default()
+///         }
+///     }
+/// }
+///
+/// impl Workspace for MyWorkspace {
+///     fn discover(&self, request: DiscoveryRequest) -> Result<DiscoveryResponse> {
+///         Ok(morphir_workspace::discover(request))
+///     }
+/// }
+///
+/// morphir_extension_sdk::export_extension!(MyWorkspace, workspace);
+/// ```
 pub trait Workspace: Extension {
     /// Discover a workspace using protocol-neutral file trees supplied by the host.
     fn discover(

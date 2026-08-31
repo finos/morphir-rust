@@ -112,6 +112,17 @@ fn workspace_initialization(discover: bool, protocol_versions: Vec<u32>) -> Init
     result
 }
 
+fn workspace_discovery_request() -> serde_json::Value {
+    serde_json::json!({
+        "protocolVersion": 1,
+        "developmentRoot": {"entries": {}},
+        "morphirHome": null,
+        "systemConfig": null,
+        "environment": {},
+        "cliOverlay": {}
+    })
+}
+
 fn scripted_transport(responses: impl IntoIterator<Item = ExtensionResponse>) -> ScriptedTransport {
     ScriptedTransport {
         expected: ExpectedExtension::identified("example"),
@@ -729,7 +740,7 @@ async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
             .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
         match session
-            .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, serde_json::json!({}))
+            .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request())
             .await
         {
             InvokeOutcome::Rejected(session, error) => {
@@ -768,7 +779,7 @@ async fn permits_workspace_discovery_for_protocol_v1() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, serde_json::json!({}))
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request())
         .await
     {
         InvokeOutcome::Success(session, result) => {
@@ -806,7 +817,7 @@ async fn malformed_workspace_discovery_result_fails_the_session() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, serde_json::json!({}))
+        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request())
         .await
     {
         InvokeOutcome::Failed(failure) => {

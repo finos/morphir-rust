@@ -10,7 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
-use morphir_workspace::DiscoveryResponse;
+use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
 use unicode_normalization::UnicodeNormalization as _;
@@ -59,7 +59,16 @@ pub(super) fn validate_method_result(
         return validate_compile_result(request_params, value);
     }
     if method == methods::WORKSPACE_DISCOVER {
+        let request: DiscoveryRequest = serde_json::from_value(request_params.clone())?;
         let result: DiscoveryResponse = serde_json::from_value(value)?;
+        if let DiscoveryResponse::Success { snapshot } = &result
+            && snapshot.protocol_version != request.protocol_version
+        {
+            return Err(DaemonError::Extension(format!(
+                "Workspace snapshot protocol version {} did not match requested protocol version {}",
+                snapshot.protocol_version, request.protocol_version
+            )));
+        }
         return Ok(serde_json::to_value(result)?);
     }
     Ok(value)
@@ -356,6 +365,17 @@ pub(in crate::extensions) fn validate_negotiation(
 mod tests {
     use super::*;
 
+    fn workspace_request(protocol_version: u32) -> serde_json::Value {
+        serde_json::json!({
+            "protocolVersion": protocol_version,
+            "developmentRoot": {"entries": {}},
+            "morphirHome": null,
+            "systemConfig": null,
+            "environment": {},
+            "cliOverlay": {}
+        })
+    }
+
     fn compile_request(ir_version: &str) -> serde_json::Value {
         serde_json::json!({
             "languageId": "elm",
@@ -390,7 +410,7 @@ mod tests {
     fn rejects_malformed_workspace_discovery_results() {
         let error = validate_method_result(
             methods::WORKSPACE_DISCOVER,
-            &serde_json::json!({}),
+            &workspace_request(1),
             serde_json::json!({
                 "status": "success",
                 "snapshot": {"protocolVersion": 1}
@@ -415,11 +435,38 @@ mod tests {
         assert_eq!(
             validate_method_result(
                 methods::WORKSPACE_DISCOVER,
-                &serde_json::json!({}),
+                &workspace_request(1),
                 value.clone()
             )
             .expect("a typed workspace failure is a valid discovery result"),
             value
+        );
+    }
+
+    #[test]
+    fn rejects_workspace_snapshots_using_a_different_protocol_version() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request(1),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {
+                    "protocolVersion": 2,
+                    "configAnchor": "morphir.toml",
+                    "name": null,
+                    "state": "open",
+                    "projects": [],
+                    "diagnostics": []
+                }
+            }),
+        )
+        .expect_err("snapshot protocol must match the discovery request");
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not match requested protocol version 1"),
+            "{error}"
         );
     }
 

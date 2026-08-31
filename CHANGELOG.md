@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;
-  extension acquisition, negotiation, and daemon result validation enforce that contract.
-
 ### Changed
 
 - **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase
@@ -32,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;
+  extension acquisition, negotiation, and daemon result validation enforce that contract.
 - A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro
   JSON schemas, JSON protocols, or Avro IDL. The backend supports schema-only, entry-point protocol,
   and public protocol modes; represents constants as zero-argument messages with

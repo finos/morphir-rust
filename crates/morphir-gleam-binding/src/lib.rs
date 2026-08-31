@@ -1277,6 +1277,44 @@ mod tests {
     }
 
     #[test]
+    fn backend_rejects_decodable_but_unsupported_ir_releases() {
+        let (request, _compile_output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let compiled = GleamExtension
+            .compile(request)
+            .expect("compile valid Gleam document");
+        let supported_ir = compiled.ir.expect("successful compile contains IR");
+
+        for unsupported in [serde_json::json!("4.0.1"), serde_json::json!(5)] {
+            let mut ir = supported_ir.clone();
+            ir["formatVersion"] = unsupported.clone();
+            let output_dir = tempfile::tempdir().expect("create backend output directory");
+
+            let generated = GleamExtension
+                .generate(GenerateRequest {
+                    ir,
+                    options: [("outputDir".to_owned(), serde_json::json!(output_dir.path()))]
+                        .into_iter()
+                        .collect(),
+                })
+                .expect("return a typed generation result");
+
+            assert!(!generated.success, "unsupported release {unsupported}");
+            assert!(generated.artifacts.is_empty());
+            assert!(
+                generated.diagnostics[0]
+                    .message
+                    .contains("unsupported Morphir IR formatVersion"),
+                "{}",
+                generated.diagnostics[0].message
+            );
+        }
+    }
+
+    #[test]
     fn malformed_document_returns_a_failed_result_at_its_uri() {
         let uri = "untitled:broken%20module.gleam";
         let (request, _output_dir) = compile_request(uri, "pub fn broken(", IR_VERSION);

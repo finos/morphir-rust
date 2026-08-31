@@ -50,6 +50,16 @@ pub fn generate_gleam(
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
     if let Ok(ir_file) = serde_json::from_value::<IRFile>(ir.clone()) {
+        let normalized = ir_file.format_version.normalize().map_err(|error| {
+            ExtensionError::execution(format!("Invalid Morphir IR formatVersion: {error}"))
+        })?;
+        let release = normalized.release.to_exact_string();
+        if !normalized.is_supported() || release != crate::GLEAM_IR_VERSION {
+            return Err(ExtensionError::execution(format!(
+                "unsupported Morphir IR formatVersion '{release}'; Gleam supports '{}'",
+                crate::GLEAM_IR_VERSION
+            )));
+        }
         return match ir_file.distribution {
             MorphirDistribution::Library(content) => {
                 generate_from_package_definition(content.def, options)

@@ -5,8 +5,9 @@ mod pinned;
 mod registration;
 
 pub use registration::{CacheNamespace, CacheRegistrationError};
+pub(crate) use registration::{comparison_keys_overlap, portable_comparison_key};
 
-use self::{identity::portable_identity, registration::portable_comparison_key};
+use self::identity::portable_identity;
 use super::{CacheEntry, CacheModelError};
 use crate::home::MorphirHome;
 use cap_fs_ext::DirExt;
@@ -183,7 +184,7 @@ fn inventory_cache_namespace_inner(
     inventory_cache_namespace_from_home(home, &home_dir, namespace, limits, pinned_paths)
 }
 
-fn inventory_cache_namespace_from_home(
+pub(crate) fn inventory_cache_namespace_from_home(
     home: &MorphirHome,
     home_dir: &Dir,
     namespace: &CacheNamespace,

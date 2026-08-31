@@ -194,6 +194,23 @@ class AvroArtifactTaskTests(unittest.TestCase):
             )
             self.assertFalse(fixture.snapshot_source().parent.exists())
 
+    def test_clean_status_fails_when_head_lacks_a_packaging_module(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")
+            fixture._git("rm", "scripts/extension_packaging/bundles.py")
+            fixture._git(
+                "-c", "commit.gpgsign=false", "commit", "-qm", "remove packaging module"
+            )
+
+            result = fixture.run()
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("packaging module unavailable", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse(
+                (fixture.root / ".morphir/build/extensions/avro/release.json").exists()
+            )
+
     def test_clean_status_fails_when_head_lacks_the_artifact_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ArtifactTaskFixture(Path(temporary_directory) / "repository")

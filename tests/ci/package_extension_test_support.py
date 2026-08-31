@@ -19,6 +19,7 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 EXTENSIONS_TOML = REPOSITORY_ROOT / ".github" / "extensions.toml"
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_extension.py"
+PACKAGER_MODULES = REPOSITORY_ROOT / "scripts" / "extension_packaging"
 AVRO_ARTIFACT_TASK = (
     REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "avro"
 )
@@ -60,6 +61,11 @@ class PackageFixture:
         self.wasm.parent.mkdir()
 
         shutil.copy2(PACKAGER, self.root / "scripts" / "package_extension.py")
+        shutil.copytree(
+            PACKAGER_MODULES,
+            self.root / "scripts" / "extension_packaging",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         (self.root / ".github" / "extensions.toml").write_text(
             registry, encoding="utf-8", newline="\n"
         )

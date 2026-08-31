@@ -19,10 +19,10 @@ pub async fn activate_transport(
 ) -> Result<Session<BoxedMepTransport, Loaded>> {
     let transport: BoxedMepTransport = match artifact {
         VerifiedExtensionArtifact::Process(process) => {
-            let launch = if process.backend().is_some() {
-                ProcessLaunch::from_verified_bytes_with_capabilities_in(
+            let launch = if let Some(backend) = process.extension_capabilities().backend {
+                ProcessLaunch::from_verified_bytes_with_backend_capability_in(
                     process.extension_info().clone(),
-                    process.extension_capabilities(),
+                    backend,
                     process.filename(),
                     process.bytes(),
                     process.staging_directory(),
@@ -50,10 +50,10 @@ pub async fn activate_transport(
                 wasm_host_functions(working_directory),
             )
             .await?;
-            Box::new(ExtismTransport::new_with_expected_capabilities(
+            Box::new(ExtismTransport::new_with_expected_backend_capability(
                 container,
                 wasm.extension_info().clone(),
-                wasm.backend().map(|_| wasm.extension_capabilities()),
+                wasm.extension_capabilities().backend,
             ))
         }
     };
@@ -330,9 +330,10 @@ mod tests {
         assert_eq!(discovered.version, "1.2.3");
         assert_eq!(discovered.types, [ExtensionType::Backend]);
         assert_eq!(
-            expected.capabilities().unwrap().backend.as_ref(),
+            expected.backend_capability(),
             Some(&expected_backend_capability())
         );
+        assert!(expected.capabilities().is_none());
 
         let observed = wait_for_launch(&capture, args.len() + 2).await;
         let mut lines = observed.lines();
@@ -405,9 +406,10 @@ mod tests {
         assert_eq!(discovered.version, "1.2.3");
         assert_eq!(discovered.types, [ExtensionType::Backend]);
         assert_eq!(
-            expected.capabilities().unwrap().backend.as_ref(),
+            expected.backend_capability(),
             Some(&expected_backend_capability())
         );
+        assert!(expected.capabilities().is_none());
 
         let failure = session
             .initialize(InitializeParams {

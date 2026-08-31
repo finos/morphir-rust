@@ -4,7 +4,7 @@ use super::{ExpectedExtension, Loaded, MepTransport, Session, TransportError, Tr
 use crate::extensions::ExtensionContainer;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
+use morphir_extension_sdk::{BackendCapability, ExtensionInfo};
 
 /// Factory for Extism-backed typestate sessions.
 pub struct ExtismSession;
@@ -27,14 +27,14 @@ pub struct ExtismTransport {
 
 impl ExtismTransport {
     /// Attach exact installed identity and optional backend metadata to a container.
-    pub(crate) fn new_with_expected_capabilities(
+    pub(crate) fn new_with_expected_backend_capability(
         container: ExtensionContainer,
         info: ExtensionInfo,
-        capabilities: Option<ExtensionCapabilities>,
+        backend: Option<BackendCapability>,
     ) -> Self {
-        let locked_extension = capabilities
-            .map(|capabilities| {
-                ExpectedExtension::discovered_with_capabilities(info.clone(), capabilities)
+        let locked_extension = backend
+            .map(|backend| {
+                ExpectedExtension::discovered_with_backend_capability(info.clone(), backend)
             })
             .unwrap_or_else(|| ExpectedExtension::discovered(info));
         Self {

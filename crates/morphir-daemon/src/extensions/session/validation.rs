@@ -1,7 +1,7 @@
 //! Validation of untrusted response envelopes and initialization data.
 
 use super::controller::NegotiatedSession;
-use super::transport::ExpectedExtension;
+use super::transport::{CapabilityExpectation, ExpectedExtension};
 use crate::extensions::protocol::{
     ExtensionResponse, InitializeResult, JSONRPC_VERSION, RpcError, methods,
 };
@@ -223,18 +223,28 @@ pub(in crate::extensions) fn validate_negotiation(
             expected.id
         )));
     }
-    if let Some(discovered) = expected.capabilities
-        && result.capabilities != discovered
-    {
-        let capability_scope = if result.capabilities.backend != discovered.backend {
-            "backend capabilities"
-        } else {
-            "capabilities"
+    if let Some(discovered) = expected.capabilities {
+        let capability_scope = match discovered {
+            CapabilityExpectation::Exact(discovered) if result.capabilities != discovered => {
+                if result.capabilities.backend != discovered.backend {
+                    Some("backend capabilities")
+                } else {
+                    Some("capabilities")
+                }
+            }
+            CapabilityExpectation::Backend(discovered)
+                if result.capabilities.backend.as_ref() != Some(&discovered) =>
+            {
+                Some("backend capabilities")
+            }
+            CapabilityExpectation::Exact(_) | CapabilityExpectation::Backend(_) => None,
         };
-        return Err(DaemonError::Extension(format!(
-            "Extension '{}' {capability_scope} disagreed with discovery",
-            expected.id
-        )));
+        if let Some(capability_scope) = capability_scope {
+            return Err(DaemonError::Extension(format!(
+                "Extension '{}' {capability_scope} disagreed with discovery",
+                expected.id
+            )));
+        }
     }
     if unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_none() {
         return Err(DaemonError::Extension(

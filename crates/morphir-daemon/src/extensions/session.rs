@@ -14,6 +14,7 @@ pub use controller::{
     FailedSession, Indeterminate, InvokeOutcome, Loaded, NegotiatedSession, Ready, Session, Stopped,
 };
 pub use extism::{ExtismSession, ExtismTransport};
+pub(in crate::extensions) use transport::CapabilityExpectation;
 pub use transport::{ExpectedExtension, MepTransport, TransportError, TransportState};
 pub(in crate::extensions) use validation::validate_negotiation;
 

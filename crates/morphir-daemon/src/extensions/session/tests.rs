@@ -446,6 +446,83 @@ async fn rejects_each_non_backend_locked_capability_drift() {
 }
 
 #[tokio::test]
+async fn backend_only_lock_accepts_unpersisted_capabilities() {
+    let backend = BackendCapability {
+        targets: vec!["avro".into()],
+        ir_versions: vec!["4".into()],
+        generate: true,
+    };
+    let mut initialized = initialization(extension(vec![
+        ExtensionType::Backend,
+        ExtensionType::Frontend,
+    ]));
+    initialized.capabilities = ExtensionCapabilities {
+        backend: Some(backend.clone()),
+        frontend: Some(FrontendCapability {
+            compile: true,
+            ..FrontendCapability::default()
+        }),
+        streaming: true,
+        extra: [("vendor.feature".to_owned(), serde_json::json!("guest"))]
+            .into_iter()
+            .collect(),
+        ..ExtensionCapabilities::default()
+    };
+    let response = ExtensionResponse::success(1, initialized).unwrap();
+    let transport = ScriptedTransport {
+        expected: ExpectedExtension::discovered_with_backend_capability(
+            extension(vec![ExtensionType::Backend, ExtensionType::Frontend]),
+            backend,
+        ),
+        responses: [Ok(response)].into(),
+        requests: Vec::new(),
+    };
+
+    let session = match Session::loaded(transport).initialize(params()).await {
+        Ok(session) => session,
+        Err(failure) => panic!(
+            "capabilities absent from installed metadata must remain negotiable: {}",
+            failure.error()
+        ),
+    };
+
+    assert!(session.negotiated().capabilities.streaming);
+    assert!(session.negotiated().capabilities.frontend.is_some());
+}
+
+#[tokio::test]
+async fn backend_only_lock_rejects_backend_drift() {
+    let locked = BackendCapability {
+        targets: vec!["avro".into()],
+        ir_versions: vec!["4".into()],
+        generate: true,
+    };
+    let mut initialized = backend_initialization(true);
+    initialized.capabilities.backend.as_mut().unwrap().targets = vec!["json-schema".into()];
+    let response = ExtensionResponse::success(1, initialized).unwrap();
+    let transport = ScriptedTransport {
+        expected: ExpectedExtension::discovered_with_backend_capability(
+            extension(vec![ExtensionType::Backend]),
+            locked,
+        ),
+        responses: [Ok(response)].into(),
+        requests: Vec::new(),
+    };
+
+    let failure = match Session::loaded(transport).initialize(params()).await {
+        Ok(_) => panic!("the persisted backend contract must remain exact"),
+        Err(failure) => failure,
+    };
+
+    assert!(
+        failure
+            .error()
+            .to_string()
+            .contains("backend capabilities disagreed with discovery")
+    );
+}
+
+#[tokio::test]
 async fn discovered_backend_without_locked_metadata_accepts_valid_initialization() {
     let initialized = ExtensionResponse::success(1, backend_initialization(true)).unwrap();
     let transport = ScriptedTransport {

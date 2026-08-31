@@ -5,12 +5,13 @@ use crate::extensions::protocol::{
     InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
 use crate::extensions::session::{
-    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport,
-    NegotiatedSession, Session, Stopped, TransportError, TransportState, validate_negotiation,
+    CapabilityExpectation, ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded,
+    MepTransport, NegotiatedSession, Session, Stopped, TransportError, TransportState,
+    validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
+use morphir_extension_sdk::{BackendCapability, ExtensionCapabilities, ExtensionInfo};
 use serde::{Serialize, de::DeserializeOwned};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
@@ -35,7 +36,7 @@ const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 pub struct ProcessLaunch {
     extension_id: String,
     discovered: Option<ExtensionInfo>,
-    capabilities: Option<ExtensionCapabilities>,
+    capabilities: Option<CapabilityExpectation>,
     program: ProcessProgram,
     args: Vec<OsString>,
     working_directory: PathBuf,
@@ -104,7 +105,7 @@ impl ProcessLaunch {
         Self {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
-            capabilities: Some(capabilities),
+            capabilities: Some(CapabilityExpectation::Exact(capabilities)),
             program: ProcessProgram::Path(program.into()),
             args: Vec::new(),
             working_directory: working_directory.into(),
@@ -171,7 +172,7 @@ impl ProcessLaunch {
         Self {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
-            capabilities: Some(capabilities),
+            capabilities: Some(CapabilityExpectation::Exact(capabilities)),
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -196,7 +197,32 @@ impl ProcessLaunch {
         Self {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
-            capabilities: Some(capabilities),
+            capabilities: Some(CapabilityExpectation::Exact(capabilities)),
+            program: ProcessProgram::VerifiedBytes {
+                filename: filename.to_os_string(),
+                bytes: Arc::from(bytes),
+                staging_directory: Some(staging_directory.into()),
+            },
+            args: Vec::new(),
+            working_directory: working_directory.into(),
+            environment: Vec::new(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Define a backend-locked verified launch below an executable directory.
+    pub(crate) fn from_verified_bytes_with_backend_capability_in(
+        discovered: ExtensionInfo,
+        backend: BackendCapability,
+        filename: &OsStr,
+        bytes: &[u8],
+        staging_directory: impl Into<PathBuf>,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            extension_id: discovered.id.clone(),
+            discovered: Some(discovered),
+            capabilities: Some(CapabilityExpectation::Backend(backend)),
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),
                 bytes: Arc::from(bytes),
@@ -253,7 +279,7 @@ struct CompatibilityReady {
 pub struct SpawnedProcessSession {
     expected_extension_id: String,
     discovered: Option<ExtensionInfo>,
-    capabilities: Option<ExtensionCapabilities>,
+    capabilities: Option<CapabilityExpectation>,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -349,7 +375,7 @@ impl SpawnedProcessSession {
     fn expected_extension(&self) -> ExpectedExtension {
         match (&self.discovered, &self.capabilities) {
             (Some(discovered), Some(capabilities)) => {
-                ExpectedExtension::discovered_with_capabilities(
+                ExpectedExtension::discovered_with_expectation(
                     discovered.clone(),
                     capabilities.clone(),
                 )

@@ -1,4 +1,5 @@
-use super::CacheExecutionError;
+use super::filesystem::RecoveryBudget;
+use super::{CacheExecutionError, CacheExecutionLimits};
 use crate::cache_maintenance::inventory::{PinnedCacheEntry, inventory_cache_namespace_pinned};
 use crate::cache_maintenance::{
     CacheEntry, CacheEntryState, CacheInventoryLimits, CacheNamespace, CleanupPlan,
@@ -32,24 +33,33 @@ pub(super) fn inventory_for_execution(
     ownership: &[CacheNamespace],
     limits: CacheInventoryLimits,
     plan: &CleanupPlan,
-    max_removals: usize,
+    execution_limits: CacheExecutionLimits,
+    recovered: RecoveryBudget,
 ) -> Result<BTreeMap<String, Vec<PinnedCacheEntry>>, CacheExecutionError> {
-    let pinned_paths = plan
+    let mut pinned_paths = BTreeMap::<String, BTreeSet<String>>::new();
+    let remaining_removals = execution_limits
+        .max_removals
+        .saturating_sub(recovered.removals);
+    let mut budgeted_bytes = recovered.bytes;
+    for decision in plan
         .decisions()
         .iter()
         .filter(|decision| decision.will_remove())
-        .take(max_removals)
-        .fold(
-            BTreeMap::<String, BTreeSet<String>>::new(),
-            |mut paths, decision| {
-                let entry = decision.entry();
-                paths
-                    .entry(entry.namespace().to_owned())
-                    .or_default()
-                    .insert(entry.path().to_owned());
-                paths
-            },
-        );
+        .take(remaining_removals)
+    {
+        let entry = decision.entry();
+        let next_budgeted_bytes = budgeted_bytes
+            .checked_add(entry.bytes())
+            .ok_or(CacheExecutionError::ByteCountOverflow)?;
+        if next_budgeted_bytes > execution_limits.max_bytes {
+            break;
+        }
+        budgeted_bytes = next_budgeted_bytes;
+        pinned_paths
+            .entry(entry.namespace().to_owned())
+            .or_default()
+            .insert(entry.path().to_owned());
+    }
     let mut inventories = BTreeMap::new();
     for namespace in ownership {
         let Some(requested) = pinned_paths.get(namespace.name()).cloned() else {

@@ -303,6 +303,54 @@ fn cleanup_does_not_revalidate_a_namespace_beyond_the_removal_budget() {
 }
 
 #[test]
+fn cleanup_does_not_revalidate_a_namespace_beyond_the_byte_budget() {
+    let (_directory, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    std::fs::create_dir_all(home.indexes_cache_dir()).unwrap();
+    let first = home.downloads_cache_dir().join("first.pkg");
+    let deferred = home.indexes_cache_dir().join("deferred.json");
+    std::fs::write(&first, b"first").unwrap();
+    std::fs::write(&deferred, b"deferred").unwrap();
+    register(&home, "downloads", "first.pkg", 1);
+    register(&home, "indexes", "deferred.json", 1);
+
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
+    let inventory = session
+        .inventory(&["downloads", "indexes"], CacheInventoryLimits::default())
+        .unwrap();
+    let plan = plan_cache_cleanup(
+        inventory,
+        CachePolicy::new(Duration::from_secs(1), 0),
+        10,
+        CleanupMode::All,
+    )
+    .unwrap();
+    std::fs::remove_dir_all(home.indexes_cache_dir()).unwrap();
+    std::fs::write(home.indexes_cache_dir(), b"invalid deferred namespace").unwrap();
+
+    let report = session
+        .execute_cleanup(
+            &plan,
+            CacheInventoryLimits::default(),
+            CacheExecutionLimits::new(10, 5).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(report.removed_bytes(), 5);
+    assert_eq!(report.items().len(), 2);
+    assert_eq!(
+        report.items()[0].disposition(),
+        CacheExecutionDisposition::Removed
+    );
+    assert_eq!(
+        report.items()[1].disposition(),
+        CacheExecutionDisposition::DeferredLimit
+    );
+    assert!(!first.exists());
+    assert!(home.indexes_cache_dir().is_file());
+}
+
+#[test]
 fn cleanup_compacts_removed_and_missing_ownership_entries() {
     let (_directory, home) = a_morphir_home();
     std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();

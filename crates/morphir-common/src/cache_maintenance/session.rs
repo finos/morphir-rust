@@ -110,6 +110,18 @@ impl<'home> CacheMaintenanceSession<'home> {
         namespace_names: &[&str],
         limits: CacheInventoryLimits,
     ) -> Result<Vec<CacheEntry>, CacheMaintenanceSessionError> {
+        self.inventory_with_hook(namespace_names, limits, || {})
+    }
+
+    fn inventory_with_hook<F>(
+        &mut self,
+        namespace_names: &[&str],
+        limits: CacheInventoryLimits,
+        before_compaction_save: F,
+    ) -> Result<Vec<CacheEntry>, CacheMaintenanceSessionError>
+    where
+        F: FnOnce(),
+    {
         let registered = self
             .ownership
             .namespaces()?
@@ -154,9 +166,12 @@ impl<'home> CacheMaintenanceSession<'home> {
                 .map(super::inventory::PinnedCacheEntry::into_entry),
             );
         }
-        let compacted_entries = self.ownership.prune_unobserved(&selected_names, &entries);
+        let mut compacted = self.ownership.clone();
+        let compacted_entries = compacted.prune_unobserved(&selected_names, &entries);
         if compacted_entries > 0 {
-            save_cache_ownership_registry_under_guard(self.home, &self.ownership, &self.guard)?;
+            before_compaction_save();
+            save_cache_ownership_registry_under_guard(self.home, &compacted, &self.guard)?;
+            self.ownership = compacted;
             debug!(
                 event = "cache_ownership_compacted",
                 phase = "inventory",
@@ -217,5 +232,47 @@ impl<'home> CacheMaintenanceSession<'home> {
             );
         }
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache_maintenance::{CacheOwnershipMutationGuard, load_cache_ownership_registry};
+
+    #[test]
+    fn failed_inventory_compaction_remains_retryable() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = MorphirHome::resolve_from(Some(directory.path().as_os_str()), None).unwrap();
+        std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+        let artifact = home.downloads_cache_dir().join("missing.pkg");
+        std::fs::write(&artifact, b"temporary").unwrap();
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "missing.pkg")
+            .unwrap()
+            .finish(1)
+            .unwrap();
+        std::fs::remove_file(&artifact).unwrap();
+        let registry_path = home.cache_ownership_registry_file();
+        let original_registry = std::fs::read(&registry_path).unwrap();
+
+        let mut session = CacheMaintenanceSession::begin(&home).unwrap();
+        let error = session
+            .inventory_with_hook(&["downloads"], CacheInventoryLimits::default(), || {
+                std::fs::remove_file(&registry_path).unwrap();
+                std::fs::create_dir(&registry_path).unwrap();
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("unsafe"));
+        std::fs::remove_dir(&registry_path).unwrap();
+        std::fs::write(&registry_path, original_registry).unwrap();
+
+        assert!(
+            session
+                .inventory(&["downloads"], CacheInventoryLimits::default())
+                .unwrap()
+                .is_empty()
+        );
+        drop(session);
+        assert!(load_cache_ownership_registry(&home).unwrap().is_empty());
     }
 }

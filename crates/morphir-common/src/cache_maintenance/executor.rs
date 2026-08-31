@@ -316,7 +316,8 @@ fn execute_cache_cleanup_inner(
         ownership,
         inventory_limits,
         plan,
-        limits.max_removals,
+        limits,
+        recovered,
     )?;
     let selected = plan
         .decisions()
@@ -331,10 +332,19 @@ fn execute_cache_cleanup_inner(
 
     for decision in selected {
         let entry = decision.entry();
+        if deferred || attempted == limits.max_removals {
+            deferred = true;
+            items.push(execution_item(
+                entry,
+                None,
+                CacheExecutionDisposition::DeferredLimit,
+            ));
+            continue;
+        }
         let next_budgeted_bytes = budgeted_bytes
             .checked_add(entry.bytes())
             .ok_or(CacheExecutionError::ByteCountOverflow)?;
-        if deferred || attempted == limits.max_removals || next_budgeted_bytes > limits.max_bytes {
+        if next_budgeted_bytes > limits.max_bytes {
             deferred = true;
             items.push(execution_item(
                 entry,

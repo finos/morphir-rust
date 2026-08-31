@@ -166,3 +166,68 @@
             )
         }));
     }
+
+    #[test]
+    fn equal_complexity_generic_specializations_converge_to_a_named_cycle() {
+        let switch_source = "acme/customer:customer#switch";
+        let switch = custom(
+            switch_source,
+            "switch",
+            vec!["a"],
+            vec![constructor(
+                "next",
+                vec![field(
+                    "value",
+                    reference(switch_source, vec![reference(INT, vec![])]),
+                )],
+            )],
+        );
+        let root = alias(
+            "acme/customer:customer#string-switch",
+            "string-switch",
+            reference(switch_source, vec![reference(STRING, vec![])]),
+        );
+
+        let mut input = package(vec![root]);
+        input.dependencies = vec![ProjectionDependency {
+            package_name: "acme/customer".to_owned(),
+            modules: vec![ProjectionModule {
+                path: vec!["customer".to_owned()],
+                types: vec![switch],
+                values: Vec::new(),
+                doc: None,
+            }],
+        }];
+        let model = project(&input, &AvroOptions::default()).unwrap();
+        let switches = model
+            .schemas()
+            .iter()
+            .filter(|schema| schema.full_name().name().starts_with("Switch"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            switches
+                .iter()
+                .any(|schema| schema.full_name().name().starts_with("SwitchString_"))
+        );
+        let integer = switches
+            .iter()
+            .find(|schema| schema.full_name().name().starts_with("SwitchInt_"))
+            .expect("convergent integer specialization should be projected");
+        let payload_name = match integer.field("value").unwrap().tpe() {
+            AvroType::Union(union) => union
+                .branches()
+                .iter()
+                .find_map(|branch| match branch {
+                    AvroType::Named(name) if name.name().ends_with("Next") => Some(name),
+                    _ => None,
+                })
+                .expect("custom wrapper should reference its payload"),
+            other => panic!("custom wrapper should be a union, got {other:?}"),
+        };
+        let payload = model.named_schema(&payload_name.to_string()).unwrap();
+        assert!(matches!(
+            payload.field("value").unwrap().tpe(),
+            AvroType::Named(name) if name == integer.full_name()
+        ));
+    }

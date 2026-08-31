@@ -97,6 +97,17 @@ pub(in crate::extensions) async fn validate_method_result_async(
             DaemonError::Extension(format!("Compile result validation worker failed: {error}"))
         })?;
     }
+    if method == methods::WORKSPACE_DISCOVER {
+        return tokio::task::spawn_blocking(move || {
+            validate_method_result(methods::WORKSPACE_DISCOVER, &request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            DaemonError::Extension(format!(
+                "Workspace result validation worker failed: {error}"
+            ))
+        })?;
+    }
     validate_method_result(method, &request_params, value)
 }
 
@@ -600,6 +611,42 @@ mod tests {
             validate_method_result_async(methods::COMPILE, request, value)
                 .await
                 .expect("large compile result should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workspace_validation_runs_off_the_async_worker() {
+        let value = serde_json::json!({
+            "status": "success",
+            "snapshot": {
+                "protocolVersion": 1,
+                "configAnchor": "morphir.toml",
+                "name": null,
+                "state": "open",
+                "projects": [],
+                "diagnostics": [{
+                    "severity": "warning",
+                    "code": "workspace.large-diagnostic",
+                    "message": "M".repeat(8 * 1024 * 1024),
+                    "path": null,
+                    "projectPath": null
+                }]
+            }
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::WORKSPACE_DISCOVER, workspace_request(1), value)
+                .await
+                .expect("large workspace result should validate");
             validation_tx.send("validation").unwrap();
         });
         tokio::spawn(async move {

@@ -73,3 +73,24 @@ fn reports_an_ir_error_rather_than_panicking() {
     assert_eq!(diagnostic.code.as_deref(), Some("missing_format_version"));
     assert_ne!(diagnostic.code.as_deref(), Some("JSC002"));
 }
+
+#[test]
+fn reports_an_invalid_option_before_an_ir_error() {
+    // Both the options and the IR are invalid here. Option decoding must run
+    // before IR normalization, so the reported diagnostic is the option
+    // error (JSC002), not the IR normalization error.
+    let mut options = HashMap::new();
+    options.insert("unsupported".to_owned(), json!("ignore"));
+
+    let result = generate("json-schema", json!({}), options);
+
+    assert!(!result.success);
+    assert!(result.artifacts.is_empty());
+    let diagnostic = result
+        .diagnostics
+        .first()
+        .expect("an invalid option reports a diagnostic");
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.code.as_deref(), Some("JSC002"));
+    assert_ne!(diagnostic.code.as_deref(), Some("missing_format_version"));
+}

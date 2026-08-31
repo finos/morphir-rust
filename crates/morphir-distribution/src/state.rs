@@ -927,10 +927,14 @@ fn validate_runtime_state(
                 reason: "process artifacts require a platform",
             })
         }
-        ArtifactRuntime::Process if !executable => Err(DistributionError::InvalidInstalledState {
-            id: id.clone(),
-            reason: "process artifacts must be executable",
-        }),
+        ArtifactRuntime::Process
+            if platform.is_some_and(|platform| platform.os() != "windows") && !executable =>
+        {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: "process artifacts must be executable on Unix platforms",
+            })
+        }
         ArtifactRuntime::Wasm if platform.is_some() || !args.is_empty() || executable => {
             Err(DistributionError::InvalidInstalledState {
                 id: id.clone(),
@@ -986,7 +990,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn process_runtime_state_requires_an_executable_artifact() {
+    fn unix_process_runtime_state_requires_an_executable_artifact() {
         let id = ExtensionId::parse("example").unwrap();
         let platform = Platform::new("linux", "x86_64").unwrap();
 
@@ -1002,6 +1006,23 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("must be executable"));
+    }
+
+    #[test]
+    fn windows_process_runtime_state_does_not_require_unix_executable_mode() {
+        let id = ExtensionId::parse("example").unwrap();
+        let platform = Platform::new("windows", "x86_64").unwrap();
+
+        validate_runtime_state(
+            &id,
+            ArtifactRuntime::Process,
+            Some(&platform),
+            &[],
+            false,
+            &[Capability::Frontend],
+            None,
+        )
+        .unwrap();
     }
 
     struct FailingWriter {

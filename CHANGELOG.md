@@ -115,6 +115,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tool resolution now takes mutable channel membership and active, yanked, or revoked status from
+  the current authenticated targets metadata while keeping exact release descriptors immutable.
 - Content-addressed artifact paths are now serialized with portable forward slashes on Windows,
   keeping extension installation and offline activation compatible across platforms.
 - Native process hosts now complete MEP shutdown by sending the required `morphir.exit`

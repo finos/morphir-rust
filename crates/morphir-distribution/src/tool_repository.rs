@@ -328,8 +328,7 @@ impl TrustedToolRepository {
                     format!("descriptor decoding failed: {source}"),
                 )
             })?;
-            validate_release_custom(target.raw(), &custom, &record)?;
-            releases.push(AuthenticatedRelease { record });
+            releases.push(authenticate_release(target.raw(), custom, record)?);
         }
         Ok(releases)
     }
@@ -367,6 +366,17 @@ struct ToolArtifactCustom {
     tool_id: ToolId,
     version: Version,
     platform: Platform,
+}
+
+fn authenticate_release(
+    target: &str,
+    custom: ToolReleaseCustom,
+    record: ToolReleaseRecord,
+) -> Result<AuthenticatedRelease> {
+    validate_release_custom(target, &custom, &record)?;
+    Ok(AuthenticatedRelease {
+        record: record.with_repository_state(custom.channels, custom.status),
+    })
 }
 
 fn release_custom(
@@ -414,8 +424,7 @@ fn validate_release_custom(
         && custom.kind == "tool-release"
         && custom.tool_id == *record.tool_id()
         && custom.version == *record.version()
-        && custom.channels == record.channels()
-        && custom.status == record.status()
+        && (custom.status == ToolReleaseStatus::Active || custom.channels.is_empty())
         && custom.compatibility.morphir_cli == *record.morphir_cli_requirement()
         && custom_platforms == record_platforms
         && target == expected_target;
@@ -424,7 +433,7 @@ fn validate_release_custom(
     } else {
         Err(invalid_metadata(
             target,
-            "descriptor disagrees with authenticated target metadata",
+            "descriptor identity or authenticated release state is invalid",
         ))
     }
 }
@@ -714,6 +723,69 @@ mod descriptor_filter_tests {
         assert!(
             release_custom("releases/desktop/2.0.0.json", Some(&matching), &requested).is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod release_state_tests {
+    use super::{ToolReleaseCustom, authenticate_release};
+    use crate::{ToolReleaseRecord, ToolReleaseStatus};
+
+    fn an_active_descriptor() -> ToolReleaseRecord {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "morphir-tool-release",
+            "tool": { "id": "desktop", "name": "Morphir Desktop" },
+            "version": "1.0.0",
+            "channels": ["stable"],
+            "status": "active",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "artifacts": [{
+                "targetPath": "artifacts/desktop/1.0.0/desktop",
+                "platform": { "os": "linux", "arch": "x86_64" },
+                "archive": { "format": "raw", "entryPoint": "desktop" },
+                "launch": { "kind": "executable", "path": "desktop", "args": [] }
+            }]
+        }))
+        .unwrap()
+    }
+
+    fn yanked_targets(channels: &[&str]) -> ToolReleaseCustom {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "tool-release",
+            "toolId": "desktop",
+            "version": "1.0.0",
+            "channels": channels,
+            "status": "yanked",
+            "compatibility": { "morphirCli": ">=0.4.0, <0.5.0" },
+            "platforms": [{ "os": "linux", "arch": "x86_64" }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn authenticated_targets_override_the_descriptors_publication_state() {
+        let descriptor = an_active_descriptor();
+        let targets = yanked_targets(&[]);
+
+        let authenticated =
+            authenticate_release("releases/desktop/1.0.0.json", targets, descriptor).unwrap();
+
+        assert_eq!(authenticated.record.status(), ToolReleaseStatus::Yanked);
+        assert!(authenticated.record.channels().is_empty());
+    }
+
+    #[test]
+    fn authenticated_targets_reject_channels_on_inactive_releases() {
+        let error = authenticate_release(
+            "releases/desktop/1.0.0.json",
+            yanked_targets(&["stable"]),
+            an_active_descriptor(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("authenticated release state"));
     }
 }
 

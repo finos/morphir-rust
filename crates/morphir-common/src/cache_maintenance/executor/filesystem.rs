@@ -3,9 +3,9 @@ mod observation;
 use self::observation::{observe_tree, remove_tree};
 use super::{CacheExecutionError, CacheExecutionLimits};
 use crate::home::MorphirHome;
-#[cfg(unix)]
-use cap_fs_ext::OpenOptionsSyncExt;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+#[cfg(unix)]
+use cap_fs_ext::{OpenOptionsMaybeDirExt, OpenOptionsSyncExt};
 use cap_std::ambient_authority;
 #[cfg(windows)]
 use cap_std::fs::MetadataExt as CapMetadataExt;
@@ -34,6 +34,7 @@ pub(super) enum RemovalOutcome {
 
 pub(super) struct RemovalTarget<'a> {
     pub(super) home: &'a MorphirHome,
+    pub(super) home_dir: &'a Dir,
     pub(super) namespace: &'a str,
     pub(super) relative: &'a str,
     pub(super) expected: &'a Handle,
@@ -50,8 +51,12 @@ fn remove_revalidated_entry_with_hook<F>(
 where
     F: FnOnce(),
 {
-    let (parent, leaf, source) =
-        open_removal_parent(target.home, target.namespace, target.relative)?;
+    let (parent, leaf, source) = open_removal_parent(
+        target.home,
+        target.home_dir,
+        target.namespace,
+        target.relative,
+    )?;
     let source_object = pin_object(&parent, &leaf, &source)?;
     if source_object.handle != *target.expected {
         return Ok(RemovalOutcome::Changed);
@@ -143,11 +148,10 @@ fn pin_object(parent: &Dir, name: &str, path: &Path) -> Result<PinnedObject, Cac
 
 fn open_removal_parent(
     home: &MorphirHome,
+    home_dir: &Dir,
     namespace: &str,
     relative: &str,
 ) -> Result<(Dir, String, PathBuf), CacheExecutionError> {
-    let home_dir = Dir::open_ambient_dir(home.root(), ambient_authority())
-        .map_err(|source| io_error(home.root(), source))?;
     let cache_path = home.cache_dir();
     let cache_dir = home_dir
         .open_dir_nofollow("cache")
@@ -202,12 +206,10 @@ impl TrashRun {
 
 pub(super) fn open_maintenance_trash(
     home: &MorphirHome,
+    home_dir: &Dir,
 ) -> Result<MaintenanceTrash, CacheExecutionError> {
-    fs::create_dir_all(home.root()).map_err(|source| io_error(home.root(), source))?;
-    let home_dir = Dir::open_ambient_dir(home.root(), ambient_authority())
-        .map_err(|source| io_error(home.root(), source))?;
     let temp_path = home.temp_dir();
-    let temp_dir = open_or_create_directory(&home_dir, "tmp", &temp_path)?;
+    let temp_dir = open_or_create_directory(home_dir, "tmp", &temp_path)?;
     let path = home.maintenance_trash_dir();
     let dir = open_or_create_directory(&temp_dir, "maintenance-trash", &path)?;
     Ok(MaintenanceTrash { dir, path })
@@ -399,16 +401,21 @@ pub(super) fn create_trash_run(trash: &MaintenanceTrash) -> Result<TrashRun, Cac
     ))
 }
 
-pub(super) struct MaintenanceGuard {
+pub(crate) struct MaintenanceGuard {
     file: File,
+    home_dir: Dir,
 }
 
 impl MaintenanceGuard {
-    pub(super) fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
-        let file = open_maintenance_lock(home)?;
+    pub(crate) fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
+        let (file, home_dir) = open_maintenance_lock(home)?;
         let path = home.maintenance_lock_file();
         FileExt::lock_exclusive(&file).map_err(|source| io_error(&path, source))?;
-        Ok(Self { file })
+        Ok(Self { file, home_dir })
+    }
+
+    pub(crate) fn home_dir(&self) -> &Dir {
+        &self.home_dir
     }
 }
 
@@ -430,7 +437,7 @@ pub struct CacheMutationGuard {
 impl CacheMutationGuard {
     /// Acquire the suite-wide shared cache mutation lease beneath Morphir Home.
     pub fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
-        let file = open_maintenance_lock(home)?;
+        let (file, _home_dir) = open_maintenance_lock(home)?;
         let path = home.maintenance_lock_file();
         FileExt::lock_shared(&file).map_err(|source| io_error(&path, source))?;
         Ok(Self { file })
@@ -443,8 +450,8 @@ impl Drop for CacheMutationGuard {
     }
 }
 
-fn open_maintenance_lock(home: &MorphirHome) -> Result<File, CacheExecutionError> {
-    fs::create_dir_all(home.root()).map_err(|source| io_error(home.root(), source))?;
+fn open_maintenance_lock(home: &MorphirHome) -> Result<(File, Dir), CacheExecutionError> {
+    create_directory_tree_durably(home.root())?;
     let home_dir = Dir::open_ambient_dir(home.root(), ambient_authority())
         .map_err(|source| io_error(home.root(), source))?;
     let locks_path = home.locks_dir();
@@ -465,10 +472,82 @@ fn open_maintenance_lock(home: &MorphirHome) -> Result<File, CacheExecutionError
         .read(true)
         .write(true)
         .follow(FollowSymlinks::No);
-    locks_dir
+    let file = locks_dir
         .open_with("maintenance.lock", &options)
         .map(cap_std::fs::File::into_std)
-        .map_err(|source| io_error(&path, source))
+        .map_err(|source| io_error(&path, source))?;
+    Ok((file, home_dir))
+}
+
+fn create_directory_tree_durably(path: &Path) -> Result<(), CacheExecutionError> {
+    create_directory_tree_durably_with(path, sync_ambient_directory)
+}
+
+fn create_directory_tree_durably_with<F>(
+    path: &Path,
+    mut sync_parent: F,
+) -> Result<(), CacheExecutionError>
+where
+    F: FnMut(&Path) -> Result<(), CacheExecutionError>,
+{
+    let mut missing = Vec::new();
+    let mut candidate = Some(path);
+    while let Some(directory) = candidate {
+        match fs::symlink_metadata(directory) {
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(directory.to_path_buf());
+                candidate = nonempty_parent(directory);
+            }
+            Err(source) => return Err(io_error(directory, source)),
+        }
+    }
+
+    fs::create_dir_all(path).map_err(|source| io_error(path, source))?;
+    // Persist each new directory entry from the leaf toward the nearest
+    // pre-existing ancestor so no durable parent depends on a lost child.
+    for directory in missing {
+        if let Some(parent) = directory_entry_parent(&directory) {
+            sync_parent(parent)?;
+        }
+    }
+    Ok(())
+}
+
+fn nonempty_parent(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+fn directory_entry_parent(path: &Path) -> Option<&Path> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
+    })
+}
+
+#[cfg(unix)]
+fn sync_ambient_directory(path: &Path) -> Result<(), CacheExecutionError> {
+    let directory = Dir::open_ambient_dir(path, ambient_authority())
+        .map_err(|source| io_error(path, source))?;
+    let mut options = CapOpenOptions::new();
+    options
+        .read(true)
+        .maybe_dir(true)
+        .follow(FollowSymlinks::No);
+    directory
+        .open_with(".", &options)
+        .map(cap_std::fs::File::into_std)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| io_error(path, source))
+}
+
+#[cfg(not(unix))]
+fn sync_ambient_directory(_path: &Path) -> Result<(), CacheExecutionError> {
+    Ok(())
 }
 
 fn io_error(path: &Path, source: io::Error) -> CacheExecutionError {

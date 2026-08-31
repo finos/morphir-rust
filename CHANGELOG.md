@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Durable cache-maintenance scheduling state with interval gating, validated continuation cursors,
+  bounded fail-closed loading, and atomic Morphir Home persistence shared by CLI and Desktop.
 - Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;
   extension acquisition, negotiation, and daemon result validation enforce that contract.
 - A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro

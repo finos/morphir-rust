@@ -2,9 +2,10 @@ mod filesystem;
 mod revalidation;
 
 pub use self::filesystem::CacheMutationGuard;
+pub(crate) use self::filesystem::MaintenanceGuard;
 use self::filesystem::{
-    MaintenanceGuard, RemovalOutcome, RemovalTarget, TrashRun, create_trash_run,
-    open_maintenance_trash, remove_revalidated_entry, sweep_existing_trash,
+    RemovalOutcome, RemovalTarget, TrashRun, create_trash_run, open_maintenance_trash,
+    remove_revalidated_entry, sweep_existing_trash,
 };
 use self::revalidation::{RevalidatedEntry, inventory_for_execution, revalidate_entry};
 use super::{CacheInventoryError, CacheInventoryLimits, CacheNamespace, CleanupPlan};
@@ -239,6 +240,18 @@ pub fn execute_cache_cleanup(
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
+    let guard = MaintenanceGuard::acquire(home)?;
+    execute_cache_cleanup_under_guard(home, &guard, plan, ownership, inventory_limits, limits)
+}
+
+pub(crate) fn execute_cache_cleanup_under_guard(
+    home: &MorphirHome,
+    guard: &MaintenanceGuard,
+    plan: &CleanupPlan,
+    ownership: &[CacheNamespace],
+    inventory_limits: CacheInventoryLimits,
+    limits: CacheExecutionLimits,
+) -> Result<CacheExecutionReport, CacheExecutionError> {
     let selected_entries = plan
         .decisions()
         .iter()
@@ -251,7 +264,8 @@ pub fn execute_cache_cleanup(
         max_bytes = limits.max_bytes,
         "cache cleanup started"
     );
-    let result = execute_cache_cleanup_inner(home, plan, ownership, inventory_limits, limits);
+    let result =
+        execute_cache_cleanup_inner(home, guard, plan, ownership, inventory_limits, limits);
     match &result {
         Ok(report) => {
             for (entry_index, item) in report.items().iter().enumerate() {
@@ -285,16 +299,23 @@ pub fn execute_cache_cleanup(
 
 fn execute_cache_cleanup_inner(
     home: &MorphirHome,
+    guard: &MaintenanceGuard,
     plan: &CleanupPlan,
     ownership: &[CacheNamespace],
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let _guard = MaintenanceGuard::acquire(home)?;
-    let trash = open_maintenance_trash(home)?;
+    let home_dir = guard.home_dir();
+    let trash = open_maintenance_trash(home, home_dir)?;
     let recovered = sweep_existing_trash(&trash, limits)?;
-    let inventories =
-        inventory_for_execution(home, ownership, inventory_limits, plan, limits.max_removals)?;
+    let inventories = inventory_for_execution(
+        home,
+        home_dir,
+        ownership,
+        inventory_limits,
+        plan,
+        limits.max_removals,
+    )?;
     let selected = plan
         .decisions()
         .iter()
@@ -360,6 +381,7 @@ fn execute_cache_cleanup_inner(
                 match remove_revalidated_entry(
                     RemovalTarget {
                         home,
+                        home_dir,
                         namespace: entry.namespace(),
                         relative: entry.path(),
                         expected: handle,

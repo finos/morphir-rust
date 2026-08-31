@@ -4,6 +4,7 @@ use crate::cache_maintenance::{
     CacheEntry, CacheEntryState, CacheInventoryLimits, CacheNamespace, CleanupPlan,
 };
 use crate::home::MorphirHome;
+use cap_std::fs::Dir;
 use same_file::Handle;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +28,7 @@ pub(super) enum RevalidatedEntry<'a> {
 
 pub(super) fn inventory_for_execution(
     home: &MorphirHome,
+    home_dir: &Dir,
     ownership: &[CacheNamespace],
     limits: CacheInventoryLimits,
     plan: &CleanupPlan,
@@ -61,7 +63,7 @@ pub(super) fn inventory_for_execution(
             .unwrap_or_default();
         inventories.insert(
             namespace.name().to_owned(),
-            inventory_cache_namespace_pinned(home, namespace, limits, &requested)?,
+            inventory_cache_namespace_pinned(home, home_dir, namespace, limits, &requested)?,
         );
     }
     Ok(inventories)

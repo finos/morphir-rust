@@ -159,11 +159,12 @@ pub fn inventory_cache_namespace(
 
 pub(crate) fn inventory_cache_namespace_pinned(
     home: &MorphirHome,
+    home_dir: &Dir,
     namespace: &CacheNamespace,
     limits: CacheInventoryLimits,
     pinned_paths: &BTreeSet<String>,
 ) -> Result<Vec<PinnedCacheEntry>, CacheInventoryError> {
-    inventory_cache_namespace_inner(home, namespace, limits, Some(pinned_paths))
+    inventory_cache_namespace_from_home(home, home_dir, namespace, limits, Some(pinned_paths))
 }
 
 fn inventory_cache_namespace_inner(
@@ -179,6 +180,16 @@ fn inventory_cache_namespace_inner(
         Err(source) => return Err(io_error(home_root, source)),
     };
 
+    inventory_cache_namespace_from_home(home, &home_dir, namespace, limits, pinned_paths)
+}
+
+fn inventory_cache_namespace_from_home(
+    home: &MorphirHome,
+    home_dir: &Dir,
+    namespace: &CacheNamespace,
+    limits: CacheInventoryLimits,
+    pinned_paths: Option<&BTreeSet<String>>,
+) -> Result<Vec<PinnedCacheEntry>, CacheInventoryError> {
     let cache_root = home.cache_dir();
     let cache_metadata = match home_dir.symlink_metadata("cache") {
         Ok(metadata) => metadata,
@@ -191,7 +202,7 @@ fn inventory_cache_namespace_inner(
     if !cache_metadata.is_dir() {
         return Err(CacheInventoryError::InvalidCacheRoot { path: cache_root });
     }
-    if native::crosses_filesystem_boundary(&home_dir, &cache_metadata) {
+    if native::crosses_filesystem_boundary(home_dir, &cache_metadata) {
         return Err(CacheInventoryError::FilesystemBoundary { path: cache_root });
     }
     let cache_dir = home_dir

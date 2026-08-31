@@ -269,6 +269,16 @@ impl ToolReleaseRecord {
     pub fn artifacts(&self) -> &[ToolArtifactRecord] {
         &self.artifacts
     }
+
+    pub(crate) fn with_repository_state(
+        mut self,
+        channels: Vec<Channel>,
+        status: ToolReleaseStatus,
+    ) -> Self {
+        self.channels = channels;
+        self.status = status;
+        self
+    }
 }
 
 impl<'de> Deserialize<'de> for ToolReleaseRecord {

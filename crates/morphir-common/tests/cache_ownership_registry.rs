@@ -181,6 +181,40 @@ fn failed_handoff_returns_a_lease_that_keeps_cleanup_excluded() {
 }
 
 #[test]
+fn selected_cleanup_is_not_blocked_by_an_unrelated_invalid_namespace() {
+    let (_directory, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    let artifact = home.downloads_cache_dir().join("old.pkg");
+    std::fs::write(&artifact, b"old").unwrap();
+    register(&home, "downloads", "old.pkg", 1);
+    register(&home, "indexes", "catalog.json", 1);
+    std::fs::write(home.indexes_cache_dir(), b"not a namespace directory").unwrap();
+
+    let session = CacheMaintenanceSession::begin(&home).unwrap();
+    let inventory = session
+        .inventory(&["downloads"], CacheInventoryLimits::default())
+        .unwrap();
+    let plan = plan_cache_cleanup(
+        inventory,
+        CachePolicy::new(Duration::from_secs(1), 0),
+        10,
+        CleanupMode::All,
+    )
+    .unwrap();
+    let report = session
+        .execute_cleanup(
+            &plan,
+            CacheInventoryLimits::default(),
+            CacheExecutionLimits::new(10, 1024).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(report.removed_bytes(), 3);
+    assert!(!artifact.exists());
+    assert!(home.indexes_cache_dir().is_file());
+}
+
+#[test]
 fn malformed_and_oversized_registries_fail_closed() {
     let (_directory, home) = a_morphir_home();
     let path = home.cache_ownership_registry_file();

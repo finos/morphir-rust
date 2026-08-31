@@ -85,6 +85,20 @@ impl std::error::Error for CacheOwnershipHandoffError {
 }
 
 /// Load the trusted cache ownership registry under suite-wide coordination.
+///
+/// ```
+/// use morphir_common::cache_maintenance::load_cache_ownership_registry;
+/// use morphir_common::home::MorphirHome;
+///
+/// let temporary_home = tempfile::tempdir()?;
+/// let home = MorphirHome::resolve_from(
+///     Some(temporary_home.path().as_os_str()),
+///     None,
+/// )?;
+/// let registry = load_cache_ownership_registry(&home)?;
+/// assert!(registry.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn load_cache_ownership_registry(
     home: &MorphirHome,
 ) -> Result<CacheOwnershipRegistry, CacheOwnershipPersistenceError> {

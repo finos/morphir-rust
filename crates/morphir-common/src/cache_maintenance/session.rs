@@ -157,7 +157,18 @@ impl<'home> CacheMaintenanceSession<'home> {
         inventory_limits: CacheInventoryLimits,
         execution_limits: CacheExecutionLimits,
     ) -> Result<CacheExecutionReport, CacheMaintenanceSessionError> {
-        let namespaces = self.ownership.namespaces()?;
+        let selected_names = plan
+            .decisions()
+            .iter()
+            .filter(|decision| decision.will_remove())
+            .map(|decision| decision.entry().namespace())
+            .collect::<BTreeSet<_>>();
+        let namespaces = self
+            .ownership
+            .namespaces()?
+            .into_iter()
+            .filter(|namespace| selected_names.contains(namespace.name()))
+            .collect::<Vec<_>>();
         super::executor::execute_cache_cleanup_under_guard(
             self.home,
             &self.guard,

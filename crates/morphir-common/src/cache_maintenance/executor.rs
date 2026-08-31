@@ -110,6 +110,35 @@ impl CacheExecutionItem {
     }
 }
 
+pub(crate) struct GuardedCacheExecution<'a> {
+    home: &'a MorphirHome,
+    guard: &'a MaintenanceGuard,
+    plan: &'a CleanupPlan,
+    ownership: &'a [CacheNamespace],
+    inventory_limits: CacheInventoryLimits,
+    limits: CacheExecutionLimits,
+}
+
+impl<'a> GuardedCacheExecution<'a> {
+    pub(crate) fn new(
+        home: &'a MorphirHome,
+        guard: &'a MaintenanceGuard,
+        plan: &'a CleanupPlan,
+        ownership: &'a [CacheNamespace],
+        inventory_limits: CacheInventoryLimits,
+        limits: CacheExecutionLimits,
+    ) -> Self {
+        Self {
+            home,
+            guard,
+            plan,
+            ownership,
+            inventory_limits,
+            limits,
+        }
+    }
+}
+
 /// Deterministic, serializable result of a bounded cleanup execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,7 +272,10 @@ pub fn execute_cache_cleanup(
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
     let guard = MaintenanceGuard::acquire(home)?;
-    execute_cache_cleanup_under_guard(home, &guard, plan, ownership, inventory_limits, limits)
+    execute_cache_cleanup_observing_terminal(
+        GuardedCacheExecution::new(home, &guard, plan, ownership, inventory_limits, limits),
+        |_, _| {},
+    )
 }
 
 pub(crate) fn execute_cache_cleanup_under_guard(
@@ -254,7 +286,21 @@ pub(crate) fn execute_cache_cleanup_under_guard(
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let selected_entries = plan
+    execute_cache_cleanup_observing_terminal(
+        GuardedCacheExecution::new(home, guard, plan, ownership, inventory_limits, limits),
+        |_, _| {},
+    )
+}
+
+pub(crate) fn execute_cache_cleanup_observing_terminal<F>(
+    request: GuardedCacheExecution<'_>,
+    mut on_terminal: F,
+) -> Result<CacheExecutionReport, CacheExecutionError>
+where
+    F: FnMut(&str, &str),
+{
+    let selected_entries = request
+        .plan
         .decisions()
         .iter()
         .filter(|decision| decision.will_remove())
@@ -262,12 +308,15 @@ pub(crate) fn execute_cache_cleanup_under_guard(
     info!(
         event = "cache_cleanup_started",
         selected_entries,
-        max_removals = limits.max_removals,
-        max_bytes = limits.max_bytes,
+        max_removals = request.limits.max_removals,
+        max_bytes = request.limits.max_bytes,
         "cache cleanup started"
     );
-    let result =
-        execute_cache_cleanup_inner(home, guard, plan, ownership, inventory_limits, limits);
+    let mut terminal_entries = 0_usize;
+    let result = execute_cache_cleanup_inner(request, &mut |namespace, path| {
+        terminal_entries += 1;
+        on_terminal(namespace, path);
+    });
     match &result {
         Ok(report) => {
             for (entry_index, item) in report.items().iter().enumerate() {
@@ -292,6 +341,7 @@ pub(crate) fn execute_cache_cleanup_under_guard(
         Err(error) => warn!(
             event = "cache_cleanup_failed",
             selected_entries,
+            terminal_entries,
             error_code = error.code(),
             "cache cleanup failed"
         ),
@@ -299,14 +349,21 @@ pub(crate) fn execute_cache_cleanup_under_guard(
     result
 }
 
-fn execute_cache_cleanup_inner(
-    home: &MorphirHome,
-    guard: &MaintenanceGuard,
-    plan: &CleanupPlan,
-    ownership: &[CacheNamespace],
-    inventory_limits: CacheInventoryLimits,
-    limits: CacheExecutionLimits,
-) -> Result<CacheExecutionReport, CacheExecutionError> {
+fn execute_cache_cleanup_inner<F>(
+    request: GuardedCacheExecution<'_>,
+    on_terminal: &mut F,
+) -> Result<CacheExecutionReport, CacheExecutionError>
+where
+    F: FnMut(&str, &str),
+{
+    let GuardedCacheExecution {
+        home,
+        guard,
+        plan,
+        ownership,
+        inventory_limits,
+        limits,
+    } = request;
     let home_dir = guard.home_dir();
     let trash = open_maintenance_trash(home, home_dir)?;
     let recovered = sweep_existing_trash(&trash, limits)?;
@@ -357,11 +414,14 @@ fn execute_cache_cleanup_inner(
         budgeted_bytes = next_budgeted_bytes;
 
         match revalidate_entry(&inventories, entry) {
-            RevalidatedEntry::Missing => items.push(execution_item(
-                entry,
-                None,
-                CacheExecutionDisposition::Missing,
-            )),
+            RevalidatedEntry::Missing => {
+                on_terminal(entry.namespace(), entry.path());
+                items.push(execution_item(
+                    entry,
+                    None,
+                    CacheExecutionDisposition::Missing,
+                ));
+            }
             RevalidatedEntry::ActiveLease { observed_bytes } => items.push(execution_item(
                 entry,
                 Some(observed_bytes),
@@ -407,6 +467,7 @@ fn execute_cache_cleanup_inner(
                         removed_bytes = removed_bytes
                             .checked_add(entry.bytes())
                             .ok_or(CacheExecutionError::ByteCountOverflow)?;
+                        on_terminal(entry.namespace(), entry.path());
                         items.push(execution_item(
                             entry,
                             Some(entry.bytes()),

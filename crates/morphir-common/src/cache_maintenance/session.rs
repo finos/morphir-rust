@@ -3,9 +3,9 @@ use super::ownership::{
     load_cache_ownership_registry_under_guard, save_cache_ownership_registry_under_guard,
 };
 use super::{
-    CacheEntry, CacheExecutionDisposition, CacheExecutionError, CacheExecutionLimits,
-    CacheExecutionReport, CacheInventoryError, CacheInventoryLimits, CacheNamespace,
-    CacheOwnershipPersistenceError, CacheOwnershipRegistry, CleanupPlan,
+    CacheEntry, CacheExecutionError, CacheExecutionLimits, CacheExecutionReport,
+    CacheInventoryError, CacheInventoryLimits, CacheNamespace, CacheOwnershipPersistenceError,
+    CacheOwnershipRegistry, CleanupPlan,
 };
 use crate::home::MorphirHome;
 use std::collections::{BTreeMap, BTreeSet};
@@ -202,24 +202,33 @@ impl<'home> CacheMaintenanceSession<'home> {
             .into_iter()
             .filter(|namespace| selected_names.contains(namespace.name()))
             .collect::<Vec<_>>();
-        let report = super::executor::execute_cache_cleanup_under_guard(
+        let request = super::executor::GuardedCacheExecution::new(
             self.home,
             &self.guard,
             plan,
             &namespaces,
             inventory_limits,
             execution_limits,
-        )?;
+        );
+        let mut terminal_entries = Vec::new();
+        let result = super::executor::execute_cache_cleanup_observing_terminal(
+            request,
+            |namespace, path| {
+                terminal_entries.push((namespace.to_owned(), path.to_owned()));
+            },
+        );
+        self.finish_execution(result, terminal_entries)
+    }
+
+    fn finish_execution(
+        self,
+        result: Result<CacheExecutionReport, CacheExecutionError>,
+        terminal_entries: Vec<(String, String)>,
+    ) -> Result<CacheExecutionReport, CacheMaintenanceSessionError> {
         let mut compacted = self.ownership.clone();
         let mut compacted_entries = 0_usize;
-        for item in report.items() {
-            if matches!(
-                item.disposition(),
-                CacheExecutionDisposition::Removed | CacheExecutionDisposition::Missing
-            ) {
-                compacted_entries +=
-                    usize::from(compacted.unregister(item.namespace(), item.path())?);
-            }
+        for (namespace, path) in terminal_entries {
+            compacted_entries += usize::from(compacted.unregister(&namespace, &path)?);
         }
         if compacted_entries > 0 {
             save_cache_ownership_registry_under_guard(self.home, &compacted, &self.guard)?;
@@ -231,7 +240,7 @@ impl<'home> CacheMaintenanceSession<'home> {
                 "terminal cache ownership entries compacted"
             );
         }
-        Ok(report)
+        result.map_err(CacheMaintenanceSessionError::Execution)
     }
 }
 
@@ -274,5 +283,41 @@ mod tests {
         );
         drop(session);
         assert!(load_cache_ownership_registry(&home).unwrap().is_empty());
+    }
+
+    #[test]
+    fn partial_execution_outcomes_are_compacted_before_returning_the_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = MorphirHome::resolve_from(Some(directory.path().as_os_str()), None).unwrap();
+        std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+        let first = home.downloads_cache_dir().join("first.pkg");
+        let second = home.downloads_cache_dir().join("second.pkg");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&second, b"second").unwrap();
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "first.pkg")
+            .unwrap()
+            .finish(1)
+            .unwrap();
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "second.pkg")
+            .unwrap()
+            .finish(1)
+            .unwrap();
+
+        let session = CacheMaintenanceSession::begin(&home).unwrap();
+        let error = session
+            .finish_execution(
+                Err(CacheExecutionError::ByteCountOverflow),
+                vec![("downloads".to_owned(), "first.pkg".to_owned())],
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CacheMaintenanceSessionError::Execution(CacheExecutionError::ByteCountOverflow)
+        ));
+        let mut registry = load_cache_ownership_registry(&home).unwrap();
+        assert_eq!(registry.len(), 1);
+        assert!(registry.unregister("downloads", "second.pkg").unwrap());
+        assert!(registry.is_empty());
     }
 }

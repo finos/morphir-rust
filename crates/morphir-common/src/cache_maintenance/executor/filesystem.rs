@@ -497,7 +497,7 @@ where
             Ok(_) => break,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 missing.push(directory.to_path_buf());
-                candidate = directory.parent();
+                candidate = nonempty_parent(directory);
             }
             Err(source) => return Err(io_error(directory, source)),
         }
@@ -507,11 +507,26 @@ where
     // Persist each new directory entry from the leaf toward the nearest
     // pre-existing ancestor so no durable parent depends on a lost child.
     for directory in missing {
-        if let Some(parent) = directory.parent() {
+        if let Some(parent) = directory_entry_parent(&directory) {
             sync_parent(parent)?;
         }
     }
     Ok(())
+}
+
+fn nonempty_parent(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+fn directory_entry_parent(path: &Path) -> Option<&Path> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
+    })
 }
 
 #[cfg(unix)]

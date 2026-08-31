@@ -29,6 +29,17 @@ fn durable_home_creation_syncs_new_entries_from_leaf_to_existing_ancestor() {
 }
 
 #[test]
+fn relative_home_creation_stops_before_empty_path_and_syncs_current_directory() {
+    let relative_home = std::path::Path::new("morphir-home");
+
+    assert_eq!(super::nonempty_parent(relative_home), None);
+    assert_eq!(
+        super::directory_entry_parent(relative_home),
+        Some(std::path::Path::new("."))
+    );
+}
+
+#[test]
 fn removal_refuses_a_link_like_source_ancestor() {
     let root = TempDir::new().unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().as_os_str()), None).unwrap();

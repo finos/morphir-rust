@@ -3217,6 +3217,7 @@ dependencies = [
  "apache-avro",
  "morphir-core",
  "morphir-extension-sdk",
+ "morphir-projection",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3465,6 +3466,18 @@ dependencies = [
  "serde",
  "serde_yaml",
  "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "morphir-projection"
+version = "0.1.0"
+dependencies = [
+ "morphir-core",
+ "morphir-projection",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 

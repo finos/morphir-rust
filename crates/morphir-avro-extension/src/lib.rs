@@ -7,9 +7,7 @@
 mod avro;
 mod diagnostic;
 mod internal;
-mod model;
 mod naming;
-mod normalize;
 mod options;
 mod render;
 
@@ -19,13 +17,12 @@ pub use avro::{
 };
 pub use diagnostic::{AvroDiagnostic, ProjectedDiagnostic};
 pub use internal::{AvroGenerationError, AvroInternalError};
-pub use model::{
+pub use morphir_projection::{
     Constructor, DistributionKind, EntryPointKind, EntryPointMetadata, IncompletenessKind,
-    NamedType, ProjectionDependency, ProjectionModule, ProjectionPackage, TypeDeclaration,
-    TypeExpr, ValueKind, ValueSpecification,
+    NamedType, NormalizeError, ProjectionDependency, ProjectionModule, ProjectionPackage,
+    TypeDeclaration, TypeExpr, ValueKind, ValueSpecification, normalize,
 };
 pub use naming::escape_idl_identifier;
-pub use normalize::{NormalizeError, normalize};
 pub use options::{
     Aliases, AvroOptions, Dependencies, Projection, Representation, TypeMapping, Unsupported,
 };

@@ -1,10 +1,12 @@
+mod naming;
 mod v3;
 mod v4;
 
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{model::ProjectionPackage, naming::lower_camel};
+use crate::model::ProjectionPackage;
+use naming::lower_camel;
 
 /// Failure to decode the supplied Morphir IR generation.
 #[derive(Debug, Error)]
@@ -94,7 +96,7 @@ impl NormalizeError {
 /// # Examples
 ///
 /// ```
-/// use morphir_avro_extension::{DistributionKind, normalize};
+/// use morphir_projection::{DistributionKind, normalize};
 ///
 /// let ir = serde_json::json!({
 ///     "formatVersion": 3,
@@ -102,7 +104,7 @@ impl NormalizeError {
 /// });
 /// let package = normalize(&ir)?;
 /// assert_eq!(package.kind, DistributionKind::Library);
-/// # Ok::<(), morphir_avro_extension::NormalizeError>(())
+/// # Ok::<(), morphir_projection::NormalizeError>(())
 /// ```
 pub fn normalize(ir: &Value) -> Result<ProjectionPackage, NormalizeError> {
     match recognize_version(ir)? {

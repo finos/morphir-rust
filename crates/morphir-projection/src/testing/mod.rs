@@ -1,5 +1,10 @@
-mod classic;
-mod v4;
+//! Shared Morphir IR fixtures for backend extension tests.
+//!
+//! Enabled by the `testing` feature so that extension crates can build IR
+//! fixtures without duplicating them.
+
+pub mod classic;
+pub mod v4;
 
 // Each integration-test crate uses a different subset of the shared facade.
 #[allow(unused_imports)]

@@ -20,6 +20,7 @@ default-members = [
     "crates/morphir-gleam-binding",
     "crates/morphir-kb",
     "crates/morphir-okf",
+    "crates/morphir-projection",
     "crates/morphir-runtime",
     "crates/morphir-wasm-binding",
     "crates/morphir-workspace",

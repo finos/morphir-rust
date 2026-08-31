@@ -1,26 +1,22 @@
 [package]
-name = "morphir-avro-extension"
+name = "morphir-projection"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Apache Avro backend extension for Morphir"
+description = "Shared Morphir IR normalization for backend extensions"
 
-[lib]
-crate-type = ["rlib", "cdylib"]
+[features]
+testing = []
 
 [dependencies]
 morphir-core = { path = "../morphir-core" }
-morphir-extension-sdk = { path = "../morphir-extension-sdk" }
-morphir-projection = { path = "../morphir-projection" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.10"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-apache-avro = "=0.22.0"
-morphir-projection = { path = "../morphir-projection", features = ["testing"] }
+morphir-projection = { path = ".", features = ["testing"] }
 pretty_assertions = "1.4"

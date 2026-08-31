@@ -6,6 +6,8 @@ use crate::extensions::protocol::{
     ExtensionResponse, InitializeResult, JSONRPC_VERSION, RpcError, methods,
 };
 use crate::{DaemonError, Result};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
 use std::collections::HashSet;
@@ -96,6 +98,14 @@ fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Valu
             ))
         })?;
         artifact.path = path.as_str().to_owned();
+        if artifact.binary {
+            STANDARD.decode(&artifact.content).map_err(|error| {
+                DaemonError::Extension(format!(
+                    "Generated binary artifact '{}' contains invalid Base64: {error}",
+                    artifact.path
+                ))
+            })?;
+        }
     }
     serde_json::to_value(result).map_err(Into::into)
 }
@@ -313,6 +323,26 @@ mod tests {
                 "unexpected error for {path}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_malformed_binary_generated_artifact_content() {
+        let error = validate_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [{
+                    "path": "schema.avro",
+                    "content": "not base64!",
+                    "binary": true
+                }],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("binary artifact content must be valid base64");
+
+        assert!(error.to_string().contains("Base64"), "{error}");
     }
 
     #[test]

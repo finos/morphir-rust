@@ -60,11 +60,19 @@ pub fn register_cache_ownership(
     path: impl Into<String>,
     last_used: u64,
 ) -> Result<(), CacheOwnershipPersistenceError> {
+    let namespace = namespace.into();
     let guard =
         MaintenanceGuard::acquire(home).map_err(CacheOwnershipPersistenceError::Coordination)?;
     let mut registry = load_cache_ownership_registry_under_guard(home, &guard)?;
-    registry.register_disposable(namespace, path, last_used)?;
-    save_cache_ownership_registry_under_guard(home, &registry, &guard)
+    registry.register_disposable(&namespace, path, last_used)?;
+    save_cache_ownership_registry_under_guard(home, &registry, &guard)?;
+    debug!(
+        event = "cache_ownership_registered",
+        namespace,
+        entry_count = registry.len(),
+        "cache ownership registered"
+    );
+    Ok(())
 }
 
 /// Stop declaring ownership without deleting the cache content itself.
@@ -80,6 +88,13 @@ pub fn unregister_cache_ownership(
     if removed {
         save_cache_ownership_registry_under_guard(home, &registry, &guard)?;
     }
+    debug!(
+        event = "cache_ownership_unregistered",
+        namespace,
+        removed,
+        entry_count = registry.len(),
+        "cache ownership unregistered"
+    );
     Ok(removed)
 }
 

@@ -75,4 +75,8 @@ name = "cache_maintenance_state_acceptance"
 harness = false
 
 [[test]]
+name = "cache_ownership_registry_acceptance"
+harness = false
+
+[[test]]
 name = "cache_maintenance_state"

@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Durable cache-maintenance scheduling state with interval gating, validated continuation cursors,
+  bounded fail-closed loading, and atomic Morphir Home persistence shared by CLI and Desktop.
 - Canonical portable workspace discovery for native daemon and browser hosts, with a root-confined
   native adapter, deterministic browser WASM package, and cross-runtime conformance corpus
 - A shared, side-effect-free cache maintenance policy planner with portable owned-entry identities,

@@ -27,6 +27,7 @@ mod fingerprint;
 mod inventory;
 mod model;
 mod planner;
+mod state;
 
 pub use executor::{
     CacheExecutionDisposition, CacheExecutionError, CacheExecutionItem, CacheExecutionLimits,
@@ -41,3 +42,8 @@ pub use model::{
     CleanupMode, CleanupPlan,
 };
 pub use planner::{CachePlanError, plan_cache_cleanup};
+pub use state::{
+    AutomaticCacheCleanupDecision, CacheCleanupCursor, CacheMaintenanceState,
+    CacheMaintenanceStateError, automatic_cache_cleanup_decision, load_cache_maintenance_state,
+    save_cache_maintenance_state,
+};

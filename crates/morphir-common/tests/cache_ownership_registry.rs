@@ -146,6 +146,41 @@ fn refresh_handoff_precedes_a_waiting_cleanup_session() {
 }
 
 #[test]
+fn failed_handoff_returns_a_lease_that_keeps_cleanup_excluded() {
+    let (_directory, home) = a_morphir_home();
+    let registry_path = home.cache_ownership_registry_file();
+    std::fs::create_dir_all(&registry_path).unwrap();
+    let mutation = CacheMutationGuard::acquire(&home).unwrap();
+
+    let failure = mutation
+        .finish_with_ownership("downloads", "recent.pkg", 100)
+        .unwrap_err();
+    let (retained_mutation, source) = failure.into_parts();
+    assert!(source.to_string().contains("unsafe"));
+
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let cleanup = {
+        let home = home.clone();
+        let ready = ready.clone();
+        std::thread::spawn(move || {
+            ready.wait();
+            let failed_closed = CacheMaintenanceSession::begin(&home).is_err();
+            finished_tx.send(failed_closed).unwrap();
+        })
+    };
+    ready.wait();
+    assert!(matches!(
+        finished_rx.recv_timeout(Duration::from_millis(200)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+
+    drop(retained_mutation);
+    assert!(finished_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    cleanup.join().unwrap();
+}
+
+#[test]
 fn malformed_and_oversized_registries_fail_closed() {
     let (_directory, home) = a_morphir_home();
     let path = home.cache_ownership_registry_file();

@@ -12,6 +12,22 @@ const MAX_BYTES: u64 = 64 * 1024;
 ///
 /// Malformed, oversized, or link-like state fails closed so callers do not
 /// accidentally reset the automatic-maintenance schedule.
+///
+/// ```
+/// use morphir_common::cache_maintenance::{
+///     CacheMaintenanceState, load_cache_maintenance_state,
+/// };
+/// use morphir_common::home::MorphirHome;
+///
+/// let temporary_home = tempfile::tempdir()?;
+/// let home = MorphirHome::resolve_from(
+///     Some(temporary_home.path().as_os_str()),
+///     None,
+/// )?;
+/// let state = load_cache_maintenance_state(&home)?;
+/// assert_eq!(state, CacheMaintenanceState::default());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn load_cache_maintenance_state(
     home: &MorphirHome,
 ) -> Result<CacheMaintenanceState, CacheMaintenanceStateError> {
@@ -55,6 +71,24 @@ where
 }
 
 /// Atomically replace durable automatic-maintenance state beneath Morphir Home.
+///
+/// ```
+/// use morphir_common::cache_maintenance::{
+///     CacheMaintenanceState, load_cache_maintenance_state,
+///     save_cache_maintenance_state,
+/// };
+/// use morphir_common::home::MorphirHome;
+///
+/// let temporary_home = tempfile::tempdir()?;
+/// let home = MorphirHome::resolve_from(
+///     Some(temporary_home.path().as_os_str()),
+///     None,
+/// )?;
+/// let state = CacheMaintenanceState::default().completed(1_000);
+/// save_cache_maintenance_state(&home, &state)?;
+/// assert_eq!(load_cache_maintenance_state(&home)?, state);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn save_cache_maintenance_state(
     home: &MorphirHome,
     state: &CacheMaintenanceState,

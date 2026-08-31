@@ -47,6 +47,43 @@ pub enum CacheOwnershipPersistenceError {
     },
 }
 
+/// Failed producer-to-maintenance handoff that retains the mutation lease.
+///
+/// Call [`Self::into_parts`] to recover the guard and keep cleanup excluded
+/// while retrying, quarantining, or otherwise handling the cache content.
+pub struct CacheOwnershipHandoffError {
+    guard: CacheMutationGuard,
+    source: CacheOwnershipPersistenceError,
+}
+
+impl CacheOwnershipHandoffError {
+    /// Recover the still-held mutation lease and the publication failure.
+    pub fn into_parts(self) -> (CacheMutationGuard, CacheOwnershipPersistenceError) {
+        (self.guard, self.source)
+    }
+}
+
+impl std::fmt::Debug for CacheOwnershipHandoffError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CacheOwnershipHandoffError")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for CacheOwnershipHandoffError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl std::error::Error for CacheOwnershipHandoffError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// Load the trusted cache ownership registry under suite-wide coordination.
 pub fn load_cache_ownership_registry(
     home: &MorphirHome,
@@ -110,9 +147,23 @@ impl CacheMutationGuard {
     ///
     /// The shared mutation lease remains held until the registry replacement is
     /// durable, so cleanup cannot act on the previous `last_used` timestamp in
-    /// the handoff between cache use and ownership publication.
+    /// the handoff between cache use and ownership publication. A failed
+    /// handoff returns [`CacheOwnershipHandoffError`], which retains the lease.
     pub fn finish_with_ownership(
         self,
+        namespace: impl Into<String>,
+        path: impl Into<String>,
+        last_used: u64,
+    ) -> Result<(), CacheOwnershipHandoffError> {
+        let result = self.publish_ownership(namespace, path, last_used);
+        result.map_err(|source| CacheOwnershipHandoffError {
+            guard: self,
+            source,
+        })
+    }
+
+    fn publish_ownership(
+        &self,
         namespace: impl Into<String>,
         path: impl Into<String>,
         last_used: u64,
@@ -138,6 +189,18 @@ impl CacheMutationGuard {
     /// registry. The cache content itself is not modified.
     pub fn finish_releasing_ownership(
         self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<bool, CacheOwnershipHandoffError> {
+        let result = self.release_ownership(namespace, path);
+        result.map_err(|source| CacheOwnershipHandoffError {
+            guard: self,
+            source,
+        })
+    }
+
+    fn release_ownership(
+        &self,
         namespace: &str,
         path: &str,
     ) -> Result<bool, CacheOwnershipPersistenceError> {

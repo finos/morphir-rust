@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;
+  extension acquisition, negotiation, and daemon result validation enforce that contract.
+
 ### Changed
 
 - **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase

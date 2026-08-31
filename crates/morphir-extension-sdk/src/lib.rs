@@ -101,7 +101,7 @@ pub mod types;
 
 // Re-exports
 pub use error::{ExtensionError, Result};
-pub use traits::{Backend, Extension, Frontend, Transform, Validator};
+pub use traits::{Backend, Extension, Frontend, Transform, Validator, Workspace};
 pub use types::*;
 
 /// Export an extension implementation with JSON-RPC dispatch
@@ -173,6 +173,10 @@ macro_rules! __push_extension_types {
         $types.push($crate::ExtensionType::Transform);
         $crate::__push_extension_types!($types $(, $remaining)*);
     };
+    ($types:ident, workspace $(, $remaining:ident)*) => {
+        $types.push($crate::ExtensionType::Workspace);
+        $crate::__push_extension_types!($types $(, $remaining)*);
+    };
     ($types:ident) => {};
 }
 
@@ -194,6 +198,10 @@ macro_rules! __push_extension_dispatchers {
     };
     ($dispatchers:ident, $impl:ty, transform $(, $remaining:ident)*) => {
         $dispatchers.push($crate::__dispatch_transform::<$impl>);
+        $crate::__push_extension_dispatchers!($dispatchers, $impl $(, $remaining)*);
+    };
+    ($dispatchers:ident, $impl:ty, workspace $(, $remaining:ident)*) => {
+        $dispatchers.push($crate::__dispatch_workspace::<$impl>);
         $crate::__push_extension_dispatchers!($dispatchers, $impl $(, $remaining)*);
     };
     ($dispatchers:ident, $impl:ty) => {};
@@ -356,6 +364,19 @@ pub fn __dispatch_transform<E: Transform>(
     })
 }
 
+#[doc(hidden)]
+pub fn __dispatch_workspace<E: Workspace>(
+    extension: &E,
+    request: &protocol::ExtensionRequest,
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
+    (request.method == protocol::methods::WORKSPACE_DISCOVER).then(|| {
+        let params: morphir_workspace::DiscoveryRequest =
+            serde_json::from_value(request.params.clone())
+                .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
+        serde_json::to_value(extension.discover(params)?).map_err(ExtensionError::from)
+    })
+}
+
 // Re-export extism_pdk for use in macro
 #[doc(hidden)]
 #[cfg(target_arch = "wasm32")]
@@ -365,6 +386,11 @@ pub use extism_pdk;
 mod tests {
     use super::*;
     use crate::protocol::{ExtensionRequest, methods};
+    use morphir_workspace::{
+        DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree, RelativePath,
+        WORKSPACE_DISCOVERY_PROTOCOL,
+    };
+    use std::collections::BTreeMap;
 
     #[derive(Default)]
     struct RecordingBackend;
@@ -395,6 +421,58 @@ mod tests {
 
         fn target_languages() -> Vec<String> {
             vec!["recording".into()]
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingWorkspace;
+
+    impl Extension for RecordingWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo {
+                id: "recording-workspace".into(),
+                name: "Recording workspace".into(),
+                version: "1.0.0".into(),
+                types: vec![],
+                ..ExtensionInfo::default()
+            }
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![WORKSPACE_DISCOVERY_PROTOCOL],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Workspace for RecordingWorkspace {
+        fn discover(&self, request: DiscoveryRequest) -> Result<DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    fn a_workspace_request() -> DiscoveryRequest {
+        DiscoveryRequest {
+            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            development_root: FileTree {
+                entries: BTreeMap::from([
+                    (RelativePath::root(), FileEntry::Directory),
+                    (
+                        RelativePath::parse("morphir.toml").unwrap(),
+                        FileEntry::File {
+                            text: "[project]\nname = \"acme/orders\"\n".into(),
+                        },
+                    ),
+                ]),
+            },
+            morphir_home: None,
+            system_config: None,
+            environment: BTreeMap::new(),
+            cli_overlay: serde_json::json!({}),
         }
     }
 
@@ -444,6 +522,71 @@ mod tests {
         assert_eq!(result.artifacts[0].path, "observed.json");
         assert_eq!(result.artifacts[0].content, r#"{"observed":true}"#);
         assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn workspace_requests_reach_the_workspace_implementation() {
+        let response = __dispatch_request::<RecordingWorkspace>(
+            &ExtensionRequest::new(methods::WORKSPACE_DISCOVER, a_workspace_request(), 8)
+                .expect("the workspace request should serialize"),
+            &[__dispatch_workspace::<RecordingWorkspace>],
+            &[ExtensionType::Workspace],
+        );
+        let result: DiscoveryResponse = serde_json::from_value(
+            response
+                .result
+                .expect("workspace dispatch should return a discovery response"),
+        )
+        .expect("workspace dispatch should return a typed response");
+
+        let snapshot = result
+            .into_result()
+            .expect("the workspace fixture should discover");
+        assert_eq!(snapshot.projects[0].name, "acme/orders");
+    }
+
+    #[test]
+    fn malformed_workspace_parameters_are_invalid_params() {
+        let request = ExtensionRequest::new(
+            methods::WORKSPACE_DISCOVER,
+            serde_json::json!({ "protocolVersion": "one" }),
+            9,
+        )
+        .expect("the malformed request should still be valid JSON-RPC");
+        let response = __dispatch_request::<RecordingWorkspace>(
+            &request,
+            &[__dispatch_workspace::<RecordingWorkspace>],
+            &[ExtensionType::Workspace],
+        );
+
+        assert_eq!(
+            response
+                .error
+                .expect("workspace parameters should fail")
+                .code,
+            protocol::error_codes::INVALID_PARAMS
+        );
+    }
+
+    #[test]
+    fn initialization_reports_the_workspace_contract() {
+        let response = __dispatch_request::<RecordingWorkspace>(
+            &an_initialize_request(vec!["0.1"]),
+            &[__dispatch_workspace::<RecordingWorkspace>],
+            &[ExtensionType::Workspace],
+        );
+        let result: protocol::InitializeResult =
+            serde_json::from_value(response.result.expect("workspace peers should initialize"))
+                .expect("initialization should return the negotiated session");
+
+        assert_eq!(result.extension.types, vec![ExtensionType::Workspace]);
+        assert_eq!(
+            result.capabilities.workspace,
+            Some(WorkspaceCapability {
+                protocol_versions: vec![WORKSPACE_DISCOVERY_PROTOCOL],
+                discover: true,
+            })
+        );
     }
 
     #[test]

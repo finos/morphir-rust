@@ -153,6 +153,8 @@ pub enum Capability {
     Transform,
     /// IR validator.
     Validator,
+    /// Morphir workspace discovery provider.
+    Workspace,
 }
 
 /// Backend-specific metadata carried by schema-v2 release records.

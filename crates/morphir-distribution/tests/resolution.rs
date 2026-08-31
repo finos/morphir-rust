@@ -1,6 +1,6 @@
 use morphir_distribution::{
-    ArtifactFilename, Channel, DistributionError, ExtensionHistory, ExtensionId, Platform,
-    RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolId, resolve,
+    ArtifactFilename, Capability, Channel, DistributionError, ExtensionHistory, ExtensionId,
+    Platform, RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolId, resolve,
 };
 use morphir_extension_sdk::protocol::MEP_VERSION;
 use semver::Version;
@@ -58,6 +58,15 @@ fn portable_wasm_release() -> serde_json::Value {
             "filename": "morphir_avro_extension.wasm"
         }]
     })
+}
+
+fn portable_workspace_release() -> serde_json::Value {
+    let mut release = portable_wasm_release();
+    release["id"] = serde_json::json!("morphir-workspace-provider");
+    release["name"] = serde_json::json!("Morphir Workspace Provider");
+    release["capabilities"] = serde_json::json!(["workspace"]);
+    release.as_object_mut().unwrap().remove("backend");
+    release
 }
 
 fn parse_error(record: &serde_json::Value) -> String {
@@ -636,6 +645,25 @@ fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
         backend.generate(),
         "omitted generate must remain compatible"
     );
+}
+
+#[test]
+fn schema_v2_accepts_and_exposes_workspace_capabilities() {
+    let record = portable_workspace_release();
+    let history = ExtensionHistory::parse_jsonl(record.to_string().as_bytes()).unwrap();
+
+    assert_eq!(
+        history.releases()[0].capabilities(),
+        [Capability::Workspace]
+    );
+}
+
+#[test]
+fn schema_v2_rejects_unknown_capabilities() {
+    let mut record = portable_workspace_release();
+    record["capabilities"] = serde_json::json!(["arbitrary-filesystem"]);
+
+    assert!(parse_error(&record).contains("unknown variant"));
 }
 
 #[test]

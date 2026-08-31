@@ -10,6 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
+use morphir_workspace::DiscoveryResponse;
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
 use unicode_normalization::UnicodeNormalization as _;
@@ -56,6 +57,10 @@ pub(super) fn validate_method_result(
     }
     if method == methods::COMPILE {
         return validate_compile_result(request_params, value);
+    }
+    if method == methods::WORKSPACE_DISCOVER {
+        let result: DiscoveryResponse = serde_json::from_value(value)?;
+        return Ok(serde_json::to_value(result)?);
     }
     Ok(value)
 }
@@ -329,6 +334,16 @@ pub(in crate::extensions) fn validate_negotiation(
             "Extension advertised backend capabilities without declaring Backend".into(),
         ));
     }
+    if unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_none() {
+        return Err(DaemonError::Extension(
+            "Extension declared Workspace without workspace capabilities".into(),
+        ));
+    }
+    if !unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_some() {
+        return Err(DaemonError::Extension(
+            "Extension advertised workspace capabilities without declaring Workspace".into(),
+        ));
+    }
     Ok(NegotiatedSession {
         protocol_version: result.protocol_version,
         extension: result.extension,
@@ -369,6 +384,43 @@ mod tests {
                 "def": {"modules": {}}
             }
         })
+    }
+
+    #[test]
+    fn rejects_malformed_workspace_discovery_results() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {"protocolVersion": 1}
+            }),
+        )
+        .expect_err("workspace discovery results must match the shared protocol");
+
+        assert!(error.to_string().contains("missing field"), "{error}");
+    }
+
+    #[test]
+    fn accepts_and_normalizes_workspace_discovery_results() {
+        let value = serde_json::json!({
+            "status": "failure",
+            "error": {
+                "code": "workspace.config.missing",
+                "message": "No workspace configuration was found",
+                "path": null
+            }
+        });
+
+        assert_eq!(
+            validate_method_result(
+                methods::WORKSPACE_DISCOVER,
+                &serde_json::json!({}),
+                value.clone()
+            )
+            .expect("a typed workspace failure is a valid discovery result"),
+            value
+        );
     }
 
     #[test]

@@ -67,3 +67,12 @@ pub trait Transform: Extension {
         Vec::new()
     }
 }
+
+/// Workspace extension: discovers Morphir projects from a confined portable request.
+pub trait Workspace: Extension {
+    /// Discover a workspace using protocol-neutral file trees supplied by the host.
+    fn discover(
+        &self,
+        request: morphir_workspace::DiscoveryRequest,
+    ) -> Result<morphir_workspace::DiscoveryResponse>;
+}

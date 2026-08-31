@@ -67,6 +67,16 @@ impl NegotiatedSession {
             }
             methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
             methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),
+            methods::WORKSPACE_DISCOVER => {
+                self.extension.types.contains(&ExtensionType::Workspace)
+                    && self
+                        .capabilities
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|workspace| {
+                            workspace.discover && workspace.protocol_versions.contains(&1)
+                        })
+            }
             _ => true,
         }
     }

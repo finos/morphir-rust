@@ -17,6 +17,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 # Workspace dependencies
+morphir-workspace = { path = "../morphir-workspace" }
 thiserror = { workspace = true }
 
 # Serialization

@@ -1,6 +1,8 @@
 #!/bin/sh
 #MISE description="Lint Rust code with clippy"
 
+set -eu
+
 echo "Running Rust linter..."
 cargo clippy --all-targets --all-features -- -D warnings
 

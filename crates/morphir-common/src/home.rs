@@ -148,6 +148,11 @@ impl MorphirHome {
         self.locks_dir().join("maintenance.lock")
     }
 
+    /// Interprocess lock serializing trusted cache ownership updates.
+    pub fn cache_ownership_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("cache-ownership.lock")
+    }
+
     /// Temporary destination for entries selected for atomic cleanup.
     pub fn maintenance_trash_dir(&self) -> PathBuf {
         self.temp_dir().join("maintenance-trash")
@@ -342,6 +347,10 @@ mod tests {
         assert_eq!(
             home.maintenance_lock_file(),
             Path::new("/mh/locks/maintenance.lock")
+        );
+        assert_eq!(
+            home.cache_ownership_lock_file(),
+            Path::new("/mh/locks/cache-ownership.lock")
         );
         assert_eq!(
             home.maintenance_trash_dir(),

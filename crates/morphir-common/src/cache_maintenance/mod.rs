@@ -46,7 +46,7 @@ pub use model::{
 };
 pub use ownership::{
     CacheOwnershipPersistenceError, CacheOwnershipRegistry, CacheOwnershipRegistryError,
-    load_cache_ownership_registry, register_cache_ownership, unregister_cache_ownership,
+    load_cache_ownership_registry,
 };
 pub use planner::{CachePlanError, plan_cache_cleanup};
 pub use session::{CacheMaintenanceSession, CacheMaintenanceSessionError};

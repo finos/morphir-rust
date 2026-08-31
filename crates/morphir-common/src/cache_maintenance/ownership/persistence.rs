@@ -1,7 +1,10 @@
 use super::{CacheOwnershipRegistry, CacheOwnershipRegistryError};
 use crate::cache_maintenance::durable_json::{self, DurableJsonError, DurableJsonSpec};
-use crate::cache_maintenance::executor::MaintenanceGuard;
+use crate::cache_maintenance::executor::{
+    CacheMutationGuard, CacheOwnershipWriteGuard, MaintenanceGuard,
+};
 use crate::home::MorphirHome;
+use cap_std::fs::Dir;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::debug;
@@ -53,57 +56,19 @@ pub fn load_cache_ownership_registry(
     load_cache_ownership_registry_under_guard(home, &guard)
 }
 
-/// Register or refresh one disposable entry after its cache mutation completes.
-pub fn register_cache_ownership(
-    home: &MorphirHome,
-    namespace: impl Into<String>,
-    path: impl Into<String>,
-    last_used: u64,
-) -> Result<(), CacheOwnershipPersistenceError> {
-    let namespace = namespace.into();
-    let guard =
-        MaintenanceGuard::acquire(home).map_err(CacheOwnershipPersistenceError::Coordination)?;
-    let mut registry = load_cache_ownership_registry_under_guard(home, &guard)?;
-    registry.register_disposable(&namespace, path, last_used)?;
-    save_cache_ownership_registry_under_guard(home, &registry, &guard)?;
-    debug!(
-        event = "cache_ownership_registered",
-        namespace,
-        entry_count = registry.len(),
-        "cache ownership registered"
-    );
-    Ok(())
-}
-
-/// Stop declaring ownership without deleting the cache content itself.
-pub fn unregister_cache_ownership(
-    home: &MorphirHome,
-    namespace: &str,
-    path: &str,
-) -> Result<bool, CacheOwnershipPersistenceError> {
-    let guard =
-        MaintenanceGuard::acquire(home).map_err(CacheOwnershipPersistenceError::Coordination)?;
-    let mut registry = load_cache_ownership_registry_under_guard(home, &guard)?;
-    let removed = registry.unregister(namespace, path)?;
-    if removed {
-        save_cache_ownership_registry_under_guard(home, &registry, &guard)?;
-    }
-    debug!(
-        event = "cache_ownership_unregistered",
-        namespace,
-        removed,
-        entry_count = registry.len(),
-        "cache ownership unregistered"
-    );
-    Ok(removed)
-}
-
 pub(crate) fn load_cache_ownership_registry_under_guard(
     home: &MorphirHome,
     guard: &MaintenanceGuard,
 ) -> Result<CacheOwnershipRegistry, CacheOwnershipPersistenceError> {
+    load_cache_ownership_registry_from_home(home, guard.home_dir())
+}
+
+fn load_cache_ownership_registry_from_home(
+    home: &MorphirHome,
+    home_dir: &Dir,
+) -> Result<CacheOwnershipRegistry, CacheOwnershipPersistenceError> {
     let path = home.cache_ownership_registry_file();
-    let registry = durable_json::load_from_home(home, guard.home_dir(), &path, FILENAME, MAX_BYTES)
+    let registry = durable_json::load_from_home(home, home_dir, &path, FILENAME, MAX_BYTES)
         .map_err(CacheOwnershipPersistenceError::from)?;
     debug!(
         event = "cache_ownership_registry_loaded",
@@ -113,15 +78,15 @@ pub(crate) fn load_cache_ownership_registry_under_guard(
     Ok(registry)
 }
 
-fn save_cache_ownership_registry_under_guard(
+fn save_cache_ownership_registry_to_home(
     home: &MorphirHome,
     registry: &CacheOwnershipRegistry,
-    guard: &MaintenanceGuard,
+    home_dir: &Dir,
 ) -> Result<(), CacheOwnershipPersistenceError> {
     let path = home.cache_ownership_registry_file();
     durable_json::save_to_home(
         home,
-        guard.home_dir(),
+        home_dir,
         registry,
         DurableJsonSpec {
             path: &path,
@@ -138,6 +103,60 @@ fn save_cache_ownership_registry_under_guard(
         "cache ownership registry saved"
     );
     Ok(())
+}
+
+impl CacheMutationGuard {
+    /// Finish a cache mutation by durably registering or refreshing ownership.
+    ///
+    /// The shared mutation lease remains held until the registry replacement is
+    /// durable, so cleanup cannot act on the previous `last_used` timestamp in
+    /// the handoff between cache use and ownership publication.
+    pub fn finish_with_ownership(
+        self,
+        namespace: impl Into<String>,
+        path: impl Into<String>,
+        last_used: u64,
+    ) -> Result<(), CacheOwnershipPersistenceError> {
+        let namespace = namespace.into();
+        let _write_guard = CacheOwnershipWriteGuard::acquire(self.home())
+            .map_err(CacheOwnershipPersistenceError::Coordination)?;
+        let mut registry = load_cache_ownership_registry_from_home(self.home(), self.home_dir())?;
+        registry.register_disposable(&namespace, path, last_used)?;
+        save_cache_ownership_registry_to_home(self.home(), &registry, self.home_dir())?;
+        debug!(
+            event = "cache_ownership_registered",
+            namespace,
+            entry_count = registry.len(),
+            "cache ownership registered"
+        );
+        Ok(())
+    }
+
+    /// Finish a cache mutation by durably releasing ownership of one entry.
+    ///
+    /// Cleanup remains excluded until the entry is unclassified in the durable
+    /// registry. The cache content itself is not modified.
+    pub fn finish_releasing_ownership(
+        self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<bool, CacheOwnershipPersistenceError> {
+        let _write_guard = CacheOwnershipWriteGuard::acquire(self.home())
+            .map_err(CacheOwnershipPersistenceError::Coordination)?;
+        let mut registry = load_cache_ownership_registry_from_home(self.home(), self.home_dir())?;
+        let removed = registry.unregister(namespace, path)?;
+        if removed {
+            save_cache_ownership_registry_to_home(self.home(), &registry, self.home_dir())?;
+        }
+        debug!(
+            event = "cache_ownership_unregistered",
+            namespace,
+            removed,
+            entry_count = registry.len(),
+            "cache ownership unregistered"
+        );
+        Ok(removed)
+    }
 }
 
 impl From<DurableJsonError> for CacheOwnershipPersistenceError {

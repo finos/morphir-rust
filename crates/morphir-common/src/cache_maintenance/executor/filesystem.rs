@@ -432,15 +432,29 @@ impl Drop for MaintenanceGuard {
 /// changing between its final observation and deletion.
 pub struct CacheMutationGuard {
     file: File,
+    home: MorphirHome,
+    home_dir: Dir,
 }
 
 impl CacheMutationGuard {
     /// Acquire the suite-wide shared cache mutation lease beneath Morphir Home.
     pub fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
-        let (file, _home_dir) = open_maintenance_lock(home)?;
+        let (file, home_dir) = open_maintenance_lock(home)?;
         let path = home.maintenance_lock_file();
         FileExt::lock_shared(&file).map_err(|source| io_error(&path, source))?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            home: home.clone(),
+            home_dir,
+        })
+    }
+
+    pub(crate) fn home(&self) -> &MorphirHome {
+        &self.home
+    }
+
+    pub(crate) fn home_dir(&self) -> &Dir {
+        &self.home_dir
     }
 }
 
@@ -450,20 +464,52 @@ impl Drop for CacheMutationGuard {
     }
 }
 
+pub(crate) struct CacheOwnershipWriteGuard {
+    file: File,
+}
+
+impl CacheOwnershipWriteGuard {
+    pub(crate) fn acquire(home: &MorphirHome) -> Result<Self, CacheExecutionError> {
+        let (file, _home_dir) = open_coordination_lock(
+            home,
+            "cache-ownership.lock",
+            &home.cache_ownership_lock_file(),
+        )?;
+        let path = home.cache_ownership_lock_file();
+        FileExt::lock_exclusive(&file).map_err(|source| io_error(&path, source))?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for CacheOwnershipWriteGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 fn open_maintenance_lock(home: &MorphirHome) -> Result<(File, Dir), CacheExecutionError> {
+    open_coordination_lock(home, "maintenance.lock", &home.maintenance_lock_file())
+}
+
+fn open_coordination_lock(
+    home: &MorphirHome,
+    filename: &str,
+    path: &Path,
+) -> Result<(File, Dir), CacheExecutionError> {
     create_directory_tree_durably(home.root())?;
     let home_dir = Dir::open_ambient_dir(home.root(), ambient_authority())
         .map_err(|source| io_error(home.root(), source))?;
     let locks_path = home.locks_dir();
     let locks_dir = open_or_create_directory(&home_dir, "locks", &locks_path)?;
-    let path = home.maintenance_lock_file();
-    match locks_dir.symlink_metadata("maintenance.lock") {
+    match locks_dir.symlink_metadata(filename) {
         Ok(metadata) if cap_is_link_like(&metadata) || !metadata.is_file() => {
-            return Err(CacheExecutionError::UnsafeMaintenancePath { path });
+            return Err(CacheExecutionError::UnsafeMaintenancePath {
+                path: path.to_path_buf(),
+            });
         }
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(source) => return Err(io_error(&path, source)),
+        Err(source) => return Err(io_error(path, source)),
     }
     let mut options = CapOpenOptions::new();
     options
@@ -473,9 +519,9 @@ fn open_maintenance_lock(home: &MorphirHome) -> Result<(File, Dir), CacheExecuti
         .write(true)
         .follow(FollowSymlinks::No);
     let file = locks_dir
-        .open_with("maintenance.lock", &options)
+        .open_with(filename, &options)
         .map(cap_std::fs::File::into_std)
-        .map_err(|source| io_error(&path, source))?;
+        .map_err(|source| io_error(path, source))?;
     Ok((file, home_dir))
 }
 

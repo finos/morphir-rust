@@ -2,8 +2,7 @@
 
 use morphir_common::cache_maintenance::{
     CacheEntry, CacheEntryState, CacheExecutionLimits, CacheInventoryLimits,
-    CacheMaintenanceSession, CachePolicy, CleanupMode, plan_cache_cleanup,
-    register_cache_ownership, unregister_cache_ownership,
+    CacheMaintenanceSession, CacheMutationGuard, CachePolicy, CleanupMode, plan_cache_cleanup,
 };
 use morphir_common::home::MorphirHome;
 use std::path::PathBuf;
@@ -31,7 +30,7 @@ impl CacheOwnershipRegistryDriver {
         std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
         std::fs::write(&registered, b"registered").unwrap();
         std::fs::write(&unknown, b"unknown").unwrap();
-        register_cache_ownership(&home, "downloads", "registered.pkg", 1).unwrap();
+        register(&home, "downloads", "registered.pkg", 1);
 
         self.home_root = Some(home_root);
         self.home = Some(home);
@@ -44,8 +43,13 @@ impl CacheOwnershipRegistryDriver {
         let released = home.downloads_cache_dir().join("released.pkg");
         std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
         std::fs::write(&released, b"released").unwrap();
-        register_cache_ownership(&home, "downloads", "released.pkg", 1).unwrap();
-        assert!(unregister_cache_ownership(&home, "downloads", "released.pkg").unwrap());
+        register(&home, "downloads", "released.pkg", 1);
+        assert!(
+            CacheMutationGuard::acquire(&home)
+                .unwrap()
+                .finish_releasing_ownership("downloads", "released.pkg")
+                .unwrap()
+        );
 
         self.home_root = Some(home_root);
         self.home = Some(home);
@@ -106,4 +110,11 @@ fn new_home() -> (TempDir, MorphirHome) {
     let home_root = TempDir::new().unwrap();
     let home = MorphirHome::resolve_from(Some(home_root.path().as_os_str()), None).unwrap();
     (home_root, home)
+}
+
+fn register(home: &MorphirHome, namespace: &str, path: &str, last_used: u64) {
+    CacheMutationGuard::acquire(home)
+        .unwrap()
+        .finish_with_ownership(namespace, path, last_used)
+        .unwrap();
 }

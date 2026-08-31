@@ -41,6 +41,37 @@ pub enum CacheMaintenanceSessionError {
 /// Keeping the session alive across inventory, planning, and execution prevents
 /// cleanup from acting on ownership metadata that a producer refreshed or
 /// released concurrently.
+///
+/// ```no_run
+/// use morphir_common::cache_maintenance::{
+///     CacheExecutionLimits, CacheInventoryLimits, CacheMaintenanceSession,
+///     CachePolicy, CleanupMode, plan_cache_cleanup,
+/// };
+/// use morphir_common::home::MorphirHome;
+/// use std::time::Duration;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let home = MorphirHome::resolve()?;
+/// let session = CacheMaintenanceSession::begin(&home)?;
+/// let inventory = session.inventory(
+///     &["desktop", "downloads", "extensions", "indexes"],
+///     CacheInventoryLimits::default(),
+/// )?;
+/// let plan = plan_cache_cleanup(
+///     inventory,
+///     CachePolicy::new(Duration::from_secs(30 * 24 * 60 * 60), 2_000_000_000),
+///     1_735_689_600,
+///     CleanupMode::Policy,
+/// )?;
+/// let report = session.execute_cleanup(
+///     &plan,
+///     CacheInventoryLimits::default(),
+///     CacheExecutionLimits::new(100, 100_000_000)?,
+/// )?;
+/// println!("removed {} bytes", report.removed_bytes());
+/// # Ok(())
+/// # }
+/// ```
 pub struct CacheMaintenanceSession<'home> {
     home: &'home MorphirHome,
     ownership: CacheOwnershipRegistry,

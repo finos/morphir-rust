@@ -2,7 +2,7 @@ mod filesystem;
 mod revalidation;
 
 pub use self::filesystem::CacheMutationGuard;
-pub(crate) use self::filesystem::MaintenanceGuard;
+pub(crate) use self::filesystem::{CacheOwnershipWriteGuard, MaintenanceGuard};
 use self::filesystem::{
     RemovalOutcome, RemovalTarget, TrashRun, create_trash_run, open_maintenance_trash,
     remove_revalidated_entry, sweep_existing_trash,

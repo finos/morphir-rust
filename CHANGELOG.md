@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A versioned, bounded trusted cache-ownership registry with atomic producer handoff,
+  unclassified-content protection, guarded inventory/cleanup sessions, structured events, and
+  durable Morphir Home persistence shared by CLI and Desktop.
 - Durable cache-maintenance scheduling state with interval gating, validated continuation cursors,
   bounded fail-closed loading, and atomic Morphir Home persistence shared by CLI and Desktop.
 - Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;

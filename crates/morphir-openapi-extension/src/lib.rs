@@ -6,8 +6,10 @@
 //! same schema in either output.
 
 mod diagnostic;
+mod options;
 
 pub use diagnostic::{SchemaDiagnostic, SchemaGenerationError};
+pub use options::{SchemaOptions, Unsupported};
 
 use morphir_extension_sdk::{
     Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension, ExtensionCapabilities,
@@ -101,6 +103,14 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
             SchemaDiagnostic::unknown_target(&request.target)
                 .into_diagnostic(DiagnosticSeverity::Error),
         ));
+    };
+    let _options = match SchemaOptions::from_map(&request.options) {
+        Ok(options) => options,
+        Err(diagnostic) => {
+            return Ok(failed(
+                diagnostic.into_diagnostic(DiagnosticSeverity::Error),
+            ));
+        }
     };
     let _package = match morphir_projection::normalize(&request.ir) {
         Ok(package) => package,

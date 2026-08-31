@@ -75,6 +75,36 @@ fn malformed_state_fails_closed_instead_of_resetting_the_schedule() {
 }
 
 #[test]
+fn link_like_data_directory_is_rejected_when_state_is_missing() {
+    let (directory, home) = a_morphir_home();
+    let target = directory.path().join("outside-data");
+    std::fs::create_dir(&target).unwrap();
+    if !create_directory_link(&target, &home.data_dir()) {
+        return;
+    }
+
+    let error = load_cache_maintenance_state(&home).unwrap_err();
+
+    assert!(error.to_string().contains("unsafe"));
+}
+
+#[test]
+fn link_like_maintenance_directory_is_rejected_when_state_is_missing() {
+    let (directory, home) = a_morphir_home();
+    let target = directory.path().join("outside-maintenance");
+    let maintenance = home.data_dir().join("maintenance");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::create_dir(home.data_dir()).unwrap();
+    if !create_directory_link(&target, &maintenance) {
+        return;
+    }
+
+    let error = load_cache_maintenance_state(&home).unwrap_err();
+
+    assert!(error.to_string().contains("unsafe"));
+}
+
+#[test]
 fn oversized_state_is_rejected_at_the_read_boundary() {
     let (_directory, home) = a_morphir_home();
     let path = home.cache_maintenance_state_file();
@@ -129,4 +159,14 @@ fn subsecond_automatic_interval_is_rejected() {
     .unwrap_err();
 
     assert!(error.to_string().contains("nonzero"));
+}
+
+#[cfg(unix)]
+fn create_directory_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+    std::os::unix::fs::symlink(target, link).is_ok()
+}
+
+#[cfg(windows)]
+fn create_directory_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+    std::os::windows::fs::symlink_dir(target, link).is_ok()
 }

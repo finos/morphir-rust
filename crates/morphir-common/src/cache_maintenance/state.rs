@@ -1,5 +1,10 @@
 use super::CacheModelError;
 use crate::home::MorphirHome;
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+#[cfg(windows)]
+use cap_std::fs::MetadataExt as CapMetadataExt;
+use cap_std::fs::{Dir, Metadata as CapMetadata, OpenOptions as CapOpenOptions};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -238,27 +243,59 @@ pub fn automatic_cache_cleanup_decision(
 }
 
 /// Load bounded automatic-maintenance state, returning an empty state if absent.
+///
+/// Malformed, oversized, or link-like state fails closed so callers do not
+/// accidentally reset the automatic-maintenance schedule.
+///
+/// ```
+/// use morphir_common::cache_maintenance::{
+///     CacheMaintenanceState, load_cache_maintenance_state,
+/// };
+/// use morphir_common::home::MorphirHome;
+///
+/// let temporary_home = tempfile::tempdir()?;
+/// let home = MorphirHome::resolve_from(
+///     Some(temporary_home.path().as_os_str()),
+///     None,
+/// )?;
+/// let state = load_cache_maintenance_state(&home)?;
+/// assert_eq!(state, CacheMaintenanceState::default());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn load_cache_maintenance_state(
     home: &MorphirHome,
 ) -> Result<CacheMaintenanceState, CacheMaintenanceStateError> {
     let path = home.cache_maintenance_state_file();
-    let metadata = match fs::symlink_metadata(&path) {
+    let Some(maintenance) = open_state_directory(home)? else {
+        return Ok(CacheMaintenanceState::default());
+    };
+    let metadata = match maintenance.symlink_metadata("cache-cleanup.json") {
+        Ok(metadata) if cap_is_link_like(&metadata) || !metadata.is_file() => {
+            return Err(CacheMaintenanceStateError::UnsafePath { path });
+        }
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(CacheMaintenanceState::default());
         }
         Err(source) => return Err(io_error(&path, source)),
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let mut options = CapOpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let file = maintenance
+        .open_with("cache-cleanup.json", &options)
+        .map_err(|source| io_error(&path, source))?;
+    let opened = file.metadata().map_err(|source| io_error(&path, source))?;
+    if cap_is_link_like(&opened) || !opened.is_file() {
         return Err(CacheMaintenanceStateError::UnsafePath { path });
     }
-    if metadata.len() > MAX_CACHE_MAINTENANCE_STATE_BYTES {
+    if metadata.len() > MAX_CACHE_MAINTENANCE_STATE_BYTES
+        || opened.len() > MAX_CACHE_MAINTENANCE_STATE_BYTES
+    {
         return Err(CacheMaintenanceStateError::StateTooLarge {
             path,
             limit: MAX_CACHE_MAINTENANCE_STATE_BYTES,
         });
     }
-    let file = fs::File::open(&path).map_err(|source| io_error(&path, source))?;
     let mut bytes = Vec::with_capacity((MAX_CACHE_MAINTENANCE_STATE_BYTES + 1) as usize);
     file.take(MAX_CACHE_MAINTENANCE_STATE_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -281,6 +318,39 @@ pub fn load_cache_maintenance_state(
         "cache maintenance state loaded"
     );
     Ok(state)
+}
+
+fn open_state_directory(home: &MorphirHome) -> Result<Option<Dir>, CacheMaintenanceStateError> {
+    let root = match Dir::open_ambient_dir(home.root(), ambient_authority()) {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(io_error(home.root(), source)),
+    };
+    let Some(data) = open_existing_directory(&root, "data", &home.data_dir())? else {
+        return Ok(None);
+    };
+    let maintenance_path = home.data_dir().join("maintenance");
+    open_existing_directory(&data, "maintenance", &maintenance_path)
+}
+
+fn open_existing_directory(
+    parent: &Dir,
+    name: &str,
+    path: &Path,
+) -> Result<Option<Dir>, CacheMaintenanceStateError> {
+    match parent.symlink_metadata(name) {
+        Ok(metadata) if cap_is_link_like(&metadata) || !metadata.is_dir() => {
+            Err(CacheMaintenanceStateError::UnsafePath {
+                path: path.to_path_buf(),
+            })
+        }
+        Ok(_) => parent
+            .open_dir_nofollow(name)
+            .map(Some)
+            .map_err(|source| io_error(path, source)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(io_error(path, source)),
+    }
 }
 
 /// Atomically replace durable automatic-maintenance state beneath Morphir Home.
@@ -335,7 +405,7 @@ fn create_state_directory(
 
 fn create_checked_directory(path: &Path) -> Result<(), CacheMaintenanceStateError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+        Ok(metadata) if std_is_link_like(&metadata) || !metadata.is_dir() => {
             Err(CacheMaintenanceStateError::UnsafePath {
                 path: path.to_path_buf(),
             })
@@ -354,7 +424,7 @@ fn create_checked_directory(path: &Path) -> Result<(), CacheMaintenanceStateErro
 
 fn validate_state_destination(path: &Path) -> Result<(), CacheMaintenanceStateError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if std_is_link_like(&metadata) || !metadata.is_file() => {
             Err(CacheMaintenanceStateError::UnsafePath {
                 path: path.to_path_buf(),
             })
@@ -363,6 +433,32 @@ fn validate_state_destination(path: &Path) -> Result<(), CacheMaintenanceStateEr
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(io_error(path, source)),
     }
+}
+
+#[cfg(windows)]
+fn cap_is_link_like(metadata: &CapMetadata) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_type().is_symlink()
+        || CapMetadataExt::file_attributes(metadata) & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn cap_is_link_like(metadata: &CapMetadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn std_is_link_like(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn std_is_link_like(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 #[cfg(unix)]

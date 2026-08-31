@@ -1,5 +1,7 @@
 use super::CacheModelError;
 use crate::home::MorphirHome;
+#[cfg(unix)]
+use cap_fs_ext::OpenOptionsMaybeDirExt;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 #[cfg(windows)]
@@ -572,9 +574,14 @@ fn cap_is_link_like(metadata: &CapMetadata) -> bool {
 
 #[cfg(unix)]
 fn sync_state_directory(maintenance: &Dir, path: &Path) -> Result<(), CacheMaintenanceStateError> {
+    let mut options = CapOpenOptions::new();
+    options
+        .read(true)
+        .maybe_dir(true)
+        .follow(FollowSymlinks::No);
     maintenance
-        .try_clone()
-        .map(cap_std::fs::Dir::into_std_file)
+        .open_with(".", &options)
+        .map(cap_std::fs::File::into_std)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| io_error(path, source))
 }

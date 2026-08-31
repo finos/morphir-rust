@@ -49,10 +49,11 @@ pub enum CacheOwnershipPersistenceError {
 
 /// Ownership-aware mutation lease for one registered cache identity.
 ///
-/// Beginning the mutation durably removes any prior registration before this
-/// capability is returned. The suite-wide mutation lease and ownership writer
-/// lock remain held until the capability is dropped or finished, so another
-/// producer cannot publish the same identity while it may still be changing.
+/// Beginning the mutation durably removes any prior registration that overlaps
+/// the mutation path before this capability is returned. The suite-wide
+/// mutation lease and ownership writer lock remain held until the capability is
+/// dropped or finished, so another producer cannot publish overlapping
+/// ownership while the path may still be changing.
 ///
 /// ```no_run
 /// use morphir_common::cache_maintenance::CacheOwnershipMutationGuard;
@@ -75,11 +76,11 @@ pub struct CacheOwnershipMutationGuard {
     _ownership_guard: CacheOwnershipWriteGuard,
     namespace: String,
     path: String,
-    previous_last_used: Option<u64>,
+    invalidated_last_used: Option<u64>,
 }
 
 impl CacheOwnershipMutationGuard {
-    /// Begin mutating one cache identity after durably invalidating ownership.
+    /// Begin mutating one cache identity after durably invalidating overlapping ownership.
     ///
     /// If the producer exits before [`Self::finish`], the entry remains absent
     /// from the trusted registry and cleanup therefore treats its content as
@@ -109,14 +110,15 @@ impl CacheOwnershipMutationGuard {
         let ownership_guard = CacheOwnershipWriteGuard::acquire(home, guard.home_dir())
             .map_err(CacheOwnershipPersistenceError::Coordination)?;
         let mut registry = load_cache_ownership_registry_from_home(home, guard.home_dir())?;
-        let previous_last_used = registry.unregister_with_last_used(&namespace, &path)?;
-        if previous_last_used.is_some() {
+        let (invalidated_entries, invalidated_last_used) =
+            registry.unregister_overlapping_with_last_used(&namespace, &path)?;
+        if invalidated_entries > 0 {
             save_cache_ownership_registry_to_home(home, &registry, guard.home_dir())?;
         }
         debug!(
             event = "cache_ownership_mutation_begun",
             namespace,
-            previously_owned = previous_last_used.is_some(),
+            invalidated_entries,
             entry_count = registry.len(),
             "cache ownership invalidated before mutation"
         );
@@ -125,7 +127,7 @@ impl CacheOwnershipMutationGuard {
             _ownership_guard: ownership_guard,
             namespace,
             path,
-            previous_last_used,
+            invalidated_last_used,
         })
     }
 
@@ -153,7 +155,7 @@ impl CacheOwnershipMutationGuard {
 
     fn publish_ownership(&self, last_used: u64) -> Result<(), CacheOwnershipPersistenceError> {
         let last_used = self
-            .previous_last_used
+            .invalidated_last_used
             .map_or(last_used, |previous| previous.max(last_used));
         let mut registry =
             load_cache_ownership_registry_from_home(self.guard.home(), self.guard.home_dir())?;
@@ -170,9 +172,9 @@ impl CacheOwnershipMutationGuard {
 
     /// Finish without republishing ownership, leaving the content protected.
     ///
-    /// Returns whether the identity was registered when the mutation began.
+    /// Returns whether overlapping ownership was registered when the mutation began.
     pub fn finish_unowned(self) -> bool {
-        self.previous_last_used.is_some()
+        self.invalidated_last_used.is_some()
     }
 }
 

@@ -2,10 +2,11 @@
 //!
 //! Producers begin a [`CacheOwnershipMutationGuard`] for a specific identity
 //! before writing cache content, close their content handles, and finish the
-//! guard by publishing ownership. Beginning durably invalidates any prior
-//! registration; finishing keeps cleanup excluded until the new registration
-//! is durable. An interrupted producer therefore leaves protected, unknown
-//! content rather than stale disposable ownership.
+//! guard by publishing ownership. Beginning durably invalidates every prior
+//! registration that overlaps the mutation path; finishing keeps cleanup
+//! excluded until the new registration is durable. An interrupted producer
+//! therefore leaves protected, unknown content rather than stale disposable
+//! ownership.
 //!
 //! ```no_run
 //! use morphir_common::cache_maintenance::CacheOwnershipMutationGuard;

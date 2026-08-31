@@ -4,8 +4,8 @@ mod native;
 mod pinned;
 mod registration;
 
-pub(crate) use registration::portable_comparison_key;
 pub use registration::{CacheNamespace, CacheRegistrationError};
+pub(crate) use registration::{comparison_keys_overlap, portable_comparison_key};
 
 use self::identity::portable_identity;
 use super::{CacheEntry, CacheModelError};

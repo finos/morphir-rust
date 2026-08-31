@@ -89,7 +89,7 @@ fn paths_overlap(first: &str, second: &str) -> bool {
     comparison_keys_overlap(&first, &second)
 }
 
-fn comparison_keys_overlap(first: &str, second: &str) -> bool {
+pub(crate) fn comparison_keys_overlap(first: &str, second: &str) -> bool {
     first == second
         || first
             .strip_prefix(second)

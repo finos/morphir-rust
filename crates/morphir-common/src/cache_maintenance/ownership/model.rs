@@ -1,4 +1,4 @@
-use super::super::inventory::portable_comparison_key;
+use super::super::inventory::{comparison_keys_overlap, portable_comparison_key};
 use super::super::{CacheEntry, CacheEntryState, CacheNamespace, CacheRegistrationError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -140,6 +140,30 @@ impl CacheOwnershipRegistry {
             .entries
             .remove(&comparison_key(namespace, path))
             .map(|entry| entry.last_used))
+    }
+
+    pub(crate) fn unregister_overlapping_with_last_used(
+        &mut self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<(usize, Option<u64>), CacheOwnershipRegistryError> {
+        CacheNamespace::new(namespace)?.with_disposable(path, 0)?;
+        let candidate = comparison_key(namespace, path);
+        let mut invalidated_entries = 0_usize;
+        let mut invalidated_last_used = None;
+        self.entries.retain(|key, entry| {
+            let overlaps = key.0 == candidate.0 && comparison_keys_overlap(&key.1, &candidate.1);
+            if overlaps {
+                invalidated_entries += 1;
+                invalidated_last_used = Some(
+                    invalidated_last_used.map_or(entry.last_used, |last_used: u64| {
+                        last_used.max(entry.last_used)
+                    }),
+                );
+            }
+            !overlaps
+        });
+        Ok((invalidated_entries, invalidated_last_used))
     }
 
     pub(crate) fn prune_unobserved(
@@ -294,6 +318,33 @@ mod tests {
         assert!(registry.unregister("downloads", "one.pkg").unwrap());
         assert!(!registry.unregister("downloads", "one.pkg").unwrap());
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn mutation_invalidation_removes_ancestor_and_descendant_ownership() {
+        let mut registry = CacheOwnershipRegistry::default();
+        registry
+            .register_disposable("downloads", "packages", 20)
+            .unwrap();
+
+        assert_eq!(
+            registry
+                .unregister_overlapping_with_last_used("downloads", "packages/file.pkg")
+                .unwrap(),
+            (1, Some(20))
+        );
+        assert!(registry.is_empty());
+
+        registry
+            .register_disposable("downloads", "packages/file.pkg", 30)
+            .unwrap();
+        assert_eq!(
+            registry
+                .unregister_overlapping_with_last_used("downloads", "packages")
+                .unwrap(),
+            (1, Some(30))
+        );
+        assert!(registry.is_empty());
     }
 
     #[test]

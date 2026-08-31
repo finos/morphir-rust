@@ -56,6 +56,29 @@ fn mutation_begin_invalidates_prior_ownership_before_content_is_writable() {
 }
 
 #[test]
+fn mutation_begin_invalidates_ancestor_and_descendant_ownership() {
+    let (_directory, home) = a_morphir_home();
+    register(&home, "downloads", "packages", 20);
+
+    let descendant =
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "packages/file.pkg").unwrap();
+    let json = std::fs::read_to_string(home.cache_ownership_registry_file()).unwrap();
+    assert!(!json.contains("packages"));
+    assert!(descendant.finish_unowned());
+
+    register(&home, "downloads", "packages/file.pkg", 30);
+    let ancestor = CacheOwnershipMutationGuard::begin(&home, "downloads", "packages").unwrap();
+    let json = std::fs::read_to_string(home.cache_ownership_registry_file()).unwrap();
+    assert!(!json.contains("packages"));
+    ancestor.finish(10).unwrap();
+
+    let json = std::fs::read_to_string(home.cache_ownership_registry_file()).unwrap();
+    assert!(json.contains("\"path\": \"packages\""));
+    assert!(!json.contains("packages/file.pkg"));
+    assert!(json.contains("\"lastUsed\": 30"));
+}
+
+#[test]
 fn inventory_compacts_ownership_for_content_already_missing() {
     let (_directory, home) = a_morphir_home();
     std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();

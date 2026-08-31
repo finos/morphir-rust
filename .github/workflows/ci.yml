@@ -14,7 +14,22 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
+  test-release-workflow:
+    name: Test (release workflow)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Test Python release tooling
+        run: python3 -m unittest discover -s tests/ci -v
+
   lint-rust:
     name: Lint (Rust)
     runs-on: ubuntu-latest

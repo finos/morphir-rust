@@ -1,0 +1,8 @@
+@namespace("acme.shared.types")
+protocol CustomerSchemas {
+  @namespace("acme.shared.types")
+  @morphir.fqname("acme/shared:types#customer")
+  record Customer {
+    string id;
+  }
+}

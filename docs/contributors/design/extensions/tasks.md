@@ -53,9 +53,10 @@ morphir run integration    # Custom task
 morphir run test           # Runs overridden test task
 ```
 
-### Extension-Provided Tasks
+### Future extension-provided tasks
 
-Extensions (via WASM components) can register additional intrinsic tasks:
+This section explores a future integration. The current MEP capability model
+does not let extensions register tasks.
 
 ```bash
 # Tasks provided by a TypeScript codegen extension
@@ -65,7 +66,8 @@ morphir run codegen:typescript
 morphir run codegen:scala
 ```
 
-See [WASM Components](./wasm-component.md) for how extensions register tasks.
+See the [extension overview](./README.md) for the current runtime and protocol
+boundary.
 
 ## Task Definition
 
@@ -434,14 +436,16 @@ run = "morphir-elm make"
 4. **Compatibility**: File-based tasks work with any scripting language
 5. **Incremental**: Source/output tracking avoids unnecessary work
 
-For extension points beyond tasks (custom commands, protocol extensions), see [WASM Components](./wasm-component.md) for the WASM Component Model approach.
+For current frontend, backend, validator, and transform extension points, see
+the [extension overview](./README.md). The archived Component Model page is not
+the current ABI.
 
 ## Related
 
 ### Morphir Rust Design Documents
 
 - **[Morphir Extensions](./README.md)** - Extension system overview
-- **[WASM Components](./wasm-component.md)** - Component model integration
+- **[Historical WASM Component Model](./wasm-component.md)** - Superseded WIT design rationale
 - **[Morphir Daemon](../daemon/)** - Workspace and build management
 
 ### Main Morphir Documentation

@@ -1,0 +1,345 @@
+name: Release extensions
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "extension/*/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-info:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+      matrix: ${{ steps.release.outputs.matrix }}
+    steps:
+      - name: Checkout existing tag
+        uses: actions/checkout@v7
+        with:
+          ref: >-
+            ${{ github.event_name == 'workflow_dispatch'
+              && format('refs/tags/{0}', inputs.tag)
+              || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate tag and resolve extension matrix
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          tag_ref="refs/tags/${RELEASE_TAG}^{commit}"
+          RELEASE_COMMIT="$(git rev-parse --verify "$tag_ref")"
+          python3 .github/scripts/extension_release.py \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT"
+
+  create-extension-artifacts:
+    name: Create ${{ matrix.short_id }} extension artifact
+    runs-on: ubuntu-latest
+    needs: release-info
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-info.outputs.matrix) }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Install mise tools
+        uses: jdx/mise-action@v4
+
+      - name: Install WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            .morphir/cache
+          key: >-
+            ${{ runner.os }}-extension-${{ matrix.short_id }}-
+            ${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-extension-${{ matrix.short_id }}-
+
+      - name: Build tested extension bundle
+        env:
+          SHORT_ID: ${{ matrix.short_id }}
+        run: mise run "extension:artifact:${SHORT_ID}"
+
+      - name: Validate descriptor and checksum against tag
+        env:
+          RELEASE_TAG: ${{ needs.release-info.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.release-info.outputs.commit }}
+          SHORT_ID: ${{ matrix.short_id }}
+        run: |
+          python3 .github/scripts/select_extension_assets.py \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            --bundles ".morphir/build/extensions/$SHORT_ID" \
+            --validate-short-id "$SHORT_ID"
+
+      - name: Upload exact extension bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-${{ matrix.short_id }}
+          path: .morphir/build/extensions/${{ matrix.short_id }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-extensions:
+    name: Publish exact extension bundles
+    runs-on: ubuntu-latest
+    needs: [release-info, create-extension-artifacts]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Download created extension bundles
+        uses: actions/download-artifact@v7
+        with:
+          pattern: extension-*
+          path: .release/bundles
+
+      - name: Download existing release assets
+        id: existing-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-info.outputs.tag }}
+        run: |
+          mkdir -p .release/existing
+          encoded_tag="$(jq -rn --arg value "$RELEASE_TAG" '$value|@uri')"
+          release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${encoded_tag}"
+          release_error="${RUNNER_TEMP}/extension-release-view.err"
+          release_id_file="${RUNNER_TEMP}/extension-release-view-id"
+          if gh api "$release_endpoint" --jq '.id' \
+            > "$release_id_file" 2> "$release_error"; then
+            release_id="$(cat "$release_id_file")"
+            assets_endpoint="repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets"
+            asset_list="${RUNNER_TEMP}/extension-release-existing-assets"
+            if ! gh api "$assets_endpoint" --paginate --jq '.[].name' \
+              > "$asset_list" 2> "$release_error"; then
+              cat "$release_error" >&2
+              exit 1
+            fi
+            if [ -s "$asset_list" ]; then
+              gh release download "$RELEASE_TAG" --dir .release/existing
+            fi
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif grep -Fq '(HTTP 404)' "$release_error"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+      - name: Validate exact bytes and select new assets
+        env:
+          RELEASE_TAG: ${{ needs.release-info.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.release-info.outputs.commit }}
+        run: |
+          python3 .github/scripts/select_extension_assets.py \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            --bundles .release/bundles \
+            --existing-assets .release/existing \
+            --prepared-assets "${RUNNER_TEMP}/extension-release/upload" \
+            --output-manifest "${RUNNER_TEMP}/extension-release/assets.txt" \
+            --expected-manifest \
+              "${RUNNER_TEMP}/extension-release/expected-assets.txt"
+
+      - name: Create release and upload only new assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-info.outputs.tag }}
+          EXPECTED_COMMIT: ${{ needs.release-info.outputs.commit }}
+        run: |
+          encoded_tag="$(jq -rn --arg value "$RELEASE_TAG" '$value|@uri')"
+          release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${encoded_tag}"
+          release_error="${RUNNER_TEMP}/extension-release-mutation.err"
+          release_id_file="${RUNNER_TEMP}/extension-release-id"
+
+          verify_remote_tag_commit() {
+            git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG"
+            actual_commit="$(git rev-parse --verify 'FETCH_HEAD^{commit}')"
+            if [ "$actual_commit" != "$EXPECTED_COMMIT" ]; then
+              echo "tag moved from $EXPECTED_COMMIT to $actual_commit" >&2
+              return 1
+            fi
+          }
+
+          refresh_release_state() {
+            if gh api "$release_endpoint" --jq '.id' \
+              > "$release_id_file" \
+              2> "$release_error"; then
+              release_exists=true
+            elif grep -Fq '(HTTP 404)' "$release_error"; then
+              release_exists=false
+            else
+              cat "$release_error" >&2
+              return 1
+            fi
+          }
+
+          published_asset_url() {
+            asset_name="$1"
+            release_id="$(cat "$release_id_file")"
+            assets_endpoint="repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets"
+            gh api "$assets_endpoint" --paginate \
+              --jq ".[] | select(.name == \"$asset_name\") | .url"
+          }
+
+          compare_published_asset() {
+            source_asset="$1"
+            asset_name="$(basename "$source_asset")"
+            if ! asset_url="$(published_asset_url "$asset_name")"; then
+              echo "cannot inspect published asset: $asset_name" >&2
+              return 2
+            fi
+            asset_url_count="$(printf '%s\n' "$asset_url" | grep -c . || true)"
+            if [ "$asset_url_count" -eq 0 ]; then
+              return 1
+            fi
+            if [ "$asset_url_count" -ne 1 ]; then
+              return 4
+            fi
+            downloaded_asset="$(mktemp "${RUNNER_TEMP}/published-asset.XXXXXX")"
+            if ! gh api \
+              -H "Accept: application/octet-stream" \
+              "$asset_url" > "$downloaded_asset"; then
+              echo "cannot download published asset: $asset_name" >&2
+              return 2
+            fi
+            if cmp -s "$source_asset" "$downloaded_asset"; then
+              return 0
+            fi
+            return 3
+          }
+
+          verify_remote_tag_commit
+          refresh_release_state
+          if [ "$release_exists" != "true" ]; then
+            verify_remote_tag_commit
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --generate-notes || {
+                refresh_release_state
+                [ "$release_exists" = "true" ]
+              }
+          fi
+          refresh_release_state
+          if [ "$release_exists" != "true" ]; then
+            echo "release does not exist after creation: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [ ! -f "$release_id_file" ] || [ -L "$release_id_file" ] \
+            || [ ! -s "$release_id_file" ]; then
+            echo "release ID is missing after state refresh: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          while IFS= read -r asset; do
+            if [ -n "$asset" ]; then
+              asset_name="$(basename "$asset")"
+              compare_status=0
+              compare_published_asset "$asset" || compare_status=$?
+              case "$compare_status" in
+                0) continue ;;
+                1) ;;
+                2) exit 1 ;;
+                3)
+                  echo "existing release asset has different bytes" >&2
+                  echo "$asset_name" >&2
+                  exit 1
+                  ;;
+                4)
+                  echo "duplicate existing release asset: $asset_name" >&2
+                  exit 1
+                  ;;
+                *) exit 1 ;;
+              esac
+              verify_remote_tag_commit
+              if ! gh release upload "$RELEASE_TAG" "$asset"; then
+                verify_remote_tag_commit
+                compare_status=0
+                compare_published_asset "$asset" || compare_status=$?
+                case "$compare_status" in
+                  0) continue ;;
+                  2) exit 1 ;;
+                  *)
+                    echo "upload raced with a different asset: $asset_name" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+            fi
+          done < "${RUNNER_TEMP}/extension-release/assets.txt"
+
+      - name: Final verification of every expected asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-info.outputs.tag }}
+          EXPECTED_COMMIT: ${{ needs.release-info.outputs.commit }}
+        run: |
+          verify_remote_tag_commit() {
+            git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG"
+            actual_commit="$(git rev-parse --verify 'FETCH_HEAD^{commit}')"
+            if [ "$actual_commit" != "$EXPECTED_COMMIT" ]; then
+              echo "tag moved from $EXPECTED_COMMIT to $actual_commit" >&2
+              return 1
+            fi
+          }
+          verify_remote_tag_commit
+          encoded_tag="$(jq -rn --arg value "$RELEASE_TAG" '$value|@uri')"
+          release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${encoded_tag}"
+          release_id="$(gh api "$release_endpoint" --jq '.id')"
+          assets_endpoint="repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets"
+          final_names="${RUNNER_TEMP}/extension-release-final-names"
+          gh api "$assets_endpoint" --paginate --jq '.[].name' > "$final_names"
+          while IFS= read -r expected_asset; do
+            asset_name="$(basename "$expected_asset")"
+            match_count="$(grep -Fxc "$asset_name" "$final_names" || true)"
+            if [ "$match_count" -ne 1 ]; then
+              echo "expected asset is missing or duplicated: $asset_name" >&2
+              exit 1
+            fi
+          done < "${RUNNER_TEMP}/extension-release/expected-assets.txt"
+          final_assets="${RUNNER_TEMP}/extension-release-final-assets"
+          mkdir "$final_assets"
+          gh release download "$RELEASE_TAG" --dir "$final_assets"
+          python3 .github/scripts/select_extension_assets.py \
+            --tag "$RELEASE_TAG" \
+            --commit "$EXPECTED_COMMIT" \
+            --bundles .release/bundles \
+            --existing-assets "$final_assets" \
+            --require-all-existing
+          verify_remote_tag_commit

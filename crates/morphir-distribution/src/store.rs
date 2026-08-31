@@ -11,12 +11,15 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+const MAX_EXTENSION_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Content-addressed artifact store rooted in a Morphir home directory.
 #[derive(Debug, Clone)]
 pub struct ArtifactStore {
     home_root: PathBuf,
     root: PathBuf,
     object_namespace: Option<&'static str>,
+    max_artifact_bytes: Option<u64>,
 }
 
 impl ArtifactStore {
@@ -31,6 +34,7 @@ impl ArtifactStore {
             home_root: home.root().to_path_buf(),
             root: home.extensions_store_dir(),
             object_namespace: None,
+            max_artifact_bytes: Some(MAX_EXTENSION_ARTIFACT_BYTES),
         }
     }
 
@@ -40,6 +44,7 @@ impl ArtifactStore {
             home_root: home.root().to_path_buf(),
             root: home.tools_store_dir(),
             object_namespace: Some("objects"),
+            max_artifact_bytes: None,
         }
     }
 
@@ -92,7 +97,12 @@ impl ArtifactStore {
                 source,
             })?;
         ensure_contained(&canonical_source_root, &canonical_source)?;
-        if !canonical_source.is_file() {
+        let source_metadata =
+            fs::metadata(&canonical_source).map_err(|source| DistributionError::Io {
+                path: canonical_source.clone(),
+                source,
+            })?;
+        if !source_metadata.is_file() {
             return Err(DistributionError::Io {
                 path: canonical_source,
                 source: std::io::Error::new(
@@ -100,6 +110,9 @@ impl ArtifactStore {
                     "artifact source is not a regular file",
                 ),
             });
+        }
+        if let Some(limit) = self.max_artifact_bytes {
+            ensure_artifact_size(&canonical_source, source_metadata.len(), limit)?;
         }
 
         fs::create_dir_all(&self.root).map_err(|source| DistributionError::Io {
@@ -163,7 +176,11 @@ impl ArtifactStore {
                 path: object_directory.clone(),
                 source,
             })?;
-        let actual = copy_and_hash(&canonical_source, staged.as_file_mut())?;
+        let actual = copy_and_hash(
+            &canonical_source,
+            staged.as_file_mut(),
+            self.max_artifact_bytes,
+        )?;
         if &actual != digest {
             return Err(DistributionError::DigestMismatch {
                 path: canonical_source,
@@ -314,6 +331,79 @@ pub(crate) fn verify_file(path: &Path, expected: &Sha256Digest) -> Result<()> {
     }
 }
 
+pub(crate) fn read_verified_file(
+    path: &Path,
+    expected_digest: &Sha256Digest,
+    expected_executable: bool,
+) -> Result<Vec<u8>> {
+    let mut file = File::open(path).map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| DistributionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    verify_executable_metadata(path, &metadata, expected_executable)?;
+    ensure_artifact_size(path, metadata.len(), MAX_EXTENSION_ARTIFACT_BYTES)?;
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(MAX_EXTENSION_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| DistributionError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    ensure_artifact_size(path, bytes.len() as u64, MAX_EXTENSION_ARTIFACT_BYTES)?;
+    let actual = Sha256Digest::of_bytes(&bytes);
+    if &actual == expected_digest {
+        Ok(bytes)
+    } else {
+        Err(DistributionError::DigestMismatch {
+            path: path.to_path_buf(),
+            expected: expected_digest.clone(),
+            actual,
+        })
+    }
+}
+
+fn ensure_artifact_size(path: &Path, actual: u64, limit: u64) -> Result<()> {
+    if actual <= limit {
+        Ok(())
+    } else {
+        Err(DistributionError::ArtifactTooLarge {
+            path: path.to_path_buf(),
+            actual,
+            limit,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn verify_executable_metadata(path: &Path, metadata: &fs::Metadata, expected: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let actual = metadata.permissions().mode() & 0o100 != 0;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(DistributionError::ExecutableModeMismatch {
+            path: path.to_path_buf(),
+            expected,
+            actual,
+        })
+    }
+}
+
+#[cfg(not(unix))]
+fn verify_executable_metadata(
+    _path: &Path,
+    _metadata: &fs::Metadata,
+    _expected: bool,
+) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(unix)]
 pub(crate) fn verify_executable_mode(path: &Path, expected: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -365,13 +455,18 @@ pub(crate) fn hash_file(path: &Path) -> Result<Sha256Digest> {
     Ok(Sha256Digest::from_bytes(hasher.finalize().into()))
 }
 
-fn copy_and_hash(source: &Path, destination: &mut File) -> Result<Sha256Digest> {
+fn copy_and_hash(
+    source: &Path,
+    destination: &mut File,
+    max_bytes: Option<u64>,
+) -> Result<Sha256Digest> {
     let mut source_file = File::open(source).map_err(|error| DistributionError::Io {
         path: source.to_path_buf(),
         source: error,
     })?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
+    let mut total = 0_u64;
     loop {
         let count = source_file
             .read(&mut buffer)
@@ -381,6 +476,10 @@ fn copy_and_hash(source: &Path, destination: &mut File) -> Result<Sha256Digest> 
             })?;
         if count == 0 {
             break;
+        }
+        total = total.saturating_add(count as u64);
+        if let Some(limit) = max_bytes {
+            ensure_artifact_size(source, total, limit)?;
         }
         hasher.update(&buffer[..count]);
         destination

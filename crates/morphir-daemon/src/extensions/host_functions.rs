@@ -67,6 +67,20 @@ impl MorphirHostFunctions {
         })
     }
 
+    /// Create host functions for generation where artifact publication is host-owned.
+    pub fn for_restricted_generation(workspace_root: PathBuf) -> Self {
+        Self::new(MorphirHostState {
+            workspace_root,
+            output_dir: PathBuf::new(),
+            ir_cache: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn workspace_info(&self) -> WorkspaceInfo {
+        workspace_info(&self.state)
+    }
+
     /// Convert to Extism functions
     pub fn into_functions(self) -> Vec<Function> {
         let state = self.state;
@@ -136,10 +150,7 @@ fn get_workspace_info_impl(
     let state = user_data.get()?;
     let state = state.lock().unwrap();
 
-    let info = WorkspaceInfo {
-        root: state.workspace_root.to_string_lossy().to_string(),
-        output_dir: state.output_dir.to_string_lossy().to_string(),
-    };
+    let info = workspace_info(&state);
 
     let _json = serde_json::to_vec(&info).map_err(|e| extism::Error::msg(e.to_string()))?;
 
@@ -149,6 +160,13 @@ fn get_workspace_info_impl(
     // In a real implementation, we'd allocate memory in the plugin and return a pointer
     outputs[0] = Val::I64(0);
     Ok(())
+}
+
+fn workspace_info(state: &MorphirHostState) -> WorkspaceInfo {
+    WorkspaceInfo {
+        root: state.workspace_root.to_string_lossy().to_string(),
+        output_dir: state.output_dir.to_string_lossy().to_string(),
+    }
 }
 
 fn cache_ir_impl(

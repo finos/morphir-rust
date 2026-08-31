@@ -2,10 +2,17 @@
 layout: default
 title: Wasm Extension Architecture (Interactive Session)
 nav_order: 12
-parent: Morphir Extensions
+nav_exclude: true
+search_exclude: true
+has_toc: false
 ---
 
 # Wasm Extension Architecture (Interactive Session)
+
+> **Historical design, not a supported extension contract.** This page belongs
+> to the superseded actor-based, multi-protocol design set. Current extensions
+> use Extism plus MEP JSON-RPC and install by ID from a controlled index. See
+> the [current extension guide](../README.md).
 
 **Status:** Draft
 **Version:** 0.3.0

@@ -8,7 +8,7 @@
 //! use morphir_common::home::MorphirHome;
 //! use morphir_distribution::{
 //!     Channel, ExtensionId, ExtensionInstaller, LocalIndex, Platform, Selection,
-//!     activate_installed, list_installed, uninstall_extension,
+//!     VerifiedExtensionArtifact, activate_installed, list_installed, uninstall_extension,
 //! };
 //!
 //! # fn install() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,8 +22,13 @@
 //! ExtensionInstaller::new(&home).install(selected)?;
 //!
 //! // Activation is offline and rehashes the installed bytes.
-//! let process = activate_installed(&home, &id)?;
-//! assert_eq!(process.extension_info().id, "morphir-elm");
+//! let artifact = activate_installed(&home, &id)?;
+//! match artifact {
+//!     VerifiedExtensionArtifact::Process(process) => {
+//!         assert_eq!(process.extension_info().id, "morphir-elm");
+//!     }
+//!     VerifiedExtensionArtifact::Wasm(_) => unreachable!("selected a process artifact"),
+//! }
 //!
 //! // Catalog entries and their exact locks are read as one validated snapshot.
 //! let installed = list_installed(&home)?;
@@ -94,10 +99,10 @@ mod tool_resolver;
 mod tool_state;
 
 pub use domain::{
-    ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability,
-    Channel, ChannelSegment, ExtensionId, Platform, RelativeArtifactPath, ReleaseRecord, Selection,
-    Sha256Digest, ToolArchive, ToolArtifactRecord, ToolId, ToolLaunch, ToolReleaseRecord,
-    ToolReleaseStatus,
+    ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource,
+    BackendRecord, Capability, Channel, ChannelSegment, ExtensionId, Platform,
+    RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolArchive, ToolArtifactRecord,
+    ToolId, ToolLaunch, ToolReleaseRecord, ToolReleaseStatus,
 };
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
@@ -105,7 +110,8 @@ pub use local::{IndexKind, IndexProvenance, LocalIndex, ResolvedArtifact};
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{
     ExtensionInstaller, ExtensionLock, InstalledCatalog, InstalledExtension,
-    InstalledExtensionSnapshot, VerifiedProcessArtifact, activate_installed, list_installed,
+    InstalledExtensionSnapshot, VerifiedExtensionArtifact, VerifiedProcessArtifact,
+    VerifiedWasmArtifact, activate_installed, activate_installed_snapshot, list_installed,
     read_extension_lock, uninstall_extension, write_extension_lock,
 };
 pub use store::{ArtifactStore, StoredArtifact, VerifiedArtifact};

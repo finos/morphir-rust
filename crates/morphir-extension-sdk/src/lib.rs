@@ -113,7 +113,9 @@ pub use types::*;
 macro_rules! export_extension {
     ($impl:ty, $($capability:ident),+ $(,)?) => {
         #[cfg(target_arch = "wasm32")]
-        use $crate::extism_pdk::*;
+        use $crate::extism_pdk as extism_pdk;
+        #[cfg(target_arch = "wasm32")]
+        use extism_pdk::*;
 
         /// Extension info function (required by host)
         #[cfg(target_arch = "wasm32")]

@@ -6,11 +6,11 @@
 
 // Re-export all core types
 pub use crate::types::{
-    Artifact, CompileDependency, CompileOptions, CompilePackage, CompileRequest, CompileResult,
-    Diagnostic, DiagnosticSeverity, ExtensionCapabilities, ExtensionInfo, ExtensionType,
-    FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability, RelatedInformation,
-    ResourceLimits, SourceDocument, SourceLocation, SourcePosition, SourceRange, TransformRequest,
-    TransformResult, ValidateRequest, ValidateResult, WorkspaceInfo,
+    Artifact, BackendCapability, CompileDependency, CompileOptions, CompilePackage, CompileRequest,
+    CompileResult, Diagnostic, DiagnosticSeverity, ExtensionCapabilities, ExtensionInfo,
+    ExtensionType, FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability,
+    RelatedInformation, ResourceLimits, SourceDocument, SourceLocation, SourcePosition,
+    SourceRange, TransformRequest, TransformResult, ValidateRequest, ValidateResult, WorkspaceInfo,
 };
 
 // Re-export traits
@@ -33,7 +33,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prelude_exports_the_frontend_contract() {
+    fn prelude_exports_the_frontend_and_backend_contracts() {
+        let _: Option<BackendCapability> = None;
         let _: Option<CompileDependency> = None;
         let _: Option<CompileOptions> = None;
         let _: Option<CompilePackage> = None;

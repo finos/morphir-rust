@@ -53,6 +53,11 @@ impl Extension for GleamExtension {
                 incremental: false,
                 fragments: false,
             }),
+            backend: Some(BackendCapability {
+                targets: vec!["gleam".into()],
+                ir_versions: vec![GLEAM_IR_VERSION.into()],
+                generate: true,
+            }),
             ..Default::default()
         }
     }
@@ -821,6 +826,14 @@ mod tests {
                 "fragments": false
             })
         );
+        assert_eq!(
+            capabilities["backend"],
+            serde_json::json!({
+                "targets": ["gleam"],
+                "irVersions": [IR_VERSION],
+                "generate": true
+            })
+        );
     }
 
     #[test]
@@ -1235,6 +1248,70 @@ mod tests {
 
         assert_eq!(ir_file.format_version, FormatVersion::default());
         assert!(matches!(ir_file.distribution, Distribution::Library(_)));
+    }
+
+    #[test]
+    fn backend_accepts_the_v4_ir_file_root_emitted_by_the_frontend() {
+        let (request, _compile_output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let compiled = GleamExtension
+            .compile(request)
+            .expect("compile valid Gleam document");
+        let output_dir = tempfile::tempdir().expect("create backend output directory");
+
+        let generated = GleamExtension
+            .generate(GenerateRequest {
+                ir: compiled.ir.expect("successful compile contains IR"),
+                options: [("outputDir".to_owned(), serde_json::json!(output_dir.path()))]
+                    .into_iter()
+                    .collect(),
+            })
+            .expect("return a typed generation result");
+
+        assert!(generated.success, "{:?}", generated.diagnostics);
+        assert_eq!(generated.artifacts.len(), 1);
+        assert!(generated.artifacts[0].content.contains("pub fn hello"));
+    }
+
+    #[test]
+    fn backend_rejects_decodable_but_unsupported_ir_releases() {
+        let (request, _compile_output_dir) = compile_request(
+            "file:///workspace/src/main.gleam",
+            "pub fn hello() { \"world\" }",
+            IR_VERSION,
+        );
+        let compiled = GleamExtension
+            .compile(request)
+            .expect("compile valid Gleam document");
+        let supported_ir = compiled.ir.expect("successful compile contains IR");
+
+        for unsupported in [serde_json::json!("4.0.1"), serde_json::json!(5)] {
+            let mut ir = supported_ir.clone();
+            ir["formatVersion"] = unsupported.clone();
+            let output_dir = tempfile::tempdir().expect("create backend output directory");
+
+            let generated = GleamExtension
+                .generate(GenerateRequest {
+                    ir,
+                    options: [("outputDir".to_owned(), serde_json::json!(output_dir.path()))]
+                        .into_iter()
+                        .collect(),
+                })
+                .expect("return a typed generation result");
+
+            assert!(!generated.success, "unsupported release {unsupported}");
+            assert!(generated.artifacts.is_empty());
+            assert!(
+                generated.diagnostics[0]
+                    .message
+                    .contains("unsupported Morphir IR formatVersion"),
+                "{}",
+                generated.diagnostics[0].message
+            );
+        }
     }
 
     #[test]

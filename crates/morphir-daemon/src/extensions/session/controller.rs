@@ -2,7 +2,7 @@
 
 use super::transport::{MepTransport, TransportError, TransportState};
 use super::validation::{
-    ResponseFailure, validate_method_result, validate_negotiation, validate_response,
+    ResponseFailure, validate_method_result_async, validate_negotiation, validate_response,
 };
 use crate::DaemonError;
 use crate::extensions::protocol::{
@@ -27,6 +27,7 @@ pub struct NegotiatedSession {
     pub(super) protocol_version: String,
     pub(super) extension: ExtensionInfo,
     pub(super) capabilities: ExtensionCapabilities,
+    pub(super) legacy_backend: bool,
 }
 
 impl NegotiatedSession {
@@ -45,7 +46,7 @@ impl NegotiatedSession {
         &self.capabilities
     }
 
-    fn supports_method(&self, method: &str) -> bool {
+    pub(crate) fn supports_method(&self, method: &str) -> bool {
         match method {
             methods::COMPILE => {
                 self.extension.types.contains(&ExtensionType::Frontend)
@@ -55,7 +56,15 @@ impl NegotiatedSession {
                         .as_ref()
                         .is_some_and(|frontend| frontend.compile)
             }
-            methods::GENERATE => self.extension.types.contains(&ExtensionType::Backend),
+            methods::GENERATE => {
+                self.extension.types.contains(&ExtensionType::Backend)
+                    && (self.legacy_backend
+                        || self
+                            .capabilities
+                            .backend
+                            .as_ref()
+                            .is_some_and(|backend| backend.generate))
+            }
             methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
             methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),
             _ => true,
@@ -235,7 +244,8 @@ impl<T: MepTransport, S> Session<T, S> {
             Err(error) => return CallOutcome::Transport(error),
         };
         match validate_response(response, id) {
-            Ok(value) => match validate_method_result(method, &request_params, value)
+            Ok(value) => match validate_method_result_async(method, request_params, value)
+                .await
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
             {
                 Ok(value) => CallOutcome::Success(value),

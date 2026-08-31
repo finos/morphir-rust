@@ -10,7 +10,8 @@ pub use identity::{
     ArtifactFilename, Channel, ChannelSegment, ExtensionId, RelativeArtifactPath, ToolId,
 };
 pub use manifest::{
-    ArtifactRecord, ArtifactRuntime, ArtifactSource, Capability, Platform, ReleaseRecord, Selection,
+    ArtifactRecord, ArtifactRuntime, ArtifactSource, BackendRecord, Capability, Platform,
+    ReleaseRecord, Selection,
 };
 pub use tool::{
     ArchiveFormat, ToolArchive, ToolArtifactRecord, ToolLaunch, ToolReleaseRecord,

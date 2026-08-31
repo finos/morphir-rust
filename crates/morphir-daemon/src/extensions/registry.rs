@@ -67,8 +67,13 @@ pub struct ExtensionRegistry {
     configs: RwLock<HashMap<String, ExtensionConfig>>,
     /// Workspace root for host functions
     workspace_root: PathBuf,
-    /// Output directory for host functions
-    output_dir: PathBuf,
+    /// Artifact access granted to guest host functions.
+    output_access: RegistryOutputAccess,
+}
+
+enum RegistryOutputAccess {
+    Workspace(PathBuf),
+    RestrictedGeneration,
 }
 
 impl ExtensionRegistry {
@@ -81,7 +86,20 @@ impl ExtensionRegistry {
             extensions: RwLock::new(HashMap::new()),
             configs: RwLock::new(HashMap::new()),
             workspace_root,
-            output_dir,
+            output_access: RegistryOutputAccess::Workspace(output_dir),
+        })
+    }
+
+    /// Create a registry for generation where the host owns artifact publication.
+    pub fn for_restricted_generation(workspace_root: PathBuf) -> Result<Self> {
+        let cache_dir = ExtensionLoader::default_cache_dir()?;
+
+        Ok(Self {
+            loader: ExtensionLoader::new(cache_dir)?,
+            extensions: RwLock::new(HashMap::new()),
+            configs: RwLock::new(HashMap::new()),
+            workspace_root,
+            output_access: RegistryOutputAccess::RestrictedGeneration,
         })
     }
 
@@ -96,7 +114,7 @@ impl ExtensionRegistry {
             extensions: RwLock::new(HashMap::new()),
             configs: RwLock::new(HashMap::new()),
             workspace_root,
-            output_dir,
+            output_access: RegistryOutputAccess::Workspace(output_dir),
         }
     }
 
@@ -145,13 +163,12 @@ impl ExtensionRegistry {
         };
 
         // Create host functions
-        let host_funcs = MorphirHostFunctions::for_workspace(
-            self.workspace_root.clone(),
-            self.output_dir.clone(),
-        );
+        let host_funcs = self.host_functions();
 
         // Create container
-        let container = ExtensionContainer::new(id, &wasm_path, host_funcs)?;
+        let wasm_bytes = tokio::fs::read(&wasm_path).await?;
+        let container =
+            ExtensionContainer::from_bytes_async(id.to_owned(), wasm_bytes, host_funcs).await?;
         let container = Arc::new(container);
 
         // Store in registry
@@ -167,6 +184,17 @@ impl ExtensionRegistry {
         );
 
         Ok(container)
+    }
+
+    fn host_functions(&self) -> MorphirHostFunctions {
+        match &self.output_access {
+            RegistryOutputAccess::Workspace(output_dir) => {
+                MorphirHostFunctions::for_workspace(self.workspace_root.clone(), output_dir.clone())
+            }
+            RegistryOutputAccess::RestrictedGeneration => {
+                MorphirHostFunctions::for_restricted_generation(self.workspace_root.clone())
+            }
+        }
     }
 
     /// Load extension from a path (convenience method)
@@ -332,5 +360,18 @@ mod tests {
 
         let list = registry.list().await;
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn restricted_generation_registry_exposes_no_output_directory_to_guests() {
+        let temp = tempdir().unwrap();
+        let actual_output = temp.path().join("real-publish-root");
+        let registry =
+            ExtensionRegistry::for_restricted_generation(temp.path().join("workspace")).unwrap();
+
+        let workspace_info = registry.host_functions().workspace_info();
+
+        assert!(workspace_info.output_dir.is_empty());
+        assert_ne!(workspace_info.output_dir, actual_output.to_string_lossy());
     }
 }

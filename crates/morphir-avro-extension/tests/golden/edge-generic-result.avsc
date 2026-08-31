@@ -1,0 +1,40 @@
+{
+  "morphir.fqname": "acme/customer:customer#lookup-result",
+  "type": {
+    "fields": [
+      {
+        "name": "value",
+        "type": [
+          {
+            "fields": [
+              {
+                "name": "error",
+                "type": "string"
+              }
+            ],
+            "morphir.fqname": "morphir/SDK:result#err",
+            "name": "Err",
+            "namespace": "acme.customer.customer.ResultStringString_ea53b995971b",
+            "type": "record"
+          },
+          {
+            "fields": [
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ],
+            "morphir.fqname": "morphir/SDK:result#ok",
+            "name": "Ok",
+            "namespace": "acme.customer.customer.ResultStringString_ea53b995971b",
+            "type": "record"
+          }
+        ]
+      }
+    ],
+    "morphir.fqname": "morphir/SDK:result#result",
+    "name": "ResultStringString_ea53b995971b",
+    "namespace": "acme.customer.customer",
+    "type": "record"
+  }
+}

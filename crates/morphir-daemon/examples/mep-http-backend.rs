@@ -6,8 +6,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 use morphir_daemon::extensions::protocol::MAX_MEP_PAYLOAD_BYTES;
 use morphir_extension_sdk::protocol::{ExtensionRequest, methods};
 use morphir_extension_sdk::{
-    Artifact, Backend, Diagnostic, DiagnosticSeverity, Extension, ExtensionCapabilities,
-    ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult, Result,
+    Artifact, Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension,
+    ExtensionCapabilities, ExtensionInfo, ExtensionType, GenerateRequest, GenerateResult, Result,
 };
 use std::io::Write;
 use std::sync::Arc;
@@ -29,7 +29,14 @@ impl Extension for HttpBackend {
     }
 
     fn capabilities() -> ExtensionCapabilities {
-        ExtensionCapabilities::default()
+        ExtensionCapabilities {
+            backend: Some(BackendCapability {
+                targets: vec!["json".into()],
+                ir_versions: vec!["3".into(), "4".into()],
+                generate: true,
+            }),
+            ..ExtensionCapabilities::default()
+        }
     }
 }
 

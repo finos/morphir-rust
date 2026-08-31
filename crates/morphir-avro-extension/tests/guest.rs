@@ -26,7 +26,7 @@ fn generate(ir: Value, options: HashMap<String, Value>) -> morphir_extension_sdk
 fn extension_metadata_and_backend_capabilities_match_mep() {
     let info = AvroExtension::info();
     assert_eq!(info.id, "morphir-avro");
-    assert_eq!(info.name, "Morphir Avro Backend");
+    assert_eq!(info.name, "Morphir Avro");
     assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
     assert_eq!(
         info.description.as_deref(),

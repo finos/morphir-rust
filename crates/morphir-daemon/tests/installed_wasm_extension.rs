@@ -54,7 +54,7 @@ impl InstalledWasmMother {
         let record = json!({
             "schemaVersion": 2,
             "id": extension_id,
-            "name": "Morphir Avro Backend",
+            "name": "Morphir Avro",
             "version": "0.1.0",
             "channels": ["stable"],
             "mepVersions": ["0.1"],
@@ -164,7 +164,7 @@ async fn installed_wasm_runs_the_common_mep_lifecycle() {
     assert_eq!(ready.negotiated().protocol_version(), "0.1");
     let info = ready.negotiated().extension();
     assert_eq!(info.id, "morphir-avro");
-    assert_eq!(info.name, "Morphir Avro Backend");
+    assert_eq!(info.name, "Morphir Avro");
     assert_eq!(info.version, "0.1.0");
     assert_eq!(info.types, [ExtensionType::Backend]);
     let backend = ready

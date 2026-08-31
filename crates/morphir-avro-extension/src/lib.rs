@@ -44,7 +44,7 @@ impl Extension for AvroExtension {
     fn info() -> ExtensionInfo {
         ExtensionInfo {
             id: "morphir-avro".into(),
-            name: "Morphir Avro Backend".into(),
+            name: "Morphir Avro".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some("Projects Morphir specifications into Apache Avro".into()),
             types: vec![ExtensionType::Backend],

@@ -8,14 +8,15 @@ has_children: true
 
 # Morphir Design Documents
 
-This directory contains design documents for the Morphir daemon and extension system, covering architecture, protocols, and implementation details.
+This directory contains design documents for the Morphir daemon and extension
+system, including current guidance and archived design exploration.
 
 ## Overview
 
 This directory is organized into two main areas:
 
 1. **Daemon Design** - Workspace management, build orchestration, file watching, and CLI-daemon interaction
-2. **Extension Design** - WASM component model, extension interfaces, and task system
+2. **Extension Design** - Extism-backed WASM and process runtimes, MEP, and the task system
 
 ## Daemon Design Documents
 
@@ -42,13 +43,17 @@ The daemon design documents describe the Morphir daemon architecture for managin
 
 ## Extension Design Documents
 
-The extension design documents describe the architecture for adding capabilities to Morphir via WASM components and the task system:
+The extension documents describe the current Extism plus MEP implementation and
+the separate task-system draft:
 
 ### Core Documents
 
 - **[README](extensions/README.md)** - Extension system overview and getting started
-- **[WASM Components](extensions/wasm-component.md)** - Component model integration and WIT interfaces
 - **[Tasks](extensions/tasks.md)** - Task system, dependencies, and hooks
+
+The [historical WASM Component Model design](extensions/wasm-component.md) is
+excluded from navigation. It preserves rationale from the superseded WIT-based
+extension proposal and is not an implementation guide.
 
 ## Key Concepts
 
@@ -71,11 +76,10 @@ Morphir extensions enable:
 - Additional tasks (build automation)
 - Protocol integration (JSON-RPC based communication)
 
-Extensions are implemented as:
-
-- **WASM Components** - Sandboxed WebAssembly components using the Component Model
-- **Native Executables** - JSON-RPC over stdio executables
-- **Packages** - Distributable bundles with manifest
+Extensions use the same MEP JSON-RPC contract through two runtimes. Process
+extensions exchange framed messages over standard input and output. WASM
+extensions run through Extism and have no direct filesystem or network access.
+The CLI installs either runtime by extension ID from a controlled index.
 
 ## Design Status
 

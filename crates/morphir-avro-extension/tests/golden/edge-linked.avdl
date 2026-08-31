@@ -1,0 +1,10 @@
+@namespace("acme.customer.customer")
+protocol OrderSchemas {
+  import idl "../../shared/types/CustomerSchemas.avdl";
+
+  @namespace("acme.customer.customer")
+  @morphir.fqname("acme/customer:customer#order")
+  record Order {
+    acme.shared.types.Customer customer;
+  }
+}

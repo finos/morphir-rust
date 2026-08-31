@@ -1,9 +1,9 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    ArtifactFilename, ArtifactStore, Channel, DistributionError, ExtensionId, ExtensionInstaller,
-    InstalledCatalog, LocalIndex, Platform, RelativeArtifactPath, Selection, Sha256Digest,
-    activate_installed, list_installed, read_extension_lock, uninstall_extension,
-    write_extension_lock,
+    ArtifactFilename, ArtifactRuntime, ArtifactStore, Channel, DistributionError, ExtensionId,
+    ExtensionInstaller, InstalledCatalog, LocalIndex, Platform, RelativeArtifactPath, Selection,
+    Sha256Digest, VerifiedExtensionArtifact, VerifiedProcessArtifact, activate_installed,
+    list_installed, read_extension_lock, uninstall_extension, write_extension_lock,
 };
 use std::fs;
 use std::path::Path;
@@ -62,6 +62,53 @@ impl DistributionMother {
         }
     }
 
+    fn a_local_wasm_artifact() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let index = root.path().join("index");
+        let source = index.join("artifacts/morphir_avro_extension.wasm");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(index.join("extensions")).unwrap();
+        fs::write(&source, b"portable wasm artifact").unwrap();
+        let digest = Sha256Digest::of_bytes(&fs::read(&source).unwrap());
+        let record = serde_json::json!({
+            "schemaVersion": 2,
+            "id": "morphir-avro",
+            "name": "Morphir Avro",
+            "version": "0.1.0",
+            "channels": ["stable"],
+            "mepVersions": ["0.1"],
+            "capabilities": ["backend"],
+            "backend": {
+                "targets": ["avro"],
+                "irVersions": ["3", "4"],
+                "generate": false
+            },
+            "artifacts": [{
+                "runtime": "wasm",
+                "source": {
+                    "kind": "local-file",
+                    "path": "artifacts/morphir_avro_extension.wasm"
+                },
+                "sha256": digest,
+                "filename": "morphir_avro_extension.wasm"
+            }]
+        });
+        fs::write(
+            index.join("extensions/morphir-avro.jsonl"),
+            format!("{record}\n"),
+        )
+        .unwrap();
+        let home =
+            MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+        Self {
+            root,
+            index,
+            home,
+            id: ExtensionId::parse("morphir-avro").unwrap(),
+            digest,
+        }
+    }
+
     fn selected(&self) -> morphir_distribution::ResolvedArtifact {
         self.selected_for(&self.id)
     }
@@ -102,7 +149,7 @@ impl DistributionMother {
                 "sha256": digest,
                 "filename": filename,
                 "args": [],
-                "executable": false
+                "executable": true
             }]
         });
         fs::write(
@@ -345,7 +392,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
 
     write_extension_lock(&mother.home, &verified).unwrap();
     let lock = read_extension_lock(&mother.home, &mother.id).unwrap();
-    assert_eq!(lock.schema_version(), 2);
+    assert_eq!(lock.schema_version(), 3);
     assert_eq!(lock.selection(), &Selection::Channel(Channel::Stable));
     assert_eq!(lock.extension_id(), &mother.id);
     assert_eq!(lock.version().to_string(), "3.2.1");
@@ -363,7 +410,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
         &fs::read(mother.home.extensions_locks_dir().join("morphir-elm.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(lock_json["schemaVersion"], 2);
+    assert_eq!(lock_json["schemaVersion"], 3);
     assert_eq!(lock_json["selection"]["kind"], "channel");
     assert_eq!(lock_json["selection"]["value"], "stable");
     assert_eq!(lock_json["version"], "3.2.1");
@@ -384,6 +431,284 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(installed.extension_id(), &mother.id);
     assert!(installed.executable());
     assert!(mother.home.extensions_catalog_file().exists());
+}
+
+#[test]
+fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let expected_canonical_path =
+        fs::canonicalize(mother.home.root().join(installed.store_path())).unwrap();
+
+    let lock = read_extension_lock(&mother.home, &mother.id).unwrap();
+    assert_eq!(lock.schema_version(), 3);
+    assert_eq!(lock.runtime(), ArtifactRuntime::Wasm);
+    assert_eq!(lock.platform(), None);
+    assert_eq!(lock.digest(), &mother.digest);
+    assert_eq!(lock.backend().unwrap().targets(), ["avro"]);
+    assert_eq!(lock.backend().unwrap().ir_versions(), ["3", "4"]);
+    assert!(!lock.backend().unwrap().generate());
+    assert!(!lock.executable());
+
+    let catalog = InstalledCatalog::load(&mother.home).unwrap();
+    let catalog_entry = catalog.get(&mother.id).unwrap();
+    assert_eq!(catalog_entry.runtime(), ArtifactRuntime::Wasm);
+    assert_eq!(catalog_entry.platform(), None);
+    assert_eq!(catalog_entry.digest(), &mother.digest);
+    assert_eq!(catalog_entry.backend().unwrap().targets(), ["avro"]);
+    assert_eq!(catalog_entry.backend().unwrap().ir_versions(), ["3", "4"]);
+    assert!(!catalog_entry.backend().unwrap().generate());
+    assert!(!catalog_entry.executable());
+    assert!(expected_canonical_path.starts_with(fs::canonicalize(mother.home.root()).unwrap()));
+
+    let lock_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(mother.home.extensions_locks_dir().join("morphir-avro.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(lock_json["schemaVersion"], 3);
+    assert_eq!(lock_json["runtime"], "wasm");
+    assert_eq!(lock_json["platform"], serde_json::Value::Null);
+    assert_eq!(lock_json["digest"], mother.digest.to_string());
+    assert_eq!(lock_json["backend"]["targets"], serde_json::json!(["avro"]));
+    assert_eq!(
+        lock_json["backend"]["irVersions"],
+        serde_json::json!(["3", "4"])
+    );
+    assert_eq!(lock_json["backend"]["generate"], false);
+    assert_eq!(lock_json["executable"], false);
+
+    let catalog_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(mother.home.extensions_catalog_file()).unwrap()).unwrap();
+    assert_eq!(catalog_json["schemaVersion"], 2);
+    assert_eq!(catalog_json["extensions"][0]["runtime"], "wasm");
+    assert_eq!(
+        catalog_json["extensions"][0]["platform"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        catalog_json["extensions"][0]["backend"]["targets"],
+        serde_json::json!(["avro"])
+    );
+    assert_eq!(catalog_json["extensions"][0]["backend"]["generate"], false);
+    assert_eq!(catalog_json["extensions"][0]["executable"], false);
+
+    fs::remove_dir_all(&mother.index).unwrap();
+    let activated = activate_installed(&mother.home, &mother.id).unwrap();
+    match activated {
+        VerifiedExtensionArtifact::Wasm(wasm) => {
+            assert_eq!(wasm.extension_info().id, "morphir-avro");
+            assert_eq!(wasm.path(), expected_canonical_path);
+            assert_eq!(wasm.backend().unwrap().targets(), ["avro"]);
+            let backend = wasm.extension_capabilities().backend.unwrap();
+            assert_eq!(backend.targets, ["avro"]);
+            assert_eq!(backend.ir_versions, ["3", "4"]);
+            assert!(!backend.generate);
+            let verified_bytes = wasm.bytes().as_ptr();
+            assert_eq!(wasm.into_bytes().as_ptr(), verified_bytes);
+        }
+        VerifiedExtensionArtifact::Process(_) => panic!("expected wasm artifact"),
+    }
+}
+
+#[test]
+fn installed_wasm_rejects_tampered_bytes() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let path = mother.home.root().join(installed.store_path());
+    fs::write(&path, b"tampered wasm bytes").unwrap();
+
+    let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+
+    assert!(error.to_string().contains("digest mismatch"));
+}
+
+#[test]
+fn installed_wasm_rejects_oversized_bytes_before_buffering() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let path = mother.home.root().join(installed.store_path());
+    let oversized = 256 * 1024 * 1024 + 1;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(oversized)
+        .unwrap();
+
+    let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+
+    match error {
+        DistributionError::ArtifactTooLarge {
+            path: actual_path,
+            actual,
+            limit,
+        } => {
+            assert_eq!(actual_path, fs::canonicalize(path).unwrap());
+            assert_eq!(actual, oversized);
+            assert_eq!(limit, 256 * 1024 * 1024);
+        }
+        other => panic!("expected ArtifactTooLarge, got {other}"),
+    }
+}
+
+#[test]
+fn installer_rejects_oversized_extension_without_publishing_state() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    let source = mother.index.join("artifacts/morphir_avro_extension.wasm");
+    let oversized = 256 * 1024 * 1024 + 1;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_len(oversized)
+        .unwrap();
+
+    let error = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap_err();
+
+    match error {
+        DistributionError::ArtifactTooLarge {
+            path: actual_path,
+            actual,
+            limit,
+        } => {
+            assert_eq!(actual_path, fs::canonicalize(source).unwrap());
+            assert_eq!(actual, oversized);
+            assert_eq!(limit, 256 * 1024 * 1024);
+        }
+        other => panic!("expected ArtifactTooLarge, got {other}"),
+    }
+    assert!(!mother.home.extensions_store_dir().exists());
+    assert!(!mother.home.extensions_catalog_file().exists());
+    assert!(
+        !mother
+            .home
+            .extensions_locks_dir()
+            .join("morphir-avro.json")
+            .exists()
+    );
+}
+
+#[test]
+fn installed_wasm_rejects_backend_lock_catalog_mismatch() {
+    let mother = DistributionMother::a_local_wasm_artifact();
+    ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-avro.json");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+    lock["backend"]["targets"] = serde_json::json!(["protobuf"]);
+    fs::write(&lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+
+    let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+
+    match error {
+        DistributionError::StateMismatch { id } => assert_eq!(id, mother.id),
+        other => panic!("expected StateMismatch, got {other}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_wasm_rejects_symlink_escape_and_executable_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let escaped = DistributionMother::a_local_wasm_artifact();
+    let installed = ExtensionInstaller::new(&escaped.home)
+        .install(escaped.selected())
+        .unwrap();
+    let path = escaped.home.root().join(installed.store_path());
+    let outside = escaped.root.path().join("outside.wasm");
+    fs::write(&outside, b"portable wasm artifact").unwrap();
+    fs::remove_file(&path).unwrap();
+    make_file_symlink(&outside, &path);
+    let error = activate_installed(&escaped.home, &escaped.id).unwrap_err();
+    assert!(error.to_string().contains("escapes Morphir home"));
+
+    let executable = DistributionMother::a_local_wasm_artifact();
+    let installed = ExtensionInstaller::new(&executable.home)
+        .install(executable.selected())
+        .unwrap();
+    let path = executable.home.root().join(installed.store_path());
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(permissions.mode() | 0o100);
+    fs::set_permissions(&path, permissions).unwrap();
+    let error = activate_installed(&executable.home, &executable.id).unwrap_err();
+    assert!(error.to_string().contains("executable mode mismatch"));
+}
+
+#[test]
+fn installed_wasm_rejects_process_only_state() {
+    for (field, value) in [
+        ("args", serde_json::json!(["serve"])),
+        ("executable", serde_json::json!(true)),
+        (
+            "platform",
+            serde_json::json!({ "os": "linux", "arch": "x86_64" }),
+        ),
+        ("backend", serde_json::Value::Null),
+    ] {
+        let mother = DistributionMother::a_local_wasm_artifact();
+        ExtensionInstaller::new(&mother.home)
+            .install(mother.selected())
+            .unwrap();
+        let lock_path = mother.home.extensions_locks_dir().join("morphir-avro.json");
+        let catalog_path = mother.home.extensions_catalog_file();
+        let mut lock: serde_json::Value =
+            serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+        let mut catalog: serde_json::Value =
+            serde_json::from_slice(&fs::read(&catalog_path).unwrap()).unwrap();
+        lock[field] = value.clone();
+        catalog["extensions"][0][field] = value;
+        fs::write(&lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+        fs::write(&catalog_path, serde_json::to_vec_pretty(&catalog).unwrap()).unwrap();
+
+        let error = activate_installed(&mother.home, &mother.id).unwrap_err();
+
+        assert!(
+            error.to_string().contains("invalid installed state"),
+            "unexpected error after tampering {field}: {error}"
+        );
+    }
+}
+
+#[test]
+fn legacy_process_installed_state_remains_activatable() {
+    let mother = DistributionMother::a_local_process_artifact();
+    ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
+    let catalog_path = mother.home.extensions_catalog_file();
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+    let mut catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(&catalog_path).unwrap()).unwrap();
+    lock["schemaVersion"] = serde_json::json!(2);
+    lock.as_object_mut().unwrap().remove("backend");
+    catalog["schemaVersion"] = serde_json::json!(1);
+    catalog["extensions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("backend");
+    fs::write(&lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+    fs::write(&catalog_path, serde_json::to_vec_pretty(&catalog).unwrap()).unwrap();
+
+    let lock = read_extension_lock(&mother.home, &mother.id).unwrap();
+    assert_eq!(lock.schema_version(), 2);
+    assert_eq!(lock.platform().unwrap().os(), "linux");
+    assert_eq!(lock.backend(), None);
+    let process = expect_process(activate_installed(&mother.home, &mother.id).unwrap());
+    assert_eq!(process.extension_info().id, "morphir-elm");
+    assert_eq!(process.args(), ["serve"]);
 }
 
 #[test]
@@ -593,7 +918,7 @@ fn activation_is_offline_and_reverifies_installed_content() {
         .unwrap();
     fs::remove_dir_all(&mother.index).unwrap();
 
-    let launch = activate_installed(&mother.home, &mother.id).unwrap();
+    let launch = expect_process(activate_installed(&mother.home, &mother.id).unwrap());
     assert_eq!(
         launch.program(),
         fs::canonicalize(mother.home.root().join(installed.store_path())).unwrap()
@@ -604,6 +929,8 @@ fn activation_is_offline_and_reverifies_installed_content() {
     assert_eq!(info.name, "Morphir Elm");
     assert_eq!(info.version, "3.2.1");
     assert_eq!(info.types, [morphir_extension_sdk::ExtensionType::Frontend]);
+    assert!(launch.backend().is_none());
+    assert!(launch.extension_capabilities().backend.is_none());
 
     #[cfg(unix)]
     {
@@ -695,6 +1022,13 @@ fn count_staging_files(root: &Path) -> usize {
             }
         })
         .sum()
+}
+
+fn expect_process(artifact: VerifiedExtensionArtifact) -> VerifiedProcessArtifact {
+    match artifact {
+        VerifiedExtensionArtifact::Process(process) => process,
+        VerifiedExtensionArtifact::Wasm(_) => panic!("expected process artifact"),
+    }
 }
 
 #[cfg(unix)]

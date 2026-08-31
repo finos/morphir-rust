@@ -3,6 +3,7 @@
 //! This module provides the Extism-based plugin runtime for loading
 //! and executing Morphir extensions.
 
+pub mod activation;
 pub mod connected;
 pub mod container;
 pub mod host_functions;
@@ -13,6 +14,7 @@ pub mod registry;
 pub mod session;
 pub mod virtual_paths;
 
+pub use activation::{BoxedMepTransport, activate_transport};
 pub use connected::{ConnectedDaemonSession, ConnectedDaemonTransport, DaemonConnection};
 pub use container::ExtensionContainer;
 pub use loader::ExtensionLoader;

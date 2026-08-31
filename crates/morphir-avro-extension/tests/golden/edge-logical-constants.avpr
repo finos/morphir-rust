@@ -1,0 +1,50 @@
+{
+  "messages": {
+    "logicalDefaults": {
+      "errors": [],
+      "morphir.doc": "Documentation for logical-defaults.",
+      "morphir.fqname": "acme/customer:customer#logical-defaults",
+      "morphir.value-kind": "constant",
+      "request": [],
+      "response": "acme.customer.customer.LogicalValues"
+    }
+  },
+  "morphir.module": "customer",
+  "morphir.package": "acme/customer",
+  "namespace": "acme.customer",
+  "protocol": "Customer",
+  "types": [
+    {
+      "fields": [
+        {
+          "name": "amount",
+          "type": {
+            "logicalType": "decimal",
+            "precision": 38,
+            "scale": 10,
+            "type": "bytes"
+          }
+        },
+        {
+          "name": "asOf",
+          "type": {
+            "logicalType": "date",
+            "type": "int"
+          }
+        },
+        {
+          "name": "tags",
+          "type": {
+            "items": "string",
+            "morphir.collection-kind": "set",
+            "type": "array"
+          }
+        }
+      ],
+      "morphir.fqname": "acme/customer:customer#logical-values",
+      "name": "LogicalValues",
+      "namespace": "acme.customer.customer",
+      "type": "record"
+    }
+  ]
+}

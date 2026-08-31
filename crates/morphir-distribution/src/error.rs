@@ -183,6 +183,16 @@ pub enum DistributionError {
         /// Digest computed from the file bytes.
         actual: crate::Sha256Digest,
     },
+    /// An installed extension artifact exceeds the activation memory budget.
+    #[error("artifact {path:?} is {actual} bytes, exceeding the {limit}-byte activation limit")]
+    ArtifactTooLarge {
+        /// Installed artifact path.
+        path: PathBuf,
+        /// Observed byte length.
+        actual: u64,
+        /// Maximum accepted byte length.
+        limit: u64,
+    },
     /// Existing content has different executable semantics than the manifest.
     #[error(
         "executable mode mismatch for {path}: expected executable={expected}, got executable={actual}"
@@ -247,6 +257,14 @@ pub enum DistributionError {
     StateMismatch {
         /// Extension whose durable records disagree.
         id: crate::ExtensionId,
+    },
+    /// One installed record violates its runtime-specific state invariants.
+    #[error("invalid installed state for extension {id}: {reason}")]
+    InvalidInstalledState {
+        /// Extension whose persisted runtime state is malformed.
+        id: crate::ExtensionId,
+        /// Runtime invariant that the record violates.
+        reason: &'static str,
     },
     /// Tool catalog and exact lock disagree about active content.
     #[error("installed catalog and lock disagree for tool {id}")]

@@ -128,8 +128,8 @@ morphir publish                 # Publish to registry
 
 ### Morphir Rust Design Documents
 
-- **[Extensions](../extensions/)** - WASM components and task system
-- **[Wasm Extension Architecture (Interactive Session)](../extensions/actor-based/12-wasm-extension-architecture-session.md)** - Hidden Extism, envelope protocol, TEA runtime, and actors
+- **[Extensions](../extensions/)** - Current Extism runtimes, MEP contract, installation, and release guidance
+- The excluded actor-based pages are historical design input, not the current extension contract.
 - **[Design Documents](../)** - All design documents
 
 ### Main Morphir Documentation

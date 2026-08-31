@@ -6,6 +6,7 @@ resolver = "2"
 
 # Don't build examples by default (morphir-ext-example needs wasm32 target)
 default-members = [
+    "crates/morphir-avro-extension",
     "crates/morphir-builtins",
     "crates/morphir-common",
     "crates/morphir-config",

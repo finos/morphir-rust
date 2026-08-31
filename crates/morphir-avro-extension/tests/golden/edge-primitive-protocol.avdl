@@ -1,0 +1,12 @@
+@morphir.module("customer")
+@morphir.package("acme/customer")
+@namespace("acme.customer")
+protocol Customer {
+  /**
+   * Documentation for primitive-response.
+   */
+  @morphir.doc("Documentation for primitive-response.")
+  @morphir.fqname("acme/customer:customer#primitive-response")
+  @morphir.value-kind("function")
+  string primitiveResponse();
+}

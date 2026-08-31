@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Metadata-only changes can skip the expensive Rust/WebAssembly suite, and the README now
+  inventories workspace crates and versioned extensions.
 - **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase
   segment (`value-in-USD`) instead of a run of single letters wrapped in parentheses
   (`value-in-(usd)`), and the parenthesized form is no longer accepted. Existing v4 artifacts
@@ -22,10 +24,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handles the Windows reserved device names. Decoding accepts the uppercase encoding, the case-free
   doubled-hyphen alternative, and the legacy v1-v3 array; `CANONICAL_STYLE` selects which is written
 
+### Fixed
+
+- Avro extension artifact packaging now preserves `gitCommit` provenance in clean tagged builds by
+  preventing Python bytecode caches from making the checkout appear dirty (#130).
+
 ### Added
 
 - Durable cache-maintenance scheduling state with interval gating, validated continuation cursors,
   bounded fail-closed loading, and atomic Morphir Home persistence shared by CLI and Desktop.
+- Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;
+  extension acquisition, negotiation, and daemon result validation enforce that contract.
+- A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro
+  JSON schemas, JSON protocols, or Avro IDL. The backend supports schema-only, entry-point protocol,
+  and public protocol modes; represents constants as zero-argument messages with
+  `morphir.value-kind=constant`; and can be released independently with versioned extension tags.
+- Bounded Extism hosting and installed-extension activation for MEP backends, including exact
+  artifact verification, locked backend capability metadata, and configurable generation options.
 - Canonical portable workspace discovery for native daemon and browser hosts, with a root-confined
   native adapter, deterministic browser WASM package, and cross-runtime conformance corpus
 - A shared, side-effect-free cache maintenance policy planner with portable owned-entry identities,

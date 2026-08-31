@@ -1,7 +1,14 @@
 //! Parsing for local JSONL extension histories.
 
 use crate::{DistributionError, ExtensionId, ReleaseRecord, Result, Sha256Digest};
+use serde::Deserialize;
 use std::cmp::Ordering;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseSchemaEnvelope {
+    schema_version: u32,
+}
 
 /// A validated release history and the digest of its exact JSONL bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,18 +26,25 @@ impl ExtensionHistory {
             if line.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
+            let envelope: ReleaseSchemaEnvelope =
+                serde_json::from_slice(line).map_err(|source| {
+                    DistributionError::InvalidRecord {
+                        line: line_index + 1,
+                        source,
+                    }
+                })?;
+            if !matches!(envelope.schema_version, 1 | 2) {
+                return Err(DistributionError::UnsupportedSchema {
+                    line: line_index + 1,
+                    version: envelope.schema_version,
+                });
+            }
             let record: ReleaseRecord = serde_json::from_slice(line).map_err(|source| {
                 DistributionError::InvalidRecord {
                     line: line_index + 1,
                     source,
                 }
             })?;
-            if record.schema_version() != 1 {
-                return Err(DistributionError::UnsupportedSchema {
-                    line: line_index + 1,
-                    version: record.schema_version(),
-                });
-            }
             if let Some(first) = releases.first()
                 && record.extension_id() != first.extension_id()
             {

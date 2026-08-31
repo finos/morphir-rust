@@ -1,0 +1,49 @@
+{
+  "messages": {
+    "findCustomer": {
+      "errors": [],
+      "morphir.doc": "Documentation for find-customer.",
+      "morphir.entry-point": true,
+      "morphir.entry-point-doc": "Query a customer by ID.",
+      "morphir.entry-point-id": "customer-query",
+      "morphir.entry-point-kind": "command",
+      "morphir.fqname": "acme/customer:customer#find-customer",
+      "morphir.value-kind": "function",
+      "request": [
+        {
+          "name": "id",
+          "type": "string"
+        }
+      ],
+      "response": "acme.customer.customer.Customer"
+    }
+  },
+  "morphir.doc": "Customer operations.",
+  "morphir.module": "customer",
+  "morphir.package": "acme/customer",
+  "namespace": "acme.customer",
+  "protocol": "Customer",
+  "types": [
+    {
+      "doc": "A customer record.",
+      "fields": [
+        {
+          "name": "active",
+          "type": "boolean"
+        },
+        {
+          "name": "age",
+          "type": "long"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        }
+      ],
+      "morphir.fqname": "Acme:Customer:Customer",
+      "name": "Customer",
+      "namespace": "acme.customer.customer",
+      "type": "record"
+    }
+  ]
+}

@@ -8,6 +8,43 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 
+/// Distinguishes an omitted wire field from an explicit JSON `null`.
+#[derive(Default)]
+enum FieldPresence<T> {
+    #[default]
+    Missing,
+    Present(Option<T>),
+}
+
+impl<'de, T> Deserialize<'de> for FieldPresence<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::Present(Option::<T>::deserialize(deserializer)?))
+    }
+}
+
+impl<T> FieldPresence<T> {
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+
+    fn has_value(&self) -> bool {
+        matches!(self, Self::Present(Some(_)))
+    }
+
+    fn into_option(self) -> Option<T> {
+        match self {
+            Self::Missing | Self::Present(None) => None,
+            Self::Present(Some(value)) => Some(value),
+        }
+    }
+}
+
 /// A portable operating-system and CPU-architecture pair.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Platform {
@@ -89,6 +126,8 @@ impl fmt::Display for Platform {
 pub enum ArtifactRuntime {
     /// An executable that communicates through MEP standard streams.
     Process,
+    /// A portable WebAssembly module.
+    Wasm,
 }
 
 /// Artifact source supported by this acquisition version.
@@ -114,14 +153,94 @@ pub enum Capability {
     Transform,
     /// IR validator.
     Validator,
+    /// Morphir workspace discovery provider.
+    Workspace,
 }
 
-/// One platform-specific artifact declaration.
+/// Backend-specific metadata carried by schema-v2 release records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendRecord {
+    targets: Vec<String>,
+    ir_versions: Vec<String>,
+    generate: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackendRecordWire {
+    targets: Vec<String>,
+    ir_versions: Vec<String>,
+    #[serde(default = "default_backend_generate")]
+    generate: bool,
+}
+
+fn default_backend_generate() -> bool {
+    true
+}
+
+fn valid_backend_identifiers(values: &[String]) -> bool {
+    !values.is_empty()
+        && values.iter().all(|value| {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed == value
+        })
+        && values
+            .iter()
+            .map(|value| value.trim())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == values.len()
+}
+
+impl<'de> Deserialize<'de> for BackendRecord {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BackendRecordWire::deserialize(deserializer)?;
+        if !valid_backend_identifiers(&wire.targets) {
+            return Err(serde::de::Error::custom(
+                "backend targets must be non-empty and unique",
+            ));
+        }
+        if !valid_backend_identifiers(&wire.ir_versions) {
+            return Err(serde::de::Error::custom(
+                "backend IR versions must be non-empty and unique",
+            ));
+        }
+        Ok(Self {
+            targets: wire.targets,
+            ir_versions: wire.ir_versions,
+            generate: wire.generate,
+        })
+    }
+}
+
+impl BackendRecord {
+    /// Return the non-empty unique backend target names.
+    pub fn targets(&self) -> &[String] {
+        &self.targets
+    }
+
+    /// Return the non-empty unique Morphir IR versions supported by the backend.
+    pub fn ir_versions(&self) -> &[String] {
+        &self.ir_versions
+    }
+
+    /// Return whether this backend accepts generate requests.
+    pub fn generate(&self) -> bool {
+        self.generate
+    }
+}
+
+/// One process-specific or portable artifact declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactRecord {
     runtime: ArtifactRuntime,
-    platform: Platform,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform: Option<Platform>,
     source: ArtifactSource,
     sha256: Sha256Digest,
     filename: ArtifactFilename,
@@ -133,7 +252,8 @@ pub struct ArtifactRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ArtifactRecordWire {
     runtime: ArtifactRuntime,
-    platform: Platform,
+    #[serde(default)]
+    platform: FieldPresence<Platform>,
     source: ArtifactSource,
     sha256: Sha256Digest,
     filename: ArtifactFilename,
@@ -149,9 +269,9 @@ impl ArtifactRecord {
         self.runtime
     }
 
-    /// Return the target platform.
-    pub fn platform(&self) -> &Platform {
-        &self.platform
+    /// Return the process target platform, if this artifact has one.
+    pub fn platform(&self) -> Option<&Platform> {
+        self.platform.as_ref()
     }
 
     /// Return the controlled source declaration.
@@ -186,6 +306,21 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
         D: Deserializer<'de>,
     {
         let wire = ArtifactRecordWire::deserialize(deserializer)?;
+        match wire.runtime {
+            ArtifactRuntime::Process if !wire.platform.has_value() => {
+                return Err(serde::de::Error::custom(
+                    "process artifacts require a platform",
+                ));
+            }
+            ArtifactRuntime::Wasm
+                if !wire.platform.is_missing() || !wire.args.is_empty() || wire.executable =>
+            {
+                return Err(serde::de::Error::custom(
+                    "wasm artifacts must be portable, argument-free, and non-executable",
+                ));
+            }
+            _ => {}
+        }
         match &wire.source {
             ArtifactSource::LocalFile { path } => {
                 path.validate_declared().map_err(serde::de::Error::custom)?
@@ -198,7 +333,7 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
         }
         Ok(Self {
             runtime: wire.runtime,
-            platform: wire.platform,
+            platform: wire.platform.into_option(),
             source: wire.source,
             sha256: wire.sha256,
             filename: wire.filename,
@@ -219,6 +354,8 @@ pub struct ReleaseRecord {
     channels: Vec<Channel>,
     mep_versions: Vec<String>,
     capabilities: Vec<Capability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<BackendRecord>,
     artifacts: Vec<ArtifactRecord>,
 }
 
@@ -233,6 +370,8 @@ struct ReleaseRecordWire {
     channels: Vec<Channel>,
     mep_versions: Vec<String>,
     capabilities: Vec<Capability>,
+    #[serde(default)]
+    backend: FieldPresence<BackendRecord>,
     artifacts: Vec<ArtifactRecord>,
 }
 
@@ -272,6 +411,11 @@ impl ReleaseRecord {
         &self.capabilities
     }
 
+    /// Return backend-specific metadata when declared by a schema-v2 record.
+    pub fn backend(&self) -> Option<&BackendRecord> {
+        self.backend.as_ref()
+    }
+
     /// Return the non-empty platform artifact set.
     pub fn artifacts(&self) -> &[ArtifactRecord] {
         &self.artifacts
@@ -307,6 +451,45 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
                 "extension capabilities cannot contain duplicates",
             ));
         }
+        match wire.schema_version {
+            1 => {
+                if !wire.backend.is_missing() {
+                    return Err(serde::de::Error::custom(
+                        "schema-v1 records cannot declare backend metadata",
+                    ));
+                }
+                if wire
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.runtime() != ArtifactRuntime::Process)
+                {
+                    return Err(serde::de::Error::custom(
+                        "schema-v1 records require process artifacts",
+                    ));
+                }
+            }
+            2 => {
+                let declares_backend = wire.capabilities.contains(&Capability::Backend);
+                match (declares_backend, wire.backend.has_value()) {
+                    (true, false) => {
+                        return Err(serde::de::Error::custom(
+                            "backend metadata is required when backend capability is declared",
+                        ));
+                    }
+                    (false, _) if !wire.backend.is_missing() => {
+                        return Err(serde::de::Error::custom(
+                            "backend metadata requires the backend capability",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            version => {
+                return Err(serde::de::Error::custom(format!(
+                    "unsupported extension index schema version {version}"
+                )));
+            }
+        }
         if wire.artifacts.is_empty() {
             return Err(serde::de::Error::custom(
                 "release artifacts cannot be empty",
@@ -320,6 +503,7 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
             channels: wire.channels,
             mep_versions: wire.mep_versions,
             capabilities: wire.capabilities,
+            backend: wire.backend.into_option(),
             artifacts: wire.artifacts,
         })
     }

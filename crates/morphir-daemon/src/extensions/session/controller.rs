@@ -2,13 +2,14 @@
 
 use super::transport::{MepTransport, TransportError, TransportState};
 use super::validation::{
-    ResponseFailure, validate_method_result, validate_negotiation, validate_response,
+    ResponseFailure, validate_method_result_async, validate_negotiation, validate_response,
 };
 use crate::DaemonError;
 use crate::extensions::protocol::{
     ExtensionRequest, InitializeParams, InitializeResult, error_codes, methods,
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
+use morphir_workspace::{DiscoveryRequest, WORKSPACE_DISCOVERY_PROTOCOL};
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
@@ -27,6 +28,7 @@ pub struct NegotiatedSession {
     pub(super) protocol_version: String,
     pub(super) extension: ExtensionInfo,
     pub(super) capabilities: ExtensionCapabilities,
+    pub(super) legacy_backend: bool,
 }
 
 impl NegotiatedSession {
@@ -45,7 +47,7 @@ impl NegotiatedSession {
         &self.capabilities
     }
 
-    fn supports_method(&self, method: &str) -> bool {
+    pub(crate) fn supports_method(&self, method: &str) -> bool {
         match method {
             methods::COMPILE => {
                 self.extension.types.contains(&ExtensionType::Frontend)
@@ -55,11 +57,46 @@ impl NegotiatedSession {
                         .as_ref()
                         .is_some_and(|frontend| frontend.compile)
             }
-            methods::GENERATE => self.extension.types.contains(&ExtensionType::Backend),
+            methods::GENERATE => {
+                self.extension.types.contains(&ExtensionType::Backend)
+                    && (self.legacy_backend
+                        || self
+                            .capabilities
+                            .backend
+                            .as_ref()
+                            .is_some_and(|backend| backend.generate))
+            }
             methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
             methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),
+            methods::WORKSPACE_DISCOVER => {
+                self.extension.types.contains(&ExtensionType::Workspace)
+                    && self
+                        .capabilities
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|workspace| {
+                            workspace.discover && workspace.protocol_versions.contains(&1)
+                        })
+            }
             _ => true,
         }
+    }
+
+    pub(crate) fn supports_invocation(&self, method: &str, params: &serde_json::Value) -> bool {
+        if method != methods::WORKSPACE_DISCOVER {
+            return true;
+        }
+        let Some(workspace) = self.capabilities.workspace.as_ref() else {
+            return false;
+        };
+        serde_json::from_value::<DiscoveryRequest>(params.clone())
+            .ok()
+            .is_some_and(|request| {
+                request.protocol_version == WORKSPACE_DISCOVERY_PROTOCOL
+                    && workspace
+                        .protocol_versions
+                        .contains(&request.protocol_version)
+            })
     }
 }
 
@@ -157,6 +194,19 @@ impl<T: MepTransport> Session<T, Ready> {
                 )),
             );
         }
+        let params = match serde_json::to_value(params) {
+            Ok(params) => params,
+            Err(error) => return InvokeOutcome::Rejected(self, error.into()),
+        };
+        if !self.negotiated().supports_invocation(method, &params) {
+            return InvokeOutcome::Rejected(
+                self,
+                DaemonError::Extension(format!(
+                    "RPC error {}: Extension does not support capability '{method}' for the requested protocol",
+                    error_codes::CAPABILITY_UNAVAILABLE
+                )),
+            );
+        }
         match self.call(method, params).await {
             CallOutcome::Success(value) => InvokeOutcome::Success(self, value),
             CallOutcome::RpcError(error) | CallOutcome::Local(error) => {
@@ -235,7 +285,8 @@ impl<T: MepTransport, S> Session<T, S> {
             Err(error) => return CallOutcome::Transport(error),
         };
         match validate_response(response, id) {
-            Ok(value) => match validate_method_result(method, &request_params, value)
+            Ok(value) => match validate_method_result_async(method, request_params, value)
+                .await
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
             {
                 Ok(value) => CallOutcome::Success(value),

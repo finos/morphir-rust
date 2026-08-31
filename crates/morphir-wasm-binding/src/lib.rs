@@ -29,7 +29,11 @@ impl Extension for WasmExtension {
 
     fn capabilities() -> ExtensionCapabilities {
         ExtensionCapabilities {
-            frontend: None,
+            backend: Some(BackendCapability {
+                targets: vec!["wasm".into(), "wat".into()],
+                ir_versions: Vec::new(),
+                generate: true,
+            }),
             ..ExtensionCapabilities::default()
         }
     }
@@ -76,6 +80,45 @@ impl Backend for WasmExtension {
 
     fn target_languages() -> Vec<String> {
         vec!["wasm".into(), "wat".into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_advertise_wasm_backend_contract() {
+        let backend = WasmExtension::capabilities()
+            .backend
+            .expect("WASM extension should advertise backend capabilities");
+
+        assert_eq!(backend.targets, ["wasm", "wat"]);
+        assert!(backend.ir_versions.is_empty());
+        assert!(backend.generate);
+    }
+
+    #[test]
+    fn standard_morphir_ir_roots_are_not_accepted_as_legacy_distributions() {
+        let generated = WasmExtension
+            .generate(GenerateRequest {
+                ir: serde_json::json!({
+                    "formatVersion": 4,
+                    "distribution": {
+                        "Library": {
+                            "packageName": "example/package",
+                            "dependencies": {},
+                            "def": {"modules": {}}
+                        }
+                    }
+                }),
+                options: Default::default(),
+            })
+            .expect("return a typed generation result");
+
+        assert!(!generated.success);
+        assert!(generated.artifacts.is_empty());
+        assert_eq!(generated.diagnostics[0].code.as_deref(), Some("W001"));
     }
 }
 

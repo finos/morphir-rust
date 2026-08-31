@@ -1,0 +1,21 @@
+{
+  "doc": "A customer record.",
+  "fields": [
+    {
+      "name": "active",
+      "type": "boolean"
+    },
+    {
+      "name": "age",
+      "type": "long"
+    },
+    {
+      "name": "name",
+      "type": "string"
+    }
+  ],
+  "morphir.fqname": "Acme:Customer:Customer",
+  "name": "Customer",
+  "namespace": "acme.customer.customer",
+  "type": "record"
+}

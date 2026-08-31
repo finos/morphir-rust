@@ -18,6 +18,8 @@ pub enum ExtensionType {
     Transform,
     /// Validator - analyzes IR and produces diagnostics
     Validator,
+    /// Workspace - discovers Morphir projects from a confined file tree
+    Workspace,
 }
 
 /// Information about an extension
@@ -65,7 +67,7 @@ impl Default for ExtensionInfo {
 }
 
 /// Source language supported by a frontend extension.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LanguageCapability {
     /// Stable language identifier used in compile requests.
@@ -75,7 +77,7 @@ pub struct LanguageCapability {
 }
 
 /// Compilation features advertised by a frontend extension.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendCapability {
     /// Source languages accepted by the frontend.
@@ -90,12 +92,40 @@ pub struct FrontendCapability {
     pub fragments: bool,
 }
 
+/// Code-generation features advertised by a backend extension.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendCapability {
+    /// Target formats the backend can generate.
+    pub targets: Vec<String>,
+    /// Morphir IR versions the backend can consume.
+    pub ir_versions: Vec<String>,
+    /// Whether the backend accepts generate requests.
+    pub generate: bool,
+}
+
+/// Workspace-discovery features advertised by an extension.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCapability {
+    /// Portable workspace discovery protocol versions accepted by the extension.
+    pub protocol_versions: Vec<u32>,
+    /// Whether the extension accepts workspace discovery requests.
+    pub discover: bool,
+}
+
 /// Extension capabilities for runtime negotiation
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct ExtensionCapabilities {
     /// Frontend compilation features, when provided by the extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frontend: Option<FrontendCapability>,
+    /// Backend code-generation features, when provided by the extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendCapability>,
+    /// Workspace discovery features, when provided by the extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceCapability>,
     /// Supports streaming/incremental processing
     #[serde(default)]
     pub streaming: bool,
@@ -120,8 +150,10 @@ impl Serialize for ExtensionCapabilities {
     where
         S: serde::Serializer,
     {
-        const RESERVED_KEYS: [&str; 5] = [
+        const RESERVED_KEYS: [&str; 7] = [
             "frontend",
+            "backend",
+            "workspace",
             "streaming",
             "incremental",
             "cancellation",
@@ -138,10 +170,19 @@ impl Serialize for ExtensionCapabilities {
         }
 
         let mut map = serializer.serialize_map(Some(
-            4 + usize::from(self.frontend.is_some()) + self.extra.len(),
+            4 + usize::from(self.frontend.is_some())
+                + usize::from(self.backend.is_some())
+                + usize::from(self.workspace.is_some())
+                + self.extra.len(),
         ))?;
         if let Some(frontend) = &self.frontend {
             map.serialize_entry("frontend", frontend)?;
+        }
+        if let Some(backend) = &self.backend {
+            map.serialize_entry("backend", backend)?;
+        }
+        if let Some(workspace) = &self.workspace {
+            map.serialize_entry("workspace", workspace)?;
         }
         map.serialize_entry("streaming", &self.streaming)?;
         map.serialize_entry("incremental", &self.incremental)?;
@@ -695,6 +736,41 @@ mod tests {
         let decoded: ExtensionCapabilities = serde_json::from_value(legacy.clone()).unwrap();
         assert!(decoded.frontend.is_none());
         assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+    }
+
+    #[test]
+    fn backend_capability_round_trips() {
+        let capabilities = ExtensionCapabilities {
+            backend: Some(BackendCapability {
+                targets: vec!["avro".into()],
+                ir_versions: vec!["3".into(), "4".into()],
+                generate: true,
+            }),
+            ..ExtensionCapabilities::default()
+        };
+        let json = serde_json::to_value(&capabilities).unwrap();
+
+        assert_eq!(json["backend"]["targets"], serde_json::json!(["avro"]));
+        assert_eq!(json["backend"]["irVersions"], serde_json::json!(["3", "4"]));
+        assert_eq!(json["backend"]["generate"], true);
+        assert_eq!(
+            serde_json::from_value::<ExtensionCapabilities>(json)
+                .unwrap()
+                .backend
+                .unwrap()
+                .targets,
+            ["avro"]
+        );
+    }
+
+    #[test]
+    fn extra_cannot_replace_the_typed_backend_capability() {
+        let capabilities = ExtensionCapabilities {
+            extra: HashMap::from([("backend".into(), serde_json::json!({}))]),
+            ..ExtensionCapabilities::default()
+        };
+
+        assert!(serde_json::to_value(capabilities).is_err());
     }
 
     #[test]

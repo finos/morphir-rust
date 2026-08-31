@@ -1,13 +1,19 @@
 //! Validation of untrusted response envelopes and initialization data.
 
 use super::controller::NegotiatedSession;
-use super::transport::ExpectedExtension;
+use super::transport::{CapabilityExpectation, ExpectedExtension};
 use crate::extensions::protocol::{
     ExtensionResponse, InitializeResult, JSONRPC_VERSION, RpcError, methods,
 };
 use crate::{DaemonError, Result};
-use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use morphir_distribution::RelativeArtifactPath;
+use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
+use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
+use unicode_casefold::UnicodeCaseFold as _;
+use unicode_normalization::UnicodeNormalization as _;
 
 pub(super) enum ResponseFailure {
     Rpc(DaemonError),
@@ -46,40 +52,144 @@ pub(super) fn validate_method_result(
     request_params: &serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
+    if method == methods::GENERATE {
+        return validate_generate_result(value);
+    }
     if method == methods::COMPILE {
-        let result: CompileResult = serde_json::from_value(value.clone())?;
-        if result.success && result.ir_version.is_none() {
-            return Err(DaemonError::Extension(
-                "Successful compile result is missing irVersion".into(),
-            ));
+        return validate_compile_result(request_params, value);
+    }
+    if method == methods::WORKSPACE_DISCOVER {
+        let request: DiscoveryRequest = serde_json::from_value(request_params.clone())?;
+        let result: DiscoveryResponse = serde_json::from_value(value)?;
+        if let DiscoveryResponse::Success { snapshot } = &result
+            && snapshot.protocol_version != request.protocol_version
+        {
+            return Err(DaemonError::Extension(format!(
+                "Workspace snapshot protocol version {} did not match requested protocol version {}",
+                snapshot.protocol_version, request.protocol_version
+            )));
         }
-        if result.success && result.ir.is_none() {
-            return Err(DaemonError::Extension(
-                "Successful compile result is missing ir".into(),
-            ));
-        }
-        if result.success {
-            let request: CompileRequest = serde_json::from_value(request_params.clone())?;
-            let result_version = result
-                .ir_version
-                .as_deref()
-                .expect("successful result version was validated");
-            if result_version != request.options.ir_version {
-                return Err(DaemonError::Extension(format!(
-                    "Successful compile result irVersion '{result_version}' did not match requested irVersion '{}'",
-                    request.options.ir_version
-                )));
-            }
-            validate_compile_ir(
-                result
-                    .ir
-                    .as_ref()
-                    .expect("successful result IR was validated"),
-                &request.options.ir_version,
-            )?;
-        }
+        return Ok(serde_json::to_value(result)?);
     }
     Ok(value)
+}
+
+pub(in crate::extensions) async fn validate_method_result_async(
+    method: &str,
+    request_params: serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    if method == methods::GENERATE {
+        return tokio::task::spawn_blocking(move || validate_generate_result(value))
+            .await
+            .map_err(|error| {
+                DaemonError::Extension(format!(
+                    "Generated artifact validation worker failed: {error}"
+                ))
+            })?;
+    }
+    if method == methods::COMPILE {
+        return tokio::task::spawn_blocking(move || {
+            validate_compile_result(&request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            DaemonError::Extension(format!("Compile result validation worker failed: {error}"))
+        })?;
+    }
+    if method == methods::WORKSPACE_DISCOVER {
+        return tokio::task::spawn_blocking(move || {
+            validate_method_result(methods::WORKSPACE_DISCOVER, &request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            DaemonError::Extension(format!(
+                "Workspace result validation worker failed: {error}"
+            ))
+        })?;
+    }
+    validate_method_result(method, &request_params, value)
+}
+
+fn validate_compile_result(
+    request_params: &serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let result: CompileResult = serde_json::from_value(value.clone())?;
+    if result.success && result.ir_version.is_none() {
+        return Err(DaemonError::Extension(
+            "Successful compile result is missing irVersion".into(),
+        ));
+    }
+    if result.success && result.ir.is_none() {
+        return Err(DaemonError::Extension(
+            "Successful compile result is missing ir".into(),
+        ));
+    }
+    if result.success {
+        let request: CompileRequest = serde_json::from_value(request_params.clone())?;
+        let result_version = result
+            .ir_version
+            .as_deref()
+            .expect("successful result version was validated");
+        if result_version != request.options.ir_version {
+            return Err(DaemonError::Extension(format!(
+                "Successful compile result irVersion '{result_version}' did not match requested irVersion '{}'",
+                request.options.ir_version
+            )));
+        }
+        validate_compile_ir(
+            result
+                .ir
+                .as_ref()
+                .expect("successful result IR was validated"),
+            &request.options.ir_version,
+        )?;
+    }
+    Ok(value)
+}
+
+fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
+    let mut result: GenerateResult = serde_json::from_value(value)?;
+    let mut case_folded_paths = HashSet::new();
+    let mut uppercase_paths = HashSet::new();
+    for artifact in &mut result.artifacts {
+        let path = RelativeArtifactPath::parse(artifact.path.clone()).map_err(|error| {
+            DaemonError::Extension(format!(
+                "Generated artifact path '{}' is invalid: {error}",
+                artifact.path
+            ))
+        })?;
+        artifact.path = path.as_str().to_owned();
+        let (case_folded, uppercase) = portable_artifact_path_keys(&artifact.path);
+        if !case_folded_paths.insert(case_folded) || !uppercase_paths.insert(uppercase) {
+            return Err(DaemonError::Extension(format!(
+                "Generated artifact path '{}' is duplicate",
+                artifact.path
+            )));
+        }
+        if artifact.binary {
+            STANDARD.decode(&artifact.content).map_err(|error| {
+                DaemonError::Extension(format!(
+                    "Generated binary artifact '{}' contains invalid Base64: {error}",
+                    artifact.path
+                ))
+            })?;
+        }
+    }
+    serde_json::to_value(result).map_err(Into::into)
+}
+
+fn portable_artifact_path_keys(path: &str) -> (String, String) {
+    let normalized = path.nfc().collect::<String>();
+    let case_folded = normalized
+        .as_str()
+        .case_fold()
+        .collect::<String>()
+        .nfc()
+        .collect();
+    let uppercase = normalized.to_uppercase().nfc().collect();
+    (case_folded, uppercase)
 }
 
 fn validate_compile_ir(ir: &serde_json::Value, requested_version: &str) -> Result<()> {
@@ -161,11 +271,12 @@ fn validate_typed_raw_distribution(ir: &serde_json::Value, requested_version: &s
     })
 }
 
-pub(super) fn validate_negotiation(
+pub(in crate::extensions) fn validate_negotiation(
     expected: ExpectedExtension,
     offered_versions: &[String],
     result: InitializeResult,
 ) -> Result<NegotiatedSession> {
+    let allows_legacy_backend = expected.allows_legacy_backend;
     if !offered_versions.contains(&result.protocol_version) {
         return Err(DaemonError::Extension(format!(
             "Extension selected protocol version '{}' that the host did not offer",
@@ -194,6 +305,29 @@ pub(super) fn validate_negotiation(
             expected.id
         )));
     }
+    if let Some(discovered) = expected.capabilities {
+        let capability_scope = match discovered {
+            CapabilityExpectation::Exact(discovered) if result.capabilities != discovered => {
+                if result.capabilities.backend != discovered.backend {
+                    Some("backend capabilities")
+                } else {
+                    Some("capabilities")
+                }
+            }
+            CapabilityExpectation::Backend(discovered)
+                if result.capabilities.backend.as_ref() != Some(&discovered) =>
+            {
+                Some("backend capabilities")
+            }
+            CapabilityExpectation::Exact(_) | CapabilityExpectation::Backend(_) => None,
+        };
+        if let Some(capability_scope) = capability_scope {
+            return Err(DaemonError::Extension(format!(
+                "Extension '{}' {capability_scope} disagreed with discovery",
+                expected.id
+            )));
+        }
+    }
     if unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_none() {
         return Err(DaemonError::Extension(
             "Extension declared Frontend without frontend capabilities".into(),
@@ -204,16 +338,54 @@ pub(super) fn validate_negotiation(
             "Extension advertised frontend capabilities without declaring Frontend".into(),
         ));
     }
+    let legacy_backend = allows_legacy_backend
+        && unique.contains(&ExtensionType::Backend)
+        && result.capabilities.backend.is_none();
+    if unique.contains(&ExtensionType::Backend)
+        && result.capabilities.backend.is_none()
+        && !legacy_backend
+    {
+        return Err(DaemonError::Extension(
+            "Extension declared Backend without backend capabilities".into(),
+        ));
+    }
+    if !unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_some() {
+        return Err(DaemonError::Extension(
+            "Extension advertised backend capabilities without declaring Backend".into(),
+        ));
+    }
+    if unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_none() {
+        return Err(DaemonError::Extension(
+            "Extension declared Workspace without workspace capabilities".into(),
+        ));
+    }
+    if !unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_some() {
+        return Err(DaemonError::Extension(
+            "Extension advertised workspace capabilities without declaring Workspace".into(),
+        ));
+    }
     Ok(NegotiatedSession {
         protocol_version: result.protocol_version,
         extension: result.extension,
         capabilities: result.capabilities,
+        legacy_backend,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace_request(protocol_version: u32) -> serde_json::Value {
+        serde_json::json!({
+            "protocolVersion": protocol_version,
+            "developmentRoot": {"entries": {}},
+            "morphirHome": null,
+            "systemConfig": null,
+            "environment": {},
+            "cliOverlay": {}
+        })
+    }
 
     fn compile_request(ir_version: &str) -> serde_json::Value {
         serde_json::json!({
@@ -243,6 +415,247 @@ mod tests {
                 "def": {"modules": {}}
             }
         })
+    }
+
+    #[test]
+    fn rejects_malformed_workspace_discovery_results() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request(1),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {"protocolVersion": 1}
+            }),
+        )
+        .expect_err("workspace discovery results must match the shared protocol");
+
+        assert!(error.to_string().contains("missing field"), "{error}");
+    }
+
+    #[test]
+    fn accepts_and_normalizes_workspace_discovery_results() {
+        let value = serde_json::json!({
+            "status": "failure",
+            "error": {
+                "code": "workspace.config.missing",
+                "message": "No workspace configuration was found",
+                "path": null
+            }
+        });
+
+        assert_eq!(
+            validate_method_result(
+                methods::WORKSPACE_DISCOVER,
+                &workspace_request(1),
+                value.clone()
+            )
+            .expect("a typed workspace failure is a valid discovery result"),
+            value
+        );
+    }
+
+    #[test]
+    fn rejects_workspace_snapshots_using_a_different_protocol_version() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request(1),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {
+                    "protocolVersion": 2,
+                    "configAnchor": "morphir.toml",
+                    "name": null,
+                    "state": "open",
+                    "projects": [],
+                    "diagnostics": []
+                }
+            }),
+        )
+        .expect_err("snapshot protocol must match the discovery request");
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not match requested protocol version 1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_generated_artifact_paths() {
+        for path in [
+            "/tmp/schema.avsc",
+            "../../.ssh/authorized_keys",
+            "nested/../schema.avsc",
+            r"C:\\Users\\Public\\schema.avsc",
+        ] {
+            let error = validate_method_result(
+                methods::GENERATE,
+                &serde_json::json!({}),
+                serde_json::json!({
+                    "success": true,
+                    "artifacts": [{"path": path, "content": "{}"}],
+                    "diagnostics": []
+                }),
+            )
+            .expect_err("unsafe generated artifact paths must fail validation");
+
+            assert!(
+                error.to_string().contains("artifact path"),
+                "unexpected error for {path}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_binary_generated_artifact_content() {
+        let error = validate_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [{
+                    "path": "schema.avro",
+                    "content": "not base64!",
+                    "binary": true
+                }],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("binary artifact content must be valid base64");
+
+        assert!(error.to_string().contains("Base64"), "{error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_generated_artifact_paths() {
+        let error = validate_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [
+                    {"path": "schema.avsc", "content": "{}"},
+                    {"path": "schema.avsc", "content": "duplicate"}
+                ],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("duplicate artifact paths must fail validation");
+
+        assert!(error.to_string().contains("duplicate"), "{error}");
+    }
+
+    #[test]
+    fn rejects_portably_colliding_generated_artifact_paths() {
+        for paths in [
+            ["Foo.avsc", "foo.avsc"],
+            ["caf\u{e9}.avsc", "cafe\u{301}.avsc"],
+        ] {
+            let error = validate_method_result(
+                methods::GENERATE,
+                &serde_json::json!({}),
+                serde_json::json!({
+                    "success": true,
+                    "artifacts": [
+                        {"path": paths[0], "content": "{}"},
+                        {"path": paths[1], "content": "duplicate"}
+                    ],
+                    "diagnostics": []
+                }),
+            )
+            .expect_err("portable artifact path collisions must fail validation");
+
+            assert!(error.to_string().contains("duplicate"), "{error}");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn binary_generation_validation_runs_off_the_async_worker() {
+        let content = STANDARD.encode(vec![0_u8; 8 * 1024 * 1024]);
+        let value = serde_json::json!({
+            "success": true,
+            "artifacts": [{
+                "path": "schema.avro",
+                "content": content,
+                "binary": true
+            }],
+            "diagnostics": []
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::GENERATE, serde_json::json!({}), value)
+                .await
+                .expect("large binary artifact should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn compile_validation_runs_off_the_async_worker() {
+        let request = compile_request("3");
+        let mut value =
+            successful_result("3", serde_json::json!(["Library", [], [], {"modules": []}]));
+        value["modules"] = serde_json::json!(["M".repeat(8 * 1024 * 1024)]);
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::COMPILE, request, value)
+                .await
+                .expect("large compile result should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workspace_validation_runs_off_the_async_worker() {
+        let value = serde_json::json!({
+            "status": "success",
+            "snapshot": {
+                "protocolVersion": 1,
+                "configAnchor": "morphir.toml",
+                "name": null,
+                "state": "open",
+                "projects": [],
+                "diagnostics": [{
+                    "severity": "warning",
+                    "code": "workspace.large-diagnostic",
+                    "message": "M".repeat(8 * 1024 * 1024),
+                    "path": null,
+                    "projectPath": null
+                }]
+            }
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_method_result_async(methods::WORKSPACE_DISCOVER, workspace_request(1), value)
+                .await
+                .expect("large workspace result should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
     }
 
     #[test]

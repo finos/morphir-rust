@@ -1,20 +1,33 @@
 //! Native child-process transport for the Morphir Extension Protocol.
 
+mod launch;
+mod transport;
+
+pub use launch::ProcessLaunch;
+use launch::ProcessProgram;
+pub use transport::SpawnedProcessTransport;
+
+#[cfg(test)]
+mod tests;
+
 use crate::extensions::protocol::{
     ExtensionNotification, ExtensionRequest, ExtensionResponse, ExtensionResponseExt,
     InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
 };
 use crate::extensions::session::{
-    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport, Session,
-    Stopped, TransportError, TransportState,
+    CapabilityExpectation, ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded,
+    MepTransport, NegotiatedSession, Session, Stopped, TransportError, TransportState,
+    validate_method_result_async, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{BackendCapability, ExtensionCapabilities, ExtensionInfo};
 use serde::{Serialize, de::DeserializeOwned};
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, OpenOptions};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
@@ -25,81 +38,17 @@ use tokio::time::timeout;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_STDERR_BYTES: usize = 256 * 1024;
-
-/// A native extension command with an explicit identity and working directory.
-#[derive(Debug, Clone)]
-pub struct ProcessLaunch {
-    extension_id: String,
-    discovered: Option<ExtensionInfo>,
-    program: PathBuf,
-    args: Vec<OsString>,
-    working_directory: PathBuf,
-    environment: Vec<(OsString, OsString)>,
-    request_timeout: Duration,
-}
-
-impl ProcessLaunch {
-    /// Define a process launch without inheriting the host environment.
-    pub fn new(
-        extension_id: impl Into<String>,
-        program: impl Into<PathBuf>,
-        working_directory: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            extension_id: extension_id.into(),
-            discovered: None,
-            program: program.into(),
-            args: Vec::new(),
-            working_directory: working_directory.into(),
-            environment: Vec::new(),
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-        }
-    }
-
-    /// Define a verified process launch with exact discovery metadata.
-    ///
-    /// Typestate initialization requires the child to reproduce this identity,
-    /// name, version, and capability set. Use [`Self::new`] for explicit
-    /// development commands that have only a configured identity.
-    pub fn from_discovered(
-        discovered: ExtensionInfo,
-        program: impl Into<PathBuf>,
-        working_directory: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            extension_id: discovered.id.clone(),
-            discovered: Some(discovered),
-            program: program.into(),
-            args: Vec::new(),
-            working_directory: working_directory.into(),
-            environment: Vec::new(),
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-        }
-    }
-
-    /// Append one process argument.
-    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    /// Add one environment variable to the otherwise empty child environment.
-    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
-        self.environment.push((key.into(), value.into()));
-        self
-    }
-
-    /// Set the timeout applied to each request and to process shutdown.
-    pub fn request_timeout(mut self, request_timeout: Duration) -> Self {
-        self.request_timeout = request_timeout;
-        self
-    }
-}
+const EXECUTABLE_BUSY_RETRIES: usize = 4;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 enum ProcessSessionData {
     Starting,
-    Ready(Box<InitializeResult>),
+    Ready(Box<CompatibilityReady>),
     Stopped,
+}
+
+struct CompatibilityReady {
+    negotiated: NegotiatedSession,
 }
 
 /// A runtime-erased MEP session carried over a child process's standard streams.
@@ -117,6 +66,8 @@ enum ProcessSessionData {
 pub struct SpawnedProcessSession {
     expected_extension_id: String,
     discovered: Option<ExtensionInfo>,
+    capabilities: Option<CapabilityExpectation>,
+    allows_legacy_backend: bool,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -125,6 +76,7 @@ pub struct SpawnedProcessSession {
     next_request_id: u64,
     request_timeout: Duration,
     state: ProcessSessionData,
+    _staged_program: Option<tempfile::TempDir>,
 }
 
 impl SpawnedProcessSession {
@@ -132,7 +84,8 @@ impl SpawnedProcessSession {
     pub async fn spawn(launch: ProcessLaunch) -> Result<Self> {
         validate_launch(&launch)?;
 
-        let mut command = Command::new(&launch.program);
+        let (program, staged_program) = prepare_program(&launch.program).await?;
+        let mut command = Command::new(&program);
         command
             .args(&launch.args)
             .current_dir(&launch.working_directory)
@@ -143,7 +96,7 @@ impl SpawnedProcessSession {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = command.spawn().map_err(|error| {
+        let mut child = spawn_child(&mut command).await.map_err(|error| {
             DaemonError::Extension(format!(
                 "Failed to start extension '{}': {}",
                 launch.extension_id, error
@@ -163,6 +116,8 @@ impl SpawnedProcessSession {
         Ok(Self {
             expected_extension_id: launch.extension_id,
             discovered: launch.discovered,
+            capabilities: launch.capabilities,
+            allows_legacy_backend: launch.allows_legacy_backend,
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
@@ -171,6 +126,7 @@ impl SpawnedProcessSession {
             next_request_id: 1,
             request_timeout: launch.request_timeout,
             state: ProcessSessionData::Starting,
+            _staged_program: staged_program,
         })
     }
 
@@ -178,9 +134,9 @@ impl SpawnedProcessSession {
     pub async fn spawn_typestate(
         launch: ProcessLaunch,
     ) -> Result<Session<SpawnedProcessTransport, Loaded>> {
-        Ok(Session::loaded(SpawnedProcessTransport {
-            session: Self::spawn(launch).await?,
-        }))
+        Ok(Session::loaded(
+            SpawnedProcessTransport::spawn(launch).await?,
+        ))
     }
 
     /// Return captured standard error after the process exits.
@@ -196,12 +152,28 @@ impl SpawnedProcessSession {
             .map_err(DaemonError::from)
     }
 
-    fn ready_session(&self) -> Result<&InitializeResult> {
+    fn ready_session(&self) -> Result<&CompatibilityReady> {
         match &self.state {
             ProcessSessionData::Ready(initialized) => Ok(initialized),
             ProcessSessionData::Starting | ProcessSessionData::Stopped => Err(
                 DaemonError::Extension("Extension session is not ready".to_string()),
             ),
+        }
+    }
+
+    fn expected_extension(&self) -> ExpectedExtension {
+        match (&self.discovered, &self.capabilities) {
+            (Some(discovered), Some(capabilities)) => {
+                ExpectedExtension::discovered_with_expectation(
+                    discovered.clone(),
+                    capabilities.clone(),
+                )
+            }
+            (Some(discovered), None) if self.allows_legacy_backend => {
+                ExpectedExtension::legacy_discovered(discovered.clone())
+            }
+            (Some(discovered), None) => ExpectedExtension::discovered(discovered.clone()),
+            (None, _) => ExpectedExtension::identified(self.expected_extension_id.clone()),
         }
     }
 
@@ -310,144 +282,18 @@ impl SpawnedProcessSession {
     }
 }
 
-/// Fresh child-process transport owned by a typestate session.
-///
-/// Only [`SpawnedProcessSession::spawn_typestate`] constructs this type, so a
-/// runtime-erased compatibility session cannot be reintroduced as loaded.
-pub struct SpawnedProcessTransport {
-    session: SpawnedProcessSession,
-}
-
-#[async_trait]
-impl MepTransport for SpawnedProcessTransport {
-    fn expected_extension(&self) -> ExpectedExtension {
-        self.session
-            .discovered
-            .clone()
-            .map(ExpectedExtension::discovered)
-            .unwrap_or_else(|| {
-                ExpectedExtension::identified(self.session.expected_extension_id.clone())
-            })
-    }
-
-    async fn exchange(
-        &mut self,
-        request: ExtensionRequest,
-    ) -> std::result::Result<ExtensionResponse, TransportError> {
-        let method = request.method.clone();
-        let exchange = async {
-            let stdin = self.session.stdin.as_mut().ok_or_else(|| {
-                DaemonError::Extension("Extension process stdin is closed".to_string())
-            })?;
-            write_frame(stdin, &request).await?;
-            let frame = read_frame(&mut self.session.stdout).await?;
-            serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
-        };
-        let result = match timeout(self.session.request_timeout, exchange).await {
-            Ok(result) => result,
-            Err(_) => Err(DaemonError::Extension(format!(
-                "Extension request '{}' timed out after {:?}",
-                method, self.session.request_timeout
-            ))),
-        };
-        match result {
-            Ok(response) => Ok(response),
-            Err(error) => Err(match self.session.abort_process().await {
-                Ok(()) => TransportError::new(error, TransportState::Stopped),
-                Err(cleanup) => TransportError::new(
-                    DaemonError::Extension(format!(
-                        "{error}; process cleanup also failed: {cleanup}"
-                    )),
-                    TransportState::Indeterminate,
-                ),
-            }),
-        }
-    }
-
-    async fn abort(&mut self) -> std::result::Result<TransportState, TransportError> {
-        self.session
-            .abort_process()
-            .await
-            .map(|()| TransportState::Stopped)
-            .map_err(|error| TransportError::new(error, TransportState::Indeterminate))
-    }
-
-    async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
-        if let Err(error) = self.session.send_exit_notification().await {
-            return Err(match self.session.abort_process().await {
-                Ok(()) => TransportError::new(error, TransportState::Stopped),
-                Err(cleanup) => TransportError::new(
-                    DaemonError::Extension(format!(
-                        "{error}; process cleanup also failed: {cleanup}"
-                    )),
-                    TransportState::Indeterminate,
-                ),
-            });
-        }
-        self.session.stdin.take();
-        let status = match timeout(self.session.request_timeout, self.session.child.wait()).await {
-            Ok(status) => status.map_err(|error| {
-                TransportError::new(error.into(), TransportState::Indeterminate)
-            })?,
-            Err(_) => {
-                let error = DaemonError::Extension(format!(
-                    "Extension process did not exit after {:?}",
-                    self.session.request_timeout
-                ));
-                return Err(match self.session.abort_process().await {
-                    Ok(()) => TransportError::new(error, TransportState::Stopped),
-                    Err(cleanup) => TransportError::new(
-                        DaemonError::Extension(format!(
-                            "{error}; process cleanup also failed: {cleanup}"
-                        )),
-                        TransportState::Indeterminate,
-                    ),
-                });
+async fn spawn_child(command: &mut Command) -> std::io::Result<Child> {
+    let mut retries = 0;
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && retries < EXECUTABLE_BUSY_RETRIES =>
+            {
+                retries += 1;
+                tokio::time::sleep(EXECUTABLE_BUSY_RETRY_DELAY).await;
             }
-        };
-        self.session
-            .collect_stderr()
-            .await
-            .map_err(|error| TransportError::new(error, TransportState::Stopped))?;
-        self.session.state = ProcessSessionData::Stopped;
-        if !status.success() {
-            return Err(TransportError::new(
-                DaemonError::Extension(format!("Extension process exited with status {status}")),
-                TransportState::Stopped,
-            ));
-        }
-        Ok(TransportState::Stopped)
-    }
-}
-
-impl<S> Session<SpawnedProcessTransport, S> {
-    /// Report whether the child process is still running without exposing transport I/O.
-    pub fn process_is_running(&mut self) -> Result<bool> {
-        self.transport_mut_internal().session.is_running()
-    }
-
-    /// Return captured child-process diagnostics without exposing transport I/O.
-    pub fn process_stderr_output(&self) -> &str {
-        self.transport_internal().session.stderr_output()
-    }
-}
-
-impl Session<SpawnedProcessTransport, Stopped> {
-    /// Report whether the stopped child left any unread bytes on standard output.
-    ///
-    /// A conforming process writes only the response frames consumed by the host.
-    /// Remaining bytes therefore identify protocol output that was not framed as a
-    /// response.
-    pub async fn process_stdout_is_exhausted(&mut self) -> Result<bool> {
-        let request_timeout = self.transport_internal().session.request_timeout;
-        let stdout = &mut self.transport_mut_internal().session.stdout;
-        match timeout(request_timeout, stdout.fill_buf()).await {
-            Ok(result) => result
-                .map(|remaining| remaining.is_empty())
-                .map_err(Into::into),
-            Err(_) => Err(DaemonError::Extension(format!(
-                "Timed out while checking extension stdout after {request_timeout:?}"
-            ))),
+            result => return result,
         }
     }
 }
@@ -471,24 +317,17 @@ impl ExtensionSession for SpawnedProcessSession {
 
         let offered_versions = params.protocol_versions.clone();
         let initialized: InitializeResult = self.call(methods::INITIALIZE, params).await?;
-        let validation = if !offered_versions.contains(&initialized.protocol_version) {
-            Err(DaemonError::Extension(format!(
-                "Extension selected protocol version '{}' that the host did not offer",
-                initialized.protocol_version
-            )))
-        } else if initialized.extension.id != self.expected_extension_id {
-            Err(DaemonError::Extension(format!(
-                "Extension identity changed during initialization: expected '{}', initialized '{}'",
-                self.expected_extension_id, initialized.extension.id
-            )))
-        } else {
-            Ok(())
+        let negotiated = validate_compatibility_initialization(
+            self.expected_extension(),
+            &offered_versions,
+            initialized.clone(),
+        );
+        let negotiated = match negotiated {
+            Ok(negotiated) => negotiated,
+            Err(error) => return Err(self.abort_with_error(error).await),
         };
-        if let Err(error) = validation {
-            return Err(self.abort_with_error(error).await);
-        }
 
-        self.state = ProcessSessionData::Ready(Box::new(initialized.clone()));
+        self.state = ProcessSessionData::Ready(Box::new(CompatibilityReady { negotiated }));
         Ok(initialized)
     }
 
@@ -497,7 +336,7 @@ impl ExtensionSession for SpawnedProcessSession {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let initialized = self.ready_session()?;
+        let ready = self.ready_session()?;
         if matches!(
             method,
             methods::INITIALIZE | methods::SHUTDOWN | methods::EXIT
@@ -507,18 +346,29 @@ impl ExtensionSession for SpawnedProcessSession {
                 method
             )));
         }
-        if let Some(required) = required_capability(method)
-            && !initialized.extension.types.contains(&required)
-        {
+        if !ready.negotiated.supports_method(method) {
             return Err(DaemonError::Extension(format!(
                 "RPC error {}: Extension '{}' does not support capability '{}'",
                 error_codes::CAPABILITY_UNAVAILABLE,
-                initialized.extension.id,
+                ready.negotiated.extension().id,
+                method
+            )));
+        }
+        if !ready.negotiated.supports_invocation(method, &params) {
+            return Err(DaemonError::Extension(format!(
+                "RPC error {}: Extension '{}' does not support capability '{}' for the requested protocol",
+                error_codes::CAPABILITY_UNAVAILABLE,
+                ready.negotiated.extension().id,
                 method
             )));
         }
 
-        self.call(method, params).await
+        let request_params = params.clone();
+        let value: serde_json::Value = self.call(method, params).await?;
+        match validate_compatibility_method_result(method, request_params, value).await {
+            Ok(value) => Ok(value),
+            Err(error) => Err(self.abort_with_error(error).await),
+        }
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -549,6 +399,22 @@ impl ExtensionSession for SpawnedProcessSession {
 
         Ok(())
     }
+}
+
+fn validate_compatibility_initialization(
+    expected: ExpectedExtension,
+    offered_versions: &[String],
+    initialized: InitializeResult,
+) -> Result<NegotiatedSession> {
+    validate_negotiation(expected, offered_versions, initialized)
+}
+
+async fn validate_compatibility_method_result(
+    method: &str,
+    request_params: serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value> {
+    validate_method_result_async(method, request_params, value).await
 }
 
 async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
@@ -586,10 +452,12 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
             "Extension process identity cannot be empty".to_string(),
         ));
     }
-    if !Path::new(&launch.program).is_file() {
+    if let ProcessProgram::Path(program) = &launch.program
+        && !program.is_file()
+    {
         return Err(DaemonError::Extension(format!(
             "Extension executable does not exist: {}",
-            launch.program.display()
+            program.display()
         )));
     }
     if !launch.working_directory.is_dir() {
@@ -601,14 +469,82 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
     Ok(())
 }
 
-fn required_capability(method: &str) -> Option<ExtensionType> {
-    match method {
-        methods::COMPILE => Some(ExtensionType::Frontend),
-        methods::GENERATE => Some(ExtensionType::Backend),
-        methods::VALIDATE => Some(ExtensionType::Validator),
-        methods::TRANSFORM => Some(ExtensionType::Transform),
-        _ => None,
+async fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+    match program {
+        ProcessProgram::Path(path) => Ok((path.clone(), None)),
+        ProcessProgram::VerifiedBytes {
+            filename,
+            bytes,
+            staging_directory,
+        } => {
+            let filename = filename.clone();
+            let bytes = Arc::clone(bytes);
+            let staging_directory = staging_directory.clone();
+            tokio::task::spawn_blocking(move || {
+                stage_verified_program(filename, bytes, staging_directory)
+            })
+            .await
+            .map_err(|error| {
+                DaemonError::Extension(format!("Extension staging worker failed: {error}"))
+            })?
+        }
     }
+}
+
+fn stage_verified_program(
+    filename: OsString,
+    bytes: Arc<[u8]>,
+    staging_directory: Option<PathBuf>,
+) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+    validate_verified_program_filename(&filename)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("morphir-extension-");
+    let directory = match staging_directory {
+        Some(staging_directory) => {
+            fs::create_dir_all(&staging_directory).map_err(DaemonError::from)?;
+            builder
+                .tempdir_in(staging_directory)
+                .map_err(DaemonError::from)?
+        }
+        None => builder.tempdir().map_err(DaemonError::from)?,
+    };
+    let path = directory.path().join(filename);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(DaemonError::from)?;
+    std::io::Write::write_all(&mut file, &bytes).map_err(DaemonError::from)?;
+    file.sync_all().map_err(DaemonError::from)?;
+    make_owner_executable(&path)?;
+    Ok((path, Some(directory)))
+}
+
+fn validate_verified_program_filename(filename: &OsStr) -> Result<()> {
+    let mut components = Path::new(filename).components();
+    if matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Ok(());
+    }
+    Err(DaemonError::Extension(
+        "Verified extension executable must be a single filename".to_owned(),
+    ))
+}
+
+#[cfg(unix)]
+fn make_owner_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions).map_err(Into::into)
+}
+
+#[cfg(not(unix))]
+fn make_owner_executable(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 async fn write_frame<W, T>(writer: &mut W, value: &T) -> Result<()>
@@ -671,79 +607,4 @@ where
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body).await?;
     Ok(body)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use morphir_extension_sdk::ExtensionInfo;
-    use tokio::io::{BufReader, duplex};
-
-    #[test]
-    fn discovered_process_launch_retains_exact_negotiation_metadata() {
-        let discovered = ExtensionInfo {
-            id: "morphir-elm".into(),
-            name: "Morphir Elm".into(),
-            version: "3.2.1".into(),
-            types: vec![ExtensionType::Frontend],
-            ..ExtensionInfo::default()
-        };
-        let launch = ProcessLaunch::from_discovered(
-            discovered.clone(),
-            "/verified/morphir-elm",
-            "/workspace",
-        );
-
-        assert_eq!(launch.extension_id, discovered.id);
-        let retained = launch
-            .discovered
-            .expect("verified launches should retain discovery metadata");
-        assert_eq!(retained.name, discovered.name);
-        assert_eq!(retained.version, discovered.version);
-        assert_eq!(retained.types, discovered.types);
-    }
-
-    #[tokio::test]
-    async fn content_length_frames_round_trip_formatted_json() {
-        let (mut writer, reader) = duplex(1024);
-        let value = serde_json::json!({ "message": "line one\nline two" });
-        let expected = value.clone();
-        let writing = tokio::spawn(async move { write_frame(&mut writer, &value).await });
-        let body = read_frame(&mut BufReader::new(reader))
-            .await
-            .expect("the frame should parse");
-        writing.await.expect("the writer task should join").unwrap();
-
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-            expected
-        );
-    }
-
-    #[tokio::test]
-    async fn stdout_logs_are_rejected_as_protocol_headers() {
-        let (mut writer, reader) = duplex(1024);
-        writer.write_all(b"accidental log line\n").await.unwrap();
-        drop(writer);
-
-        let error = read_frame(&mut BufReader::new(reader))
-            .await
-            .expect_err("stdout logs must not be treated as protocol data");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid extension protocol header")
-        );
-    }
-
-    #[test]
-    fn stderr_capture_retains_only_the_bounded_tail() {
-        let mut output = b"old diagnostics".to_vec();
-        append_bounded_tail(&mut output, b"new diagnostics", 16);
-
-        assert_eq!(output, b"snew diagnostics");
-
-        append_bounded_tail(&mut output, b"0123456789abcdefghijkl", 16);
-        assert_eq!(output, b"6789abcdefghijkl");
-    }
 }

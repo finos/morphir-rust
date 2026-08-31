@@ -79,10 +79,26 @@ pub fn load_distribution(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistributi
         }
     }
 
-    let classic_dist: classic::Distribution = serde_json::from_str(&content)
+    let classic_dist = deserialize_classic(&content)
         .context("Failed to parse distribution as either V4 or Classic IR")?;
 
     Ok(LoadedDistribution::Classic(classic_dist))
+}
+
+fn deserialize_classic(content: &str) -> serde_json::Result<classic::Distribution> {
+    match serde_json::from_str(content) {
+        Ok(distribution) => Ok(distribution),
+        Err(original_error) => {
+            let Ok(mut value) = serde_json::from_str::<serde_json::Value>(content) else {
+                return Err(original_error);
+            };
+            if value.get("formatVersion") != Some(&serde_json::Value::from("3.0.0")) {
+                return Err(original_error);
+            }
+            value["formatVersion"] = serde_json::Value::from(3);
+            serde_json::from_value(value)
+        }
+    }
 }
 
 fn load_v4_from_dir(vfs: &impl Vfs, path: &Path) -> Result<LoadedDistribution> {

@@ -1,0 +1,24 @@
+[package]
+name = "morphir-avro-extension"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Apache Avro backend extension for Morphir"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+morphir-core = { path = "../morphir-core" }
+morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+apache-avro = "=0.22.0"
+pretty_assertions = "1.4"

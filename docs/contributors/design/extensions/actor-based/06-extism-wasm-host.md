@@ -2,10 +2,17 @@
 layout: default
 title: Extism WASM Extension Host
 nav_order: 8
-parent: Morphir Extensions
+nav_exclude: true
+search_exclude: true
+has_toc: false
 ---
 
 # Extism WASM Extension Host
+
+> **Historical design, not a supported extension contract.** This page belongs
+> to the superseded actor-based, multi-protocol design set. Current extensions
+> use Extism plus MEP JSON-RPC and install by ID from a controlled index. See
+> the [current extension guide](../README.md).
 
 **Status:** Draft  
 **Version:** 0.1.0
@@ -217,7 +224,7 @@ tinygo build -o extension.wasm -target wasi main.go
 ## Configuration Example
 
 ```toml
-[[extensions]]
+# Historical sketch only. No current morphir.toml extension table exists.
 name = "wasm-optimizer"
 enabled = true
 protocol = "extism"

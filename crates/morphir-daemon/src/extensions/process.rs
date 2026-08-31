@@ -14,7 +14,7 @@ use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType}
 use serde::{Serialize, de::DeserializeOwned};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -795,6 +795,7 @@ fn stage_verified_program(
     bytes: Arc<[u8]>,
     staging_directory: Option<PathBuf>,
 ) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+    validate_verified_program_filename(&filename)?;
     let mut builder = tempfile::Builder::new();
     builder.prefix("morphir-extension-");
     let directory = match staging_directory {
@@ -816,6 +817,19 @@ fn stage_verified_program(
     file.sync_all().map_err(DaemonError::from)?;
     make_owner_executable(&path)?;
     Ok((path, Some(directory)))
+}
+
+fn validate_verified_program_filename(filename: &OsStr) -> Result<()> {
+    let mut components = Path::new(filename).components();
+    if matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Ok(());
+    }
+    Err(DaemonError::Extension(
+        "Verified extension executable must be a single filename".to_owned(),
+    ))
 }
 
 #[cfg(unix)]
@@ -953,6 +967,31 @@ mod tests {
         let (program, _retained_directory) = prepare_program(&launch.program).await.unwrap();
 
         assert!(program.starts_with(&staging_directory));
+    }
+
+    #[test]
+    fn verified_bytes_reject_path_components_without_writing_outside_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let staging_directory = root.path().join("managed-staging");
+        let absolute_escape = root.path().join("absolute-escape");
+
+        for filename in [
+            OsString::from("../relative-escape"),
+            OsString::from("nested/escape"),
+            absolute_escape.clone().into_os_string(),
+        ] {
+            let error = stage_verified_program(
+                filename,
+                Arc::from(&b"#!/bin/sh\n"[..]),
+                Some(staging_directory.clone()),
+            )
+            .expect_err("verified process filename must be a single basename");
+
+            assert!(error.to_string().contains("single filename"), "{error}");
+        }
+        assert!(!absolute_escape.exists());
+        assert!(!staging_directory.join("relative-escape").exists());
+        assert!(!staging_directory.join("nested/escape").exists());
     }
 
     #[tokio::test]

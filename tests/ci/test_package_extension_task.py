@@ -90,6 +90,9 @@ class AvroArtifactTaskTests(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(fixture.head(), fixture.descriptor()["gitCommit"])
+            self.assertFalse(
+                (fixture.root / "scripts/extension_packaging/__pycache__").exists()
+            )
             snapshot_source = fixture.snapshot_source()
             self.assertFalse(snapshot_source.is_relative_to(fixture.root))
             self.assertTrue(fixture.archived_task_path().is_relative_to(snapshot_source))

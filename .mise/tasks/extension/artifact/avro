@@ -3,6 +3,8 @@
 
 set -eu
 
+export PYTHONDONTWRITEBYTECODE=1
+
 SNAPSHOT_MODE="${MORPHIR_AVRO_SNAPSHOT_MODE:-0}"
 TASK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 case "$SNAPSHOT_MODE" in

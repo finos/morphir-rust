@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -80,6 +84,7 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
             "test-release-workflow",
             "lint-shell",
             "lint-yaml",
+            "docs-generated",
             "lint-rust",
             "build-wasm",
             "workspace-wasm",
@@ -91,6 +96,145 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         }
 
         self.assertEqual(expected_jobs, set(self.jobs))
+
+    def test_generated_docs_are_checked_independently(self) -> None:
+        docs_generated = self.jobs["docs-generated"]
+
+        self.assertNotIn("    needs:", docs_generated)
+        self.assertNotIn("\n    if:", docs_generated)
+        self.assertIn("      - name: Checkout repository", docs_generated)
+        self.assertIn("        uses: actions/checkout@v7", docs_generated)
+        self.assertIn(
+            "        uses: jdx/mise-action@v4\n        with:\n          install: false",
+            docs_generated,
+        )
+        self.assertIn("        run: mise run --skip-tools docs:generate", docs_generated)
+        self.assertIn(
+            "          if ! docs_status=\"$(git status --porcelain --untracked-files=all -- docs/)\"; then",
+            docs_generated,
+        )
+        self.assertIn(
+            '            echo "::error::Unable to inspect generated documentation."',
+            docs_generated,
+        )
+        self.assertIn("          if [ -n \"$docs_status\" ]; then", docs_generated)
+        self.assertIn(
+            "            git status --short --untracked-files=all -- docs/",
+            docs_generated,
+        )
+        self.assertIn("            git diff -- docs/", docs_generated)
+        self.assertIn("            exit 1", docs_generated)
+
+    def test_generated_docs_drift_check_fails_when_git_inspection_fails(self) -> None:
+        docs_generated = self.jobs["docs-generated"]
+        marker = "      - name: Check docs are up to date\n"
+        drift_step = docs_generated.split(marker, 1)[1]
+        drift_script = textwrap.dedent(drift_step.split("        run: |\n", 1)[1])
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            fake_bin = temporary_root / "bin"
+            fake_bin.mkdir()
+            fake_git = fake_bin / "git"
+            fake_git.write_text(
+                "#!/bin/sh\necho 'fatal: unable to inspect repository' >&2\nexit 1\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", drift_script],
+                check=False,
+                cwd=temporary_root,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(
+                "Unable to inspect generated documentation.",
+                result.stdout + result.stderr,
+            )
+
+    def test_deleted_generated_docs_are_detected_as_untracked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            clone = temporary_root / "repository"
+            global_config = temporary_root / "gitconfig"
+            hooks = temporary_root / "hooks"
+            hooks.mkdir()
+            global_config.write_text("[commit]\n\tgpgSign = false\n", encoding="utf-8")
+            git_environment = {
+                **os.environ,
+                "GIT_CONFIG_GLOBAL": str(global_config),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_SYSTEM": os.devnull,
+            }
+
+            subprocess.run(
+                ["git", "clone", "--local", str(REPOSITORY_ROOT), str(clone)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_environment,
+            )
+            for key, value in (
+                ("user.email", "ci@example.invalid"),
+                ("user.name", "CI Test"),
+                ("core.hooksPath", str(hooks)),
+                ("commit.gpgSign", "false"),
+            ):
+                subprocess.run(
+                    ["git", "config", key, value],
+                    check=True,
+                    cwd=clone,
+                    env=git_environment,
+                )
+
+            subprocess.run(
+                ["git", "rm", "docs/llms.txt"],
+                check=True,
+                cwd=clone,
+                env=git_environment,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "delete generated docs"],
+                check=True,
+                cwd=clone,
+                env=git_environment,
+            )
+            for task in ("releases", "llms-txt"):
+                subprocess.run(
+                    ["sh", str(clone / ".mise" / "tasks" / "docs" / task)],
+                    check=True,
+                    cwd=clone,
+                    env=git_environment,
+                )
+
+            generated = clone / "docs" / "llms.txt"
+            self.assertTrue(generated.is_file())
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all", "--", "docs/"],
+                check=True,
+                cwd=clone,
+                capture_output=True,
+                text=True,
+                env=git_environment,
+            )
+            self.assertIn("?? docs/llms.txt", status.stdout.splitlines())
+
+    def test_expensive_docs_job_only_builds_rust_documentation(self) -> None:
+        docs = self.jobs["docs"]
+
+        self.assertIn("    needs: [lint-rust]", docs)
+        self.assertIn(
+            "    if: ${{ !cancelled() && needs.lint-rust.result == 'success' }}",
+            docs,
+        )
+        self.assertIn("        run: cargo doc --no-deps", docs)
+        self.assertNotIn("docs:generate", docs)
+        self.assertNotIn("git diff --quiet docs/", docs)
 
     def test_release_shell_and_yaml_checks_are_always_independent(self) -> None:
         for job_name in ("test-release-workflow", "lint-shell", "lint-yaml"):

@@ -71,4 +71,8 @@ name = "cache_maintenance_execution_acceptance"
 harness = false
 
 [[test]]
+name = "cache_maintenance_state_acceptance"
+harness = false
+
+[[test]]
 name = "cache_maintenance_state"

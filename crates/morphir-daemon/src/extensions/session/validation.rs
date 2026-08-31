@@ -107,6 +107,7 @@ pub(in crate::extensions) async fn validate_method_result_async(
 
 fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
     let mut result: GenerateResult = serde_json::from_value(value)?;
+    let mut paths = HashSet::new();
     for artifact in &mut result.artifacts {
         let path = RelativeArtifactPath::parse(artifact.path.clone()).map_err(|error| {
             DaemonError::Extension(format!(
@@ -115,6 +116,12 @@ fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Valu
             ))
         })?;
         artifact.path = path.as_str().to_owned();
+        if !paths.insert(artifact.path.clone()) {
+            return Err(DaemonError::Extension(format!(
+                "Generated artifact path '{}' is duplicate",
+                artifact.path
+            )));
+        }
         if artifact.binary {
             STANDARD.decode(&artifact.content).map_err(|error| {
                 DaemonError::Extension(format!(
@@ -375,6 +382,25 @@ mod tests {
         .expect_err("binary artifact content must be valid base64");
 
         assert!(error.to_string().contains("Base64"), "{error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_generated_artifact_paths() {
+        let error = validate_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [
+                    {"path": "schema.avsc", "content": "{}"},
+                    {"path": "schema.avsc", "content": "duplicate"}
+                ],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("duplicate artifact paths must fail validation");
+
+        assert!(error.to_string().contains("duplicate"), "{error}");
     }
 
     #[tokio::test(flavor = "current_thread")]

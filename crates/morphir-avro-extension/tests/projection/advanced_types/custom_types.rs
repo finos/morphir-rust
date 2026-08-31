@@ -48,6 +48,41 @@
     }
 
     #[test]
+    fn constructor_payload_fields_preserve_positional_source_order() {
+        let pair = custom(
+            "acme/customer:customer#pair",
+            "pair",
+            vec![],
+            vec![constructor(
+                "pair",
+                vec![
+                    field("z", reference(STRING, vec![])),
+                    field("a", reference(INT, vec![])),
+                ],
+            )],
+        );
+
+        let model = project(&package(vec![pair]), &AvroOptions::default()).unwrap();
+        let payload = model
+            .named_schema("acme.customer.customer.Pair.Pair")
+            .unwrap();
+        let NamedSchema::Record(payload) = payload else {
+            panic!("constructor payload must be a record")
+        };
+
+        assert_eq!(
+            payload
+                .fields()
+                .iter()
+                .map(|field| field.name())
+                .collect::<Vec<_>>(),
+            ["z", "a"]
+        );
+        assert_eq!(payload.fields()[0].tpe(), &AvroType::String);
+        assert_eq!(payload.fields()[1].tpe(), &AvroType::Long);
+    }
+
+    #[test]
     fn result_is_data_not_an_rpc_error_channel() {
         let customer = customer_record();
         let result = alias(
@@ -267,4 +302,3 @@
             AvroType::Named(name) if name.to_string() == "acme.customer.customer.Names"
         ));
     }
-

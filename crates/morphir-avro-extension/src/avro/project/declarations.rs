@@ -122,7 +122,7 @@ impl Projector<'_> {
         Ok(projected)
     }
 
-    pub(super) fn project_request_fields(
+    pub(super) fn project_positional_fields(
         &mut self,
         schema_namespace: &str,
         owner_source: &str,
@@ -246,10 +246,13 @@ impl Projector<'_> {
                     tpe: substitute(&argument.tpe, substitutions),
                 })
                 .collect::<Vec<_>>();
-            let fields =
-                self.project_fields(constructor_name.namespace(), source_name, &arguments)?;
+            let fields = self.project_positional_fields(
+                constructor_name.namespace(),
+                source_name,
+                &arguments,
+            )?;
             self.insert(
-                NamedSchema::Record(RecordSchema::new(
+                NamedSchema::Record(RecordSchema::new_ordered(
                     constructor_name.clone(),
                     fields,
                     None,

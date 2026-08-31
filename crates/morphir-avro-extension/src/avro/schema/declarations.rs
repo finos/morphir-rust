@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 use super::{AvroFullName, AvroType, Properties};
 use crate::{AvroDiagnostic, naming::is_valid_identifier};
@@ -62,9 +63,19 @@ impl RecordSchema {
         properties: Properties,
     ) -> Result<Self, AvroDiagnostic> {
         fields.sort_by(|left, right| left.name.cmp(&right.name));
-        for pair in fields.windows(2) {
-            if pair[0].name == pair[1].name {
-                return Err(AvroDiagnostic::name_collision(&pair[0].name));
+        Self::new_ordered(full_name, fields, doc, properties)
+    }
+
+    pub(crate) fn new_ordered(
+        full_name: AvroFullName,
+        fields: Vec<AvroField>,
+        doc: Option<String>,
+        properties: Properties,
+    ) -> Result<Self, AvroDiagnostic> {
+        let mut names = BTreeSet::new();
+        for field in &fields {
+            if !names.insert(field.name.as_str()) {
+                return Err(AvroDiagnostic::name_collision(&field.name));
             }
         }
         Ok(Self {

@@ -1,12 +1,11 @@
-mod naming;
 mod v3;
 mod v4;
 
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::lower_camel;
 use crate::model::ProjectionPackage;
-use naming::lower_camel;
 
 /// Failure to decode the supplied Morphir IR generation.
 #[derive(Debug, Error)]

@@ -2,6 +2,13 @@ use std::collections::BTreeMap;
 
 use crate::AvroDiagnostic;
 
+// `upper_camel`/`lower_camel` live in `morphir-projection` so that
+// normalization (synthetic argument names) and this Avro renderer derive
+// identifiers with the exact same transform. Re-exported here, rather than
+// redefined, so every existing `crate::naming::{upper_camel, lower_camel}`
+// call site in this crate keeps working unchanged.
+pub(crate) use morphir_projection::{lower_camel, upper_camel};
+
 const AVRO_KEYWORDS: &[&str] = &[
     "array",
     "big_decimal",
@@ -36,30 +43,6 @@ const AVRO_KEYWORDS: &[&str] = &[
     "uuid",
     "void",
 ];
-
-pub(crate) fn upper_camel(source: &str) -> String {
-    let words = words(source);
-    let result = words
-        .iter()
-        .map(|word| {
-            let mut chars = word.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
-                .unwrap_or_default()
-        })
-        .collect::<String>();
-    valid_identifier(result)
-}
-
-pub(crate) fn lower_camel(source: &str) -> String {
-    let upper = upper_camel(source);
-    let mut chars = upper.chars();
-    chars
-        .next()
-        .map(|first| first.to_lowercase().chain(chars).collect::<String>())
-        .unwrap_or_else(|| "_".to_owned())
-}
 
 /// Render a semantic Avro identifier for Avro IDL.
 ///
@@ -125,40 +108,4 @@ impl NameRegistry {
             Some(_) => Err(AvroDiagnostic::name_collision(full_name)),
         }
     }
-}
-
-fn words(source: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut previous_was_lowercase_or_digit = false;
-    for character in source.chars() {
-        if !character.is_ascii_alphanumeric() {
-            if !current.is_empty() {
-                words.push(std::mem::take(&mut current));
-            }
-            previous_was_lowercase_or_digit = false;
-            continue;
-        }
-        if character.is_ascii_uppercase() && previous_was_lowercase_or_digit && !current.is_empty()
-        {
-            words.push(std::mem::take(&mut current));
-        }
-        previous_was_lowercase_or_digit =
-            character.is_ascii_lowercase() || character.is_ascii_digit();
-        current.push(character.to_ascii_lowercase());
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
-}
-
-fn valid_identifier(mut value: String) -> String {
-    if value.is_empty() {
-        value.push('_');
-    }
-    if value.as_bytes()[0].is_ascii_digit() {
-        value.insert(0, '_');
-    }
-    value
 }

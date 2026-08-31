@@ -1,13 +1,17 @@
-//! Pure camelCase identifier helpers used by normalization to derive
-//! synthetic argument names for curried value signatures.
+//! Shared camelCase identifier helpers.
 //!
-//! This is a private, verbatim copy of the same helpers in
-//! `morphir-avro-extension::naming`. Only the case-conversion logic is
-//! duplicated here; nothing Avro-specific (IDL escaping, namespaces, or
-//! `AvroDiagnostic`) is included, so this module has no dependency on the
-//! Avro crate.
+//! These derive synthetic and semantic identifiers (record fields, synthetic
+//! argument names, namespace segments) from Morphir source names. Every
+//! backend extension that projects [`crate::ProjectionPackage`] into a
+//! target schema language is expected to call these directly (or, for Avro,
+//! re-export them) rather than reimplement the transform: normalization and
+//! rendering must agree byte-for-byte on the derived name for a given
+//! backend, so this is the single source of truth both sides depend on
+//! producing identical output for.
 
-pub(super) fn upper_camel(source: &str) -> String {
+/// Convert `source` to `UpperCamelCase`, treating any run of non-alphanumeric
+/// characters as a word boundary.
+pub fn upper_camel(source: &str) -> String {
     let words = words(source);
     let result = words
         .iter()
@@ -22,7 +26,9 @@ pub(super) fn upper_camel(source: &str) -> String {
     valid_identifier(result)
 }
 
-pub(super) fn lower_camel(source: &str) -> String {
+/// Convert `source` to `lowerCamelCase`, treating any run of non-alphanumeric
+/// characters as a word boundary.
+pub fn lower_camel(source: &str) -> String {
     let upper = upper_camel(source);
     let mut chars = upper.chars();
     chars

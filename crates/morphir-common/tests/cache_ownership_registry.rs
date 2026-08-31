@@ -19,6 +19,7 @@ fn producers_can_register_refresh_and_release_durable_ownership() {
 
     register(&home, "downloads", "desktop/1.2.3.pkg", 10);
     register(&home, "downloads", "desktop/1.2.3.pkg", 20);
+    register(&home, "downloads", "desktop/1.2.3.pkg", 15);
     register(&home, "indexes", "releases.json", 30);
 
     let registry = load_cache_ownership_registry(&home).unwrap();
@@ -46,12 +47,31 @@ fn mutation_begin_invalidates_prior_ownership_before_content_is_writable() {
     std::fs::write(&artifact, b"new but interrupted").unwrap();
     drop(mutation);
 
-    let session = CacheMaintenanceSession::begin(&home).unwrap();
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
     let inventory = session
         .inventory(&["downloads"], CacheInventoryLimits::default())
         .unwrap();
     assert_eq!(inventory.len(), 1);
     assert_eq!(inventory[0].state(), CacheEntryState::Unclassified);
+}
+
+#[test]
+fn inventory_compacts_ownership_for_content_already_missing() {
+    let (_directory, home) = a_morphir_home();
+    std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+    let artifact = home.downloads_cache_dir().join("externally-removed.pkg");
+    std::fs::write(&artifact, b"temporary").unwrap();
+    register(&home, "downloads", "externally-removed.pkg", 1);
+    std::fs::remove_file(&artifact).unwrap();
+
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
+    let inventory = session
+        .inventory(&["downloads"], CacheInventoryLimits::default())
+        .unwrap();
+    assert!(inventory.is_empty());
+    drop(session);
+
+    assert!(load_cache_ownership_registry(&home).unwrap().is_empty());
 }
 
 #[test]
@@ -64,7 +84,7 @@ fn a_guarded_session_cleans_registered_content_and_preserves_unknown_files() {
     std::fs::write(&unknown, b"unknown").unwrap();
     register(&home, "downloads", "owned.pkg", 1);
 
-    let session = CacheMaintenanceSession::begin(&home).unwrap();
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
     let inventory = session
         .inventory(&["downloads"], CacheInventoryLimits::default())
         .unwrap();
@@ -139,7 +159,7 @@ fn refresh_handoff_precedes_a_waiting_cleanup_session() {
         let ready = ready.clone();
         std::thread::spawn(move || {
             ready.wait();
-            let session = CacheMaintenanceSession::begin(&home).unwrap();
+            let mut session = CacheMaintenanceSession::begin(&home).unwrap();
             let inventory = session
                 .inventory(&["downloads"], CacheInventoryLimits::default())
                 .unwrap();
@@ -210,7 +230,7 @@ fn selected_cleanup_is_not_blocked_by_an_unrelated_invalid_namespace() {
     register(&home, "indexes", "catalog.json", 1);
     std::fs::write(home.indexes_cache_dir(), b"not a namespace directory").unwrap();
 
-    let session = CacheMaintenanceSession::begin(&home).unwrap();
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
     let inventory = session
         .inventory(&["downloads"], CacheInventoryLimits::default())
         .unwrap();
@@ -246,7 +266,7 @@ fn cleanup_does_not_revalidate_a_namespace_beyond_the_removal_budget() {
     register(&home, "downloads", "first.pkg", 1);
     register(&home, "indexes", "deferred.json", 1);
 
-    let session = CacheMaintenanceSession::begin(&home).unwrap();
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
     let inventory = session
         .inventory(&["downloads", "indexes"], CacheInventoryLimits::default())
         .unwrap();
@@ -293,7 +313,7 @@ fn cleanup_compacts_removed_and_missing_ownership_entries() {
     register(&home, "downloads", "removable.pkg", 1);
     register(&home, "downloads", "missing.pkg", 1);
 
-    let session = CacheMaintenanceSession::begin(&home).unwrap();
+    let mut session = CacheMaintenanceSession::begin(&home).unwrap();
     let inventory = session
         .inventory(&["downloads"], CacheInventoryLimits::default())
         .unwrap();

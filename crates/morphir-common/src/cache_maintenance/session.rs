@@ -55,7 +55,7 @@ pub enum CacheMaintenanceSessionError {
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let home = MorphirHome::resolve()?;
-/// let session = CacheMaintenanceSession::begin(&home)?;
+/// let mut session = CacheMaintenanceSession::begin(&home)?;
 /// let inventory = session.inventory(
 ///     &["desktop", "downloads", "extensions", "indexes"],
 ///     CacheInventoryLimits::default(),
@@ -106,7 +106,7 @@ impl<'home> CacheMaintenanceSession<'home> {
     /// entry remains protected and unclassified. An empty name list inventories
     /// every registered namespace.
     pub fn inventory(
-        &self,
+        &mut self,
         namespace_names: &[&str],
         limits: CacheInventoryLimits,
     ) -> Result<Vec<CacheEntry>, CacheMaintenanceSessionError> {
@@ -136,6 +136,10 @@ impl<'home> CacheMaintenanceSession<'home> {
             }
             selected
         };
+        let selected_names = namespaces
+            .iter()
+            .map(|namespace| namespace.name().to_owned())
+            .collect::<BTreeSet<_>>();
         let mut entries = Vec::new();
         for namespace in &namespaces {
             entries.extend(
@@ -148,6 +152,17 @@ impl<'home> CacheMaintenanceSession<'home> {
                 )?
                 .into_iter()
                 .map(super::inventory::PinnedCacheEntry::into_entry),
+            );
+        }
+        let compacted_entries = self.ownership.prune_unobserved(&selected_names, &entries);
+        if compacted_entries > 0 {
+            save_cache_ownership_registry_under_guard(self.home, &self.ownership, &self.guard)?;
+            debug!(
+                event = "cache_ownership_compacted",
+                phase = "inventory",
+                compacted_entries,
+                remaining_entries = self.ownership.len(),
+                "unobserved cache ownership entries compacted"
             );
         }
         Ok(entries)
@@ -195,6 +210,7 @@ impl<'home> CacheMaintenanceSession<'home> {
             save_cache_ownership_registry_under_guard(self.home, &compacted, &self.guard)?;
             debug!(
                 event = "cache_ownership_compacted",
+                phase = "execution",
                 compacted_entries,
                 remaining_entries = compacted.len(),
                 "terminal cache ownership entries compacted"

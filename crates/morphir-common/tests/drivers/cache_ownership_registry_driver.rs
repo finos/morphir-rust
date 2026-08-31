@@ -58,7 +58,7 @@ impl CacheOwnershipRegistryDriver {
 
     pub fn when_running_guarded_cleanup(&mut self) {
         let result = (|| {
-            let session = CacheMaintenanceSession::begin(self.home.as_ref().unwrap())
+            let mut session = CacheMaintenanceSession::begin(self.home.as_ref().unwrap())
                 .map_err(|error| error.to_string())?;
             let inventory = session
                 .inventory(&["downloads"], CacheInventoryLimits::default())

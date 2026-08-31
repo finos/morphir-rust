@@ -75,7 +75,7 @@ pub struct CacheOwnershipMutationGuard {
     _ownership_guard: CacheOwnershipWriteGuard,
     namespace: String,
     path: String,
-    previously_owned: bool,
+    previous_last_used: Option<u64>,
 }
 
 impl CacheOwnershipMutationGuard {
@@ -109,14 +109,14 @@ impl CacheOwnershipMutationGuard {
         let ownership_guard = CacheOwnershipWriteGuard::acquire(home, guard.home_dir())
             .map_err(CacheOwnershipPersistenceError::Coordination)?;
         let mut registry = load_cache_ownership_registry_from_home(home, guard.home_dir())?;
-        let previously_owned = registry.unregister(&namespace, &path)?;
-        if previously_owned {
+        let previous_last_used = registry.unregister_with_last_used(&namespace, &path)?;
+        if previous_last_used.is_some() {
             save_cache_ownership_registry_to_home(home, &registry, guard.home_dir())?;
         }
         debug!(
             event = "cache_ownership_mutation_begun",
             namespace,
-            previously_owned,
+            previously_owned = previous_last_used.is_some(),
             entry_count = registry.len(),
             "cache ownership invalidated before mutation"
         );
@@ -125,7 +125,7 @@ impl CacheOwnershipMutationGuard {
             _ownership_guard: ownership_guard,
             namespace,
             path,
-            previously_owned,
+            previous_last_used,
         })
     }
 
@@ -152,6 +152,9 @@ impl CacheOwnershipMutationGuard {
     }
 
     fn publish_ownership(&self, last_used: u64) -> Result<(), CacheOwnershipPersistenceError> {
+        let last_used = self
+            .previous_last_used
+            .map_or(last_used, |previous| previous.max(last_used));
         let mut registry =
             load_cache_ownership_registry_from_home(self.guard.home(), self.guard.home_dir())?;
         registry.register_disposable(&self.namespace, &self.path, last_used)?;
@@ -169,7 +172,7 @@ impl CacheOwnershipMutationGuard {
     ///
     /// Returns whether the identity was registered when the mutation began.
     pub fn finish_unowned(self) -> bool {
-        self.previously_owned
+        self.previous_last_used.is_some()
     }
 }
 

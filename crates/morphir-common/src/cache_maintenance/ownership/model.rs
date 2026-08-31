@@ -1,7 +1,7 @@
 use super::super::inventory::portable_comparison_key;
-use super::super::{CacheNamespace, CacheRegistrationError};
+use super::super::{CacheEntry, CacheEntryState, CacheNamespace, CacheRegistrationError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 const CACHE_OWNERSHIP_SCHEMA_VERSION: u32 = 1;
@@ -127,11 +127,41 @@ impl CacheOwnershipRegistry {
         namespace: &str,
         path: &str,
     ) -> Result<bool, CacheOwnershipRegistryError> {
+        Ok(self.unregister_with_last_used(namespace, path)?.is_some())
+    }
+
+    pub(crate) fn unregister_with_last_used(
+        &mut self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<Option<u64>, CacheOwnershipRegistryError> {
         CacheNamespace::new(namespace)?.with_disposable(path, 0)?;
         Ok(self
             .entries
             .remove(&comparison_key(namespace, path))
-            .is_some())
+            .map(|entry| entry.last_used))
+    }
+
+    pub(crate) fn prune_unobserved(
+        &mut self,
+        namespaces: &BTreeSet<String>,
+        observed: &[CacheEntry],
+    ) -> usize {
+        let observed_owned = observed
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.state(),
+                    CacheEntryState::Disposable { .. } | CacheEntryState::ActiveLease { .. }
+                )
+            })
+            .map(|entry| comparison_key(entry.namespace(), entry.path()))
+            .collect::<BTreeSet<_>>();
+        let previous_len = self.entries.len();
+        self.entries.retain(|key, entry| {
+            !namespaces.contains(&entry.namespace) || observed_owned.contains(key)
+        });
+        previous_len - self.entries.len()
     }
 
     /// Convert trusted declarations into deterministic inventory namespaces.
@@ -264,5 +294,30 @@ mod tests {
         assert!(registry.unregister("downloads", "one.pkg").unwrap());
         assert!(!registry.unregister("downloads", "one.pkg").unwrap());
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn pruning_removes_only_unobserved_entries_from_selected_namespaces() {
+        let mut registry = CacheOwnershipRegistry::default();
+        registry
+            .register_disposable("downloads", "present.pkg", 10)
+            .unwrap();
+        registry
+            .register_disposable("downloads", "missing.pkg", 20)
+            .unwrap();
+        registry
+            .register_disposable("indexes", "catalog.json", 30)
+            .unwrap();
+        let observed = vec![CacheEntry::disposable("downloads", "present.pkg", 4, 10).unwrap()];
+
+        let pruned =
+            registry.prune_unobserved(&BTreeSet::from(["downloads".to_owned()]), &observed);
+
+        assert_eq!(pruned, 1);
+        assert_eq!(registry.len(), 2);
+        let serialized = serde_json::to_string(&registry).unwrap();
+        assert!(serialized.contains("present.pkg"));
+        assert!(serialized.contains("catalog.json"));
+        assert!(!serialized.contains("missing.pkg"));
     }
 }

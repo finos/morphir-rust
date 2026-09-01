@@ -141,6 +141,14 @@ pub(crate) fn schema_body(schema: &Schema, reference_base: &str) -> Value {
 
 /// One [`Schema::OneOf`] variant, with its discriminator property fixed to
 /// the constructor name by `const`.
+///
+/// The insert below is unconditional, and safe to be: the projection rejects
+/// a constructor argument that would project to the discriminator's own
+/// property name (`JSC003`, in `schema::types::reject_discriminator_collision`),
+/// so no variant reaching here already declares it. Were that check removed,
+/// this would overwrite the real property and push a duplicate into
+/// `required` — invalid under JSON Schema 2020-12 and the OpenAPI 3.0
+/// metaschema alike.
 fn variant_body(
     variant: &SchemaVariant,
     discriminator: &str,

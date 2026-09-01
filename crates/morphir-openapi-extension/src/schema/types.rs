@@ -59,6 +59,18 @@ pub(super) fn project_declaration(
 }
 
 /// Project a custom type as an enumeration or as a discriminated choice.
+///
+/// A discriminated choice writes [`DISCRIMINATOR`] into every variant's
+/// `properties` and `required`. `kind` is an ordinary Morphir identifier, so
+/// a constructor is free to declare an argument of that name — and if one
+/// does, the rendered variant cannot carry both: the discriminator would
+/// overwrite the real field's schema and its name would appear twice in
+/// `required`, which JSON Schema 2020-12 and the OpenAPI 3.0 metaschema both
+/// forbid. The rule is therefore that a constructor argument may not be named
+/// `kind`: the collision is rejected here, as a `JSC003` unsupported form
+/// naming the constructor and the argument, rather than silently corrupting
+/// the schema. Like every other `JSC003`, `unsupported: "warn-and-skip"`
+/// downgrades it to a warning that omits just this declaration.
 fn project_custom(
     context: &Context<'_>,
     source_name: &str,
@@ -79,9 +91,11 @@ fn project_custom(
     let variants = constructors
         .iter()
         .map(|constructor| {
+            let schema = project_object(context, source_name, &constructor.arguments, referenced)?;
+            reject_discriminator_collision(source_name, constructor, &schema)?;
             Ok(SchemaVariant {
                 name: variant_name(&constructor.name),
-                schema: project_object(context, source_name, &constructor.arguments, referenced)?,
+                schema,
                 source_name: constructor.source_name.clone(),
             })
         })
@@ -90,6 +104,34 @@ fn project_custom(
         discriminator: DISCRIMINATOR.to_owned(),
         variants,
     })
+}
+
+/// Reject a constructor argument whose projected property name is
+/// [`DISCRIMINATOR`].
+///
+/// The name is compared after `field_name` normalization, because that is the
+/// name the rendered variant would carry: a Morphir argument named `Kind` and
+/// one named `kind` both project to the property `kind` and both collide.
+fn reject_discriminator_collision(
+    source_name: &str,
+    constructor: &Constructor,
+    schema: &Schema,
+) -> Result<(), SchemaDiagnostic> {
+    let Schema::Object { fields, .. } = schema else {
+        return Ok(());
+    };
+    if !fields.iter().any(|field| field.name == DISCRIMINATOR) {
+        return Ok(());
+    }
+    Err(SchemaDiagnostic::unsupported_form(
+        source_name,
+        format!(
+            "constructor '{}' declares an argument that projects to the property '{DISCRIMINATOR}', \
+             which is the discriminator this backend writes into every variant of a custom type; \
+             rename the argument, because one property cannot be both",
+            constructor.name
+        ),
+    ))
 }
 
 /// Project a Morphir type expression into a schema.

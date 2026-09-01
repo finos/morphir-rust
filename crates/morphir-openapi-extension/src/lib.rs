@@ -11,7 +11,10 @@ mod render;
 mod schema;
 
 pub use diagnostic::{SchemaDiagnostic, SchemaGenerationError};
-pub use options::{SchemaOptions, Unsupported};
+pub use options::{
+    HttpMethod, OpenApiVersion, OperationOverride, ParameterBinding, Projection, ResultResponses,
+    SchemaOptions, Unsupported,
+};
 pub use render::render_json_schema;
 pub use schema::{
     NamedSchema, Schema, SchemaField, SchemaProjection, SchemaVariant, project, schema_name,

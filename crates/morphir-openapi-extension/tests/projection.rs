@@ -101,6 +101,7 @@ fn warn_and_skip_omits_the_form_and_keeps_the_rest() {
         normalize(&classic::classic_function_field_library()).expect("the fixture normalizes");
     let options = SchemaOptions {
         unsupported: Unsupported::WarnAndSkip,
+        ..SchemaOptions::default()
     };
 
     let projection = project(&package, &options).expect("skipping keeps projection successful");
@@ -343,6 +344,7 @@ fn strict_failure(types: Vec<TypeDeclaration>) -> SchemaDiagnostic {
 fn skipping(types: Vec<TypeDeclaration>) -> SchemaProjection {
     let options = SchemaOptions {
         unsupported: Unsupported::WarnAndSkip,
+        ..SchemaOptions::default()
     };
     project(&package(types), &options).expect("skipping keeps projection successful")
 }

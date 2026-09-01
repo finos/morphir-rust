@@ -17,7 +17,7 @@ morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 morphir-projection = { path = "../morphir-projection" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = { workspace = true }
 
 [dev-dependencies]

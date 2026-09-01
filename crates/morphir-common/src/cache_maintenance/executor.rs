@@ -2,9 +2,10 @@ mod filesystem;
 mod revalidation;
 
 pub use self::filesystem::CacheMutationGuard;
+pub(crate) use self::filesystem::{CacheOwnershipWriteGuard, MaintenanceGuard};
 use self::filesystem::{
-    MaintenanceGuard, RemovalOutcome, RemovalTarget, TrashRun, create_trash_run,
-    open_maintenance_trash, remove_revalidated_entry, sweep_existing_trash,
+    RemovalOutcome, RemovalTarget, TrashRun, create_trash_run, open_maintenance_trash,
+    remove_revalidated_entry, sweep_existing_trash,
 };
 use self::revalidation::{RevalidatedEntry, inventory_for_execution, revalidate_entry};
 use super::{CacheInventoryError, CacheInventoryLimits, CacheNamespace, CleanupPlan};
@@ -109,6 +110,35 @@ impl CacheExecutionItem {
     }
 }
 
+pub(crate) struct GuardedCacheExecution<'a> {
+    home: &'a MorphirHome,
+    guard: &'a MaintenanceGuard,
+    plan: &'a CleanupPlan,
+    ownership: &'a [CacheNamespace],
+    inventory_limits: CacheInventoryLimits,
+    limits: CacheExecutionLimits,
+}
+
+impl<'a> GuardedCacheExecution<'a> {
+    pub(crate) fn new(
+        home: &'a MorphirHome,
+        guard: &'a MaintenanceGuard,
+        plan: &'a CleanupPlan,
+        ownership: &'a [CacheNamespace],
+        inventory_limits: CacheInventoryLimits,
+        limits: CacheExecutionLimits,
+    ) -> Self {
+        Self {
+            home,
+            guard,
+            plan,
+            ownership,
+            inventory_limits,
+            limits,
+        }
+    }
+}
+
 /// Deterministic, serializable result of a bounded cleanup execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,7 +226,9 @@ impl CacheExecutionError {
 /// before deleting them. The per-run limits make the same operation suitable
 /// for manual and opportunistic automatic cleanup.
 /// Cache producers must hold [`CacheMutationGuard`] for the full lifetime of
-/// any open handle that can mutate a registered cache namespace.
+/// any open handle that can mutate cache content. Producers changing a
+/// registered identity must use [`super::CacheOwnershipMutationGuard`] so its
+/// prior ownership is invalidated before the content becomes writable.
 ///
 /// # Example
 ///
@@ -239,7 +271,36 @@ pub fn execute_cache_cleanup(
     inventory_limits: CacheInventoryLimits,
     limits: CacheExecutionLimits,
 ) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let selected_entries = plan
+    let guard = MaintenanceGuard::acquire(home)?;
+    execute_cache_cleanup_observing_terminal(
+        GuardedCacheExecution::new(home, &guard, plan, ownership, inventory_limits, limits),
+        |_, _| {},
+    )
+}
+
+pub(crate) fn execute_cache_cleanup_under_guard(
+    home: &MorphirHome,
+    guard: &MaintenanceGuard,
+    plan: &CleanupPlan,
+    ownership: &[CacheNamespace],
+    inventory_limits: CacheInventoryLimits,
+    limits: CacheExecutionLimits,
+) -> Result<CacheExecutionReport, CacheExecutionError> {
+    execute_cache_cleanup_observing_terminal(
+        GuardedCacheExecution::new(home, guard, plan, ownership, inventory_limits, limits),
+        |_, _| {},
+    )
+}
+
+pub(crate) fn execute_cache_cleanup_observing_terminal<F>(
+    request: GuardedCacheExecution<'_>,
+    mut on_terminal: F,
+) -> Result<CacheExecutionReport, CacheExecutionError>
+where
+    F: FnMut(&str, &str),
+{
+    let selected_entries = request
+        .plan
         .decisions()
         .iter()
         .filter(|decision| decision.will_remove())
@@ -247,11 +308,15 @@ pub fn execute_cache_cleanup(
     info!(
         event = "cache_cleanup_started",
         selected_entries,
-        max_removals = limits.max_removals,
-        max_bytes = limits.max_bytes,
+        max_removals = request.limits.max_removals,
+        max_bytes = request.limits.max_bytes,
         "cache cleanup started"
     );
-    let result = execute_cache_cleanup_inner(home, plan, ownership, inventory_limits, limits);
+    let mut terminal_entries = 0_usize;
+    let result = execute_cache_cleanup_inner(request, &mut |namespace, path| {
+        terminal_entries += 1;
+        on_terminal(namespace, path);
+    });
     match &result {
         Ok(report) => {
             for (entry_index, item) in report.items().iter().enumerate() {
@@ -276,6 +341,7 @@ pub fn execute_cache_cleanup(
         Err(error) => warn!(
             event = "cache_cleanup_failed",
             selected_entries,
+            terminal_entries,
             error_code = error.code(),
             "cache cleanup failed"
         ),
@@ -283,18 +349,33 @@ pub fn execute_cache_cleanup(
     result
 }
 
-fn execute_cache_cleanup_inner(
-    home: &MorphirHome,
-    plan: &CleanupPlan,
-    ownership: &[CacheNamespace],
-    inventory_limits: CacheInventoryLimits,
-    limits: CacheExecutionLimits,
-) -> Result<CacheExecutionReport, CacheExecutionError> {
-    let _guard = MaintenanceGuard::acquire(home)?;
-    let trash = open_maintenance_trash(home)?;
+fn execute_cache_cleanup_inner<F>(
+    request: GuardedCacheExecution<'_>,
+    on_terminal: &mut F,
+) -> Result<CacheExecutionReport, CacheExecutionError>
+where
+    F: FnMut(&str, &str),
+{
+    let GuardedCacheExecution {
+        home,
+        guard,
+        plan,
+        ownership,
+        inventory_limits,
+        limits,
+    } = request;
+    let home_dir = guard.home_dir();
+    let trash = open_maintenance_trash(home, home_dir)?;
     let recovered = sweep_existing_trash(&trash, limits)?;
-    let inventories =
-        inventory_for_execution(home, ownership, inventory_limits, plan, limits.max_removals)?;
+    let inventories = inventory_for_execution(
+        home,
+        home_dir,
+        ownership,
+        inventory_limits,
+        plan,
+        limits,
+        recovered,
+    )?;
     let selected = plan
         .decisions()
         .iter()
@@ -308,10 +389,19 @@ fn execute_cache_cleanup_inner(
 
     for decision in selected {
         let entry = decision.entry();
+        if deferred || attempted == limits.max_removals {
+            deferred = true;
+            items.push(execution_item(
+                entry,
+                None,
+                CacheExecutionDisposition::DeferredLimit,
+            ));
+            continue;
+        }
         let next_budgeted_bytes = budgeted_bytes
             .checked_add(entry.bytes())
             .ok_or(CacheExecutionError::ByteCountOverflow)?;
-        if deferred || attempted == limits.max_removals || next_budgeted_bytes > limits.max_bytes {
+        if next_budgeted_bytes > limits.max_bytes {
             deferred = true;
             items.push(execution_item(
                 entry,
@@ -324,11 +414,14 @@ fn execute_cache_cleanup_inner(
         budgeted_bytes = next_budgeted_bytes;
 
         match revalidate_entry(&inventories, entry) {
-            RevalidatedEntry::Missing => items.push(execution_item(
-                entry,
-                None,
-                CacheExecutionDisposition::Missing,
-            )),
+            RevalidatedEntry::Missing => {
+                on_terminal(entry.namespace(), entry.path());
+                items.push(execution_item(
+                    entry,
+                    None,
+                    CacheExecutionDisposition::Missing,
+                ));
+            }
             RevalidatedEntry::ActiveLease { observed_bytes } => items.push(execution_item(
                 entry,
                 Some(observed_bytes),
@@ -360,6 +453,7 @@ fn execute_cache_cleanup_inner(
                 match remove_revalidated_entry(
                     RemovalTarget {
                         home,
+                        home_dir,
                         namespace: entry.namespace(),
                         relative: entry.path(),
                         expected: handle,
@@ -373,6 +467,7 @@ fn execute_cache_cleanup_inner(
                         removed_bytes = removed_bytes
                             .checked_add(entry.bytes())
                             .ok_or(CacheExecutionError::ByteCountOverflow)?;
+                        on_terminal(entry.namespace(), entry.path());
                         items.push(execution_item(
                             entry,
                             Some(entry.bytes()),

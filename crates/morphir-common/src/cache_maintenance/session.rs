@@ -1,0 +1,323 @@
+use super::executor::MaintenanceGuard;
+use super::ownership::{
+    load_cache_ownership_registry_under_guard, save_cache_ownership_registry_under_guard,
+};
+use super::{
+    CacheEntry, CacheExecutionError, CacheExecutionLimits, CacheExecutionReport,
+    CacheInventoryError, CacheInventoryLimits, CacheNamespace, CacheOwnershipPersistenceError,
+    CacheOwnershipRegistry, CleanupPlan,
+};
+use crate::home::MorphirHome;
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
+use tracing::debug;
+
+/// Errors beginning or using an exclusive cache-maintenance session.
+#[derive(Debug, Error)]
+pub enum CacheMaintenanceSessionError {
+    /// Suite-wide coordination could not be acquired.
+    #[error("cache maintenance coordination failed: {0}")]
+    Coordination(#[source] CacheExecutionError),
+    /// Trusted ownership metadata could not be loaded.
+    #[error(transparent)]
+    Ownership(#[from] CacheOwnershipPersistenceError),
+    /// A registered namespace could not be inventoried safely.
+    #[error(transparent)]
+    Inventory(#[from] CacheInventoryError),
+    /// Trusted ownership metadata could not be converted to namespaces.
+    #[error(transparent)]
+    Registration(#[from] super::CacheOwnershipRegistryError),
+    /// A namespace was requested more than once.
+    #[error("duplicate requested cache namespace {namespace}")]
+    DuplicateNamespace {
+        /// Repeated namespace identifier.
+        namespace: String,
+    },
+    /// A cleanup plan could not be executed safely.
+    #[error(transparent)]
+    Execution(#[from] CacheExecutionError),
+}
+
+/// Exclusive cache-maintenance capability pinned to one Morphir Home.
+///
+/// The ownership snapshot is loaded only after the suite-wide lock is held.
+/// Keeping the session alive across inventory, planning, and execution prevents
+/// cleanup from acting on ownership metadata that a producer refreshed or
+/// released concurrently.
+///
+/// ```no_run
+/// use morphir_common::cache_maintenance::{
+///     CacheExecutionLimits, CacheInventoryLimits, CacheMaintenanceSession,
+///     CachePolicy, CleanupMode, plan_cache_cleanup,
+/// };
+/// use morphir_common::home::MorphirHome;
+/// use std::time::Duration;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let home = MorphirHome::resolve()?;
+/// let mut session = CacheMaintenanceSession::begin(&home)?;
+/// let inventory = session.inventory(
+///     &["desktop", "downloads", "extensions", "indexes"],
+///     CacheInventoryLimits::default(),
+/// )?;
+/// let plan = plan_cache_cleanup(
+///     inventory,
+///     CachePolicy::new(Duration::from_secs(30 * 24 * 60 * 60), 2_000_000_000),
+///     1_735_689_600,
+///     CleanupMode::Policy,
+/// )?;
+/// let report = session.execute_cleanup(
+///     &plan,
+///     CacheInventoryLimits::default(),
+///     CacheExecutionLimits::new(100, 100_000_000)?,
+/// )?;
+/// println!("removed {} bytes", report.removed_bytes());
+/// # Ok(())
+/// # }
+/// ```
+pub struct CacheMaintenanceSession<'home> {
+    home: &'home MorphirHome,
+    ownership: CacheOwnershipRegistry,
+    guard: MaintenanceGuard,
+}
+
+impl<'home> CacheMaintenanceSession<'home> {
+    /// Acquire exclusive coordination and load the current trusted registry.
+    pub fn begin(home: &'home MorphirHome) -> Result<Self, CacheMaintenanceSessionError> {
+        let guard =
+            MaintenanceGuard::acquire(home).map_err(CacheMaintenanceSessionError::Coordination)?;
+        let ownership = load_cache_ownership_registry_under_guard(home, &guard)?;
+        Ok(Self {
+            home,
+            ownership,
+            guard,
+        })
+    }
+
+    /// Trusted ownership snapshot loaded while this session held coordination.
+    pub fn ownership(&self) -> &CacheOwnershipRegistry {
+        &self.ownership
+    }
+
+    /// Inventory named namespaces through this session's pinned Morphir Home.
+    ///
+    /// Registered ownership is always taken from the trusted snapshot. A valid
+    /// namespace with no registrations is still inventoried, but every observed
+    /// entry remains protected and unclassified. An empty name list inventories
+    /// every registered namespace.
+    pub fn inventory(
+        &mut self,
+        namespace_names: &[&str],
+        limits: CacheInventoryLimits,
+    ) -> Result<Vec<CacheEntry>, CacheMaintenanceSessionError> {
+        self.inventory_with_hook(namespace_names, limits, || {})
+    }
+
+    fn inventory_with_hook<F>(
+        &mut self,
+        namespace_names: &[&str],
+        limits: CacheInventoryLimits,
+        before_compaction_save: F,
+    ) -> Result<Vec<CacheEntry>, CacheMaintenanceSessionError>
+    where
+        F: FnOnce(),
+    {
+        let registered = self
+            .ownership
+            .namespaces()?
+            .into_iter()
+            .map(|namespace| (namespace.name().to_owned(), namespace))
+            .collect::<BTreeMap<_, _>>();
+        let namespaces = if namespace_names.is_empty() {
+            registered.into_values().collect::<Vec<_>>()
+        } else {
+            let mut seen = BTreeSet::new();
+            let mut selected = Vec::with_capacity(namespace_names.len());
+            for name in namespace_names {
+                if !seen.insert(*name) {
+                    return Err(CacheMaintenanceSessionError::DuplicateNamespace {
+                        namespace: (*name).to_owned(),
+                    });
+                }
+                selected.push(match registered.get(*name) {
+                    Some(namespace) => namespace.clone(),
+                    None => CacheNamespace::new(*name).map_err(|error| {
+                        CacheMaintenanceSessionError::Registration(error.into())
+                    })?,
+                });
+            }
+            selected
+        };
+        let selected_names = namespaces
+            .iter()
+            .map(|namespace| namespace.name().to_owned())
+            .collect::<BTreeSet<_>>();
+        let mut entries = Vec::new();
+        for namespace in &namespaces {
+            entries.extend(
+                super::inventory::inventory_cache_namespace_from_home(
+                    self.home,
+                    self.guard.home_dir(),
+                    namespace,
+                    limits,
+                    None,
+                )?
+                .into_iter()
+                .map(super::inventory::PinnedCacheEntry::into_entry),
+            );
+        }
+        let mut compacted = self.ownership.clone();
+        let compacted_entries = compacted.prune_unobserved(&selected_names, &entries);
+        if compacted_entries > 0 {
+            before_compaction_save();
+            save_cache_ownership_registry_under_guard(self.home, &compacted, &self.guard)?;
+            self.ownership = compacted;
+            debug!(
+                event = "cache_ownership_compacted",
+                phase = "inventory",
+                compacted_entries,
+                remaining_entries = self.ownership.len(),
+                "unobserved cache ownership entries compacted"
+            );
+        }
+        Ok(entries)
+    }
+
+    /// Execute a plan using the same ownership snapshot and exclusive lock.
+    pub fn execute_cleanup(
+        self,
+        plan: &CleanupPlan,
+        inventory_limits: CacheInventoryLimits,
+        execution_limits: CacheExecutionLimits,
+    ) -> Result<CacheExecutionReport, CacheMaintenanceSessionError> {
+        let selected_names = plan
+            .decisions()
+            .iter()
+            .filter(|decision| decision.will_remove())
+            .map(|decision| decision.entry().namespace())
+            .collect::<BTreeSet<_>>();
+        let namespaces = self
+            .ownership
+            .namespaces()?
+            .into_iter()
+            .filter(|namespace| selected_names.contains(namespace.name()))
+            .collect::<Vec<_>>();
+        let request = super::executor::GuardedCacheExecution::new(
+            self.home,
+            &self.guard,
+            plan,
+            &namespaces,
+            inventory_limits,
+            execution_limits,
+        );
+        let mut terminal_entries = Vec::new();
+        let result = super::executor::execute_cache_cleanup_observing_terminal(
+            request,
+            |namespace, path| {
+                terminal_entries.push((namespace.to_owned(), path.to_owned()));
+            },
+        );
+        self.finish_execution(result, terminal_entries)
+    }
+
+    fn finish_execution(
+        self,
+        result: Result<CacheExecutionReport, CacheExecutionError>,
+        terminal_entries: Vec<(String, String)>,
+    ) -> Result<CacheExecutionReport, CacheMaintenanceSessionError> {
+        let mut compacted = self.ownership.clone();
+        let mut compacted_entries = 0_usize;
+        for (namespace, path) in terminal_entries {
+            compacted_entries += usize::from(compacted.unregister(&namespace, &path)?);
+        }
+        if compacted_entries > 0 {
+            save_cache_ownership_registry_under_guard(self.home, &compacted, &self.guard)?;
+            debug!(
+                event = "cache_ownership_compacted",
+                phase = "execution",
+                compacted_entries,
+                remaining_entries = compacted.len(),
+                "terminal cache ownership entries compacted"
+            );
+        }
+        result.map_err(CacheMaintenanceSessionError::Execution)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache_maintenance::{CacheOwnershipMutationGuard, load_cache_ownership_registry};
+
+    #[test]
+    fn failed_inventory_compaction_remains_retryable() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = MorphirHome::resolve_from(Some(directory.path().as_os_str()), None).unwrap();
+        std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+        let artifact = home.downloads_cache_dir().join("missing.pkg");
+        std::fs::write(&artifact, b"temporary").unwrap();
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "missing.pkg")
+            .unwrap()
+            .finish(1)
+            .unwrap();
+        std::fs::remove_file(&artifact).unwrap();
+        let registry_path = home.cache_ownership_registry_file();
+        let original_registry = std::fs::read(&registry_path).unwrap();
+
+        let mut session = CacheMaintenanceSession::begin(&home).unwrap();
+        let error = session
+            .inventory_with_hook(&["downloads"], CacheInventoryLimits::default(), || {
+                std::fs::remove_file(&registry_path).unwrap();
+                std::fs::create_dir(&registry_path).unwrap();
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("unsafe"));
+        std::fs::remove_dir(&registry_path).unwrap();
+        std::fs::write(&registry_path, original_registry).unwrap();
+
+        assert!(
+            session
+                .inventory(&["downloads"], CacheInventoryLimits::default())
+                .unwrap()
+                .is_empty()
+        );
+        drop(session);
+        assert!(load_cache_ownership_registry(&home).unwrap().is_empty());
+    }
+
+    #[test]
+    fn partial_execution_outcomes_are_compacted_before_returning_the_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = MorphirHome::resolve_from(Some(directory.path().as_os_str()), None).unwrap();
+        std::fs::create_dir_all(home.downloads_cache_dir()).unwrap();
+        let first = home.downloads_cache_dir().join("first.pkg");
+        let second = home.downloads_cache_dir().join("second.pkg");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&second, b"second").unwrap();
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "first.pkg")
+            .unwrap()
+            .finish(1)
+            .unwrap();
+        CacheOwnershipMutationGuard::begin(&home, "downloads", "second.pkg")
+            .unwrap()
+            .finish(1)
+            .unwrap();
+
+        let session = CacheMaintenanceSession::begin(&home).unwrap();
+        let error = session
+            .finish_execution(
+                Err(CacheExecutionError::ByteCountOverflow),
+                vec![("downloads".to_owned(), "first.pkg".to_owned())],
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CacheMaintenanceSessionError::Execution(CacheExecutionError::ByteCountOverflow)
+        ));
+        let mut registry = load_cache_ownership_registry(&home).unwrap();
+        assert_eq!(registry.len(), 1);
+        assert!(registry.unregister("downloads", "second.pkg").unwrap());
+        assert!(registry.is_empty());
+    }
+}

@@ -6,6 +6,7 @@ mod manifest;
 mod tool;
 
 pub use digest::Sha256Digest;
+pub(crate) use identity::portable_token;
 pub use identity::{
     ArtifactFilename, Channel, ChannelSegment, ExtensionId, RelativeArtifactPath, ToolId,
 };

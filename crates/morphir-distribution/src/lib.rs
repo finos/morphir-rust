@@ -89,6 +89,7 @@ mod domain;
 mod error;
 mod index;
 mod local;
+mod repository;
 mod resolver;
 mod state;
 mod state_io;
@@ -107,6 +108,10 @@ pub use domain::{
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
 pub use local::{IndexKind, IndexProvenance, LocalIndex, ResolvedArtifact};
+pub use repository::{
+    ExtensionRepositories, ExtensionRepository, RepositoryEndpoint, RepositoryName,
+    RepositoryState, RepositoryVerification,
+};
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{
     ExtensionInstaller, ExtensionLock, InstalledCatalog, InstalledExtension,

@@ -284,7 +284,7 @@ fi
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.pop("PYTHONPYCACHEPREFIX", None)
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment.pop("PYTHONDONTWRITEBYTECODE", None)
         environment["PATH"] = f"{self.root / 'test-bin'}{os.pathsep}{environment['PATH']}"
         environment["ARTIFACT_TASK_LOG"] = str(self.log)
         environment["ARTIFACT_SNAPSHOT_MARKER"] = str(self.snapshot_marker)

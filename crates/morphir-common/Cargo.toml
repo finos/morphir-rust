@@ -47,10 +47,16 @@ zip = "8.0"
 tar = "0.4"
 tempfile = "3"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 cucumber = "0.23"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
 
 [[test]]
 name = "streaming_migration_acceptance"
@@ -63,3 +69,14 @@ harness = false
 [[test]]
 name = "cache_maintenance_execution_acceptance"
 harness = false
+
+[[test]]
+name = "cache_maintenance_state_acceptance"
+harness = false
+
+[[test]]
+name = "cache_ownership_registry_acceptance"
+harness = false
+
+[[test]]
+name = "cache_maintenance_state"

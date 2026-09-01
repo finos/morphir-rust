@@ -765,6 +765,7 @@ fn extension_type(capability: Capability) -> ExtensionType {
         Capability::Backend => ExtensionType::Backend,
         Capability::Transform => ExtensionType::Transform,
         Capability::Validator => ExtensionType::Validator,
+        Capability::Workspace => ExtensionType::Workspace,
     }
 }
 

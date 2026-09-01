@@ -18,6 +18,8 @@ pub enum ExtensionType {
     Transform,
     /// Validator - analyzes IR and produces diagnostics
     Validator,
+    /// Workspace - discovers Morphir projects from a confined file tree
+    Workspace,
 }
 
 /// Information about an extension
@@ -102,6 +104,16 @@ pub struct BackendCapability {
     pub generate: bool,
 }
 
+/// Workspace-discovery features advertised by an extension.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCapability {
+    /// Portable workspace discovery protocol versions accepted by the extension.
+    pub protocol_versions: Vec<u32>,
+    /// Whether the extension accepts workspace discovery requests.
+    pub discover: bool,
+}
+
 /// Extension capabilities for runtime negotiation
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct ExtensionCapabilities {
@@ -111,6 +123,9 @@ pub struct ExtensionCapabilities {
     /// Backend code-generation features, when provided by the extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendCapability>,
+    /// Workspace discovery features, when provided by the extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceCapability>,
     /// Supports streaming/incremental processing
     #[serde(default)]
     pub streaming: bool,
@@ -135,9 +150,10 @@ impl Serialize for ExtensionCapabilities {
     where
         S: serde::Serializer,
     {
-        const RESERVED_KEYS: [&str; 6] = [
+        const RESERVED_KEYS: [&str; 7] = [
             "frontend",
             "backend",
+            "workspace",
             "streaming",
             "incremental",
             "cancellation",
@@ -156,6 +172,7 @@ impl Serialize for ExtensionCapabilities {
         let mut map = serializer.serialize_map(Some(
             4 + usize::from(self.frontend.is_some())
                 + usize::from(self.backend.is_some())
+                + usize::from(self.workspace.is_some())
                 + self.extra.len(),
         ))?;
         if let Some(frontend) = &self.frontend {
@@ -163,6 +180,9 @@ impl Serialize for ExtensionCapabilities {
         }
         if let Some(backend) = &self.backend {
             map.serialize_entry("backend", backend)?;
+        }
+        if let Some(workspace) = &self.workspace {
+            map.serialize_entry("workspace", workspace)?;
         }
         map.serialize_entry("streaming", &self.streaming)?;
         map.serialize_entry("incremental", &self.incremental)?;

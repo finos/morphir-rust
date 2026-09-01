@@ -90,6 +90,7 @@ mod error;
 mod index;
 mod local;
 mod repository;
+mod repository_authoring;
 mod resolver;
 mod state;
 mod state_io;
@@ -109,8 +110,11 @@ pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
 pub use local::{IndexKind, IndexProvenance, LocalIndex, ResolvedArtifact};
 pub use repository::{
-    ExtensionRepositories, ExtensionRepository, RepositoryEndpoint, RepositoryName,
-    RepositoryState, RepositoryVerification,
+    ExtensionRepositories, ExtensionRepository, ExtensionSearchQuery, ExtensionSearchResult,
+    RepositoryEndpoint, RepositoryName, RepositoryState, RepositoryVerification,
+};
+pub use repository_authoring::{
+    LocalExtensionRepository, PublicationStatus, RepositoryPublication,
 };
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{

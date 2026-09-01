@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use unicode_casefold::UnicodeCaseFold;
+use unicode_normalization::UnicodeNormalization;
 
 const REPOSITORIES_SCHEMA_VERSION: u32 = 1;
 const MAX_REPOSITORY_NAME_LEN: usize = 64;
@@ -165,6 +167,54 @@ impl ExtensionRepository {
     /// Return whether the repository is enabled.
     pub fn state(&self) -> RepositoryState {
         self.state
+    }
+}
+
+/// A non-empty case-insensitive query over extension identity and display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionSearchQuery {
+    normalized: String,
+}
+
+impl ExtensionSearchQuery {
+    /// Parse a search query after trimming surrounding whitespace.
+    pub fn parse(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(crate::error::invalid_value(
+                "extension search query",
+                value,
+                "expected non-whitespace identity or text",
+            ));
+        }
+        Ok(Self {
+            normalized: normalize_search_text(trimmed),
+        })
+    }
+
+    fn matches(&self, release: &crate::ReleaseRecord) -> bool {
+        normalize_search_text(release.extension_id().as_str()).contains(&self.normalized)
+            || normalize_search_text(release.name()).contains(&self.normalized)
+    }
+}
+
+/// One release found in an enabled repository, including its exact provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionSearchResult {
+    repository: ExtensionRepository,
+    release: crate::ReleaseRecord,
+}
+
+impl ExtensionSearchResult {
+    /// Return the configured repository that supplied this result.
+    pub fn repository(&self) -> &ExtensionRepository {
+        &self.repository
+    }
+
+    /// Return the exact matching release record.
+    pub fn release(&self) -> &crate::ReleaseRecord {
+        &self.release
     }
 }
 
@@ -325,6 +375,48 @@ impl<'home> ExtensionRepositories<'home> {
         Ok(report)
     }
 
+    /// Search extension identity and display name across enabled repositories.
+    pub fn search(&self, query: &ExtensionSearchQuery) -> Result<Vec<ExtensionSearchResult>> {
+        let mut results = Vec::new();
+        for repository in self.list()? {
+            if repository.state == RepositoryState::Disabled {
+                continue;
+            }
+            let index = repository.endpoint.local_index()?;
+            for history in read_local_histories(&index)? {
+                results.extend(
+                    history
+                        .releases()
+                        .iter()
+                        .filter(|release| query.matches(release))
+                        .cloned()
+                        .map(|release| ExtensionSearchResult {
+                            repository: repository.clone(),
+                            release,
+                        }),
+                );
+            }
+        }
+        results.sort_by(|left, right| {
+            left.repository
+                .name
+                .cmp(&right.repository.name)
+                .then_with(|| {
+                    left.release
+                        .extension_id()
+                        .cmp(right.release.extension_id())
+                })
+                .then_with(|| right.release.version().cmp(left.release.version()))
+        });
+        tracing::info!(
+            event_name = "extension.catalog.search",
+            query = %query.normalized,
+            result_count = results.len(),
+            "extension catalog searched"
+        );
+        Ok(results)
+    }
+
     /// Resolve one exact extension artifact through an enabled repository.
     pub fn resolve(
         &self,
@@ -408,6 +500,17 @@ impl<'home> ExtensionRepositories<'home> {
 }
 
 fn verify_local_index(index: &LocalIndex) -> Result<RepositoryVerification> {
+    let histories = read_local_histories(index)?;
+    Ok(RepositoryVerification {
+        history_count: histories.len(),
+        release_count: histories
+            .iter()
+            .map(|history| history.releases().len())
+            .sum(),
+    })
+}
+
+fn read_local_histories(index: &LocalIndex) -> Result<Vec<ExtensionHistory>> {
     let extensions = index.root().join("extensions");
     let mut histories = fs::read_dir(&extensions)
         .map_err(|source| DistributionError::Io {
@@ -425,8 +528,7 @@ fn verify_local_index(index: &LocalIndex) -> Result<RepositoryVerification> {
         .collect::<Result<Vec<_>>>()?;
     histories.sort();
 
-    let mut history_count = 0;
-    let mut release_count = 0;
+    let mut parsed = Vec::new();
     for path in histories {
         if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
             continue;
@@ -468,12 +570,17 @@ fn verify_local_index(index: &LocalIndex) -> Result<RepositoryVerification> {
                 actual: history.extension_id().clone(),
             });
         }
-        history_count += 1;
-        release_count += history.releases().len();
+        parsed.push(history);
     }
+    Ok(parsed)
+}
 
-    Ok(RepositoryVerification {
-        history_count,
-        release_count,
-    })
+fn normalize_search_text(value: &str) -> String {
+    value
+        .nfc()
+        .collect::<String>()
+        .chars()
+        .case_fold()
+        .nfc()
+        .collect()
 }

@@ -29,6 +29,20 @@ struct Invoke {
 /// Complete MEP shutdown and stop the actor.
 struct Shutdown;
 
+/// What the session is doing, as far as the idle watchdog can see.
+///
+/// "Idle" is a claim about the session, not about the clock, so the watchdog
+/// needs more than a timestamp: a session can be well past its deadline and
+/// still be working. Publishing the state itself lets the watchdog answer
+/// "is this session idle?" instead of "has it been a while since one started?".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionActivity {
+    /// No invocation is in flight; the idle period runs from the last change.
+    Idle,
+    /// An invocation is being handled and the session cannot be idle-stopped.
+    Busy,
+}
+
 /// An actor owning one ready MEP session.
 ///
 /// The session is held as an `Option` only because [`Session::invoke`] takes it
@@ -36,14 +50,15 @@ struct Shutdown;
 /// shared state, so `None` means exactly one thing: the session is gone and the
 /// actor is on its way out.
 ///
-/// `activity` implements the idle timeout: it is bumped on every handled
-/// [`Invoke`], and the watchdog task spawned alongside the actor (see
-/// [`spawn_session_with_idle_timeout`]) resets its sleep every time it
-/// observes a bump, stopping the actor only once a full idle period passes
-/// with no activity at all.
+/// `activity` implements the idle timeout: it publishes
+/// [`SessionActivity::Busy`] for the whole of every handled [`Invoke`] and
+/// [`SessionActivity::Idle`] once it is answered. The watchdog task spawned
+/// alongside the actor (see [`spawn_session_with_idle_timeout`]) resets its
+/// sleep on every change and refuses to stop a busy actor, so the actor is
+/// stopped only after a full idle period during which it did no work at all.
 struct SessionActor<T: MepTransport + Send + 'static> {
     session: Option<Session<T, Ready>>,
-    activity: tokio::sync::watch::Sender<()>,
+    activity: tokio::sync::watch::Sender<SessionActivity>,
 }
 
 /// Hand-written instead of `#[derive(Actor)]` so `on_stop` can complete the
@@ -88,13 +103,13 @@ fn gone(cause: DaemonError) -> DaemonError {
     DaemonError::SessionLost(Box::new(cause))
 }
 
-impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
-    type Reply = Result<serde_json::Value, DaemonError>;
-
-    async fn handle(&mut self, msg: Invoke, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        // Bump the idle watchdog first: every handled message counts as
-        // activity, whether or not the session is still there to use.
-        let _ = self.activity.send(());
+impl<T: MepTransport + Send + 'static> SessionActor<T> {
+    /// Invoke one operation, leaving the activity state to the caller.
+    async fn invoke(
+        &mut self,
+        msg: Invoke,
+        ctx: &mut Context<Self, Result<serde_json::Value, DaemonError>>,
+    ) -> Result<serde_json::Value, DaemonError> {
         let Some(session) = self.session.take() else {
             ctx.stop();
             return Err(gone(DaemonError::Extension(
@@ -121,6 +136,21 @@ impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
                 Err(gone(failure.into_error()))
             }
         }
+    }
+}
+
+impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
+    type Reply = Result<serde_json::Value, DaemonError>;
+
+    async fn handle(&mut self, msg: Invoke, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        // Busy for the whole handler, not just its first instant. The idle
+        // deadline is meant to reclaim a session nobody is using; a transport
+        // operation that runs longer than the deadline is the session being
+        // used, and the fresh idle period starts when it finishes.
+        let _ = self.activity.send(SessionActivity::Busy);
+        let reply = self.invoke(msg, ctx).await;
+        let _ = self.activity.send(SessionActivity::Idle);
+        reply
     }
 }
 
@@ -256,17 +286,19 @@ pub fn spawn_session<T: MepTransport + Send + 'static>(
 /// Spawn one actor owning the given ready session, stopping it after `idle`
 /// passes with no invocations.
 ///
-/// Every [`SessionHandle::invoke`] resets the idle timer, so a busy session is
-/// never stopped mid-use; only a session with no activity for a full `idle`
-/// period is stopped. Stopping completes the MEP shutdown handshake via
-/// [`Actor::on_stop`], the same as dropping the last handle would.
+/// Only a session that did nothing for a full `idle` period is stopped. An
+/// invocation in flight makes the session ineligible to stop no matter how long
+/// it runs, and the next idle period begins when it is answered, so `idle` may
+/// safely be shorter than the slowest operation the extension performs.
+/// Stopping completes the MEP shutdown handshake via [`Actor::on_stop`], the
+/// same as dropping the last handle would.
 ///
 /// Must be called from within a Tokio runtime; the actor runs on its own task.
 pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
     session: Session<T, Ready>,
     idle: std::time::Duration,
 ) -> SessionHandle {
-    let (activity, receiver) = tokio::sync::watch::channel(());
+    let (activity, receiver) = tokio::sync::watch::channel(SessionActivity::Idle);
     let actor_ref = SessionActor::spawn(SessionActor {
         session: Some(session),
         activity,
@@ -281,8 +313,13 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
     }
 }
 
-/// Spawn the task that stops `actor_ref` after `idle` passes with no activity
-/// on `receiver`.
+/// Spawn the task that stops `actor_ref` after `idle` passes with the session
+/// reported [`SessionActivity::Idle`] on `receiver` throughout.
+///
+/// The watchdog reads the published state rather than only reacting to changes,
+/// because a deadline can pass in the middle of a single long invocation: with
+/// no state to consult it would stop a session that had been working without
+/// pause since the moment it was created.
 ///
 /// The reference is deliberately weak. Kameo stops an actor when its last
 /// strong reference drops, so a watchdog holding a strong one would keep the
@@ -297,7 +334,7 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
 /// every case.
 fn spawn_idle_watchdog<T: MepTransport + Send + 'static>(
     actor_ref: WeakActorRef<SessionActor<T>>,
-    mut receiver: tokio::sync::watch::Receiver<()>,
+    mut receiver: tokio::sync::watch::Receiver<SessionActivity>,
     idle: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     // Anchored synchronously, before this function returns and certainly
@@ -315,6 +352,20 @@ fn spawn_idle_watchdog<T: MepTransport + Send + 'static>(
         loop {
             tokio::select! {
                 _ = &mut sleep => {
+                    if *receiver.borrow_and_update() == SessionActivity::Busy {
+                        // The deadline passed while an invocation was still
+                        // running. A working session is not an idle one, and a
+                        // graceful stop here would answer this invocation and
+                        // then refuse every call after it -- the caller would
+                        // lose a session that was never once idle. Wait for
+                        // the invocation to finish and start a fresh idle
+                        // period from there.
+                        if receiver.changed().await.is_err() {
+                            return;
+                        }
+                        sleep.as_mut().reset(tokio::time::Instant::now() + idle);
+                        continue;
+                    }
                     // No activity for a full `idle` period: stop gracefully
                     // rather than `kill`, so any message already in flight is
                     // answered before the actor goes away, and `on_stop` still
@@ -349,12 +400,12 @@ fn spawn_idle_watchdog<T: MepTransport + Send + 'static>(
 mod tests {
     use super::*;
     use crate::DaemonError;
-    use crate::extensions::protocol::{ExtensionResponse, RpcError, methods};
+    use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse, RpcError, methods};
     use crate::extensions::session::tests::{
         FakeTransport, RequestLog, backend_initialization, params,
     };
     use crate::extensions::session::{
-        ExpectedExtension, Ready, Session, TransportError, TransportState,
+        ExpectedExtension, MepTransport, Ready, Session, TransportError, TransportState,
     };
     use std::collections::VecDeque;
 
@@ -390,6 +441,14 @@ mod tests {
     async fn ready_backend_session(
         exchanges: impl IntoIterator<Item = Exchange>,
     ) -> (Session<FakeTransport, Ready>, RequestLog) {
+        let (transport, requests) = backend_transport(exchanges);
+        (negotiated(transport).await, requests)
+    }
+
+    /// A transport that answers a backend negotiation and then `exchanges`.
+    fn backend_transport(
+        exchanges: impl IntoIterator<Item = Exchange>,
+    ) -> (FakeTransport, RequestLog) {
         let mut responses: VecDeque<Exchange> = VecDeque::new();
         responses.push_back(Ok(ExtensionResponse::success(
             1,
@@ -404,23 +463,74 @@ mod tests {
             termination: TransportState::Stopped,
             requests: requests.clone(),
         };
+        (transport, requests)
+    }
+
+    /// Drive `transport` through negotiation into a ready session.
+    async fn negotiated<T: MepTransport + Send + 'static>(transport: T) -> Session<T, Ready> {
         match Session::loaded(transport).initialize(params()).await {
-            Ok(session) => (session, requests),
+            Ok(session) => session,
             Err(failure) => panic!("negotiation should succeed: {}", failure.error()),
         }
     }
 
-    async fn ready_session_answering(
-        results: &[serde_json::Value],
-    ) -> (Session<FakeTransport, Ready>, RequestLog) {
-        let exchanges: Vec<Exchange> = results
+    /// The successful exchanges that answer `results`, in request-id order.
+    fn answering(results: &[serde_json::Value]) -> Vec<Exchange> {
+        results
             .iter()
             .enumerate()
             .map(|(index, result)| {
                 Ok(ExtensionResponse::success(index as u64 + 2, result).expect("a valid envelope"))
             })
-            .collect();
-        ready_backend_session(exchanges).await
+            .collect()
+    }
+
+    async fn ready_session_answering(
+        results: &[serde_json::Value],
+    ) -> (Session<FakeTransport, Ready>, RequestLog) {
+        ready_backend_session(answering(results)).await
+    }
+
+    /// A transport that takes `delay` to answer every exchange.
+    ///
+    /// Every other fake here answers instantly, so no invocation can ever
+    /// outlive an idle window in a test. Real MEP work does: a compile of a
+    /// large package can easily run longer than the idle period a caller
+    /// picked for a session it expects to be interactive.
+    struct SlowTransport {
+        inner: FakeTransport,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl MepTransport for SlowTransport {
+        fn expected_extension(&self) -> ExpectedExtension {
+            self.inner.expected_extension()
+        }
+
+        async fn exchange(
+            &mut self,
+            request: ExtensionRequest,
+        ) -> std::result::Result<ExtensionResponse, TransportError> {
+            tokio::time::sleep(self.delay).await;
+            self.inner.exchange(request).await
+        }
+
+        async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
+            self.inner.terminate().await
+        }
+    }
+
+    /// A ready session whose every exchange takes `delay` to answer.
+    async fn ready_slow_session_answering(
+        results: &[serde_json::Value],
+        delay: std::time::Duration,
+    ) -> (Session<SlowTransport, Ready>, RequestLog) {
+        let (inner, requests) = backend_transport(answering(results));
+        // Negotiation is slow too, but it completes before any actor -- and so
+        // before any idle watchdog -- exists, so it cannot affect the timing
+        // under test.
+        (negotiated(SlowTransport { inner, delay }).await, requests)
     }
 
     async fn ready_session_rejecting_then_answering(
@@ -640,7 +750,7 @@ mod tests {
         // completion from a subsequent `invoke` failing (which only proves the
         // mailbox stopped accepting new messages, not that `on_stop` itself
         // has finished running).
-        let (activity, receiver) = tokio::sync::watch::channel(());
+        let (activity, receiver) = tokio::sync::watch::channel(SessionActivity::Idle);
         let actor_ref = SessionActor::spawn(SessionActor {
             session: Some(session),
             activity,
@@ -693,6 +803,65 @@ mod tests {
         assert_eq!(generated_paths(&second), ["second.avro"]);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn an_invocation_outliving_the_idle_window_keeps_the_session() {
+        let idle = std::time::Duration::from_secs(10);
+        // One invocation on its own takes three idle windows to answer, so the
+        // watchdog's deadline passes while the session is at its busiest.
+        let (session, _requests) = ready_slow_session_answering(
+            &[generate_result("slow.avro"), generate_result("next.avro")],
+            idle * 3,
+        )
+        .await;
+        let handle = spawn_session_with_idle_timeout(session, idle);
+
+        let slow: serde_json::Value = handle
+            .invoke(methods::GENERATE, serde_json::json!({}))
+            .await
+            .expect("an invocation in flight is not idle");
+        assert_eq!(generated_paths(&slow), ["slow.avro"]);
+
+        // The point of the test: a session that was working the whole time is
+        // still usable afterwards. An idle deadline that only restarts when an
+        // invocation *begins* has already expired by now.
+        let next = handle
+            .invoke::<serde_json::Value>(methods::GENERATE, serde_json::json!({}))
+            .await;
+        assert!(
+            next.is_ok(),
+            "a session busy for the whole idle window was stopped anyway: {next:?}"
+        );
+        assert_eq!(generated_paths(&next.unwrap()), ["next.avro"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_session_that_outlived_its_deadline_still_stops_once_it_goes_idle() {
+        let idle = std::time::Duration::from_secs(10);
+        let (session, _requests) = ready_slow_session_answering(
+            &[generate_result("slow.avro"), generate_result("unused.avro")],
+            idle * 3,
+        )
+        .await;
+        let handle = spawn_session_with_idle_timeout(session, idle);
+
+        // Runs straight through the first deadline, so the watchdog is left
+        // holding a deadline it declined to act on.
+        let _: serde_json::Value = handle
+            .invoke(methods::GENERATE, serde_json::json!({}))
+            .await
+            .unwrap();
+        tokio::time::advance(idle + std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+
+        let after = handle
+            .invoke::<serde_json::Value>(methods::GENERATE, serde_json::json!({}))
+            .await;
+        assert!(
+            matches!(after, Err(DaemonError::SessionLost(_))),
+            "declining to stop a busy session must not disarm the idle stop: {after:?}"
+        );
+    }
+
     #[tokio::test]
     async fn explicit_shutdown_is_not_repeated_when_the_actor_stops() {
         let (session, requests) =
@@ -705,7 +874,7 @@ mod tests {
         // resolves only once `on_stop` has actually returned. `SessionHandle`
         // erases the actor type on purpose, so it has no equivalent method;
         // polling with `yield_now` in a loop would only approximate this.
-        let (activity, _receiver) = tokio::sync::watch::channel(());
+        let (activity, _receiver) = tokio::sync::watch::channel(SessionActivity::Idle);
         let actor_ref = SessionActor::spawn(SessionActor {
             session: Some(session),
             activity,
@@ -736,7 +905,7 @@ mod tests {
                 ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
             )])
             .await;
-        let (activity, receiver) = tokio::sync::watch::channel(());
+        let (activity, receiver) = tokio::sync::watch::channel(SessionActivity::Idle);
         let actor_ref = SessionActor::spawn(SessionActor {
             session: Some(session),
             activity,

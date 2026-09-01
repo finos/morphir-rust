@@ -99,7 +99,15 @@ mod tests {
         assert_eq!(version, SchemaVersion::new(1, 2));
         assert_eq!(serde_json::to_string(&version).unwrap(), r#""1.2""#);
 
-        for invalid in [r#"1"#, r#""1""#, r#""1.2.0""#, r#""01.2""#, r#""1.02""#] {
+        for invalid in [
+            r#"1"#,
+            r#""1""#,
+            r#""1.2.0""#,
+            r#""01.2""#,
+            r#""1.02""#,
+            r#""1.2-alpha""#,
+            r#""1.2+build""#,
+        ] {
             assert!(
                 serde_json::from_str::<SchemaVersion>(invalid).is_err(),
                 "{invalid}"

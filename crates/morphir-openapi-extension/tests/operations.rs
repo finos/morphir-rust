@@ -23,12 +23,12 @@
 //! sets `unsupported: "warn-and-skip"` so those two declarations are
 //! skipped with a warning while the rest of the package still projects.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use morphir_extension_sdk::{Backend, GenerateRequest};
 use morphir_openapi_extension::{
-    OpenApiExtension, Projection, SchemaOptions, Unsupported, project, project_operations,
-    render_openapi,
+    OpenApiExtension, OperationOverride, ParameterBinding, Projection, ResultResponses,
+    SchemaOptions, Unsupported, project, project_operations, render_openapi,
 };
 use morphir_projection::testing::v4;
 use morphir_projection::{
@@ -322,6 +322,42 @@ fn a_path_bound_parameter_without_a_placeholder_in_the_override_path_is_an_error
     assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
 }
 
+/// Reproduces the exact failure mode Important-finding review flagged: the
+/// plan brief's own illustrative override names its path parameter
+/// `customerId` against `/customers/{customerId}`, while the real fixture's
+/// input is named `id`. Adjusting only the FQName (as the brief instructed)
+/// and copying the parameter name and path verbatim lands squarely on a
+/// `Path` binding whose name matches no request field — the placeholder is
+/// present, so the check above alone would miss this and silently leave a
+/// `{customerId}` path template with no matching Parameter Object, a
+/// structurally invalid document generated without complaint.
+#[test]
+fn an_override_path_parameter_naming_no_request_field_is_an_error() {
+    let result = OpenApiExtension
+        .generate(GenerateRequest {
+            ir: v4::v4_customer_application(),
+            target: "openapi".into(),
+            options: map([
+                ("projection", json!("operations-public")),
+                ("unsupported", json!("warn-and-skip")),
+                (
+                    "operations",
+                    json!({
+                        "acme/customer:domain#find-customer": {
+                            "method": "get",
+                            "path": "/customers/{customerId}",
+                            "parameters": {"customerId": "path"}
+                        }
+                    }),
+                ),
+            ]),
+        })
+        .expect("generation is a successful MEP call");
+
+    assert!(!result.success);
+    assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
+}
+
 #[test]
 fn an_override_naming_an_unknown_value_is_an_error() {
     let result = OpenApiExtension
@@ -352,6 +388,7 @@ fn an_override_naming_an_unknown_value_is_an_error() {
 // directly rather than round-tripping through IR JSON.
 
 const SDK_BOOL: &str = "morphir/SDK:basics#bool";
+const SDK_RESULT: &str = "morphir/SDK:result#result";
 
 fn source(local: &str) -> String {
     format!("acme/customer:domain#{local}")
@@ -721,6 +758,234 @@ fn a_dangling_reference_from_an_operation_is_dropped_from_the_rendered_document(
     assert!(
         !paths.contains_key("/domain/lookUp"),
         "'look-up' must not appear in paths: {paths:?}"
+    );
+    assert_eq!(paths.len(), 1, "only 'fine' survives: {paths:?}");
+    assert!(paths.contains_key("/domain/fine"));
+}
+
+/// The same whole-document invariant as
+/// `a_dangling_reference_from_an_operation_is_dropped_from_the_rendered_document`,
+/// but reached through `operation.parameters` rather than `operation.response`:
+/// `operation_references` was extended to walk moved-out parameters
+/// alongside the request body, and this is the only test that would fail if
+/// that branch were missing or wrong. `look-up-by-token`'s only reference to
+/// the dangling `wrapper` type is through its `token` input, which an
+/// override moves out of the request body and into a `Query` parameter
+/// before the dangling sweep runs; `fine` again proves the rest of the
+/// document survives.
+#[test]
+fn a_dangling_reference_reached_only_through_an_override_parameter_is_dropped() {
+    let mut package = package_with(vec![
+        ValueSpecification {
+            source_name: source("look-up-by-token"),
+            name: "look-up-by-token".to_owned(),
+            inputs: vec![NamedType {
+                name: "token".to_owned(),
+                tpe: TypeExpr::Reference {
+                    source_name: "shared/vault:support#wrapper".to_owned(),
+                    arguments: Vec::new(),
+                },
+            }],
+            output: Some(TypeExpr::Reference {
+                source_name: SDK_BOOL.to_owned(),
+                arguments: Vec::new(),
+            }),
+            value_kind: ValueKind::Function,
+            entry_point: entry_point("look-up-by-token-id"),
+            doc: None,
+        },
+        supported_entry_point("fine"),
+    ]);
+    package.dependencies = vec![ProjectionDependency {
+        package_name: "shared/vault".to_owned(),
+        modules: vec![ProjectionModule {
+            path: vec!["support".to_owned()],
+            types: vec![
+                TypeDeclaration::Alias {
+                    source_name: "shared/vault:support#wrapper".to_owned(),
+                    name: "wrapper".to_owned(),
+                    type_params: Vec::new(),
+                    value: TypeExpr::Record(vec![NamedType {
+                        name: "payload".to_owned(),
+                        tpe: TypeExpr::Reference {
+                            source_name: "shared/vault:support#broken".to_owned(),
+                            arguments: Vec::new(),
+                        },
+                    }]),
+                    doc: None,
+                },
+                alias(
+                    "shared/vault:support#broken",
+                    "broken",
+                    TypeExpr::Variable("a".to_owned()),
+                ),
+            ],
+            values: Vec::new(),
+            doc: None,
+        }],
+    }];
+
+    let mut projection = project(&package, &SchemaOptions::default())
+        .expect("neither dependency type is a public type root of this package");
+    let options = SchemaOptions {
+        projection: Projection::OperationsEntryPoints,
+        unsupported: Unsupported::WarnAndSkip,
+        operations: BTreeMap::from([(
+            source("look-up-by-token"),
+            OperationOverride {
+                method: None,
+                path: None,
+                parameters: BTreeMap::from([("token".to_owned(), ParameterBinding::Query)]),
+            },
+        )]),
+        ..SchemaOptions::default()
+    };
+    projection.operations = project_operations(&package, &mut projection, &options)
+        .expect("skipping keeps the rest of the document rendering");
+
+    assert_eq!(
+        projection
+            .operations
+            .iter()
+            .map(|operation| operation.source_name.as_str())
+            .collect::<Vec<_>>(),
+        vec![source("fine").as_str()],
+        "'look-up-by-token' is dropped for its dangling Query parameter; 'fine' is unaffected"
+    );
+
+    let artifacts = render_openapi(&projection, &options);
+    assert_eq!(artifacts.len(), 1);
+    let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
+
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    for reference in collect_refs(&document) {
+        let name = reference
+            .strip_prefix("#/components/schemas/")
+            .unwrap_or_else(|| panic!("non-local reference {reference}"));
+        assert!(
+            schemas.contains_key(name),
+            "dangling $ref to '{name}' with no components/schemas entry anywhere              in the document: {document}"
+        );
+    }
+
+    let paths = document["paths"].as_object().expect("paths is an object");
+    assert!(
+        !paths.contains_key("/domain/lookUpByToken"),
+        "'look-up-by-token' must not appear in paths: {paths:?}"
+    );
+    assert_eq!(paths.len(), 1, "only 'fine' survives: {paths:?}");
+    assert!(paths.contains_key("/domain/fine"));
+}
+
+/// The same whole-document invariant again, this time reached through
+/// `operation.error_response` rather than `operation.response`:
+/// `operation_references` was also extended to walk the split error
+/// response, and this is the only test that would fail if that branch were
+/// missing or wrong. `look-up-with-result` returns
+/// `Result wrapper Bool`; under `ResultResponses::Split` its `Err` member
+/// (`wrapper`, the dangling type) lands only in `error_response`, never in
+/// `response`, so only the new branch can catch it.
+#[test]
+fn a_dangling_reference_reached_only_through_a_split_error_response_is_dropped() {
+    let mut package = package_with(vec![
+        ValueSpecification {
+            source_name: source("look-up-with-result"),
+            name: "look-up-with-result".to_owned(),
+            inputs: Vec::new(),
+            output: Some(TypeExpr::Reference {
+                source_name: SDK_RESULT.to_owned(),
+                arguments: vec![
+                    TypeExpr::Reference {
+                        source_name: "shared/vault:support#wrapper".to_owned(),
+                        arguments: Vec::new(),
+                    },
+                    TypeExpr::Reference {
+                        source_name: SDK_BOOL.to_owned(),
+                        arguments: Vec::new(),
+                    },
+                ],
+            }),
+            value_kind: ValueKind::Constant,
+            entry_point: entry_point("look-up-with-result-id"),
+            doc: None,
+        },
+        supported_entry_point("fine"),
+    ]);
+    package.dependencies = vec![ProjectionDependency {
+        package_name: "shared/vault".to_owned(),
+        modules: vec![ProjectionModule {
+            path: vec!["support".to_owned()],
+            types: vec![
+                TypeDeclaration::Alias {
+                    source_name: "shared/vault:support#wrapper".to_owned(),
+                    name: "wrapper".to_owned(),
+                    type_params: Vec::new(),
+                    value: TypeExpr::Record(vec![NamedType {
+                        name: "payload".to_owned(),
+                        tpe: TypeExpr::Reference {
+                            source_name: "shared/vault:support#broken".to_owned(),
+                            arguments: Vec::new(),
+                        },
+                    }]),
+                    doc: None,
+                },
+                alias(
+                    "shared/vault:support#broken",
+                    "broken",
+                    TypeExpr::Variable("a".to_owned()),
+                ),
+            ],
+            values: Vec::new(),
+            doc: None,
+        }],
+    }];
+
+    let mut projection = project(&package, &SchemaOptions::default())
+        .expect("neither dependency type is a public type root of this package");
+    let options = SchemaOptions {
+        projection: Projection::OperationsEntryPoints,
+        unsupported: Unsupported::WarnAndSkip,
+        result_responses: ResultResponses::Split,
+        ..SchemaOptions::default()
+    };
+    projection.operations = project_operations(&package, &mut projection, &options)
+        .expect("skipping keeps the rest of the document rendering");
+
+    assert_eq!(
+        projection
+            .operations
+            .iter()
+            .map(|operation| operation.source_name.as_str())
+            .collect::<Vec<_>>(),
+        vec![source("fine").as_str()],
+        "'look-up-with-result' is dropped for its dangling split error response;          'fine' is unaffected"
+    );
+
+    let artifacts = render_openapi(&projection, &options);
+    assert_eq!(artifacts.len(), 1);
+    let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
+
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    for reference in collect_refs(&document) {
+        let name = reference
+            .strip_prefix("#/components/schemas/")
+            .unwrap_or_else(|| panic!("non-local reference {reference}"));
+        assert!(
+            schemas.contains_key(name),
+            "dangling $ref to '{name}' with no components/schemas entry anywhere              in the document: {document}"
+        );
+    }
+
+    let paths = document["paths"].as_object().expect("paths is an object");
+    assert!(
+        !paths.contains_key("/domain/lookUpWithResult"),
+        "'look-up-with-result' must not appear in paths: {paths:?}"
     );
     assert_eq!(paths.len(), 1, "only 'fine' survives: {paths:?}");
     assert!(paths.contains_key("/domain/fine"));

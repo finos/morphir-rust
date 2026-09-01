@@ -312,18 +312,25 @@ fn result_arguments(tpe: &TypeExpr) -> Option<(&TypeExpr, &TypeExpr)> {
 /// [`Operation`]: `method` and `path` replace their default, and each bound
 /// parameter moves from `request` to `parameters`.
 ///
-/// A `Path`-bound parameter must appear as a `{name}` placeholder in the
+/// A `Path`-bound parameter is checked twice, in order, both failures
+/// `SchemaDiagnostic::unknown_operation` (`OAS002`) — the same code an
+/// override naming no value specification uses, because every case here is
+/// the same failure at heart: `options.operations` describes an operation
+/// that cannot exist as written. First, its name must match an actual
+/// request field: a `Path` binding silently doing nothing when the name is
+/// wrong (for instance a copy-pasted override whose parameter name was
+/// never updated to match the value's real input name) would otherwise
+/// leave the rendered path template carrying a `{name}` placeholder with no
+/// matching Parameter Object — a structurally invalid document generated
+/// without complaint. Second, once the field is confirmed to exist, the
 /// operation's path (the override's path when given, the default path
-/// otherwise) once `path` itself has already been applied above; failing
-/// that is `SchemaDiagnostic::unknown_operation` (`OAS002`), the same code
-/// an override naming no value specification uses, because both are the
-/// same failure at heart: `options.operations` describes an operation that
-/// cannot exist as written. A parameter name that matches no request field
-/// — for instance because `value`'s own inputs changed since the override
-/// was written — is silently ignored rather than erroring: `options.operations`
-/// is keyed by value FQName, not by parameter name, so there is no companion
-/// diagnostic code reserved for it, and ignoring it leaves the field in the
-/// request body, a safe default.
+/// otherwise, since `path` itself is already applied above) must actually
+/// contain that `{name}` placeholder.
+///
+/// A `Query`- or `Header`-bound parameter name that matches no request
+/// field is, by contrast, silently ignored: neither binding renders a path
+/// placeholder, so a name that matches nothing just leaves that field in
+/// the request body, a safe default rather than a broken document.
 fn apply_override(
     operation: &mut Operation,
     override_: &OperationOverride,
@@ -339,7 +346,17 @@ fn apply_override(
         if matches!(binding, ParameterBinding::Body) {
             continue;
         }
+        let index = operation
+            .request
+            .iter()
+            .position(|field| &field.name == name);
         if matches!(binding, ParameterBinding::Path) {
+            let Some(index) = index else {
+                return Err(SchemaDiagnostic::unknown_operation(
+                    &operation.source_name,
+                    format!("parameter '{name}' is bound to Path but names no request field"),
+                ));
+            };
             let placeholder = format!("{{{name}}}");
             if !operation.path.contains(&placeholder) {
                 return Err(SchemaDiagnostic::unknown_operation(
@@ -350,12 +367,11 @@ fn apply_override(
                     ),
                 ));
             }
+            let field = operation.request.remove(index);
+            operation.parameters.push((*binding, field));
+            continue;
         }
-        if let Some(index) = operation
-            .request
-            .iter()
-            .position(|field| &field.name == name)
-        {
+        if let Some(index) = index {
             let field = operation.request.remove(index);
             operation.parameters.push((*binding, field));
         }

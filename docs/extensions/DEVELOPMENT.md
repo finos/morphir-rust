@@ -65,6 +65,14 @@ morphir extension list
 Use `MORPHIR_HOME` when a test needs isolated catalog, lock, and store state.
 The CLI has no `--global` install mode.
 
+Release manifests in the index use the strict JSON string
+`"schemaVersion": "1.0"`. Declaring `frontend` or `backend` in `capabilities`
+requires the matching metadata object. Installation writes separate extension
+lock and catalog formats, each with its own current `"1.0"` schema version. Each
+reader accepts supported minors of its current major from its minimum through
+its current minor, and rejects future minors and other majors. These distribution
+schema versions do not identify a Morphir IR version.
+
 See the root repository's
 [Avro generation guide](https://github.com/finos/morphir/blob/main/docs/generate/avro.md#build-and-install-the-local-extension)
 for a tested build, local index, install, and generation sequence.

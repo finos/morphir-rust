@@ -40,7 +40,10 @@ Resolution works in this order:
 
 This ordering matters. An installed extension that lacks the requested capability or IR version cannot hide an eligible built-in.
 
-Installed records migrated from schemas that did not persist frontend or backend selector metadata remain available for exact-ID activation through the distribution API, but typed registry resolution does not guess their languages, targets, or IR versions. Reinstall the provider from a metadata-bearing index record before relying on automatic capability resolution.
+Extension release schema `"1.0"` requires frontend and backend selector metadata
+whenever the corresponding capability is declared. The installer preserves that
+metadata in schema `"1.0"` catalog and lock records, so typed registry resolution
+uses only validated languages, targets, and Morphir IR versions.
 
 ## Compile flow
 

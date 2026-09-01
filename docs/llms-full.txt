@@ -846,6 +846,14 @@ Morphir does not discover a local extension path from `morphir.toml`. The CLI
 resolves an extension ID from a controlled schema-versioned index, verifies its
 digest, and writes matching catalog and lock state.
 
+Each JSONL release manifest uses `"schemaVersion": "1.0"`. If its
+`capabilities` include `frontend` or `backend`, the record must contain the
+matching `frontend` or `backend` metadata. The resulting extension lock and
+catalog are separate formats that also currently write the strict JSON string
+`"schemaVersion": "1.0"`. Their readers accept supported minors of the same
+major from the minimum through the current minor, reject future minors and
+other majors, and do not use this field as a Morphir IR version.
+
 ```console
 morphir extension install --index <INDEX> <NAME>
 morphir extension list
@@ -1139,6 +1147,14 @@ artifact bytes below that controlled root. Installation defaults to the
 another release. The CLI has no `--global` mode; `MORPHIR_HOME` selects the
 state root when a contributor needs an isolated test home.
 
+Release manifests use the strict JSON string `"schemaVersion": "1.0"` and
+must include matching metadata for every declared frontend or backend
+capability. Installation writes separate extension lock and catalog formats,
+each with its own current `"1.0"` schema version. Each reader accepts supported
+minors of the same major from its minimum through its current minor and rejects
+future minors and other majors. These distribution versions are independent of
+Morphir IR versions.
+
 For a tested Avro build-to-index example, see the root repository's
 [Avro generation guide](https://github.com/finos/morphir/blob/main/docs/generate/avro.md#build-and-install-the-local-extension).
 
@@ -1154,7 +1170,7 @@ The task tests the native crate, builds and validates the WASM guest, checks the
 Avro IDL goldens, and writes the WASM file, checksum, and `release.json` under
 `.morphir/build/extensions/avro/`. It does not create an install index, Git tag,
 or GitHub release. The root Avro guide shows how to turn that local bundle into
-a schema-v2 local index record.
+a schema `"1.0"` local index record.
 
 ## Create versus publish
 
@@ -1247,6 +1263,21 @@ morphir extension uninstall <NAME>
 `extensions/` and artifact bytes below the same controlled root. Installation
 verifies the artifact digest and records matching catalog and lock state.
 
+### Distribution schema contract
+
+Extension release manifests, extension locks, and extension catalogs are three
+separately versioned distribution formats. Each current format writes the strict
+JSON string `"schemaVersion": "1.0"`; this version is independent of Morphir IR
+versions.
+
+For each format, the reader accepts versions with the current major whose minor
+is between that format's minimum and current supported minor, inclusive. It
+rejects future minors and versions with any other major. A schema `"1.0"` release
+manifest must include `frontend` metadata when it declares the `frontend`
+capability and `backend` metadata when it declares the `backend` capability.
+Installation persists the matching metadata in the schema `"1.0"` lock and
+catalog records used for activation.
+
 The CLI does not discover extension entries in `morphir.toml` and does not
 install raw WASM files, archives, URLs, or directories. It has no `--global`
 installation mode. `MORPHIR_HOME` selects an isolated state root for local
@@ -1325,7 +1356,10 @@ Resolution works in this order:
 
 This ordering matters. An installed extension that lacks the requested capability or IR version cannot hide an eligible built-in.
 
-Installed records migrated from schemas that did not persist frontend or backend selector metadata remain available for exact-ID activation through the distribution API, but typed registry resolution does not guess their languages, targets, or IR versions. Reinstall the provider from a metadata-bearing index record before relying on automatic capability resolution.
+Extension release schema `"1.0"` requires frontend and backend selector metadata
+whenever the corresponding capability is declared. The installer preserves that
+metadata in schema `"1.0"` catalog and lock records, so typed registry resolution
+uses only validated languages, targets, and Morphir IR versions.
 
 ## Compile flow
 
@@ -1782,6 +1816,14 @@ morphir extension list
 
 Use `MORPHIR_HOME` when a test needs isolated catalog, lock, and store state.
 The CLI has no `--global` install mode.
+
+Release manifests in the index use the strict JSON string
+`"schemaVersion": "1.0"`. Declaring `frontend` or `backend` in `capabilities`
+requires the matching metadata object. Installation writes separate extension
+lock and catalog formats, each with its own current `"1.0"` schema version. Each
+reader accepts supported minors of its current major from its minimum through
+its current minor, and rejects future minors and other majors. These distribution
+schema versions do not identify a Morphir IR version.
 
 See the root repository's
 [Avro generation guide](https://github.com/finos/morphir/blob/main/docs/generate/avro.md#build-and-install-the-local-extension)

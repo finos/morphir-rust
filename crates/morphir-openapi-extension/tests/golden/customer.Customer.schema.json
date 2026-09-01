@@ -1,0 +1,42 @@
+{
+  "$defs": {
+    "Status": {
+      "description": "Customer status.",
+      "enum": [
+        "Active",
+        "Inactive"
+      ],
+      "type": "string",
+      "x-morphir-fqname": "acme/customer:customer#status"
+    }
+  },
+  "$id": "Customer.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A customer record.",
+  "properties": {
+    "customerId": {
+      "type": "string"
+    },
+    "nickname": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/Status"
+    }
+  },
+  "required": [
+    "customerId",
+    "nickname",
+    "status"
+  ],
+  "title": "Customer",
+  "type": "object",
+  "x-morphir-fqname": "acme/customer:customer#customer"
+}

@@ -7,10 +7,12 @@
 
 mod diagnostic;
 mod options;
+mod render;
 mod schema;
 
 pub use diagnostic::{SchemaDiagnostic, SchemaGenerationError};
 pub use options::{SchemaOptions, Unsupported};
+pub use render::render_json_schema;
 pub use schema::{
     NamedSchema, Schema, SchemaField, SchemaProjection, SchemaVariant, project, schema_name,
 };
@@ -102,13 +104,13 @@ morphir_extension_sdk::export_extension!(OpenApiExtension, backend);
 /// stable code, matching `morphir-avro-extension`'s `generate_request`, so a
 /// caller branching on the code can tell bad IR from a bad backend option.
 pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, SchemaGenerationError> {
-    let Some(_target) = Target::parse(&request.target) else {
+    let Some(target) = Target::parse(&request.target) else {
         return Ok(failed(
             SchemaDiagnostic::unknown_target(&request.target)
                 .into_diagnostic(DiagnosticSeverity::Error),
         ));
     };
-    let _options = match SchemaOptions::from_map(&request.options) {
+    let options = match SchemaOptions::from_map(&request.options) {
         Ok(options) => options,
         Err(diagnostic) => {
             return Ok(failed(
@@ -116,7 +118,7 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
             ));
         }
     };
-    let _package = match morphir_projection::normalize(&request.ir) {
+    let package = match morphir_projection::normalize(&request.ir) {
         Ok(package) => package,
         Err(error) => {
             return Ok(failed(Diagnostic {
@@ -128,10 +130,34 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
             }));
         }
     };
+    let projection = match project(&package, &options) {
+        Ok(projection) => projection,
+        Err(diagnostic) => {
+            return Ok(failed(
+                diagnostic.into_diagnostic(DiagnosticSeverity::Error),
+            ));
+        }
+    };
+    let artifacts = match target {
+        Target::JsonSchema => render_json_schema(&projection),
+        // The follow-up plan adds the OpenAPI renderer over this same
+        // projection. Returning no artifacts here is deliberate, not a gap.
+        Target::OpenApi => Vec::new(),
+    };
     Ok(GenerateResult {
         success: true,
-        artifacts: Vec::new(),
-        diagnostics: Vec::new(),
+        artifacts,
+        diagnostics: projection
+            .diagnostics
+            .into_iter()
+            .map(|(diagnostic, warning)| {
+                diagnostic.into_diagnostic(if warning {
+                    DiagnosticSeverity::Warning
+                } else {
+                    DiagnosticSeverity::Error
+                })
+            })
+            .collect(),
     })
 }
 

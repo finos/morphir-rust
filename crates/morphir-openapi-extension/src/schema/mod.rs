@@ -279,7 +279,7 @@ fn drop_dangling(
 }
 
 /// Every schema name this schema refers to.
-fn references(schema: &Schema) -> Vec<&str> {
+pub(crate) fn references(schema: &Schema) -> Vec<&str> {
     match schema {
         Schema::Reference(name) => vec![name.as_str()],
         Schema::Array { items, .. } => references(items),

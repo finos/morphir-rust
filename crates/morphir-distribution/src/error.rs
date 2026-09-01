@@ -224,6 +224,36 @@ pub enum DistributionError {
         /// Unsupported schema version.
         version: u32,
     },
+    /// A repository configuration already uses the requested name.
+    #[error("extension repository {name} is already configured")]
+    RepositoryAlreadyExists {
+        /// Conflicting repository name.
+        name: crate::RepositoryName,
+    },
+    /// No repository configuration uses the requested name.
+    #[error("extension repository {name} is not configured")]
+    RepositoryNotFound {
+        /// Missing repository name.
+        name: crate::RepositoryName,
+    },
+    /// A disabled repository was selected for extension resolution.
+    #[error("extension repository {name} is disabled")]
+    RepositoryDisabled {
+        /// Disabled repository name.
+        name: crate::RepositoryName,
+    },
+    /// A local repository history filename disagrees with its declared identity.
+    #[error(
+        "extension repository history {path} declares {actual}, but its filename identifies {expected}"
+    )]
+    RepositoryHistoryIdentity {
+        /// History file being validated.
+        path: PathBuf,
+        /// Identity derived from the history filename.
+        expected: crate::ExtensionId,
+        /// Identity declared by the history records.
+        actual: crate::ExtensionId,
+    },
     /// No installed catalog entry exists for the requested identity.
     #[error("extension {id} is not installed")]
     NotInstalled {

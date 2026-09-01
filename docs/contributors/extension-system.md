@@ -48,7 +48,7 @@ morphir extension update --index <INDEX> <NAME>
 morphir extension uninstall <NAME>
 ```
 
-`<INDEX>` is a directory containing schema-v2 JSONL release histories under
+`<INDEX>` is a directory containing schema-versioned JSONL release histories under
 `extensions/` and artifact bytes below the same controlled root. Installation
 verifies the artifact digest and records matching catalog and lock state.
 

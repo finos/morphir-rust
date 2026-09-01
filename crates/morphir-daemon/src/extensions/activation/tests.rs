@@ -331,7 +331,7 @@ mod runtime_mother {
             MetadataShape::FrontendWorkspace => serde_json::json!(["frontend", "workspace"]),
         };
         let mut record = serde_json::json!({
-            "schemaVersion": if matches!(spec.metadata, MetadataShape::LegacyBackend) { 1 } else { 2 },
+            "schemaVersion": if matches!(spec.metadata, MetadataShape::LegacyBackend) { 1 } else { 3 },
             "id": spec.id,
             "name": spec.name,
             "version": "1.2.3",

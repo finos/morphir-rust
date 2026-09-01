@@ -53,16 +53,16 @@ enum CapabilityMetadataScope {
 
 impl CapabilityMetadataScope {
     fn from_release(
-        schema_version: u32,
         capabilities: &[Capability],
         capability: Capability,
+        has_metadata: bool,
     ) -> Self {
         if !capabilities.contains(&capability) {
             Self::NotDeclared
-        } else if schema_version == 1 {
-            Self::LegacyUnpersisted
-        } else {
+        } else if has_metadata {
             Self::Persisted
+        } else {
+            Self::LegacyUnpersisted
         }
     }
 
@@ -236,16 +236,16 @@ impl ExtensionLock {
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
             frontend_metadata_scope: CapabilityMetadataScope::from_release(
-                release.schema_version(),
                 release.capabilities(),
                 Capability::Frontend,
+                release.frontend().is_some(),
             ),
             frontend: artifact.selected.release.frontend().cloned(),
             backend: artifact.selected.release.backend().cloned(),
             backend_metadata_scope: CapabilityMetadataScope::from_release(
-                release.schema_version(),
                 release.capabilities(),
                 Capability::Backend,
+                release.backend().is_some(),
             ),
             executable: artifact.selected.artifact.executable(),
         };
@@ -548,16 +548,16 @@ impl InstalledExtension {
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
             index: artifact.selected.index.clone(),
             frontend_metadata_scope: CapabilityMetadataScope::from_release(
-                release.schema_version(),
                 release.capabilities(),
                 Capability::Frontend,
+                release.frontend().is_some(),
             ),
             frontend: artifact.selected.release.frontend().cloned(),
             backend: artifact.selected.release.backend().cloned(),
             backend_metadata_scope: CapabilityMetadataScope::from_release(
-                release.schema_version(),
                 release.capabilities(),
                 Capability::Backend,
+                release.backend().is_some(),
             ),
             executable: artifact.selected.artifact.executable(),
         };
@@ -1604,7 +1604,7 @@ mod tests {
 
     fn write_release(index: &Path, version: &str, digest: &Sha256Digest) {
         let record = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "id": "example",
             "name": "Example",
             "version": version,

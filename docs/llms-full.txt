@@ -843,7 +843,7 @@ The task does not publish a release or create an install index.
 ## 4. Install from a controlled index
 
 Morphir does not discover a local extension path from `morphir.toml`. The CLI
-resolves an extension ID from a controlled schema-v2 index, verifies its
+resolves an extension ID from a controlled schema-versioned index, verifies its
 digest, and writes matching catalog and lock state.
 
 ```console
@@ -1243,7 +1243,7 @@ morphir extension update --index <INDEX> <NAME>
 morphir extension uninstall <NAME>
 ```
 
-`<INDEX>` is a directory containing schema-v2 JSONL release histories under
+`<INDEX>` is a directory containing schema-versioned JSONL release histories under
 `extensions/` and artifact bytes below the same controlled root. Installation
 verifies the artifact digest and records matching catalog and lock state.
 
@@ -1324,6 +1324,8 @@ Resolution works in this order:
 `PreferDirect` selects `NativeDirect` for a native built-in. `ProtocolOnly` selects `NativeMep`, which runs the same extension instance through a MEP session. Installed process and WebAssembly providers remain MEP-only under both policies.
 
 This ordering matters. An installed extension that lacks the requested capability or IR version cannot hide an eligible built-in.
+
+Installed records migrated from schemas that did not persist frontend or backend selector metadata remain available for exact-ID activation through the distribution API, but typed registry resolution does not guess their languages, targets, or IR versions. Reinstall the provider from a metadata-bearing index record before relying on automatic capability resolution.
 
 ## Compile flow
 
@@ -1770,7 +1772,7 @@ public release.
 
 ## Install for local testing
 
-The CLI installs an extension ID from a controlled schema-v2 index. It does not
+The CLI installs an extension ID from a controlled schema-versioned index. It does not
 install a raw WASM file, archive, URL, or directory.
 
 ```console

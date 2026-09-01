@@ -71,7 +71,7 @@ fn portable_workspace_release() -> serde_json::Value {
 
 fn frontend_release() -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "id": "morphir-gleam",
         "name": "Installed Gleam",
         "version": "1.0.0",
@@ -225,7 +225,7 @@ fn jsonl_history_parses_schema_versioned_records_and_hashes_exact_bytes() {
 
 #[test]
 fn release_records_reject_unsupported_schema_versions() {
-    for version in [0, 3] {
+    for version in [0, 4] {
         let mut record = portable_wasm_release();
         record["schemaVersion"] = serde_json::json!(version);
 
@@ -240,7 +240,7 @@ fn release_records_reject_unsupported_schema_versions() {
 
 #[test]
 fn jsonl_histories_report_unsupported_schema_versions() {
-    for version in [0, 3] {
+    for version in [0, 4] {
         let mut record = portable_wasm_release();
         record["schemaVersion"] = serde_json::json!(version);
 
@@ -585,6 +585,28 @@ fn schema_v1_process_history_remains_readable() {
 }
 
 #[test]
+fn schema_v2_frontend_capability_without_metadata_remains_readable() {
+    let mut record = frontend_release();
+    record["schemaVersion"] = serde_json::json!(2);
+    record.as_object_mut().unwrap().remove("frontend");
+
+    let history = ExtensionHistory::parse_jsonl(record.to_string().as_bytes()).unwrap();
+    let release = &history.releases()[0];
+
+    assert_eq!(release.schema_version(), 2);
+    assert!(release.capabilities().contains(&Capability::Frontend));
+    assert!(release.frontend().is_none());
+}
+
+#[test]
+fn schema_v2_rejects_frontend_metadata_without_a_schema_bump() {
+    let mut record = frontend_release();
+    record["schemaVersion"] = serde_json::json!(2);
+
+    assert!(parse_error(&record).contains("schema-v2 records cannot declare frontend metadata"));
+}
+
+#[test]
 fn schema_v2_backend_metadata_requires_exactly_the_backend_capability() {
     let mut missing = portable_wasm_release();
     missing.as_object_mut().unwrap().remove("backend");
@@ -673,7 +695,7 @@ fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
 }
 
 #[test]
-fn schema_v2_frontend_metadata_is_exposed_by_the_release_domain() {
+fn schema_v3_frontend_metadata_is_exposed_by_the_release_domain() {
     let history = ExtensionHistory::parse_jsonl(frontend_release().to_string().as_bytes()).unwrap();
     let frontend = history.releases()[0].frontend().unwrap();
 
@@ -685,7 +707,7 @@ fn schema_v2_frontend_metadata_is_exposed_by_the_release_domain() {
 }
 
 #[test]
-fn schema_v2_frontend_metadata_requires_exactly_the_frontend_capability() {
+fn schema_v3_frontend_metadata_requires_exactly_the_frontend_capability() {
     let mut missing = frontend_release();
     missing.as_object_mut().unwrap().remove("frontend");
     assert!(parse_error(&missing).contains("frontend metadata is required"));
@@ -764,7 +786,7 @@ fn frontend_ir_versions_must_be_non_empty_unique_trimmed_values() {
 }
 
 #[test]
-fn schema_v2_release_can_declare_frontend_and_backend_metadata() {
+fn schema_v3_release_can_declare_frontend_and_backend_metadata() {
     let mut record = frontend_release();
     record["capabilities"] = serde_json::json!(["frontend", "backend"]);
     record["frontend"]["compile"] = serde_json::json!(false);

@@ -59,7 +59,7 @@ The task does not publish a release or create an install index.
 ## 4. Install from a controlled index
 
 Morphir does not discover a local extension path from `morphir.toml`. The CLI
-resolves an extension ID from a controlled schema-v2 index, verifies its
+resolves an extension ID from a controlled schema-versioned index, verifies its
 digest, and writes matching catalog and lock state.
 
 ```console

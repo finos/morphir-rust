@@ -221,7 +221,7 @@ fn installed(spec: InstalledSpec<'_>) -> InstalledExtensionSnapshot {
     .flatten()
     .collect();
     let mut record = serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": if spec.frontend.is_some() { 3 } else { 2 },
         "id": spec.id,
         "name": format!("Installed {}", spec.id),
         "version": "2.0.0",

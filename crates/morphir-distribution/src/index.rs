@@ -33,7 +33,7 @@ impl ExtensionHistory {
                         source,
                     }
                 })?;
-            if !matches!(envelope.schema_version, 1 | 2) {
+            if !matches!(envelope.schema_version, 1..=3) {
                 return Err(DistributionError::UnsupportedSchema {
                     line: line_index + 1,
                     version: envelope.schema_version,

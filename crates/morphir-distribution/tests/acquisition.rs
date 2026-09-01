@@ -118,7 +118,7 @@ impl DistributionMother {
         fs::write(&source, b"#!/bin/sh\necho gleam\n").unwrap();
         let digest = Sha256Digest::of_bytes(&fs::read(&source).unwrap());
         let record = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "id": "morphir-gleam",
             "name": "Installed Gleam",
             "version": "1.0.0",
@@ -509,6 +509,26 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
             .frontend
             .is_none()
     );
+}
+
+#[test]
+fn schema_v2_frontend_without_metadata_installs_as_legacy_unpersisted() {
+    let mother = DistributionMother::a_local_process_artifact();
+    let history_path = mother.index.join("extensions/morphir-elm.jsonl");
+    let mut record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&history_path).unwrap().trim()).unwrap();
+    record["schemaVersion"] = serde_json::json!(2);
+    fs::write(&history_path, format!("{record}\n")).unwrap();
+
+    let installed = ExtensionInstaller::new(&mother.home)
+        .install(mother.selected())
+        .unwrap();
+
+    assert!(installed.frontend().is_none());
+    let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
+    let lock: serde_json::Value = serde_json::from_slice(&fs::read(lock_path).unwrap()).unwrap();
+    assert_eq!(lock["frontendMetadataScope"], "legacy-unpersisted");
+    assert!(lock.get("frontend").is_none());
 }
 
 #[test]

@@ -157,7 +157,7 @@ pub enum Capability {
     Workspace,
 }
 
-/// One source language accepted by a schema-v2 frontend extension.
+/// One source language accepted by a schema-v3 frontend extension.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendLanguageRecord {
@@ -208,7 +208,7 @@ impl FrontendLanguageRecord {
     }
 }
 
-/// Frontend-specific metadata carried by schema-v2 release records.
+/// Frontend-specific metadata carried by schema-v3 release records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendRecord {
@@ -552,7 +552,7 @@ impl ReleaseRecord {
         &self.capabilities
     }
 
-    /// Return frontend-specific metadata when declared by a schema-v2 record.
+    /// Return frontend-specific metadata when declared by a schema-v3 record.
     pub fn frontend(&self) -> Option<&FrontendRecord> {
         self.frontend.as_ref()
     }
@@ -619,7 +619,7 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
                     ));
                 }
             }
-            2 => {
+            2 | 3 => {
                 let declares_backend = wire.capabilities.contains(&Capability::Backend);
                 match (declares_backend, wire.backend.has_value()) {
                     (true, false) => {
@@ -634,19 +634,27 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
                     }
                     _ => {}
                 }
-                let declares_frontend = wire.capabilities.contains(&Capability::Frontend);
-                match (declares_frontend, wire.frontend.has_value()) {
-                    (true, false) => {
+                if wire.schema_version == 2 {
+                    if !wire.frontend.is_missing() {
                         return Err(serde::de::Error::custom(
-                            "frontend metadata is required when frontend capability is declared",
+                            "schema-v2 records cannot declare frontend metadata",
                         ));
                     }
-                    (false, _) if !wire.frontend.is_missing() => {
-                        return Err(serde::de::Error::custom(
-                            "frontend metadata requires the frontend capability",
-                        ));
+                } else {
+                    let declares_frontend = wire.capabilities.contains(&Capability::Frontend);
+                    match (declares_frontend, wire.frontend.has_value()) {
+                        (true, false) => {
+                            return Err(serde::de::Error::custom(
+                                "frontend metadata is required when frontend capability is declared",
+                            ));
+                        }
+                        (false, _) if !wire.frontend.is_missing() => {
+                            return Err(serde::de::Error::custom(
+                                "frontend metadata requires the frontend capability",
+                            ));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
             version => {

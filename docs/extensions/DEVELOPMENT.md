@@ -54,7 +54,7 @@ public release.
 
 ## Install for local testing
 
-The CLI installs an extension ID from a controlled schema-v2 index. It does not
+The CLI installs an extension ID from a controlled schema-versioned index. It does not
 install a raw WASM file, archive, URL, or directory.
 
 ```console

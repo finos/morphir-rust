@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `morphir-avro-extension` is re-released as `0.1.1`. The extension SDK now states the selected
+  target in a generation request, which changed the Avro crate and so the WASM it builds; the
+  already-published `extension/avro/v0.1.0` assets no longer match what this commit produces, and
+  re-releasing under the same version would have replaced them with different bytes.
 - **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase
   segment (`value-in-USD`) instead of a run of single letters wrapped in parentheses
   (`value-in-(usd)`), and the parenthesized form is no longer accepted. Existing v4 artifacts
@@ -24,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A portable `morphir-openapi` WASM backend that projects Morphir v3 and v4 specifications into
+  OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. One installed extension serves both
+  the `openapi` and `json-schema` targets. It renders schemas only, operations synthesized from
+  declared entry points, or operations from every public value specification, with per-operation
+  method, path, and parameter overrides and optional `Result` response splitting. It can be
+  released independently with versioned extension tags.
 - A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro
   JSON schemas, JSON protocols, or Avro IDL. The backend supports schema-only, entry-point protocol,
   and public protocol modes; represents constants as zero-argument messages with

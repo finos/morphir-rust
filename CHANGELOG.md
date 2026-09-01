@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded fail-closed loading, and atomic Morphir Home persistence shared by CLI and Desktop.
 - Workspace-provider extensions now advertise a typed Morphir workspace discovery capability;
   extension acquisition, negotiation, and daemon result validation enforce that contract.
+- Native workspace discovery now exposes a typed error and detailed entry point so hosts can
+  distinguish portable discovery failures from native host failures while the existing API keeps
+  its compatible error presentation.
 - A portable `morphir-avro` WASM backend that projects Morphir v3 and v4 specifications into Avro
   JSON schemas, JSON protocols, or Avro IDL. The backend supports schema-only, entry-point protocol,
   and public protocol modes; represents constants as zero-argument messages with

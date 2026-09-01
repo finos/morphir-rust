@@ -41,8 +41,8 @@ pub use sources::{
     EnvSelection, SourceSelection,
 };
 pub use workspace_discovery::{
-    NativeWorkspaceDiscovery, build_workspace_discovery_request, discover_workspace,
-    discover_workspace_detailed,
+    NativeWorkspaceDiscovery, NativeWorkspaceDiscoveryError, build_workspace_discovery_request,
+    discover_workspace, discover_workspace_detailed, discover_workspace_detailed_typed,
 };
 
 #[cfg(test)]

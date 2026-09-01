@@ -40,9 +40,22 @@ if [ -z "$LINE" ]; then
     exit 1
 fi
 
-# Insert the entry after the category header
-sed -i "$((LINE))a\\
-- $ENTRY" "$CHANGELOG"
+# Insert the entry after the category header.
+#
+# Written with awk rather than `sed -i`: BSD sed (macOS) reads the argument
+# after -i as the backup suffix, so `sed -i "5a\\..."` consumed the address
+# expression and left the file untouched while the task still reported
+# success. awk behaves the same on every platform this repository is
+# developed on.
+TEMP="$(mktemp "${TMPDIR:-/tmp}/morphir-changelog.XXXXXX")"
+trap 'rm -f "$TEMP"' EXIT
+if ! awk -v line="$LINE" -v entry="- $ENTRY" \
+    'NR == line { print; print entry; next } { print }' \
+    "$CHANGELOG" >"$TEMP"; then
+    echo "ERROR: could not rewrite $CHANGELOG"
+    exit 1
+fi
+cat "$TEMP" >"$CHANGELOG"
 
 echo "Added entry to $CATEGORY section:"
 echo "  - $ENTRY"

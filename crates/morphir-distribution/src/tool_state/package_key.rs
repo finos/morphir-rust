@@ -1,18 +1,7 @@
 //! Deterministic namespaces for isolated tool-package launch contracts.
 
-use crate::{ArchiveFormat, RelativeArtifactPath, Sha256Digest, ToolArtifactRecord};
+use crate::{ArchiveFormat, RelativeArtifactPath, Sha256Digest};
 use std::path::{Path, PathBuf};
-
-pub(super) fn extracted_package_path(
-    digest_directory: &Path,
-    artifact: &ToolArtifactRecord,
-) -> PathBuf {
-    package_path(
-        digest_directory,
-        artifact.archive().format(),
-        artifact.launch().path(),
-    )
-}
 
 pub(super) fn package_path(
     digest_directory: &Path,

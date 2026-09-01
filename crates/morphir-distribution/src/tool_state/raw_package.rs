@@ -1,33 +1,29 @@
 //! Isolated materialization for raw executable and AppImage packages.
 
 use super::package::{
-    ToolPackageFile, VerifiedToolPackage, home_relative, package_from_resolved, portable_filename,
-    verified_package_namespace, verify_relative_package,
+    ToolPackageCandidate, ToolPackageFile, VerifiedToolPackage, home_relative,
+    package_from_candidate, portable_filename, verified_package_namespace, verify_relative_package,
 };
-use super::package_key::extracted_package_path;
+use super::package_key::package_path;
 use super::verification::verify_one_file;
 use crate::store::add_owner_executable;
-use crate::{
-    ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
-    RelativeArtifactPath, ResolvedTrustedToolArtifact, Result,
-};
+use crate::{ArtifactFilename, ArtifactStore, DistributionError, RelativeArtifactPath, Result};
 use morphir_common::home::MorphirHome;
 use std::fs;
 use std::path::Path;
 
 pub(super) fn prepare(
     home: &MorphirHome,
-    resolved: ResolvedTrustedToolArtifact,
-    downloaded: DownloadedToolArtifact,
+    candidate: ToolPackageCandidate,
 ) -> Result<VerifiedToolPackage> {
-    let downloaded = downloaded.path();
+    let downloaded = &candidate.source;
     let source_root = downloaded
         .parent()
         .expect("downloaded TUF target has a parent");
     let source_name = portable_filename(downloaded)?;
     let filename = ArtifactFilename::parse(source_name)?;
     let source = RelativeArtifactPath::parse(source_name)?;
-    let entry_point = resolved.artifact().launch().path();
+    let entry_point = &candidate.entry_point;
     if entry_point.as_str() != source_name {
         return Err(DistributionError::ToolEntryPointMismatch {
             target: source_name.to_owned(),
@@ -37,14 +33,14 @@ pub(super) fn prepare(
     let stored = ArtifactStore::for_tools(home).materialize_file(
         source_root,
         &source,
-        resolved.digest(),
+        &candidate.digest,
         &filename,
         false,
     )?;
-    verify_one_file(stored.path(), resolved.digest(), resolved.length(), false)?;
+    verify_one_file(stored.path(), &candidate.digest, candidate.length, false)?;
 
-    let digest_directory = home.tools_store_dir().join(resolved.digest().to_string());
-    let requested_destination = extracted_package_path(&digest_directory, resolved.artifact());
+    let digest_directory = home.tools_store_dir().join(candidate.digest.to_string());
+    let requested_destination = package_path(&digest_directory, candidate.format, entry_point);
     let destination_name = requested_destination
         .file_name()
         .expect("tool package destination has a filename")
@@ -69,11 +65,11 @@ pub(super) fn prepare(
         source,
     })?;
     add_owner_executable(&staged_program)?;
-    verify_one_file(&staged_program, resolved.digest(), resolved.length(), true)?;
+    verify_one_file(&staged_program, &candidate.digest, candidate.length, true)?;
     let relative_files = vec![ToolPackageFile {
         path: entry_point.clone(),
-        digest: resolved.digest().clone(),
-        length: resolved.length(),
+        digest: candidate.digest.clone(),
+        length: candidate.length,
         executable: true,
     }];
     publish(&staging_root, &destination, &relative_files)?;
@@ -83,12 +79,12 @@ pub(super) fn prepare(
     let package_root = home_relative(home, &destination)?;
     let files = vec![ToolPackageFile {
         path: store_path.clone(),
-        digest: resolved.digest().clone(),
-        length: resolved.length(),
+        digest: candidate.digest.clone(),
+        length: candidate.length,
         executable: true,
     }];
-    Ok(package_from_resolved(
-        resolved,
+    Ok(package_from_candidate(
+        candidate,
         store_path,
         Some(package_root),
         files,

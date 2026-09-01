@@ -4,7 +4,8 @@ use super::catalog::{
     InstalledTool, TOOL_CATALOG_SCHEMA_VERSION, ToolCatalogFile, ToolLock, load_catalog_unlocked,
     read_tool_lock_unlocked, tool_lock_path, tool_state_guard, validate_active_pair,
 };
-use super::package::{ToolPackageStore, VerifiedToolPackage};
+use super::local_package::LocalDeveloperToolPackage;
+use super::package::{ToolPackageCandidate, ToolPackageStore, VerifiedToolPackage};
 use super::repair_journal::{
     begin_repair, commit_repair, quarantined_digest_path, rollback_repair,
 };
@@ -126,6 +127,98 @@ impl<'home> ToolRepairer<'home> {
             "installed tool bytes repaired"
         );
         Ok(active)
+    }
+
+    /// Repair an installed local-developer release from the explicitly supplied source package.
+    #[tracing::instrument(
+        name = "morphir.tool.repair_local",
+        skip(self, local),
+        fields(tool_id = %id),
+        err
+    )]
+    pub fn repair_local(
+        &self,
+        id: &ToolId,
+        local: LocalDeveloperToolPackage,
+    ) -> Result<InstalledTool> {
+        let _transaction = tool_state_guard(self.home)?;
+        let tools = load_catalog_unlocked(self.home)?;
+        let entry = tools
+            .get(id)
+            .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+        let active = entry.active.clone();
+        let lock = read_tool_lock_unlocked(self.home, id)?;
+        validate_active_pair(&active, &entry.rollback, &lock)?;
+        if active.provenance != crate::ToolProvenance::LocalDeveloper {
+            return Err(repair_mismatch(
+                &active,
+                "installed release is not a local developer package",
+            ));
+        }
+        let candidate = ToolPackageCandidate::local(local)?;
+        validate_local_repair_candidate(&active, &candidate)?;
+        let shared_files = shared_digest_files(self.home, &tools, &active);
+        let shared_directories = shared_digest_directories(self.home, &tools, &active);
+        let transaction = begin_repair(self.home, &active)?;
+        let digest_path = self.home.tools_store_dir().join(active.digest.to_string());
+        let previous_path = quarantined_digest_path(self.home, id, &active.digest);
+
+        let repair = ToolPackageStore::new(self.home)
+            .prepare_candidate(candidate)
+            .and_then(|package| {
+                validate_repair_package(&active, &package)?;
+                verify_package(self.home, &package)?;
+                sync_package(self.home, &package)?;
+                restore_shared_directories(&digest_path, &previous_path, &shared_directories)?;
+                restore_shared_files(self.home, &digest_path, &previous_path, &shared_files)?;
+                Ok(())
+            });
+        if let Err(original) = repair {
+            if let Err(rollback) = rollback_repair(self.home, &transaction) {
+                return Err(DistributionError::StateRollback {
+                    original: Box::new(original),
+                    rollback: Box::new(rollback),
+                });
+            }
+            return Err(original);
+        }
+        commit_repair(self.home, transaction)?;
+        tracing::info!(
+            tool_id = %active.tool_id,
+            version = %active.version,
+            digest = %active.digest,
+            "local developer tool bytes repaired"
+        );
+        Ok(active)
+    }
+}
+
+fn validate_local_repair_candidate(
+    active: &InstalledTool,
+    candidate: &ToolPackageCandidate,
+) -> Result<()> {
+    let mismatch = if candidate.tool_id != active.tool_id {
+        Some("tool identity differs")
+    } else if candidate.tool_name != active.tool_name {
+        Some("tool name differs")
+    } else if candidate.version != active.version {
+        Some("version differs")
+    } else if candidate.platform != active.platform {
+        Some("platform differs")
+    } else if candidate.digest != active.digest {
+        Some("artifact digest differs")
+    } else if candidate.length != active.length {
+        Some("artifact length differs")
+    } else if candidate.target_path != active.target_path {
+        Some("target path differs")
+    } else if candidate.args != active.args {
+        Some("launch arguments differ")
+    } else {
+        None
+    };
+    match mismatch {
+        Some(reason) => Err(repair_mismatch(active, reason)),
+        None => Ok(()),
     }
 }
 

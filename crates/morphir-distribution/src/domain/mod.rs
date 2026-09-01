@@ -19,6 +19,6 @@ pub use manifest::{
 };
 pub use schema_version::SchemaVersion;
 pub use tool::{
-    ArchiveFormat, ToolArchive, ToolArtifactRecord, ToolLaunch, ToolReleaseRecord,
+    ArchiveFormat, ToolArchive, ToolArtifactRecord, ToolLaunch, ToolProvenance, ToolReleaseRecord,
     ToolReleaseStatus,
 };

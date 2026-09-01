@@ -105,7 +105,7 @@ pub use domain::{
     BackendRecord, CURRENT_RELEASE_SCHEMA_VERSION, Capability, Channel, ChannelSegment,
     ExtensionId, FrontendLanguageRecord, FrontendRecord, MINIMUM_RELEASE_SCHEMA_VERSION, Platform,
     RelativeArtifactPath, ReleaseRecord, SchemaVersion, Selection, Sha256Digest, ToolArchive,
-    ToolArtifactRecord, ToolId, ToolLaunch, ToolReleaseRecord, ToolReleaseStatus,
+    ToolArtifactRecord, ToolId, ToolLaunch, ToolProvenance, ToolReleaseRecord, ToolReleaseStatus,
 };
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
@@ -130,7 +130,7 @@ pub use tool_repository::{
 };
 pub use tool_resolver::{ResolvedToolRelease, resolve_tool};
 pub use tool_state::{
-    InstalledTool, InstalledToolSnapshot, ToolInstaller, ToolLock, ToolPackageStore, ToolRepairer,
-    VerifiedToolPackage, VerifiedToolProcess, activate_installed_tool, list_installed_tools,
-    read_tool_lock, rollback_tool,
+    InstalledTool, InstalledToolSnapshot, LocalDeveloperToolPackage, ToolInstaller, ToolLock,
+    ToolPackageStore, ToolRepairer, VerifiedToolPackage, VerifiedToolProcess,
+    activate_installed_tool, list_installed_tools, read_tool_lock, rollback_tool, uninstall_tool,
 };

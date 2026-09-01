@@ -1,6 +1,6 @@
 //! Authenticated tool release descriptors and launch metadata.
 
-use crate::{Channel, Platform, RelativeArtifactPath, ToolId};
+use crate::{Channel, Platform, RelativeArtifactPath, Selection, ToolId};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
@@ -15,6 +15,42 @@ pub enum ToolReleaseStatus {
     Yanked,
     /// Rejected for new installation and activation.
     Revoked,
+}
+
+/// Trust boundary and requested selection that produced an installed tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ToolProvenance {
+    /// A stable, preview, insiders, or exact selection authenticated by TUF.
+    AuthenticatedRepository {
+        /// The channel or exact version requested by the user.
+        selection: Selection,
+        /// The TUF snapshot version that authenticated the release.
+        #[serde(rename = "snapshotVersion")]
+        snapshot_version: u64,
+    },
+    /// An explicitly selected unsigned package built on the local machine.
+    LocalDeveloper,
+}
+
+impl ToolProvenance {
+    /// Return the authenticated repository selection, if this package came from one.
+    pub fn repository_selection(&self) -> Option<&Selection> {
+        match self {
+            Self::AuthenticatedRepository { selection, .. } => Some(selection),
+            Self::LocalDeveloper => None,
+        }
+    }
+
+    /// Return the authenticating TUF snapshot version, if applicable.
+    pub fn snapshot_version(&self) -> Option<u64> {
+        match self {
+            Self::AuthenticatedRepository {
+                snapshot_version, ..
+            } => Some(*snapshot_version),
+            Self::LocalDeveloper => None,
+        }
+    }
 }
 
 /// Packaging format of a tool artifact.

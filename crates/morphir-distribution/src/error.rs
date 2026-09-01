@@ -231,6 +231,20 @@ pub enum DistributionError {
         /// Unsupported schema version.
         version: u32,
     },
+    /// Extension installation state uses an unsupported schema version.
+    #[error(
+        "unsupported {kind} schema version {version}; supported versions are {minimum} through {maximum}"
+    )]
+    UnsupportedExtensionStateSchema {
+        /// Kind of extension installation state.
+        kind: &'static str,
+        /// Unsupported schema version.
+        version: crate::SchemaVersion,
+        /// Oldest supported schema version.
+        minimum: crate::SchemaVersion,
+        /// Newest supported schema version.
+        maximum: crate::SchemaVersion,
+    },
     /// A repository configuration already uses the requested name.
     #[error("extension repository {name} is already configured")]
     RepositoryAlreadyExists {

@@ -40,11 +40,14 @@ struct SessionActor<T: MepTransport + Send + 'static> {
     session: Option<Session<T, Ready>>,
 }
 
-/// The one error reported once the session can no longer serve requests.
-fn gone(detail: impl std::fmt::Display) -> DaemonError {
-    DaemonError::Extension(format!(
-        "Extension session is no longer available: {detail}"
-    ))
+/// Report that the session is gone, wrapping the cause that ended it.
+///
+/// [`DaemonError::SessionLost`] is deliberately a different variant from the
+/// [`DaemonError::Extension`] an extension returns when it refuses one
+/// operation. A caller caching a handle needs to evict and respawn on the first
+/// but not the second, and matching on message text is not a contract.
+fn gone(cause: DaemonError) -> DaemonError {
+    DaemonError::SessionLost(Box::new(cause))
 }
 
 impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
@@ -53,7 +56,9 @@ impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
     async fn handle(&mut self, msg: Invoke, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let Some(session) = self.session.take() else {
             ctx.stop();
-            return Err(gone("the session was already released"));
+            return Err(gone(DaemonError::Extension(
+                "the session was already released".into(),
+            )));
         };
         match session
             .invoke::<serde_json::Value>(&msg.method, msg.params)
@@ -72,7 +77,7 @@ impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
                 // stop once this message is done. `self.session` stays `None`,
                 // which keeps any message that races the stop deterministic.
                 ctx.stop();
-                Err(DaemonError::Extension(failure.error().to_string()))
+                Err(gone(failure.into_error()))
             }
         }
     }
@@ -88,13 +93,15 @@ impl<T: MepTransport + Send + 'static> Message<Shutdown> for SessionActor<T> {
     ) -> Self::Reply {
         ctx.stop();
         let Some(session) = self.session.take() else {
-            return Err(gone("the session was already released"));
+            return Err(gone(DaemonError::Extension(
+                "the session was already released".into(),
+            )));
         };
         session
             .shutdown()
             .await
             .map(|_stopped| ())
-            .map_err(|failure| DaemonError::Extension(failure.error().to_string()))
+            .map_err(|failure| gone(failure.into_error()))
     }
 }
 
@@ -129,7 +136,7 @@ fn delivered<M, R>(result: Result<R, SendError<M, DaemonError>>) -> Result<R, Da
     match result {
         Ok(value) => Ok(value),
         Err(SendError::HandlerError(error)) => Err(error),
-        Err(undeliverable) => Err(gone(undeliverable)),
+        Err(undeliverable) => Err(gone(DaemonError::Extension(undeliverable.to_string()))),
     }
 }
 
@@ -184,8 +191,10 @@ pub fn spawn_session<T: MepTransport + Send + 'static>(
 mod tests {
     use super::*;
     use crate::DaemonError;
-    use crate::extensions::protocol::{ExtensionResponse, RpcError};
-    use crate::extensions::session::tests::{FakeTransport, backend_initialization, params};
+    use crate::extensions::protocol::{ExtensionResponse, RpcError, methods};
+    use crate::extensions::session::tests::{
+        FakeTransport, RequestLog, backend_initialization, params,
+    };
     use crate::extensions::session::{
         ExpectedExtension, Ready, Session, TransportError, TransportState,
     };
@@ -217,9 +226,12 @@ mod tests {
     /// Negotiation consumes response id 1, so the first replayed exchange must
     /// answer id 2. Response ids are validated against the session's own request
     /// counter, which makes the id sequence a proof that one session was reused.
+    ///
+    /// The returned [`RequestLog`] is shared with the transport, so it stays
+    /// readable after the session is handed to an actor that never gives it back.
     async fn ready_backend_session(
         exchanges: impl IntoIterator<Item = Exchange>,
-    ) -> Session<FakeTransport, Ready> {
+    ) -> (Session<FakeTransport, Ready>, RequestLog) {
         let mut responses: VecDeque<Exchange> = VecDeque::new();
         responses.push_back(Ok(ExtensionResponse::success(
             1,
@@ -227,20 +239,22 @@ mod tests {
         )
         .expect("a valid envelope")));
         responses.extend(exchanges);
+        let requests = RequestLog::default();
         let transport = FakeTransport {
             expected: ExpectedExtension::identified("example"),
             responses,
             termination: TransportState::Stopped,
+            requests: requests.clone(),
         };
         match Session::loaded(transport).initialize(params()).await {
-            Ok(session) => session,
+            Ok(session) => (session, requests),
             Err(failure) => panic!("negotiation should succeed: {}", failure.error()),
         }
     }
 
     async fn ready_session_answering(
         results: &[serde_json::Value],
-    ) -> Session<FakeTransport, Ready> {
+    ) -> (Session<FakeTransport, Ready>, RequestLog) {
         let exchanges: Vec<Exchange> = results
             .iter()
             .enumerate()
@@ -253,7 +267,7 @@ mod tests {
 
     async fn ready_session_rejecting_then_answering(
         result: serde_json::Value,
-    ) -> Session<FakeTransport, Ready> {
+    ) -> (Session<FakeTransport, Ready>, RequestLog) {
         ready_backend_session([
             Ok(ExtensionResponse::error(
                 2,
@@ -264,9 +278,13 @@ mod tests {
         .await
     }
 
-    async fn ready_session_failing_transport() -> Session<FakeTransport, Ready> {
+    /// A session whose next exchange fails at the transport with an `Io` cause.
+    ///
+    /// The cause is deliberately not an `Extension` error so that a test can
+    /// prove the original variant survives being reported to the caller.
+    async fn ready_session_failing_transport() -> (Session<FakeTransport, Ready>, RequestLog) {
         ready_backend_session([Err(TransportError::new(
-            DaemonError::Extension("the transport pipe broke".into()),
+            DaemonError::Io(std::io::Error::other("the transport pipe broke")),
             TransportState::Stopped,
         ))])
         .await
@@ -274,13 +292,12 @@ mod tests {
 
     #[tokio::test]
     async fn sequential_invocations_reuse_one_session() {
-        let handle = spawn_session(
-            ready_session_answering(&[
-                generate_result("first.avro"),
-                generate_result("second.avro"),
-            ])
-            .await,
-        );
+        let (session, requests) = ready_session_answering(&[
+            generate_result("first.avro"),
+            generate_result("second.avro"),
+        ])
+        .await;
+        let handle = spawn_session(session);
 
         let first: serde_json::Value = handle
             .invoke("morphir.backend.generate", serde_json::json!({}))
@@ -293,18 +310,45 @@ mod tests {
 
         assert_eq!(generated_paths(&first), ["first.avro"]);
         assert_eq!(generated_paths(&second), ["second.avro"]);
+        assert_eq!(
+            requests.methods(),
+            [methods::INITIALIZE, methods::GENERATE, methods::GENERATE]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invocation_forwards_the_callers_method_and_params() {
+        let (session, requests) = ready_session_answering(&[generate_result("out.avro")]).await;
+        let handle = spawn_session(session);
+
+        let _: serde_json::Value = handle
+            .invoke(
+                methods::GENERATE,
+                serde_json::json!({"target": "avro", "options": {"pretty": true}}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(requests.methods(), [methods::INITIALIZE, methods::GENERATE]);
+        assert_eq!(
+            requests.params(1),
+            serde_json::json!({"target": "avro", "options": {"pretty": true}})
+        );
     }
 
     #[tokio::test]
     async fn a_rejected_invocation_keeps_the_session_usable() {
-        let handle = spawn_session(
-            ready_session_rejecting_then_answering(generate_result("recovered.avro")).await,
-        );
+        let (session, _requests) =
+            ready_session_rejecting_then_answering(generate_result("recovered.avro")).await;
+        let handle = spawn_session(session);
 
         let rejected = handle
             .invoke::<serde_json::Value>("morphir.backend.generate", serde_json::json!({}))
             .await;
-        assert!(rejected.is_err(), "unexpected result: {rejected:?}");
+        assert!(
+            matches!(rejected, Err(DaemonError::Extension(ref message)) if message.contains("the extension refused this request")),
+            "unexpected result: {rejected:?}"
+        );
 
         let recovered: serde_json::Value = handle
             .invoke("morphir.backend.generate", serde_json::json!({}))
@@ -314,38 +358,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_caller_can_tell_a_rejection_from_a_dead_session() {
+        let (rejecting, _) =
+            ready_session_rejecting_then_answering(generate_result("unused.avro")).await;
+        let rejecting = spawn_session(rejecting);
+        let (failing, _) = ready_session_failing_transport().await;
+        let failing = spawn_session(failing);
+
+        let rejected = rejecting
+            .invoke::<serde_json::Value>(methods::GENERATE, serde_json::json!({}))
+            .await;
+        let lost = failing
+            .invoke::<serde_json::Value>(methods::GENERATE, serde_json::json!({}))
+            .await;
+
+        // A caller caching a handle evicts on one of these and retries on the
+        // other, so the two must be different variants, not different strings.
+        assert!(
+            matches!(rejected, Err(DaemonError::Extension(_))),
+            "a refused operation should not look like a lost session: {rejected:?}"
+        );
+        assert!(
+            matches!(lost, Err(DaemonError::SessionLost(_))),
+            "a dead session should be its own variant: {lost:?}"
+        );
+        // The cause keeps its original variant instead of being stringified.
+        assert!(
+            matches!(lost, Err(DaemonError::SessionLost(ref cause)) if matches!(**cause, DaemonError::Io(_))),
+            "the transport failure lost its variant: {lost:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_failed_invocation_stops_the_actor() {
-        let handle = spawn_session(ready_session_failing_transport().await);
+        let (session, _requests) = ready_session_failing_transport().await;
+        let handle = spawn_session(session);
 
         let failed = handle
             .invoke::<serde_json::Value>("morphir.backend.generate", serde_json::json!({}))
             .await;
-        assert!(failed.is_err(), "unexpected result: {failed:?}");
+        assert!(
+            matches!(failed, Err(DaemonError::SessionLost(_))),
+            "unexpected result: {failed:?}"
+        );
 
         let after = handle
             .invoke::<serde_json::Value>("morphir.backend.generate", serde_json::json!({}))
             .await;
         assert!(
-            matches!(after, Err(DaemonError::Extension(ref message)) if message.contains("session is no longer available")),
+            matches!(after, Err(DaemonError::SessionLost(_))),
             "unexpected result: {after:?}"
         );
         // An actor that merely dropped its session would still accept the
-        // message and answer with the released-session detail. Undeliverable
+        // message and answer with the released-session cause. Undeliverable
         // means the actor itself is gone.
         assert!(
-            matches!(after, Err(DaemonError::Extension(ref message)) if !message.contains("already released")),
+            !format!("{after:?}").contains("already released"),
             "the actor kept accepting messages: {after:?}"
         );
     }
 
     #[tokio::test]
-    async fn shutdown_stops_the_actor_and_later_calls_report_it() {
-        let handle = spawn_session(
+    async fn shutdown_completes_the_mep_handshake() {
+        let (session, requests) =
             ready_backend_session([Ok(
                 ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
             )])
-            .await,
+            .await;
+        let handle = spawn_session(session);
+
+        handle.shutdown().await.unwrap();
+
+        // Dropping the session instead of shutting it down would leave the
+        // extension running and this request unsent.
+        assert_eq!(requests.methods(), [methods::INITIALIZE, methods::SHUTDOWN]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_a_failed_handshake_as_a_lost_session() {
+        let (session, _requests) = ready_backend_session([Ok(ExtensionResponse::error(
+            2,
+            RpcError::extension_error("the extension could not stop cleanly"),
+        ))])
+        .await;
+        let handle = spawn_session(session);
+
+        let result = handle.shutdown().await;
+
+        assert!(
+            matches!(result, Err(DaemonError::SessionLost(_))),
+            "unexpected result: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_the_actor_and_later_calls_report_it() {
+        let (session, _requests) =
+            ready_backend_session([Ok(
+                ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
+            )])
+            .await;
+        let handle = spawn_session(session);
 
         handle.shutdown().await.unwrap();
 
@@ -353,11 +466,11 @@ mod tests {
             .invoke::<serde_json::Value>("morphir.backend.generate", serde_json::json!({}))
             .await;
         assert!(
-            matches!(after, Err(DaemonError::Extension(ref message)) if message.contains("session is no longer available")),
+            matches!(after, Err(DaemonError::SessionLost(_))),
             "unexpected result: {after:?}"
         );
         assert!(
-            matches!(after, Err(DaemonError::Extension(ref message)) if !message.contains("already released")),
+            !format!("{after:?}").contains("already released"),
             "the actor kept accepting messages: {after:?}"
         );
     }

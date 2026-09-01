@@ -28,6 +28,16 @@ pub enum DaemonError {
     #[error("Extension error: {0}")]
     Extension(String),
 
+    /// An extension session ended and can no longer serve operations.
+    ///
+    /// This is distinct from an extension rejecting one operation: the session
+    /// itself is gone, so retrying on the same handle can never succeed. A
+    /// caller holding a cached session handle should discard it and start a new
+    /// session. The boxed cause keeps the original failure's variant, so an
+    /// `Io` transport failure is still recognisably an `Io` failure.
+    #[error("Extension session is no longer available: {0}")]
+    SessionLost(#[source] Box<DaemonError>),
+
     /// IO errors
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

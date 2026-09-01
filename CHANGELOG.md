@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared entry points, or operations from every public value specification, with per-operation
   method, path, and parameter overrides and optional `Result` response splitting. It can be
   released independently with versioned extension tags.
+- Idempotent local extension repository initialization, verified release-bundle publication with
+  atomic metadata updates, and repository-qualified search across enabled endpoints.
 - Morphir Home-backed named extension repositories with locked lifecycle updates, local-directory
   metadata verification, offline inspection, deterministic resolution, and structured events.
 - A versioned, bounded trusted cache-ownership registry with pre-write ownership invalidation,

@@ -254,6 +254,22 @@ pub enum DistributionError {
         /// Identity declared by the history records.
         actual: crate::ExtensionId,
     },
+    /// A staged extension release bundle violated its format or path contract.
+    #[error("invalid extension release bundle at {path}: {reason}")]
+    InvalidReleaseBundle {
+        /// Bundle path or entry that failed validation.
+        path: PathBuf,
+        /// Concise validation failure.
+        reason: String,
+    },
+    /// A repository already contains a different release at the same SemVer precedence.
+    #[error("extension repository already contains a different {id} release at version {version}")]
+    RepositoryReleaseConflict {
+        /// Conflicting extension identity.
+        id: crate::ExtensionId,
+        /// Version requested for conflicting publication.
+        version: semver::Version,
+    },
     /// No installed catalog entry exists for the requested identity.
     #[error("extension {id} is not installed")]
     NotInstalled {

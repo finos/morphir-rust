@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A reusable extension session. `spawn_session` and `spawn_session_with_idle_timeout` return a
+  `SessionHandle` that owns one negotiated MEP session and serves many `invoke` calls from it
+  instead of starting a process per call. The session completes the MEP shutdown handshake when
+  it is shut down explicitly, when the last handle is dropped, or after an idle period. An
+  invocation in flight makes the session ineligible for the idle stop however long it runs, and
+  the next idle period starts when it is answered, so the idle setting may be shorter than the
+  slowest operation an extension performs. A session that has ended is reported as
+  `DaemonError::SessionLost`, which is distinct from an extension refusing one operation, so a
+  caller holding a cached handle can tell "evict and respawn" from "retry is pointless";
+  `FailedSession::into_error` recovers the underlying cause.
 - Verified installation, repair, rollback, and uninstall of explicitly unsigned local developer
   tool packages, with durable provenance and automatic migration of existing tool state.
 - A portable `morphir-openapi` WASM backend that projects Morphir v3 and v4 specifications into

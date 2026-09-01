@@ -16,10 +16,45 @@ use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 
-struct FakeTransport {
-    expected: ExpectedExtension,
-    responses: VecDeque<std::result::Result<ExtensionResponse, TransportError>>,
-    termination: TransportState,
+pub(super) struct FakeTransport {
+    pub(super) expected: ExpectedExtension,
+    pub(super) responses: VecDeque<std::result::Result<ExtensionResponse, TransportError>>,
+    pub(super) termination: TransportState,
+    pub(super) requests: RequestLog,
+}
+
+/// A record of the requests a [`FakeTransport`] received, shared with the test.
+///
+/// [`ScriptedTransport`] keeps its own `Vec` because its tests still hold the
+/// session and can borrow the transport back. Once a session is handed to an
+/// owner that does not give it back, the log has to be shared up front.
+#[derive(Clone, Default)]
+pub(super) struct RequestLog(std::sync::Arc<std::sync::Mutex<Vec<ExtensionRequest>>>);
+
+impl RequestLog {
+    fn record(&self, request: ExtensionRequest) {
+        self.0
+            .lock()
+            .expect("the log is never poisoned")
+            .push(request);
+    }
+
+    /// The methods received so far, in order.
+    pub(super) fn methods(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .expect("the log is never poisoned")
+            .iter()
+            .map(|request| request.method.clone())
+            .collect()
+    }
+
+    /// The params of the request at `index`.
+    pub(super) fn params(&self, index: usize) -> serde_json::Value {
+        self.0.lock().expect("the log is never poisoned")[index]
+            .params
+            .clone()
+    }
 }
 
 struct ScriptedTransport {
@@ -36,8 +71,9 @@ impl MepTransport for FakeTransport {
 
     async fn exchange(
         &mut self,
-        _: ExtensionRequest,
+        request: ExtensionRequest,
     ) -> std::result::Result<ExtensionResponse, TransportError> {
+        self.requests.record(request);
         self.responses
             .pop_front()
             .expect("a response should be arranged")
@@ -69,7 +105,7 @@ impl MepTransport for ScriptedTransport {
     }
 }
 
-fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
+pub(super) fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
     ExtensionInfo {
         id: "example".into(),
         name: "Example".into(),
@@ -79,7 +115,7 @@ fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
     }
 }
 
-fn initialization(info: ExtensionInfo) -> InitializeResult {
+pub(super) fn initialization(info: ExtensionInfo) -> InitializeResult {
     InitializeResult {
         protocol_version: "0.1".into(),
         extension: info,
@@ -96,7 +132,7 @@ fn frontend_initialization(compile: bool) -> InitializeResult {
     result
 }
 
-fn backend_initialization(generate: bool) -> InitializeResult {
+pub(super) fn backend_initialization(generate: bool) -> InitializeResult {
     let mut result = initialization(extension(vec![ExtensionType::Backend]));
     result.capabilities.backend = Some(BackendCapability {
         targets: vec!["avro".into()],
@@ -134,7 +170,7 @@ fn scripted_transport(responses: impl IntoIterator<Item = ExtensionResponse>) ->
     }
 }
 
-fn params() -> InitializeParams {
+pub(super) fn params() -> InitializeParams {
     InitializeParams {
         protocol_versions: vec!["0.1".into()],
         host: crate::extensions::protocol::PeerInfo {
@@ -159,6 +195,7 @@ fn transport(expected: ExpectedExtension, response: ExtensionResponse) -> FakeTr
         expected,
         responses: VecDeque::from([Ok(response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     }
 }
 
@@ -1220,6 +1257,7 @@ async fn retains_an_indeterminate_state_after_an_uncertain_exchange_failure() {
             TransportState::Indeterminate,
         ))]),
         termination: TransportState::Indeterminate,
+        requests: RequestLog::default(),
     };
     let failure = Session::loaded(transport)
         .initialize(params())
@@ -1288,6 +1326,7 @@ async fn rejects_exit_as_a_ready_request_without_sending() {
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(exit_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())
@@ -1325,6 +1364,7 @@ async fn rejects_compile_when_the_frontend_did_not_enable_it_without_sending() {
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())
@@ -1362,6 +1402,7 @@ async fn permits_compile_when_the_frontend_enabled_it() {
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())
@@ -1398,6 +1439,7 @@ async fn rejects_successful_compile_result_without_ir_version() {
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())
@@ -1435,6 +1477,7 @@ async fn rejects_successful_compile_result_without_ir_for_raw_callers() {
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())
@@ -1476,6 +1519,7 @@ async fn accepts_successful_compile_result_with_ir_version_and_ir() {
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())
@@ -1516,6 +1560,7 @@ async fn rejects_a_successful_compile_result_for_another_requested_ir_version() 
         expected: ExpectedExtension::identified("example"),
         responses: VecDeque::from([Ok(initialized), Ok(compile_response)]),
         termination: TransportState::Stopped,
+        requests: RequestLog::default(),
     };
     let session = Session::loaded(transport)
         .initialize(params())

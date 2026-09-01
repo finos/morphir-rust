@@ -345,6 +345,16 @@ impl<T> FailedSession<T> {
             Self::Stopped(_, error) | Self::Indeterminate(_, error) => error,
         }
     }
+
+    /// Consume the failed session and take ownership of its cause.
+    ///
+    /// [`Self::error`] can only lend the cause, which forces callers that need
+    /// to propagate it to stringify it and lose its variant.
+    pub fn into_error(self) -> DaemonError {
+        match self {
+            Self::Stopped(_, error) | Self::Indeterminate(_, error) => error,
+        }
+    }
 }
 
 enum CallOutcome<R> {

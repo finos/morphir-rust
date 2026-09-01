@@ -55,6 +55,60 @@ fn local_developer_package_records_unsigned_provenance_and_exact_integrity() {
 }
 
 #[test]
+fn version_one_tool_state_is_migrated_with_authenticated_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let installed = ToolInstaller::new(&home)
+        .install(package(&home, "1.0.0", b"desktop-v1"))
+        .unwrap();
+    let lock_path = super::catalog::tool_lock_path(&home, installed.tool_id());
+
+    downgrade_tool_state_to_version_one(&home.tools_catalog_file());
+    downgrade_tool_state_to_version_one(&lock_path);
+
+    let snapshot = list_installed_tools(&home).unwrap().remove(0);
+    assert_eq!(
+        snapshot.active().provenance(),
+        &crate::ToolProvenance::AuthenticatedRepository {
+            selection: Selection::Channel(Channel::Stable),
+            snapshot_version: 1,
+        }
+    );
+    for path in [home.tools_catalog_file(), lock_path] {
+        let state: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(state["schemaVersion"], 2);
+        assert!(state.to_string().contains("authenticated-repository"));
+    }
+}
+
+fn downgrade_tool_state_to_version_one(path: &std::path::Path) {
+    fn downgrade_installed(installed: &mut serde_json::Value) {
+        installed.as_object_mut().unwrap().remove("provenance");
+        installed["snapshotVersion"] = serde_json::json!(1);
+    }
+
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    state["schemaVersion"] = serde_json::json!(1);
+    if let Some(tools) = state
+        .get_mut("tools")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for entry in tools {
+            downgrade_installed(&mut entry["active"]);
+            for rollback in entry["rollback"].as_array_mut().unwrap() {
+                downgrade_installed(rollback);
+            }
+        }
+    } else {
+        downgrade_installed(&mut state);
+        for rollback in state["rollback"].as_array_mut().unwrap() {
+            downgrade_installed(rollback);
+        }
+    }
+    fs::write(path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+}
+
+#[test]
 fn unsafe_local_developer_archive_does_not_replace_the_active_release() {
     let root = tempfile::tempdir().unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();

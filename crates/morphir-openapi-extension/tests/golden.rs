@@ -116,6 +116,40 @@ fn local_references_resolve_inside_the_document() {
     }
 }
 
+fn generate_openapi(
+    ir: Value,
+    options: HashMap<String, Value>,
+) -> morphir_extension_sdk::GenerateResult {
+    OpenApiExtension
+        .generate(GenerateRequest {
+            ir,
+            target: "openapi".into(),
+            options,
+        })
+        .expect("generation is a successful MEP call")
+}
+
+#[test]
+fn renders_one_openapi_document_per_package() {
+    let result = generate_openapi(classic::classic_schema_library(), HashMap::new());
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.artifacts.len(), 1);
+    let artifact = &result.artifacts[0];
+    assert_eq!(artifact.path, "openapi.json");
+    assert!(artifact.content.ends_with('\n'));
+    assert!(!artifact.content.ends_with("\n\n"));
+
+    let document: Value = serde_json::from_str(&artifact.content).expect("valid JSON");
+    assert_eq!(document["openapi"], "3.1.0");
+    assert!(document["components"]["schemas"].is_object());
+    assert!(document["paths"].is_object());
+    assert_eq!(
+        artifact.content,
+        golden("customer.openapi-3.1.json", &artifact.content)
+    );
+}
+
 fn references(value: &Value) -> Vec<String> {
     match value {
         Value::Object(members) => members

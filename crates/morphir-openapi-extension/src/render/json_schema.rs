@@ -9,8 +9,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use morphir_extension_sdk::Artifact;
 use serde_json::{Map, Value, json};
 
+use crate::render::named_schema_body;
 use crate::schema::references;
-use crate::{NamedSchema, Schema, SchemaProjection, SchemaVariant};
+use crate::{NamedSchema, Schema, SchemaProjection};
 
 /// The only dialect this renderer speaks.
 const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -30,7 +31,7 @@ pub fn render_json_schema(projection: &SchemaProjection) -> Vec<Artifact> {
 
 /// Render one root as a complete, self-contained document.
 fn render_document(root: &NamedSchema, definitions: &BTreeMap<String, NamedSchema>) -> Artifact {
-    let mut document = named_schema_object(root, REF_PREFIX);
+    let mut document = named_schema_body(root, REF_PREFIX);
     document.insert("$schema".to_owned(), json!(DIALECT));
     document.insert(
         "$id".to_owned(),
@@ -45,7 +46,7 @@ fn render_document(root: &NamedSchema, definitions: &BTreeMap<String, NamedSchem
             let named = definitions
                 .get(&name)
                 .unwrap_or_else(|| panic!("dangling reference to '{name}' inside a document"));
-            defs.insert(name, Value::Object(named_schema_object(named, REF_PREFIX)));
+            defs.insert(name, Value::Object(named_schema_body(named, REF_PREFIX)));
         }
         document.insert("$defs".to_owned(), Value::Object(defs));
     }
@@ -59,146 +60,6 @@ fn render_document(root: &NamedSchema, definitions: &BTreeMap<String, NamedSchem
         ),
         binary: false,
     }
-}
-
-/// The JSON object body of one named schema: its own keywords, plus the
-/// `x-morphir-fqname` and optional `description` every named schema carries.
-fn named_schema_object(named: &NamedSchema, ref_prefix: &str) -> Map<String, Value> {
-    let mut object = schema_object(&named.schema, ref_prefix);
-    object.insert("x-morphir-fqname".to_owned(), json!(named.source_name));
-    if let Some(doc) = &named.doc {
-        object.insert("description".to_owned(), json!(doc));
-    }
-    object
-}
-
-/// The JSON Schema keywords for one [`Schema`], with every `$ref` written
-/// against `ref_prefix`.
-///
-/// This is the shared schema-body conversion: `ref_prefix` is the only place
-/// reference-base knowledge lives, so a second renderer (an OpenAPI renderer
-/// over `#/components/schemas/`) can reuse it unchanged.
-fn schema_object(schema: &Schema, ref_prefix: &str) -> Map<String, Value> {
-    let mut object = Map::new();
-    match schema {
-        Schema::Boolean => {
-            object.insert("type".to_owned(), json!("boolean"));
-        }
-        Schema::Integer { format } => {
-            object.insert("type".to_owned(), json!("integer"));
-            if let Some(format) = format {
-                object.insert("format".to_owned(), json!(format));
-            }
-        }
-        Schema::Number { format } => {
-            object.insert("type".to_owned(), json!("number"));
-            if let Some(format) = format {
-                object.insert("format".to_owned(), json!(format));
-            }
-        }
-        Schema::Text { max_length } => {
-            object.insert("type".to_owned(), json!("string"));
-            if let Some(max_length) = max_length {
-                object.insert("maxLength".to_owned(), json!(max_length));
-            }
-        }
-        Schema::Null => {
-            object.insert("type".to_owned(), json!("null"));
-        }
-        Schema::Array { items, unique } => {
-            object.insert("type".to_owned(), json!("array"));
-            object.insert(
-                "items".to_owned(),
-                Value::Object(schema_object(items, ref_prefix)),
-            );
-            if *unique {
-                object.insert("uniqueItems".to_owned(), json!(true));
-            }
-        }
-        Schema::Tuple(members) => {
-            let prefix_items: Vec<Value> = members
-                .iter()
-                .map(|member| Value::Object(schema_object(member, ref_prefix)))
-                .collect();
-            let count = prefix_items.len();
-            object.insert("type".to_owned(), json!("array"));
-            object.insert("prefixItems".to_owned(), Value::Array(prefix_items));
-            object.insert("items".to_owned(), json!(false));
-            object.insert("minItems".to_owned(), json!(count));
-            object.insert("maxItems".to_owned(), json!(count));
-        }
-        Schema::Map { values } => {
-            object.insert("type".to_owned(), json!("object"));
-            object.insert(
-                "additionalProperties".to_owned(),
-                Value::Object(schema_object(values, ref_prefix)),
-            );
-        }
-        Schema::Object { fields, required } => {
-            object.insert("type".to_owned(), json!("object"));
-            let mut properties = Map::new();
-            for field in fields {
-                let mut property = schema_object(&field.schema, ref_prefix);
-                if let Some(doc) = &field.doc {
-                    property.insert("description".to_owned(), json!(doc));
-                }
-                properties.insert(field.name.clone(), Value::Object(property));
-            }
-            object.insert("properties".to_owned(), Value::Object(properties));
-            if !required.is_empty() {
-                object.insert("required".to_owned(), json!(required));
-            }
-        }
-        Schema::Enumeration(values) => {
-            object.insert("type".to_owned(), json!("string"));
-            object.insert("enum".to_owned(), json!(values));
-        }
-        Schema::OneOf {
-            discriminator,
-            variants,
-        } => {
-            let variants = variants
-                .iter()
-                .map(|variant| Value::Object(variant_object(variant, discriminator, ref_prefix)))
-                .collect();
-            object.insert("oneOf".to_owned(), Value::Array(variants));
-        }
-        // Always `anyOf`, even when every member is a simple type: a member
-        // can be a `Schema::Reference`, and `anyOf` stays correct for that
-        // case, so there is no separate "all members are simple" special case.
-        Schema::Union(members) => {
-            let members = members
-                .iter()
-                .map(|member| Value::Object(schema_object(member, ref_prefix)))
-                .collect();
-            object.insert("anyOf".to_owned(), Value::Array(members));
-        }
-        Schema::Reference(name) => {
-            object.insert("$ref".to_owned(), json!(format!("{ref_prefix}{name}")));
-        }
-    }
-    object
-}
-
-/// One [`Schema::OneOf`] variant, with its discriminator property fixed to
-/// the constructor name by `const`.
-fn variant_object(
-    variant: &SchemaVariant,
-    discriminator: &str,
-    ref_prefix: &str,
-) -> Map<String, Value> {
-    let mut object = schema_object(&variant.schema, ref_prefix);
-    if let Some(Value::Object(properties)) = object.get_mut("properties") {
-        properties.insert(discriminator.to_owned(), json!({ "const": variant.name }));
-    }
-    let mut required: Vec<Value> = object
-        .get("required")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    required.push(json!(discriminator));
-    object.insert("required".to_owned(), Value::Array(required));
-    object
 }
 
 /// Every definition `root` reaches, directly or through another definition.

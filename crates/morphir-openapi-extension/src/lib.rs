@@ -15,7 +15,7 @@ pub use options::{
     HttpMethod, OpenApiVersion, OperationOverride, ParameterBinding, Projection, ResultResponses,
     SchemaOptions, Unsupported,
 };
-pub use render::render_json_schema;
+pub use render::{render_json_schema, render_openapi};
 pub use schema::{
     NamedSchema, Schema, SchemaField, SchemaProjection, SchemaVariant, project, schema_name,
 };
@@ -143,9 +143,7 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
     };
     let artifacts = match target {
         Target::JsonSchema => render_json_schema(&projection),
-        // The follow-up plan adds the OpenAPI renderer over this same
-        // projection. Returning no artifacts here is deliberate, not a gap.
-        Target::OpenApi => Vec::new(),
+        Target::OpenApi => render_openapi(&projection, &options),
     };
     Ok(GenerateResult {
         success: true,

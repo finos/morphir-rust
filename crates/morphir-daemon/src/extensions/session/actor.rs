@@ -35,9 +35,16 @@ struct Shutdown;
 /// by value. That `Option` is private to a single-threaded actor rather than
 /// shared state, so `None` means exactly one thing: the session is gone and the
 /// actor is on its way out.
+///
+/// `activity` implements the idle timeout: it is bumped on every handled
+/// [`Invoke`], and the watchdog task spawned alongside the actor (see
+/// [`spawn_session_with_idle_timeout`]) resets its sleep every time it
+/// observes a bump, stopping the actor only once a full idle period passes
+/// with no activity at all.
 #[derive(Actor)]
 struct SessionActor<T: MepTransport + Send + 'static> {
     session: Option<Session<T, Ready>>,
+    activity: tokio::sync::watch::Sender<()>,
 }
 
 /// Report that the session is gone, wrapping the cause that ended it.
@@ -54,6 +61,9 @@ impl<T: MepTransport + Send + 'static> Message<Invoke> for SessionActor<T> {
     type Reply = Result<serde_json::Value, DaemonError>;
 
     async fn handle(&mut self, msg: Invoke, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        // Bump the idle watchdog first: every handled message counts as
+        // activity, whether or not the session is still there to use.
+        let _ = self.activity.send(());
         let Some(session) = self.session.take() else {
             ctx.stop();
             return Err(gone(DaemonError::Extension(
@@ -175,12 +185,69 @@ impl SessionHandle {
 
 /// Spawn one actor owning the given ready session and return its handle.
 ///
+/// The session stops itself after 300 seconds with no invocations; see
+/// [`spawn_session_with_idle_timeout`] to choose a different duration.
+///
 /// Must be called from within a Tokio runtime; the actor runs on its own task.
 pub fn spawn_session<T: MepTransport + Send + 'static>(
     session: Session<T, Ready>,
 ) -> SessionHandle {
+    spawn_session_with_idle_timeout(session, std::time::Duration::from_secs(300))
+}
+
+/// Spawn one actor owning the given ready session, stopping it after `idle`
+/// passes with no invocations.
+///
+/// Every [`SessionHandle::invoke`] resets the idle timer, so a busy session is
+/// never stopped mid-use; only a session with no activity for a full `idle`
+/// period is stopped. Stopping completes the MEP shutdown handshake via
+/// [`Actor::on_stop`], the same as dropping the last handle would.
+///
+/// Must be called from within a Tokio runtime; the actor runs on its own task.
+pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
+    session: Session<T, Ready>,
+    idle: std::time::Duration,
+) -> SessionHandle {
+    let (activity, mut receiver) = tokio::sync::watch::channel(());
     let actor_ref = SessionActor::spawn(SessionActor {
         session: Some(session),
+        activity,
+    });
+    let watchdog_ref = actor_ref.clone();
+    // Anchored synchronously, before this function returns and certainly
+    // before any `.await` in it, so the deadline reflects actor-creation time
+    // even though the watchdog task below won't itself run until the runtime
+    // schedules it. `tokio::spawn` only enqueues the task; if the deadline
+    // were instead computed lazily on the watchdog's first poll, a test that
+    // advances a paused clock before the runtime takes a turn would compute
+    // the deadline against the *already advanced* clock, requiring a second
+    // full `idle` period to elapse before the timeout ever fired.
+    let first_deadline = tokio::time::Instant::now() + idle;
+    tokio::spawn(async move {
+        let sleep = tokio::time::sleep_until(first_deadline);
+        tokio::pin!(sleep);
+        loop {
+            tokio::select! {
+                _ = &mut sleep => {
+                    // No activity for a full `idle` period: stop gracefully
+                    // rather than `kill`, so any message already in flight is
+                    // answered before the actor goes away, and `on_stop` still
+                    // gets to complete the MEP shutdown handshake.
+                    let _ = watchdog_ref.stop_gracefully().await;
+                    return;
+                }
+                changed = receiver.changed() => {
+                    if changed.is_err() {
+                        // The actor dropped its sender, meaning it is already
+                        // gone; nothing left for this watchdog to do.
+                        return;
+                    }
+                    // Activity observed: re-arm the sleep instead of letting
+                    // it fire on schedule.
+                    sleep.as_mut().reset(tokio::time::Instant::now() + idle);
+                }
+            }
+        }
     });
     SessionHandle {
         dispatch: std::sync::Arc::new(actor_ref),
@@ -449,6 +516,56 @@ mod tests {
             matches!(result, Err(DaemonError::SessionLost(_))),
             "unexpected result: {result:?}"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_session_stops_itself() {
+        let (session, _requests) = ready_session_answering(&[generate_result("out.avro")]).await;
+        let handle = spawn_session_with_idle_timeout(session, std::time::Duration::from_secs(60));
+
+        tokio::time::advance(std::time::Duration::from_secs(61)).await;
+        tokio::task::yield_now().await;
+
+        let after = handle
+            .invoke::<serde_json::Value>("morphir.backend.generate", serde_json::json!({}))
+            .await;
+        assert!(after.is_err(), "an idle session should have stopped");
+        assert!(
+            matches!(after, Err(DaemonError::SessionLost(_))),
+            "an idle stop should surface the same way as any other dead session: {after:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn activity_resets_the_idle_timer() {
+        let (session, _requests) = ready_session_answering(&[
+            generate_result("first.avro"),
+            generate_result("second.avro"),
+        ])
+        .await;
+        let idle = std::time::Duration::from_secs(10);
+        let handle = spawn_session_with_idle_timeout(session, idle);
+
+        // Advance less than the idle duration, then invoke: this should reset
+        // the timer rather than letting the elapsed time accumulate toward it.
+        tokio::time::advance(std::time::Duration::from_secs(7)).await;
+        tokio::task::yield_now().await;
+        let first: serde_json::Value = handle
+            .invoke("morphir.backend.generate", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(generated_paths(&first), ["first.avro"]);
+
+        // Advance less than the idle duration again. Without a reset, the two
+        // advances together (7s + 7s = 14s) would exceed the 10s idle window
+        // and this session would already be dead.
+        tokio::time::advance(std::time::Duration::from_secs(7)).await;
+        tokio::task::yield_now().await;
+        let second: serde_json::Value = handle
+            .invoke("morphir.backend.generate", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(generated_paths(&second), ["second.avro"]);
     }
 
     #[tokio::test]

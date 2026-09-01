@@ -11,7 +11,7 @@ mod native;
 mod transport;
 mod validation;
 
-pub use actor::{SessionHandle, spawn_session};
+pub use actor::{SessionHandle, spawn_session, spawn_session_with_idle_timeout};
 pub use compatibility::{ExtensionSession, ExtensionSessionState};
 pub use controller::{
     FailedSession, Indeterminate, InvokeOutcome, Loaded, NegotiatedSession, Ready, Session, Stopped,

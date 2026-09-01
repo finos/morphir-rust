@@ -76,4 +76,5 @@ morphir-workspace = { path = "../morphir-workspace" }
 
 [dev-dependencies]
 wat = "1"
+tokio = { version = "1", features = ["test-util"] }
 morphir-projection = { path = "../morphir-projection", features = ["testing"] }

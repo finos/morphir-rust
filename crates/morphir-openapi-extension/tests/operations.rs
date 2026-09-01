@@ -154,6 +154,195 @@ fn a_constant_entry_point_takes_no_request_body() {
     assert!(constant["post"]["requestBody"].is_null());
 }
 
+// --- `operations-public`, `Result` splitting, and per-operation overrides.
+//
+// `v4_customer_application()` declares `find-customer` (targeted by the
+// `customer-query` entry point) and, since this plan step, `validate-customer`
+// — a public value the plan brief's own fixture description did not have
+// reason to mention because it predates this task; both return in module
+// `domain`, so their canonical FQNames are `acme/customer:domain#find-customer`
+// and `acme/customer:domain#validate-customer`. `validate-customer` returns
+// `morphir/SDK:result#result` applied to `String` (the error) and `Customer`
+// (the value) — the one value in every v4 fixture whose output is
+// `Result`-shaped, added to `morphir-projection`'s testing module rather than
+// asserted through a hand-built `ProjectionPackage`, so `ResultResponses`
+// splitting is exercised through the same normalize -> project -> render
+// pipeline every other test in this file uses.
+
+#[test]
+fn public_mode_covers_values_that_are_not_entry_points() {
+    let entry_points = document(
+        v4::v4_customer_application(),
+        map([
+            ("projection", json!("operations-entry-points")),
+            ("unsupported", json!("warn-and-skip")),
+        ]),
+    );
+    let public = document(
+        v4::v4_customer_application(),
+        map([
+            ("projection", json!("operations-public")),
+            ("unsupported", json!("warn-and-skip")),
+        ]),
+    );
+
+    let entry_point_count = entry_points["paths"].as_object().unwrap().len();
+    let public_count = public["paths"].as_object().unwrap().len();
+    assert!(
+        public_count > entry_point_count,
+        "public mode covers more values: {public_count} vs {entry_point_count}"
+    );
+}
+
+#[test]
+fn a_result_stays_data_in_the_200_response_by_default() {
+    let document = document(
+        v4::v4_customer_application(),
+        map([
+            ("projection", json!("operations-public")),
+            ("unsupported", json!("warn-and-skip")),
+        ]),
+    );
+
+    for item in document["paths"].as_object().unwrap().values() {
+        for operation in item.as_object().unwrap().values() {
+            let responses = operation["responses"].as_object().unwrap();
+            assert_eq!(
+                responses.keys().collect::<Vec<_>>(),
+                vec!["200"],
+                "the default emits only a 200 response: {operation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn split_mode_moves_the_error_branch_to_the_configured_status() {
+    let document = document(
+        v4::v4_customer_application(),
+        map([
+            ("projection", json!("operations-public")),
+            ("unsupported", json!("warn-and-skip")),
+            ("result_responses", json!("split")),
+            ("error_status", json!(422)),
+        ]),
+    );
+
+    let validate_customer = &document["paths"]["/domain/validateCustomer"]["post"];
+    assert!(
+        validate_customer.is_object(),
+        "'validate-customer' keeps its default path: {document}"
+    );
+    assert_eq!(
+        validate_customer["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/Customer",
+        "the 200 response is the Ok member's own schema, not the whole Result: {validate_customer}"
+    );
+    let error_response = &validate_customer["responses"]["422"];
+    assert!(
+        error_response.is_object(),
+        "a Result-returning value gains a 422 response: {validate_customer}"
+    );
+    assert_eq!(
+        error_response["content"]["application/json"]["schema"]["type"], "string",
+        "the 422 response is the Err member's own schema: {error_response}"
+    );
+
+    let has_error_response = document["paths"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|item| item.as_object().unwrap().values())
+        .any(|operation| operation["responses"]["422"].is_object());
+    assert!(
+        has_error_response,
+        "a Result-returning value gains a 422 response"
+    );
+}
+
+#[test]
+fn an_override_replaces_the_method_and_the_path() {
+    let document = document(
+        v4::v4_customer_application(),
+        map([
+            ("projection", json!("operations-public")),
+            ("unsupported", json!("warn-and-skip")),
+            (
+                "operations",
+                json!({
+                    "acme/customer:domain#find-customer": {
+                        "method": "get",
+                        "path": "/customers/{id}",
+                        "parameters": {"id": "path"}
+                    }
+                }),
+            ),
+        ]),
+    );
+
+    let item = &document["paths"]["/customers/{id}"];
+    assert!(
+        item["get"].is_object(),
+        "the override selects GET: {document}"
+    );
+    assert!(
+        item["get"]["requestBody"].is_null(),
+        "a path parameter is not a body"
+    );
+    assert_eq!(item["get"]["x-morphir-value-kind"], "function");
+    let parameter = &item["get"]["parameters"][0];
+    assert_eq!(parameter["name"], "id");
+    assert_eq!(parameter["in"], "path");
+    assert_eq!(parameter["required"], true);
+}
+
+#[test]
+fn a_path_bound_parameter_without_a_placeholder_in_the_override_path_is_an_error() {
+    let result = OpenApiExtension
+        .generate(GenerateRequest {
+            ir: v4::v4_customer_application(),
+            target: "openapi".into(),
+            options: map([
+                ("projection", json!("operations-public")),
+                ("unsupported", json!("warn-and-skip")),
+                (
+                    "operations",
+                    json!({
+                        "acme/customer:domain#find-customer": {
+                            "path": "/customers",
+                            "parameters": {"id": "path"}
+                        }
+                    }),
+                ),
+            ]),
+        })
+        .expect("generation is a successful MEP call");
+
+    assert!(!result.success);
+    assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
+}
+
+#[test]
+fn an_override_naming_an_unknown_value_is_an_error() {
+    let result = OpenApiExtension
+        .generate(GenerateRequest {
+            ir: v4::v4_customer_application(),
+            target: "openapi".into(),
+            options: map([
+                ("projection", json!("operations-public")),
+                ("unsupported", json!("warn-and-skip")),
+                (
+                    "operations",
+                    json!({"acme/customer:domain#no-such-value": {"method": "get"}}),
+                ),
+            ]),
+        })
+        .expect("generation is a successful MEP call");
+
+    assert!(!result.success);
+    assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
+}
+
 // --- Unsupported-form handling for operations, exercised directly on hand-built
 // `ProjectionPackage`s the way `tests/projection.rs` builds unsupported *type*
 // declarations. Neither v4 nor Classic fixture declares a value specification

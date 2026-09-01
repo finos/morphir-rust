@@ -17,6 +17,7 @@ const SDK_MAYBE: &str = "morphir/SDK:maybe#maybe";
 const SDK_LIST: &str = "morphir/SDK:list#list";
 const SDK_SET: &str = "morphir/SDK:set#set";
 const SDK_DICT: &str = "morphir/SDK:dict#dict";
+const SDK_RESULT: &str = "morphir/SDK:result#result";
 
 /// The property name that tells one custom-type variant from another.
 pub(super) const DISCRIMINATOR: &str = "kind";
@@ -197,6 +198,13 @@ fn project_reference(
                 values: Box::new(argument(1, referenced)?),
             })
         }
+        (SDK_RESULT, 2) => project_result(
+            context,
+            owner_source,
+            &arguments[0],
+            &arguments[1],
+            referenced,
+        ),
         _ if context.declared.contains_key(source_name) => {
             referenced.insert(source_name.to_owned());
             Ok(Schema::Reference(schema_name(source_name)))
@@ -206,6 +214,58 @@ fn project_reference(
             format!("no schema projection for '{source_name}'"),
         )),
     }
+}
+
+/// Project the SDK's `Result error value` as the whole discriminated choice
+/// between its `Err` and `Ok` members.
+///
+/// Mirrors `morphir-avro-extension`'s `project_result`: each member is
+/// wrapped in a single-field object (`error` for `Err`, `value` for `Ok`)
+/// rather than being the argument's own schema, so a scalar or reference
+/// member still has a home for the `kind` discriminator property. Operation
+/// projection reaches for this only when `ResultResponses::Data` keeps the
+/// whole shape in one response; `ResultResponses::Split` instead projects
+/// `error` and `value` on their own, without ever building this choice.
+fn project_result(
+    context: &Context<'_>,
+    owner_source: &str,
+    error: &TypeExpr,
+    value: &TypeExpr,
+    referenced: &mut BTreeSet<String>,
+) -> Result<Schema, SchemaDiagnostic> {
+    let error_field = NamedType {
+        name: "error".to_owned(),
+        tpe: error.clone(),
+    };
+    let value_field = NamedType {
+        name: "value".to_owned(),
+        tpe: value.clone(),
+    };
+    Ok(Schema::OneOf {
+        discriminator: DISCRIMINATOR.to_owned(),
+        variants: vec![
+            SchemaVariant {
+                name: variant_name("err"),
+                schema: project_object(
+                    context,
+                    owner_source,
+                    std::slice::from_ref(&error_field),
+                    referenced,
+                )?,
+                source_name: "morphir/SDK:result#err".to_owned(),
+            },
+            SchemaVariant {
+                name: variant_name("ok"),
+                schema: project_object(
+                    context,
+                    owner_source,
+                    std::slice::from_ref(&value_field),
+                    referenced,
+                )?,
+                source_name: "morphir/SDK:result#ok".to_owned(),
+            },
+        ],
+    })
 }
 
 /// Only a `String` key maps onto an object with named properties.

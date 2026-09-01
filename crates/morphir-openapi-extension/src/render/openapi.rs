@@ -9,7 +9,10 @@ use morphir_extension_sdk::Artifact;
 use serde_json::{Map, Value, json};
 
 use crate::render::{named_schema_body, schema_body};
-use crate::{HttpMethod, Operation, Schema, SchemaOptions, SchemaProjection, operation_id};
+use crate::{
+    HttpMethod, Operation, ParameterBinding, Schema, SchemaField, SchemaOptions, SchemaProjection,
+    operation_id,
+};
 use morphir_projection::EntryPointKind;
 
 /// The OpenAPI version string this renderer emits in `schemas` mode.
@@ -93,10 +96,12 @@ fn render_document(projection: &SchemaProjection, _options: &SchemaOptions) -> A
 
 /// Render one [`Operation`] as an OpenAPI Operation Object.
 ///
-/// `x-morphir-value-kind` is read off whether `request` is empty rather than
-/// stored on `Operation` separately: a [`morphir_projection::ValueKind::Constant`]
-/// is exactly the case with no inputs and so no request body, which is the
-/// same condition either way.
+/// `x-morphir-value-kind` is read off whether `request` and `parameters` are
+/// both empty rather than stored on `Operation` separately: a
+/// [`morphir_projection::ValueKind::Constant`] is exactly the case with no
+/// inputs at all, and an override that moves every input into `parameters`
+/// still leaves it a function, so `request` alone is not enough once
+/// overrides can empty it without the value itself being a constant.
 fn render_operation(operation: &Operation, reference_base: &str) -> Value {
     let mut object = Map::new();
     object.insert(
@@ -104,7 +109,7 @@ fn render_operation(operation: &Operation, reference_base: &str) -> Value {
         json!(operation_id(&operation.source_name)),
     );
     object.insert("x-morphir-fqname".to_owned(), json!(operation.source_name));
-    let value_kind = if operation.request.is_empty() {
+    let value_kind = if operation.request.is_empty() && operation.parameters.is_empty() {
         "constant"
     } else {
         "function"
@@ -112,6 +117,15 @@ fn render_operation(operation: &Operation, reference_base: &str) -> Value {
     object.insert("x-morphir-value-kind".to_owned(), json!(value_kind));
     if let Some(doc) = &operation.doc {
         object.insert("description".to_owned(), json!(doc));
+    }
+
+    if !operation.parameters.is_empty() {
+        let parameters = operation
+            .parameters
+            .iter()
+            .map(|(binding, field)| render_parameter(*binding, field, reference_base))
+            .collect();
+        object.insert("parameters".to_owned(), Value::Array(parameters));
     }
 
     if !operation.request.is_empty() {
@@ -148,6 +162,16 @@ fn render_operation(operation: &Operation, reference_base: &str) -> Value {
     response_200.insert("content".to_owned(), Value::Object(response_content));
     let mut responses = Map::new();
     responses.insert("200".to_owned(), Value::Object(response_200));
+    if let Some((status, schema)) = &operation.error_response {
+        let mut error_media = Map::new();
+        error_media.insert("schema".to_owned(), schema_body(schema, reference_base));
+        let mut error_content = Map::new();
+        error_content.insert("application/json".to_owned(), Value::Object(error_media));
+        let mut error_response = Map::new();
+        error_response.insert("description".to_owned(), json!("Error result"));
+        error_response.insert("content".to_owned(), Value::Object(error_content));
+        responses.insert(status.to_string(), Value::Object(error_response));
+    }
     object.insert("responses".to_owned(), Value::Object(responses));
 
     if let Some(entry_point) = &operation.entry_point {
@@ -182,6 +206,44 @@ fn entry_point_kind_key(kind: EntryPointKind) -> &'static str {
         EntryPointKind::Main => "main",
         EntryPointKind::Command => "command",
         EntryPointKind::Handler => "handler",
+    }
+}
+
+/// Render one [`Operation::parameters`] entry as an OpenAPI Parameter
+/// Object.
+///
+/// Every Morphir input is required, so `required` is always `true`: an
+/// override binds a field that already had to be present in the request
+/// body to a parameter location instead, and moving where a value is
+/// carried never makes it optional.
+fn render_parameter(binding: ParameterBinding, field: &SchemaField, reference_base: &str) -> Value {
+    let mut object = Map::new();
+    object.insert("name".to_owned(), json!(field.name));
+    object.insert("in".to_owned(), json!(parameter_location(binding)));
+    object.insert("required".to_owned(), json!(true));
+    object.insert(
+        "schema".to_owned(),
+        schema_body(&field.schema, reference_base),
+    );
+    if let Some(doc) = &field.doc {
+        object.insert("description".to_owned(), json!(doc));
+    }
+    Value::Object(object)
+}
+
+/// The OpenAPI `in` value for a [`ParameterBinding`].
+///
+/// [`ParameterBinding::Body`] never reaches this: a `Body`-bound override
+/// parameter is left in the request-body fields, so it never becomes a
+/// [`Operation::parameters`] entry in the first place.
+fn parameter_location(binding: ParameterBinding) -> &'static str {
+    match binding {
+        ParameterBinding::Path => "path",
+        ParameterBinding::Query => "query",
+        ParameterBinding::Header => "header",
+        ParameterBinding::Body => unreachable!(
+            "a Body-bound parameter stays in the request body and never becomes an Operation::parameters entry"
+        ),
     }
 }
 

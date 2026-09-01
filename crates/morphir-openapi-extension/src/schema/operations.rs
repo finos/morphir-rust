@@ -4,15 +4,19 @@
 //! [`SchemaOptions::projection`] selects into [`Operation`]s: `Schemas`
 //! selects none, `OperationsEntryPoints` selects only declared entry
 //! points, and `OperationsPublic` selects every public value specification.
-//! Every selection uses the default mapping — `POST`, path
+//! Every selection starts from the default mapping — `POST`, path
 //! `/{module}/{value}`, arguments as a request-body object, the output type
-//! as the `200` response — because per-operation overrides are a later plan
-//! step.
+//! as the `200` response — and then applies `options.operations`, keyed by
+//! canonical Morphir FQName, to move the method, the path, and individual
+//! parameters. `options.result_responses` additionally decides whether a
+//! `Result`-shaped output stays as one `200` body or splits its `Ok` member
+//! into `200` and its `Err` member into `options.error_status`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use morphir_projection::{
-    EntryPointMetadata, ProjectionModule, ProjectionPackage, ValueKind, ValueSpecification,
+    EntryPointMetadata, ProjectionModule, ProjectionPackage, TypeExpr, ValueKind,
+    ValueSpecification,
 };
 
 use super::names::{field_name, operation_id};
@@ -21,8 +25,13 @@ use super::{
     NamedSchema, Schema, SchemaField, SchemaProjection, close_definitions, declared_types,
     references,
 };
-use crate::options::Projection;
-use crate::{HttpMethod, SchemaDiagnostic, SchemaOptions, Unsupported};
+use crate::options::{OperationOverride, Projection, ResultResponses};
+use crate::{HttpMethod, ParameterBinding, SchemaDiagnostic, SchemaOptions, Unsupported};
+
+/// Canonical FQName of the SDK's `Result` type. `Result` is identified by
+/// this exact source name, never by shape, so a package-local type that
+/// happens to look like an error/value choice is never mistaken for it.
+const SDK_RESULT: &str = "morphir/SDK:result#result";
 
 /// One HTTP operation synthesized from a Morphir value specification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,11 +43,24 @@ pub struct Operation {
     /// Request path template.
     pub path: String,
     /// Request-body fields; empty for a [`ValueKind::Constant`], which has
-    /// no inputs and so no request body.
+    /// no inputs and so no request body, and also once every input has been
+    /// moved into `parameters` by an override.
     pub request: Vec<SchemaField>,
+    /// Fields an override moved out of the request body, paired with where
+    /// each is bound. Rendered as OpenAPI Parameter Objects rather than
+    /// request-body properties.
+    pub parameters: Vec<(ParameterBinding, SchemaField)>,
     /// The projected `200` response schema; [`Schema::Null`] when the value
-    /// specification carries no output type.
+    /// specification carries no output type. Under
+    /// [`crate::ResultResponses::Split`] applied to a `Result`-shaped
+    /// output, this is the `Ok` member's schema rather than the whole
+    /// `Result`.
     pub response: Schema,
+    /// The paired status code and `Err` member schema
+    /// [`crate::ResultResponses::Split`] adds alongside `response`. `None`
+    /// under [`crate::ResultResponses::Data`], and `None` whenever the
+    /// output is not `Result`-shaped regardless of `result_responses`.
+    pub error_response: Option<(u16, Schema)>,
     /// Declared entry-point metadata, present only when this operation
     /// projects a declared application entry point.
     pub entry_point: Option<EntryPointMetadata>,
@@ -76,6 +98,14 @@ pub struct Operation {
 /// naming both Morphir FQNames — a Morphir-source ambiguity, so it is
 /// always an error regardless of `options.unsupported`. `render_openapi`
 /// cannot fail, so this check happens here, before any document is built.
+///
+/// An `options.operations` key that names no value specification the
+/// package declares is `SchemaDiagnostic::unknown_operation` (`OAS002`),
+/// checked up front against every declared value — not only the ones this
+/// projection mode selects — and, like `OAS001`, always an error regardless
+/// of `options.unsupported`: a misconfigured override is not a Morphir form
+/// this backend cannot project, so skipping it silently would hide the
+/// mistake rather than the intended behavior.
 pub fn project_operations(
     package: &ProjectionPackage,
     projection: &mut SchemaProjection,
@@ -96,6 +126,28 @@ pub fn project_operations(
     let mut discovered: BTreeSet<String> = BTreeSet::new();
     let mut warnings: Vec<(SchemaDiagnostic, bool)> = Vec::new();
 
+    // Every value specification the package declares, whether or not this
+    // projection mode selects it as an operation: `options.operations`'
+    // keys are checked against this set, not against the narrower set that
+    // actually became an `Operation`, because "no value specification" is
+    // what `SchemaDiagnostic::unknown_operation` (`OAS002`) promises.
+    let declared_values: BTreeSet<&str> = package
+        .modules
+        .iter()
+        .flat_map(|module| &module.values)
+        .map(|value| value.source_name.as_str())
+        .collect();
+    if let Some(unknown) = options
+        .operations
+        .keys()
+        .find(|source_name| !declared_values.contains(source_name.as_str()))
+    {
+        return Err(SchemaDiagnostic::unknown_operation(
+            unknown,
+            format!("'{unknown}' is not a value specification this package declares"),
+        ));
+    }
+
     for module in &package.modules {
         for value in &module.values {
             if !selected(options.projection, value) {
@@ -108,16 +160,20 @@ pub fn project_operations(
             // projected successfully. A type reached only by a skipped
             // operation must not be pulled into `components/schemas`.
             let mut referenced = BTreeSet::new();
-            let operation = match project_operation(&context, module, value, &mut referenced) {
-                Ok(operation) => operation,
-                Err(diagnostic) => {
-                    if options.unsupported == Unsupported::Error {
-                        return Err(diagnostic);
+            let mut operation =
+                match project_operation(&context, module, value, options, &mut referenced) {
+                    Ok(operation) => operation,
+                    Err(diagnostic) => {
+                        if options.unsupported == Unsupported::Error {
+                            return Err(diagnostic);
+                        }
+                        warnings.push((diagnostic, true));
+                        continue;
                     }
-                    warnings.push((diagnostic, true));
-                    continue;
-                }
-            };
+                };
+            if let Some(override_) = options.operations.get(&operation.source_name) {
+                apply_override(&mut operation, override_)?;
+            }
             discovered.extend(referenced);
 
             let path_key = format!("{:?} {}", operation.method, operation.path);
@@ -165,11 +221,13 @@ fn selected(projection: Projection, value: &ValueSpecification) -> bool {
 }
 
 /// Project one value specification into an [`Operation`] under the default
-/// mapping.
+/// mapping. The caller applies `options.operations`' override, if any, once
+/// this returns.
 fn project_operation(
     context: &Context<'_>,
     module: &ProjectionModule,
     value: &ValueSpecification,
+    options: &SchemaOptions,
     discovered: &mut BTreeSet<String>,
 ) -> Result<Operation, SchemaDiagnostic> {
     let request = if matches!(value.value_kind, ValueKind::Constant) {
@@ -189,9 +247,9 @@ fn project_operation(
             .collect::<Result<Vec<_>, SchemaDiagnostic>>()?
     };
 
-    let response = match &value.output {
-        Some(output) => project_type(context, &value.source_name, output, discovered)?,
-        None => Schema::Null,
+    let (response, error_response) = match &value.output {
+        Some(output) => project_response(context, value, output, options, discovered)?,
+        None => (Schema::Null, None),
     };
 
     Ok(Operation {
@@ -199,10 +257,110 @@ fn project_operation(
         method: HttpMethod::Post,
         path: default_path(module, value),
         request,
+        parameters: Vec::new(),
         response,
+        error_response,
         entry_point: value.entry_point.clone(),
         doc: value.doc.clone(),
     })
+}
+
+/// Project a value specification's output type into its `200` response and,
+/// under [`ResultResponses::Split`], its paired error response.
+///
+/// `Result` is detected by `output`'s own source FQName
+/// (`morphir/SDK:result#result`), never by shape: a package-local type that
+/// happens to carry an `Ok`/`Err`-shaped choice is never split just because
+/// it looks like one. Under [`ResultResponses::Data`] — the default — or
+/// when `output` is not `Result`-shaped, the whole output type is projected
+/// as one `200` response and `error_response` is `None`.
+fn project_response(
+    context: &Context<'_>,
+    value: &ValueSpecification,
+    output: &TypeExpr,
+    options: &SchemaOptions,
+    discovered: &mut BTreeSet<String>,
+) -> Result<(Schema, Option<(u16, Schema)>), SchemaDiagnostic> {
+    if let (ResultResponses::Split, Some((error, ok))) =
+        (options.result_responses, result_arguments(output))
+    {
+        let ok_schema = project_type(context, &value.source_name, ok, discovered)?;
+        let error_schema = project_type(context, &value.source_name, error, discovered)?;
+        return Ok((ok_schema, Some((options.error_status, error_schema))));
+    }
+    let response = project_type(context, &value.source_name, output, discovered)?;
+    Ok((response, None))
+}
+
+/// If `tpe` is `morphir/SDK:result#result` applied to exactly two
+/// arguments, its `(error, value)` type arguments — matching the argument
+/// order `morphir-avro-extension`'s `project_result` uses, `Result error
+/// value`, not `Result value error`.
+fn result_arguments(tpe: &TypeExpr) -> Option<(&TypeExpr, &TypeExpr)> {
+    match tpe {
+        TypeExpr::Reference {
+            source_name,
+            arguments,
+        } if source_name == SDK_RESULT && arguments.len() == 2 => {
+            Some((&arguments[0], &arguments[1]))
+        }
+        _ => None,
+    }
+}
+
+/// Apply one `options.operations` override to an already-projected
+/// [`Operation`]: `method` and `path` replace their default, and each bound
+/// parameter moves from `request` to `parameters`.
+///
+/// A `Path`-bound parameter must appear as a `{name}` placeholder in the
+/// operation's path (the override's path when given, the default path
+/// otherwise) once `path` itself has already been applied above; failing
+/// that is `SchemaDiagnostic::unknown_operation` (`OAS002`), the same code
+/// an override naming no value specification uses, because both are the
+/// same failure at heart: `options.operations` describes an operation that
+/// cannot exist as written. A parameter name that matches no request field
+/// — for instance because `value`'s own inputs changed since the override
+/// was written — is silently ignored rather than erroring: `options.operations`
+/// is keyed by value FQName, not by parameter name, so there is no companion
+/// diagnostic code reserved for it, and ignoring it leaves the field in the
+/// request body, a safe default.
+fn apply_override(
+    operation: &mut Operation,
+    override_: &OperationOverride,
+) -> Result<(), SchemaDiagnostic> {
+    if let Some(method) = override_.method {
+        operation.method = method;
+    }
+    if let Some(path) = &override_.path {
+        operation.path = path.clone();
+    }
+
+    for (name, binding) in &override_.parameters {
+        if matches!(binding, ParameterBinding::Body) {
+            continue;
+        }
+        if matches!(binding, ParameterBinding::Path) {
+            let placeholder = format!("{{{name}}}");
+            if !operation.path.contains(&placeholder) {
+                return Err(SchemaDiagnostic::unknown_operation(
+                    &operation.source_name,
+                    format!(
+                        "parameter '{name}' is bound to Path but '{}' has no '{placeholder}' placeholder",
+                        operation.path
+                    ),
+                ));
+            }
+        }
+        if let Some(index) = operation
+            .request
+            .iter()
+            .position(|field| &field.name == name)
+        {
+            let field = operation.request.remove(index);
+            operation.parameters.push((*binding, field));
+        }
+    }
+    Ok(())
 }
 
 /// The default `/{module}/{entryPoint}` path: module segments lowercased and
@@ -268,7 +426,19 @@ fn operation_references(operation: &Operation) -> Vec<&str> {
         .request
         .iter()
         .flat_map(|field| references(&field.schema))
+        .chain(
+            operation
+                .parameters
+                .iter()
+                .flat_map(|(_, field)| references(&field.schema)),
+        )
         .chain(references(&operation.response))
+        .chain(
+            operation
+                .error_response
+                .iter()
+                .flat_map(|(_, schema)| references(schema)),
+        )
         .collect()
 }
 

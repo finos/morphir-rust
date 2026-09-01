@@ -11,7 +11,6 @@ use crate::SchemaDiagnostic;
 const SDK_BOOL: &str = "morphir/SDK:basics#bool";
 const SDK_INT: &str = "morphir/SDK:basics#int";
 const SDK_FLOAT: &str = "morphir/SDK:basics#float";
-const SDK_UNIT: &str = "morphir/SDK:basics#unit";
 const SDK_STRING: &str = "morphir/SDK:string#string";
 const SDK_CHAR: &str = "morphir/SDK:char#char";
 const SDK_MAYBE: &str = "morphir/SDK:maybe#maybe";
@@ -174,7 +173,6 @@ fn project_reference(
         (SDK_FLOAT, 0) => Ok(Schema::Number {
             format: Some("double"),
         }),
-        (SDK_UNIT, 0) => Ok(Schema::Null),
         (SDK_STRING, 0) => Ok(Schema::Text { max_length: None }),
         (SDK_CHAR, 0) => Ok(Schema::Text {
             max_length: Some(1),

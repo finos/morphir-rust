@@ -336,6 +336,62 @@ pub fn classic_schema_library() -> Value {
                                                 ]
                                             }
                                         }
+                                    ],
+                                    [
+                                        ["metrics"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "Every scalar and collection form.",
+                                                "value": [
+                                                    "TypeAliasDefinition",
+                                                    [],
+                                                    ["Record", {}, classic_metric_fields()]
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    [
+                                        ["shape"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "A custom type carrying payloads.",
+                                                "value": [
+                                                    "CustomTypeDefinition",
+                                                    [],
+                                                    {
+                                                        "access": "Public",
+                                                        "value": [
+                                                            [
+                                                                ["circle"],
+                                                                [[
+                                                                    ["radius"],
+                                                                    classic_ref("basics", "float")
+                                                                ]]
+                                                            ],
+                                                            [
+                                                                ["rounded", "box"],
+                                                                [
+                                                                    [
+                                                                        ["width"],
+                                                                        classic_ref(
+                                                                            "basics", "float"
+                                                                        )
+                                                                    ],
+                                                                    [
+                                                                        ["height"],
+                                                                        classic_ref(
+                                                                            "basics", "float"
+                                                                        )
+                                                                    ]
+                                                                ]
+                                                            ]
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        }
                                     ]
                                 ],
                                 "values": [],
@@ -483,10 +539,46 @@ fn classic_local_ref(local: &str) -> Value {
 }
 
 fn classic_maybe(argument: Value) -> Value {
+    classic_sdk_ref("maybe", "maybe", vec![argument])
+}
+
+/// Record fields covering every scalar and collection type form.
+fn classic_metric_fields() -> Value {
+    let float = classic_ref("basics", "float");
+    let string = classic_ref("string", "string");
+    let int = classic_ref("basics", "int");
+    json!([
+        [["active"], classic_ref("basics", "bool")],
+        [["count"], int],
+        [
+            ["extent"],
+            ["Tuple", {}, [int, classic_ref("basics", "int")]]
+        ],
+        [["grade"], classic_ref("char", "char")],
+        [
+            ["labels"],
+            classic_sdk_ref("set", "set", vec![string.clone()])
+        ],
+        [["ratio"], float],
+        [
+            ["scores"],
+            classic_sdk_ref(
+                "dict",
+                "dict",
+                vec![string.clone(), classic_ref("basics", "float")]
+            )
+        ],
+        [["tags"], classic_sdk_ref("list", "list", vec![string])],
+        [["nothing"], ["Unit", {}]]
+    ])
+}
+
+/// A Morphir SDK type reference carrying type arguments.
+fn classic_sdk_ref(module: &str, local: &str, arguments: Vec<Value>) -> Value {
     json!([
         "Reference",
         {},
-        [[["morphir"], ["s", "d", "k"]], [["maybe"]], ["maybe"]],
-        [argument]
+        [[["morphir"], ["s", "d", "k"]], [[module]], [local]],
+        arguments
     ])
 }

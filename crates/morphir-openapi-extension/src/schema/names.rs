@@ -23,6 +23,21 @@ pub fn variant_name(name: &str) -> String {
     upper_camel(local_name(name))
 }
 
+/// Map a canonical Morphir value FQName to a stable OpenAPI `operationId`.
+///
+/// `acme/customer:customer#find-customer` becomes `customerFindCustomer`:
+/// everything after the package's `:` — every module segment and the local
+/// value name — is one run of words, `lowerCamelCase`d together. Reused by
+/// operation-collision detection during projection and by the renderer, so
+/// the two sides can never disagree on the identifier a `$ref` or a
+/// diagnostic message names.
+pub fn operation_id(source_name: &str) -> String {
+    let after_package = source_name
+        .split_once(':')
+        .map_or(source_name, |(_, rest)| rest);
+    lower_camel(after_package)
+}
+
 /// Take the local part of a canonical Morphir FQName.
 fn local_name(source_name: &str) -> &str {
     source_name.rsplit('#').next().unwrap_or(source_name)

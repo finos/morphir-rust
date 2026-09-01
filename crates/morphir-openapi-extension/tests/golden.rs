@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use morphir_extension_sdk::{Backend, GenerateRequest};
 use morphir_openapi_extension::OpenApiExtension;
-use morphir_projection::testing::classic;
+use morphir_projection::testing::{classic, v4};
 use pretty_assertions::assert_eq;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn golden(name: &str, actual: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -147,6 +147,46 @@ fn renders_one_openapi_document_per_package() {
     assert_eq!(
         artifact.content,
         golden("customer.openapi-3.1.json", &artifact.content)
+    );
+}
+
+/// Pins the `operations-entry-points` mode document byte-exactly, the same
+/// way `matches_the_reviewed_golden_documents` pins the `schemas`-mode
+/// documents: a wrong default path, a missing `x-morphir-entry-point-kind`,
+/// or a dropped `requestBody` would still pass a purely structural check.
+///
+/// `v4_customer_application()` also declares `acme/customer:domain#complex`,
+/// a generic alias with an unbound type parameter unrelated to operations;
+/// `unsupported: "warn-and-skip"` lets the rest of the package project while
+/// that one declaration is skipped with a warning.
+#[test]
+fn matches_the_reviewed_entry_points_golden_document() {
+    let result = generate_openapi(
+        v4::v4_customer_application(),
+        [
+            ("projection".to_owned(), json!("operations-entry-points")),
+            ("unsupported".to_owned(), json!("warn-and-skip")),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.artifacts.len(), 1);
+    let artifact = &result.artifacts[0];
+    assert_eq!(artifact.path, "openapi.json");
+
+    let document: Value = serde_json::from_str(&artifact.content).expect("valid JSON");
+    let paths = document["paths"].as_object().expect("paths is an object");
+    assert_eq!(
+        paths.len(),
+        2,
+        "the fixture declares two entry points: 'customer-query' and 'unfinished'"
+    );
+
+    assert_eq!(
+        artifact.content,
+        golden("customer.openapi-3.1-entry-points.json", &artifact.content)
     );
 }
 

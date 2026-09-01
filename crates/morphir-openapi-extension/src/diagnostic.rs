@@ -45,6 +45,12 @@ impl SchemaDiagnostic {
         Self::new("JSC004", message, Some(source_name.to_owned()))
     }
 
+    /// Two synthesized operations claimed the same request path and method,
+    /// or the same `operationId`.
+    pub fn operation_collision(source_name: &str, message: impl Into<String>) -> Self {
+        Self::new("OAS001", message, Some(source_name.to_owned()))
+    }
+
     /// Return the stable backend diagnostic code.
     pub fn code(&self) -> &'static str {
         self.code

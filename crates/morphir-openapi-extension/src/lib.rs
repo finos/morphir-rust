@@ -17,7 +17,8 @@ pub use options::{
 };
 pub use render::{render_json_schema, render_openapi};
 pub use schema::{
-    NamedSchema, Schema, SchemaField, SchemaProjection, SchemaVariant, project, schema_name,
+    NamedSchema, Operation, Schema, SchemaField, SchemaProjection, SchemaVariant, operation_id,
+    project, project_operations, schema_name,
 };
 
 use morphir_extension_sdk::{
@@ -133,7 +134,7 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
             }));
         }
     };
-    let projection = match project(&package, &options) {
+    let mut projection = match project(&package, &options) {
         Ok(projection) => projection,
         Err(diagnostic) => {
             return Ok(failed(
@@ -141,6 +142,19 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
             ));
         }
     };
+    // Operations are an `openapi`-only concern: `render_json_schema` never
+    // reads `SchemaProjection::operations`, so it stays empty for the
+    // `json-schema` target rather than being computed and then ignored.
+    if let Target::OpenApi = target {
+        match project_operations(&package, &mut projection, &options) {
+            Ok(operations) => projection.operations = operations,
+            Err(diagnostic) => {
+                return Ok(failed(
+                    diagnostic.into_diagnostic(DiagnosticSeverity::Error),
+                ));
+            }
+        }
+    }
     let artifacts = match target {
         Target::JsonSchema => render_json_schema(&projection),
         Target::OpenApi => render_openapi(&projection, &options),

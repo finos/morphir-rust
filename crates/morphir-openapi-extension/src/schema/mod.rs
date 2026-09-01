@@ -6,9 +6,11 @@
 //! type, apart from the base a `$ref` is written against.
 
 mod names;
+mod operations;
 mod types;
 
-pub use names::schema_name;
+pub use names::{operation_id, schema_name};
+pub use operations::{Operation, project_operations};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -123,6 +125,11 @@ pub struct SchemaProjection {
     pub roots: Vec<NamedSchema>,
     /// Every reachable schema, keyed by projected name.
     pub definitions: BTreeMap<String, NamedSchema>,
+    /// Synthesized OpenAPI operations. Always empty for the `json-schema`
+    /// target and for [`crate::Projection::Schemas`]; populated by
+    /// [`project_operations`] for the `openapi` target under the other
+    /// projection modes.
+    pub operations: Vec<Operation>,
     /// Diagnostics raised while projecting, paired with `true` for a warning.
     pub diagnostics: Vec<(SchemaDiagnostic, bool)>,
 }
@@ -217,6 +224,7 @@ pub fn project(
         package_name: package.package_name.clone(),
         roots,
         definitions,
+        operations: Vec::new(),
         diagnostics,
     })
 }

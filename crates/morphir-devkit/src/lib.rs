@@ -17,7 +17,4 @@ pub use config::{
     resolve_test_scenario, sanitize_project_name, system_config_candidates,
     user_override_candidates,
 };
-pub use extensions::{
-    BuiltinExtension, ExtensionInfo, ExtensionSource, discover_builtin_extensions,
-    get_builtin_extension_path, resolve_extension_source,
-};
+pub use extensions::{ExtensionInfo, ExtensionSource, resolve_extension_source};

@@ -8,48 +8,36 @@ redirect_from:
   - /contributors/design-time-crate.html
 ---
 
-# Devkit Crate
+# Devkit crate
 
-The `morphir-devkit` crate provides workspace, configuration, and extension discovery for tools that work on Morphir projects: the CLI, IDEs, build tools, and other Morphir tooling.
+The `morphir-devkit` crate provides workspace discovery, configuration loading, and path conventions for tools that work on Morphir projects. The CLI, IDEs, and build tools can use it without depending on one another.
 
-It is distinct from `morphir-extension-sdk`, which is the SDK for *building* extensions. `morphir-devkit` is for tools that *use* a Morphir workspace.
+It is distinct from `morphir-extension-sdk`, which defines the contracts for building extensions, and `morphir-daemon`, which owns extension registration, resolution, and execution.
 
-## Purpose
+## Responsibilities
 
-The devkit separates concerns:
-- **CLI**: User-facing commands and output formatting
-- **Devkit**: Configuration and extension discovery (reusable)
-- **Common**: Shared data structures and utilities
-- **Daemon**: Runtime extension execution
+The crates divide the work as follows:
 
-This allows IDEs and other tools to use workspace functionality without CLI dependencies.
+- The CLI handles commands, output formatting, and the set of built-in extensions linked into that executable.
+- The devkit discovers workspace and project configuration, computes effective configuration, and resolves conventional paths.
+- The extension SDK defines MEP data types and native capability traits.
+- The daemon provides the transport-neutral provider registry and MEP sessions.
+- The distribution crate resolves, verifies, installs, and activates process and WebAssembly artifacts.
 
-## Key Functionality
+The devkit does not scan beside an executable for built-in extension files. A host application registers its linked built-ins explicitly.
 
-### Configuration Discovery and Loading
+## Configuration discovery and loading
 
 ```rust
 use morphir_devkit::{discover_config, load_config_context};
 
-// Walk up the directory tree to find morphir.toml or morphir.yaml
 let config_path = discover_config(&start_dir)?.expect("no configuration found");
-
-// Merge every configuration source and resolve workspace/project context
-let ctx = load_config_context(&config_path)?;
+let context = load_config_context(&config_path)?;
 ```
 
-`load_config_context` merges built-in defaults, system, global user, project, workspace member, user override, and `MORPHIR_*` environment sources in precedence order. `ctx.sources` reports which sources were consulted.
+`load_config_context` merges built-in defaults, system configuration, global user configuration, project configuration, workspace-member configuration, user overrides, and `MORPHIR_*` environment sources. `context.sources` records which sources the loader consulted.
 
-### Extension Discovery
-
-```rust
-use morphir_devkit::{discover_builtin_extensions, get_builtin_extension_path};
-
-let builtins = discover_builtin_extensions();
-let path = get_builtin_extension_path("gleam").expect("gleam builtin not found");
-```
-
-### Path Resolution
+## Path resolution
 
 ```rust
 use morphir_devkit::{resolve_compile_output, resolve_generate_output};
@@ -58,26 +46,23 @@ let compile_path = resolve_compile_output("My.Project", "gleam", &morphir_dir);
 let generate_path = resolve_generate_output("My.Project", "gleam", &morphir_dir);
 ```
 
-## Usage in IDEs
+These helpers apply Morphir's output layout. They do not choose or activate an extension provider.
 
-IDEs can use the devkit to discover project configuration, resolve build output paths, find available extensions, and determine workspace/project context.
+## Extension boundary
 
-## Usage in Build Tools
+The provider registry in the daemon resolves providers by requested capability and Morphir IR version. It filters ineligible providers before considering origin. If an installed provider and a built-in provider both match, the installed provider wins.
 
-```rust
-use morphir_devkit::{discover_config, ensure_morphir_structure, load_config_context};
+Provider origin remains separate from invocation mode. A native built-in can run as `NativeDirect` under `PreferDirect` or as `NativeMep` under `ProtocolOnly`. Installed providers run as `ProcessMep` or `WasmMep` under either policy.
 
-let ctx = load_config_context(&discover_config(&project_dir)?.expect("configuration"))?;
-ensure_morphir_structure(&ctx.morphir_dir)?;
-// ... trigger compilation
-```
+The Morphir CLI owns the built-in Gleam registration. `morphir-daemon` stays language-neutral and does not depend on the Gleam extension.
 
-## API Stability
+## Use in other tools
 
-The devkit API is designed to be stable and reusable. Changes should maintain backward compatibility when possible.
+IDEs and build tools can reuse configuration and workspace discovery from the devkit. A tool that executes extensions should create its own registry, register the built-ins it ships, add installed snapshots from the distribution crate, and resolve the requested capability through the daemon.
 
-## Next Steps
+## Further reading
 
-- See [Architecture Overview](architecture)
-- Read [CLI Architecture](cli-architecture)
-- Check [Development Guide](development)
+- [Architecture overview](architecture)
+- [CLI architecture](cli-architecture)
+- [Development guide](development)
+- [ADR-0003: Dual native invocation for built-in extensions](adr/0003-dual-native-builtin-invocation)

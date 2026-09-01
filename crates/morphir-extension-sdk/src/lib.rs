@@ -94,6 +94,7 @@
 pub mod error;
 #[cfg(target_arch = "wasm32")]
 pub mod host;
+pub mod native;
 pub mod prelude;
 pub mod protocol;
 pub mod traits;
@@ -101,6 +102,7 @@ pub mod types;
 
 // Re-exports
 pub use error::{ExtensionError, Result};
+pub use native::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol};
 pub use traits::{Backend, Extension, Frontend, Transform, Validator, Workspace};
 pub use types::*;
 
@@ -256,44 +258,137 @@ pub fn __dispatch_request<E: Extension + Default>(
 ) -> protocol::ExtensionResponse {
     use protocol::methods;
 
+    match request.method.as_str() {
+        methods::INITIALIZE => dispatch_response(
+            request.id,
+            dispatch_initialize::<E>(request, declared_types),
+        ),
+        methods::PING => dispatch_response(request.id, Ok(serde_json::json!({ "ok": true }))),
+        methods::INFO => dispatch_response(
+            request.id,
+            serde_json::to_value(__extension_info::<E>(declared_types))
+                .map_err(ExtensionError::from),
+        ),
+        methods::CAPABILITIES => dispatch_response(
+            request.id,
+            serde_json::to_value(E::capabilities()).map_err(ExtensionError::from),
+        ),
+        methods::SHUTDOWN => dispatch_response(request.id, Ok(serde_json::json!({}))),
+        _ => __dispatch_request_with(&E::default(), request, dispatchers, declared_types),
+    }
+}
+
+/// Dispatch a protocol request to an existing extension instance.
+///
+/// Native hosts use this entry point to preserve extension state across direct
+/// and protocol calls. The WASM export helper continues to instantiate a
+/// default extension through [`__dispatch_request`].
+#[doc(hidden)]
+pub fn __dispatch_request_with<E: Extension>(
+    extension: &E,
+    request: &protocol::ExtensionRequest,
+    dispatchers: &[DispatchFn<E>],
+    declared_types: &[ExtensionType],
+) -> protocol::ExtensionResponse {
+    use protocol::methods;
+
+    match request.method.as_str() {
+        methods::INITIALIZE => {
+            let info = __extension_info::<E>(declared_types);
+            let capabilities = E::capabilities();
+            dispatch_response(
+                request.id,
+                dispatch_initialize_with_metadata(request, &info, &capabilities),
+            )
+        }
+        methods::PING => dispatch_response(request.id, Ok(serde_json::json!({ "ok": true }))),
+        methods::INFO => dispatch_response(
+            request.id,
+            serde_json::to_value(__extension_info::<E>(declared_types))
+                .map_err(ExtensionError::from),
+        ),
+        methods::CAPABILITIES => dispatch_response(
+            request.id,
+            serde_json::to_value(E::capabilities()).map_err(ExtensionError::from),
+        ),
+        methods::SHUTDOWN => dispatch_response(request.id, Ok(serde_json::json!({}))),
+        _ => dispatch_capability_response(extension, request, dispatchers),
+    }
+}
+
+fn __dispatch_request_with_metadata<E: Extension>(
+    extension: &E,
+    request: &protocol::ExtensionRequest,
+    dispatchers: &[DispatchFn<E>],
+    info: &ExtensionInfo,
+    capabilities: &ExtensionCapabilities,
+) -> protocol::ExtensionResponse {
+    use protocol::methods;
+
     let result = match request.method.as_str() {
-        methods::INITIALIZE => dispatch_initialize::<E>(request, declared_types),
+        methods::INITIALIZE => dispatch_initialize_with_metadata(request, info, capabilities),
         methods::PING => Ok(serde_json::json!({ "ok": true })),
-        methods::INFO => serde_json::to_value(__extension_info::<E>(declared_types))
-            .map_err(ExtensionError::from),
-        methods::CAPABILITIES => {
-            serde_json::to_value(E::capabilities()).map_err(ExtensionError::from)
-        }
+        methods::INFO => serde_json::to_value(info).map_err(ExtensionError::from),
+        methods::CAPABILITIES => serde_json::to_value(capabilities).map_err(ExtensionError::from),
         methods::SHUTDOWN => Ok(serde_json::json!({})),
-        _ => {
-            let extension = E::default();
-            let Some(result) = dispatchers
-                .iter()
-                .find_map(|dispatch| dispatch(&extension, request))
-            else {
-                return protocol::ExtensionResponse::error(
-                    request.id,
-                    protocol::RpcError::method_not_found(&request.method),
-                );
-            };
-            result
-        }
+        _ => return dispatch_capability_response(extension, request, dispatchers),
     };
 
+    dispatch_response(request.id, result)
+}
+
+fn dispatch_capability_response<E>(
+    extension: &E,
+    request: &protocol::ExtensionRequest,
+    dispatchers: &[DispatchFn<E>],
+) -> protocol::ExtensionResponse {
+    match dispatch_capability_request(extension, request, dispatchers) {
+        Some(result) => dispatch_response(request.id, result),
+        None => protocol::ExtensionResponse::error(
+            request.id,
+            protocol::RpcError::method_not_found(&request.method),
+        ),
+    }
+}
+
+fn dispatch_capability_request<E>(
+    extension: &E,
+    request: &protocol::ExtensionRequest,
+    dispatchers: &[DispatchFn<E>],
+) -> Option<std::result::Result<serde_json::Value, ExtensionError>> {
+    dispatchers
+        .iter()
+        .find_map(|dispatch| dispatch(extension, request))
+}
+
+fn dispatch_response(
+    request_id: u64,
+    result: std::result::Result<serde_json::Value, ExtensionError>,
+) -> protocol::ExtensionResponse {
     match result {
         Ok(value) => protocol::ExtensionResponse {
             jsonrpc: "2.0".to_string(),
             result: Some(value),
             error: None,
-            id: request.id,
+            id: request_id,
         },
-        Err(error) => protocol::ExtensionResponse::from_extension_error(request.id, &error),
+        Err(error) => protocol::ExtensionResponse::from_extension_error(request_id, &error),
     }
 }
 
 fn dispatch_initialize<E: Extension>(
     request: &protocol::ExtensionRequest,
     declared_types: &[ExtensionType],
+) -> std::result::Result<serde_json::Value, ExtensionError> {
+    let info = __extension_info::<E>(declared_types);
+    let capabilities = E::capabilities();
+    dispatch_initialize_with_metadata(request, &info, &capabilities)
+}
+
+fn dispatch_initialize_with_metadata(
+    request: &protocol::ExtensionRequest,
+    info: &ExtensionInfo,
+    capabilities: &ExtensionCapabilities,
 ) -> std::result::Result<serde_json::Value, ExtensionError> {
     let params: protocol::InitializeParams = serde_json::from_value(request.params.clone())
         .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
@@ -310,8 +405,8 @@ fn dispatch_initialize<E: Extension>(
 
     serde_json::to_value(protocol::InitializeResult {
         protocol_version: protocol::MEP_VERSION.to_string(),
-        extension: __extension_info::<E>(declared_types),
-        capabilities: E::capabilities(),
+        extension: info.clone(),
+        capabilities: capabilities.clone(),
     })
     .map_err(ExtensionError::from)
 }
@@ -391,6 +486,41 @@ mod tests {
         WORKSPACE_DISCOVERY_PROTOCOL,
     };
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static LAZY_DEFAULT_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static LAZY_METADATA_INFO_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LAZY_METADATA_CAPABILITY_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct LazyDefaultExtension;
+
+    impl Default for LazyDefaultExtension {
+        fn default() -> Self {
+            LAZY_DEFAULT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Extension for LazyDefaultExtension {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+    }
+
+    #[derive(Default)]
+    struct MetadataLazyExtension;
+
+    impl Extension for MetadataLazyExtension {
+        fn info() -> ExtensionInfo {
+            LAZY_METADATA_INFO_CALLS.fetch_add(1, Ordering::SeqCst);
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            LAZY_METADATA_CAPABILITY_CALLS.fetch_add(1, Ordering::SeqCst);
+            ExtensionCapabilities::default()
+        }
+    }
 
     #[derive(Default)]
     struct RecordingBackend;
@@ -502,6 +632,42 @@ mod tests {
             1,
         )
         .expect("the initialization fixture should serialize")
+    }
+
+    #[test]
+    fn control_requests_do_not_construct_default_extensions() {
+        LAZY_DEFAULT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        let control_requests = [
+            ExtensionRequest::new(methods::PING, serde_json::json!({}), 1).unwrap(),
+            ExtensionRequest::new(methods::INFO, serde_json::json!({}), 2).unwrap(),
+            ExtensionRequest::new(methods::CAPABILITIES, serde_json::json!({}), 3).unwrap(),
+            an_initialize_request(vec![protocol::MEP_VERSION]),
+            ExtensionRequest::new(methods::SHUTDOWN, serde_json::json!({}), 5).unwrap(),
+        ];
+
+        for request in control_requests {
+            let response = __dispatch_request::<LazyDefaultExtension>(&request, &[], &[]);
+            assert!(response.error.is_none());
+        }
+        assert_eq!(LAZY_DEFAULT_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
+
+        let request =
+            ExtensionRequest::new("test.extension.method", serde_json::json!({}), 6).unwrap();
+        let _ = __dispatch_request::<LazyDefaultExtension>(&request, &[], &[]);
+        assert_eq!(LAZY_DEFAULT_CONSTRUCTIONS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn extension_method_dispatch_does_not_refresh_static_metadata() {
+        LAZY_METADATA_INFO_CALLS.store(0, Ordering::SeqCst);
+        LAZY_METADATA_CAPABILITY_CALLS.store(0, Ordering::SeqCst);
+        let request =
+            ExtensionRequest::new("test.extension.method", serde_json::json!({}), 1).unwrap();
+
+        let _ = __dispatch_request::<MetadataLazyExtension>(&request, &[], &[]);
+
+        assert_eq!(LAZY_METADATA_INFO_CALLS.load(Ordering::SeqCst), 0);
+        assert_eq!(LAZY_METADATA_CAPABILITY_CALLS.load(Ordering::SeqCst), 0);
     }
 
     #[test]

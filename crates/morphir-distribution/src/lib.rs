@@ -102,9 +102,10 @@ mod tool_state;
 
 pub use domain::{
     ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource,
-    BackendRecord, Capability, Channel, ChannelSegment, ExtensionId, Platform,
-    RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolArchive, ToolArtifactRecord,
-    ToolId, ToolLaunch, ToolReleaseRecord, ToolReleaseStatus,
+    BackendRecord, CURRENT_RELEASE_SCHEMA_VERSION, Capability, Channel, ChannelSegment,
+    ExtensionId, FrontendLanguageRecord, FrontendRecord, MINIMUM_RELEASE_SCHEMA_VERSION, Platform,
+    RelativeArtifactPath, ReleaseRecord, SchemaVersion, Selection, Sha256Digest, ToolArchive,
+    ToolArtifactRecord, ToolId, ToolLaunch, ToolReleaseRecord, ToolReleaseStatus,
 };
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;

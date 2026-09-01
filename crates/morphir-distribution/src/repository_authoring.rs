@@ -4,8 +4,8 @@ use crate::domain::portable_token;
 use crate::local::ensure_contained;
 use crate::state_io::{StateGuard, atomic_write_bytes, create_dir_all_durable};
 use crate::{
-    ArtifactFilename, ArtifactRuntime, DistributionError, ExtensionHistory, ExtensionId,
-    ReleaseRecord, Result, Sha256Digest,
+    ArtifactFilename, ArtifactRuntime, CURRENT_RELEASE_SCHEMA_VERSION, DistributionError,
+    ExtensionHistory, ExtensionId, ReleaseRecord, Result, Sha256Digest,
 };
 use semver::Version;
 use serde::Deserialize;
@@ -318,7 +318,7 @@ impl ReleaseBundleDescriptor {
             "preview"
         };
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": CURRENT_RELEASE_SCHEMA_VERSION,
             "id": self.extension_id,
             "name": display_name(&self.extension_id),
             "version": self.version,

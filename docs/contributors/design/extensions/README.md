@@ -97,6 +97,14 @@ artifact bytes below that controlled root. Installation defaults to the
 another release. The CLI has no `--global` mode; `MORPHIR_HOME` selects the
 state root when a contributor needs an isolated test home.
 
+Release manifests use the strict JSON string `"schemaVersion": "1.0"` and
+must include matching metadata for every declared frontend or backend
+capability. Installation writes separate extension lock and catalog formats,
+each with its own current `"1.0"` schema version. Each reader accepts supported
+minors of the same major from its minimum through its current minor and rejects
+future minors and other majors. These distribution versions are independent of
+Morphir IR versions.
+
 For a tested Avro build-to-index example, see the root repository's
 [Avro generation guide](https://github.com/finos/morphir/blob/main/docs/generate/avro.md#build-and-install-the-local-extension).
 
@@ -112,7 +120,7 @@ The task tests the native crate, builds and validates the WASM guest, checks the
 Avro IDL goldens, and writes the WASM file, checksum, and `release.json` under
 `.morphir/build/extensions/avro/`. It does not create an install index, Git tag,
 or GitHub release. The root Avro guide shows how to turn that local bundle into
-a schema-v2 local index record.
+a schema `"1.0"` local index record.
 
 ## Create versus publish
 

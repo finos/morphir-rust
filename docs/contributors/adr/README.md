@@ -22,10 +22,11 @@ Each ADR follows this structure:
 
 ## Index
 
-| ADR                                                    | Title                                          | Status   | Date       |
-|--------------------------------------------------------|------------------------------------------------|----------|------------|
-| [0001](./0001-envelope-only-execution-for-builtins.md) | Envelope-Only Execution for Builtin Extensions | Accepted | 2026-01-29 |
-| [0002](./0002-validated-typestate-mep-sessions.md)       | Validated typestate MEP sessions                | Accepted | 2026-08-27 |
+| ADR                                                    | Title                                           | Status                                                     | Date       |
+|--------------------------------------------------------|-------------------------------------------------|------------------------------------------------------------|------------|
+| [0001](./0001-envelope-only-execution-for-builtins.md) | Envelope-Only Execution for Builtin Extensions   | Superseded by [0003](./0003-dual-native-builtin-invocation.md) | 2026-01-29 |
+| [0002](./0002-validated-typestate-mep-sessions.md)       | Validated typestate MEP sessions                 | Accepted                                                   | 2026-08-27 |
+| [0003](./0003-dual-native-builtin-invocation.md)         | Dual native invocation for built-in extensions   | Accepted                                                   | 2026-09-01 |
 
 ## Creating a New ADR
 

@@ -187,10 +187,10 @@ impl ProcessLaunch {
         }
     }
 
-    /// Define a backend-locked verified launch below an executable directory.
-    pub(crate) fn from_verified_bytes_with_backend_capability_in(
+    /// Define a verified launch with persisted capability members below an executable directory.
+    pub fn from_verified_bytes_with_persisted_capabilities_in(
         discovered: ExtensionInfo,
-        backend: BackendCapability,
+        capabilities: PersistedExtensionCapabilities,
         filename: &OsStr,
         bytes: &[u8],
         staging_directory: impl Into<PathBuf>,
@@ -199,7 +199,7 @@ impl ProcessLaunch {
         Self {
             extension_id: discovered.id.clone(),
             discovered: Some(discovered),
-            capabilities: Some(CapabilityExpectation::Backend(backend)),
+            capabilities: Some(CapabilityExpectation::Persisted(capabilities)),
             allows_legacy_backend: false,
             program: ProcessProgram::VerifiedBytes {
                 filename: filename.to_os_string(),

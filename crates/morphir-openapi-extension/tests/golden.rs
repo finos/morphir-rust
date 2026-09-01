@@ -41,20 +41,39 @@ fn renders_one_document_per_public_root_type() {
     }
 }
 
+/// Every root the fixture declares is pinned byte-exactly, not just the
+/// customer root: a golden that only pins one of four documents leaves the
+/// other three checked structurally only, so a wrong `format`, a dropped
+/// `uniqueItems`, or a swapped `const` discriminator would still pass.
 #[test]
 fn matches_the_reviewed_golden_documents() {
     let result = generate(classic::classic_schema_library());
 
-    let artifact = result
-        .artifacts
-        .iter()
-        .find(|artifact| artifact.path == "customer.Customer.schema.json")
-        .expect("the customer root is generated");
-
+    let expected_paths = [
+        "customer.Customer.schema.json",
+        "customer.Metrics.schema.json",
+        "customer.Shape.schema.json",
+        "customer.Status.schema.json",
+    ];
     assert_eq!(
-        artifact.content,
-        golden("customer.Customer.schema.json", &artifact.content)
+        result
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.path.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_paths.into_iter().collect(),
+        "the fixture's public roots changed; update expected_paths and the golden files together"
     );
+
+    for path in expected_paths {
+        let artifact = result
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == path)
+            .unwrap_or_else(|| panic!("{path} is generated"));
+
+        assert_eq!(artifact.content, golden(path, &artifact.content), "{path}");
+    }
 }
 
 #[test]

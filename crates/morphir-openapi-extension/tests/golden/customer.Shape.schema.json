@@ -1,0 +1,46 @@
+{
+  "$id": "Shape.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A custom type carrying payloads.",
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {
+          "const": "Circle"
+        },
+        "radius": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "radius",
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "kind": {
+          "const": "RoundedBox"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "kind"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Shape",
+  "x-morphir-fqname": "acme/customer:customer#shape"
+}

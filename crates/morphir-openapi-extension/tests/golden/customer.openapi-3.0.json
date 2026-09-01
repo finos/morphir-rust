@@ -1,0 +1,164 @@
+{
+  "components": {
+    "schemas": {
+      "Customer": {
+        "description": "A customer record.",
+        "properties": {
+          "customerId": {
+            "type": "string"
+          },
+          "nickname": {
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        },
+        "required": [
+          "customerId",
+          "nickname",
+          "status"
+        ],
+        "type": "object",
+        "x-morphir-fqname": "acme/customer:customer#customer"
+      },
+      "Metrics": {
+        "description": "Every scalar and collection form.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "extent": {
+            "items": {
+              "oneOf": [
+                {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              ]
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "grade": {
+            "maxLength": 1,
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "nothing": {
+            "type": "null"
+          },
+          "ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "scores": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "object"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "active",
+          "count",
+          "extent",
+          "grade",
+          "labels",
+          "nothing",
+          "ratio",
+          "scores",
+          "tags"
+        ],
+        "type": "object",
+        "x-morphir-fqname": "acme/customer:customer#metrics"
+      },
+      "Shape": {
+        "description": "A custom type carrying payloads.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Circle"
+                ]
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "height": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "RoundedBox"
+                ]
+              },
+              "width": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "width",
+              "height",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ],
+        "x-morphir-fqname": "acme/customer:customer#shape"
+      },
+      "Status": {
+        "description": "Customer status.",
+        "enum": [
+          "Active",
+          "Inactive"
+        ],
+        "type": "string",
+        "x-morphir-fqname": "acme/customer:customer#status"
+      }
+    }
+  },
+  "info": {
+    "title": "acme/customer",
+    "version": "0.0.0",
+    "x-morphir-package": "acme/customer"
+  },
+  "openapi": "3.0.3",
+  "paths": {}
+}

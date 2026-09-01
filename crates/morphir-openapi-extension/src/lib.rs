@@ -157,7 +157,14 @@ pub fn generate_request(request: GenerateRequest) -> Result<GenerateResult, Sche
     }
     let artifacts = match target {
         Target::JsonSchema => render_json_schema(&projection),
-        Target::OpenApi => render_openapi(&projection, &options),
+        Target::OpenApi => match render_openapi(&projection, &options) {
+            Ok(artifacts) => artifacts,
+            Err(diagnostic) => {
+                return Ok(failed(
+                    diagnostic.into_diagnostic(DiagnosticSeverity::Error),
+                ));
+            }
+        },
     };
     Ok(GenerateResult {
         success: true,

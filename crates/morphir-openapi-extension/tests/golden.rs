@@ -150,6 +150,36 @@ fn renders_one_openapi_document_per_package() {
     );
 }
 
+/// Pins the OpenAPI 3.0 downgrade of the same `schemas`-mode document
+/// `renders_one_openapi_document_per_package` pins as 3.1: same fixture,
+/// same projection, `version: "3.0"` instead of the default. A wrong
+/// `nullable` placement, a missed `prefixItems` rewrite, or a dropped
+/// `allOf` wrap around a `$ref` with siblings would still pass a purely
+/// structural check.
+#[test]
+fn matches_the_reviewed_3_0_golden_document() {
+    let result = generate_openapi(
+        classic::classic_schema_library(),
+        [("version".to_owned(), json!("3.0"))].into_iter().collect(),
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.artifacts.len(), 1);
+    let artifact = &result.artifacts[0];
+    assert_eq!(artifact.path, "openapi.json");
+    assert!(artifact.content.ends_with('\n'));
+    assert!(!artifact.content.ends_with("\n\n"));
+
+    let document: Value = serde_json::from_str(&artifact.content).expect("valid JSON");
+    assert_eq!(document["openapi"], "3.0.3");
+    assert!(document["components"]["schemas"].is_object());
+    assert!(document["paths"].is_object());
+    assert_eq!(
+        artifact.content,
+        golden("customer.openapi-3.0.json", &artifact.content)
+    );
+}
+
 /// Pins the `operations-entry-points` mode document byte-exactly, the same
 /// way `matches_the_reviewed_golden_documents` pins the `schemas`-mode
 /// documents: a wrong default path, a missing `x-morphir-entry-point-kind`,

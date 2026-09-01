@@ -6,6 +6,7 @@
 //! defined in this module, differing only in the base a `$ref` is written
 //! against.
 
+mod downgrade;
 pub mod json_schema;
 pub mod openapi;
 

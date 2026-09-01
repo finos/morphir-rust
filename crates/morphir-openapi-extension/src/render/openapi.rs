@@ -1,25 +1,29 @@
-//! Render a [`SchemaProjection`] as an OpenAPI 3.1 document.
+//! Render a [`SchemaProjection`] as an OpenAPI document.
 //!
 //! One document is produced per package, holding every named schema the
 //! projection reached. `components/schemas` shares its bodies with the JSON
 //! Schema renderer via [`crate::render::named_schema_body`]; only the `$ref`
-//! base differs.
+//! base differs. The document is always built as OpenAPI 3.1 first and,
+//! under [`crate::OpenApiVersion::V30`], rewritten to OpenAPI 3.0 afterward
+//! — see [`render_openapi`].
 
 use morphir_extension_sdk::Artifact;
 use serde_json::{Map, Value, json};
 
+use crate::render::downgrade::downgrade;
 use crate::render::{named_schema_body, schema_body};
 use crate::{
-    HttpMethod, Operation, ParameterBinding, Schema, SchemaField, SchemaOptions, SchemaProjection,
-    operation_id,
+    HttpMethod, OpenApiVersion, Operation, ParameterBinding, Schema, SchemaDiagnostic, SchemaField,
+    SchemaOptions, SchemaProjection, operation_id,
 };
 use morphir_projection::EntryPointKind;
 
-/// The OpenAPI version string this renderer emits in `schemas` mode.
+/// The OpenAPI version string this renderer emits before any downgrade.
 ///
-/// `SchemaOptions::version` also carries `OpenApiVersion::V30`, but its
-/// downgrade behavior belongs to a later plan step; this renderer always
-/// produces the 3.1 document that step downgrades from.
+/// Every document is built in this dialect first, whatever
+/// `SchemaOptions::version` asks for: [`OpenApiVersion::V30`] rewrites this
+/// document afterward rather than being built separately, so there is one
+/// projection and one document builder and the two versions cannot drift.
 const OPENAPI_VERSION: &str = "3.1.0";
 
 /// Where an OpenAPI document's own `$ref`s point.
@@ -30,18 +34,22 @@ const REF_PREFIX: &str = "#/components/schemas/";
 /// `options.projection` selects the public-model surface: in `schemas` mode
 /// (`Projection::Schemas`), only `components/schemas` is populated and
 /// `paths` is emitted as an empty object rather than omitted, because some
-/// validators require the key.
-pub fn render_openapi(projection: &SchemaProjection, options: &SchemaOptions) -> Vec<Artifact> {
-    vec![render_document(projection, options)]
+/// validators require the key. `options.version` selects the OpenAPI
+/// dialect: [`OpenApiVersion::V31`] (the default) renders the document
+/// built here unchanged; [`OpenApiVersion::V30`] rewrites it through
+/// [`downgrade`].
+pub fn render_openapi(
+    projection: &SchemaProjection,
+    options: &SchemaOptions,
+) -> Result<Vec<Artifact>, SchemaDiagnostic> {
+    Ok(vec![render_document(projection, options)?])
 }
 
 /// Render one OpenAPI document covering every schema the projection reached.
-///
-/// `options` is unused today: every option this task can observe
-/// (`Projection::Schemas`, `OpenApiVersion::V31`) renders the same way, and
-/// the rest — operation projection, the 3.0 downgrade — belongs to later
-/// plan steps. It stays a parameter because those steps read it here.
-fn render_document(projection: &SchemaProjection, _options: &SchemaOptions) -> Artifact {
+fn render_document(
+    projection: &SchemaProjection,
+    options: &SchemaOptions,
+) -> Result<Artifact, SchemaDiagnostic> {
     let package_name = &projection.package_name;
 
     let mut info = Map::new();
@@ -83,15 +91,23 @@ fn render_document(projection: &SchemaProjection, _options: &SchemaOptions) -> A
     document.insert("paths".to_owned(), Value::Object(paths));
     document.insert("components".to_owned(), Value::Object(components));
 
-    Artifact {
+    // Always build the 3.1 document first, whatever `options.version` asks
+    // for, and rewrite it afterward: one projection, one document builder,
+    // so the two versions cannot drift.
+    let document = match options.version {
+        OpenApiVersion::V31 => Value::Object(document),
+        OpenApiVersion::V30 => downgrade(Value::Object(document))?,
+    };
+
+    Ok(Artifact {
         path: "openapi.json".to_owned(),
         content: format!(
             "{}\n",
-            serde_json::to_string_pretty(&Value::Object(document))
+            serde_json::to_string_pretty(&document)
                 .expect("a document made of Value::Object and String always serializes")
         ),
         binary: false,
-    }
+    })
 }
 
 /// Render one [`Operation`] as an OpenAPI Operation Object.
@@ -264,7 +280,7 @@ mod tests {
         };
         let options = SchemaOptions::default();
 
-        let artifacts = render_openapi(&projection, &options);
+        let artifacts = render_openapi(&projection, &options).expect("no unsupported forms");
 
         assert_eq!(artifacts.len(), 1);
         let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");

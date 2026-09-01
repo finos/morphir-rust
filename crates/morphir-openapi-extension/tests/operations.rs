@@ -735,7 +735,7 @@ fn a_dangling_reference_from_an_operation_is_dropped_from_the_rendered_document(
         "'look-up' is dropped for its dangling response; 'fine' is unaffected"
     );
 
-    let artifacts = render_openapi(&projection, &options);
+    let artifacts = render_openapi(&projection, &options).expect("no unsupported forms");
     assert_eq!(artifacts.len(), 1);
     let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
 
@@ -853,7 +853,7 @@ fn a_dangling_reference_reached_only_through_an_override_parameter_is_dropped() 
         "'look-up-by-token' is dropped for its dangling Query parameter; 'fine' is unaffected"
     );
 
-    let artifacts = render_openapi(&projection, &options);
+    let artifacts = render_openapi(&projection, &options).expect("no unsupported forms");
     assert_eq!(artifacts.len(), 1);
     let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
 
@@ -964,7 +964,7 @@ fn a_dangling_reference_reached_only_through_a_split_error_response_is_dropped()
         "'look-up-with-result' is dropped for its dangling split error response;          'fine' is unaffected"
     );
 
-    let artifacts = render_openapi(&projection, &options);
+    let artifacts = render_openapi(&projection, &options).expect("no unsupported forms");
     assert_eq!(artifacts.len(), 1);
     let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
 

@@ -126,6 +126,25 @@ fn rejects_an_unknown_openapi_version() {
     assert_eq!(error.code(), "JSC002");
 }
 
+/// `version` takes the strings `"3.1"` and `"3.0"`, never the JSON numbers
+/// `3.1` and `3.0`. This matters at the CLI: `morphir generate --option`
+/// parses a value as JSON first, so `--option version=3.0` hands this
+/// decoder the number `3.0` and the user has to write
+/// `--option 'version="3.0"'` instead. The rejection is deliberate, not an
+/// accident of the derive: a JSON number cannot distinguish `3.10` from
+/// `3.1`, and `3.0` and `3.00` are the same number, so the spelling of an
+/// OpenAPI version is only well defined as a string. Pinned here so the
+/// quoting requirement the guides document keeps a test behind it.
+#[test]
+fn rejects_a_numeric_openapi_version() {
+    for numeric in [json!(3.0), json!(3.1), json!(3)] {
+        let error = SchemaOptions::from_map(&map([("version", numeric.clone())]))
+            .expect_err("an OpenAPI version is a string, never a number");
+
+        assert_eq!(error.code(), "JSC002", "version = {numeric}");
+    }
+}
+
 #[test]
 fn rejects_an_override_path_without_a_leading_slash() {
     let error = SchemaOptions::from_map(&map([(

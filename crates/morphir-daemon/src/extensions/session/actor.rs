@@ -173,11 +173,32 @@ trait SessionDispatch: Send + Sync {
 }
 
 /// Translate a Kameo delivery result, keeping handler errors verbatim.
+///
+/// A delivery failure is described in this module's own vocabulary rather than
+/// by forwarding kameo's `Display`. This module promises the framework does not
+/// escape, and "Extension session is no longer available: Extension error:
+/// actor stopped" would break that promise in the one place a user reads.
 fn delivered<M, R>(result: Result<R, SendError<M, DaemonError>>) -> Result<R, DaemonError> {
     match result {
         Ok(value) => Ok(value),
         Err(SendError::HandlerError(error)) => Err(error),
-        Err(undeliverable) => Err(gone(DaemonError::Extension(undeliverable.to_string()))),
+        Err(undeliverable) => Err(gone(DaemonError::Extension(
+            undeliverable_cause(&undeliverable).to_owned(),
+        ))),
+    }
+}
+
+/// Describe why a request never reached the session, in domain terms.
+fn undeliverable_cause<M, E>(error: &SendError<M, E>) -> &'static str {
+    match error {
+        SendError::ActorNotRunning(_) | SendError::ActorStopped | SendError::ActorRestarting(_) => {
+            "the session ended before this request was handled"
+        }
+        SendError::MailboxFull(_) => "the session has too many requests in flight",
+        SendError::Timeout(_) => "the session did not answer in time",
+        // Handler errors are the extension's own reply and are returned
+        // verbatim by `delivered`; this arm exists only for exhaustiveness.
+        SendError::HandlerError(_) => "the session could not serve this request",
     }
 }
 
@@ -209,6 +230,12 @@ impl SessionHandle {
     }
 
     /// Complete MEP shutdown for the owned session and stop the actor.
+    ///
+    /// This is not a pre-emption: the request queues behind whatever is
+    /// already in the actor's bounded mailbox (capacity 64), each entry of
+    /// which can hold the actor for up to the transport's 30-second request
+    /// timeout, so shutting down a hung extension can take far longer than one
+    /// timeout to return.
     pub async fn shutdown(&self) -> Result<(), DaemonError> {
         self.dispatch.shutdown().await
     }
@@ -734,6 +761,38 @@ mod tests {
                  not linger until its idle deadline",
             )
             .expect("the watchdog task should not panic");
+    }
+
+    #[tokio::test]
+    async fn an_undeliverable_request_is_reported_without_kameo_vocabulary() {
+        let (session, _requests) =
+            ready_backend_session([Ok(
+                ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
+            )])
+            .await;
+        let handle = spawn_session(session);
+        handle.shutdown().await.unwrap();
+
+        let error = handle
+            .invoke::<serde_json::Value>(methods::GENERATE, serde_json::json!({}))
+            .await
+            .expect_err("a stopped session cannot serve an invocation");
+
+        // This module's whole reason for erasing the framework is that callers
+        // -- and the people reading their output -- never learn an actor
+        // library is involved. Reporting kameo's own Display strings would
+        // hand a user "Extension error: actor stopped".
+        let message = error.to_string();
+        assert!(
+            message.contains("the session ended before this request was handled"),
+            "expected a domain phrase, got: {message}"
+        );
+        for leak in ["actor", "kameo", "mailbox"] {
+            assert!(
+                !message.to_lowercase().contains(leak),
+                "the actor framework leaked into user-facing text via {leak:?}: {message}"
+            );
+        }
     }
 
     #[tokio::test]

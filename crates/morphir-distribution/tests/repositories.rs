@@ -371,6 +371,22 @@ fn publishing_a_verified_bundle_is_repeatable_and_writes_valid_metadata() {
 }
 
 #[test]
+fn prerelease_publication_uses_the_resolvable_preview_channel() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+    let bundle = release_bundle(
+        root.path(),
+        "morphir-avro",
+        "1.0.0-rc.1",
+        b"preview wasm extension",
+    );
+
+    let publication = repository.publish(bundle).unwrap();
+
+    assert_eq!(publication.release().channels(), &[Channel::Preview(None)]);
+}
+
+#[test]
 fn publication_rejects_tampered_and_unsafe_bundles_without_metadata_writes() {
     let root = tempfile::tempdir().unwrap();
     let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();

@@ -312,12 +312,17 @@ impl ReleaseBundleDescriptor {
 
     fn release_record(&self, root: &Path) -> Result<ReleaseRecord> {
         let artifact_path = format!("artifacts/{}", self.artifact.as_str());
+        let channel = if self.version.pre.is_empty() {
+            "stable"
+        } else {
+            "preview"
+        };
         serde_json::from_value(serde_json::json!({
             "schemaVersion": 2,
             "id": self.extension_id,
             "name": display_name(&self.extension_id),
             "version": self.version,
-            "channels": ["stable"],
+            "channels": [channel],
             "mepVersions": self.mep_versions,
             "capabilities": ["backend"],
             "backend": {

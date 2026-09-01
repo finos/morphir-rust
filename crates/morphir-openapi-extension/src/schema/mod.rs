@@ -146,10 +146,19 @@ pub struct SchemaProjection {
 /// [`Unsupported::Error`] it fails the whole projection. Under
 /// [`Unsupported::WarnAndSkip`] its declaration is omitted, the diagnostic is
 /// recorded as a warning, and the remaining declarations still project.
+///
+/// This is a projection entry point, so it re-validates `options` itself
+/// (`JSC002` on failure) rather than trusting the caller: [`SchemaOptions`]
+/// and this function are both public, so a library caller can build
+/// `options` directly instead of going through [`SchemaOptions::from_map`],
+/// which validates already. Calling `validate` again on the normal
+/// `from_map` path is harmless — it is pure and re-checks the same already-
+/// valid struct.
 pub fn project(
     package: &ProjectionPackage,
     options: &SchemaOptions,
 ) -> Result<SchemaProjection, SchemaDiagnostic> {
+    options.validate()?;
     let declared = declared_types(package);
     let context = Context {
         declared: &declared,

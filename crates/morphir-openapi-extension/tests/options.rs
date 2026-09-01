@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use morphir_openapi_extension::{SchemaOptions, Unsupported};
+use morphir_openapi_extension::{SchemaOptions, Unsupported, project};
+use morphir_projection::{DistributionKind, ProjectionPackage};
 use serde_json::{Value, json};
 
 fn map(entries: impl IntoIterator<Item = (&'static str, Value)>) -> HashMap<String, Value> {
@@ -152,6 +153,31 @@ fn rejects_an_override_path_without_a_leading_slash() {
         json!({"acme/customer:customer#find-customer": {"path": "customers"}}),
     )]))
     .expect_err("a path template starts with a slash");
+
+    assert_eq!(error.code(), "JSC002");
+}
+
+/// `SchemaOptions` and `project` are both public, so a library caller can
+/// build `SchemaOptions` directly and skip `from_map` — and its validation
+/// — entirely. `project` is a projection entry point, so it must re-run
+/// `validate` itself rather than trusting a hand-built struct: an
+/// out-of-range `error_status` set this way must still fail with `JSC002`,
+/// not reach rendering and produce an invalid document.
+#[test]
+fn project_validates_a_hand_built_options_struct_directly() {
+    let options = SchemaOptions {
+        error_status: 200,
+        ..SchemaOptions::default()
+    };
+    let package = ProjectionPackage {
+        kind: DistributionKind::Library,
+        package_name: "acme/customer".to_owned(),
+        dependencies: Vec::new(),
+        modules: Vec::new(),
+    };
+
+    let error = project(&package, &options)
+        .expect_err("a hand-built out-of-range error_status must still be rejected");
 
     assert_eq!(error.code(), "JSC002");
 }

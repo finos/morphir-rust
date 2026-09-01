@@ -115,6 +115,11 @@ pub fn project_operations(
     projection: &mut SchemaProjection,
     options: &SchemaOptions,
 ) -> Result<Vec<Operation>, SchemaDiagnostic> {
+    // A second projection entry point, so it re-validates `options` itself
+    // (`JSC002` on failure) rather than trusting the caller — see
+    // `project`'s doc comment for why. Harmless on the normal `from_map`
+    // path, where `options` already passed the same check.
+    options.validate()?;
     if matches!(options.projection, Projection::Schemas) {
         return Ok(Vec::new());
     }

@@ -227,6 +227,16 @@ impl MorphirHome {
     pub fn extensions_state_lock_file(&self) -> PathBuf {
         self.locks_dir().join("extensions.state.lock")
     }
+
+    /// Durable configuration of named extension repositories.
+    pub fn extension_repositories_file(&self) -> PathBuf {
+        self.config_dir().join("extensions/repositories.json")
+    }
+
+    /// Interprocess lock serializing extension repository configuration.
+    pub fn extension_repositories_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("extensions.repositories.lock")
+    }
 }
 
 /// Root directory for Morphir caches.
@@ -391,6 +401,14 @@ mod tests {
         assert_eq!(
             home.extensions_state_lock_file(),
             Path::new("/mh/locks/extensions.state.lock")
+        );
+        assert_eq!(
+            home.extension_repositories_file(),
+            Path::new("/mh/config/extensions/repositories.json")
+        );
+        assert_eq!(
+            home.extension_repositories_lock_file(),
+            Path::new("/mh/locks/extensions.repositories.lock")
         );
     }
 

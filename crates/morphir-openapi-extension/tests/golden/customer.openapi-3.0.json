@@ -35,7 +35,7 @@
           },
           "extent": {
             "items": {
-              "oneOf": [
+              "anyOf": [
                 {
                   "format": "int64",
                   "type": "integer"
@@ -62,7 +62,10 @@
             "uniqueItems": true
           },
           "nothing": {
-            "type": "null"
+            "enum": [
+              null
+            ],
+            "nullable": true
           },
           "ratio": {
             "format": "double",

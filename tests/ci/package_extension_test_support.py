@@ -33,6 +33,9 @@ PACKAGER_MODULES = REPOSITORY_ROOT / "scripts" / "extension_packaging"
 AVRO_ARTIFACT_TASK = (
     REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "avro"
 )
+OPENAPI_ARTIFACT_TASK = (
+    REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "openapi"
+)
 
 AVRO_REGISTRY = """\
 [extensions.avro]

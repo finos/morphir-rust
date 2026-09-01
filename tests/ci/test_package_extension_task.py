@@ -321,3 +321,48 @@ class AvroArtifactTaskTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("Java 11 or newer is required", result.stderr)
             self.assertFalse(fixture.log.exists())
+
+
+class WorktreeCleanlinessTests(unittest.TestCase):
+    """Both artifact tasks run `python3 scripts/package_extension.py
+    --validate-extension-staging` *before* they consult `git status`, and take
+    a provenance-free branch that omits `gitCommit` when that status is not
+    empty. The interpreter writes a bytecode cache on that first call, so
+    without a `.gitignore` rule a run started from a genuinely clean worktree
+    still produced a descriptor `select_extension_assets.py` rejects."""
+
+    def test_generated_python_caches_are_ignored(self) -> None:
+        generated = [
+            "scripts/extension_packaging/__pycache__/model.cpython-311.pyc",
+            ".github/scripts/extension_asset_selection/__pycache__/bundles.cpython-311.pyc",
+            "tests/ci/__pycache__/test_package_extension.cpython-311.pyc",
+            "scripts/extension_packaging/model.pyc",
+            ".pytest_cache/CACHEDIR.TAG",
+        ]
+
+        for path in generated:
+            with self.subTest(path=path):
+                result = subprocess.run(
+                    ["git", "check-ignore", "--quiet", path],
+                    cwd=REPOSITORY_ROOT,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"{path} must be ignored, or an artifact task loses its gitCommit",
+                )
+
+    def test_the_staging_validation_runs_before_the_worktree_check(self) -> None:
+        for task in (AVRO_ARTIFACT_TASK, OPENAPI_ARTIFACT_TASK):
+            with self.subTest(task=task.name):
+                script = task.read_text(encoding="utf-8")
+                validate = script.index("--validate-extension-staging")
+                status = script.index("git status --porcelain")
+
+                self.assertLess(
+                    validate,
+                    status,
+                    "the ordering this ignore rule protects has changed; if the "
+                    "status check now runs first, the rule may be relaxed",
+                )

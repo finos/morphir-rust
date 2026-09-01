@@ -36,6 +36,27 @@
     } }
   },
   {
+    "name": "member-project-discovery",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/member\"]\n" },
+        "packages": { "kind": "directory" },
+        "packages/member": { "kind": "directory" },
+        "packages/member/morphir.toml": { "kind": "file", "text": "[project]\nname = \"member/orders\"\nversion = \"1.0.0\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open",
+      "projects": [{ "name": "member/orders", "version": "1.0.0", "relativePath": "packages/member", "configAnchor": "packages/member/morphir.toml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
+    } }
+  },
+  {
     "name": "morphir-directory-toml",
     "request": {
       "protocolVersion": 1,
@@ -164,6 +185,26 @@
     } }
   },
   {
+    "name": "morphir-home-invalid-is-fatal",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[project]\nname = \"home/root\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[project\nversion = \"2.0.0\"\n" }
+      } },
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "failure", "error": {
+      "code": "workspace.config.invalid",
+      "message": "invalid Morphir configuration at `morphir.toml`: Failed to parse TOML config morphir.toml: TOML parse error at line 1, column 9\n  |\n1 | [project\n  |         ^\nunclosed table, expected `]`\n",
+      "path": "morphir.toml"
+    } }
+  },
+  {
     "name": "unmatched-member-glob",
     "request": {
       "protocolVersion": 1,
@@ -178,6 +219,29 @@
     },
     "expected": { "status": "success", "snapshot": {
       "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open", "projects": [], "diagnostics": []
+    } }
+  },
+  {
+    "name": "excluded-member-omitted",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "morphir.toml": { "kind": "file", "text": "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/private\"]\n" },
+        "packages": { "kind": "directory" },
+        "packages/private": { "kind": "directory" },
+        "packages/private/morphir.toml": { "kind": "file", "text": "[project]\nname = \"excluded/private\"\nversion = \"1.0.0\"\nsource_directory = \"src\"\n" },
+        "packages/public": { "kind": "directory" },
+        "packages/public/morphir.toml": { "kind": "file", "text": "[project]\nname = \"excluded/public\"\nversion = \"1.0.0\"\nsource_directory = \"src\"\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {}
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": "morphir.toml", "name": null, "state": "open",
+      "projects": [{ "name": "excluded/public", "version": "1.0.0", "relativePath": "packages/public", "configAnchor": "packages/public/morphir.toml", "sourceDirectory": "src", "state": "unloaded", "diagnostics": [] }],
+      "diagnostics": []
     } }
   },
   {

@@ -118,7 +118,7 @@ impl Error for NativeWorkspaceDiscoveryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Portable(_) => None,
-            Self::Host(error) => error.source(),
+            Self::Host(error) => Some(error.as_ref()),
         }
     }
 }

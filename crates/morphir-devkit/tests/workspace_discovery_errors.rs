@@ -7,6 +7,15 @@ use morphir_devkit::{
 use morphir_workspace::{RelativePath, WORKSPACE_CONFIG_AMBIGUOUS, WORKSPACE_CONFIG_INVALID};
 
 #[test]
+fn direct_host_failures_remain_visible_in_the_standard_error_chain() {
+    let error = NativeWorkspaceDiscoveryError::Host(anyhow::anyhow!("direct host failure"));
+
+    let source = std::error::Error::source(&error).expect("host failure must be the source");
+
+    assert_eq!(source.to_string(), "direct host failure");
+}
+
+#[test]
 fn portable_failures_retain_their_typed_code_message_and_path() {
     for (name, files, expected_code, expected_message) in [
         (
@@ -68,7 +77,14 @@ fn full_config_decode_failures_remain_native_after_portable_success() {
 
     let error = discover_workspace_detailed_typed(root.path(), &options).unwrap_err();
     let source = std::error::Error::source(&error).expect("host failure must retain its cause");
-    assert!(source.to_string().contains("invalid type: string"));
+    assert_eq!(
+        source.to_string(),
+        "Failed to decode effective root Morphir configuration"
+    );
+    assert!(
+        std::iter::successors(Some(source), |cause| cause.source())
+            .any(|cause| cause.to_string().contains("invalid type: string"))
+    );
     let NativeWorkspaceDiscoveryError::Host(host) = error else {
         panic!("expected a host full-config decoding failure")
     };

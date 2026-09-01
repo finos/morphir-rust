@@ -19,8 +19,8 @@ fi
 case "$CATEGORY" in
     Added | Changed | Deprecated | Removed | Fixed | Security) ;;
     *)
-        echo "ERROR: Invalid category '$CATEGORY'"
-        echo "Valid categories: Added, Changed, Deprecated, Removed, Fixed, Security"
+        echo "ERROR: Invalid category '$CATEGORY'" >&2
+        echo "Valid categories: Added, Changed, Deprecated, Removed, Fixed, Security" >&2
         exit 1
         ;;
 esac
@@ -28,7 +28,7 @@ esac
 CHANGELOG="CHANGELOG.md"
 
 if [ ! -f "$CHANGELOG" ]; then
-    echo "ERROR: $CHANGELOG not found"
+    echo "ERROR: $CHANGELOG not found" >&2
     exit 1
 fi
 
@@ -36,7 +36,7 @@ fi
 LINE=$(grep -n "### $CATEGORY" "$CHANGELOG" | head -1 | cut -d: -f1)
 
 if [ -z "$LINE" ]; then
-    echo "ERROR: Category '### $CATEGORY' not found in $CHANGELOG"
+    echo "ERROR: Category '### $CATEGORY' not found in $CHANGELOG" >&2
     exit 1
 fi
 
@@ -52,7 +52,7 @@ trap 'rm -f "$TEMP"' EXIT
 if ! awk -v line="$LINE" -v entry="- $ENTRY" \
     'NR == line { print; print entry; next } { print }' \
     "$CHANGELOG" >"$TEMP"; then
-    echo "ERROR: could not rewrite $CHANGELOG"
+    echo "ERROR: could not rewrite $CHANGELOG" >&2
     exit 1
 fi
 cat "$TEMP" >"$CHANGELOG"

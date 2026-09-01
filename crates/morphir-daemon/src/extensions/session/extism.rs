@@ -1,10 +1,13 @@
 //! Extism transport for typestate MEP sessions.
 
-use super::{ExpectedExtension, Loaded, MepTransport, Session, TransportError, TransportState};
+use super::{
+    ExpectedExtension, Loaded, MepTransport, PersistedExtensionCapabilities, Session,
+    TransportError, TransportState,
+};
 use crate::extensions::ExtensionContainer;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use async_trait::async_trait;
-use morphir_extension_sdk::{BackendCapability, ExtensionInfo};
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 
 /// Factory for Extism-backed typestate sessions.
 pub struct ExtismSession;
@@ -26,20 +29,43 @@ pub struct ExtismTransport {
 }
 
 impl ExtismTransport {
-    /// Attach exact installed identity and optional backend metadata to a container.
-    pub(crate) fn new_with_expected_backend_capability(
+    /// Attach exact installed identity and complete capabilities to a container.
+    pub fn new_with_expected_capabilities(
         container: ExtensionContainer,
         info: ExtensionInfo,
-        backend: Option<BackendCapability>,
+        capabilities: ExtensionCapabilities,
     ) -> Self {
-        let locked_extension = backend
-            .map(|backend| {
-                ExpectedExtension::discovered_with_backend_capability(info.clone(), backend)
-            })
-            .unwrap_or_else(|| ExpectedExtension::legacy_discovered(info));
         Self {
             container,
-            locked_extension: Some(locked_extension),
+            locked_extension: Some(ExpectedExtension::discovered_with_capabilities(
+                info,
+                capabilities,
+            )),
+        }
+    }
+
+    /// Attach installed identity and persisted capability members to a container.
+    pub fn new_with_persisted_capabilities(
+        container: ExtensionContainer,
+        info: ExtensionInfo,
+        capabilities: PersistedExtensionCapabilities,
+    ) -> Self {
+        Self {
+            container,
+            locked_extension: Some(ExpectedExtension::discovered_with_persisted_capabilities(
+                info,
+                capabilities,
+            )),
+        }
+    }
+
+    pub(crate) fn new_with_legacy_expected_extension(
+        container: ExtensionContainer,
+        info: ExtensionInfo,
+    ) -> Self {
+        Self {
+            container,
+            locked_extension: Some(ExpectedExtension::legacy_discovered(info)),
         }
     }
 }

@@ -13,12 +13,15 @@ use crate::state_io::{
 };
 use crate::{
     ArtifactRuntime, ArtifactSource, ArtifactStore, BackendRecord, Capability, DistributionError,
-    ExtensionId, IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result,
-    Selection, Sha256Digest, VerifiedArtifact,
+    ExtensionId, FrontendRecord, IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact,
+    Result, SchemaVersion, Selection, Sha256Digest, VerifiedArtifact,
 };
 use morphir_common::home::MorphirHome;
 use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
-use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{
+    BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
+    LanguageCapability,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -27,22 +30,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const EXTENSION_LOCK_SCHEMA_VERSION: u32 = 3;
-const LEGACY_EXTENSION_LOCK_SCHEMA_VERSION: u32 = 2;
-const CATALOG_SCHEMA_VERSION: u32 = 2;
-const LEGACY_CATALOG_SCHEMA_VERSION: u32 = 1;
+const MINIMUM_EXTENSION_LOCK_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+const CURRENT_EXTENSION_LOCK_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+const MINIMUM_CATALOG_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+const CURRENT_CATALOG_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StateSchemaEnvelope {
-    schema_version: u32,
+    schema_version: SchemaVersion,
 }
 
 /// Reproducible selection and integrity record for one installed extension.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtensionLock {
-    schema_version: u32,
+    schema_version: SchemaVersion,
     selection: Selection,
     extension_id: ExtensionId,
     name: String,
@@ -55,57 +58,19 @@ pub struct ExtensionLock {
     digest: Sha256Digest,
     capabilities: Vec<Capability>,
     mep_versions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frontend: Option<FrontendRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     backend: Option<BackendRecord>,
     executable: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LegacyExtensionLock {
-    schema_version: u32,
-    selection: Selection,
-    extension_id: ExtensionId,
-    name: String,
-    version: Version,
-    index: IndexProvenance,
-    source: ArtifactSource,
-    runtime: ArtifactRuntime,
-    platform: Platform,
-    args: Vec<String>,
-    digest: Sha256Digest,
-    capabilities: Vec<Capability>,
-    mep_versions: Vec<String>,
-    executable: bool,
-}
-
-impl From<LegacyExtensionLock> for ExtensionLock {
-    fn from(legacy: LegacyExtensionLock) -> Self {
-        Self {
-            schema_version: legacy.schema_version,
-            selection: legacy.selection,
-            extension_id: legacy.extension_id,
-            name: legacy.name,
-            version: legacy.version,
-            index: legacy.index,
-            source: legacy.source,
-            runtime: legacy.runtime,
-            platform: Some(legacy.platform),
-            args: legacy.args,
-            digest: legacy.digest,
-            capabilities: legacy.capabilities,
-            mep_versions: legacy.mep_versions,
-            backend: None,
-            executable: legacy.executable,
-        }
-    }
 }
 
 impl ExtensionLock {
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
+        let release = &artifact.selected.release;
         let lock = Self {
-            schema_version: EXTENSION_LOCK_SCHEMA_VERSION,
+            schema_version: CURRENT_EXTENSION_LOCK_SCHEMA_VERSION,
             selection: artifact.selected.selection.clone(),
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -118,7 +83,8 @@ impl ExtensionLock {
             digest: artifact.selected.artifact.digest().clone(),
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
-            backend: artifact.selected.release.backend().cloned(),
+            frontend: release.frontend().cloned(),
+            backend: release.backend().cloned(),
             executable: artifact.selected.artifact.executable(),
         };
         validate_runtime_state(
@@ -128,13 +94,16 @@ impl ExtensionLock {
             &lock.args,
             lock.executable,
             &lock.capabilities,
-            lock.backend.as_ref(),
+            ExtensionMetadata {
+                frontend: lock.frontend.as_ref(),
+                backend: lock.backend.as_ref(),
+            },
         )?;
         Ok(lock)
     }
 
     /// Return the lock schema version.
-    pub fn schema_version(&self) -> u32 {
+    pub fn schema_version(&self) -> SchemaVersion {
         self.schema_version
     }
 
@@ -198,6 +167,11 @@ impl ExtensionLock {
         &self.mep_versions
     }
 
+    /// Return frontend-specific metadata fixed by this lock, when declared.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
+    }
+
     /// Return backend-specific metadata fixed by this lock, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
@@ -226,19 +200,13 @@ fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<
     let path = extension_lock_path(home, id);
     let bytes = read_state_bytes(&path)?;
     let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
-    let lock: ExtensionLock = match envelope.schema_version {
-        EXTENSION_LOCK_SCHEMA_VERSION => decode_state(&path, &bytes)?,
-        LEGACY_EXTENSION_LOCK_SCHEMA_VERSION => {
-            let legacy: LegacyExtensionLock = decode_state(&path, &bytes)?;
-            legacy.into()
-        }
-        version => {
-            return Err(DistributionError::UnsupportedStateSchema {
-                kind: "extension lock",
-                version,
-            });
-        }
-    };
+    validate_extension_state_schema(
+        "extension lock",
+        envelope.schema_version,
+        MINIMUM_EXTENSION_LOCK_SCHEMA_VERSION,
+        CURRENT_EXTENSION_LOCK_SCHEMA_VERSION,
+    )?;
+    let lock: ExtensionLock = decode_state(&path, &bytes)?;
     if &lock.extension_id != id {
         return Err(DistributionError::StateMismatch { id: id.clone() });
     }
@@ -249,9 +217,30 @@ fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<
         &lock.args,
         lock.executable,
         &lock.capabilities,
-        lock.backend.as_ref(),
+        ExtensionMetadata {
+            frontend: lock.frontend.as_ref(),
+            backend: lock.backend.as_ref(),
+        },
     )?;
     Ok(lock)
+}
+
+fn validate_extension_state_schema(
+    kind: &'static str,
+    version: SchemaVersion,
+    minimum: SchemaVersion,
+    maximum: SchemaVersion,
+) -> Result<()> {
+    if version >= minimum && maximum.supports(version) {
+        Ok(())
+    } else {
+        Err(DistributionError::UnsupportedExtensionStateSchema {
+            kind,
+            version,
+            minimum,
+            maximum,
+        })
+    }
 }
 
 fn extension_lock_path(home: &MorphirHome, id: &ExtensionId) -> PathBuf {
@@ -273,51 +262,17 @@ pub struct InstalledExtension {
     capabilities: Vec<Capability>,
     mep_versions: Vec<String>,
     index: IndexProvenance,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frontend: Option<FrontendRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     backend: Option<BackendRecord>,
     executable: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LegacyInstalledExtension {
-    extension_id: ExtensionId,
-    name: String,
-    version: Version,
-    runtime: ArtifactRuntime,
-    platform: Platform,
-    args: Vec<String>,
-    digest: Sha256Digest,
-    store_path: RelativeArtifactPath,
-    capabilities: Vec<Capability>,
-    mep_versions: Vec<String>,
-    index: IndexProvenance,
-    executable: bool,
-}
-
-impl From<LegacyInstalledExtension> for InstalledExtension {
-    fn from(legacy: LegacyInstalledExtension) -> Self {
-        Self {
-            extension_id: legacy.extension_id,
-            name: legacy.name,
-            version: legacy.version,
-            runtime: legacy.runtime,
-            platform: Some(legacy.platform),
-            args: legacy.args,
-            digest: legacy.digest,
-            store_path: legacy.store_path,
-            capabilities: legacy.capabilities,
-            mep_versions: legacy.mep_versions,
-            index: legacy.index,
-            backend: None,
-            executable: legacy.executable,
-        }
-    }
 }
 
 impl InstalledExtension {
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
+        let release = &artifact.selected.release;
         let installed = Self {
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -330,7 +285,8 @@ impl InstalledExtension {
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
             index: artifact.selected.index.clone(),
-            backend: artifact.selected.release.backend().cloned(),
+            frontend: release.frontend().cloned(),
+            backend: release.backend().cloned(),
             executable: artifact.selected.artifact.executable(),
         };
         validate_installed_runtime(&installed)?;
@@ -392,6 +348,11 @@ impl InstalledExtension {
         &self.index
     }
 
+    /// Return frontend-specific metadata, when declared.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
+    }
+
     /// Return backend-specific metadata, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
@@ -415,6 +376,32 @@ impl InstalledExtension {
                 .map(extension_type)
                 .collect(),
             ..ExtensionInfo::default()
+        }
+    }
+
+    /// Convert installed frontend and backend metadata to shared MEP capabilities.
+    pub fn extension_capabilities(&self) -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            frontend: self.frontend.as_ref().map(|record| FrontendCapability {
+                languages: record
+                    .languages()
+                    .iter()
+                    .map(|language| LanguageCapability {
+                        id: language.id().to_owned(),
+                        file_extensions: language.file_extensions().to_vec(),
+                    })
+                    .collect(),
+                ir_versions: record.ir_versions().to_vec(),
+                compile: record.compile(),
+                incremental: false,
+                fragments: false,
+            }),
+            backend: self.backend.as_ref().map(|backend| BackendCapability {
+                targets: backend.targets().to_vec(),
+                ir_versions: backend.ir_versions().to_vec(),
+                generate: backend.generate(),
+            }),
+            ..ExtensionCapabilities::default()
         }
     }
 }
@@ -441,15 +428,8 @@ impl InstalledExtensionSnapshot {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CatalogFile {
-    schema_version: u32,
+    schema_version: SchemaVersion,
     extensions: Vec<InstalledExtension>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LegacyCatalogFile {
-    schema_version: u32,
-    extensions: Vec<LegacyInstalledExtension>,
 }
 
 /// Durable installed extension catalog.
@@ -476,22 +456,13 @@ impl InstalledCatalog {
         }
         let bytes = read_state_bytes(&path)?;
         let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
-        let stored = match envelope.schema_version {
-            CATALOG_SCHEMA_VERSION => decode_state(&path, &bytes)?,
-            LEGACY_CATALOG_SCHEMA_VERSION => {
-                let legacy: LegacyCatalogFile = decode_state(&path, &bytes)?;
-                CatalogFile {
-                    schema_version: legacy.schema_version,
-                    extensions: legacy.extensions.into_iter().map(Into::into).collect(),
-                }
-            }
-            version => {
-                return Err(DistributionError::UnsupportedStateSchema {
-                    kind: "installed extension catalog",
-                    version,
-                });
-            }
-        };
+        validate_extension_state_schema(
+            "installed extension catalog",
+            envelope.schema_version,
+            MINIMUM_CATALOG_SCHEMA_VERSION,
+            CURRENT_CATALOG_SCHEMA_VERSION,
+        )?;
+        let stored: CatalogFile = decode_state(&path, &bytes)?;
         let mut extensions = BTreeMap::new();
         for extension in stored.extensions {
             validate_installed_runtime(&extension)?;
@@ -527,7 +498,7 @@ impl InstalledCatalog {
         let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CATALOG_SCHEMA_VERSION,
+            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
             extensions: next.values().cloned().collect(),
         };
         atomic_write_json(&self.home.extensions_catalog_file(), &stored)?;
@@ -566,7 +537,7 @@ impl<'home> ExtensionInstaller<'home> {
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CATALOG_SCHEMA_VERSION,
+            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
             extensions: extensions.into_values().collect(),
         };
         let lock_bytes = encode_json(&lock)?;
@@ -602,7 +573,7 @@ fn uninstall_with_writer(
         .remove(id)
         .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
     let stored = CatalogFile {
-        schema_version: CATALOG_SCHEMA_VERSION,
+        schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
         extensions: extensions.into_values().collect(),
     };
     let lock_path = extension_lock_path(home, id);
@@ -679,6 +650,7 @@ fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock)
         || lock.capabilities != installed.capabilities
         || lock.mep_versions != installed.mep_versions
         || lock.index != installed.index
+        || lock.frontend != installed.frontend
         || lock.backend != installed.backend
         || lock.executable != installed.executable
     {
@@ -708,8 +680,53 @@ fn validate_installed_runtime(installed: &InstalledExtension) -> Result<()> {
         &installed.args,
         installed.executable,
         &installed.capabilities,
-        installed.backend.as_ref(),
+        ExtensionMetadata {
+            frontend: installed.frontend.as_ref(),
+            backend: installed.backend.as_ref(),
+        },
     )
+}
+
+#[derive(Clone, Copy)]
+struct ExtensionMetadata<'record> {
+    frontend: Option<&'record FrontendRecord>,
+    backend: Option<&'record BackendRecord>,
+}
+
+fn validate_capability_metadata<Metadata>(
+    id: &ExtensionId,
+    capabilities: &[Capability],
+    capability: Capability,
+    metadata: Option<&Metadata>,
+) -> Result<()> {
+    let declared = capabilities.contains(&capability);
+    match (declared, metadata.is_some()) {
+        (false, false) | (true, true) => Ok(()),
+        (false, true) => Err(DistributionError::InvalidInstalledState {
+            id: id.clone(),
+            reason: metadata_requires_capability_reason(capability),
+        }),
+        (true, false) => Err(DistributionError::InvalidInstalledState {
+            id: id.clone(),
+            reason: capability_requires_metadata_reason(capability),
+        }),
+    }
+}
+
+fn metadata_requires_capability_reason(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Frontend => "frontend metadata requires the frontend capability",
+        Capability::Backend => "backend metadata requires the backend capability",
+        _ => unreachable!("only frontend and backend have persisted metadata"),
+    }
+}
+
+fn capability_requires_metadata_reason(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Frontend => "frontend capability requires frontend metadata",
+        Capability::Backend => "backend capability requires backend metadata",
+        _ => unreachable!("only frontend and backend have persisted metadata"),
+    }
 }
 
 fn validate_runtime_state(
@@ -719,15 +736,10 @@ fn validate_runtime_state(
     args: &[String],
     executable: bool,
     capabilities: &[Capability],
-    backend: Option<&BackendRecord>,
+    metadata: ExtensionMetadata<'_>,
 ) -> Result<()> {
-    let declares_backend = capabilities.contains(&Capability::Backend);
-    if backend.is_some() && !declares_backend {
-        return Err(DistributionError::InvalidInstalledState {
-            id: id.clone(),
-            reason: "backend metadata requires the backend capability",
-        });
-    }
+    validate_capability_metadata(id, capabilities, Capability::Frontend, metadata.frontend)?;
+    validate_capability_metadata(id, capabilities, Capability::Backend, metadata.backend)?;
     match runtime {
         ArtifactRuntime::Process if platform.is_none() => {
             Err(DistributionError::InvalidInstalledState {
@@ -747,12 +759,6 @@ fn validate_runtime_state(
             Err(DistributionError::InvalidInstalledState {
                 id: id.clone(),
                 reason: "wasm artifacts must be portable, argument-free, and non-executable",
-            })
-        }
-        ArtifactRuntime::Wasm if declares_backend && backend.is_none() => {
-            Err(DistributionError::InvalidInstalledState {
-                id: id.clone(),
-                reason: "wasm backend artifacts require backend metadata",
             })
         }
         _ => Ok(()),
@@ -798,8 +804,11 @@ mod tests {
             Some(&platform),
             &[],
             false,
-            &[Capability::Frontend],
-            None,
+            &[],
+            ExtensionMetadata {
+                frontend: None,
+                backend: None,
+            },
         )
         .unwrap_err();
 
@@ -817,8 +826,11 @@ mod tests {
             Some(&platform),
             &[],
             false,
-            &[Capability::Frontend],
-            None,
+            &[],
+            ExtensionMetadata {
+                frontend: None,
+                backend: None,
+            },
         )
         .unwrap();
     }
@@ -1231,13 +1243,18 @@ mod tests {
 
     fn write_release(index: &Path, version: &str, digest: &Sha256Digest) {
         let record = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": "1.0",
             "id": "example",
             "name": "Example",
             "version": version,
             "channels": ["stable"],
             "mepVersions": ["0.1"],
             "capabilities": ["frontend"],
+            "frontend": {
+                "languages": [{"id": "example", "fileExtensions": [".example"]}],
+                "irVersions": ["4"],
+                "compile": true
+            },
             "artifacts": [{
                 "runtime": "process",
                 "platform": { "os": "linux", "arch": "x86_64" },

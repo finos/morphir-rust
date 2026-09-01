@@ -1,377 +1,370 @@
-//! Extension registry for managing loaded extensions
-//!
-//! This module provides discovery and lifecycle management for extensions.
+//! Transport-neutral extension provider registration and resolution.
 
-use crate::error::{DaemonError, Result};
-use crate::extensions::container::{ExtensionContainer, ExtensionInfo, ExtensionType};
-use crate::extensions::host_functions::MorphirHostFunctions;
-use crate::extensions::loader::ExtensionLoader;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+mod types;
+
+pub use types::{
+    CapabilityMetadataScope, InvocationMode, InvocationPolicy, ProviderMetadata, ProviderOrigin,
+    ResolvedBackend, ResolvedFrontend,
+};
+
+use crate::{DaemonError, Result};
+use morphir_core::format_version::{
+    NormalizedFormatVersion, ReleaseTriplet, ScalarValue, SupportTable,
+};
+use morphir_distribution::InstalledExtensionSnapshot;
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, NativeExtension};
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::info;
+use types::{ProviderRuntime, RegisteredBackend, RegisteredFrontend, RegisteredProvider};
 
-/// Configuration for an extension in the registry
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExtensionConfig {
-    /// Extension identifier
-    pub id: String,
-    /// Source path, URL, or embedded
-    #[serde(default)]
-    pub source: ExtensionSource,
-    /// Whether the extension is enabled
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Extension-specific configuration
-    #[serde(default)]
-    pub config: HashMap<String, serde_json::Value>,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Source of an extension
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum ExtensionSource {
-    /// Local file path
-    Path { path: PathBuf },
-    /// URL to download
-    Url { url: String },
-    /// GitHub release
-    GitHub {
-        repo: String,
-        #[serde(default)]
-        tag: Option<String>,
-        asset: String,
-    },
-}
-
-impl Default for ExtensionSource {
-    fn default() -> Self {
-        ExtensionSource::Path {
-            path: PathBuf::new(),
-        }
-    }
-}
-
-/// Extension registry managing loaded extensions
+/// In-memory registry of immutable built-in and installed provider snapshots.
+#[derive(Clone, Default)]
 pub struct ExtensionRegistry {
-    /// Extension loader
-    loader: ExtensionLoader,
-    /// Loaded extensions by ID
-    extensions: RwLock<HashMap<String, Arc<ExtensionContainer>>>,
-    /// Extension configurations
-    configs: RwLock<HashMap<String, ExtensionConfig>>,
-    /// Workspace root for host functions
-    workspace_root: PathBuf,
-    /// Artifact access granted to guest host functions.
-    output_access: RegistryOutputAccess,
-}
-
-enum RegistryOutputAccess {
-    Workspace(PathBuf),
-    RestrictedGeneration,
+    providers: BTreeMap<(ProviderOrigin, String), Arc<RegisteredProvider>>,
 }
 
 impl ExtensionRegistry {
-    /// Create a new extension registry
-    pub fn new(workspace_root: PathBuf, output_dir: PathBuf) -> Result<Self> {
-        let cache_dir = ExtensionLoader::default_cache_dir()?;
-
-        Ok(Self {
-            loader: ExtensionLoader::new(cache_dir)?,
-            extensions: RwLock::new(HashMap::new()),
-            configs: RwLock::new(HashMap::new()),
-            workspace_root,
-            output_access: RegistryOutputAccess::Workspace(output_dir),
-        })
+    /// Create an empty provider registry.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Create a registry for generation where the host owns artifact publication.
-    pub fn for_restricted_generation(workspace_root: PathBuf) -> Result<Self> {
-        let cache_dir = ExtensionLoader::default_cache_dir()?;
-
-        Ok(Self {
-            loader: ExtensionLoader::new(cache_dir)?,
-            extensions: RwLock::new(HashMap::new()),
-            configs: RwLock::new(HashMap::new()),
-            workspace_root,
-            output_access: RegistryOutputAccess::RestrictedGeneration,
-        })
+    /// Register one in-process provider using its native metadata snapshots.
+    pub fn register_builtin(&mut self, extension: NativeExtension) -> Result<()> {
+        let info = extension.info().clone();
+        let capabilities = extension.capabilities().clone();
+        self.register_provider(
+            info,
+            capabilities,
+            ProviderOrigin::Builtin,
+            ProviderRuntime::Native(extension),
+        )
     }
 
-    /// Create registry with custom loader
-    pub fn with_loader(
-        loader: ExtensionLoader,
-        workspace_root: PathBuf,
-        output_dir: PathBuf,
-    ) -> Self {
-        Self {
-            loader,
-            extensions: RwLock::new(HashMap::new()),
-            configs: RwLock::new(HashMap::new()),
-            workspace_root,
-            output_access: RegistryOutputAccess::Workspace(output_dir),
-        }
+    /// Register one atomically validated installed provider snapshot.
+    pub fn register_installed(&mut self, snapshot: InstalledExtensionSnapshot) -> Result<()> {
+        let info = snapshot.installed().extension_info();
+        let capabilities = snapshot.installed().extension_capabilities();
+        self.register_provider(
+            info,
+            capabilities,
+            ProviderOrigin::Installed,
+            ProviderRuntime::Installed(snapshot),
+        )
     }
 
-    /// Register an extension configuration
-    pub async fn register(&self, config: ExtensionConfig) -> Result<()> {
-        let mut configs = self.configs.write().await;
-        info!("Registering extension: {}", config.id);
-        configs.insert(config.id.clone(), config);
-        Ok(())
-    }
-
-    /// Load an extension by ID
-    pub async fn load(&self, id: &str) -> Result<Arc<ExtensionContainer>> {
-        // Check if already loaded
-        {
-            let extensions = self.extensions.read().await;
-            if let Some(ext) = extensions.get(id) {
-                return Ok(ext.clone());
-            }
-        }
-
-        // Get config
-        let config = {
-            let configs = self.configs.read().await;
-            configs.get(id).cloned().ok_or_else(|| {
-                DaemonError::Extension(format!("Extension not registered: {}", id))
-            })?
-        };
-
-        if !config.enabled {
+    fn register_provider(
+        &mut self,
+        info: ExtensionInfo,
+        capabilities: ExtensionCapabilities,
+        origin: ProviderOrigin,
+        runtime: ProviderRuntime,
+    ) -> Result<()> {
+        let key = (origin, info.id.clone());
+        if self.providers.contains_key(&key) {
             return Err(DaemonError::Extension(format!(
-                "Extension is disabled: {}",
-                id
+                "duplicate {origin:?} provider ID '{}'",
+                info.id
             )));
         }
 
-        // Load the WASM file
-        let wasm_path = match &config.source {
-            ExtensionSource::Path { path } => self.loader.load_from_path(path).await?,
-            ExtensionSource::Url { url } => self.loader.load_from_url(id, url).await?,
-            ExtensionSource::GitHub { repo, tag, asset } => {
-                self.loader
-                    .load_from_github(id, repo, tag.as_deref(), asset)
-                    .await?
-            }
-        };
+        let frontend = capabilities
+            .frontend
+            .clone()
+            .map(|capability| {
+                normalize_advertised_releases(&info.id, "frontend", &capability.ir_versions).map(
+                    |releases| RegisteredFrontend {
+                        capability,
+                        releases,
+                    },
+                )
+            })
+            .transpose()?;
+        let backend = capabilities
+            .backend
+            .clone()
+            .map(|capability| {
+                normalize_advertised_releases(&info.id, "backend", &capability.ir_versions).map(
+                    |releases| RegisteredBackend {
+                        capability,
+                        releases,
+                    },
+                )
+            })
+            .transpose()?;
 
-        // Create host functions
-        let host_funcs = self.host_functions();
-
-        // Create container
-        let wasm_bytes = tokio::fs::read(&wasm_path).await?;
-        let container =
-            ExtensionContainer::from_bytes_async(id.to_owned(), wasm_bytes, host_funcs).await?;
-        let container = Arc::new(container);
-
-        // Store in registry
-        {
-            let mut extensions = self.extensions.write().await;
-            extensions.insert(id.to_string(), container.clone());
-        }
-
-        info!(
-            "Extension loaded: {} v{}",
-            container.info().name,
-            container.info().version
+        self.providers.insert(
+            key,
+            Arc::new(RegisteredProvider {
+                info,
+                capabilities,
+                origin,
+                capability_metadata_scope: match origin {
+                    ProviderOrigin::Builtin => CapabilityMetadataScope::Complete,
+                    ProviderOrigin::Installed => CapabilityMetadataScope::PersistedFrontendBackend,
+                },
+                runtime,
+                frontend,
+                backend,
+            }),
         );
-
-        Ok(container)
-    }
-
-    fn host_functions(&self) -> MorphirHostFunctions {
-        match &self.output_access {
-            RegistryOutputAccess::Workspace(output_dir) => {
-                MorphirHostFunctions::for_workspace(self.workspace_root.clone(), output_dir.clone())
-            }
-            RegistryOutputAccess::RestrictedGeneration => {
-                MorphirHostFunctions::for_restricted_generation(self.workspace_root.clone())
-            }
-        }
-    }
-
-    /// Load extension from a path (convenience method)
-    pub async fn load_from_path(&self, id: &str, path: &Path) -> Result<Arc<ExtensionContainer>> {
-        self.register(ExtensionConfig {
-            id: id.to_string(),
-            source: ExtensionSource::Path {
-                path: path.to_path_buf(),
-            },
-            enabled: true,
-            config: HashMap::new(),
-        })
-        .await?;
-
-        self.load(id).await
-    }
-
-    /// Unload an extension
-    pub async fn unload(&self, id: &str) -> Result<()> {
-        let mut extensions = self.extensions.write().await;
-        if extensions.remove(id).is_some() {
-            info!("Extension unloaded: {}", id);
-            Ok(())
-        } else {
-            Err(DaemonError::Extension(format!(
-                "Extension not loaded: {}",
-                id
-            )))
-        }
-    }
-
-    /// Get a loaded extension
-    pub async fn get(&self, id: &str) -> Option<Arc<ExtensionContainer>> {
-        let extensions = self.extensions.read().await;
-        extensions.get(id).cloned()
-    }
-
-    /// List all loaded extensions
-    pub async fn list(&self) -> Vec<ExtensionInfo> {
-        let extensions = self.extensions.read().await;
-        extensions.values().map(|e| e.info().clone()).collect()
-    }
-
-    /// List extensions by type
-    pub async fn list_by_type(&self, ext_type: ExtensionType) -> Vec<Arc<ExtensionContainer>> {
-        let extensions = self.extensions.read().await;
-        extensions
-            .values()
-            .filter(|e| e.supports(ext_type))
-            .cloned()
-            .collect()
-    }
-
-    /// Find an extension supporting a specific type
-    pub async fn find_by_type(&self, ext_type: ExtensionType) -> Option<Arc<ExtensionContainer>> {
-        let extensions = self.extensions.read().await;
-        extensions.values().find(|e| e.supports(ext_type)).cloned()
-    }
-
-    /// Get the extension loader
-    pub fn loader(&self) -> &ExtensionLoader {
-        &self.loader
-    }
-
-    /// Discover extensions from configuration
-    pub async fn discover_from_config(
-        &self,
-        extensions_config: &HashMap<String, ExtensionConfig>,
-    ) -> Result<()> {
-        for (id, config) in extensions_config {
-            let mut config = config.clone();
-            config.id = id.clone();
-            self.register(config).await?;
-        }
         Ok(())
     }
 
-    /// Load all registered extensions
-    pub async fn load_all(&self) -> Vec<Result<Arc<ExtensionContainer>>> {
-        let ids: Vec<String> = {
-            let configs = self.configs.read().await;
-            configs.keys().cloned().collect()
-        };
-
-        let mut results = Vec::new();
-        for id in ids {
-            results.push(self.load(&id).await);
-        }
-        results
-    }
-
-    /// Register a builtin extension
-    pub async fn register_builtin(&self, id: &str, path: PathBuf) -> Result<()> {
-        self.register(ExtensionConfig {
-            id: id.to_string(),
-            source: ExtensionSource::Path { path },
-            enabled: true,
-            config: HashMap::new(),
-        })
-        .await
-    }
-
-    /// Find a frontend extension by language name
-    pub async fn find_extension_by_language(
+    /// Resolve an enabled frontend for an exact language and normalized IR release.
+    pub fn resolve_frontend(
         &self,
-        language: &str,
-    ) -> Option<Arc<ExtensionContainer>> {
-        // First check builtin extensions (by ID matching language)
-        if let Ok(ext) = self.load(language).await
-            && ext.supports(ExtensionType::Frontend)
-        {
-            return Some(ext);
-        }
-
-        // Then check registered extensions
-        let extensions = self.extensions.read().await;
-        for ext in extensions.values() {
-            if ext.supports(ExtensionType::Frontend) {
-                // For now, match by ID. In the future, we could query the extension
-                // for its supported languages
-                if ext.id() == language {
-                    return Some(ext.clone());
-                }
-            }
-        }
-        None
+        language_id: &str,
+        ir_version: &str,
+        policy: InvocationPolicy,
+    ) -> Result<ResolvedFrontend> {
+        let requested = normalize_requested_ir_version(ir_version)?;
+        let matching: Vec<_> = self
+            .providers
+            .values()
+            .filter(|provider| {
+                provider.frontend.as_ref().is_some_and(|frontend| {
+                    frontend.capability.compile
+                        && frontend
+                            .capability
+                            .languages
+                            .iter()
+                            .any(|language| language.id == language_id)
+                        && frontend.releases.contains(&requested)
+                })
+            })
+            .cloned()
+            .collect();
+        let provider = select_provider(
+            matching,
+            "frontend.compile",
+            &format!("language '{language_id}'"),
+            requested,
+            || self.frontend_candidates(),
+        )?;
+        provider
+            .frontend
+            .as_ref()
+            .expect("selected frontend provider retains frontend metadata");
+        Ok(ResolvedFrontend {
+            invocation_mode: provider.runtime.invocation_mode(policy),
+            provider,
+        })
     }
 
-    /// Find a backend extension by target language name
-    pub async fn find_extension_by_target(&self, target: &str) -> Option<Arc<ExtensionContainer>> {
-        // First check builtin extensions (by ID matching target)
-        if let Ok(ext) = self.load(target).await
-            && ext.supports(ExtensionType::Backend)
-        {
-            return Some(ext);
-        }
+    /// Resolve an enabled backend for an exact target and normalized IR release.
+    pub fn resolve_backend(
+        &self,
+        target: &str,
+        ir_version: &str,
+        policy: InvocationPolicy,
+    ) -> Result<ResolvedBackend> {
+        let requested = normalize_requested_ir_version(ir_version)?;
+        let matching: Vec<_> = self
+            .providers
+            .values()
+            .filter(|provider| {
+                provider.backend.as_ref().is_some_and(|backend| {
+                    backend.capability.generate
+                        && backend
+                            .capability
+                            .targets
+                            .iter()
+                            .any(|candidate| candidate == target)
+                        && backend.releases.contains(&requested)
+                })
+            })
+            .cloned()
+            .collect();
+        let provider = select_provider(
+            matching,
+            "backend.generate",
+            &format!("target '{target}'"),
+            requested,
+            || self.backend_candidates(),
+        )?;
+        provider
+            .backend
+            .as_ref()
+            .expect("selected backend provider retains backend metadata");
+        Ok(ResolvedBackend {
+            invocation_mode: provider.runtime.invocation_mode(policy),
+            provider,
+        })
+    }
 
-        // Then check registered extensions
-        let extensions = self.extensions.read().await;
-        for ext in extensions.values() {
-            if ext.supports(ExtensionType::Backend) {
-                // For now, match by ID. In the future, we could query the extension
-                // for its supported targets
-                if ext.id() == target {
-                    return Some(ext.clone());
-                }
-            }
-        }
-        None
+    /// List immutable provider metadata in origin-then-ID order.
+    pub fn providers(&self) -> Vec<ProviderMetadata> {
+        self.providers
+            .values()
+            .map(|provider| ProviderMetadata {
+                provider: Arc::clone(provider),
+            })
+            .collect()
+    }
+
+    fn frontend_candidates(&self) -> String {
+        let candidates = self.providers.values().filter_map(|provider| {
+            provider.frontend.as_ref().map(|frontend| {
+                let mut languages: Vec<_> = frontend
+                    .capability
+                    .languages
+                    .iter()
+                    .map(|language| language.id.as_str())
+                    .collect();
+                languages.sort_unstable();
+                format_candidate(
+                    provider,
+                    &format!("languages={languages:?}"),
+                    &frontend.releases,
+                    &format!("compile={}", frontend.capability.compile),
+                )
+            })
+        });
+        join_candidates(candidates)
+    }
+
+    fn backend_candidates(&self) -> String {
+        let candidates = self.providers.values().filter_map(|provider| {
+            provider.backend.as_ref().map(|backend| {
+                let mut targets: Vec<_> = backend
+                    .capability
+                    .targets
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                targets.sort_unstable();
+                format_candidate(
+                    provider,
+                    &format!("targets={targets:?}"),
+                    &backend.releases,
+                    &format!("generate={}", backend.capability.generate),
+                )
+            })
+        });
+        join_candidates(candidates)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn test_registry_creation() {
-        let temp = tempdir().unwrap();
-        let registry =
-            ExtensionRegistry::new(temp.path().to_path_buf(), temp.path().join("output")).unwrap();
-
-        let list = registry.list().await;
-        assert!(list.is_empty());
+fn select_provider(
+    matching: Vec<Arc<RegisteredProvider>>,
+    capability: &str,
+    selector: &str,
+    requested: ReleaseTriplet,
+    candidates: impl FnOnce() -> String,
+) -> Result<Arc<RegisteredProvider>> {
+    let Some(best_origin) = matching.iter().map(|provider| provider.origin).max() else {
+        return Err(DaemonError::Extension(format!(
+            "no provider supports {capability} for {selector} at IR {requested}; relevant providers: {}",
+            candidates()
+        )));
+    };
+    let mut best: Vec<_> = matching
+        .into_iter()
+        .filter(|provider| provider.origin == best_origin)
+        .collect();
+    best.sort_by(|left, right| left.info.id.cmp(&right.info.id));
+    if best.len() > 1 {
+        let ids: Vec<_> = best
+            .iter()
+            .map(|provider| provider.info.id.as_str())
+            .collect();
+        return Err(DaemonError::Extension(format!(
+            "ambiguous {capability} provider for {selector} at IR {requested} from {best_origin:?}: {ids:?}"
+        )));
     }
+    Ok(best.remove(0))
+}
 
-    #[test]
-    fn restricted_generation_registry_exposes_no_output_directory_to_guests() {
-        let temp = tempdir().unwrap();
-        let actual_output = temp.path().join("real-publish-root");
-        let registry =
-            ExtensionRegistry::for_restricted_generation(temp.path().join("workspace")).unwrap();
+fn normalize_advertised_releases(
+    provider_id: &str,
+    capability: &str,
+    values: &[String],
+) -> Result<Vec<ReleaseTriplet>> {
+    if values.is_empty() {
+        return Err(DaemonError::Extension(format!(
+            "provider '{provider_id}' must advertise at least one {capability} IR version"
+        )));
+    }
+    values
+        .iter()
+        .map(|value| {
+            normalize_ir_version(value).map_err(|failure| {
+                DaemonError::Extension(format!(
+                    "provider '{provider_id}' advertised invalid {capability} IR version '{value}': {failure}"
+                ))
+            })
+        })
+        .collect()
+}
 
-        let workspace_info = registry.host_functions().workspace_info();
+fn normalize_requested_ir_version(value: &str) -> Result<ReleaseTriplet> {
+    normalize_ir_version(value).map_err(|failure| match failure {
+        VersionFailure::Malformed(detail) => DaemonError::Extension(format!(
+            "requested IR version '{value}' is malformed: {detail}"
+        )),
+        VersionFailure::Unsupported(detail) => DaemonError::Extension(format!(
+            "requested IR version '{value}' is unsupported: {detail}"
+        )),
+    })
+}
 
-        assert!(workspace_info.output_dir.is_empty());
-        assert_ne!(workspace_info.output_dir, actual_output.to_string_lossy());
+#[derive(Debug)]
+enum VersionFailure {
+    Malformed(String),
+    Unsupported(String),
+}
+
+impl std::fmt::Display for VersionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed(detail) | Self::Unsupported(detail) => formatter.write_str(detail),
+        }
+    }
+}
+
+fn normalize_ir_version(value: &str) -> std::result::Result<ReleaseTriplet, VersionFailure> {
+    let scalar = if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        ScalarValue::Integer(
+            value
+                .parse::<u64>()
+                .map_err(|error| VersionFailure::Malformed(error.to_string()))?,
+        )
+    } else {
+        ScalarValue::String(value.to_owned())
+    };
+    let support = SupportTable::reference();
+    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support)
+        .map_err(|error| VersionFailure::Malformed(error.to_string()))?;
+    if !normalized.is_supported() {
+        let detail = support
+            .unsupported_diagnostic(&normalized.release, normalized.compatibility)
+            .map(|diagnostic| diagnostic.to_string())
+            .unwrap_or_else(|| normalized.release.to_string());
+        return Err(VersionFailure::Unsupported(detail));
+    }
+    Ok(normalized.release)
+}
+
+fn format_candidate(
+    provider: &RegisteredProvider,
+    selector: &str,
+    releases: &[ReleaseTriplet],
+    enabled: &str,
+) -> String {
+    let mut versions: Vec<_> = releases.iter().map(ToString::to_string).collect();
+    versions.sort();
+    format!(
+        "{} [{:?}] {selector} irVersions={versions:?} {enabled}",
+        provider.info.id, provider.origin
+    )
+}
+
+fn join_candidates(candidates: impl Iterator<Item = String>) -> String {
+    let candidates: Vec<_> = candidates.collect();
+    if candidates.is_empty() {
+        "none".to_owned()
+    } else {
+        candidates.join("; ")
     }
 }

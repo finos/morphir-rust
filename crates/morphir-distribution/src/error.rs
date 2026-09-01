@@ -1,5 +1,6 @@
 //! Errors reported while selecting or acquiring distribution artifacts.
 
+use crate::SchemaVersion;
 use std::path::PathBuf;
 
 /// A failure to parse, resolve, verify, or persist an extension artifact.
@@ -24,12 +25,18 @@ pub enum DistributionError {
         source: serde_json::Error,
     },
     /// The history used an unsupported schema revision.
-    #[error("unsupported extension index schema version {version} on line {line}")]
+    #[error(
+        "unsupported extension index schema version {version} on line {line}; supported range is {minimum} through {maximum}"
+    )]
     UnsupportedSchema {
         /// One-based JSONL line number.
         line: usize,
         /// Unsupported schema version.
-        version: u32,
+        version: SchemaVersion,
+        /// Earliest supported release schema version.
+        minimum: SchemaVersion,
+        /// Newest supported release schema version.
+        maximum: SchemaVersion,
     },
     /// A JSONL history did not contain any releases.
     #[error("extension history is empty")]
@@ -223,6 +230,20 @@ pub enum DistributionError {
         kind: &'static str,
         /// Unsupported schema version.
         version: u32,
+    },
+    /// Extension installation state uses an unsupported schema version.
+    #[error(
+        "unsupported {kind} schema version {version}; supported versions are {minimum} through {maximum}"
+    )]
+    UnsupportedExtensionStateSchema {
+        /// Kind of extension installation state.
+        kind: &'static str,
+        /// Unsupported schema version.
+        version: crate::SchemaVersion,
+        /// Oldest supported schema version.
+        minimum: crate::SchemaVersion,
+        /// Newest supported schema version.
+        maximum: crate::SchemaVersion,
     },
     /// A repository configuration already uses the requested name.
     #[error("extension repository {name} is already configured")]

@@ -1,7 +1,7 @@
 use super::{FileMetadata, Vfs};
 use std::fs;
 use std::io::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// OS File System implementation
 pub struct OsVfs;
@@ -72,5 +72,13 @@ impl Vfs for OsVfs {
             modified: meta.modified().ok(),
             created: meta.created().ok(),
         })
+    }
+
+    fn is_symlink(&self, path: &Path) -> Result<bool> {
+        fs::symlink_metadata(path).map(|metadata| metadata.file_type().is_symlink())
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        fs::canonicalize(path)
     }
 }

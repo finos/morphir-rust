@@ -48,9 +48,25 @@ morphir extension update --index <INDEX> <NAME>
 morphir extension uninstall <NAME>
 ```
 
-`<INDEX>` is a directory containing schema-v2 JSONL release histories under
+`<INDEX>` is a directory containing schema-versioned JSONL release histories under
 `extensions/` and artifact bytes below the same controlled root. Installation
 verifies the artifact digest and records matching catalog and lock state.
+
+### Distribution schema contract
+
+Extension release manifests, extension locks, and extension catalogs are three
+separately versioned distribution formats. Their `schemaVersion` field is a
+quoted `"major.minor"` JSON string. Each current format writes the strict JSON
+string `"schemaVersion": "1.0"`; this version is independent of Morphir IR
+versions.
+
+For each format, the reader accepts versions with the current major whose minor
+is between that format's minimum and current supported minor, inclusive. It
+rejects future minors and versions with any other major. A schema `"1.0"` release
+manifest must include `frontend` metadata when it declares the `frontend`
+capability and `backend` metadata when it declares the `backend` capability.
+Installation persists the matching metadata in the schema `"1.0"` lock and
+catalog records used for activation.
 
 The CLI does not discover extension entries in `morphir.toml` and does not
 install raw WASM files, archives, URLs, or directories. It has no `--global`

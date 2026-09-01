@@ -59,8 +59,16 @@ The task does not publish a release or create an install index.
 ## 4. Install from a controlled index
 
 Morphir does not discover a local extension path from `morphir.toml`. The CLI
-resolves an extension ID from a controlled schema-v2 index, verifies its
+resolves an extension ID from a controlled schema-versioned index, verifies its
 digest, and writes matching catalog and lock state.
+
+Each JSONL release manifest uses `"schemaVersion": "1.0"`. If its
+`capabilities` include `frontend` or `backend`, the record must contain the
+matching `frontend` or `backend` metadata. The resulting extension lock and
+catalog are separate formats that also currently write the strict JSON string
+`"schemaVersion": "1.0"`. Their readers accept supported minors of the same
+major from the minimum through the current minor, reject future minors and
+other majors, and do not use this field as a Morphir IR version.
 
 ```console
 morphir extension install --index <INDEX> <NAME>

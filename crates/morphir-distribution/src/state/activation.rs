@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::read_verified_file;
-use morphir_extension_sdk::{BackendCapability, ExtensionCapabilities};
+use morphir_extension_sdk::ExtensionCapabilities;
 
 /// Offline process activation whose installed bytes have just been rehashed.
 #[derive(Debug, Clone)]
@@ -11,6 +11,8 @@ pub struct VerifiedProcessArtifact {
     filename: OsString,
     args: Vec<String>,
     extension_info: ExtensionInfo,
+    capabilities: ExtensionCapabilities,
+    frontend: Option<FrontendRecord>,
     backend: Option<BackendRecord>,
 }
 
@@ -45,6 +47,11 @@ impl VerifiedProcessArtifact {
         &self.extension_info
     }
 
+    /// Return stored frontend metadata, when declared.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
+    }
+
     /// Return stored backend metadata, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
@@ -52,7 +59,7 @@ impl VerifiedProcessArtifact {
 
     /// Return typed capabilities reconstructed from installed metadata.
     pub fn extension_capabilities(&self) -> ExtensionCapabilities {
-        extension_capabilities(self.backend.as_ref())
+        self.capabilities.clone()
     }
 }
 
@@ -62,6 +69,8 @@ pub struct VerifiedWasmArtifact {
     path: PathBuf,
     bytes: Arc<[u8]>,
     extension_info: ExtensionInfo,
+    capabilities: ExtensionCapabilities,
+    frontend: Option<FrontendRecord>,
     backend: Option<BackendRecord>,
 }
 
@@ -86,6 +95,11 @@ impl VerifiedWasmArtifact {
         &self.extension_info
     }
 
+    /// Return stored frontend metadata, when declared.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
+    }
+
     /// Return stored backend metadata, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
@@ -93,7 +107,7 @@ impl VerifiedWasmArtifact {
 
     /// Return typed capabilities reconstructed from installed metadata.
     pub fn extension_capabilities(&self) -> ExtensionCapabilities {
-        extension_capabilities(self.backend.as_ref())
+        self.capabilities.clone()
     }
 }
 
@@ -152,7 +166,7 @@ pub fn activate_installed(
 /// Activate the exact atomically validated snapshot selected by a caller.
 ///
 /// Later catalog replacements cannot change the selected version, digest,
-/// capabilities, arguments, or backend metadata used for this activation.
+/// capabilities, arguments, or frontend and backend metadata used for this activation.
 pub fn activate_installed_snapshot(
     home: &MorphirHome,
     snapshot: &InstalledExtensionSnapshot,
@@ -182,6 +196,7 @@ pub fn activate_installed_snapshot(
         .to_os_string();
 
     let extension_info = installed.extension_info();
+    let capabilities = installed.extension_capabilities();
     match installed.runtime {
         ArtifactRuntime::Process => Ok(VerifiedExtensionArtifact::Process(
             VerifiedProcessArtifact {
@@ -191,6 +206,8 @@ pub fn activate_installed_snapshot(
                 filename,
                 args: installed.args,
                 extension_info,
+                capabilities,
+                frontend: installed.frontend,
                 backend: installed.backend,
             },
         )),
@@ -198,18 +215,9 @@ pub fn activate_installed_snapshot(
             path: artifact_path,
             bytes: bytes.into(),
             extension_info,
+            capabilities,
+            frontend: installed.frontend,
             backend: installed.backend,
         })),
-    }
-}
-
-fn extension_capabilities(backend: Option<&BackendRecord>) -> ExtensionCapabilities {
-    ExtensionCapabilities {
-        backend: backend.map(|backend| BackendCapability {
-            targets: backend.targets().to_vec(),
-            ir_versions: backend.ir_versions().to_vec(),
-            generate: backend.generate(),
-        }),
-        ..ExtensionCapabilities::default()
     }
 }

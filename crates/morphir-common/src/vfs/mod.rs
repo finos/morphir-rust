@@ -83,6 +83,41 @@ pub trait Vfs {
     ///
     /// Returns metadata for the path, including whether it's a file or directory.
     fn metadata(&self, path: &Path) -> Result<FileMetadata>;
+
+    /// Return whether a path is a symbolic link without following it.
+    ///
+    /// Virtual filesystems without symbolic links may use the default implementation.
+    fn is_symlink(&self, _path: &Path) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Return a stable identity path for traversal and containment checks.
+    ///
+    /// Virtual filesystems use lexical normalization by default. Filesystems that can
+    /// contain links should override this with their canonical path operation.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        Ok(normalize_lexically(path))
+    }
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    path.components()
+        .fold(PathBuf::new(), |mut normalized, component| {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if !normalized.pop() && !path.has_root() {
+                        normalized.push(component.as_os_str());
+                    }
+                }
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            normalized
+        })
 }
 
 /// File metadata information

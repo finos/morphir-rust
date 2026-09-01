@@ -1,6 +1,6 @@
 //! Gleam code generation from Morphir IR
 
-use morphir_common::vfs::{OsVfs, Vfs};
+use morphir_common::vfs::{MemoryVfs, Vfs};
 use morphir_core::ir::v4::{Distribution as MorphirDistribution, IRFile, PackageDefinition};
 use morphir_core::naming::ModuleName;
 use morphir_extension_sdk::prelude::*;
@@ -119,19 +119,14 @@ fn generate_from_package_definition(
 ) -> Result<Vec<Artifact>> {
     use super::visitor::MorphirToGleamVisitor;
 
-    let output_dir = options
-        .get("outputDir")
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-
     let package_name = options
         .get("packageName")
         .and_then(|v| v.as_str())
         .map(String::from)
         .unwrap_or_else(|| "default-package".to_string());
 
-    let visitor = MorphirToGleamVisitor::new(OsVfs, output_dir.clone(), package_name);
+    let vfs = MemoryVfs::new();
+    let visitor = MorphirToGleamVisitor::new(vfs.clone(), PathBuf::new(), package_name);
 
     let mut artifacts = Vec::new();
 
@@ -141,11 +136,9 @@ fn generate_from_package_definition(
 
         match visitor.visit_module(&module_path, module_def) {
             Ok(_) => {
-                // Read generated file using a new OsVfs instance
-                let file_path = output_dir.join(format!("{}.gleam", module_path_str));
-                let read_vfs = OsVfs;
-                if read_vfs.exists(&file_path) {
-                    match read_vfs.read_to_string(&file_path) {
+                let file_path = PathBuf::from(format!("{}.gleam", module_path_str));
+                if vfs.exists(&file_path) {
+                    match vfs.read_to_string(&file_path) {
                         Ok(content) => {
                             artifacts.push(Artifact {
                                 path: format!("{}.gleam", module_path_str),
@@ -312,6 +305,7 @@ fn generate_value(output: &mut String, value_def: &ValueDef, indent: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_generate_simple_module() {
@@ -337,5 +331,28 @@ mod tests {
         assert!(result[0].path.contains("example"));
         assert!(result[0].content.contains("pub fn hello()"));
         assert!(result[0].content.contains("\"world\""));
+    }
+
+    #[test]
+    fn v4_generation_returns_artifacts_without_publishing_files() {
+        let output = TempDir::new().unwrap();
+        let ir = serde_json::json!({
+            "modules": {
+                "example": {
+                    "access": "Public",
+                    "value": {
+                        "types": {},
+                        "values": {}
+                    }
+                }
+            }
+        });
+        let options = HashMap::from([("outputDir".to_string(), serde_json::json!(output.path()))]);
+
+        let artifacts = generate_gleam(&ir, &options).unwrap();
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].path, "example.gleam");
+        assert!(!output.path().join("example.gleam").exists());
     }
 }

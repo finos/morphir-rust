@@ -12,8 +12,8 @@
 //! never depend on `kameo`.
 
 use kameo::Actor;
-use kameo::actor::{ActorRef, Spawn as _};
-use kameo::error::SendError;
+use kameo::actor::{ActorRef, Spawn as _, WeakActorRef};
+use kameo::error::{ActorStopReason, Infallible, SendError};
 use kameo::message::{Context, Message};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -41,10 +41,41 @@ struct Shutdown;
 /// [`spawn_session_with_idle_timeout`]) resets its sleep every time it
 /// observes a bump, stopping the actor only once a full idle period passes
 /// with no activity at all.
-#[derive(Actor)]
 struct SessionActor<T: MepTransport + Send + 'static> {
     session: Option<Session<T, Ready>>,
     activity: tokio::sync::watch::Sender<()>,
+}
+
+/// Hand-written instead of `#[derive(Actor)]` so `on_stop` can complete the
+/// MEP shutdown handshake for a session that was never explicitly shut down
+/// (dropped handle, idle timeout). `on_start` is otherwise exactly what the
+/// derive macro generates: return the args unchanged.
+impl<T: MepTransport + Send + 'static> Actor for SessionActor<T> {
+    type Args = Self;
+    type Error = Infallible;
+
+    async fn on_start(state: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(state)
+    }
+
+    async fn on_stop(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<(), Self::Error> {
+        // The explicit `Shutdown` message already completes the handshake and
+        // takes `self.session`. This hook also fires after that path (every
+        // terminal stop runs it), so `None` here means "already handled,
+        // nothing to do" rather than an error.
+        let Some(session) = self.session.take() else {
+            return Ok(());
+        };
+        // Best-effort: there is no caller left to report a failure to. A
+        // remote extension daemon that never receives this handshake would
+        // otherwise leak the session's state indefinitely.
+        let _ = session.shutdown().await;
+        Ok(())
+    }
 }
 
 /// Report that the session is gone, wrapping the cause that ended it.
@@ -566,6 +597,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(generated_paths(&second), ["second.avro"]);
+    }
+
+    #[tokio::test]
+    async fn explicit_shutdown_is_not_repeated_when_the_actor_stops() {
+        let (session, requests) =
+            ready_backend_session([Ok(
+                ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
+            )])
+            .await;
+        let handle = spawn_session(session);
+
+        handle.shutdown().await.unwrap();
+
+        // The explicit `Shutdown` message already completed the MEP handshake
+        // and took `self.session`. Give the actor's own `on_stop` hook, which
+        // runs right after, a chance to execute. If it attempted the
+        // handshake again it would either need a second queued response (and
+        // so append a second SHUTDOWN request here) or panic reaching into a
+        // session that is already gone.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(
+            requests.methods(),
+            [methods::INITIALIZE, methods::SHUTDOWN],
+            "on_stop should not repeat the MEP shutdown handshake"
+        );
     }
 
     #[tokio::test]

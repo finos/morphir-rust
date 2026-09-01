@@ -10,8 +10,17 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// The only release manifest schema supported by this distribution build.
-pub(crate) const CURRENT_RELEASE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+/// The earliest release manifest schema supported by this distribution build.
+pub const MINIMUM_RELEASE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+
+/// The newest release manifest schema supported by this distribution build.
+pub const CURRENT_RELEASE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+
+/// Return whether a release manifest schema version falls within the supported range.
+pub(crate) fn supports_release_schema_version(candidate: SchemaVersion) -> bool {
+    candidate >= MINIMUM_RELEASE_SCHEMA_VERSION
+        && CURRENT_RELEASE_SCHEMA_VERSION.supports(candidate)
+}
 
 /// Distinguishes an omitted wire field from an explicit JSON `null`.
 #[derive(Default)]
@@ -579,10 +588,10 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
         D: Deserializer<'de>,
     {
         let wire = ReleaseRecordWire::deserialize(deserializer)?;
-        if !CURRENT_RELEASE_SCHEMA_VERSION.supports(wire.schema_version) {
+        if !supports_release_schema_version(wire.schema_version) {
             return Err(serde::de::Error::custom(format!(
                 "unsupported extension index schema version {}; supported range is {} through {}",
-                wire.schema_version, CURRENT_RELEASE_SCHEMA_VERSION, CURRENT_RELEASE_SCHEMA_VERSION
+                wire.schema_version, MINIMUM_RELEASE_SCHEMA_VERSION, CURRENT_RELEASE_SCHEMA_VERSION
             )));
         }
         if wire.name.trim().is_empty() {

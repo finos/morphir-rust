@@ -1,7 +1,10 @@
 //! Parsing for local JSONL extension histories.
 
-use crate::domain::CURRENT_RELEASE_SCHEMA_VERSION;
-use crate::{DistributionError, ExtensionId, ReleaseRecord, Result, SchemaVersion, Sha256Digest};
+use crate::domain::supports_release_schema_version;
+use crate::{
+    CURRENT_RELEASE_SCHEMA_VERSION, DistributionError, ExtensionId, MINIMUM_RELEASE_SCHEMA_VERSION,
+    ReleaseRecord, Result, SchemaVersion, Sha256Digest,
+};
 use serde::Deserialize;
 use std::cmp::Ordering;
 
@@ -34,11 +37,12 @@ impl ExtensionHistory {
                         source,
                     }
                 })?;
-            if !CURRENT_RELEASE_SCHEMA_VERSION.supports(envelope.schema_version) {
+            if !supports_release_schema_version(envelope.schema_version) {
                 return Err(DistributionError::UnsupportedSchema {
                     line: line_index + 1,
                     version: envelope.schema_version,
-                    supported: CURRENT_RELEASE_SCHEMA_VERSION,
+                    minimum: MINIMUM_RELEASE_SCHEMA_VERSION,
+                    maximum: CURRENT_RELEASE_SCHEMA_VERSION,
                 });
             }
             let record: ReleaseRecord = serde_json::from_slice(line).map_err(|source| {

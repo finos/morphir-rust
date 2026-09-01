@@ -26,15 +26,17 @@ pub enum DistributionError {
     },
     /// The history used an unsupported schema revision.
     #[error(
-        "unsupported extension index schema version {version} on line {line}; supported range is {supported} through {supported}"
+        "unsupported extension index schema version {version} on line {line}; supported range is {minimum} through {maximum}"
     )]
     UnsupportedSchema {
         /// One-based JSONL line number.
         line: usize,
         /// Unsupported schema version.
         version: SchemaVersion,
-        /// Current supported release schema version.
-        supported: SchemaVersion,
+        /// Earliest supported release schema version.
+        minimum: SchemaVersion,
+        /// Newest supported release schema version.
+        maximum: SchemaVersion,
     },
     /// A JSONL history did not contain any releases.
     #[error("extension history is empty")]

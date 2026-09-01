@@ -229,56 +229,84 @@ fn jsonl_history_parses_schema_versioned_records_and_hashes_exact_bytes() {
 }
 
 #[test]
-fn release_records_reject_unsupported_schema_versions() {
+fn release_records_reject_malformed_schema_versions() {
     for version in [
         serde_json::json!(1),
         serde_json::json!("1"),
         serde_json::json!("1.0.0"),
         serde_json::json!("01.0"),
-        serde_json::json!("1.1"),
-        serde_json::json!("2.0"),
     ] {
         let mut record = portable_wasm_release();
-        record["schemaVersion"] = version.clone();
+        record["schemaVersion"] = version;
 
-        let error = serde_json::from_value::<ReleaseRecord>(record)
-            .expect_err("the release record schema version should be rejected");
-
-        let message = error.to_string();
-        if version == serde_json::json!("1.1") || version == serde_json::json!("2.0") {
-            assert!(message.contains(&format!("schema version {}", version.as_str().unwrap())));
-            assert!(message.contains("supported range is 1.0 through 1.0"));
-        }
+        assert!(serde_json::from_value::<ReleaseRecord>(record).is_err());
     }
 }
 
 #[test]
-fn jsonl_histories_report_unsupported_schema_versions() {
+fn release_records_report_well_formed_unsupported_schema_version_ranges() {
+    for version in ["1.1", "2.0"] {
+        let mut record = portable_wasm_release();
+        record["schemaVersion"] = serde_json::json!(version);
+
+        let error = serde_json::from_value::<ReleaseRecord>(record)
+            .expect_err("the release record schema version should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("schema version {version}"))
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("supported range is 1.0 through 1.0")
+        );
+    }
+}
+
+#[test]
+fn jsonl_histories_reject_malformed_schema_version_wires() {
     for version in [
         serde_json::json!(1),
         serde_json::json!("1"),
         serde_json::json!("1.0.0"),
         serde_json::json!("01.0"),
-        serde_json::json!("1.1"),
-        serde_json::json!("2.0"),
     ] {
         let mut record = portable_wasm_release();
-        record["schemaVersion"] = version.clone();
+        record["schemaVersion"] = version;
 
         let error = ExtensionHistory::parse_jsonl(record.to_string().as_bytes())
             .expect_err("the history schema version should be rejected");
 
-        if version == serde_json::json!("1.1") || version == serde_json::json!("2.0") {
-            let actual = version.as_str().unwrap().parse::<SchemaVersion>().unwrap();
-            assert!(matches!(
-                error,
-                DistributionError::UnsupportedSchema {
-                    line: 1,
-                    version,
-                    supported,
-                } if version == actual && supported == SchemaVersion::new(1, 0)
-            ));
-        }
+        assert!(matches!(
+            error,
+            DistributionError::InvalidRecord { line: 1, .. }
+        ));
+    }
+}
+
+#[test]
+fn jsonl_histories_report_well_formed_unsupported_schema_version_ranges() {
+    for version in ["1.1", "2.0"] {
+        let mut record = portable_wasm_release();
+        record["schemaVersion"] = serde_json::json!(version);
+
+        let error = ExtensionHistory::parse_jsonl(record.to_string().as_bytes())
+            .expect_err("the history schema version should be rejected");
+
+        let version = version.parse::<SchemaVersion>().unwrap();
+        assert!(matches!(
+            error,
+            DistributionError::UnsupportedSchema {
+                line: 1,
+                version: actual,
+                minimum,
+                maximum,
+            } if actual == version
+                && minimum == SchemaVersion::new(1, 0)
+                && maximum == SchemaVersion::new(1, 0)
+        ));
     }
 }
 

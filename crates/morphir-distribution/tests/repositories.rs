@@ -1,8 +1,8 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    Channel, DistributionError, ExtensionId, ExtensionRepositories, ExtensionSearchQuery,
-    LocalExtensionRepository, Platform, PublicationStatus, RepositoryEndpoint, RepositoryName,
-    RepositoryState, Selection, Sha256Digest,
+    CURRENT_RELEASE_SCHEMA_VERSION, Channel, DistributionError, ExtensionId, ExtensionRepositories,
+    ExtensionSearchQuery, LocalExtensionRepository, Platform, PublicationStatus,
+    RepositoryEndpoint, RepositoryName, RepositoryState, Selection, Sha256Digest,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -357,6 +357,11 @@ fn publishing_a_verified_bundle_is_repeatable_and_writes_valid_metadata() {
     assert_eq!(first.release().extension_id().as_str(), "morphir-avro");
     assert_eq!(first.release().name(), "Morphir Avro");
     assert_eq!(first.release().version().to_string(), "0.1.0");
+    let emitted: serde_json::Value = serde_json::from_slice(&history_before).unwrap();
+    assert_eq!(
+        emitted["schemaVersion"],
+        serde_json::to_value(CURRENT_RELEASE_SCHEMA_VERSION).unwrap()
+    );
     assert_eq!(fs::read(first.artifact_path()).unwrap(), b"wasm extension");
     assert_eq!(
         fs::read(repository.root().join("extensions/morphir-avro.jsonl")).unwrap(),

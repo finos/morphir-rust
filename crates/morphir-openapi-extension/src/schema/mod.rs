@@ -172,8 +172,55 @@ pub fn project(
     let mut definitions: BTreeMap<String, NamedSchema> = BTreeMap::new();
     let mut diagnostics = Vec::new();
 
+    close_definitions(
+        &context,
+        options,
+        &mut queue,
+        &mut visited,
+        &mut claimed,
+        &mut definitions,
+        &mut diagnostics,
+    )?;
+
+    drop_dangling(&mut definitions, &mut diagnostics);
+    let roots = owned
+        .iter()
+        .map(|source_name| schema_name(source_name))
+        .filter_map(|name| definitions.get(&name).cloned())
+        .collect();
+    Ok(SchemaProjection {
+        package_name: package.package_name.clone(),
+        roots,
+        definitions,
+        operations: Vec::new(),
+        diagnostics,
+    })
+}
+
+/// Close a queue of source names into `definitions`, claiming each
+/// projected schema name in `claimed` and enqueueing every further
+/// reference [`project_declaration`] reports.
+///
+/// Shared by [`project`] — seeded from every public type declaration — and
+/// by [`operations::project_operations`], seeded from a request or response
+/// type the declaration walk did not already reach. One implementation
+/// means the two walks cannot diverge on collision detection or
+/// [`Unsupported`] handling: `claimed` and `visited` are caller-owned, so a
+/// second call started from `project`'s own `definitions` (rebuilt into
+/// `claimed`/`visited` by the caller) still catches a projected name a
+/// dependency type would otherwise silently alias onto an unrelated
+/// definition, as a `JSC004` collision rather than a wrong `$ref`.
+fn close_definitions(
+    context: &Context<'_>,
+    options: &SchemaOptions,
+    queue: &mut VecDeque<String>,
+    visited: &mut BTreeSet<String>,
+    claimed: &mut BTreeMap<String, String>,
+    definitions: &mut BTreeMap<String, NamedSchema>,
+    diagnostics: &mut Vec<(SchemaDiagnostic, bool)>,
+) -> Result<(), SchemaDiagnostic> {
     while let Some(source_name) = queue.pop_front() {
-        let Some(declaration) = declared.get(&source_name) else {
+        let Some(declaration) = context.declared.get(&source_name) else {
             continue;
         };
         let name = schema_name(&source_name);
@@ -188,7 +235,7 @@ pub fn project(
         claimed.insert(name.clone(), source_name.clone());
 
         let mut referenced = BTreeSet::new();
-        match project_declaration(&context, declaration, &mut referenced) {
+        match project_declaration(context, declaration, &mut referenced) {
             Ok(schema) => {
                 definitions.insert(
                     name.clone(),
@@ -213,20 +260,7 @@ pub fn project(
             }
         }
     }
-
-    drop_dangling(&mut definitions, &mut diagnostics);
-    let roots = owned
-        .iter()
-        .map(|source_name| schema_name(source_name))
-        .filter_map(|name| definitions.get(&name).cloned())
-        .collect();
-    Ok(SchemaProjection {
-        package_name: package.package_name.clone(),
-        roots,
-        definitions,
-        operations: Vec::new(),
-        diagnostics,
-    })
+    Ok(())
 }
 
 /// Index every declaration the package can see by its canonical FQName.

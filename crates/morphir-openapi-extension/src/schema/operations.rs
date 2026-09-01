@@ -15,11 +15,11 @@ use morphir_projection::{
     EntryPointMetadata, ProjectionModule, ProjectionPackage, ValueKind, ValueSpecification,
 };
 
-use super::names::{field_name, operation_id, schema_name};
-use super::types::{Context, project_declaration, project_type};
-use super::{NamedSchema, Schema, SchemaField, SchemaProjection, declaration_doc, declared_types};
+use super::names::{field_name, operation_id};
+use super::types::{Context, project_type};
+use super::{Schema, SchemaField, SchemaProjection, close_definitions, declared_types};
 use crate::options::Projection;
-use crate::{HttpMethod, SchemaDiagnostic, SchemaOptions};
+use crate::{HttpMethod, SchemaDiagnostic, SchemaOptions, Unsupported};
 
 /// One HTTP operation synthesized from a Morphir value specification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,10 +51,17 @@ pub struct Operation {
 /// `projection.definitions`, so a rendered document never carries a `$ref`
 /// outside `components/schemas`.
 ///
+/// A value specification whose signature has no schema is a form like any
+/// other Morphir declaration: under [`Unsupported::Error`] (the default) it
+/// fails the whole generation; under [`Unsupported::WarnAndSkip`] the
+/// operation is omitted from `paths`, a `JSC003` warning is recorded naming
+/// its Morphir FQName, and the rest of the document still renders.
+///
 /// A path claimed by two operations, or an `operationId` claimed by two
 /// operations, is a `SchemaDiagnostic::operation_collision` (`OAS001`)
-/// naming both Morphir FQNames. `render_openapi` cannot fail, so this
-/// check happens here, before any document is built.
+/// naming both Morphir FQNames — a Morphir-source ambiguity, so it is
+/// always an error regardless of `options.unsupported`. `render_openapi`
+/// cannot fail, so this check happens here, before any document is built.
 pub fn project_operations(
     package: &ProjectionPackage,
     projection: &mut SchemaProjection,
@@ -73,6 +80,7 @@ pub fn project_operations(
     let mut claimed_paths: BTreeMap<String, String> = BTreeMap::new();
     let mut claimed_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut discovered: BTreeSet<String> = BTreeSet::new();
+    let mut warnings: Vec<(SchemaDiagnostic, bool)> = Vec::new();
 
     for module in &package.modules {
         for value in &module.values {
@@ -80,7 +88,23 @@ pub fn project_operations(
                 continue;
             }
 
-            let operation = project_operation(&context, module, value, &mut discovered)?;
+            // A fresh set per attempt: only merged into `discovered` once the
+            // operation itself succeeds, the same way `close_definitions`
+            // only enqueues a declaration's references once that declaration
+            // projected successfully. A type reached only by a skipped
+            // operation must not be pulled into `components/schemas`.
+            let mut referenced = BTreeSet::new();
+            let operation = match project_operation(&context, module, value, &mut referenced) {
+                Ok(operation) => operation,
+                Err(diagnostic) => {
+                    if options.unsupported == Unsupported::Error {
+                        return Err(diagnostic);
+                    }
+                    warnings.push((diagnostic, true));
+                    continue;
+                }
+            };
+            discovered.extend(referenced);
 
             let path_key = format!("{:?} {}", operation.method, operation.path);
             if let Some(existing) = claimed_paths.get(&path_key) {
@@ -110,7 +134,8 @@ pub fn project_operations(
         }
     }
 
-    extend_definitions(&context, projection, discovered)?;
+    extend_definitions(&context, options, projection, discovered)?;
+    projection.diagnostics.extend(warnings);
 
     Ok(operations)
 }
@@ -178,45 +203,47 @@ fn default_path(module: &ProjectionModule, value: &ValueSpecification) -> String
 }
 
 /// Add every type an operation's request or response reached that is not
-/// already a registered definition, closing over further references the
-/// same way [`super::project`] closes over a public type root's references.
+/// already a registered definition, via the same [`close_definitions`]
+/// closure [`super::project`] uses.
+///
+/// `claimed` and `visited` are rebuilt from `projection.definitions` rather
+/// than started empty, so a dependency type this walk reaches that projects
+/// to a schema name already claimed by an unrelated source is caught as the
+/// same `JSC004` collision `project` itself would raise, instead of
+/// silently overwriting that name's `$ref` target.
 fn extend_definitions(
     context: &Context<'_>,
+    options: &SchemaOptions,
     projection: &mut SchemaProjection,
     seeds: BTreeSet<String>,
 ) -> Result<(), SchemaDiagnostic> {
-    let mut queue: VecDeque<String> = seeds.into_iter().collect();
+    let mut claimed: BTreeMap<String, String> = projection
+        .definitions
+        .values()
+        .map(|named| (named.name.clone(), named.source_name.clone()))
+        .collect();
     let mut visited: BTreeSet<String> = projection
         .definitions
         .values()
         .map(|named| named.source_name.clone())
         .collect();
-
-    while let Some(source_name) = queue.pop_front() {
-        if !visited.insert(source_name.clone()) {
-            continue;
-        }
-        let name = schema_name(&source_name);
-        if projection.definitions.contains_key(&name) {
-            continue;
-        }
-        let Some(declaration) = context.declared.get(&source_name) else {
-            continue;
-        };
-        let mut referenced = BTreeSet::new();
-        let schema = project_declaration(context, declaration, &mut referenced)?;
-        projection.definitions.insert(
-            name.clone(),
-            NamedSchema {
-                name,
-                source_name,
-                schema,
-                doc: declaration_doc(declaration),
-            },
-        );
-        for reference in referenced {
-            queue.push_back(reference);
+    let mut queue: VecDeque<String> = VecDeque::new();
+    for source_name in seeds {
+        if visited.insert(source_name.clone()) {
+            queue.push_back(source_name);
         }
     }
+
+    let mut diagnostics = Vec::new();
+    close_definitions(
+        context,
+        options,
+        &mut queue,
+        &mut visited,
+        &mut claimed,
+        &mut projection.definitions,
+        &mut diagnostics,
+    )?;
+    projection.diagnostics.extend(diagnostics);
     Ok(())
 }

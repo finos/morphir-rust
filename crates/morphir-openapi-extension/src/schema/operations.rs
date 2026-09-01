@@ -17,7 +17,10 @@ use morphir_projection::{
 
 use super::names::{field_name, operation_id};
 use super::types::{Context, project_type};
-use super::{Schema, SchemaField, SchemaProjection, close_definitions, declared_types};
+use super::{
+    NamedSchema, Schema, SchemaField, SchemaProjection, close_definitions, declared_types,
+    references,
+};
 use crate::options::Projection;
 use crate::{HttpMethod, SchemaDiagnostic, SchemaOptions, Unsupported};
 
@@ -55,7 +58,18 @@ pub struct Operation {
 /// other Morphir declaration: under [`Unsupported::Error`] (the default) it
 /// fails the whole generation; under [`Unsupported::WarnAndSkip`] the
 /// operation is omitted from `paths`, a `JSC003` warning is recorded naming
-/// its Morphir FQName, and the rest of the document still renders.
+/// its Morphir FQName, and the rest of the document still renders. The same
+/// rule applies one hop further out: an operation whose request or response
+/// only refers to a type — never touching an unsupported form itself — can
+/// still end up pointing at nothing if that type's own closure lost a
+/// definition to `Unsupported::WarnAndSkip` (`extend_definitions`'s
+/// `close_definitions` call sweeps `projection.definitions`, but an
+/// operation is a second source of references into that same namespace,
+/// outside `definitions` itself). `drop_dangling_operations` applies the
+/// identical rule to that case: the operation is dropped and warned about
+/// by its own FQName, so a rendered document can never carry a `$ref` with
+/// no `components/schemas` entry behind it, however many hops away the
+/// unsupported form was.
 ///
 /// A path claimed by two operations, or an `operationId` claimed by two
 /// operations, is a `SchemaDiagnostic::operation_collision` (`OAS001`)
@@ -135,6 +149,7 @@ pub fn project_operations(
     }
 
     extend_definitions(&context, options, projection, discovered)?;
+    let operations = drop_dangling_operations(operations, &projection.definitions, &mut warnings);
     projection.diagnostics.extend(warnings);
 
     Ok(operations)
@@ -200,6 +215,61 @@ fn default_path(module: &ProjectionModule, value: &ValueSpecification) -> String
         .collect::<Vec<_>>()
         .join("/");
     format!("/{module_segment}/{}", field_name(&value.name))
+}
+
+/// Drop any operation whose request or response refers to a name that is
+/// not in `definitions`, and warn about it by its own Morphir FQName.
+///
+/// `extend_definitions`'s `close_definitions` call sweeps `definitions`
+/// itself, so a type reachable only through some other type's closure never
+/// survives with a dangling internal reference. An operation is a second,
+/// independent source of references into that same `components/schemas`
+/// namespace, sitting outside `definitions` — so once that sweep settles,
+/// this is the equivalent sweep for `operations`: the same
+/// `Unsupported::WarnAndSkip` rule (omit and warn by FQName) applied one
+/// layer up, so a rendered document can never carry a `$ref` with no
+/// `components/schemas` entry behind it, whether the missing entry was
+/// never registered or was removed by the dangling sweep.
+///
+/// Under `Unsupported::Error` this never removes anything: any reference
+/// this function would need to drop was already a `close_definitions`
+/// failure that stopped the whole generation before reaching here.
+fn drop_dangling_operations(
+    operations: Vec<Operation>,
+    definitions: &BTreeMap<String, NamedSchema>,
+    diagnostics: &mut Vec<(SchemaDiagnostic, bool)>,
+) -> Vec<Operation> {
+    operations
+        .into_iter()
+        .filter(|operation| {
+            let Some(missing) = operation_references(operation)
+                .into_iter()
+                .find(|name| !definitions.contains_key(*name))
+            else {
+                return true;
+            };
+            diagnostics.push((
+                SchemaDiagnostic::unsupported_form(
+                    &operation.source_name,
+                    format!(
+                        "its request or response refers to '{missing}', which was skipped, so it was skipped too"
+                    ),
+                ),
+                true,
+            ));
+            false
+        })
+        .collect()
+}
+
+/// Every schema name an operation's request fields and response refer to.
+fn operation_references(operation: &Operation) -> Vec<&str> {
+    operation
+        .request
+        .iter()
+        .flat_map(|field| references(&field.schema))
+        .chain(references(&operation.response))
+        .collect()
 }
 
 /// Add every type an operation's request or response reached that is not

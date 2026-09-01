@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use morphir_extension_sdk::{Backend, GenerateRequest};
 use morphir_openapi_extension::{
     OpenApiExtension, Projection, SchemaOptions, Unsupported, project, project_operations,
+    render_openapi,
 };
 use morphir_projection::testing::v4;
 use morphir_projection::{
@@ -333,7 +334,11 @@ fn a_dependency_type_that_collides_with_an_existing_definition_is_jsc004_not_a_s
 /// second pass too, or `wrapper` — inserted into `projection.definitions`
 /// before its own field turned out to reference a skipped declaration —
 /// survives with a `$ref` to a `components/schemas` entry that does not
-/// exist.
+/// exist. One layer further out, `look-up` itself — whose own top-level
+/// signature is a plain, otherwise-fine reference to `wrapper` — must be
+/// dropped too, once `wrapper` is gone, by `drop_dangling_operations`; see
+/// `a_dangling_reference_from_an_operation_is_dropped_from_the_rendered_document`
+/// for the document-level assertion of that.
 #[test]
 fn warn_and_skip_drops_a_definition_reached_two_hops_from_an_operation() {
     let mut package = package_with(vec![ValueSpecification {
@@ -399,7 +404,8 @@ fn warn_and_skip_drops_a_definition_reached_two_hops_from_an_operation() {
             .iter()
             .map(|operation| operation.source_name.as_str())
             .collect::<Vec<_>>(),
-        vec![source("look-up").as_str()]
+        Vec::<&str>::new(),
+        "'look-up' refers to 'wrapper', which the sweep below removes, so it must be dropped too"
     );
     assert!(
         !projection.definitions.contains_key("Wrapper"),
@@ -408,16 +414,146 @@ fn warn_and_skip_drops_a_definition_reached_two_hops_from_an_operation() {
     );
     assert!(!projection.definitions.contains_key("Broken"));
 
-    let dropped_wrapper = projection.diagnostics.iter().any(|(diagnostic, warning)| {
-        *warning
-            && diagnostic.code() == "JSC003"
-            && diagnostic.source() == Some("shared/vault:support#wrapper")
-    });
+    let warned_about = |source_name: &str| {
+        projection.diagnostics.iter().any(|(diagnostic, warning)| {
+            *warning && diagnostic.code() == "JSC003" && diagnostic.source() == Some(source_name)
+        })
+    };
     assert!(
-        dropped_wrapper,
+        warned_about("shared/vault:support#wrapper"),
         "the referring declaration 'wrapper' is warned about by its own FQName: {:?}",
         projection.diagnostics
     );
+    assert!(
+        warned_about(&source("look-up")),
+        "the dropped operation is warned about by its own FQName: {:?}",
+        projection.diagnostics
+    );
+}
+
+/// The whole-document invariant round 3 protects: no `$ref` anywhere in a
+/// rendered OpenAPI document — inside `paths` or inside
+/// `components/schemas` itself — may point at a `components/schemas` entry
+/// that does not exist. `close_definitions`'s dangling sweep only ever
+/// walked `definitions`; an operation is a second, independent source of
+/// references into that same namespace, so `look-up`'s response (a plain
+/// reference to `wrapper`, which the sweep removes because its own field
+/// refers to the unsupported `broken`) must drop `look-up` out of `paths`
+/// too, not leave it behind with a `$ref` to nothing. `fine`, an unrelated
+/// operation with no dependency on any of this, proves the rest of the
+/// document still renders — the assertion below is not vacuously true from
+/// an empty `paths`.
+#[test]
+fn a_dangling_reference_from_an_operation_is_dropped_from_the_rendered_document() {
+    let mut package = package_with(vec![
+        ValueSpecification {
+            source_name: source("look-up"),
+            name: "look-up".to_owned(),
+            inputs: Vec::new(),
+            output: Some(TypeExpr::Reference {
+                source_name: "shared/vault:support#wrapper".to_owned(),
+                arguments: Vec::new(),
+            }),
+            value_kind: ValueKind::Constant,
+            entry_point: entry_point("look-up-id"),
+            doc: None,
+        },
+        supported_entry_point("fine"),
+    ]);
+    package.dependencies = vec![ProjectionDependency {
+        package_name: "shared/vault".to_owned(),
+        modules: vec![ProjectionModule {
+            path: vec!["support".to_owned()],
+            types: vec![
+                TypeDeclaration::Alias {
+                    source_name: "shared/vault:support#wrapper".to_owned(),
+                    name: "wrapper".to_owned(),
+                    type_params: Vec::new(),
+                    value: TypeExpr::Record(vec![NamedType {
+                        name: "payload".to_owned(),
+                        tpe: TypeExpr::Reference {
+                            source_name: "shared/vault:support#broken".to_owned(),
+                            arguments: Vec::new(),
+                        },
+                    }]),
+                    doc: None,
+                },
+                alias(
+                    "shared/vault:support#broken",
+                    "broken",
+                    TypeExpr::Variable("a".to_owned()),
+                ),
+            ],
+            values: Vec::new(),
+            doc: None,
+        }],
+    }];
+
+    let mut projection = project(&package, &SchemaOptions::default())
+        .expect("neither dependency type is a public type root of this package");
+    let options = SchemaOptions {
+        projection: Projection::OperationsEntryPoints,
+        unsupported: Unsupported::WarnAndSkip,
+        ..SchemaOptions::default()
+    };
+    projection.operations = project_operations(&package, &mut projection, &options)
+        .expect("skipping keeps the rest of the document rendering");
+
+    assert_eq!(
+        projection
+            .operations
+            .iter()
+            .map(|operation| operation.source_name.as_str())
+            .collect::<Vec<_>>(),
+        vec![source("fine").as_str()],
+        "'look-up' is dropped for its dangling response; 'fine' is unaffected"
+    );
+
+    let artifacts = render_openapi(&projection, &options);
+    assert_eq!(artifacts.len(), 1);
+    let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
+
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    for reference in collect_refs(&document) {
+        let name = reference
+            .strip_prefix("#/components/schemas/")
+            .unwrap_or_else(|| panic!("non-local reference {reference}"));
+        assert!(
+            schemas.contains_key(name),
+            "dangling $ref to '{name}' with no components/schemas entry anywhere \
+             in the document: {document}"
+        );
+    }
+
+    let paths = document["paths"].as_object().expect("paths is an object");
+    assert!(
+        !paths.contains_key("/domain/lookUp"),
+        "'look-up' must not appear in paths: {paths:?}"
+    );
+    assert_eq!(paths.len(), 1, "only 'fine' survives: {paths:?}");
+    assert!(paths.contains_key("/domain/fine"));
+}
+
+/// Every `$ref` target anywhere in a JSON value, walked recursively so both
+/// `paths` and `components/schemas` are covered by one call.
+fn collect_refs(value: &Value) -> Vec<String> {
+    match value {
+        Value::Object(members) => members
+            .iter()
+            .flat_map(|(key, member)| {
+                if key == "$ref" {
+                    member.as_str().map(str::to_owned).into_iter().collect()
+                } else {
+                    collect_refs(member)
+                }
+            })
+            .collect(),
+        Value::Array(members) => members.iter().flat_map(collect_refs).collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn alias(source_name: &str, name: &str, value: TypeExpr) -> TypeDeclaration {

@@ -63,6 +63,7 @@ pub(super) struct ToolPackageCandidate {
     pub(super) entry_point: RelativeArtifactPath,
     pub(super) args: Vec<String>,
     pub(super) source: PathBuf,
+    _download: Option<DownloadedToolArtifact>,
 }
 
 impl ToolPackageCandidate {
@@ -70,6 +71,7 @@ impl ToolPackageCandidate {
         resolved: ResolvedTrustedToolArtifact,
         downloaded: DownloadedToolArtifact,
     ) -> Self {
+        let source = downloaded.path().to_path_buf();
         Self {
             selection: resolved.selection().clone(),
             provenance: ToolProvenance::AuthenticatedRepository {
@@ -87,7 +89,8 @@ impl ToolPackageCandidate {
             format: resolved.artifact().archive().format(),
             entry_point: resolved.artifact().launch().path().clone(),
             args: resolved.artifact().launch().args().to_vec(),
-            source: downloaded.path().to_path_buf(),
+            source,
+            _download: Some(downloaded),
         }
     }
 
@@ -149,6 +152,7 @@ impl ToolPackageCandidate {
             entry_point: local.entry_point,
             args: local.args,
             source: local.source,
+            _download: None,
         })
     }
 }

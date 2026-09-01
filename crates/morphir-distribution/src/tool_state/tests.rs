@@ -14,6 +14,86 @@ use std::time::Duration;
 use support::*;
 
 #[test]
+fn local_developer_package_records_unsigned_provenance_and_exact_integrity() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = morphir_common::home::MorphirHome::resolve_from(
+        Some(temp.path().join("home").as_os_str()),
+        None,
+    )
+    .unwrap();
+    let source = temp.path().join("desktop.exe");
+    let bytes = b"unsigned local desktop";
+    std::fs::write(&source, bytes).unwrap();
+    let candidate = crate::LocalDeveloperToolPackage::new(
+        source,
+        crate::ToolId::parse("desktop").unwrap(),
+        "Morphir Desktop",
+        semver::Version::parse("0.1.0").unwrap(),
+        crate::Platform::new("windows", "x86_64").unwrap(),
+        crate::ArchiveFormat::Raw,
+        crate::RelativeArtifactPath::parse("desktop.exe").unwrap(),
+        vec!["--morphir-home".to_owned()],
+    )
+    .unwrap();
+
+    let package = super::ToolPackageStore::new(&home)
+        .prepare_local(candidate)
+        .unwrap();
+    let installed = super::ToolInstaller::new(&home).install(package).unwrap();
+
+    assert_eq!(
+        installed.provenance(),
+        &crate::ToolProvenance::LocalDeveloper
+    );
+    assert_eq!(installed.digest(), &crate::Sha256Digest::of_bytes(bytes));
+    assert_eq!(
+        installed.version(),
+        &semver::Version::parse("0.1.0").unwrap()
+    );
+    let lock = super::read_tool_lock(&home, installed.tool_id()).unwrap();
+    assert_eq!(lock.provenance(), installed.provenance());
+}
+
+#[test]
+fn unsafe_local_developer_archive_does_not_replace_the_active_release() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    ToolInstaller::new(&home)
+        .install(package(&home, "1.0.0", b"desktop-v1"))
+        .unwrap();
+    let source = root.path().join("desktop-2.0.0.zip");
+    write_zip(
+        &source,
+        &[
+            ("morphir-desktop.exe", b"desktop-v2"),
+            ("../escape", b"unsafe"),
+        ],
+    );
+    let candidate = crate::LocalDeveloperToolPackage::new(
+        source,
+        ToolId::parse("desktop").unwrap(),
+        "Morphir Desktop",
+        Version::parse("2.0.0").unwrap(),
+        crate::Platform::new("windows", "x86_64").unwrap(),
+        crate::ArchiveFormat::Zip,
+        RelativeArtifactPath::parse("morphir-desktop.exe").unwrap(),
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert!(
+        ToolPackageStore::new(&home)
+            .prepare_local(candidate)
+            .is_err()
+    );
+    assert_eq!(
+        list_installed_tools(&home).unwrap()[0].active().version(),
+        &Version::parse("1.0.0").unwrap()
+    );
+    assert!(!root.path().join("escape").exists());
+}
+
+#[test]
 fn verified_launch_contract_holds_state_guard_until_released() {
     let root = tempfile::tempdir().unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
@@ -152,7 +232,7 @@ fn authenticated_raw_download_is_reverified_and_published_before_activation() {
     let installed = ToolInstaller::new(&home).install(package).unwrap();
     assert!(installed.store_path().starts_with("store/tools/sha256"));
     assert_eq!(installed.digest(), &digest);
-    assert_eq!(installed.snapshot_version(), 1);
+    assert_eq!(installed.snapshot_version(), Some(1));
     let id = ToolId::parse("desktop").unwrap();
     let launch = activate_installed_tool(&home, &id).unwrap();
     assert_eq!(launch.args(), ["--morphir-home"]);

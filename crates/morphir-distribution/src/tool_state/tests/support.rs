@@ -3,7 +3,7 @@ use super::super::package_key::package_path;
 use crate::state_io::{StateWriter, atomic_write_bytes};
 use crate::{
     ArchiveFormat, Channel, Platform, RelativeArtifactPath, Selection, Sha256Digest, ToolId,
-    ToolReleaseStatus,
+    ToolProvenance, ToolReleaseStatus,
 };
 use morphir_common::home::MorphirHome;
 use semver::Version;
@@ -73,6 +73,10 @@ pub(super) fn package_for(
     };
     VerifiedToolPackage {
         selection: Selection::Channel(Channel::Stable),
+        provenance: ToolProvenance::AuthenticatedRepository {
+            selection: Selection::Channel(Channel::Stable),
+            snapshot_version: 1,
+        },
         tool_id: ToolId::parse(id).unwrap(),
         tool_name: name.to_owned(),
         version: Version::parse(version).unwrap(),
@@ -80,7 +84,6 @@ pub(super) fn package_for(
         platform: Platform::new("windows", "x86_64").unwrap(),
         digest,
         length: bytes.len() as u64,
-        snapshot_version: 1,
         target_path: RelativeArtifactPath::parse(format!("artifacts/{id}/{version}/{filename}"))
             .unwrap(),
         store_path: relative,

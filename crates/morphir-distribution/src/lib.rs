@@ -104,7 +104,7 @@ pub use domain::{
     ArchiveFormat, ArtifactFilename, ArtifactRecord, ArtifactRuntime, ArtifactSource,
     BackendRecord, Capability, Channel, ChannelSegment, ExtensionId, Platform,
     RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolArchive, ToolArtifactRecord,
-    ToolId, ToolLaunch, ToolReleaseRecord, ToolReleaseStatus,
+    ToolId, ToolLaunch, ToolProvenance, ToolReleaseRecord, ToolReleaseStatus,
 };
 pub use error::{DistributionError, Result};
 pub use index::ExtensionHistory;
@@ -129,7 +129,7 @@ pub use tool_repository::{
 };
 pub use tool_resolver::{ResolvedToolRelease, resolve_tool};
 pub use tool_state::{
-    InstalledTool, InstalledToolSnapshot, ToolInstaller, ToolLock, ToolPackageStore, ToolRepairer,
-    VerifiedToolPackage, VerifiedToolProcess, activate_installed_tool, list_installed_tools,
-    read_tool_lock, rollback_tool,
+    InstalledTool, InstalledToolSnapshot, LocalDeveloperToolPackage, ToolInstaller, ToolLock,
+    ToolPackageStore, ToolRepairer, VerifiedToolPackage, VerifiedToolProcess,
+    activate_installed_tool, list_installed_tools, read_tool_lock, rollback_tool, uninstall_tool,
 };

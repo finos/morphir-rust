@@ -4,11 +4,11 @@ use super::package::{ToolPackageFile, VerifiedToolPackage};
 use super::verification::{sync_package, verify_package};
 use crate::state_io::{
     FilesystemStateWriter, StateGuard, StateWriter, commit_state_pair, decode_state, encode_json,
-    read_json, read_state_bytes, recover_state_pairs,
+    read_json, read_state_bytes, recover_state_pairs, remove_state_pair,
 };
 use crate::{
     DistributionError, Platform, RelativeArtifactPath, Result, Selection, Sha256Digest, ToolId,
-    ToolReleaseStatus,
+    ToolProvenance, ToolReleaseStatus,
 };
 use morphir_common::home::MorphirHome;
 use semver::Version;
@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-const TOOL_LOCK_SCHEMA_VERSION: u32 = 1;
-pub(super) const TOOL_CATALOG_SCHEMA_VERSION: u32 = 1;
+const TOOL_LOCK_SCHEMA_VERSION: u32 = 2;
+pub(super) const TOOL_CATALOG_SCHEMA_VERSION: u32 = 2;
 const MAX_ROLLBACK_RELEASES: usize = 1;
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +32,7 @@ struct StateSchemaEnvelope {
 pub struct ToolLock {
     schema_version: u32,
     selection: Selection,
+    provenance: ToolProvenance,
     tool_id: ToolId,
     tool_name: String,
     version: Version,
@@ -39,7 +40,6 @@ pub struct ToolLock {
     platform: Platform,
     digest: Sha256Digest,
     length: u64,
-    snapshot_version: u64,
     target_path: RelativeArtifactPath,
     store_path: RelativeArtifactPath,
     package_root: Option<RelativeArtifactPath>,
@@ -54,6 +54,7 @@ impl ToolLock {
         Self {
             schema_version: TOOL_LOCK_SCHEMA_VERSION,
             selection: package.selection.clone(),
+            provenance: package.provenance.clone(),
             tool_id: package.tool_id.clone(),
             tool_name: package.tool_name.clone(),
             version: package.version.clone(),
@@ -61,7 +62,6 @@ impl ToolLock {
             platform: package.platform.clone(),
             digest: package.digest.clone(),
             length: package.length,
-            snapshot_version: package.snapshot_version,
             target_path: package.target_path.clone(),
             store_path: package.store_path.clone(),
             package_root: package.package_root.clone(),
@@ -76,6 +76,7 @@ impl ToolLock {
         Self {
             schema_version: TOOL_LOCK_SCHEMA_VERSION,
             selection: installed.selection.clone(),
+            provenance: installed.provenance.clone(),
             tool_id: installed.tool_id.clone(),
             tool_name: installed.tool_name.clone(),
             version: installed.version.clone(),
@@ -83,7 +84,6 @@ impl ToolLock {
             platform: installed.platform.clone(),
             digest: installed.digest.clone(),
             length: installed.length,
-            snapshot_version: installed.snapshot_version,
             target_path: installed.target_path.clone(),
             store_path: installed.store_path.clone(),
             package_root: installed.package_root.clone(),
@@ -113,6 +113,11 @@ impl ToolLock {
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
     }
+
+    /// Return the trust boundary that produced this exact lock.
+    pub fn provenance(&self) -> &ToolProvenance {
+        &self.provenance
+    }
 }
 
 /// One immutable installed tool release.
@@ -120,6 +125,7 @@ impl ToolLock {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstalledTool {
     pub(super) selection: Selection,
+    pub(super) provenance: ToolProvenance,
     pub(super) tool_id: ToolId,
     pub(super) tool_name: String,
     pub(super) version: Version,
@@ -127,7 +133,6 @@ pub struct InstalledTool {
     pub(super) platform: Platform,
     pub(super) digest: Sha256Digest,
     pub(super) length: u64,
-    pub(super) snapshot_version: u64,
     pub(super) target_path: RelativeArtifactPath,
     pub(super) store_path: RelativeArtifactPath,
     pub(super) package_root: Option<RelativeArtifactPath>,
@@ -140,6 +145,7 @@ impl InstalledTool {
     fn from_package(package: &VerifiedToolPackage) -> Self {
         Self {
             selection: package.selection.clone(),
+            provenance: package.provenance.clone(),
             tool_id: package.tool_id.clone(),
             tool_name: package.tool_name.clone(),
             version: package.version.clone(),
@@ -147,7 +153,6 @@ impl InstalledTool {
             platform: package.platform.clone(),
             digest: package.digest.clone(),
             length: package.length,
-            snapshot_version: package.snapshot_version,
             target_path: package.target_path.clone(),
             store_path: package.store_path.clone(),
             package_root: package.package_root.clone(),
@@ -187,9 +192,14 @@ impl InstalledTool {
         &self.digest
     }
 
-    /// Return the TUF snapshot version that authenticated this installation.
-    pub fn snapshot_version(&self) -> u64 {
-        self.snapshot_version
+    /// Return the trust boundary that produced this installation.
+    pub fn provenance(&self) -> &ToolProvenance {
+        &self.provenance
+    }
+
+    /// Return the TUF snapshot version when this installation came from a repository.
+    pub fn snapshot_version(&self) -> Option<u64> {
+        self.provenance.snapshot_version()
     }
 
     /// Return the installed program path relative to Morphir Home.
@@ -386,6 +396,36 @@ pub fn list_installed_tools(home: &MorphirHome) -> Result<Vec<InstalledToolSnaps
         .collect()
 }
 
+/// Atomically remove one tool's active selection, retained rollback, and exact lock.
+///
+/// Content-addressed package bytes remain cache-owned and are reclaimed by normal cache policy.
+#[tracing::instrument(name = "morphir.tool.uninstall", skip(home), fields(tool_id = %id), err)]
+pub fn uninstall_tool(home: &MorphirHome, id: &ToolId) -> Result<InstalledTool> {
+    let _transaction = tool_state_guard(home)?;
+    let mut tools = load_catalog_unlocked(home)?;
+    let entry = tools
+        .remove(id)
+        .ok_or_else(|| DistributionError::ToolNotInstalled { id: id.clone() })?;
+    let lock = read_tool_lock_unlocked(home, id)?;
+    validate_active_pair(&entry.active, &entry.rollback, &lock)?;
+    let stored = ToolCatalogFile {
+        schema_version: TOOL_CATALOG_SCHEMA_VERSION,
+        tools: tools.into_values().collect(),
+    };
+    remove_state_pair(
+        &tool_lock_path(home, id),
+        &home.tools_catalog_file(),
+        &encode_json(&stored)?,
+        &FilesystemStateWriter,
+    )?;
+    tracing::info!(
+        tool_id = %entry.active.tool_id,
+        version = %entry.active.version,
+        "tool uninstalled"
+    );
+    Ok(entry.active)
+}
+
 pub(super) fn load_catalog_unlocked(
     home: &MorphirHome,
 ) -> Result<BTreeMap<ToolId, ToolCatalogEntry>> {
@@ -417,6 +457,7 @@ pub(super) fn validate_active_pair(
 ) -> Result<()> {
     let matches = lock.schema_version == TOOL_LOCK_SCHEMA_VERSION
         && lock.selection == active.selection
+        && lock.provenance == active.provenance
         && lock.tool_id == active.tool_id
         && lock.tool_name == active.tool_name
         && lock.version == active.version
@@ -424,7 +465,6 @@ pub(super) fn validate_active_pair(
         && lock.platform == active.platform
         && lock.digest == active.digest
         && lock.length == active.length
-        && lock.snapshot_version == active.snapshot_version
         && lock.target_path == active.target_path
         && lock.store_path == active.store_path
         && lock.package_root == active.package_root

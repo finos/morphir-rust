@@ -15,6 +15,6 @@ pub use manifest::{
     ReleaseRecord, Selection,
 };
 pub use tool::{
-    ArchiveFormat, ToolArchive, ToolArtifactRecord, ToolLaunch, ToolReleaseRecord,
+    ArchiveFormat, ToolArchive, ToolArtifactRecord, ToolLaunch, ToolProvenance, ToolReleaseRecord,
     ToolReleaseStatus,
 };

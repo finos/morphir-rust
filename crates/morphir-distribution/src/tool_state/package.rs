@@ -1,20 +1,25 @@
 //! Authenticated package materialization into the tool content-addressed store.
 
 use super::catalog::tool_state_guard;
-use super::package_key::extracted_package_path;
+use super::local_package::LocalDeveloperToolPackage;
+use super::package_key::package_path;
 use super::verification::verify_one_file;
 use crate::state_io::StateGuard;
 use crate::tool_archive::{extract_tar_gzip, extract_zip};
 use crate::{
     ArchiveFormat, ArtifactFilename, ArtifactStore, DistributionError, DownloadedToolArtifact,
     Platform, RelativeArtifactPath, ResolvedTrustedToolArtifact, Result, Selection, Sha256Digest,
-    ToolId, ToolReleaseStatus,
+    ToolId, ToolProvenance, ToolReleaseStatus,
 };
 use morphir_common::home::MorphirHome;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+const MAX_LOCAL_TOOL_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Verified immutable bytes and authenticated metadata ready for catalog activation.
 ///
@@ -25,6 +30,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub struct VerifiedToolPackage {
     pub(super) selection: Selection,
+    pub(super) provenance: ToolProvenance,
     pub(super) tool_id: ToolId,
     pub(super) tool_name: String,
     pub(super) version: Version,
@@ -32,7 +38,6 @@ pub struct VerifiedToolPackage {
     pub(super) platform: Platform,
     pub(super) digest: Sha256Digest,
     pub(super) length: u64,
-    pub(super) snapshot_version: u64,
     pub(super) target_path: RelativeArtifactPath,
     pub(super) store_path: RelativeArtifactPath,
     pub(super) package_root: Option<RelativeArtifactPath>,
@@ -40,6 +45,112 @@ pub struct VerifiedToolPackage {
     pub(super) files: Vec<ToolPackageFile>,
     pub(super) directories: Vec<RelativeArtifactPath>,
     pub(super) state_guard: Option<PreparedPackageGuard>,
+}
+
+#[derive(Debug)]
+pub(super) struct ToolPackageCandidate {
+    pub(super) selection: Selection,
+    pub(super) provenance: ToolProvenance,
+    pub(super) tool_id: ToolId,
+    pub(super) tool_name: String,
+    pub(super) version: Version,
+    pub(super) status: ToolReleaseStatus,
+    pub(super) platform: Platform,
+    pub(super) digest: Sha256Digest,
+    pub(super) length: u64,
+    pub(super) target_path: RelativeArtifactPath,
+    pub(super) format: ArchiveFormat,
+    pub(super) entry_point: RelativeArtifactPath,
+    pub(super) args: Vec<String>,
+    pub(super) source: PathBuf,
+}
+
+impl ToolPackageCandidate {
+    fn authenticated(
+        resolved: ResolvedTrustedToolArtifact,
+        downloaded: DownloadedToolArtifact,
+    ) -> Self {
+        Self {
+            selection: resolved.selection().clone(),
+            provenance: ToolProvenance::AuthenticatedRepository {
+                selection: resolved.selection().clone(),
+                snapshot_version: resolved.snapshot_version(),
+            },
+            tool_id: resolved.release().tool_id().clone(),
+            tool_name: resolved.release().tool_name().to_owned(),
+            version: resolved.release().version().clone(),
+            status: resolved.release().status(),
+            platform: resolved.artifact().platform().clone(),
+            digest: resolved.digest().clone(),
+            length: resolved.length(),
+            target_path: resolved.artifact().target_path().clone(),
+            format: resolved.artifact().archive().format(),
+            entry_point: resolved.artifact().launch().path().clone(),
+            args: resolved.artifact().launch().args().to_vec(),
+            source: downloaded.path().to_path_buf(),
+        }
+    }
+
+    pub(super) fn local(local: LocalDeveloperToolPackage) -> Result<Self> {
+        let metadata = fs::metadata(&local.source).map_err(|source| DistributionError::Io {
+            path: local.source.clone(),
+            source,
+        })?;
+        if !metadata.is_file() {
+            return Err(DistributionError::InvalidToolManifest {
+                reason: "local developer package source must be a regular file".to_owned(),
+            });
+        }
+        if metadata.len() > MAX_LOCAL_TOOL_ARTIFACT_BYTES {
+            return Err(DistributionError::ArtifactTooLarge {
+                path: local.source,
+                actual: metadata.len(),
+                limit: MAX_LOCAL_TOOL_ARTIFACT_BYTES,
+            });
+        }
+        let mut source = fs::File::open(&local.source).map_err(|source| DistributionError::Io {
+            path: local.source.clone(),
+            source,
+        })?;
+        let mut hasher = Sha256::new();
+        let mut length = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = source
+                .read(&mut buffer)
+                .map_err(|source| DistributionError::Io {
+                    path: local.source.clone(),
+                    source,
+                })?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            length += read as u64;
+        }
+        let digest = Sha256Digest::from_bytes(hasher.finalize().into());
+        let filename = portable_filename(&local.source)?;
+        let target_path = RelativeArtifactPath::parse(format!(
+            "local/{}/{}/{}",
+            local.tool_id, local.version, filename
+        ))?;
+        Ok(Self {
+            selection: Selection::Exact(local.version.clone()),
+            provenance: ToolProvenance::LocalDeveloper,
+            tool_id: local.tool_id,
+            tool_name: local.tool_name,
+            version: local.version,
+            status: ToolReleaseStatus::Active,
+            platform: local.platform,
+            digest,
+            length,
+            target_path,
+            format: local.format,
+            entry_point: local.entry_point,
+            args: local.args,
+            source: local.source,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -104,7 +215,25 @@ impl<'home> ToolPackageStore<'home> {
         downloaded: DownloadedToolArtifact,
     ) -> Result<VerifiedToolPackage> {
         let state_guard = tool_state_guard(self.home)?;
-        let mut package = self.prepare_unlocked(resolved, downloaded)?;
+        let mut package =
+            self.prepare_candidate(ToolPackageCandidate::authenticated(resolved, downloaded))?;
+        package.state_guard = Some(PreparedPackageGuard {
+            home_root: self.home.root().to_path_buf(),
+            state_guard,
+        });
+        Ok(package)
+    }
+
+    /// Verify and materialize an explicitly selected unsigned local developer package.
+    #[tracing::instrument(
+        name = "morphir.tool.package.prepare_local",
+        skip(self, local),
+        fields(tool_id = %local.tool_id, version = %local.version),
+        err
+    )]
+    pub fn prepare_local(&self, local: LocalDeveloperToolPackage) -> Result<VerifiedToolPackage> {
+        let state_guard = tool_state_guard(self.home)?;
+        let mut package = self.prepare_candidate(ToolPackageCandidate::local(local)?)?;
         package.state_guard = Some(PreparedPackageGuard {
             home_root: self.home.root().to_path_buf(),
             state_guard,
@@ -128,13 +257,20 @@ impl<'home> ToolPackageStore<'home> {
         resolved: ResolvedTrustedToolArtifact,
         downloaded: DownloadedToolArtifact,
     ) -> Result<VerifiedToolPackage> {
-        let format = resolved.artifact().archive().format();
+        self.prepare_candidate(ToolPackageCandidate::authenticated(resolved, downloaded))
+    }
+
+    pub(super) fn prepare_candidate(
+        &self,
+        candidate: ToolPackageCandidate,
+    ) -> Result<VerifiedToolPackage> {
+        let format = candidate.format;
         let package = match format {
             ArchiveFormat::Raw | ArchiveFormat::Appimage => {
-                super::raw_package::prepare(self.home, resolved, downloaded)
+                super::raw_package::prepare(self.home, candidate)
             }
-            ArchiveFormat::Zip => self.prepare_zip(resolved, downloaded),
-            ArchiveFormat::TarGzip => self.prepare_tar_gzip(resolved, downloaded),
+            ArchiveFormat::Zip => self.prepare_zip(candidate),
+            ArchiveFormat::TarGzip => self.prepare_tar_gzip(candidate),
         }?;
         tracing::info!(
             program = %package.store_path.as_str(),
@@ -144,12 +280,8 @@ impl<'home> ToolPackageStore<'home> {
         Ok(package)
     }
 
-    fn prepare_zip(
-        &self,
-        resolved: ResolvedTrustedToolArtifact,
-        downloaded: DownloadedToolArtifact,
-    ) -> Result<VerifiedToolPackage> {
-        let downloaded = downloaded.path();
+    fn prepare_zip(&self, candidate: ToolPackageCandidate) -> Result<VerifiedToolPackage> {
+        let downloaded = &candidate.source;
         let source_root = downloaded
             .parent()
             .expect("downloaded TUF target has a parent");
@@ -159,7 +291,7 @@ impl<'home> ToolPackageStore<'home> {
         let stored = ArtifactStore::for_tools(self.home).materialize_file(
             source_root,
             &source,
-            resolved.digest(),
+            &candidate.digest,
             &filename,
             false,
         )?;
@@ -169,10 +301,10 @@ impl<'home> ToolPackageStore<'home> {
                 source,
             })?
             .len();
-        if actual_length != resolved.length() {
+        if actual_length != candidate.length {
             return Err(DistributionError::ToolLengthMismatch {
                 path: stored.path().to_path_buf(),
-                expected: resolved.length(),
+                expected: candidate.length,
                 actual: actual_length,
             });
         }
@@ -180,8 +312,9 @@ impl<'home> ToolPackageStore<'home> {
         let digest_directory = self
             .home
             .tools_store_dir()
-            .join(resolved.digest().to_string());
-        let requested_destination = extracted_package_path(&digest_directory, resolved.artifact());
+            .join(candidate.digest.to_string());
+        let requested_destination =
+            package_path(&digest_directory, candidate.format, &candidate.entry_point);
         let destination_name = requested_destination
             .file_name()
             .expect("tool package destination has a filename")
@@ -200,11 +333,7 @@ impl<'home> ToolPackageStore<'home> {
             path: staging_root.clone(),
             source,
         })?;
-        let extracted = extract_zip(
-            stored.path(),
-            &staging_root,
-            resolved.artifact().launch().path(),
-        )?;
+        let extracted = extract_zip(stored.path(), &staging_root, &candidate.entry_point)?;
         let relative_files = extracted
             .files
             .into_iter()
@@ -229,7 +358,7 @@ impl<'home> ToolPackageStore<'home> {
             }
         }
 
-        let program = destination.join(resolved.artifact().launch().path().as_path());
+        let program = destination.join(candidate.entry_point.as_path());
         let store_path = home_relative(self.home, &program)?;
         let package_root = home_relative(self.home, &destination)?;
         let files = relative_files
@@ -247,8 +376,8 @@ impl<'home> ToolPackageStore<'home> {
             .into_iter()
             .map(|directory| home_relative(self.home, &destination.join(directory.as_path())))
             .collect::<Result<Vec<_>>>()?;
-        Ok(package_from_resolved(
-            resolved,
+        Ok(package_from_candidate(
+            candidate,
             store_path,
             Some(package_root),
             files,
@@ -256,12 +385,8 @@ impl<'home> ToolPackageStore<'home> {
         ))
     }
 
-    fn prepare_tar_gzip(
-        &self,
-        resolved: ResolvedTrustedToolArtifact,
-        downloaded: DownloadedToolArtifact,
-    ) -> Result<VerifiedToolPackage> {
-        let downloaded = downloaded.path();
+    fn prepare_tar_gzip(&self, candidate: ToolPackageCandidate) -> Result<VerifiedToolPackage> {
+        let downloaded = &candidate.source;
         let source_root = downloaded
             .parent()
             .expect("downloaded TUF target has a parent");
@@ -271,7 +396,7 @@ impl<'home> ToolPackageStore<'home> {
         let stored = ArtifactStore::for_tools(self.home).materialize_file(
             source_root,
             &source,
-            resolved.digest(),
+            &candidate.digest,
             &filename,
             false,
         )?;
@@ -281,10 +406,10 @@ impl<'home> ToolPackageStore<'home> {
                 source,
             })?
             .len();
-        if actual_length != resolved.length() {
+        if actual_length != candidate.length {
             return Err(DistributionError::ToolLengthMismatch {
                 path: stored.path().to_path_buf(),
-                expected: resolved.length(),
+                expected: candidate.length,
                 actual: actual_length,
             });
         }
@@ -292,8 +417,9 @@ impl<'home> ToolPackageStore<'home> {
         let digest_directory = self
             .home
             .tools_store_dir()
-            .join(resolved.digest().to_string());
-        let requested_destination = extracted_package_path(&digest_directory, resolved.artifact());
+            .join(candidate.digest.to_string());
+        let requested_destination =
+            package_path(&digest_directory, candidate.format, &candidate.entry_point);
         let destination_name = requested_destination
             .file_name()
             .expect("tool package destination has a filename")
@@ -312,11 +438,7 @@ impl<'home> ToolPackageStore<'home> {
             path: staging_root.clone(),
             source,
         })?;
-        let extracted = extract_tar_gzip(
-            stored.path(),
-            &staging_root,
-            resolved.artifact().launch().path(),
-        )?;
+        let extracted = extract_tar_gzip(stored.path(), &staging_root, &candidate.entry_point)?;
         let relative_files = extracted
             .files
             .into_iter()
@@ -341,7 +463,7 @@ impl<'home> ToolPackageStore<'home> {
             }
         }
 
-        let program = destination.join(resolved.artifact().launch().path().as_path());
+        let program = destination.join(candidate.entry_point.as_path());
         let store_path = home_relative(self.home, &program)?;
         let package_root = home_relative(self.home, &destination)?;
         let files = relative_files
@@ -359,8 +481,8 @@ impl<'home> ToolPackageStore<'home> {
             .into_iter()
             .map(|directory| home_relative(self.home, &destination.join(directory.as_path())))
             .collect::<Result<Vec<_>>>()?;
-        Ok(package_from_resolved(
-            resolved,
+        Ok(package_from_candidate(
+            candidate,
             store_path,
             Some(package_root),
             files,
@@ -369,27 +491,27 @@ impl<'home> ToolPackageStore<'home> {
     }
 }
 
-pub(super) fn package_from_resolved(
-    resolved: ResolvedTrustedToolArtifact,
+pub(super) fn package_from_candidate(
+    candidate: ToolPackageCandidate,
     store_path: RelativeArtifactPath,
     package_root: Option<RelativeArtifactPath>,
     files: Vec<ToolPackageFile>,
     directories: Vec<RelativeArtifactPath>,
 ) -> VerifiedToolPackage {
     VerifiedToolPackage {
-        selection: resolved.selection().clone(),
-        tool_id: resolved.release().tool_id().clone(),
-        tool_name: resolved.release().tool_name().to_owned(),
-        version: resolved.release().version().clone(),
-        status: resolved.release().status(),
-        platform: resolved.artifact().platform().clone(),
-        digest: resolved.digest().clone(),
-        length: resolved.length(),
-        snapshot_version: resolved.snapshot_version(),
-        target_path: resolved.artifact().target_path().clone(),
+        selection: candidate.selection,
+        provenance: candidate.provenance,
+        tool_id: candidate.tool_id,
+        tool_name: candidate.tool_name,
+        version: candidate.version,
+        status: candidate.status,
+        platform: candidate.platform,
+        digest: candidate.digest,
+        length: candidate.length,
+        target_path: candidate.target_path,
         store_path,
         package_root,
-        args: resolved.artifact().launch().args().to_vec(),
+        args: candidate.args,
         files,
         directories,
         state_guard: None,

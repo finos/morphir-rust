@@ -182,7 +182,6 @@ pub fn project(
         &mut diagnostics,
     )?;
 
-    drop_dangling(&mut definitions, &mut diagnostics);
     let roots = owned
         .iter()
         .map(|source_name| schema_name(source_name))
@@ -198,18 +197,24 @@ pub fn project(
 }
 
 /// Close a queue of source names into `definitions`, claiming each
-/// projected schema name in `claimed` and enqueueing every further
-/// reference [`project_declaration`] reports.
+/// projected schema name in `claimed`, enqueueing every further reference
+/// [`project_declaration`] reports, and sweeping away anything left
+/// dangling once the queue drains.
 ///
 /// Shared by [`project`] — seeded from every public type declaration — and
 /// by [`operations::project_operations`], seeded from a request or response
 /// type the declaration walk did not already reach. One implementation
-/// means the two walks cannot diverge on collision detection or
-/// [`Unsupported`] handling: `claimed` and `visited` are caller-owned, so a
-/// second call started from `project`'s own `definitions` (rebuilt into
-/// `claimed`/`visited` by the caller) still catches a projected name a
-/// dependency type would otherwise silently alias onto an unrelated
-/// definition, as a `JSC004` collision rather than a wrong `$ref`.
+/// means the two walks cannot diverge, on any of three points: collision
+/// detection (`claimed` and `visited` are caller-owned, so a second call
+/// started from `project`'s own `definitions` still catches a projected
+/// name a dependency type would otherwise silently alias onto an unrelated
+/// definition, as a `JSC004` collision rather than a wrong `$ref`);
+/// [`Unsupported`] handling; and dangling-reference cleanup — a skipped
+/// declaration under [`Unsupported::WarnAndSkip`] can leave an
+/// already-registered definition referring to a name that no longer
+/// resolves, whichever call populated it, and [`drop_dangling`] runs here,
+/// against the whole `definitions` map, so neither caller can render a
+/// `$ref` with no `components/schemas` entry behind it.
 fn close_definitions(
     context: &Context<'_>,
     options: &SchemaOptions,
@@ -260,6 +265,7 @@ fn close_definitions(
             }
         }
     }
+    drop_dangling(definitions, diagnostics);
     Ok(())
 }
 

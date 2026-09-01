@@ -325,6 +325,101 @@ fn a_dependency_type_that_collides_with_an_existing_definition_is_jsc004_not_a_s
     assert_eq!(error.code(), "JSC004");
 }
 
+/// A multi-hop case: the unsupported type is reached only through
+/// `extend_definitions`'s own closure over an already-registered
+/// definition's references, not directly by the operation's own top-level
+/// signature (which is a plain reference to `wrapper` and projects fine on
+/// its own). `close_definitions` must run its dangling cleanup for this
+/// second pass too, or `wrapper` — inserted into `projection.definitions`
+/// before its own field turned out to reference a skipped declaration —
+/// survives with a `$ref` to a `components/schemas` entry that does not
+/// exist.
+#[test]
+fn warn_and_skip_drops_a_definition_reached_two_hops_from_an_operation() {
+    let mut package = package_with(vec![ValueSpecification {
+        source_name: source("look-up"),
+        name: "look-up".to_owned(),
+        inputs: Vec::new(),
+        output: Some(TypeExpr::Reference {
+            source_name: "shared/vault:support#wrapper".to_owned(),
+            arguments: Vec::new(),
+        }),
+        value_kind: ValueKind::Constant,
+        entry_point: entry_point("look-up-id"),
+        doc: None,
+    }]);
+    package.dependencies = vec![ProjectionDependency {
+        package_name: "shared/vault".to_owned(),
+        modules: vec![ProjectionModule {
+            path: vec!["support".to_owned()],
+            types: vec![
+                TypeDeclaration::Alias {
+                    source_name: "shared/vault:support#wrapper".to_owned(),
+                    name: "wrapper".to_owned(),
+                    type_params: Vec::new(),
+                    value: TypeExpr::Record(vec![NamedType {
+                        name: "payload".to_owned(),
+                        tpe: TypeExpr::Reference {
+                            source_name: "shared/vault:support#broken".to_owned(),
+                            arguments: Vec::new(),
+                        },
+                    }]),
+                    doc: None,
+                },
+                alias(
+                    "shared/vault:support#broken",
+                    "broken",
+                    TypeExpr::Variable("a".to_owned()),
+                ),
+            ],
+            values: Vec::new(),
+            doc: None,
+        }],
+    }];
+
+    let mut projection = project(&package, &SchemaOptions::default())
+        .expect("neither 'wrapper' nor 'broken' is a public type root of this package");
+    assert!(
+        projection.definitions.is_empty(),
+        "'wrapper' and 'broken' are dependency types reached only through the operation below"
+    );
+
+    let options = SchemaOptions {
+        projection: Projection::OperationsEntryPoints,
+        unsupported: Unsupported::WarnAndSkip,
+        ..SchemaOptions::default()
+    };
+    let operations = project_operations(&package, &mut projection, &options).expect(
+        "the operation's own top-level signature is a plain reference; only its second-hop \
+         dependency ('broken') is unsupported",
+    );
+
+    assert_eq!(
+        operations
+            .iter()
+            .map(|operation| operation.source_name.as_str())
+            .collect::<Vec<_>>(),
+        vec![source("look-up").as_str()]
+    );
+    assert!(
+        !projection.definitions.contains_key("Wrapper"),
+        "'Wrapper' refers to the skipped 'Broken' and must not survive with a dangling $ref: {:?}",
+        projection.definitions.keys().collect::<Vec<_>>()
+    );
+    assert!(!projection.definitions.contains_key("Broken"));
+
+    let dropped_wrapper = projection.diagnostics.iter().any(|(diagnostic, warning)| {
+        *warning
+            && diagnostic.code() == "JSC003"
+            && diagnostic.source() == Some("shared/vault:support#wrapper")
+    });
+    assert!(
+        dropped_wrapper,
+        "the referring declaration 'wrapper' is warned about by its own FQName: {:?}",
+        projection.diagnostics
+    );
+}
+
 fn alias(source_name: &str, name: &str, value: TypeExpr) -> TypeDeclaration {
     TypeDeclaration::Alias {
         source_name: source_name.to_owned(),

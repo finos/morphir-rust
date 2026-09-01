@@ -31,6 +31,16 @@
 //! - A `$ref` next to any other keyword — whether original or produced by
 //!   one of the rewrites above — becomes `{"allOf": [{"$ref": ...}],
 //!   ...siblings}`, because 3.0 tooling ignores every sibling of a `$ref`.
+//!   When one of those siblings is `nullable: true` — a `Maybe` whose
+//!   payload is a named type is the common case — the wrap cannot make
+//!   `nullable` take effect: OAS 3.0.3 §4.7.24.2 only extends the allowed
+//!   types when a `type` keyword sits in the *same* schema object, and
+//!   `allOf` never puts one there. There is no fully correct 3.0 encoding
+//!   for a nullable reference — inlining the referenced schema would fix
+//!   this but duplicates schemas and breaks on recursive types — so this
+//!   rewrite keeps the `allOf` idiom and instead records a `JSC003`
+//!   warning naming the schema or property, so a 3.1-only guarantee does
+//!   not silently disappear for 3.0 consumers.
 //! - `x-morphir-*` extension keys are valid in 3.0 and are never touched.
 //! - A surviving `$defs` key on a Schema Object is a bug, not a form to
 //!   project: every named schema this document can reach already lives in
@@ -94,13 +104,21 @@ enum Position {
 /// 3.0 shape rather than its 3.1 original. The document itself starts at
 /// [`Position::Other`]: an OpenAPI document is a structural object, not a
 /// schema.
-pub(crate) fn downgrade(document: Value) -> Result<Value, SchemaDiagnostic> {
-    let rewritten = rewrite_value(document, "$", Position::Other)?;
+///
+/// Returns the rewritten document paired with every `JSC003` warning the
+/// rewrite recorded along the way — currently only the nullable-reference
+/// warning `wrap_ref_with_siblings` raises. The pass still cannot fail on
+/// a warning: only the `$defs`-survived bug is an `Err`.
+pub(crate) fn downgrade(
+    document: Value,
+) -> Result<(Value, Vec<SchemaDiagnostic>), SchemaDiagnostic> {
+    let mut warnings = Vec::new();
+    let rewritten = rewrite_value(document, "$", Position::Other, &mut warnings)?;
     let Value::Object(mut object) = rewritten else {
         unreachable!("render::openapi always builds a JSON object document");
     };
     object.insert("openapi".to_owned(), json!(OPENAPI_VERSION));
-    Ok(Value::Object(object))
+    Ok((Value::Object(object), warnings))
 }
 
 /// Rewrite one JSON value at `position`, recursing into every object member
@@ -111,17 +129,25 @@ pub(crate) fn downgrade(document: Value) -> Result<Value, SchemaDiagnostic> {
 /// `path` is a JSON-Pointer-ish breadcrumb used only to name the schema in
 /// a `$defs` bug diagnostic when no `x-morphir-fqname` sibling is present
 /// to name it instead.
-fn rewrite_value(value: Value, path: &str, position: Position) -> Result<Value, SchemaDiagnostic> {
+fn rewrite_value(
+    value: Value,
+    path: &str,
+    position: Position,
+    warnings: &mut Vec<SchemaDiagnostic>,
+) -> Result<Value, SchemaDiagnostic> {
     match value {
         Value::Object(members) => {
             let mut rewritten = Map::new();
             for (key, child) in members {
                 let child_path = format!("{path}.{key}");
                 let child_position = child_position(position, &key);
-                rewritten.insert(key, rewrite_value(child, &child_path, child_position)?);
+                rewritten.insert(
+                    key,
+                    rewrite_value(child, &child_path, child_position, warnings)?,
+                );
             }
             if position == Position::Schema {
-                rewrite_object(rewritten, path).map(Value::Object)
+                rewrite_object(rewritten, path, warnings).map(Value::Object)
             } else {
                 Ok(Value::Object(rewritten))
             }
@@ -136,7 +162,9 @@ fn rewrite_value(value: Value, path: &str, position: Position) -> Result<Value, 
             let rewritten = items
                 .into_iter()
                 .enumerate()
-                .map(|(index, item)| rewrite_value(item, &format!("{path}[{index}]"), position))
+                .map(|(index, item)| {
+                    rewrite_value(item, &format!("{path}[{index}]"), position, warnings)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Value::Array(rewritten))
         }
@@ -191,6 +219,7 @@ fn child_position(position: Position, key: &str) -> Position {
 fn rewrite_object(
     mut members: Map<String, Value>,
     path: &str,
+    warnings: &mut Vec<SchemaDiagnostic>,
 ) -> Result<Map<String, Value>, SchemaDiagnostic> {
     if members.contains_key("$defs") {
         let name = members
@@ -210,7 +239,7 @@ fn rewrite_object(
     rewrite_null_type_scalar(&mut members);
     rewrite_null_union(&mut members);
     rewrite_prefix_items(&mut members);
-    wrap_ref_with_siblings(&mut members);
+    wrap_ref_with_siblings(&mut members, path, warnings);
 
     Ok(members)
 }
@@ -349,14 +378,34 @@ fn rewrite_prefix_items(members: &mut Map<String, Value>) {
 /// there is no better 3.0 rendering available: a `$ref`'s only sibling-safe
 /// home is `allOf`, and `nullable` has no other keyword to attach to here.
 /// This is a documented limitation of the 3.0 dialect itself, not something
-/// this rewrite can route around.)
-fn wrap_ref_with_siblings(members: &mut Map<String, Value>) {
+/// this rewrite can route around. It is not silent, though: when `nullable`
+/// is among the siblings being wrapped, a `JSC003` warning is recorded in
+/// `warnings`, naming the schema via its `x-morphir-fqname` sibling when
+/// this object carries one — a registered named schema — or `path`
+/// otherwise — typically a property inside one, like a `Maybe`-typed
+/// field.)
+fn wrap_ref_with_siblings(
+    members: &mut Map<String, Value>,
+    path: &str,
+    warnings: &mut Vec<SchemaDiagnostic>,
+) {
     if members.len() <= 1 {
         return;
     }
     let Some(reference) = members.remove("$ref") else {
         return;
     };
+    if members.get("nullable") == Some(&json!(true)) {
+        let name = members
+            .get("x-morphir-fqname")
+            .and_then(Value::as_str)
+            .unwrap_or(path)
+            .to_owned();
+        warnings.push(SchemaDiagnostic::unsupported_form(
+            &name,
+            "OpenAPI 3.0 cannot express a nullable reference: 'nullable' only extends the              allowed types when a 'type' keyword sits in the same schema object, and wrapping              a $ref in 'allOf' never adds one, so 3.0 consumers may not honor 'null' the way              this schema intends. Consumers that must enforce it need the OpenAPI 3.1 document              instead.",
+        ));
+    }
     members.insert(
         "allOf".to_owned(),
         Value::Array(vec![json!({ "$ref": reference })]),
@@ -371,7 +420,7 @@ mod tests {
     fn sets_the_3_0_3_version() {
         let document = json!({"openapi": "3.1.0", "info": {}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(downgraded["openapi"], "3.0.3");
     }
@@ -386,7 +435,7 @@ mod tests {
             }}}}}}
         });
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["paths"]["/x"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
@@ -405,7 +454,7 @@ mod tests {
             }}}
         });
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -414,13 +463,27 @@ mod tests {
                 "nullable": true
             })
         );
+
+        // OAS 3.0.3 §4.7.24.2 only extends the allowed types when `type`
+        // sits beside `nullable` in the same schema object; wrapping the
+        // `$ref` in `allOf` never adds one, so 3.0 consumers may not honor
+        // `null` here. That silent gap must surface as a `JSC003` warning
+        // rather than disappear.
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code(), "JSC003");
+        assert_eq!(warnings[0].source(), Some("$.components.schemas.Foo"));
+        assert!(
+            warnings[0].message().contains("nullable"),
+            "{}",
+            warnings[0].message()
+        );
     }
 
     #[test]
     fn collapses_a_null_type_array_into_nullable() {
         let document = json!({"components": {"schemas": {"Foo": {"type": ["string", "null"]}}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -432,7 +495,7 @@ mod tests {
     fn turns_a_bare_null_schema_into_a_nullable_single_value_enum() {
         let document = json!({"components": {"schemas": {"Foo": {"type": "null"}}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -447,7 +510,7 @@ mod tests {
             "description": "A foo."
         }}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -456,6 +519,10 @@ mod tests {
                 "description": "A foo."
             })
         );
+        assert!(
+            warnings.is_empty(),
+            "a non-nullable $ref wrap has nothing to warn about: {warnings:?}"
+        );
     }
 
     #[test]
@@ -463,7 +530,7 @@ mod tests {
         let document =
             json!({"components": {"schemas": {"Foo": {"$ref": "#/components/schemas/Bar"}}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -481,7 +548,7 @@ mod tests {
             "maxItems": 2
         }}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -511,7 +578,7 @@ mod tests {
             "maxItems": 2
         }}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
         let schema = &downgraded["components"]["schemas"]["Foo"];
 
         let validator = jsonschema::validator_for(schema)
@@ -534,7 +601,7 @@ mod tests {
     fn turns_const_into_a_single_value_enum() {
         let document = json!({"components": {"schemas": {"Foo": {"const": "circle"}}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -549,7 +616,7 @@ mod tests {
             "x-morphir-fqname": "acme/customer:domain#name"
         }}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"]["x-morphir-fqname"],
@@ -598,7 +665,7 @@ mod tests {
             ]
         }}}});
 
-        let downgraded = downgrade(document.clone()).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document.clone()).expect("no unsupported forms");
 
         assert_eq!(
             downgraded["components"]["schemas"]["Foo"],
@@ -626,7 +693,7 @@ mod tests {
             "required": ["const", "name"]
         }}}});
 
-        let downgraded = downgrade(document).expect("no unsupported forms");
+        let (downgraded, _warnings) = downgrade(document).expect("no unsupported forms");
 
         let properties = &downgraded["components"]["schemas"]["Thing"]["properties"];
         assert_eq!(
@@ -648,7 +715,7 @@ mod tests {
             "properties": {"$defs": {"type": "string"}}
         }}}});
 
-        let downgraded = downgrade(document)
+        let (downgraded, _warnings) = downgrade(document)
             .expect("a field literally named '$defs' is user data, not a survived keyword");
 
         assert_eq!(

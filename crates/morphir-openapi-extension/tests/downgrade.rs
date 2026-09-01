@@ -20,8 +20,8 @@ use morphir_openapi_extension::{
 };
 use morphir_projection::testing::classic;
 use morphir_projection::{
-    DistributionKind, NamedType, ProjectionModule, ProjectionPackage, TypeExpr, ValueKind,
-    ValueSpecification,
+    DistributionKind, NamedType, ProjectionModule, ProjectionPackage, TypeDeclaration, TypeExpr,
+    ValueKind, ValueSpecification,
 };
 use serde_json::{Value, json};
 
@@ -311,7 +311,7 @@ fn downgrades_operations_request_bodies_parameters_and_split_responses() {
     let mut projection = project(&package, &options).expect("no types to skip");
     projection.operations = project_operations(&package, &mut projection, &options)
         .expect("no unsupported operation forms");
-    let artifacts = render_openapi(&projection, &options).expect("no unsupported forms");
+    let artifacts = render_openapi(&mut projection, &options).expect("no unsupported forms");
     let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
 
     assert_eq!(document["openapi"], "3.0.3");
@@ -368,4 +368,93 @@ fn downgrades_operations_request_bodies_parameters_and_split_responses() {
             .unwrap_or_else(|| panic!("non-local reference {reference}"));
         assert!(schemas.contains_key(name), "dangling reference {reference}");
     }
+}
+
+// --- Finding 1 coverage: a `Maybe` over a *named* type, not a scalar.
+//
+// `nickname: Maybe String` above exercises the scalar case, where 3.0's
+// `nullable` keyword works as intended alongside `type: "string"`. A
+// `Maybe` over a reference is different: the downgraded shape is
+// `{"allOf": [{"$ref": ...}], "nullable": true}`, and OAS 3.0.3 §4.7.24.2
+// only extends the allowed types when `type` sits in the *same* schema
+// object as `nullable` — `allOf` never puts one there, so most 3.0
+// tooling ignores it. `render_openapi` cannot fix that (inlining the
+// referenced schema would duplicate schemas and break on recursive
+// types), so it records a `JSC003` warning instead of staying silent.
+
+/// A record `Widget` with one field, `owner: Maybe Person`, where `Person`
+/// is a sibling declaration — so `owner`'s schema is a reference, not an
+/// inline object.
+fn package_with_a_nullable_reference_field() -> ProjectionPackage {
+    ProjectionPackage {
+        kind: DistributionKind::Library,
+        package_name: "acme/customer".to_owned(),
+        dependencies: Vec::new(),
+        modules: vec![ProjectionModule {
+            path: vec!["domain".to_owned()],
+            types: vec![
+                TypeDeclaration::Alias {
+                    source_name: "acme/customer:domain#widget".to_owned(),
+                    name: "widget".to_owned(),
+                    type_params: Vec::new(),
+                    value: TypeExpr::Record(vec![NamedType {
+                        name: "owner".to_owned(),
+                        tpe: maybe_ref(TypeExpr::Reference {
+                            source_name: "acme/customer:domain#person".to_owned(),
+                            arguments: Vec::new(),
+                        }),
+                    }]),
+                    doc: None,
+                },
+                TypeDeclaration::Alias {
+                    source_name: "acme/customer:domain#person".to_owned(),
+                    name: "person".to_owned(),
+                    type_params: Vec::new(),
+                    value: TypeExpr::Record(vec![NamedType {
+                        name: "name".to_owned(),
+                        tpe: string_ref(),
+                    }]),
+                    doc: None,
+                },
+            ],
+            values: Vec::new(),
+            doc: None,
+        }],
+    }
+}
+
+#[test]
+fn warns_about_a_nullable_reference_under_3_0_but_not_under_3_1() {
+    let package = package_with_a_nullable_reference_field();
+
+    let options_30 = SchemaOptions {
+        version: OpenApiVersion::V30,
+        ..SchemaOptions::default()
+    };
+    let mut projection_30 = project(&package, &options_30).expect("no unsupported forms");
+    render_openapi(&mut projection_30, &options_30).expect("no unsupported forms");
+
+    let warning = projection_30
+        .diagnostics
+        .iter()
+        .find(|(diagnostic, is_warning)| {
+            *is_warning
+                && diagnostic.code() == "JSC003"
+                && diagnostic.message().contains("nullable")
+        });
+    assert!(
+        warning.is_some(),
+        "a Maybe of a named type must warn that 3.0 cannot express its nullability: {:?}",
+        projection_30.diagnostics
+    );
+
+    let options_31 = SchemaOptions::default();
+    let mut projection_31 = project(&package, &options_31).expect("no unsupported forms");
+    render_openapi(&mut projection_31, &options_31).expect("no unsupported forms");
+
+    assert!(
+        projection_31.diagnostics.is_empty(),
+        "3.1 keeps the anyOf-with-null union unrewritten, so there is nothing to warn about: {:?}",
+        projection_31.diagnostics
+    );
 }

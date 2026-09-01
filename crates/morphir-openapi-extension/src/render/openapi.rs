@@ -37,9 +37,12 @@ const REF_PREFIX: &str = "#/components/schemas/";
 /// validators require the key. `options.version` selects the OpenAPI
 /// dialect: [`OpenApiVersion::V31`] (the default) renders the document
 /// built here unchanged; [`OpenApiVersion::V30`] rewrites it through
-/// [`downgrade`].
+/// [`downgrade`], which can append `JSC003` warnings — a nullable
+/// reference the 3.0 dialect cannot express — to `projection.diagnostics`.
+/// `projection` is taken by mutable reference for exactly that: this
+/// function otherwise only reads it.
 pub fn render_openapi(
-    projection: &SchemaProjection,
+    projection: &mut SchemaProjection,
     options: &SchemaOptions,
 ) -> Result<Vec<Artifact>, SchemaDiagnostic> {
     Ok(vec![render_document(projection, options)?])
@@ -47,7 +50,7 @@ pub fn render_openapi(
 
 /// Render one OpenAPI document covering every schema the projection reached.
 fn render_document(
-    projection: &SchemaProjection,
+    projection: &mut SchemaProjection,
     options: &SchemaOptions,
 ) -> Result<Artifact, SchemaDiagnostic> {
     let package_name = &projection.package_name;
@@ -96,7 +99,13 @@ fn render_document(
     // so the two versions cannot drift.
     let document = match options.version {
         OpenApiVersion::V31 => Value::Object(document),
-        OpenApiVersion::V30 => downgrade(Value::Object(document))?,
+        OpenApiVersion::V30 => {
+            let (document, warnings) = downgrade(Value::Object(document))?;
+            projection
+                .diagnostics
+                .extend(warnings.into_iter().map(|diagnostic| (diagnostic, true)));
+            document
+        }
     };
 
     Ok(Artifact {
@@ -274,13 +283,13 @@ mod tests {
     /// a root's FQName.
     #[test]
     fn names_the_document_from_the_projection_even_with_no_roots() {
-        let projection = SchemaProjection {
+        let mut projection = SchemaProjection {
             package_name: "acme/customer".to_owned(),
             ..SchemaProjection::default()
         };
         let options = SchemaOptions::default();
 
-        let artifacts = render_openapi(&projection, &options).expect("no unsupported forms");
+        let artifacts = render_openapi(&mut projection, &options).expect("no unsupported forms");
 
         assert_eq!(artifacts.len(), 1);
         let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");

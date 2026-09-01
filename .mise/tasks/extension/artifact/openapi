@@ -80,6 +80,9 @@ require_snapshot_inputs() {
     require_snapshot_file "crates/morphir-openapi-extension/Cargo.toml"
     require_snapshot_file "crates/morphir-openapi-extension/src/lib.rs"
     require_snapshot_file "crates/morphir-openapi-extension/tests/guest.rs"
+    require_snapshot_file "crates/morphir-daemon/tests/installed_wasm_extension_openapi.rs"
+    require_snapshot_file "crates/morphir-daemon/tests/support/mod.rs"
+    require_snapshot_file "crates/morphir-daemon/tests/support/installed_wasm.rs"
     require_snapshot_tree "crates/morphir-openapi-extension/src"
     require_snapshot_tree "crates/morphir-openapi-extension/tests"
     require_snapshot_tree "crates/morphir-projection/src"
@@ -97,6 +100,7 @@ run_pipeline() {
         cd "$source_root"
         cargo test --locked -p morphir-openapi-extension
         cargo build --locked --release -p morphir-openapi-extension --target wasm32-unknown-unknown
+        cargo test --locked -p morphir-daemon --test installed_wasm_extension_openapi -- --ignored
         wasm-tools validate target/wasm32-unknown-unknown/release/morphir_openapi_extension.wasm
         set -- scripts/package_extension.py \
             --short-id openapi \

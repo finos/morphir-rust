@@ -204,6 +204,18 @@ fi
         installed_guest_test.write_text(
             "// fixture installed guest test\n", encoding="utf-8", newline="\n"
         )
+        installed_guest_support_dir = installed_guest_test.parent / "support"
+        installed_guest_support_dir.mkdir()
+        (installed_guest_support_dir / "mod.rs").write_text(
+            "// fixture installed guest support module\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (installed_guest_support_dir / "installed_wasm.rs").write_text(
+            "// fixture installed guest support helpers\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
         (self.root / ".gitignore").write_text(
             ".morphir/\ntarget/\ncrates/morphir-avro-extension/ignored-source.rs\n",

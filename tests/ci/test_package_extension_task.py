@@ -277,6 +277,8 @@ class AvroArtifactTaskTests(unittest.TestCase):
             "tests/ci/package_extension_test_support.py",
             "tests/ci/test_package_extension_packaging.py",
             "tests/ci/test_package_extension_task.py",
+            "crates/morphir-daemon/tests/support/mod.rs",
+            "crates/morphir-daemon/tests/support/installed_wasm.rs",
         ):
             with (
                 self.subTest(missing=missing),

@@ -16,10 +16,10 @@ use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 
-struct FakeTransport {
-    expected: ExpectedExtension,
-    responses: VecDeque<std::result::Result<ExtensionResponse, TransportError>>,
-    termination: TransportState,
+pub(super) struct FakeTransport {
+    pub(super) expected: ExpectedExtension,
+    pub(super) responses: VecDeque<std::result::Result<ExtensionResponse, TransportError>>,
+    pub(super) termination: TransportState,
 }
 
 struct ScriptedTransport {
@@ -69,7 +69,7 @@ impl MepTransport for ScriptedTransport {
     }
 }
 
-fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
+pub(super) fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
     ExtensionInfo {
         id: "example".into(),
         name: "Example".into(),
@@ -79,7 +79,7 @@ fn extension(types: Vec<ExtensionType>) -> ExtensionInfo {
     }
 }
 
-fn initialization(info: ExtensionInfo) -> InitializeResult {
+pub(super) fn initialization(info: ExtensionInfo) -> InitializeResult {
     InitializeResult {
         protocol_version: "0.1".into(),
         extension: info,
@@ -96,7 +96,7 @@ fn frontend_initialization(compile: bool) -> InitializeResult {
     result
 }
 
-fn backend_initialization(generate: bool) -> InitializeResult {
+pub(super) fn backend_initialization(generate: bool) -> InitializeResult {
     let mut result = initialization(extension(vec![ExtensionType::Backend]));
     result.capabilities.backend = Some(BackendCapability {
         targets: vec!["avro".into()],
@@ -134,7 +134,7 @@ fn scripted_transport(responses: impl IntoIterator<Item = ExtensionResponse>) ->
     }
 }
 
-fn params() -> InitializeParams {
+pub(super) fn params() -> InitializeParams {
     InitializeParams {
         protocol_versions: vec!["0.1".into()],
         host: crate::extensions::protocol::PeerInfo {

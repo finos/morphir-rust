@@ -3403,6 +3403,7 @@ dependencies = [
  "dirs",
  "extism",
  "jsonrpsee",
+ "kameo",
  "morphir-common",
  "morphir-core",
  "morphir-devkit",

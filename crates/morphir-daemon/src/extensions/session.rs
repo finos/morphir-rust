@@ -3,6 +3,7 @@
 //! Wire messages are untrusted data. A [`Session`] validates JSON-RPC envelopes,
 //! negotiation, capabilities, and lifecycle transitions once for every transport.
 
+mod actor;
 mod compatibility;
 mod controller;
 mod extism;
@@ -10,6 +11,7 @@ mod native;
 mod transport;
 mod validation;
 
+pub use actor::{SessionHandle, spawn_session};
 pub use compatibility::{ExtensionSession, ExtensionSessionState};
 pub use controller::{
     FailedSession, Indeterminate, InvokeOutcome, Loaded, NegotiatedSession, Ready, Session, Stopped,

@@ -27,6 +27,6 @@ pub use registry::{
 pub use session::{
     ExpectedExtension, ExtensionSession, ExtensionSessionState, ExtismSession, FailedSession,
     Indeterminate, InvokeOutcome, Loaded, MepTransport, NativeMepSession, NativeMepTransport,
-    NegotiatedSession, PersistedExtensionCapabilities, Ready, Session, Stopped, TransportError,
-    TransportState,
+    NegotiatedSession, PersistedExtensionCapabilities, Ready, Session, SessionHandle, Stopped,
+    TransportError, TransportState, spawn_session,
 };

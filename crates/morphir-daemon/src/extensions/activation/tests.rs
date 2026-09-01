@@ -30,10 +30,9 @@ mod runtime_mother {
 
     #[derive(Clone, Copy)]
     enum MetadataShape {
-        LegacyBackend,
+        Backend,
         FrontendBackend,
         FrontendWorkspace,
-        MigratedFrontendBackend,
     }
 
     struct ArtifactSpec<'a> {
@@ -74,17 +73,17 @@ mod runtime_mother {
     }
 
     #[cfg(unix)]
-    pub fn legacy_backend_process() -> RuntimeArtifact {
+    pub fn backend_process() -> RuntimeArtifact {
         install(
             tempfile::tempdir().unwrap(),
             ArtifactSpec {
-                id: "legacy-backend",
-                name: "Legacy Backend",
+                id: "morphir-backend",
+                name: "Morphir Backend",
                 runtime: "process",
-                filename: "legacy-backend",
+                filename: "morphir-backend",
                 bytes: b"#!/bin/sh\nwhile IFS= read -r line; do :; done\n",
                 args: &[],
-                metadata: MetadataShape::LegacyBackend,
+                metadata: MetadataShape::Backend,
             },
         )
     }
@@ -161,44 +160,6 @@ mod runtime_mother {
                 bytes: program.as_bytes(),
                 args: &[],
                 metadata: MetadataShape::FrontendWorkspace,
-            },
-        )
-    }
-
-    #[cfg(unix)]
-    pub fn process_with_migrated_frontend_metadata() -> RuntimeArtifact {
-        let guest_info = serde_json::json!({
-            "id": "morphir-process-migrated",
-            "name": "Morphir Process Migrated",
-            "version": "1.2.3",
-            "types": ["frontend", "backend"]
-        });
-        let guest_capabilities = capabilities_json(true);
-        let response = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "protocolVersion": "0.1",
-                "extension": guest_info,
-                "capabilities": guest_capabilities
-            }
-        })
-        .to_string();
-        let program = format!(
-            "#!/bin/sh\nlength=0\nwhile IFS= read -r header; do\ncase \"$header\" in Content-Length:*) length=${{header#*: }}; length=$(printf '%s' \"$length\" | tr -d '\\r') ;; esac\n[ -z \"$(printf '%s' \"$header\" | tr -d '\\r')\" ] && break\ndone\ndd bs=1 count=\"$length\" of=/dev/null 2>/dev/null\nprintf 'Content-Length: %s\\r\\n\\r\\n%s' '{}' '{}'\nwhile IFS= read -r line; do :; done\n",
-            response.len(),
-            response
-        );
-        install(
-            tempfile::tempdir().unwrap(),
-            ArtifactSpec {
-                id: "morphir-process-migrated",
-                name: "Morphir Process Migrated",
-                runtime: "process",
-                filename: "morphir-process-migrated",
-                bytes: program.as_bytes(),
-                args: &[],
-                metadata: MetadataShape::MigratedFrontendBackend,
             },
         )
     }
@@ -324,14 +285,12 @@ mod runtime_mother {
             })
         };
         let capabilities = match spec.metadata {
-            MetadataShape::LegacyBackend => serde_json::json!(["backend"]),
-            MetadataShape::FrontendBackend | MetadataShape::MigratedFrontendBackend => {
-                serde_json::json!(["frontend", "backend"])
-            }
+            MetadataShape::Backend => serde_json::json!(["backend"]),
+            MetadataShape::FrontendBackend => serde_json::json!(["frontend", "backend"]),
             MetadataShape::FrontendWorkspace => serde_json::json!(["frontend", "workspace"]),
         };
         let mut record = serde_json::json!({
-            "schemaVersion": if matches!(spec.metadata, MetadataShape::LegacyBackend) { 1 } else { 3 },
+            "schemaVersion": "1.0",
             "id": spec.id,
             "name": spec.name,
             "version": "1.2.3",
@@ -340,7 +299,10 @@ mod runtime_mother {
             "capabilities": capabilities,
             "artifacts": [artifact]
         });
-        if !matches!(spec.metadata, MetadataShape::LegacyBackend) {
+        if matches!(
+            spec.metadata,
+            MetadataShape::FrontendBackend | MetadataShape::FrontendWorkspace
+        ) {
             record.as_object_mut().unwrap().insert(
                 "frontend".into(),
                 serde_json::json!({
@@ -352,7 +314,7 @@ mod runtime_mother {
         }
         if matches!(
             spec.metadata,
-            MetadataShape::FrontendBackend | MetadataShape::MigratedFrontendBackend
+            MetadataShape::Backend | MetadataShape::FrontendBackend
         ) {
             record.as_object_mut().unwrap().insert(
                 "backend".into(),
@@ -382,55 +344,6 @@ mod runtime_mother {
         let installed = ExtensionInstaller::new(&home).install(selected).unwrap();
         let installed_path = home.root().join(installed.store_path());
         let staging_directory = home.temp_dir().join("extensions");
-        if matches!(spec.metadata, MetadataShape::MigratedFrontendBackend) {
-            let lock_path = home
-                .extensions_locks_dir()
-                .join(format!("{}.json", spec.id));
-            let mut lock: serde_json::Value =
-                serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
-            lock["schemaVersion"] = serde_json::json!(3);
-            assert!(lock.as_object_mut().unwrap().remove("frontend").is_some());
-            assert!(
-                lock.as_object_mut()
-                    .unwrap()
-                    .remove("frontendMetadataScope")
-                    .is_some()
-            );
-            assert!(
-                lock.as_object_mut()
-                    .unwrap()
-                    .remove("backendMetadataScope")
-                    .is_some()
-            );
-            fs::write(&lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
-
-            let catalog_path = home.extensions_catalog_file();
-            let mut catalog: serde_json::Value =
-                serde_json::from_slice(&fs::read(&catalog_path).unwrap()).unwrap();
-            catalog["schemaVersion"] = serde_json::json!(2);
-            assert!(
-                catalog["extensions"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("frontend")
-                    .is_some()
-            );
-            assert!(
-                catalog["extensions"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("frontendMetadataScope")
-                    .is_some()
-            );
-            assert!(
-                catalog["extensions"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("backendMetadataScope")
-                    .is_some()
-            );
-            fs::write(&catalog_path, serde_json::to_vec_pretty(&catalog).unwrap()).unwrap();
-        }
         let artifact = activate_installed(&home, &extension_id).unwrap();
         let working_directory = root.path().join("workspace");
         fs::create_dir(&working_directory).unwrap();
@@ -618,17 +531,28 @@ async fn process_activation_uses_the_exact_bytes_verified_before_store_replaceme
 
 #[tokio::test]
 #[cfg(unix)]
-async fn legacy_process_activation_does_not_invent_a_backend_lock() {
-    let fixture = runtime_mother::legacy_backend_process();
+async fn backend_only_process_activation_uses_persisted_backend_metadata() {
+    let fixture = runtime_mother::backend_process();
     let session = activate_transport(fixture.artifact, &fixture.working_directory)
         .await
         .unwrap();
 
     let expected = session.transport_internal().expected_extension();
-    assert_eq!(expected.id(), "legacy-backend");
+    assert_eq!(expected.id(), "morphir-backend");
     assert_eq!(
         expected.extension_info().unwrap().types,
         [ExtensionType::Backend]
+    );
+    assert_eq!(
+        expected.backend_capability(),
+        Some(&expected_backend_capability())
+    );
+    assert_eq!(
+        expected.persisted_capabilities(),
+        Some(&PersistedExtensionCapabilities::new(
+            None,
+            Some(expected_backend_capability())
+        ))
     );
     assert!(expected.capabilities().is_none());
 }
@@ -679,34 +603,6 @@ async fn process_activation_allows_unpersisted_workspace_capabilities() {
         Ok(ready) => assert!(ready.negotiated().capabilities().workspace.is_some()),
         Err(failure) => panic!(
             "unpersisted workspace capabilities should remain negotiable: {}",
-            failure.error()
-        ),
-    }
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn process_activation_allows_unpersisted_frontend_from_migrated_state() {
-    let fixture = runtime_mother::process_with_migrated_frontend_metadata();
-    let negotiation = activate_transport(fixture.artifact, &fixture.working_directory)
-        .await
-        .unwrap()
-        .initialize(InitializeParams {
-            protocol_versions: vec!["0.1".into()],
-            host: PeerInfo {
-                name: "activation-test".into(),
-                version: "1.0.0".into(),
-            },
-        })
-        .await;
-
-    match negotiation {
-        Ok(ready) => {
-            assert!(ready.negotiated().capabilities().frontend.is_some());
-            assert!(ready.negotiated().capabilities().backend.is_some());
-        }
-        Err(failure) => panic!(
-            "frontend metadata absent from migrated state should remain negotiable: {}",
             failure.error()
         ),
     }

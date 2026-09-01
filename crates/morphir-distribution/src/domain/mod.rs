@@ -11,6 +11,7 @@ pub(crate) use identity::portable_token;
 pub use identity::{
     ArtifactFilename, Channel, ChannelSegment, ExtensionId, RelativeArtifactPath, ToolId,
 };
+pub(crate) use manifest::CURRENT_RELEASE_SCHEMA_VERSION;
 pub use manifest::{
     ArtifactRecord, ArtifactRuntime, ArtifactSource, BackendRecord, Capability,
     FrontendLanguageRecord, FrontendRecord, Platform, ReleaseRecord, Selection,

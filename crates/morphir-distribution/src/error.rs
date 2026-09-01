@@ -1,5 +1,6 @@
 //! Errors reported while selecting or acquiring distribution artifacts.
 
+use crate::SchemaVersion;
 use std::path::PathBuf;
 
 /// A failure to parse, resolve, verify, or persist an extension artifact.
@@ -24,12 +25,16 @@ pub enum DistributionError {
         source: serde_json::Error,
     },
     /// The history used an unsupported schema revision.
-    #[error("unsupported extension index schema version {version} on line {line}")]
+    #[error(
+        "unsupported extension index schema version {version} on line {line}; supported range is {supported} through {supported}"
+    )]
     UnsupportedSchema {
         /// One-based JSONL line number.
         line: usize,
         /// Unsupported schema version.
-        version: u32,
+        version: SchemaVersion,
+        /// Current supported release schema version.
+        supported: SchemaVersion,
     },
     /// A JSONL history did not contain any releases.
     #[error("extension history is empty")]

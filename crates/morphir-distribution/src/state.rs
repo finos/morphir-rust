@@ -1604,7 +1604,7 @@ mod tests {
 
     fn write_release(index: &Path, version: &str, digest: &Sha256Digest) {
         let record = serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": "1.0",
             "id": "example",
             "name": "Example",
             "version": version,

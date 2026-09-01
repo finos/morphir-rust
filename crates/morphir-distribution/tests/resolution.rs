@@ -1,6 +1,7 @@
 use morphir_distribution::{
     ArtifactFilename, Capability, Channel, DistributionError, ExtensionHistory, ExtensionId,
-    Platform, RelativeArtifactPath, ReleaseRecord, Selection, Sha256Digest, ToolId, resolve,
+    Platform, RelativeArtifactPath, ReleaseRecord, SchemaVersion, Selection, Sha256Digest, ToolId,
+    resolve,
 };
 use morphir_extension_sdk::protocol::MEP_VERSION;
 use semver::Version;
@@ -18,13 +19,17 @@ fn release_with_mep(
     mep_versions: &[&str],
 ) -> String {
     serde_json::json!({
-        "schemaVersion": 1,
+        "schemaVersion": "1.0",
         "id": "morphir-elm",
         "name": "Morphir Elm",
         "version": version,
         "channels": channels,
         "mepVersions": mep_versions,
         "capabilities": ["frontend"],
+        "frontend": {
+            "languages": [{"id": "elm", "fileExtensions": [".elm"]}],
+            "irVersions": ["4"]
+        },
         "artifacts": [{
             "runtime": "process",
             "platform": { "os": platform.0, "arch": platform.1 },
@@ -40,7 +45,7 @@ fn release_with_mep(
 
 fn portable_wasm_release() -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": "1.0",
         "id": "morphir-avro",
         "name": "Morphir Avro",
         "version": "0.1.0",
@@ -71,7 +76,7 @@ fn portable_workspace_release() -> serde_json::Value {
 
 fn frontend_release() -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": "1.0",
         "id": "morphir-gleam",
         "name": "Installed Gleam",
         "version": "1.0.0",
@@ -225,35 +230,55 @@ fn jsonl_history_parses_schema_versioned_records_and_hashes_exact_bytes() {
 
 #[test]
 fn release_records_reject_unsupported_schema_versions() {
-    for version in [0, 4] {
+    for version in [
+        serde_json::json!(1),
+        serde_json::json!("1"),
+        serde_json::json!("1.0.0"),
+        serde_json::json!("01.0"),
+        serde_json::json!("1.1"),
+        serde_json::json!("2.0"),
+    ] {
         let mut record = portable_wasm_release();
-        record["schemaVersion"] = serde_json::json!(version);
+        record["schemaVersion"] = version.clone();
 
         let error = serde_json::from_value::<ReleaseRecord>(record)
-            .expect_err("the release record schema version should be supported");
+            .expect_err("the release record schema version should be rejected");
 
-        assert!(error.to_string().contains(&format!(
-            "unsupported extension index schema version {version}"
-        )));
+        let message = error.to_string();
+        if version == serde_json::json!("1.1") || version == serde_json::json!("2.0") {
+            assert!(message.contains(&format!("schema version {}", version.as_str().unwrap())));
+            assert!(message.contains("supported range is 1.0 through 1.0"));
+        }
     }
 }
 
 #[test]
 fn jsonl_histories_report_unsupported_schema_versions() {
-    for version in [0, 4] {
+    for version in [
+        serde_json::json!(1),
+        serde_json::json!("1"),
+        serde_json::json!("1.0.0"),
+        serde_json::json!("01.0"),
+        serde_json::json!("1.1"),
+        serde_json::json!("2.0"),
+    ] {
         let mut record = portable_wasm_release();
-        record["schemaVersion"] = serde_json::json!(version);
+        record["schemaVersion"] = version.clone();
 
         let error = ExtensionHistory::parse_jsonl(record.to_string().as_bytes())
-            .expect_err("the history schema version should be supported");
+            .expect_err("the history schema version should be rejected");
 
-        assert!(matches!(
-            error,
-            DistributionError::UnsupportedSchema {
-                line: 1,
-                version: actual
-            } if actual == version
-        ));
+        if version == serde_json::json!("1.1") || version == serde_json::json!("2.0") {
+            let actual = version.as_str().unwrap().parse::<SchemaVersion>().unwrap();
+            assert!(matches!(
+                error,
+                DistributionError::UnsupportedSchema {
+                    line: 1,
+                    version,
+                    supported,
+                } if version == actual && supported == SchemaVersion::new(1, 0)
+            ));
+        }
     }
 }
 
@@ -565,7 +590,7 @@ fn process_artifacts_require_a_platform() {
 }
 
 #[test]
-fn schema_v1_process_history_remains_readable() {
+fn schema_1_0_accepts_process_artifacts() {
     let record = release("1.0.0", &["stable"], ("linux", "x86_64"));
     let history = ExtensionHistory::parse_jsonl(record.as_bytes()).unwrap();
     let selected = resolve(
@@ -575,7 +600,10 @@ fn schema_v1_process_history_remains_readable() {
     )
     .unwrap();
 
-    assert_eq!(selected.release().schema_version(), 1);
+    assert_eq!(
+        selected.release().schema_version(),
+        SchemaVersion::new(1, 0)
+    );
     assert_eq!(
         selected.artifact().runtime(),
         morphir_distribution::ArtifactRuntime::Process
@@ -585,29 +613,7 @@ fn schema_v1_process_history_remains_readable() {
 }
 
 #[test]
-fn schema_v2_frontend_capability_without_metadata_remains_readable() {
-    let mut record = frontend_release();
-    record["schemaVersion"] = serde_json::json!(2);
-    record.as_object_mut().unwrap().remove("frontend");
-
-    let history = ExtensionHistory::parse_jsonl(record.to_string().as_bytes()).unwrap();
-    let release = &history.releases()[0];
-
-    assert_eq!(release.schema_version(), 2);
-    assert!(release.capabilities().contains(&Capability::Frontend));
-    assert!(release.frontend().is_none());
-}
-
-#[test]
-fn schema_v2_rejects_frontend_metadata_without_a_schema_bump() {
-    let mut record = frontend_release();
-    record["schemaVersion"] = serde_json::json!(2);
-
-    assert!(parse_error(&record).contains("schema-v2 records cannot declare frontend metadata"));
-}
-
-#[test]
-fn schema_v2_backend_metadata_requires_exactly_the_backend_capability() {
+fn schema_1_0_backend_metadata_requires_exactly_the_backend_capability() {
     let mut missing = portable_wasm_release();
     missing.as_object_mut().unwrap().remove("backend");
     assert!(parse_error(&missing).contains("backend metadata is required"));
@@ -627,7 +633,7 @@ fn schema_v2_backend_metadata_requires_exactly_the_backend_capability() {
 }
 
 #[test]
-fn schema_v2_backend_metadata_rejects_empty_or_duplicate_values() {
+fn backend_metadata_rejects_empty_or_duplicate_values() {
     let base = portable_wasm_release();
     let mut empty_targets = base.clone();
     empty_targets["backend"]["targets"] = serde_json::json!([]);
@@ -647,7 +653,7 @@ fn schema_v2_backend_metadata_rejects_empty_or_duplicate_values() {
 }
 
 #[test]
-fn schema_v2_backend_metadata_rejects_blank_values() {
+fn backend_metadata_rejects_blank_values() {
     for (field, value, expected_error) in [
         ("targets", "", "backend targets"),
         ("targets", "   ", "backend targets"),
@@ -664,7 +670,7 @@ fn schema_v2_backend_metadata_rejects_blank_values() {
 }
 
 #[test]
-fn schema_v2_backend_metadata_rejects_surrounding_whitespace_and_trimmed_duplicates() {
+fn backend_metadata_rejects_surrounding_whitespace_and_trimmed_duplicates() {
     for (field, values, expected_error) in [
         ("targets", vec![" avro"], "backend targets"),
         ("targets", vec!["avro", "avro "], "backend targets"),
@@ -681,7 +687,7 @@ fn schema_v2_backend_metadata_rejects_surrounding_whitespace_and_trimmed_duplica
 }
 
 #[test]
-fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
+fn backend_metadata_is_exposed_by_the_release_domain() {
     let record = portable_wasm_release();
     let history = ExtensionHistory::parse_jsonl(record.to_string().as_bytes()).unwrap();
     let backend = history.releases()[0].backend().unwrap();
@@ -695,7 +701,7 @@ fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
 }
 
 #[test]
-fn schema_v3_frontend_metadata_is_exposed_by_the_release_domain() {
+fn frontend_metadata_is_exposed_by_the_release_domain() {
     let history = ExtensionHistory::parse_jsonl(frontend_release().to_string().as_bytes()).unwrap();
     let frontend = history.releases()[0].frontend().unwrap();
 
@@ -707,7 +713,7 @@ fn schema_v3_frontend_metadata_is_exposed_by_the_release_domain() {
 }
 
 #[test]
-fn schema_v3_frontend_metadata_requires_exactly_the_frontend_capability() {
+fn schema_1_0_frontend_metadata_requires_exactly_the_frontend_capability() {
     let mut missing = frontend_release();
     missing.as_object_mut().unwrap().remove("frontend");
     assert!(parse_error(&missing).contains("frontend metadata is required"));
@@ -716,18 +722,14 @@ fn schema_v3_frontend_metadata_requires_exactly_the_frontend_capability() {
     unexpected["capabilities"] = serde_json::json!(["validator"]);
     assert!(parse_error(&unexpected).contains("frontend metadata requires"));
 
+    let mut null_without_capability = frontend_release();
+    null_without_capability["capabilities"] = serde_json::json!(["validator"]);
+    null_without_capability["frontend"] = serde_json::Value::Null;
+    assert!(parse_error(&null_without_capability).contains("frontend metadata requires"));
+
     let mut null_with_capability = frontend_release();
     null_with_capability["frontend"] = serde_json::Value::Null;
     assert!(parse_error(&null_with_capability).contains("frontend metadata is required"));
-}
-
-#[test]
-fn schema_v1_records_reject_frontend_metadata() {
-    let mut record: serde_json::Value =
-        serde_json::from_str(&release("1.0.0", &["stable"], ("linux", "x86_64"))).unwrap();
-    record["frontend"] = frontend_release()["frontend"].clone();
-
-    assert!(parse_error(&record).contains("schema-v1 records cannot declare frontend metadata"));
 }
 
 #[test]
@@ -786,7 +788,7 @@ fn frontend_ir_versions_must_be_non_empty_unique_trimmed_values() {
 }
 
 #[test]
-fn schema_v3_release_can_declare_frontend_and_backend_metadata() {
+fn schema_1_0_release_can_declare_frontend_and_backend_metadata() {
     let mut record = frontend_release();
     record["capabilities"] = serde_json::json!(["frontend", "backend"]);
     record["frontend"]["compile"] = serde_json::json!(false);
@@ -798,7 +800,7 @@ fn schema_v3_release_can_declare_frontend_and_backend_metadata() {
 }
 
 #[test]
-fn schema_v2_accepts_and_exposes_workspace_capabilities() {
+fn schema_1_0_accepts_and_exposes_workspace_capabilities() {
     let record = portable_workspace_release();
     let history = ExtensionHistory::parse_jsonl(record.to_string().as_bytes()).unwrap();
 
@@ -809,33 +811,11 @@ fn schema_v2_accepts_and_exposes_workspace_capabilities() {
 }
 
 #[test]
-fn schema_v2_rejects_unknown_capabilities() {
+fn schema_1_0_rejects_unknown_capabilities() {
     let mut record = portable_workspace_release();
     record["capabilities"] = serde_json::json!(["arbitrary-filesystem"]);
 
     assert!(parse_error(&record).contains("unknown variant"));
-}
-
-#[test]
-fn schema_v1_records_reject_v2_backend_and_wasm_shapes() {
-    let mut with_backend: serde_json::Value =
-        serde_json::from_str(&release("1.0.0", &["stable"], ("linux", "x86_64"))).unwrap();
-    with_backend["backend"] = serde_json::json!({ "targets": ["avro"], "irVersions": ["3"] });
-    assert!(
-        parse_error(&with_backend).contains("schema-v1 records cannot declare backend metadata")
-    );
-
-    let mut wasm = portable_wasm_release();
-    wasm["schemaVersion"] = serde_json::json!(1);
-    wasm.as_object_mut().unwrap().remove("backend");
-    assert!(parse_error(&wasm).contains("schema-v1 records require process artifacts"));
-
-    let mut null_backend: serde_json::Value =
-        serde_json::from_str(&release("1.0.0", &["stable"], ("linux", "x86_64"))).unwrap();
-    null_backend["backend"] = serde_json::Value::Null;
-    assert!(
-        parse_error(&null_backend).contains("schema-v1 records cannot declare backend metadata")
-    );
 }
 
 #[test]

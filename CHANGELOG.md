@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Morphir Home-backed named extension repositories with locked lifecycle updates, local-directory
+  metadata verification, offline inspection, deterministic resolution, and structured events.
 - A versioned, bounded trusted cache-ownership registry with pre-write ownership invalidation,
   atomic producer handoff, unclassified-content protection, guarded inventory/cleanup sessions,
   terminal-entry compaction, structured events, and durable Morphir Home persistence shared by CLI

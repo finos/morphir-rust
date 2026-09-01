@@ -119,6 +119,25 @@ fn local_endpoint_requires_a_repository_metadata_directory() {
 }
 
 #[test]
+fn add_revalidates_an_endpoint_decoded_without_its_constructor() {
+    let mother = RepositoryMother::empty();
+    let missing = mother._root.path().join("missing-repository");
+    let endpoint: RepositoryEndpoint = serde_json::from_value(serde_json::json!({
+        "kind": "local-directory",
+        "path": missing
+    }))
+    .unwrap();
+
+    assert!(matches!(
+        mother
+            .repositories()
+            .add(RepositoryName::parse("unchecked").unwrap(), endpoint),
+        Err(DistributionError::Io { .. })
+    ));
+    assert!(mother.repositories().list().unwrap().is_empty());
+}
+
+#[test]
 fn unsupported_repository_state_schema_is_reported_without_rewriting_it() {
     let mother = RepositoryMother::empty();
     let path = mother.home.extension_repositories_file();

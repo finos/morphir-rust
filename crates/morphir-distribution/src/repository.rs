@@ -67,13 +67,13 @@ impl<'de> Deserialize<'de> for RepositoryName {
 
 /// Access location for an extension repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RepositoryEndpoint(RepositoryEndpointKind);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum RepositoryEndpoint {
-    /// A repository stored in a local filesystem directory.
-    LocalDirectory {
-        /// Canonical repository root captured when the endpoint is added.
-        path: PathBuf,
-    },
+enum RepositoryEndpointKind {
+    LocalDirectory { path: PathBuf },
 }
 
 impl RepositoryEndpoint {
@@ -90,28 +90,34 @@ impl RepositoryEndpoint {
                 ),
             });
         }
-        Ok(Self::LocalDirectory {
+        Ok(Self(RepositoryEndpointKind::LocalDirectory {
             path: index.root().to_path_buf(),
-        })
+        }))
     }
 
     /// Return the stable endpoint-kind spelling.
     pub fn kind(&self) -> &'static str {
-        match self {
-            Self::LocalDirectory { .. } => "local-directory",
+        match &self.0 {
+            RepositoryEndpointKind::LocalDirectory { .. } => "local-directory",
         }
     }
 
     /// Return the local directory path when this is a local endpoint.
     pub fn local_directory_path(&self) -> Option<&Path> {
-        match self {
-            Self::LocalDirectory { path } => Some(path),
+        match &self.0 {
+            RepositoryEndpointKind::LocalDirectory { path } => Some(path),
         }
     }
 
     fn local_index(&self) -> Result<LocalIndex> {
-        match self {
-            Self::LocalDirectory { path } => LocalIndex::open(path),
+        match &self.0 {
+            RepositoryEndpointKind::LocalDirectory { path } => LocalIndex::open(path),
+        }
+    }
+
+    fn validated(self) -> Result<Self> {
+        match self.0 {
+            RepositoryEndpointKind::LocalDirectory { path } => Self::local_directory(path),
         }
     }
 }
@@ -195,6 +201,33 @@ struct StateSchemaEnvelope {
 }
 
 /// Locked lifecycle operations for extension repositories in one Morphir Home.
+///
+/// ```
+/// use morphir_common::home::MorphirHome;
+/// use morphir_distribution::{
+///     ExtensionRepositories, RepositoryEndpoint, RepositoryName, RepositoryState,
+/// };
+/// use std::fs;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # let scratch = tempfile::tempdir()?;
+/// # let home_path = scratch.path().join("home");
+/// # let repository_path = scratch.path().join("repository");
+/// # fs::create_dir_all(repository_path.join("extensions"))?;
+/// # let home = MorphirHome::resolve_from(Some(home_path.as_os_str()), None)?;
+/// let repositories = ExtensionRepositories::new(&home);
+/// let name = RepositoryName::parse("local-dev")?;
+/// let endpoint = RepositoryEndpoint::local_directory(&repository_path)?;
+///
+/// let added = repositories.add(name.clone(), endpoint)?;
+/// assert_eq!(added.state(), RepositoryState::Enabled);
+/// assert_eq!(repositories.disable(&name)?.state(), RepositoryState::Disabled);
+/// assert_eq!(repositories.enable(&name)?.state(), RepositoryState::Enabled);
+/// assert_eq!(repositories.remove(&name)?.name(), &name);
+/// # Ok(())
+/// # }
+/// # example().unwrap();
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ExtensionRepositories<'home> {
     home: &'home MorphirHome,
@@ -212,6 +245,7 @@ impl<'home> ExtensionRepositories<'home> {
         name: RepositoryName,
         endpoint: RepositoryEndpoint,
     ) -> Result<ExtensionRepository> {
+        let endpoint = endpoint.validated()?;
         let _guard = self.acquire()?;
         let mut repositories = self.load_unlocked()?;
         if repositories.contains_key(&name) {

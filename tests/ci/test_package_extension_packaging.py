@@ -44,6 +44,36 @@ class PackageExtensionTests(unittest.TestCase):
         self.assertEqual(sha256(artifact), descriptor["sha256"])
         self.assertEqual(self.fixture.wasm.read_bytes(), artifact.read_bytes())
 
+    def test_validate_extension_staging_accepts_any_registered_short_id(self) -> None:
+        root = self.fixture.root
+        staging = root / ".morphir" / "build" / "extensions" / "openapi"
+        staging.mkdir(parents=True)
+
+        validate_extension_staging(root, "openapi")
+
+    def test_clean_extension_staging_refuses_a_traversing_short_id(self) -> None:
+        root = self.fixture.root
+
+        with self.assertRaises(PackageError):
+            clean_extension_staging(root, "../avro")
+
+    def test_head_snapshot_name_is_scoped_to_the_short_id(self) -> None:
+        root = self.fixture.root
+        snapshot = root.parent / "morphir-openapi-head.ABC123"
+        snapshot.mkdir()
+
+        clean_head_snapshot(root, snapshot, "openapi")
+
+        self.assertFalse(snapshot.exists())
+
+    def test_head_snapshot_rejects_a_mismatched_short_id(self) -> None:
+        root = self.fixture.root
+        snapshot = root.parent / "morphir-avro-head.ABC123"
+        snapshot.mkdir()
+
+        with self.assertRaises(PackageError):
+            clean_head_snapshot(root, snapshot, "openapi")
+
     def test_rejects_unknown_short_id(self) -> None:
         result = self.fixture.package("unknown")
 

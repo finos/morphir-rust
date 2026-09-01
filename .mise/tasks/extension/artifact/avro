@@ -143,19 +143,19 @@ if [ "$SNAPSHOT_MODE" = 1 ]; then
     fi
     require_snapshot_inputs
     export MISE_CONFIG_FILE="$REPO_ROOT/mise.toml"
-    python3 scripts/package_extension.py --clean-avro-staging
+    python3 scripts/package_extension.py --clean-extension-staging avro
     run_pipeline "$REPO_ROOT" "$STAGING_DIR" "$MORPHIR_AVRO_HEAD_COMMIT"
     exit 0
 fi
 
-python3 scripts/package_extension.py --validate-avro-staging
+python3 scripts/package_extension.py --validate-extension-staging avro
 if ! WORKTREE_STATUS="$(git status --porcelain --untracked-files=normal)"; then
     echo "Could not determine Git worktree status" >&2
     exit 1
 fi
 
 if [ -n "$WORKTREE_STATUS" ]; then
-    python3 scripts/package_extension.py --clean-avro-staging
+    python3 scripts/package_extension.py --clean-extension-staging avro
     run_pipeline "$REPO_ROOT" "$STAGING_DIR" ""
     exit 0
 fi
@@ -166,7 +166,7 @@ SNAPSHOT_ACTIVE=false
 cleanup_snapshot() {
     if [ "$SNAPSHOT_ACTIVE" = true ]; then
         python3 "$REPO_ROOT/scripts/package_extension.py" \
-            --clean-head-snapshot "$SNAPSHOT_ROOT"
+            --clean-head-snapshot "$SNAPSHOT_ROOT" --short-id avro
     fi
 }
 trap cleanup_snapshot EXIT
@@ -200,7 +200,7 @@ MORPHIR_AVRO_SNAPSHOT_MODE=1 \
     "$ARCHIVED_TASK"
 
 SNAPSHOT_BUNDLE="$SNAPSHOT_ROOT/source/.morphir/build/extensions/avro"
-python3 scripts/package_extension.py --clean-avro-staging
+python3 scripts/package_extension.py --clean-extension-staging avro
 python3 scripts/package_extension.py \
     --transfer-bundle "$SNAPSHOT_BUNDLE" \
     --output "$STAGING_DIR"

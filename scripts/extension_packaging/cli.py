@@ -10,15 +10,15 @@ import sys
 from .bundles import verified_bundle, write_bundle
 from .errors import PackageError
 from .model import expected_bundle, package_version, registered_extension, require_identifier
-from .paths import clean_avro_staging, clean_head_snapshot, validate_avro_staging
+from .paths import clean_extension_staging, clean_head_snapshot, validate_extension_staging
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build a deterministic release bundle for a registered WASM extension."
     )
-    parser.add_argument("--clean-avro-staging", action="store_true")
-    parser.add_argument("--validate-avro-staging", action="store_true")
+    parser.add_argument("--clean-extension-staging")
+    parser.add_argument("--validate-extension-staging")
     parser.add_argument("--clean-head-snapshot", type=Path)
     parser.add_argument("--transfer-bundle", type=Path)
     parser.add_argument("--short-id")
@@ -28,8 +28,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     operation_count = sum(
         (
-            args.clean_avro_staging,
-            args.validate_avro_staging,
+            args.clean_extension_staging is not None,
+            args.validate_extension_staging is not None,
             args.clean_head_snapshot is not None,
             args.transfer_bundle is not None,
         )
@@ -37,9 +37,8 @@ def parse_args() -> argparse.Namespace:
     if operation_count > 1:
         parser.error("only one cleanup or transfer mode may be selected")
     if (
-        args.clean_avro_staging
-        or args.validate_avro_staging
-        or args.clean_head_snapshot is not None
+        args.clean_extension_staging is not None
+        or args.validate_extension_staging is not None
     ):
         if any(
             value is not None
@@ -50,6 +49,14 @@ def parse_args() -> argparse.Namespace:
                 args.git_commit,
                 args.transfer_bundle,
             )
+        ):
+            parser.error("cleanup modes cannot be combined with other arguments")
+    elif args.clean_head_snapshot is not None:
+        if args.short_id is None:
+            parser.error("the following arguments are required: --short-id")
+        if any(
+            value is not None
+            for value in (args.wasm, args.output, args.git_commit, args.transfer_bundle)
         ):
             parser.error("cleanup modes cannot be combined with other arguments")
     elif args.transfer_bundle is not None:
@@ -108,12 +115,12 @@ def main() -> int:
     try:
         args = parse_args()
         root = Path(__file__).resolve().parents[2]
-        if args.clean_avro_staging:
-            clean_avro_staging(root)
-        elif args.validate_avro_staging:
-            validate_avro_staging(root)
+        if args.clean_extension_staging is not None:
+            clean_extension_staging(root, args.clean_extension_staging)
+        elif args.validate_extension_staging is not None:
+            validate_extension_staging(root, args.validate_extension_staging)
         elif args.clean_head_snapshot is not None:
-            clean_head_snapshot(root, args.clean_head_snapshot)
+            clean_head_snapshot(root, args.clean_head_snapshot, args.short_id)
         elif args.transfer_bundle is not None:
             transfer_bundle(args.transfer_bundle, args.output)
         else:

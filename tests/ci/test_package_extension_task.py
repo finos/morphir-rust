@@ -27,7 +27,7 @@ class AvroArtifactTaskTests(unittest.TestCase):
             'STAGING_DIR="$REPO_ROOT/.morphir/build/extensions/avro"', script
         )
         self.assertNotIn("rm -rf", script)
-        self.assertIn("--clean-avro-staging", script)
+        self.assertIn("--clean-extension-staging avro", script)
         self.assertNotIn(".morphir/build/extensions/*", script)
 
     def test_task_packages_without_tagging_releasing_or_publishing(self) -> None:
@@ -78,7 +78,7 @@ class AvroArtifactTaskTests(unittest.TestCase):
                     staging.chmod(0o700)
 
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("cannot clean Avro staging directory", result.stderr)
+            self.assertIn("cannot clean avro staging directory", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(fixture.log.exists())
 

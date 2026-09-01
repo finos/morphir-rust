@@ -17,6 +17,15 @@ import unittest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+
+from extension_packaging.errors import PackageError  # noqa: E402
+from extension_packaging.paths import (  # noqa: E402
+    clean_extension_staging,
+    clean_head_snapshot,
+    validate_extension_staging,
+)
+
 EXTENSIONS_TOML = REPOSITORY_ROOT / ".github" / "extensions.toml"
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_extension.py"
 PACKAGER_MODULES = REPOSITORY_ROOT / "scripts" / "extension_packaging"

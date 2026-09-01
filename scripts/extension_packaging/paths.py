@@ -9,6 +9,7 @@ import shutil
 import stat
 
 from .errors import PackageError
+from .model import require_identifier
 
 
 def absolute_path(path: Path) -> Path:
@@ -100,25 +101,29 @@ def validate_repository_directory(
         raise PackageError(f"cannot clean {label} {current}: {error}") from error
 
 
-def validate_avro_staging(root: Path) -> None:
+def validate_extension_staging(root: Path, short_id: str) -> None:
+    short_id = require_identifier(short_id, "short ID")
     validate_repository_directory(
         root,
-        (".morphir", "build", "extensions", "avro"),
-        "Avro staging directory",
+        (".morphir", "build", "extensions", short_id),
+        f"{short_id} staging directory",
     )
 
 
-def clean_avro_staging(root: Path) -> None:
+def clean_extension_staging(root: Path, short_id: str) -> None:
+    short_id = require_identifier(short_id, "short ID")
     clean_repository_directory(
         root,
-        (".morphir", "build", "extensions", "avro"),
-        "Avro staging directory",
+        (".morphir", "build", "extensions", short_id),
+        f"{short_id} staging directory",
     )
 
 
-def clean_head_snapshot(root: Path, snapshot: Path) -> None:
+def clean_head_snapshot(root: Path, snapshot: Path, short_id: str) -> None:
+    short_id = require_identifier(short_id, "short ID")
     snapshot = absolute_path(snapshot)
-    if not re.fullmatch(r"morphir-avro-head\.[A-Za-z0-9]+", snapshot.name):
+    expected = re.compile(rf"morphir-{re.escape(short_id)}-head\.[A-Za-z0-9]+")
+    if not expected.fullmatch(snapshot.name):
         raise PackageError(f"refusing to clean unexpected HEAD snapshot path: {snapshot}")
 
     try:

@@ -52,9 +52,10 @@ impl SchemaDiagnostic {
     }
 
     /// A per-operation override in `options.operations` could not be applied:
-    /// either its key names no value specification the package declares, or
-    /// one of its `Path`-bound parameters has no matching `{name}` placeholder
-    /// in the operation's path.
+    /// its key names no value specification the package declares, one of its
+    /// `Path`-bound parameters has no matching `{name}` placeholder in the
+    /// operation's path, or — the mirror case — the operation's path carries
+    /// a `{name}` placeholder that no `Path`-bound parameter fills.
     pub fn unknown_operation(source_name: &str, message: impl Into<String>) -> Self {
         Self::new("OAS002", message, Some(source_name.to_owned()))
     }

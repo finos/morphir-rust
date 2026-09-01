@@ -105,7 +105,11 @@ pub struct Operation {
 /// projection mode selects — and, like `OAS001`, always an error regardless
 /// of `options.unsupported`: a misconfigured override is not a Morphir form
 /// this backend cannot project, so skipping it silently would hide the
-/// mistake rather than the intended behavior.
+/// mistake rather than the intended behavior. The same code covers the two
+/// path-template halves: a `Path`-bound parameter with no matching
+/// placeholder (in `apply_override`), and a placeholder with no `Path`-bound
+/// parameter (in `reject_unbound_path_placeholders`, run over every selected
+/// operation once any override has been applied).
 pub fn project_operations(
     package: &ProjectionPackage,
     projection: &mut SchemaProjection,
@@ -174,6 +178,7 @@ pub fn project_operations(
             if let Some(override_) = options.operations.get(&operation.source_name) {
                 apply_override(&mut operation, override_)?;
             }
+            reject_unbound_path_placeholders(&operation)?;
             discovered.extend(referenced);
 
             let path_key = format!("{:?} {}", operation.method, operation.path);
@@ -377,6 +382,65 @@ fn apply_override(
         }
     }
     Ok(())
+}
+
+/// Reject an operation whose final path carries a `{name}` placeholder that
+/// no `Path`-bound parameter fills.
+///
+/// This is the mirror of the second check in [`apply_override`], and carries
+/// the same `SchemaDiagnostic::unknown_operation` (`OAS002`) code, because it
+/// is the same failure seen from the other side: `options.operations`
+/// describes an operation that cannot exist as written. `apply_override`
+/// catches a `Path` binding with no placeholder; this catches a placeholder
+/// with no `Path` binding — an override that sets `path = "/customers/{id}"`
+/// but forgets the `parameters` table, which is one line short of the
+/// documented worked example and so the likeliest way to get it wrong. Both
+/// OpenAPI 3.0 and 3.1 require every path template variable to have a
+/// matching `in: path` parameter, and neither metaschema can see the
+/// difference, so leaving it would emit a structurally invalid document with
+/// no diagnostic at all.
+///
+/// Every selected operation is checked, not only an overridden one: the
+/// default path never contains a brace, so the check costs nothing there,
+/// and no path can reach the renderer unchecked.
+///
+/// An unterminated `{` names no placeholder and is left alone here: it is a
+/// malformed path template rather than an unbound variable, and inventing a
+/// placeholder name for it would only produce a confusing message.
+fn reject_unbound_path_placeholders(operation: &Operation) -> Result<(), SchemaDiagnostic> {
+    for placeholder in path_placeholders(&operation.path) {
+        let bound = operation.parameters.iter().any(|(binding, field)| {
+            matches!(binding, ParameterBinding::Path) && field.name == placeholder
+        });
+        if !bound {
+            return Err(SchemaDiagnostic::unknown_operation(
+                &operation.source_name,
+                format!(
+                    "path '{}' has a '{{{placeholder}}}' placeholder but no parameter is bound to \
+                     Path under that name; add \"{placeholder}\": \"path\" to the operation's \
+                     'parameters'",
+                    operation.path
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every `{name}` placeholder in `path`, in order of appearance. A `{` with
+/// no closing `}` after it ends the scan.
+fn path_placeholders(path: &str) -> Vec<&str> {
+    let mut placeholders = Vec::new();
+    let mut rest = path;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            break;
+        };
+        placeholders.push(&after[..close]);
+        rest = &after[close + 1..];
+    }
+    placeholders
 }
 
 /// The default `/{module}/{entryPoint}` path: module segments lowercased and

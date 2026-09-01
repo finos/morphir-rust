@@ -358,6 +358,109 @@ fn an_override_path_parameter_naming_no_request_field_is_an_error() {
     assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
 }
 
+/// The mirror of the two checks above, and the one an override is likeliest
+/// to trip: `docs/generate/openapi.md`'s worked example sets both `path` and
+/// `parameters`, so an override copied one line short of it names a
+/// `{id}` placeholder that nothing fills. The rendered operation would carry
+/// a `{id}` path template with a `requestBody` and no `parameters` array at
+/// all — invalid under both OpenAPI 3.0 and 3.1, and invisible to either
+/// metaschema, which cannot relate a path key to the parameters under it.
+#[test]
+fn an_override_path_placeholder_with_no_path_parameter_is_an_error() {
+    let result = OpenApiExtension
+        .generate(GenerateRequest {
+            ir: v4::v4_customer_application(),
+            target: "openapi".into(),
+            options: map([
+                ("projection", json!("operations-public")),
+                ("unsupported", json!("warn-and-skip")),
+                (
+                    "operations",
+                    json!({
+                        "acme/customer:domain#find-customer": {
+                            "method": "get",
+                            "path": "/customers/{id}"
+                        }
+                    }),
+                ),
+            ]),
+        })
+        .expect("generation is a successful MEP call");
+
+    assert!(!result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
+    let message = &result.diagnostics[0].message;
+    assert!(
+        message.contains("{id}") && message.contains("acme/customer:domain#find-customer"),
+        "the diagnostic names the unfilled placeholder and the operation: {message}"
+    );
+}
+
+/// A `Query` binding does not render a path variable, so naming the
+/// placeholder's field in `parameters` is not by itself enough: the binding
+/// has to be `Path`. Otherwise the field leaves the request body without
+/// ever becoming the `in: path` parameter the template requires.
+#[test]
+fn a_placeholder_filled_only_by_a_query_binding_is_an_error() {
+    let result = OpenApiExtension
+        .generate(GenerateRequest {
+            ir: v4::v4_customer_application(),
+            target: "openapi".into(),
+            options: map([
+                ("projection", json!("operations-public")),
+                ("unsupported", json!("warn-and-skip")),
+                (
+                    "operations",
+                    json!({
+                        "acme/customer:domain#find-customer": {
+                            "method": "get",
+                            "path": "/customers/{id}",
+                            "parameters": {"id": "query"}
+                        }
+                    }),
+                ),
+            ]),
+        })
+        .expect("generation is a successful MEP call");
+
+    assert!(!result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.diagnostics[0].code.as_deref(), Some("OAS002"));
+}
+
+/// The positive case the two rejections above bracket: every placeholder in
+/// the final path has a `Path`-bound parameter, so the document renders and
+/// every path variable has its matching Parameter Object.
+#[test]
+fn every_placeholder_with_a_path_binding_renders() {
+    let document = document(
+        v4::v4_customer_application(),
+        map([
+            ("projection", json!("operations-public")),
+            ("unsupported", json!("warn-and-skip")),
+            (
+                "operations",
+                json!({
+                    "acme/customer:domain#find-customer": {
+                        "method": "get",
+                        "path": "/customers/{id}",
+                        "parameters": {"id": "path"}
+                    }
+                }),
+            ),
+        ]),
+    );
+
+    let parameters = document["paths"]["/customers/{id}"]["get"]["parameters"]
+        .as_array()
+        .expect("the operation has a parameters array");
+    assert!(
+        parameters
+            .iter()
+            .any(|parameter| parameter["name"] == "id" && parameter["in"] == "path"),
+        "the '{{id}}' placeholder has its own in:path parameter: {parameters:?}"
+    );
+}
+
 #[test]
 fn an_override_naming_an_unknown_value_is_an_error() {
     let result = OpenApiExtension

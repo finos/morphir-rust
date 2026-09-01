@@ -65,7 +65,7 @@ impl InstalledWasmMother {
             ExtensionId::parse(extension_id).expect("fixture ID should be valid");
         let digest = Sha256Digest::of_bytes(&bytes);
         let record = json!({
-            "schemaVersion": 2,
+            "schemaVersion": "1.0",
             "id": extension_id_value,
             "name": display_name,
             "version": version,

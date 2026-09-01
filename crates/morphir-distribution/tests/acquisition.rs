@@ -29,13 +29,17 @@ impl DistributionMother {
         fs::write(&source, b"#!/bin/sh\necho morphir\n").unwrap();
         let digest = Sha256Digest::of_bytes(&fs::read(&source).unwrap());
         let record = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": "1.0",
             "id": "morphir-elm",
             "name": "Morphir Elm",
             "version": "3.2.1",
             "channels": ["stable"],
             "mepVersions": ["0.1"],
             "capabilities": ["frontend"],
+            "frontend": {
+                "languages": [{"id": "elm", "fileExtensions": [".elm"]}],
+                "irVersions": ["4"]
+            },
             "artifacts": [{
                 "runtime": "process",
                 "platform": { "os": "linux", "arch": "x86_64" },
@@ -71,7 +75,7 @@ impl DistributionMother {
         fs::write(&source, b"portable wasm artifact").unwrap();
         let digest = Sha256Digest::of_bytes(&fs::read(&source).unwrap());
         let record = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": "1.0",
             "id": "morphir-avro",
             "name": "Morphir Avro",
             "version": "0.1.0",
@@ -118,7 +122,7 @@ impl DistributionMother {
         fs::write(&source, b"#!/bin/sh\necho gleam\n").unwrap();
         let digest = Sha256Digest::of_bytes(&fs::read(&source).unwrap());
         let record = serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": "1.0",
             "id": "morphir-gleam",
             "name": "Installed Gleam",
             "version": "1.0.0",
@@ -187,13 +191,17 @@ impl DistributionMother {
         fs::write(&source, bytes).unwrap();
         let digest = Sha256Digest::of_bytes(bytes);
         let record = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": "1.0",
             "id": id,
             "name": name,
             "version": "1.0.0",
             "channels": ["stable"],
             "mepVersions": ["0.1"],
             "capabilities": ["backend"],
+            "backend": {
+                "targets": ["example"],
+                "irVersions": ["4"]
+            },
             "artifacts": [{
                 "runtime": "process",
                 "platform": { "os": "linux", "arch": "x86_64" },
@@ -470,8 +478,8 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
     assert_eq!(lock_json["executable"], true);
     assert_eq!(lock_json["args"], serde_json::json!(["serve"]));
     assert_eq!(lock_json["capabilities"], serde_json::json!(["frontend"]));
-    assert_eq!(lock_json["frontendMetadataScope"], "legacy-unpersisted");
-    assert!(lock_json.get("frontend").is_none());
+    assert_eq!(lock_json["frontendMetadataScope"], "persisted");
+    assert_eq!(lock_json["frontend"]["languages"][0]["id"], "elm");
     assert_eq!(lock_json["mepVersions"], serde_json::json!(["0.1"]));
     assert_eq!(
         lock_json["index"]["revision"],
@@ -490,12 +498,15 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
         serde_json::from_slice(&fs::read(mother.home.extensions_catalog_file()).unwrap()).unwrap();
     assert_eq!(
         catalog_json["extensions"][0]["frontendMetadataScope"],
-        "legacy-unpersisted"
+        "persisted"
     );
-    assert!(catalog_json["extensions"][0].get("frontend").is_none());
+    assert_eq!(
+        catalog_json["extensions"][0]["frontend"]["languages"][0]["id"],
+        "elm"
+    );
 
     let snapshots = list_installed(&mother.home).unwrap();
-    assert!(snapshots[0].installed().frontend().is_none());
+    assert!(snapshots[0].installed().frontend().is_some());
     assert!(
         snapshots[0]
             .installed()
@@ -507,32 +518,26 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
             .unwrap()
             .extension_capabilities()
             .frontend
-            .is_none()
+            .is_some()
     );
 }
 
 #[test]
-fn schema_v2_frontend_without_metadata_installs_as_legacy_unpersisted() {
+fn schema_1_0_frontend_metadata_installs_as_persisted() {
     let mother = DistributionMother::a_local_process_artifact();
-    let history_path = mother.index.join("extensions/morphir-elm.jsonl");
-    let mut record: serde_json::Value =
-        serde_json::from_str(fs::read_to_string(&history_path).unwrap().trim()).unwrap();
-    record["schemaVersion"] = serde_json::json!(2);
-    fs::write(&history_path, format!("{record}\n")).unwrap();
-
     let installed = ExtensionInstaller::new(&mother.home)
         .install(mother.selected())
         .unwrap();
 
-    assert!(installed.frontend().is_none());
+    assert!(installed.frontend().is_some());
     let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
     let lock: serde_json::Value = serde_json::from_slice(&fs::read(lock_path).unwrap()).unwrap();
-    assert_eq!(lock["frontendMetadataScope"], "legacy-unpersisted");
-    assert!(lock.get("frontend").is_none());
+    assert_eq!(lock["frontendMetadataScope"], "persisted");
+    assert_eq!(lock["frontend"]["languages"][0]["id"], "elm");
 }
 
 #[test]
-fn fresh_schema_v1_backend_records_legacy_unpersisted_scope() {
+fn schema_1_0_backend_records_persist_metadata() {
     let mother = DistributionMother::a_local_process_artifact();
     let id = mother.add_local_process_artifact(
         "morphir-legacy-backend",
@@ -548,7 +553,7 @@ fn fresh_schema_v1_backend_records_legacy_unpersisted_scope() {
             .capabilities()
             .contains(&morphir_distribution::Capability::Backend)
     );
-    assert!(installed.backend().is_none());
+    assert!(installed.backend().is_some());
 
     let lock_path = mother
         .home
@@ -557,26 +562,32 @@ fn fresh_schema_v1_backend_records_legacy_unpersisted_scope() {
     let lock_json: serde_json::Value =
         serde_json::from_slice(&fs::read(lock_path).unwrap()).unwrap();
     assert_eq!(lock_json["schemaVersion"], 4);
-    assert_eq!(lock_json["backendMetadataScope"], "legacy-unpersisted");
-    assert!(lock_json.get("backend").is_none());
+    assert_eq!(lock_json["backendMetadataScope"], "persisted");
+    assert_eq!(
+        lock_json["backend"]["targets"],
+        serde_json::json!(["example"])
+    );
 
     let catalog_json: serde_json::Value =
         serde_json::from_slice(&fs::read(mother.home.extensions_catalog_file()).unwrap()).unwrap();
     assert_eq!(catalog_json["schemaVersion"], 3);
     assert_eq!(
         catalog_json["extensions"][0]["backendMetadataScope"],
-        "legacy-unpersisted"
+        "persisted"
     );
-    assert!(catalog_json["extensions"][0].get("backend").is_none());
+    assert_eq!(
+        catalog_json["extensions"][0]["backend"]["targets"],
+        serde_json::json!(["example"])
+    );
 
     let snapshots = list_installed(&mother.home).unwrap();
-    assert!(snapshots[0].installed().backend().is_none());
+    assert!(snapshots[0].installed().backend().is_some());
     assert!(
         activate_installed(&mother.home, &id)
             .unwrap()
             .extension_capabilities()
             .backend
-            .is_none()
+            .is_some()
     );
 }
 

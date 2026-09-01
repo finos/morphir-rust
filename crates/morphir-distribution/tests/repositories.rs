@@ -37,7 +37,7 @@ impl RepositoryMother {
         fs::write(&artifact, b"wasm extension").unwrap();
         let digest = Sha256Digest::of_bytes(b"wasm extension");
         let record = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": "1.0",
             "id": "morphir-avro",
             "name": "Morphir Avro",
             "version": "0.1.0",

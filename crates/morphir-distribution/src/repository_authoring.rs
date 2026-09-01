@@ -318,7 +318,7 @@ impl ReleaseBundleDescriptor {
             "preview"
         };
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": "1.0",
             "id": self.extension_id,
             "name": display_name(&self.extension_id),
             "version": self.version,

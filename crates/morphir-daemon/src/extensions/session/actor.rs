@@ -244,7 +244,11 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
         session: Some(session),
         activity,
     });
-    spawn_idle_watchdog(actor_ref.clone(), receiver, idle);
+    // Downgraded on purpose: kameo stops an actor once the last *strong*
+    // reference is dropped, so a watchdog holding one would keep the actor —
+    // and the extension subprocess behind it — alive for the whole idle
+    // window even after every caller has let go of its handle.
+    spawn_idle_watchdog(actor_ref.downgrade(), receiver, idle);
     SessionHandle {
         dispatch: std::sync::Arc::new(actor_ref),
     }
@@ -253,12 +257,19 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
 /// Spawn the task that stops `actor_ref` after `idle` passes with no activity
 /// on `receiver`.
 ///
+/// The reference is deliberately weak. Kameo stops an actor when its last
+/// strong reference drops, so a watchdog holding a strong one would keep the
+/// session — and its extension subprocess — running for a full idle period
+/// after the last [`SessionHandle`] was dropped. Weak also means the watchdog
+/// can outlive the actor, which is why every use of it upgrades first.
+///
 /// Returns the watchdog's own `JoinHandle` so tests can observe when it
 /// exits; production callers have no need for it; the watchdog either fires
-/// (stopping the actor) or notices `receiver` closed (the actor already
-/// stopped some other way) and exits on its own either way.
+/// (stopping the actor), finds the actor already gone, or notices `receiver`
+/// closed (the actor already stopped some other way), and exits on its own in
+/// every case.
 fn spawn_idle_watchdog<T: MepTransport + Send + 'static>(
-    actor_ref: ActorRef<SessionActor<T>>,
+    actor_ref: WeakActorRef<SessionActor<T>>,
     mut receiver: tokio::sync::watch::Receiver<()>,
     idle: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
@@ -281,7 +292,13 @@ fn spawn_idle_watchdog<T: MepTransport + Send + 'static>(
                     // rather than `kill`, so any message already in flight is
                     // answered before the actor goes away, and `on_stop` still
                     // gets to complete the MEP shutdown handshake.
-                    let _ = actor_ref.stop_gracefully().await;
+                    //
+                    // A failed upgrade means the actor stopped between the
+                    // deadline firing and this poll; there is nothing left to
+                    // stop, so the watchdog is done.
+                    if let Some(actor_ref) = actor_ref.upgrade() {
+                        let _ = actor_ref.stop_gracefully().await;
+                    }
                     return;
                 }
                 changed = receiver.changed() => {
@@ -602,7 +619,7 @@ mod tests {
             activity,
         });
         let idle = std::time::Duration::from_secs(60);
-        let _watchdog = spawn_idle_watchdog(actor_ref.clone(), receiver, idle);
+        let _watchdog = spawn_idle_watchdog(actor_ref.downgrade(), receiver, idle);
 
         tokio::time::advance(idle + std::time::Duration::from_secs(1)).await;
         actor_ref
@@ -702,7 +719,7 @@ mod tests {
         // the actor's `activity` sender dropped), the `timeout` below fails
         // fast instead of the test hanging for real minutes.
         let idle = std::time::Duration::from_secs(600);
-        let watchdog = spawn_idle_watchdog(actor_ref.clone(), receiver, idle);
+        let watchdog = spawn_idle_watchdog(actor_ref.downgrade(), receiver, idle);
 
         actor_ref.ask(Shutdown).await.unwrap();
         actor_ref
@@ -717,6 +734,41 @@ mod tests {
                  not linger until its idle deadline",
             )
             .expect("the watchdog task should not panic");
+    }
+
+    #[tokio::test]
+    async fn dropping_the_last_handle_completes_the_mep_shutdown_handshake() {
+        let (session, requests) =
+            ready_backend_session([Ok(
+                ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
+            )])
+            .await;
+        // Deliberately spawned through the production entry point: the point of
+        // this test is that nothing spawned alongside the actor (the idle
+        // watchdog in particular) keeps it alive once callers let go. An idle
+        // duration far longer than this test can run makes the watchdog's own
+        // deadline an impossible explanation for the stop.
+        let handle = spawn_session_with_idle_timeout(session, std::time::Duration::from_secs(600));
+
+        drop(handle);
+
+        // `SessionHandle` erases the actor type, so there is no `ActorRef` left
+        // to wait on once the last handle is gone; the shared request log is
+        // the only observable. Polled with a sleep rather than `yield_now` so a
+        // failing run waits idly instead of burning a worker thread next to the
+        // rest of the suite, and bounded so that failure is a fast, clearly
+        // attributed timeout rather than a hung suite.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while requests.methods().len() < 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect(
+            "dropping the last handle should stop the actor and complete the \
+             MEP shutdown handshake",
+        );
+        assert_eq!(requests.methods(), [methods::INITIALIZE, methods::SHUTDOWN]);
     }
 
     #[tokio::test]

@@ -20,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 
 from extension_packaging.errors import PackageError  # noqa: E402
+from extension_packaging.model import descriptor_bytes  # noqa: E402
 from extension_packaging.paths import (  # noqa: E402
     clean_extension_staging,
     clean_head_snapshot,

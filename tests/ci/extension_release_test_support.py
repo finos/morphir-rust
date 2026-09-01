@@ -13,10 +13,12 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+EXTENSIONS_TOML = REPOSITORY_ROOT / ".github" / "extensions.toml"
 RELEASE_SCRIPT = REPOSITORY_ROOT / ".github" / "scripts" / "extension_release.py"
 SELECT_SCRIPT = (
     REPOSITORY_ROOT / ".github" / "scripts" / "select_extension_assets.py"
@@ -153,8 +155,11 @@ class AssetFixture:
         artifact_base: str,
         extension_id: str,
         version: str,
+        targets: list[str] | None = None,
     ) -> tuple[Path, Path, Path]:
         """Add another opted-in registry package and valid downloaded bundle."""
+        targets = [short_id] if targets is None else targets
+        targets_toml = ", ".join(f'"{target}"' for target in targets)
         registry_path = self.root / ".github" / "extensions.toml"
         with registry_path.open("a", encoding="utf-8", newline="\n") as registry:
             registry.write(
@@ -166,7 +171,7 @@ class AssetFixture:
                     artifact = "{artifact_base}"
                     extension_id = "{extension_id}"
                     mep_versions = ["0.1"]
-                    targets = ["{short_id}"]
+                    targets = [{targets_toml}]
                     ir_versions = ["4"]
                     release_with_workspace = true
                     """
@@ -199,7 +204,7 @@ class AssetFixture:
                     "version": version,
                     "mepVersions": ["0.1"],
                     "runtime": "wasm",
-                    "targets": [short_id],
+                    "targets": targets,
                     "irVersions": ["4"],
                     "artifact": artifact_name,
                     "sha256": digest,

@@ -15,6 +15,35 @@ class PackageExtensionTests(unittest.TestCase):
         self.assertEqual(["3", "4"], avro["ir_versions"])
         self.assertTrue(avro["release_with_workspace"])
 
+    def test_openapi_registry_entry_is_independently_versioned(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        openapi = registry["extensions"]["openapi"]
+
+        self.assertEqual("morphir-openapi-extension", openapi["package"])
+        self.assertEqual("morphir-openapi-extension", openapi["artifact"])
+        self.assertEqual("morphir-openapi", openapi["extension_id"])
+        self.assertEqual(["0.1"], openapi["mep_versions"])
+        self.assertEqual(["openapi", "json-schema"], openapi["targets"])
+        self.assertEqual(["3", "4"], openapi["ir_versions"])
+        self.assertTrue(openapi["release_with_workspace"])
+
+    def test_a_multi_target_registry_entry_reaches_the_release_descriptor(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+
+        descriptor = json.loads(
+            descriptor_bytes(
+                "openapi",
+                registry["extensions"]["openapi"],
+                "0.1.0",
+                "morphir_openapi_extension.wasm",
+                "0" * 64,
+                None,
+            )
+        )
+
+        self.assertEqual(["openapi", "json-schema"], descriptor["targets"])
+        self.assertEqual("morphir-openapi", descriptor["extensionId"])
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.fixture = PackageFixture(

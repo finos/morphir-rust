@@ -12,6 +12,33 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         self.assertEqual("0.1.0", release.version)
         self.assertEqual("extension", release.kind)
 
+    def test_openapi_tag_selects_only_the_openapi_extension(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        package_versions = {
+            "morphir-avro-extension": "0.1.0",
+            "morphir-openapi-extension": "0.1.0",
+        }
+
+        release = extension_release.resolve_release(
+            "extension/openapi/v0.1.0", registry, "0.2.0", package_versions
+        )
+
+        self.assertEqual(["openapi"], release.short_ids)
+        self.assertEqual("0.1.0", release.version)
+
+    def test_workspace_tag_selects_every_registered_extension(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        package_versions = {
+            "morphir-avro-extension": "0.1.0",
+            "morphir-openapi-extension": "0.1.0",
+        }
+
+        release = extension_release.resolve_release(
+            "v0.2.0", registry, "0.2.0", package_versions
+        )
+
+        self.assertEqual(["avro", "openapi"], release.short_ids)
+
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:
         release = extension_release.resolve_release(
             "v0.2.0", REGISTRY, "0.2.0", PACKAGE_VERSIONS

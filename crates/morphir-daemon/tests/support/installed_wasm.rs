@@ -36,6 +36,7 @@ impl InstalledWasmMother {
         guest_path: impl AsRef<Path>,
         extension_id: &str,
         display_name: &str,
+        version: &str,
         targets: &[&str],
         ir_versions: &[&str],
     ) -> Self {
@@ -67,7 +68,7 @@ impl InstalledWasmMother {
             "schemaVersion": 2,
             "id": extension_id_value,
             "name": display_name,
-            "version": "0.1.0",
+            "version": version,
             "channels": ["stable"],
             "mepVersions": ["0.1"],
             "capabilities": ["backend"],
@@ -106,6 +107,29 @@ impl InstalledWasmMother {
     }
 }
 
+/// The workspace version of one crate, read from `cargo metadata`.
+///
+/// The index record a guest is discovered through has to state the same
+/// version the guest reports at initialization, or negotiation fails with
+/// "initialization metadata disagreed with discovery". Reading it from the
+/// manifest rather than repeating a literal keeps a version bump from
+/// silently breaking this test.
+#[allow(dead_code)]
+pub fn crate_version(package_name: &str) -> String {
+    let metadata = cargo_metadata();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata should report packages");
+    let package = packages
+        .iter()
+        .find(|package| package["name"] == package_name)
+        .unwrap_or_else(|| panic!("{package_name} should be a workspace member"));
+    package["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{package_name} should report a version"))
+        .to_owned()
+}
+
 /// The compiled path of one release `wasm32-unknown-unknown` guest artifact.
 #[allow(dead_code)]
 pub fn wasm_guest_path(artifact_file_name: &str) -> PathBuf {
@@ -117,6 +141,21 @@ pub fn wasm_guest_path(artifact_file_name: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn cargo_target_directory() -> PathBuf {
+    let metadata = cargo_metadata();
+    let target = metadata["target_directory"]
+        .as_str()
+        .expect("cargo metadata should report target_directory");
+    let target = PathBuf::from(target);
+    assert!(
+        target.is_absolute(),
+        "cargo metadata should report an absolute target_directory: {}",
+        target.display()
+    );
+    target
+}
+
+/// `cargo metadata --no-deps` for the workspace this test crate belongs to.
+fn cargo_metadata() -> serde_json::Value {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
@@ -131,16 +170,5 @@ pub fn cargo_target_directory() -> PathBuf {
         manifest.display(),
         String::from_utf8_lossy(&output.stderr)
     );
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("cargo metadata should return JSON");
-    let target = metadata["target_directory"]
-        .as_str()
-        .expect("cargo metadata should report target_directory");
-    let target = PathBuf::from(target);
-    assert!(
-        target.is_absolute(),
-        "cargo metadata should report an absolute target_directory: {}",
-        target.display()
-    );
-    target
+    serde_json::from_slice(&output.stdout).expect("cargo metadata should return JSON")
 }

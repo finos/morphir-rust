@@ -20,15 +20,20 @@ use morphir_extension_sdk::{
 };
 use morphir_projection::testing::classic_schema_library;
 
-use support::installed_wasm::{InstalledWasmMother, wasm_guest_path};
+use support::installed_wasm::{InstalledWasmMother, crate_version, wasm_guest_path};
 
 #[tokio::test]
 #[ignore = "requires a release wasm guest"]
 async fn installed_openapi_wasm_runs_one_generation_through_the_host() {
+    // Read from the manifest rather than repeated as a literal: the index
+    // record and the guest's own initialization metadata have to agree, so a
+    // crate version bump would otherwise fail negotiation here.
+    let version = crate_version("morphir-openapi-extension");
     let fixture = InstalledWasmMother::from_path(
         wasm_guest_path("morphir_openapi_extension.wasm"),
         "morphir-openapi",
         "Morphir OpenAPI",
+        &version,
         &["openapi", "json-schema"],
         &["3", "4"],
     );
@@ -58,7 +63,7 @@ async fn installed_openapi_wasm_runs_one_generation_through_the_host() {
     let info = ready.negotiated().extension();
     assert_eq!(info.id, "morphir-openapi");
     assert_eq!(info.name, "Morphir OpenAPI");
-    assert_eq!(info.version, "0.1.0");
+    assert_eq!(info.version, version);
     assert_eq!(info.types, [ExtensionType::Backend]);
     let backend = ready
         .negotiated()
@@ -75,23 +80,24 @@ async fn installed_openapi_wasm_runs_one_generation_through_the_host() {
         target: "json-schema".into(),
         options: HashMap::new(),
     };
-    let ready = match ready
-        .invoke::<GenerateResult>(methods::GENERATE, request)
-        .await
-    {
-        InvokeOutcome::Success(ready, generated) => {
-            assert!(generated.success, "{:?}", generated.diagnostics);
-            assert!(!generated.artifacts.is_empty());
-            assert!(generated.artifacts.iter().all(|artifact| {
-                artifact.path.ends_with(".schema.json") && !artifact.binary
-            }));
-            ready
-        }
-        InvokeOutcome::Rejected(_, error) => panic!("valid generation was rejected: {error}"),
-        InvokeOutcome::Failed(failure) => {
-            panic!("valid generation failed MEP: {}", failure.error())
-        }
-    };
+    let ready =
+        match ready
+            .invoke::<GenerateResult>(methods::GENERATE, request)
+            .await
+        {
+            InvokeOutcome::Success(ready, generated) => {
+                assert!(generated.success, "{:?}", generated.diagnostics);
+                assert!(!generated.artifacts.is_empty());
+                assert!(generated.artifacts.iter().all(|artifact| {
+                    artifact.path.ends_with(".schema.json") && !artifact.binary
+                }));
+                ready
+            }
+            InvokeOutcome::Rejected(_, error) => panic!("valid generation was rejected: {error}"),
+            InvokeOutcome::Failed(failure) => {
+                panic!("valid generation failed MEP: {}", failure.error())
+            }
+        };
 
     ready
         .shutdown()

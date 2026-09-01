@@ -16,7 +16,7 @@ use morphir_extension_sdk::{
     protocol::{InitializeParams, PeerInfo},
 };
 
-use support::installed_wasm::{InstalledWasmMother, wasm_guest_path};
+use support::installed_wasm::{InstalledWasmMother, crate_version, wasm_guest_path};
 
 #[test]
 fn cargo_metadata_resolves_an_absolute_target_directory() {
@@ -26,10 +26,15 @@ fn cargo_metadata_resolves_an_absolute_target_directory() {
 #[tokio::test]
 #[ignore = "requires a release wasm guest"]
 async fn installed_wasm_runs_the_common_mep_lifecycle() {
+    // Read from the manifest rather than repeated as a literal: the index
+    // record and the guest's own initialization metadata have to agree, so a
+    // crate version bump would otherwise fail negotiation here.
+    let version = crate_version("morphir-avro-extension");
     let fixture = InstalledWasmMother::from_path(
         wasm_guest_path("morphir_avro_extension.wasm"),
         "morphir-avro",
         "Morphir Avro",
+        &version,
         &["avro"],
         &["3", "4"],
     );
@@ -59,7 +64,7 @@ async fn installed_wasm_runs_the_common_mep_lifecycle() {
     let info = ready.negotiated().extension();
     assert_eq!(info.id, "morphir-avro");
     assert_eq!(info.name, "Morphir Avro");
-    assert_eq!(info.version, "0.1.0");
+    assert_eq!(info.version, version);
     assert_eq!(info.types, [ExtensionType::Backend]);
     let backend = ready
         .negotiated()

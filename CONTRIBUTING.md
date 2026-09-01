@@ -2,6 +2,12 @@
 
 This document describes the contribution process and governance policies of the FINOS Morphir Rust project. The project is also governed by the [Linux Foundation Antitrust Policy](https://www.linuxfoundation.org/antitrust-policy/), and the FINOS [IP Policy](https://community.finos.org/assets/files/IP-Policy-9b1cd5f6c1d682e073c3c15224fc6d86.pdf), [Code of Conduct](https://community.finos.org/docs/governance/code-of-conduct), [Collaborative Principles](https://community.finos.org/docs/governance/collaborative-principles/), and [Meeting Procedures](https://community.finos.org/docs/governance/meeting-procedures/).
 
+## Engineering Principles
+
+Morphir Rust follows the ecosystem [domain modeling policy](https://github.com/finos/morphir/blob/main/docs/developers/domain-modeling.md). Public APIs and shared domain state should make invalid states unrepresentable. Prefer enums, newtype structs, private fields, exhaustive matching, and validating constructors over boolean state flags, optional payload combinations, primitive parameters, and unconstrained strings.
+
+Performance-critical private code may use compact representations when profiling or a reproducible benchmark proves the benefit. Keep the representation behind a named abstraction, test conversion to the domain type, and do not expose it through public APIs.
+
 ## Contribution Process
 
 Before making a contribution, please take the following steps:

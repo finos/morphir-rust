@@ -69,6 +69,8 @@ When uncertain about Morphir-specific design decisions, consult the reference im
     - **Encapsulation Validation**: If internal implementation details leak into blackbox tests, this indicates poor encapsulation that should be refactored.
 
 ### Functional Design Principles
+Follow Morphir's ecosystem-wide [domain modeling policy](https://github.com/finos/morphir/blob/main/docs/developers/domain-modeling.md). Rust enums, newtype structs, private fields, validating constructors, and exhaustive matching should make invalid domain states unrepresentable.
+
 Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
 - **Algebraic Data Types (ADTs)**: Design domain models using ADTs to precisely capture the problem domain:
     - **Product Types**: Use structs to combine multiple values (e.g., `struct Package { name: PackageName, modules: Vec<Module> }`)
@@ -77,7 +79,9 @@ Reflecting Morphir's functional domain-driven design nature, strictly adhere to:
     - **Type-Driven Design**: Let the type system guide implementation and catch errors at compile time
 - **Immutability**: Prefer immutable data structures.
 - **Illegal States Unrepresentable**: Design types such that invalid states cannot be constructed (e.g., use Enums/Sum Types over boolean flags + optional fields).
-- **No Primitive Obsession**: Wrap primitives in domain types (e.g., `PackageName` struct instead of `String`).
+- **No Primitive Obsession**: Use a domain type when a primitive represents a domain distinction or invariant (for example, a `PackageName` newtype rather than `String`). Ordinary internal values may remain primitive when they carry no domain distinction or invariant; parse and validate boundary values before constructing domain types.
+- **Existing Domain Vocabulary First**: Before adding a primitive parameter, boolean state flag, or free-form string, inspect and extend the existing domain types when the concept already exists. Test boundary validation and state transitions.
+- **Performance-Sensitive Internals**: A compact private representation, including bit flags or packed values, is acceptable only when profiling or a reproducible benchmark proves a meaningful benefit. Keep it behind a named type or helpers, test conversion to the public domain type, and document the representation contract. Do not expose the compact form through public APIs or replace a readable model with unrelated boolean flags.
 - **Composition**: Build complex logic by composing small, pure functions.
 - **Strong Cohesion & Loose Coupling**: Keep related logic together; minimize dependencies between distinct domains.
 

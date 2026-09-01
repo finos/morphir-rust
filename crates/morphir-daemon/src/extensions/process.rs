@@ -16,12 +16,12 @@ use crate::extensions::protocol::{
 };
 use crate::extensions::session::{
     CapabilityExpectation, ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded,
-    MepTransport, NegotiatedSession, Session, Stopped, TransportError, TransportState,
-    validate_method_result_async, validate_negotiation,
+    MepTransport, NegotiatedSession, PersistedExtensionCapabilities, Session, Stopped,
+    TransportError, TransportState, validate_method_result_async, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::{BackendCapability, ExtensionCapabilities, ExtensionInfo};
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
 use serde::{Serialize, de::DeserializeOwned};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};

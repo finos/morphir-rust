@@ -8,6 +8,9 @@ use crate::extensions::protocol::{
 use crate::{DaemonError, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use morphir_core::format_version::{
+    NormalizedFormatVersion, ReleaseTriplet, ScalarValue, SupportTable,
+};
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
 use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
@@ -132,7 +135,10 @@ fn validate_compile_result(
             .ir_version
             .as_deref()
             .expect("successful result version was validated");
-        if result_version != request.options.ir_version {
+        let requested_release =
+            normalize_compile_ir_version(&request.options.ir_version, "requested")?;
+        let result_release = normalize_compile_ir_version(result_version, "result")?;
+        if result_release != requested_release {
             return Err(DaemonError::Extension(format!(
                 "Successful compile result irVersion '{result_version}' did not match requested irVersion '{}'",
                 request.options.ir_version
@@ -143,10 +149,35 @@ fn validate_compile_result(
                 .ir
                 .as_ref()
                 .expect("successful result IR was validated"),
+            requested_release,
             &request.options.ir_version,
         )?;
     }
     Ok(value)
+}
+
+fn normalize_compile_ir_version(value: &str, source: &str) -> Result<ReleaseTriplet> {
+    let scalar = if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        ScalarValue::Integer(value.parse::<u64>().map_err(|error| {
+            DaemonError::Extension(format!(
+                "Successful compile {source} uses malformed irVersion '{value}': {error}"
+            ))
+        })?)
+    } else {
+        ScalarValue::String(value.to_owned())
+    };
+    let support = SupportTable::reference();
+    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support).map_err(|error| {
+        DaemonError::Extension(format!(
+            "Successful compile {source} uses malformed irVersion '{value}': {error}"
+        ))
+    })?;
+    if !normalized.is_supported() {
+        return Err(DaemonError::Extension(format!(
+            "Successful compile {source} uses unsupported irVersion '{value}'"
+        )));
+    }
+    Ok(normalized.release)
 }
 
 fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value> {
@@ -192,12 +223,11 @@ fn portable_artifact_path_keys(path: &str) -> (String, String) {
     (case_folded, uppercase)
 }
 
-fn validate_compile_ir(ir: &serde_json::Value, requested_version: &str) -> Result<()> {
-    if !matches!(requested_version, "3" | "4.0.0") {
-        return Err(DaemonError::Extension(format!(
-            "Successful compile result uses unsupported irVersion '{requested_version}' for host validation"
-        )));
-    }
+fn validate_compile_ir(
+    ir: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<()> {
     let attempted_root = ir.as_object().is_some_and(|object| {
         object.contains_key("formatVersion") || object.contains_key("distribution")
     });
@@ -213,14 +243,15 @@ fn validate_compile_ir(ir: &serde_json::Value, requested_version: &str) -> Resul
                 "Successful compile result IR file is missing distribution".into(),
             ));
         }
-        validate_embedded_format_version(format_version, requested_version)?;
-        return validate_typed_ir_root(ir, requested_version);
+        validate_embedded_format_version(format_version, requested_release, requested_version)?;
+        return validate_typed_ir_root(ir, requested_release, requested_version);
     }
-    validate_typed_raw_distribution(ir, requested_version)
+    validate_typed_raw_distribution(ir, requested_release, requested_version)
 }
 
 fn validate_embedded_format_version(
     format_version: &serde_json::Value,
+    requested_release: ReleaseTriplet,
     requested_version: &str,
 ) -> Result<()> {
     let embedded_version = match format_version {
@@ -233,7 +264,23 @@ fn validate_embedded_format_version(
             ));
         }
     };
-    if embedded_version != requested_version {
+    let scalar = ScalarValue::from_json(format_version).map_err(|error| {
+        DaemonError::Extension(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' is malformed: {error}"
+        ))
+    })?;
+    let support = SupportTable::reference();
+    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support).map_err(|error| {
+        DaemonError::Extension(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' is malformed: {error}"
+        ))
+    })?;
+    if !normalized.is_supported() {
+        return Err(DaemonError::Extension(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' is unsupported"
+        )));
+    }
+    if normalized.release != requested_release {
         return Err(DaemonError::Extension(format!(
             "Successful compile result embedded formatVersion '{embedded_version}' did not match requested irVersion '{requested_version}'"
         )));
@@ -241,11 +288,15 @@ fn validate_embedded_format_version(
     Ok(())
 }
 
-fn validate_typed_ir_root(ir: &serde_json::Value, requested_version: &str) -> Result<()> {
-    let result = match requested_version {
-        "3" => serde_json::from_value::<morphir_core::ir::classic::Distribution>(ir.clone())
+fn validate_typed_ir_root(
+    ir: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<()> {
+    let result = match requested_release.major() {
+        3 => serde_json::from_value::<morphir_core::ir::classic::Distribution>(ir.clone())
             .map(|_| ()),
-        "4.0.0" => serde_json::from_value::<morphir_core::ir::v4::IRFile>(ir.clone()).map(|_| ()),
+        4 => serde_json::from_value::<morphir_core::ir::v4::IRFile>(ir.clone()).map(|_| ()),
         _ => unreachable!("supported compile IR versions were checked"),
     };
     result.map_err(|error| {
@@ -255,13 +306,15 @@ fn validate_typed_ir_root(ir: &serde_json::Value, requested_version: &str) -> Re
     })
 }
 
-fn validate_typed_raw_distribution(ir: &serde_json::Value, requested_version: &str) -> Result<()> {
-    let result = match requested_version {
-        "3" => serde_json::from_value::<morphir_core::ir::classic::DistributionBody>(ir.clone())
+fn validate_typed_raw_distribution(
+    ir: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<()> {
+    let result = match requested_release.major() {
+        3 => serde_json::from_value::<morphir_core::ir::classic::DistributionBody>(ir.clone())
             .map(|_| ()),
-        "4.0.0" => {
-            serde_json::from_value::<morphir_core::ir::v4::Distribution>(ir.clone()).map(|_| ())
-        }
+        4 => serde_json::from_value::<morphir_core::ir::v4::Distribution>(ir.clone()).map(|_| ()),
         _ => unreachable!("supported compile IR versions were checked"),
     };
     result.map_err(|error| {
@@ -319,7 +372,23 @@ pub(in crate::extensions) fn validate_negotiation(
             {
                 Some("backend capabilities")
             }
-            CapabilityExpectation::Exact(_) | CapabilityExpectation::Backend(_) => None,
+            CapabilityExpectation::Persisted(discovered)
+                if discovered.frontend().is_some_and(|expected| {
+                    result.capabilities.frontend.as_ref() != Some(expected)
+                }) =>
+            {
+                Some("frontend capabilities")
+            }
+            CapabilityExpectation::Persisted(discovered)
+                if discovered.backend().is_some_and(|expected| {
+                    result.capabilities.backend.as_ref() != Some(expected)
+                }) =>
+            {
+                Some("backend capabilities")
+            }
+            CapabilityExpectation::Exact(_)
+            | CapabilityExpectation::Persisted(_)
+            | CapabilityExpectation::Backend(_) => None,
         };
         if let Some(capability_scope) = capability_scope {
             return Err(DaemonError::Extension(format!(
@@ -674,6 +743,87 @@ mod tests {
         .expect_err("embedded format mismatch should fail");
 
         assert!(error.to_string().contains("embedded formatVersion"));
+    }
+
+    #[test]
+    fn accepts_numeric_v4_embedded_format_for_semantic_v4_request() {
+        let value = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result(
+                "4.0.0",
+                serde_json::json!({
+                    "formatVersion": 4,
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("numeric formatVersion 4 is semantically Morphir IR 4.0.0");
+
+        assert_eq!(value["ir"]["formatVersion"], 4);
+    }
+
+    #[test]
+    fn accepts_installed_frontend_v4_result_alias_for_canonical_request() {
+        let value = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result(
+                "4",
+                serde_json::json!({
+                    "formatVersion": "4.0.0",
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("installed frontends may return the v4 family alias");
+
+        assert_eq!(value["irVersion"], "4");
+    }
+
+    #[test]
+    fn accepts_canonical_v4_result_for_family_alias_request() {
+        let value = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4"),
+            successful_result(
+                "4.0.0",
+                serde_json::json!({
+                    "formatVersion": 4,
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("the canonical v4 release and family alias are equivalent");
+
+        assert_eq!(value["irVersion"], "4.0.0");
+    }
+
+    #[test]
+    fn rejects_an_unsupported_outer_compile_ir_revision() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.1.0"),
+            successful_result("4.1.0", v4_library_distribution()),
+        )
+        .expect_err("unsupported outer IR revisions must fail host validation");
+
+        assert!(
+            error.to_string().contains("unsupported irVersion"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_malformed_outer_compile_result_version() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result("4.0", v4_library_distribution()),
+        )
+        .expect_err("malformed outer result versions must fail host validation");
+
+        assert!(error.to_string().contains("malformed irVersion"), "{error}");
     }
 
     #[test]

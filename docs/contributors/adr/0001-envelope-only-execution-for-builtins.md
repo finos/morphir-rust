@@ -1,9 +1,11 @@
 # ADR-0001: Envelope-Only Execution for Builtin Extensions
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0003](./0003-dual-native-builtin-invocation.md)
 **Date:** 2026-01-29
 **Deciders:** Damian, Claude (design discussion)
 **Tags:** extension-architecture, performance, builtins
+
+> **Supersession notice:** [ADR-0003](./0003-dual-native-builtin-invocation.md) replaces this decision. The remainder of this record preserves the original rationale, measurements, alternatives, and references.
 
 ## Context
 

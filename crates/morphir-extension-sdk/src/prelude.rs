@@ -20,6 +20,9 @@ pub use crate::traits::{Backend, Extension, Frontend, Transform, Validator, Work
 // Re-export error types
 pub use crate::error::{ExtensionError, Result};
 
+// Re-export native extension adapters.
+pub use crate::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol};
+
 // Re-export protocol types
 pub use crate::protocol::{ExtensionRequest, ExtensionResponse, RpcError};
 

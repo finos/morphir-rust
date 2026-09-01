@@ -20,9 +20,13 @@ pub use container::ExtensionContainer;
 pub use loader::ExtensionLoader;
 pub use process::{ProcessLaunch, SpawnedProcessSession, SpawnedProcessTransport};
 pub use protocol::{ExtensionRequest, ExtensionResponse};
-pub use registry::ExtensionRegistry;
+pub use registry::{
+    CapabilityMetadataScope, ExtensionRegistry, InvocationMode, InvocationPolicy, ProviderMetadata,
+    ProviderOrigin, ResolvedBackend, ResolvedFrontend,
+};
 pub use session::{
     ExpectedExtension, ExtensionSession, ExtensionSessionState, ExtismSession, FailedSession,
-    Indeterminate, InvokeOutcome, Loaded, MepTransport, NegotiatedSession, Ready, Session, Stopped,
-    TransportError, TransportState,
+    Indeterminate, InvokeOutcome, Loaded, MepTransport, NativeMepSession, NativeMepTransport,
+    NegotiatedSession, PersistedExtensionCapabilities, Ready, Session, Stopped, TransportError,
+    TransportState,
 };

@@ -5,157 +5,84 @@ nav_order: 3
 parent: For Contributors
 ---
 
-# CLI Architecture
+# CLI architecture
 
-This document describes the architecture of the Morphir CLI, including command structure, configuration handling, and extension integration.
+The Morphir CLI owns command parsing, configuration use, provider registration, and user-facing output. Shared crates provide workspace discovery, extension resolution, verified activation, and protocol sessions.
 
-## Command Structure
+## Command structure
 
-The CLI uses `clap` for argument parsing and `starbase` for application lifecycle:
-
-```
+```text
 morphir
-├── compile          # Language-agnostic compilation
-├── generate         # Language-agnostic code generation
-├── gleam            # Gleam-specific commands
-│   ├── compile
-│   ├── generate
-│   └── roundtrip
-├── extension        # Extension management
+├── compile          # Language-neutral compilation
+├── generate         # Language-neutral code generation
+├── gleam            # Gleam compile, generate, and roundtrip workflows
+├── extension        # Verified extension repository and installation management
 ├── ir               # IR operations
 └── ...
 ```
 
-## Command Execution Flow
+## Provider registry
 
-### Compile Command
+The CLI constructs a fresh transport-neutral provider registry, represented by `ExtensionRegistry`, for each operation that needs a provider. It registers the native Gleam extension as a built-in and then adds validated installed-state snapshots. Built-in registration belongs to the CLI because the executable decides which implementations it links. The daemon has no Gleam dependency.
 
-```
-1. Parse CLI arguments
-2. Discover configuration (morphir-devkit)
-3. Load config context (workspace/project detection)
-4. Merge CLI args with config (CLI overrides)
-5. Resolve paths (.morphir/out/<project>/compile/<language>/)
-6. Discover extension by language (morphir-devkit → morphir-daemon)
-7. Load extension WASM (morphir-daemon)
-8. Collect source files
-9. Call extension.frontend.compile()
-10. Write IR to output directory
-11. Format output (human/JSON/JSON Lines)
-```
+The registry records two independent properties:
 
-### Generate Command
+- `ProviderOrigin` is `Builtin` or `Installed`.
+- `InvocationMode` is `NativeDirect`, `NativeMep`, `ProcessMep`, or `WasmMep`.
 
-```
-1. Parse CLI arguments
-2. Discover configuration
-3. Load config context
-4. Resolve IR input path
-5. Discover extension by target (morphir-devkit → morphir-daemon)
-6. Load extension WASM
-7. Load Morphir IR (detect format)
-8. Call extension.backend.generate()
-9. Write generated code to output directory
-10. Format output
-```
+Resolution works in this order:
 
-## Configuration Handling
+1. Filter providers by the requested frontend or backend operation, language or target, and normalized Morphir IR version.
+2. Apply origin precedence among the eligible providers. Installed providers override built-ins.
+3. Apply the caller's invocation policy to the selected provider.
 
-### Discovery
+`PreferDirect` selects `NativeDirect` for a native built-in. `ProtocolOnly` selects `NativeMep`, which runs the same extension instance through a MEP session. Installed process and WebAssembly providers remain MEP-only under both policies.
 
-Configuration is discovered by walking up the directory tree:
+This ordering matters. An installed extension that lacks the requested capability or IR version cannot hide an eligible built-in.
 
-```rust
-let config_path = discover_config(&current_dir)?;
-let ctx = load_config_context(&config_path)?;
-```
+## Compile flow
 
-### Merging
+The general compile path performs these steps:
 
-Configuration is merged in priority order:
-1. Workspace config (if in workspace)
-2. Project config
-3. CLI arguments (highest priority)
+1. Discover and load the effective project configuration through `morphir-devkit`.
+2. Resolve the input and output paths.
+3. Read source files into sorted `SourceDocument` values.
+4. Construct the CLI-owned provider registry.
+5. Resolve `frontend.compile` for the language and Morphir IR version with `PreferDirect`.
+6. Invoke the selected native or MEP route.
+7. Validate diagnostics and the returned IR, then write `morphir-ir.json` from the host.
+8. Format human, JSON, or JSON Lines output.
 
-### Path Resolution
+The single-file Elm compatibility path still launches its configured process extension directly. It does not use the built-in Gleam route.
 
-Paths are resolved relative to:
-- Config file location (for relative paths)
-- Workspace root (for workspace paths)
-- Project root (for project paths)
+## Generate flow
 
-## Extension Integration
+Generation performs these steps:
 
-### Discovery
+1. Discover configuration and resolve the requested IR input.
+2. Prefer `morphir-ir.json` when the input is a compile-output directory. Otherwise load the directory as a Morphir document tree.
+3. Detect and normalize the Morphir IR version.
+4. Construct the CLI-owned provider registry.
+5. Resolve `backend.generate` for the target and IR version with `PreferDirect`.
+6. Invoke the selected native or MEP route.
+7. Validate returned artifact paths and let the host write the files.
+8. Format command output.
 
-```rust
-// Devkit extension discovery
-let builtins = morphir_devkit::discover_builtin_extensions();
+Extensions return artifact descriptions. They do not choose arbitrary host filesystem destinations.
 
-// Daemon registry
-let registry = ExtensionRegistry::new(workspace_root, output_dir)?;
+## MEP execution
 
-// Register builtins
-for builtin in builtins {
-    registry.register_builtin(&builtin.id, builtin.path).await?;
-}
+`NativeMep`, `ProcessMep`, and `WasmMep` share the daemon's validated session lifecycle. The host initializes the session, checks provider identity and capabilities, invokes the operation, and shuts the session down. A failed transport preserves whether the peer stopped or entered an indeterminate state.
 
-// Find extension
-let extension = registry.find_extension_by_language("gleam").await?;
-```
+Installed providers reach that session only after the distribution layer verifies the selected artifact against its catalog and lock state. The registry never treats an unverified file beside the CLI executable as a built-in.
 
-### Execution
+## Output and errors
 
-```rust
-// Call extension method
-let params = serde_json::json!({
-    "input": input_path,
-    "output": output_path,
-    "package_name": package_name,
-});
+Human output prints the final success details and diagnostics. JSON pretty-prints one `CompileOutput` or `GenerateOutput`. JSON Lines prints that same result object compactly on one line; it does not emit progress events. The CLI maps configuration, filesystem, provider-resolution, protocol, and extension diagnostics into `miette` reports at the command boundary.
 
-let result: serde_json::Value = extension
-    .call("morphir.frontend.compile", params)
-    .await?;
-```
+## Further reading
 
-## Output Formatting
-
-### Human-Readable
-
-Default format with progress messages and diagnostics.
-
-### JSON
-
-Single JSON object with structured data:
-
-```json
-{
-  "success": true,
-  "ir": {...},
-  "diagnostics": [...],
-  "modules": [...]
-}
-```
-
-### JSON Lines
-
-Streaming format (one JSON object per line):
-
-```jsonl
-{"type": "progress", "message": "Compiling..."}
-{"type": "result", "success": true, "ir": {...}}
-```
-
-## Error Handling
-
-Errors are handled using `miette` for rich diagnostics:
-
-- **Human mode**: Pretty-printed errors with source spans
-- **JSON mode**: Structured error objects
-
-## Next Steps
-
-- See [Devkit Crate](devkit-crate)
-- Read [Extension System Design](extension-system)
-- Check [Development Guide](development)
+- [Devkit crate](devkit-crate)
+- [Extension system design](extension-system)
+- [ADR-0002: Validated typestate MEP sessions](adr/0002-validated-typestate-mep-sessions)
+- [ADR-0003: Dual native invocation for built-in extensions](adr/0003-dual-native-builtin-invocation)

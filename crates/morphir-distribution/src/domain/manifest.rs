@@ -157,6 +157,143 @@ pub enum Capability {
     Workspace,
 }
 
+/// One source language accepted by a schema-v2 frontend extension.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendLanguageRecord {
+    id: String,
+    file_extensions: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrontendLanguageRecordWire {
+    id: String,
+    file_extensions: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for FrontendLanguageRecord {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FrontendLanguageRecordWire::deserialize(deserializer)?;
+        let id = wire.id.trim();
+        if id.is_empty() || id != wire.id {
+            return Err(serde::de::Error::custom(
+                "frontend languages must have non-empty trimmed IDs",
+            ));
+        }
+        if !valid_frontend_file_extensions(&wire.file_extensions) {
+            return Err(serde::de::Error::custom(
+                "frontend file extensions must be non-empty, dot-prefixed, trimmed, and unique",
+            ));
+        }
+        Ok(Self {
+            id: wire.id,
+            file_extensions: wire.file_extensions,
+        })
+    }
+}
+
+impl FrontendLanguageRecord {
+    /// Return the stable source-language identifier.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Return the non-empty unique file extensions recognized for this language.
+    pub fn file_extensions(&self) -> &[String] {
+        &self.file_extensions
+    }
+}
+
+/// Frontend-specific metadata carried by schema-v2 release records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendRecord {
+    languages: Vec<FrontendLanguageRecord>,
+    ir_versions: Vec<String>,
+    #[serde(default = "default_frontend_compile")]
+    compile: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrontendRecordWire {
+    languages: Vec<FrontendLanguageRecord>,
+    ir_versions: Vec<String>,
+    #[serde(default = "default_frontend_compile")]
+    compile: bool,
+}
+
+fn default_frontend_compile() -> bool {
+    true
+}
+
+fn valid_frontend_file_extensions(values: &[String]) -> bool {
+    !values.is_empty()
+        && values.iter().all(|value| {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed == value && trimmed.starts_with('.')
+        })
+        && values
+            .iter()
+            .map(|value| value.trim())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == values.len()
+}
+
+impl<'de> Deserialize<'de> for FrontendRecord {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FrontendRecordWire::deserialize(deserializer)?;
+        if wire.languages.is_empty()
+            || wire
+                .languages
+                .iter()
+                .map(|language| language.id().trim())
+                .collect::<BTreeSet<_>>()
+                .len()
+                != wire.languages.len()
+        {
+            return Err(serde::de::Error::custom(
+                "frontend languages must be non-empty and have unique IDs",
+            ));
+        }
+        if !valid_backend_identifiers(&wire.ir_versions) {
+            return Err(serde::de::Error::custom(
+                "frontend IR versions must be non-empty and unique",
+            ));
+        }
+        Ok(Self {
+            languages: wire.languages,
+            ir_versions: wire.ir_versions,
+            compile: wire.compile,
+        })
+    }
+}
+
+impl FrontendRecord {
+    /// Return the non-empty set of source languages accepted by the frontend.
+    pub fn languages(&self) -> &[FrontendLanguageRecord] {
+        &self.languages
+    }
+
+    /// Return the non-empty unique Morphir IR versions produced by the frontend.
+    pub fn ir_versions(&self) -> &[String] {
+        &self.ir_versions
+    }
+
+    /// Return whether this frontend accepts compile requests.
+    pub fn compile(&self) -> bool {
+        self.compile
+    }
+}
+
 /// Backend-specific metadata carried by schema-v2 release records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -355,6 +492,8 @@ pub struct ReleaseRecord {
     mep_versions: Vec<String>,
     capabilities: Vec<Capability>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    frontend: Option<FrontendRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     backend: Option<BackendRecord>,
     artifacts: Vec<ArtifactRecord>,
 }
@@ -370,6 +509,8 @@ struct ReleaseRecordWire {
     channels: Vec<Channel>,
     mep_versions: Vec<String>,
     capabilities: Vec<Capability>,
+    #[serde(default)]
+    frontend: FieldPresence<FrontendRecord>,
     #[serde(default)]
     backend: FieldPresence<BackendRecord>,
     artifacts: Vec<ArtifactRecord>,
@@ -409,6 +550,11 @@ impl ReleaseRecord {
     /// Return the non-empty set of advertised operations.
     pub fn capabilities(&self) -> &[Capability] {
         &self.capabilities
+    }
+
+    /// Return frontend-specific metadata when declared by a schema-v2 record.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
     }
 
     /// Return backend-specific metadata when declared by a schema-v2 record.
@@ -453,6 +599,11 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
         }
         match wire.schema_version {
             1 => {
+                if !wire.frontend.is_missing() {
+                    return Err(serde::de::Error::custom(
+                        "schema-v1 records cannot declare frontend metadata",
+                    ));
+                }
                 if !wire.backend.is_missing() {
                     return Err(serde::de::Error::custom(
                         "schema-v1 records cannot declare backend metadata",
@@ -483,6 +634,20 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
                     }
                     _ => {}
                 }
+                let declares_frontend = wire.capabilities.contains(&Capability::Frontend);
+                match (declares_frontend, wire.frontend.has_value()) {
+                    (true, false) => {
+                        return Err(serde::de::Error::custom(
+                            "frontend metadata is required when frontend capability is declared",
+                        ));
+                    }
+                    (false, _) if !wire.frontend.is_missing() => {
+                        return Err(serde::de::Error::custom(
+                            "frontend metadata requires the frontend capability",
+                        ));
+                    }
+                    _ => {}
+                }
             }
             version => {
                 return Err(serde::de::Error::custom(format!(
@@ -503,6 +668,7 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
             channels: wire.channels,
             mep_versions: wire.mep_versions,
             capabilities: wire.capabilities,
+            frontend: wire.frontend.into_option(),
             backend: wire.backend.into_option(),
             artifacts: wire.artifacts,
         })

@@ -13,4 +13,8 @@ pub mod extensions;
 pub mod workspace;
 
 pub use error::{DaemonError, Result};
-pub use extensions::{ExtensionContainer, ExtensionLoader, ExtensionRegistry};
+pub use extensions::{
+    CapabilityMetadataScope, ExtensionContainer, ExtensionLoader, ExtensionRegistry,
+    InvocationMode, InvocationPolicy, ProviderMetadata, ProviderOrigin, ResolvedBackend,
+    ResolvedFrontend,
+};

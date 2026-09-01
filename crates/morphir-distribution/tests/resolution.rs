@@ -69,6 +69,31 @@ fn portable_workspace_release() -> serde_json::Value {
     release
 }
 
+fn frontend_release() -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": 2,
+        "id": "morphir-gleam",
+        "name": "Installed Gleam",
+        "version": "1.0.0",
+        "channels": ["stable"],
+        "mepVersions": [MEP_VERSION],
+        "capabilities": ["frontend"],
+        "frontend": {
+            "languages": [{"id": "gleam", "fileExtensions": [".gleam"]}],
+            "irVersions": ["4"]
+        },
+        "artifacts": [{
+            "runtime": "process",
+            "platform": { "os": "linux", "arch": "x86_64" },
+            "source": { "kind": "local-file", "path": "artifacts/morphir-gleam" },
+            "sha256": DIGEST,
+            "filename": "morphir-gleam",
+            "args": ["serve"],
+            "executable": true
+        }]
+    })
+}
+
 fn parse_error(record: &serde_json::Value) -> String {
     ExtensionHistory::parse_jsonl(record.to_string().as_bytes())
         .unwrap_err()
@@ -645,6 +670,109 @@ fn schema_v2_backend_metadata_is_exposed_by_the_release_domain() {
         backend.generate(),
         "omitted generate must remain compatible"
     );
+}
+
+#[test]
+fn schema_v2_frontend_metadata_is_exposed_by_the_release_domain() {
+    let history = ExtensionHistory::parse_jsonl(frontend_release().to_string().as_bytes()).unwrap();
+    let frontend = history.releases()[0].frontend().unwrap();
+
+    assert_eq!(frontend.languages().len(), 1);
+    assert_eq!(frontend.languages()[0].id(), "gleam");
+    assert_eq!(frontend.languages()[0].file_extensions(), [".gleam"]);
+    assert_eq!(frontend.ir_versions(), ["4"]);
+    assert!(frontend.compile(), "omitted compile must default to true");
+}
+
+#[test]
+fn schema_v2_frontend_metadata_requires_exactly_the_frontend_capability() {
+    let mut missing = frontend_release();
+    missing.as_object_mut().unwrap().remove("frontend");
+    assert!(parse_error(&missing).contains("frontend metadata is required"));
+
+    let mut unexpected = frontend_release();
+    unexpected["capabilities"] = serde_json::json!(["validator"]);
+    assert!(parse_error(&unexpected).contains("frontend metadata requires"));
+
+    let mut null_with_capability = frontend_release();
+    null_with_capability["frontend"] = serde_json::Value::Null;
+    assert!(parse_error(&null_with_capability).contains("frontend metadata is required"));
+}
+
+#[test]
+fn schema_v1_records_reject_frontend_metadata() {
+    let mut record: serde_json::Value =
+        serde_json::from_str(&release("1.0.0", &["stable"], ("linux", "x86_64"))).unwrap();
+    record["frontend"] = frontend_release()["frontend"].clone();
+
+    assert!(parse_error(&record).contains("schema-v1 records cannot declare frontend metadata"));
+}
+
+#[test]
+fn frontend_languages_must_be_non_empty_unique_trimmed_records() {
+    let mut no_languages = frontend_release();
+    no_languages["frontend"]["languages"] = serde_json::json!([]);
+    assert!(parse_error(&no_languages).contains("frontend languages"));
+
+    for languages in [
+        serde_json::json!([{"id": "", "fileExtensions": [".gleam"]}]),
+        serde_json::json!([{"id": " gleam", "fileExtensions": [".gleam"]}]),
+        serde_json::json!([
+            {"id": "gleam", "fileExtensions": [".gleam"]},
+            {"id": "gleam", "fileExtensions": [".g"]}
+        ]),
+        serde_json::json!([
+            {"id": "gleam", "fileExtensions": [".gleam"]},
+            {"id": "gleam ", "fileExtensions": [".g"]}
+        ]),
+    ] {
+        let mut record = frontend_release();
+        record["frontend"]["languages"] = languages;
+        assert!(parse_error(&record).contains("frontend languages"));
+    }
+}
+
+#[test]
+fn frontend_file_extensions_must_be_non_empty_unique_trimmed_dot_prefixed_values() {
+    for extensions in [
+        serde_json::json!([]),
+        serde_json::json!([""]),
+        serde_json::json!(["gleam"]),
+        serde_json::json!([" .gleam"]),
+        serde_json::json!([".gleam", ".gleam"]),
+        serde_json::json!([".gleam", ".gleam "]),
+    ] {
+        let mut record = frontend_release();
+        record["frontend"]["languages"][0]["fileExtensions"] = extensions;
+        assert!(parse_error(&record).contains("frontend file extensions"));
+    }
+}
+
+#[test]
+fn frontend_ir_versions_must_be_non_empty_unique_trimmed_values() {
+    for versions in [
+        serde_json::json!([]),
+        serde_json::json!([""]),
+        serde_json::json!([" 4"]),
+        serde_json::json!(["4", "4"]),
+        serde_json::json!(["4", "4 "]),
+    ] {
+        let mut record = frontend_release();
+        record["frontend"]["irVersions"] = versions;
+        assert!(parse_error(&record).contains("frontend IR versions"));
+    }
+}
+
+#[test]
+fn schema_v2_release_can_declare_frontend_and_backend_metadata() {
+    let mut record = frontend_release();
+    record["capabilities"] = serde_json::json!(["frontend", "backend"]);
+    record["frontend"]["compile"] = serde_json::json!(false);
+    record["backend"] = serde_json::json!({"targets": ["avro"], "irVersions": ["4"]});
+
+    let release: ReleaseRecord = serde_json::from_value(record).unwrap();
+    assert!(!release.frontend().unwrap().compile());
+    assert_eq!(release.backend().unwrap().targets(), ["avro"]);
 }
 
 #[test]

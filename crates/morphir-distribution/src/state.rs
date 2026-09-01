@@ -13,12 +13,15 @@ use crate::state_io::{
 };
 use crate::{
     ArtifactRuntime, ArtifactSource, ArtifactStore, BackendRecord, Capability, DistributionError,
-    ExtensionId, IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact, Result,
-    Selection, Sha256Digest, VerifiedArtifact,
+    ExtensionId, FrontendRecord, IndexProvenance, Platform, RelativeArtifactPath, ResolvedArtifact,
+    Result, Selection, Sha256Digest, VerifiedArtifact,
 };
 use morphir_common::home::MorphirHome;
 use morphir_extension_sdk::protocol::SUPPORTED_MEP_VERSIONS;
-use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{
+    BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
+    LanguageCapability,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -27,15 +30,55 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const EXTENSION_LOCK_SCHEMA_VERSION: u32 = 3;
+const CURRENT_EXTENSION_LOCK_SCHEMA_VERSION: u32 = 4;
+const PRE_FRONTEND_EXTENSION_LOCK_SCHEMA_VERSION: u32 = 3;
 const LEGACY_EXTENSION_LOCK_SCHEMA_VERSION: u32 = 2;
-const CATALOG_SCHEMA_VERSION: u32 = 2;
+const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 3;
+const PRE_FRONTEND_CATALOG_SCHEMA_VERSION: u32 = 2;
 const LEGACY_CATALOG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StateSchemaEnvelope {
     schema_version: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum CapabilityMetadataScope {
+    NotDeclared,
+    LegacyUnpersisted,
+    Persisted,
+}
+
+impl CapabilityMetadataScope {
+    fn from_release(
+        schema_version: u32,
+        capabilities: &[Capability],
+        capability: Capability,
+    ) -> Self {
+        if !capabilities.contains(&capability) {
+            Self::NotDeclared
+        } else if schema_version == 1 {
+            Self::LegacyUnpersisted
+        } else {
+            Self::Persisted
+        }
+    }
+
+    fn from_migrated_state(
+        capabilities: &[Capability],
+        capability: Capability,
+        has_metadata: bool,
+    ) -> Self {
+        if !capabilities.contains(&capability) {
+            Self::NotDeclared
+        } else if has_metadata {
+            Self::Persisted
+        } else {
+            Self::LegacyUnpersisted
+        }
+    }
 }
 
 /// Reproducible selection and integrity record for one installed extension.
@@ -55,9 +98,69 @@ pub struct ExtensionLock {
     digest: Sha256Digest,
     capabilities: Vec<Capability>,
     mep_versions: Vec<String>,
+    frontend_metadata_scope: CapabilityMetadataScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frontend: Option<FrontendRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend: Option<BackendRecord>,
+    backend_metadata_scope: CapabilityMetadataScope,
+    executable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreFrontendExtensionLock {
+    schema_version: u32,
+    selection: Selection,
+    extension_id: ExtensionId,
+    name: String,
+    version: Version,
+    index: IndexProvenance,
+    source: ArtifactSource,
+    runtime: ArtifactRuntime,
+    platform: Option<Platform>,
+    args: Vec<String>,
+    digest: Sha256Digest,
+    capabilities: Vec<Capability>,
+    mep_versions: Vec<String>,
     #[serde(default)]
     backend: Option<BackendRecord>,
     executable: bool,
+}
+
+impl From<PreFrontendExtensionLock> for ExtensionLock {
+    fn from(previous: PreFrontendExtensionLock) -> Self {
+        let frontend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &previous.capabilities,
+            Capability::Frontend,
+            false,
+        );
+        let backend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &previous.capabilities,
+            Capability::Backend,
+            previous.backend.is_some(),
+        );
+        Self {
+            schema_version: previous.schema_version,
+            selection: previous.selection,
+            extension_id: previous.extension_id,
+            name: previous.name,
+            version: previous.version,
+            index: previous.index,
+            source: previous.source,
+            runtime: previous.runtime,
+            platform: previous.platform,
+            args: previous.args,
+            digest: previous.digest,
+            capabilities: previous.capabilities,
+            mep_versions: previous.mep_versions,
+            frontend_metadata_scope,
+            frontend: None,
+            backend: previous.backend,
+            backend_metadata_scope,
+            executable: previous.executable,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +184,16 @@ struct LegacyExtensionLock {
 
 impl From<LegacyExtensionLock> for ExtensionLock {
     fn from(legacy: LegacyExtensionLock) -> Self {
+        let frontend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &legacy.capabilities,
+            Capability::Frontend,
+            false,
+        );
+        let backend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &legacy.capabilities,
+            Capability::Backend,
+            false,
+        );
         Self {
             schema_version: legacy.schema_version,
             selection: legacy.selection,
@@ -95,7 +208,10 @@ impl From<LegacyExtensionLock> for ExtensionLock {
             digest: legacy.digest,
             capabilities: legacy.capabilities,
             mep_versions: legacy.mep_versions,
+            frontend_metadata_scope,
+            frontend: None,
             backend: None,
+            backend_metadata_scope,
             executable: legacy.executable,
         }
     }
@@ -104,8 +220,9 @@ impl From<LegacyExtensionLock> for ExtensionLock {
 impl ExtensionLock {
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
+        let release = &artifact.selected.release;
         let lock = Self {
-            schema_version: EXTENSION_LOCK_SCHEMA_VERSION,
+            schema_version: CURRENT_EXTENSION_LOCK_SCHEMA_VERSION,
             selection: artifact.selected.selection.clone(),
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -118,7 +235,18 @@ impl ExtensionLock {
             digest: artifact.selected.artifact.digest().clone(),
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
+            frontend_metadata_scope: CapabilityMetadataScope::from_release(
+                release.schema_version(),
+                release.capabilities(),
+                Capability::Frontend,
+            ),
+            frontend: artifact.selected.release.frontend().cloned(),
             backend: artifact.selected.release.backend().cloned(),
+            backend_metadata_scope: CapabilityMetadataScope::from_release(
+                release.schema_version(),
+                release.capabilities(),
+                Capability::Backend,
+            ),
             executable: artifact.selected.artifact.executable(),
         };
         validate_runtime_state(
@@ -128,7 +256,12 @@ impl ExtensionLock {
             &lock.args,
             lock.executable,
             &lock.capabilities,
-            lock.backend.as_ref(),
+            ExtensionMetadata {
+                frontend_scope: lock.frontend_metadata_scope,
+                frontend: lock.frontend.as_ref(),
+                backend_scope: lock.backend_metadata_scope,
+                backend: lock.backend.as_ref(),
+            },
         )?;
         Ok(lock)
     }
@@ -198,6 +331,11 @@ impl ExtensionLock {
         &self.mep_versions
     }
 
+    /// Return frontend-specific metadata fixed by this lock, when declared.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
+    }
+
     /// Return backend-specific metadata fixed by this lock, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
@@ -227,7 +365,11 @@ fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<
     let bytes = read_state_bytes(&path)?;
     let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
     let lock: ExtensionLock = match envelope.schema_version {
-        EXTENSION_LOCK_SCHEMA_VERSION => decode_state(&path, &bytes)?,
+        CURRENT_EXTENSION_LOCK_SCHEMA_VERSION => decode_state(&path, &bytes)?,
+        PRE_FRONTEND_EXTENSION_LOCK_SCHEMA_VERSION => {
+            let previous: PreFrontendExtensionLock = decode_state(&path, &bytes)?;
+            previous.into()
+        }
         LEGACY_EXTENSION_LOCK_SCHEMA_VERSION => {
             let legacy: LegacyExtensionLock = decode_state(&path, &bytes)?;
             legacy.into()
@@ -249,7 +391,12 @@ fn read_extension_lock_unlocked(home: &MorphirHome, id: &ExtensionId) -> Result<
         &lock.args,
         lock.executable,
         &lock.capabilities,
-        lock.backend.as_ref(),
+        ExtensionMetadata {
+            frontend_scope: lock.frontend_metadata_scope,
+            frontend: lock.frontend.as_ref(),
+            backend_scope: lock.backend_metadata_scope,
+            backend: lock.backend.as_ref(),
+        },
     )?;
     Ok(lock)
 }
@@ -273,9 +420,65 @@ pub struct InstalledExtension {
     capabilities: Vec<Capability>,
     mep_versions: Vec<String>,
     index: IndexProvenance,
+    frontend_metadata_scope: CapabilityMetadataScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frontend: Option<FrontendRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend: Option<BackendRecord>,
+    backend_metadata_scope: CapabilityMetadataScope,
+    executable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreFrontendInstalledExtension {
+    extension_id: ExtensionId,
+    name: String,
+    version: Version,
+    runtime: ArtifactRuntime,
+    platform: Option<Platform>,
+    args: Vec<String>,
+    digest: Sha256Digest,
+    store_path: RelativeArtifactPath,
+    capabilities: Vec<Capability>,
+    mep_versions: Vec<String>,
+    index: IndexProvenance,
     #[serde(default)]
     backend: Option<BackendRecord>,
     executable: bool,
+}
+
+impl From<PreFrontendInstalledExtension> for InstalledExtension {
+    fn from(previous: PreFrontendInstalledExtension) -> Self {
+        let frontend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &previous.capabilities,
+            Capability::Frontend,
+            false,
+        );
+        let backend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &previous.capabilities,
+            Capability::Backend,
+            previous.backend.is_some(),
+        );
+        Self {
+            extension_id: previous.extension_id,
+            name: previous.name,
+            version: previous.version,
+            runtime: previous.runtime,
+            platform: previous.platform,
+            args: previous.args,
+            digest: previous.digest,
+            store_path: previous.store_path,
+            capabilities: previous.capabilities,
+            mep_versions: previous.mep_versions,
+            index: previous.index,
+            frontend_metadata_scope,
+            frontend: None,
+            backend: previous.backend,
+            backend_metadata_scope,
+            executable: previous.executable,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -297,6 +500,16 @@ struct LegacyInstalledExtension {
 
 impl From<LegacyInstalledExtension> for InstalledExtension {
     fn from(legacy: LegacyInstalledExtension) -> Self {
+        let frontend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &legacy.capabilities,
+            Capability::Frontend,
+            false,
+        );
+        let backend_metadata_scope = CapabilityMetadataScope::from_migrated_state(
+            &legacy.capabilities,
+            Capability::Backend,
+            false,
+        );
         Self {
             extension_id: legacy.extension_id,
             name: legacy.name,
@@ -309,7 +522,10 @@ impl From<LegacyInstalledExtension> for InstalledExtension {
             capabilities: legacy.capabilities,
             mep_versions: legacy.mep_versions,
             index: legacy.index,
+            frontend_metadata_scope,
+            frontend: None,
             backend: None,
+            backend_metadata_scope,
             executable: legacy.executable,
         }
     }
@@ -318,6 +534,7 @@ impl From<LegacyInstalledExtension> for InstalledExtension {
 impl InstalledExtension {
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
+        let release = &artifact.selected.release;
         let installed = Self {
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -330,7 +547,18 @@ impl InstalledExtension {
             capabilities: artifact.selected.release.capabilities().to_vec(),
             mep_versions: artifact.selected.release.mep_versions().to_vec(),
             index: artifact.selected.index.clone(),
+            frontend_metadata_scope: CapabilityMetadataScope::from_release(
+                release.schema_version(),
+                release.capabilities(),
+                Capability::Frontend,
+            ),
+            frontend: artifact.selected.release.frontend().cloned(),
             backend: artifact.selected.release.backend().cloned(),
+            backend_metadata_scope: CapabilityMetadataScope::from_release(
+                release.schema_version(),
+                release.capabilities(),
+                Capability::Backend,
+            ),
             executable: artifact.selected.artifact.executable(),
         };
         validate_installed_runtime(&installed)?;
@@ -392,6 +620,11 @@ impl InstalledExtension {
         &self.index
     }
 
+    /// Return frontend-specific metadata, when declared.
+    pub fn frontend(&self) -> Option<&FrontendRecord> {
+        self.frontend.as_ref()
+    }
+
     /// Return backend-specific metadata, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
@@ -415,6 +648,32 @@ impl InstalledExtension {
                 .map(extension_type)
                 .collect(),
             ..ExtensionInfo::default()
+        }
+    }
+
+    /// Convert installed frontend and backend metadata to shared MEP capabilities.
+    pub fn extension_capabilities(&self) -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            frontend: self.frontend.as_ref().map(|record| FrontendCapability {
+                languages: record
+                    .languages()
+                    .iter()
+                    .map(|language| LanguageCapability {
+                        id: language.id().to_owned(),
+                        file_extensions: language.file_extensions().to_vec(),
+                    })
+                    .collect(),
+                ir_versions: record.ir_versions().to_vec(),
+                compile: record.compile(),
+                incremental: false,
+                fragments: false,
+            }),
+            backend: self.backend.as_ref().map(|backend| BackendCapability {
+                targets: backend.targets().to_vec(),
+                ir_versions: backend.ir_versions().to_vec(),
+                generate: backend.generate(),
+            }),
+            ..ExtensionCapabilities::default()
         }
     }
 }
@@ -443,6 +702,13 @@ impl InstalledExtensionSnapshot {
 struct CatalogFile {
     schema_version: u32,
     extensions: Vec<InstalledExtension>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreFrontendCatalogFile {
+    schema_version: u32,
+    extensions: Vec<PreFrontendInstalledExtension>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -477,7 +743,14 @@ impl InstalledCatalog {
         let bytes = read_state_bytes(&path)?;
         let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
         let stored = match envelope.schema_version {
-            CATALOG_SCHEMA_VERSION => decode_state(&path, &bytes)?,
+            CURRENT_CATALOG_SCHEMA_VERSION => decode_state(&path, &bytes)?,
+            PRE_FRONTEND_CATALOG_SCHEMA_VERSION => {
+                let previous: PreFrontendCatalogFile = decode_state(&path, &bytes)?;
+                CatalogFile {
+                    schema_version: previous.schema_version,
+                    extensions: previous.extensions.into_iter().map(Into::into).collect(),
+                }
+            }
             LEGACY_CATALOG_SCHEMA_VERSION => {
                 let legacy: LegacyCatalogFile = decode_state(&path, &bytes)?;
                 CatalogFile {
@@ -527,7 +800,7 @@ impl InstalledCatalog {
         let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CATALOG_SCHEMA_VERSION,
+            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
             extensions: next.values().cloned().collect(),
         };
         atomic_write_json(&self.home.extensions_catalog_file(), &stored)?;
@@ -566,7 +839,7 @@ impl<'home> ExtensionInstaller<'home> {
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CATALOG_SCHEMA_VERSION,
+            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
             extensions: extensions.into_values().collect(),
         };
         let lock_bytes = encode_json(&lock)?;
@@ -602,7 +875,7 @@ fn uninstall_with_writer(
         .remove(id)
         .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
     let stored = CatalogFile {
-        schema_version: CATALOG_SCHEMA_VERSION,
+        schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
         extensions: extensions.into_values().collect(),
     };
     let lock_path = extension_lock_path(home, id);
@@ -679,7 +952,10 @@ fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock)
         || lock.capabilities != installed.capabilities
         || lock.mep_versions != installed.mep_versions
         || lock.index != installed.index
+        || lock.frontend_metadata_scope != installed.frontend_metadata_scope
+        || lock.frontend != installed.frontend
         || lock.backend != installed.backend
+        || lock.backend_metadata_scope != installed.backend_metadata_scope
         || lock.executable != installed.executable
     {
         return Err(DistributionError::StateMismatch {
@@ -708,8 +984,94 @@ fn validate_installed_runtime(installed: &InstalledExtension) -> Result<()> {
         &installed.args,
         installed.executable,
         &installed.capabilities,
-        installed.backend.as_ref(),
+        ExtensionMetadata {
+            frontend_scope: installed.frontend_metadata_scope,
+            frontend: installed.frontend.as_ref(),
+            backend_scope: installed.backend_metadata_scope,
+            backend: installed.backend.as_ref(),
+        },
     )
+}
+
+#[derive(Clone, Copy)]
+struct ExtensionMetadata<'record> {
+    frontend_scope: CapabilityMetadataScope,
+    frontend: Option<&'record FrontendRecord>,
+    backend_scope: CapabilityMetadataScope,
+    backend: Option<&'record BackendRecord>,
+}
+
+fn validate_capability_metadata<Metadata>(
+    id: &ExtensionId,
+    capabilities: &[Capability],
+    capability: Capability,
+    scope: CapabilityMetadataScope,
+    metadata: Option<&Metadata>,
+) -> Result<()> {
+    let declared = capabilities.contains(&capability);
+    match (declared, scope, metadata) {
+        (false, CapabilityMetadataScope::NotDeclared, None)
+        | (true, CapabilityMetadataScope::LegacyUnpersisted, None)
+        | (true, CapabilityMetadataScope::Persisted, Some(_)) => Ok(()),
+        (false, _, _) => Err(DistributionError::InvalidInstalledState {
+            id: id.clone(),
+            reason: metadata_scope_requires_capability_reason(capability),
+        }),
+        (true, CapabilityMetadataScope::NotDeclared, _) => {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: capability_requires_metadata_scope_reason(capability),
+            })
+        }
+        (true, CapabilityMetadataScope::LegacyUnpersisted, Some(_)) => {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: legacy_scope_cannot_carry_metadata_reason(capability),
+            })
+        }
+        (true, CapabilityMetadataScope::Persisted, None) => {
+            Err(DistributionError::InvalidInstalledState {
+                id: id.clone(),
+                reason: capability_requires_persisted_metadata_reason(capability),
+            })
+        }
+    }
+}
+
+fn metadata_scope_requires_capability_reason(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Frontend => "frontend metadata scope requires the frontend capability",
+        Capability::Backend => "backend metadata scope requires the backend capability",
+        _ => unreachable!("only frontend and backend have persisted metadata scopes"),
+    }
+}
+
+fn capability_requires_metadata_scope_reason(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Frontend => "frontend capability requires a frontend metadata scope",
+        Capability::Backend => "backend capability requires a backend metadata scope",
+        _ => unreachable!("only frontend and backend have persisted metadata scopes"),
+    }
+}
+
+fn legacy_scope_cannot_carry_metadata_reason(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Frontend => "legacy-unpersisted frontend scope cannot carry frontend metadata",
+        Capability::Backend => "legacy-unpersisted backend scope cannot carry backend metadata",
+        _ => unreachable!("only frontend and backend have persisted metadata scopes"),
+    }
+}
+
+fn capability_requires_persisted_metadata_reason(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Frontend => {
+            "frontend capability requires frontend metadata in the persisted scope"
+        }
+        Capability::Backend => {
+            "backend capability requires backend metadata in the persisted scope"
+        }
+        _ => unreachable!("only frontend and backend have persisted metadata scopes"),
+    }
 }
 
 fn validate_runtime_state(
@@ -719,15 +1081,22 @@ fn validate_runtime_state(
     args: &[String],
     executable: bool,
     capabilities: &[Capability],
-    backend: Option<&BackendRecord>,
+    metadata: ExtensionMetadata<'_>,
 ) -> Result<()> {
-    let declares_backend = capabilities.contains(&Capability::Backend);
-    if backend.is_some() && !declares_backend {
-        return Err(DistributionError::InvalidInstalledState {
-            id: id.clone(),
-            reason: "backend metadata requires the backend capability",
-        });
-    }
+    validate_capability_metadata(
+        id,
+        capabilities,
+        Capability::Frontend,
+        metadata.frontend_scope,
+        metadata.frontend,
+    )?;
+    validate_capability_metadata(
+        id,
+        capabilities,
+        Capability::Backend,
+        metadata.backend_scope,
+        metadata.backend,
+    )?;
     match runtime {
         ArtifactRuntime::Process if platform.is_none() => {
             Err(DistributionError::InvalidInstalledState {
@@ -747,12 +1116,6 @@ fn validate_runtime_state(
             Err(DistributionError::InvalidInstalledState {
                 id: id.clone(),
                 reason: "wasm artifacts must be portable, argument-free, and non-executable",
-            })
-        }
-        ArtifactRuntime::Wasm if declares_backend && backend.is_none() => {
-            Err(DistributionError::InvalidInstalledState {
-                id: id.clone(),
-                reason: "wasm backend artifacts require backend metadata",
             })
         }
         _ => Ok(()),
@@ -799,7 +1162,12 @@ mod tests {
             &[],
             false,
             &[Capability::Frontend],
-            None,
+            ExtensionMetadata {
+                frontend_scope: CapabilityMetadataScope::LegacyUnpersisted,
+                frontend: None,
+                backend_scope: CapabilityMetadataScope::NotDeclared,
+                backend: None,
+            },
         )
         .unwrap_err();
 
@@ -818,7 +1186,12 @@ mod tests {
             &[],
             false,
             &[Capability::Frontend],
-            None,
+            ExtensionMetadata {
+                frontend_scope: CapabilityMetadataScope::LegacyUnpersisted,
+                frontend: None,
+                backend_scope: CapabilityMetadataScope::NotDeclared,
+                backend: None,
+            },
         )
         .unwrap();
     }
@@ -1231,13 +1604,18 @@ mod tests {
 
     fn write_release(index: &Path, version: &str, digest: &Sha256Digest) {
         let record = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "id": "example",
             "name": "Example",
             "version": version,
             "channels": ["stable"],
             "mepVersions": ["0.1"],
             "capabilities": ["frontend"],
+            "frontend": {
+                "languages": [{"id": "example", "fileExtensions": [".example"]}],
+                "irVersions": ["4"],
+                "compile": true
+            },
             "artifacts": [{
                 "runtime": "process",
                 "platform": { "os": "linux", "arch": "x86_64" },

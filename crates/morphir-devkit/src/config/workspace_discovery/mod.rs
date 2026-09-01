@@ -10,7 +10,8 @@ mod tests;
 
 use std::{
     collections::BTreeMap,
-    fs,
+    error::Error,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
@@ -18,8 +19,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use cap_std::{ambient_authority, fs::Dir};
 use morphir_common::config::MorphirConfig;
 use morphir_workspace::{
-    DiscoveryRequest, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL, WorkspaceSnapshot,
-    discover_with_details,
+    DiscoveryFailure, DiscoveryRequest, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
+    WorkspaceSnapshot, discover_with_details,
 };
 use same_file::Handle;
 
@@ -88,16 +89,82 @@ pub struct NativeWorkspaceDiscovery {
     pub project_configs: BTreeMap<RelativePath, MorphirConfig>,
 }
 
+/// A typed failure from native workspace discovery.
+#[derive(Debug)]
+pub enum NativeWorkspaceDiscoveryError {
+    /// The provider-neutral discovery engine rejected the request.
+    Portable(DiscoveryFailure),
+    /// Native filesystem binding or full [`MorphirConfig`] decoding failed.
+    Host(anyhow::Error),
+}
+
+impl fmt::Display for NativeWorkspaceDiscoveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Portable(failure) => {
+                let path = failure
+                    .path
+                    .as_ref()
+                    .map(|path| format!(" at `{}`", path.as_str()))
+                    .unwrap_or_default();
+                write!(formatter, "{}: {}{path}", failure.code, failure.message)
+            }
+            Self::Host(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl Error for NativeWorkspaceDiscoveryError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Portable(_) => None,
+            Self::Host(error) => error.source(),
+        }
+    }
+}
+
 /// Discover a workspace and decode the exact effective configurations produced
 /// by the portable engine without re-reading or re-merging any files.
 pub fn discover_workspace_detailed(
     root: &Path,
     options: &ConfigLoadOptions,
 ) -> Result<NativeWorkspaceDiscovery> {
-    let (canonical_root, request) = bind_workspace_discovery_request(root, options)?;
-    let details = discover_with_details(request).map_err(discovery_failure)?;
+    discover_workspace_detailed_typed(root, options).map_err(|error| match error {
+        NativeWorkspaceDiscoveryError::Portable(failure) => discovery_failure(failure),
+        NativeWorkspaceDiscoveryError::Host(error) => error,
+    })
+}
+
+/// Discover a workspace while preserving the boundary between portable
+/// discovery failures and native binding or full-configuration decode errors.
+///
+/// ```no_run
+/// use morphir_devkit::{
+///     ConfigLoadOptions, NativeWorkspaceDiscoveryError, discover_workspace_detailed_typed,
+/// };
+/// use std::path::Path;
+///
+/// match discover_workspace_detailed_typed(Path::new("."), &ConfigLoadOptions::default()) {
+///     Ok(discovery) => println!("{} project(s)", discovery.snapshot.projects.len()),
+///     Err(NativeWorkspaceDiscoveryError::Portable(failure)) => {
+///         eprintln!("workspace discovery rejected the request: {}", failure.code);
+///     }
+///     Err(NativeWorkspaceDiscoveryError::Host(error)) => {
+///         eprintln!("native workspace discovery failed: {error}");
+///     }
+/// }
+/// ```
+pub fn discover_workspace_detailed_typed(
+    root: &Path,
+    options: &ConfigLoadOptions,
+) -> std::result::Result<NativeWorkspaceDiscovery, NativeWorkspaceDiscoveryError> {
+    let (canonical_root, request) = bind_workspace_discovery_request(root, options)
+        .map_err(NativeWorkspaceDiscoveryError::Host)?;
+    let details =
+        discover_with_details(request).map_err(NativeWorkspaceDiscoveryError::Portable)?;
     let root_config = decode_effective_config(details.root_effective)
-        .context("Failed to decode effective root Morphir configuration")?;
+        .context("Failed to decode effective root Morphir configuration")
+        .map_err(NativeWorkspaceDiscoveryError::Host)?;
     let project_configs = details
         .project_effective
         .into_iter()
@@ -115,7 +182,8 @@ pub fn discover_workspace_detailed(
                     .map(|config| (path, config))
             }
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<_>>()
+        .map_err(NativeWorkspaceDiscoveryError::Host)?;
     Ok(NativeWorkspaceDiscovery {
         canonical_root,
         snapshot: details.snapshot,

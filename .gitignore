@@ -61,3 +61,17 @@ venv/
 
 # Build artifacts (staged binaries for testing)
 .morphir/build/
+
+# Downloaded tool cache (the release workflow caches this path too)
+.morphir/cache/
+
+# Python bytecode and test caches.
+#
+# Both extension artifact tasks run `python3 scripts/package_extension.py`
+# before they check `git status`, and take a provenance-free "dirty worktree"
+# branch when that check finds anything. Without these rules the interpreter's
+# own bytecode cache made the worktree dirty, so the task produced a
+# descriptor with no `gitCommit` and `select_extension_assets.py` rejected it.
+__pycache__/
+*.py[cod]
+.pytest_cache/

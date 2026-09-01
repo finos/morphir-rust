@@ -1,0 +1,191 @@
+#!/bin/sh
+#MISE description="Build and validate the independently versioned OpenAPI extension bundle"
+
+set -eu
+
+SNAPSHOT_MODE="${MORPHIR_OPENAPI_SNAPSHOT_MODE:-0}"
+TASK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+case "$SNAPSHOT_MODE" in
+    0)
+        REPO_ROOT="$(git -C "$TASK_DIR" rev-parse --show-toplevel)"
+        ;;
+    1)
+        REPO_ROOT="$(CDPATH='' cd -- "$TASK_DIR/../../../.." && pwd -P)"
+        ;;
+    *)
+        echo "MORPHIR_OPENAPI_SNAPSHOT_MODE must be 0 or 1" >&2
+        exit 1
+        ;;
+esac
+cd "$REPO_ROOT"
+
+STAGING_DIR="$REPO_ROOT/.morphir/build/extensions/openapi"
+WASM="target/wasm32-unknown-unknown/release/morphir_openapi_extension.wasm"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Python 3.11 or newer is required to package extensions" >&2
+    exit 1
+fi
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+    echo "Python 3.11 or newer is required to package extensions" >&2
+    exit 1
+fi
+
+require_snapshot_file() {
+    relative="$1"
+    if [ ! -f "$REPO_ROOT/$relative" ] || [ -L "$REPO_ROOT/$relative" ]; then
+        echo "required provenance input is missing or unsafe: $relative" >&2
+        exit 1
+    fi
+}
+
+require_snapshot_executable() {
+    relative="$1"
+    require_snapshot_file "$relative"
+    if [ ! -x "$REPO_ROOT/$relative" ]; then
+        echo "required provenance input is not executable: $relative" >&2
+        exit 1
+    fi
+}
+
+require_snapshot_tree() {
+    relative="$1"
+    if [ ! -d "$REPO_ROOT/$relative" ] || [ -L "$REPO_ROOT/$relative" ]; then
+        echo "required provenance input is missing or unsafe: $relative" >&2
+        exit 1
+    fi
+    if ! find "$REPO_ROOT/$relative" -type f -print -quit | grep -q .; then
+        echo "required provenance input is missing or empty: $relative" >&2
+        exit 1
+    fi
+}
+
+require_snapshot_inputs() {
+    require_snapshot_executable ".mise/tasks/extension/artifact/openapi"
+    require_snapshot_file "Cargo.toml"
+    require_snapshot_file "Cargo.lock"
+    require_snapshot_file "mise.toml"
+    require_snapshot_file ".github/extensions.toml"
+    require_snapshot_file "scripts/package_extension.py"
+    require_snapshot_file "scripts/extension_packaging/__init__.py"
+    require_snapshot_file "scripts/extension_packaging/bundles.py"
+    require_snapshot_file "scripts/extension_packaging/cli.py"
+    require_snapshot_file "scripts/extension_packaging/errors.py"
+    require_snapshot_file "scripts/extension_packaging/model.py"
+    require_snapshot_file "scripts/extension_packaging/paths.py"
+    require_snapshot_file "tests/ci/test_package_extension.py"
+    require_snapshot_file "tests/ci/package_extension_test_support.py"
+    require_snapshot_file "tests/ci/test_package_extension_packaging.py"
+    require_snapshot_file "tests/ci/test_package_extension_task.py"
+    require_snapshot_file "crates/morphir-openapi-extension/Cargo.toml"
+    require_snapshot_file "crates/morphir-openapi-extension/src/lib.rs"
+    require_snapshot_file "crates/morphir-openapi-extension/tests/guest.rs"
+    require_snapshot_file "crates/morphir-daemon/tests/installed_wasm_extension_openapi.rs"
+    require_snapshot_file "crates/morphir-daemon/tests/support/mod.rs"
+    require_snapshot_file "crates/morphir-daemon/tests/support/installed_wasm.rs"
+    require_snapshot_tree "crates/morphir-openapi-extension/src"
+    require_snapshot_tree "crates/morphir-openapi-extension/tests"
+    require_snapshot_tree "crates/morphir-projection/src"
+    if find "$REPO_ROOT" -type l -print -quit | grep -q .; then
+        echo "provenance snapshot contains a symbolic link" >&2
+        exit 1
+    fi
+}
+
+run_pipeline() {
+    source_root="$1"
+    output="$2"
+    git_commit="$3"
+    (
+        cd "$source_root"
+        cargo test --locked -p morphir-openapi-extension
+        cargo build --locked --release -p morphir-openapi-extension --target wasm32-unknown-unknown
+        cargo test --locked -p morphir-daemon --test installed_wasm_extension_openapi -- --ignored
+        wasm-tools validate target/wasm32-unknown-unknown/release/morphir_openapi_extension.wasm
+        set -- scripts/package_extension.py \
+            --short-id openapi \
+            --wasm "$WASM" \
+            --output "$output"
+        if [ -n "$git_commit" ]; then
+            set -- "$@" --git-commit "$git_commit"
+        fi
+        python3 "$@"
+    )
+}
+
+if [ "$SNAPSHOT_MODE" = 1 ]; then
+    if [ -z "${MORPHIR_OPENAPI_HEAD_COMMIT:-}" ]; then
+        echo "MORPHIR_OPENAPI_HEAD_COMMIT is required in snapshot mode" >&2
+        exit 1
+    fi
+    if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "snapshot source must not be inside a Git worktree" >&2
+        exit 1
+    fi
+    require_snapshot_inputs
+    export MISE_CONFIG_FILE="$REPO_ROOT/mise.toml"
+    python3 scripts/package_extension.py --clean-extension-staging openapi
+    run_pipeline "$REPO_ROOT" "$STAGING_DIR" "$MORPHIR_OPENAPI_HEAD_COMMIT"
+    exit 0
+fi
+
+python3 scripts/package_extension.py --validate-extension-staging openapi
+if ! WORKTREE_STATUS="$(git status --porcelain --untracked-files=normal)"; then
+    echo "Could not determine Git worktree status" >&2
+    exit 1
+fi
+
+if [ -n "$WORKTREE_STATUS" ]; then
+    python3 scripts/package_extension.py --clean-extension-staging openapi
+    run_pipeline "$REPO_ROOT" "$STAGING_DIR" ""
+    exit 0
+fi
+
+HEAD_COMMIT="$(git rev-parse HEAD)"
+SNAPSHOT_ROOT=""
+SNAPSHOT_ACTIVE=false
+cleanup_snapshot() {
+    if [ "$SNAPSHOT_ACTIVE" = true ]; then
+        python3 "$REPO_ROOT/scripts/package_extension.py" \
+            --clean-head-snapshot "$SNAPSHOT_ROOT" --short-id openapi
+    fi
+}
+trap cleanup_snapshot EXIT
+trap 'exit 1' HUP INT TERM
+
+SNAPSHOT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/morphir-openapi-head.XXXXXX")"
+SNAPSHOT_ACTIVE=true
+SNAPSHOT_ROOT="$(CDPATH='' cd -- "$SNAPSHOT_ROOT" && pwd -P)"
+case "$SNAPSHOT_ROOT/" in
+    "$REPO_ROOT/"*)
+        echo "HEAD snapshot must be outside repository: $SNAPSHOT_ROOT" >&2
+        exit 1
+        ;;
+esac
+mkdir "$SNAPSHOT_ROOT/source"
+git archive --format=tar --output="$SNAPSHOT_ROOT/head.tar" "$HEAD_COMMIT"
+tar -xf "$SNAPSHOT_ROOT/head.tar" -C "$SNAPSHOT_ROOT/source"
+
+if find "$SNAPSHOT_ROOT/source" -type l -print -quit | grep -q .; then
+    echo "provenance snapshot contains a symbolic link" >&2
+    exit 1
+fi
+
+ARCHIVED_TASK="$SNAPSHOT_ROOT/source/.mise/tasks/extension/artifact/openapi"
+if [ ! -f "$ARCHIVED_TASK" ] || [ -L "$ARCHIVED_TASK" ] || [ ! -x "$ARCHIVED_TASK" ]; then
+    echo "required provenance input is missing or unsafe: .mise/tasks/extension/artifact/openapi" >&2
+    exit 1
+fi
+MORPHIR_OPENAPI_SNAPSHOT_MODE=1 \
+    MORPHIR_OPENAPI_HEAD_COMMIT="$HEAD_COMMIT" \
+    "$ARCHIVED_TASK"
+
+SNAPSHOT_BUNDLE="$SNAPSHOT_ROOT/source/.morphir/build/extensions/openapi"
+python3 scripts/package_extension.py --clean-extension-staging openapi
+python3 scripts/package_extension.py \
+    --transfer-bundle "$SNAPSHOT_BUNDLE" \
+    --output "$STAGING_DIR"
+
+cleanup_snapshot
+SNAPSHOT_ACTIVE=false
+trap - EXIT HUP INT TERM

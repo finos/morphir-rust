@@ -41,6 +41,7 @@ impl ExtismConformanceDriver {
                 methods::GENERATE,
                 GenerateRequest {
                     ir,
+                    target: "wasm".into(),
                     options: Default::default(),
                 },
             )
@@ -141,6 +142,7 @@ async fn completes_the_mep_lifecycle_in_order() {
     let driver = ExtismConformanceDriver::load_wasm_backend();
     support::mep::assert_backend_typestate_conformance(
         ExtismSession::connect(driver.container),
+        "wasm",
         a_distribution_with_one_value(),
         json!("not Morphir IR"),
     )

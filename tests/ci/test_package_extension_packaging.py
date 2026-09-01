@@ -15,6 +15,35 @@ class PackageExtensionTests(unittest.TestCase):
         self.assertEqual(["3", "4"], avro["ir_versions"])
         self.assertTrue(avro["release_with_workspace"])
 
+    def test_openapi_registry_entry_is_independently_versioned(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        openapi = registry["extensions"]["openapi"]
+
+        self.assertEqual("morphir-openapi-extension", openapi["package"])
+        self.assertEqual("morphir-openapi-extension", openapi["artifact"])
+        self.assertEqual("morphir-openapi", openapi["extension_id"])
+        self.assertEqual(["0.1"], openapi["mep_versions"])
+        self.assertEqual(["openapi", "json-schema"], openapi["targets"])
+        self.assertEqual(["3", "4"], openapi["ir_versions"])
+        self.assertTrue(openapi["release_with_workspace"])
+
+    def test_a_multi_target_registry_entry_reaches_the_release_descriptor(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+
+        descriptor = json.loads(
+            descriptor_bytes(
+                "openapi",
+                registry["extensions"]["openapi"],
+                "0.1.0",
+                "morphir_openapi_extension.wasm",
+                "0" * 64,
+                None,
+            )
+        )
+
+        self.assertEqual(["openapi", "json-schema"], descriptor["targets"])
+        self.assertEqual("morphir-openapi", descriptor["extensionId"])
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.fixture = PackageFixture(
@@ -43,6 +72,36 @@ class PackageExtensionTests(unittest.TestCase):
         self.assertEqual(["3", "4"], descriptor["irVersions"])
         self.assertEqual(sha256(artifact), descriptor["sha256"])
         self.assertEqual(self.fixture.wasm.read_bytes(), artifact.read_bytes())
+
+    def test_validate_extension_staging_accepts_any_registered_short_id(self) -> None:
+        root = self.fixture.root
+        staging = root / ".morphir" / "build" / "extensions" / "openapi"
+        staging.mkdir(parents=True)
+
+        validate_extension_staging(root, "openapi")
+
+    def test_clean_extension_staging_refuses_a_traversing_short_id(self) -> None:
+        root = self.fixture.root
+
+        with self.assertRaises(PackageError):
+            clean_extension_staging(root, "../avro")
+
+    def test_head_snapshot_name_is_scoped_to_the_short_id(self) -> None:
+        root = self.fixture.root
+        snapshot = root.parent / "morphir-openapi-head.ABC123"
+        snapshot.mkdir()
+
+        clean_head_snapshot(root, snapshot, "openapi")
+
+        self.assertFalse(snapshot.exists())
+
+    def test_head_snapshot_rejects_a_mismatched_short_id(self) -> None:
+        root = self.fixture.root
+        snapshot = root.parent / "morphir-avro-head.ABC123"
+        snapshot.mkdir()
+
+        with self.assertRaises(PackageError):
+            clean_head_snapshot(root, snapshot, "openapi")
 
     def test_rejects_unknown_short_id(self) -> None:
         result = self.fixture.package("unknown")

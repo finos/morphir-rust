@@ -55,6 +55,31 @@ class ExtensionAssetSelectionTests(unittest.TestCase):
                 {path: path.read_bytes() for path in original_bytes},
             )
 
+    def test_multi_target_descriptor_bytes_survive_selection_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            _, _, openapi_descriptor = fixture.add_extension(
+                short_id="openapi",
+                package="morphir-openapi-extension",
+                artifact_base="morphir-openapi-extension",
+                extension_id="morphir-openapi",
+                version="0.1.0",
+                targets=["openapi", "json-schema"],
+            )
+            before = openapi_descriptor.read_bytes()
+
+            selection = fixture.select("v0.2.0")
+
+            uploaded = next(
+                asset
+                for asset in selection.uploads
+                if asset.name == "morphir-openapi-extension-0.1.0.release.json"
+            )
+            self.assertEqual(before, uploaded.source.read_bytes())
+            self.assertEqual(
+                ["openapi", "json-schema"], json.loads(before)["targets"]
+            )
+
     def test_rejects_cross_bundle_collision_after_publication_name_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(temporary)

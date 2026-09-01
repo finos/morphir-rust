@@ -1,0 +1,12 @@
+{
+  "$id": "Status.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Customer status.",
+  "enum": [
+    "Active",
+    "Inactive"
+  ],
+  "title": "Status",
+  "type": "string",
+  "x-morphir-fqname": "acme/customer:customer#status"
+}

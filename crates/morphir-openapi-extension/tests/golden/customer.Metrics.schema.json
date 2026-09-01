@@ -1,0 +1,75 @@
+{
+  "$id": "Metrics.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Every scalar and collection form.",
+  "properties": {
+    "active": {
+      "type": "boolean"
+    },
+    "count": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "extent": {
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "grade": {
+      "maxLength": 1,
+      "type": "string"
+    },
+    "labels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "nothing": {
+      "type": "null"
+    },
+    "ratio": {
+      "format": "double",
+      "type": "number"
+    },
+    "scores": {
+      "additionalProperties": {
+        "format": "double",
+        "type": "number"
+      },
+      "type": "object"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "active",
+    "count",
+    "extent",
+    "grade",
+    "labels",
+    "nothing",
+    "ratio",
+    "scores",
+    "tags"
+  ],
+  "title": "Metrics",
+  "type": "object",
+  "x-morphir-fqname": "acme/customer:customer#metrics"
+}

@@ -1265,6 +1265,7 @@ mod tests {
         let generated = GleamExtension
             .generate(GenerateRequest {
                 ir: compiled.ir.expect("successful compile contains IR"),
+                target: "gleam".into(),
                 options: [("outputDir".to_owned(), serde_json::json!(output_dir.path()))]
                     .into_iter()
                     .collect(),
@@ -1296,6 +1297,7 @@ mod tests {
             let generated = GleamExtension
                 .generate(GenerateRequest {
                     ir,
+                    target: "gleam".into(),
                     options: [("outputDir".to_owned(), serde_json::json!(output_dir.path()))]
                         .into_iter()
                         .collect(),

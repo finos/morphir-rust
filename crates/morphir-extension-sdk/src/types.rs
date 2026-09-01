@@ -334,10 +334,16 @@ pub struct CompileResult {
 }
 
 /// Request to generate code
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerateRequest {
     /// Input IR (JSON)
     pub ir: serde_json::Value,
+    /// Target selected by the host for this generation call.
+    ///
+    /// The host states the exact target ID it negotiated during provider
+    /// selection. A backend that advertises more than one target dispatches on
+    /// this value and never guesses a default.
+    pub target: String,
     /// Generation options
     #[serde(default)]
     pub options: HashMap<String, serde_json::Value>,
@@ -488,7 +494,7 @@ pub struct RelatedInformation {
 }
 
 /// A generated artifact
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
     /// Output path (relative)
     pub path: String,
@@ -815,5 +821,49 @@ mod tests {
 
         assert_eq!(position.line, 4);
         assert_eq!(position.character, 3);
+    }
+}
+
+#[cfg(test)]
+mod generate_request_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_a_request_that_states_its_target() {
+        let request: GenerateRequest = serde_json::from_value(serde_json::json!({
+            "ir": {"formatVersion": 4},
+            "target": "json-schema",
+            "options": {"unsupported": "warn-and-skip"}
+        }))
+        .expect("a request stating its target decodes");
+
+        assert_eq!(request.target, "json-schema");
+        assert_eq!(request.ir["formatVersion"], 4);
+        assert_eq!(
+            request.options.get("unsupported"),
+            Some(&serde_json::json!("warn-and-skip"))
+        );
+    }
+
+    #[test]
+    fn rejects_a_request_with_no_target() {
+        let error = serde_json::from_value::<GenerateRequest>(serde_json::json!({
+            "ir": {"formatVersion": 4},
+            "options": {}
+        }))
+        .expect_err("the host always states the selected target");
+
+        assert!(error.to_string().contains("target"), "{error}");
+    }
+
+    #[test]
+    fn defaults_options_to_an_empty_map() {
+        let request: GenerateRequest = serde_json::from_value(serde_json::json!({
+            "ir": {},
+            "target": "openapi"
+        }))
+        .expect("options remain optional");
+
+        assert!(request.options.is_empty());
     }
 }

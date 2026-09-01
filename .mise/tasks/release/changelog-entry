@@ -19,8 +19,8 @@ fi
 case "$CATEGORY" in
     Added | Changed | Deprecated | Removed | Fixed | Security) ;;
     *)
-        echo "ERROR: Invalid category '$CATEGORY'"
-        echo "Valid categories: Added, Changed, Deprecated, Removed, Fixed, Security"
+        echo "ERROR: Invalid category '$CATEGORY'" >&2
+        echo "Valid categories: Added, Changed, Deprecated, Removed, Fixed, Security" >&2
         exit 1
         ;;
 esac
@@ -28,7 +28,7 @@ esac
 CHANGELOG="CHANGELOG.md"
 
 if [ ! -f "$CHANGELOG" ]; then
-    echo "ERROR: $CHANGELOG not found"
+    echo "ERROR: $CHANGELOG not found" >&2
     exit 1
 fi
 
@@ -36,13 +36,26 @@ fi
 LINE=$(grep -n "### $CATEGORY" "$CHANGELOG" | head -1 | cut -d: -f1)
 
 if [ -z "$LINE" ]; then
-    echo "ERROR: Category '### $CATEGORY' not found in $CHANGELOG"
+    echo "ERROR: Category '### $CATEGORY' not found in $CHANGELOG" >&2
     exit 1
 fi
 
-# Insert the entry after the category header
-sed -i "$((LINE))a\\
-- $ENTRY" "$CHANGELOG"
+# Insert the entry after the category header.
+#
+# Written with awk rather than `sed -i`: BSD sed (macOS) reads the argument
+# after -i as the backup suffix, so `sed -i "5a\\..."` consumed the address
+# expression and left the file untouched while the task still reported
+# success. awk behaves the same on every platform this repository is
+# developed on.
+TEMP="$(mktemp "${TMPDIR:-/tmp}/morphir-changelog.XXXXXX")"
+trap 'rm -f "$TEMP"' EXIT
+if ! awk -v line="$LINE" -v entry="- $ENTRY" \
+    'NR == line { print; print entry; next } { print }' \
+    "$CHANGELOG" >"$TEMP"; then
+    echo "ERROR: could not rewrite $CHANGELOG" >&2
+    exit 1
+fi
+cat "$TEMP" >"$CHANGELOG"
 
 echo "Added entry to $CATEGORY section:"
 echo "  - $ENTRY"

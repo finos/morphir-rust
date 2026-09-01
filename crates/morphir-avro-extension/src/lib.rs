@@ -7,9 +7,7 @@
 mod avro;
 mod diagnostic;
 mod internal;
-mod model;
 mod naming;
-mod normalize;
 mod options;
 mod render;
 
@@ -19,13 +17,12 @@ pub use avro::{
 };
 pub use diagnostic::{AvroDiagnostic, ProjectedDiagnostic};
 pub use internal::{AvroGenerationError, AvroInternalError};
-pub use model::{
+pub use morphir_projection::{
     Constructor, DistributionKind, EntryPointKind, EntryPointMetadata, IncompletenessKind,
-    NamedType, ProjectionDependency, ProjectionModule, ProjectionPackage, TypeDeclaration,
-    TypeExpr, ValueKind, ValueSpecification,
+    NamedType, NormalizeError, ProjectionDependency, ProjectionModule, ProjectionPackage,
+    TypeDeclaration, TypeExpr, ValueKind, ValueSpecification, normalize,
 };
 pub use naming::escape_idl_identifier;
-pub use normalize::{NormalizeError, normalize};
 pub use options::{
     Aliases, AvroOptions, Dependencies, Projection, Representation, TypeMapping, Unsupported,
 };
@@ -195,7 +192,12 @@ mod tests {
 
     #[test]
     fn backend_maps_an_injected_invariant_failure_to_execution_failed() {
-        let result = backend_generate_with(GenerateRequest::default(), |_| {
+        let request = GenerateRequest {
+            ir: serde_json::Value::Null,
+            target: "avro".into(),
+            options: Default::default(),
+        };
+        let result = backend_generate_with(request, |_| {
             Err(AvroInternalError::invariant(
                 "injected renderer registry failure",
             ))

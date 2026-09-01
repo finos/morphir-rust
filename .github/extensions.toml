@@ -6,3 +6,12 @@ mep_versions = ["0.1"]
 targets = ["avro"]
 ir_versions = ["3", "4"]
 release_with_workspace = true
+
+[extensions.openapi]
+package = "morphir-openapi-extension"
+artifact = "morphir-openapi-extension"
+extension_id = "morphir-openapi"
+mep_versions = ["0.1"]
+targets = ["openapi", "json-schema"]
+ir_versions = ["3", "4"]
+release_with_workspace = true

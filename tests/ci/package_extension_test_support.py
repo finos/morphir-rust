@@ -17,11 +17,24 @@ import unittest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+
+from extension_packaging.errors import PackageError  # noqa: E402
+from extension_packaging.model import descriptor_bytes  # noqa: E402
+from extension_packaging.paths import (  # noqa: E402
+    clean_extension_staging,
+    clean_head_snapshot,
+    validate_extension_staging,
+)
+
 EXTENSIONS_TOML = REPOSITORY_ROOT / ".github" / "extensions.toml"
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_extension.py"
 PACKAGER_MODULES = REPOSITORY_ROOT / "scripts" / "extension_packaging"
 AVRO_ARTIFACT_TASK = (
     REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "avro"
+)
+OPENAPI_ARTIFACT_TASK = (
+    REPOSITORY_ROOT / ".mise" / "tasks" / "extension" / "artifact" / "openapi"
 )
 
 AVRO_REGISTRY = """\
@@ -193,6 +206,18 @@ fi
         installed_guest_test.parent.mkdir(parents=True)
         installed_guest_test.write_text(
             "// fixture installed guest test\n", encoding="utf-8", newline="\n"
+        )
+        installed_guest_support_dir = installed_guest_test.parent / "support"
+        installed_guest_support_dir.mkdir()
+        (installed_guest_support_dir / "mod.rs").write_text(
+            "// fixture installed guest support module\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (installed_guest_support_dir / "installed_wasm.rs").write_text(
+            "// fixture installed guest support helpers\n",
+            encoding="utf-8",
+            newline="\n",
         )
 
         (self.root / ".gitignore").write_text(

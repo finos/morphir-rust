@@ -1,0 +1,104 @@
+{
+  "components": {
+    "schemas": {
+      "Customer": {
+        "description": "A customer record.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "x-morphir-fqname": "acme/customer:domain#customer"
+      },
+      "Status": {
+        "description": "Customer status.",
+        "enum": [
+          "Active",
+          "Inactive"
+        ],
+        "type": "string",
+        "x-morphir-fqname": "acme/customer:domain#status"
+      }
+    }
+  },
+  "info": {
+    "title": "acme/customer",
+    "version": "0.0.0",
+    "x-morphir-package": "acme/customer"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/domain/findCustomer": {
+      "post": {
+        "description": "Find a customer.",
+        "operationId": "domainFindCustomer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Customer"
+                }
+              }
+            },
+            "description": "Successful result"
+          }
+        },
+        "x-morphir-entry-point": true,
+        "x-morphir-entry-point-id": "customer-query",
+        "x-morphir-entry-point-kind": "command",
+        "x-morphir-fqname": "acme/customer:domain#find-customer",
+        "x-morphir-value-kind": "function"
+      }
+    },
+    "/domain/unfinished": {
+      "post": {
+        "description": "An incomplete handler.",
+        "operationId": "domainUnfinished",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "null"
+                }
+              }
+            },
+            "description": "Successful result"
+          }
+        },
+        "x-morphir-entry-point": true,
+        "x-morphir-entry-point-id": "unfinished",
+        "x-morphir-entry-point-kind": "handler",
+        "x-morphir-fqname": "acme/customer:domain#unfinished",
+        "x-morphir-value-kind": "constant"
+      }
+    }
+  }
+}

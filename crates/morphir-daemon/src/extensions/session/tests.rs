@@ -654,7 +654,14 @@ async fn explicit_schema_v1_discovery_retains_legacy_generation() {
         .unwrap_or_else(|failure| panic!("legacy initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<GenerateResult>(methods::GENERATE, GenerateRequest::default())
+        .invoke::<GenerateResult>(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: serde_json::Value::Null,
+                target: "legacy".into(),
+                options: Default::default(),
+            },
+        )
         .await
     {
         InvokeOutcome::Success(session, result) => {
@@ -679,7 +686,14 @@ async fn rejects_generate_when_the_backend_did_not_enable_it_without_sending() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<GenerateResult>(methods::GENERATE, GenerateRequest::default())
+        .invoke::<GenerateResult>(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: serde_json::Value::Null,
+                target: "avro".into(),
+                options: Default::default(),
+            },
+        )
         .await
     {
         InvokeOutcome::Rejected(session, error) => {
@@ -711,7 +725,14 @@ async fn permits_generate_when_the_backend_enabled_it() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<GenerateResult>(methods::GENERATE, GenerateRequest::default())
+        .invoke::<GenerateResult>(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: serde_json::Value::Null,
+                target: "avro".into(),
+                options: Default::default(),
+            },
+        )
         .await
     {
         InvokeOutcome::Success(session, result) => {

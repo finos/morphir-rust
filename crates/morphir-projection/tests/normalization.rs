@@ -1,12 +1,9 @@
-mod support;
-
-use morphir_avro_extension::{
+use morphir_projection::{
     DistributionKind, EntryPointKind, IncompletenessKind, TypeDeclaration, TypeExpr, ValueKind,
-    normalize,
+    normalize, testing as mothers,
 };
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-use support::mothers;
 
 #[test]
 fn v3_and_v4_libraries_normalize_to_the_same_public_surface() {

@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 const STRING: &str = "morphir/SDK:string#string";
 const BOOL: &str = "morphir/SDK:basics#bool";
 const CUSTOMER: &str = "acme/customer:domain#customer";
+const RESULT: &str = "morphir/SDK:result#result";
 
 pub fn v4_customer_library() -> Value {
     checked_v4(v4_file("Library", v4_library_content()))
@@ -40,6 +41,16 @@ pub fn v4_customer_application_with_entry_points(entry_points: Value) -> Value {
             })
         )
     });
+    // Only the Application distribution declares this: `v4_customer_library()`
+    // builds `v4_library_content()` directly, so a Result-returning public
+    // value here has no effect on the v3/v4 parity check or the sorted-values
+    // assertions that pin `v4_customer_library()`'s value list exactly.
+    content["def"]["modules"]["domain"]["value"]["values"]["validate-customer"] = v4_value(
+        "Validate a customer, returning an error message or the customer.",
+        "Public",
+        json!({ "id": { "type": STRING } }),
+        json!({ "Reference": { "fqname": RESULT, "args": [STRING, CUSTOMER] } }),
+    );
     checked_v4(v4_file("Application", content))
 }
 

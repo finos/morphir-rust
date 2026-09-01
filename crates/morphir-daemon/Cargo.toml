@@ -73,3 +73,4 @@ morphir-workspace = { path = "../morphir-workspace" }
 
 [dev-dependencies]
 wat = "1"
+morphir-projection = { path = "../morphir-projection", features = ["testing"] }

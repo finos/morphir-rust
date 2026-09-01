@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `morphir-avro-extension` is re-released as `0.1.1`. The extension SDK now states the selected
+  target in a generation request, which changed the Avro crate and so the WASM it builds; the
+  already-published `extension/avro/v0.1.0` assets no longer match what this commit produces, and
+  re-releasing under the same version would have replaced them with different bytes.
 - Metadata-only changes can skip the expensive Rust/WebAssembly suite, and the README now
   inventories workspace crates and versioned extensions.
 - **Breaking (wire format).** Morphir IR v4 names now encode an initialism as an uppercase
@@ -31,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A portable `morphir-openapi` WASM backend that projects Morphir v3 and v4 specifications into
+  OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. One installed extension serves both
+  the `openapi` and `json-schema` targets. It renders schemas only, operations synthesized from
+  declared entry points, or operations from every public value specification, with per-operation
+  method, path, and parameter overrides and optional `Result` response splitting. It can be
+  released independently with versioned extension tags.
 - Morphir Home-backed named extension repositories with locked lifecycle updates, local-directory
   metadata verification, offline inspection, deterministic resolution, and structured events.
 - A versioned, bounded trusted cache-ownership registry with pre-write ownership invalidation,

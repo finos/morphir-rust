@@ -239,12 +239,29 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
     session: Session<T, Ready>,
     idle: std::time::Duration,
 ) -> SessionHandle {
-    let (activity, mut receiver) = tokio::sync::watch::channel(());
+    let (activity, receiver) = tokio::sync::watch::channel(());
     let actor_ref = SessionActor::spawn(SessionActor {
         session: Some(session),
         activity,
     });
-    let watchdog_ref = actor_ref.clone();
+    spawn_idle_watchdog(actor_ref.clone(), receiver, idle);
+    SessionHandle {
+        dispatch: std::sync::Arc::new(actor_ref),
+    }
+}
+
+/// Spawn the task that stops `actor_ref` after `idle` passes with no activity
+/// on `receiver`.
+///
+/// Returns the watchdog's own `JoinHandle` so tests can observe when it
+/// exits; production callers have no need for it; the watchdog either fires
+/// (stopping the actor) or notices `receiver` closed (the actor already
+/// stopped some other way) and exits on its own either way.
+fn spawn_idle_watchdog<T: MepTransport + Send + 'static>(
+    actor_ref: ActorRef<SessionActor<T>>,
+    mut receiver: tokio::sync::watch::Receiver<()>,
+    idle: std::time::Duration,
+) -> tokio::task::JoinHandle<()> {
     // Anchored synchronously, before this function returns and certainly
     // before any `.await` in it, so the deadline reflects actor-creation time
     // even though the watchdog task below won't itself run until the runtime
@@ -264,13 +281,15 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
                     // rather than `kill`, so any message already in flight is
                     // answered before the actor goes away, and `on_stop` still
                     // gets to complete the MEP shutdown handshake.
-                    let _ = watchdog_ref.stop_gracefully().await;
+                    let _ = actor_ref.stop_gracefully().await;
                     return;
                 }
                 changed = receiver.changed() => {
                     if changed.is_err() {
-                        // The actor dropped its sender, meaning it is already
-                        // gone; nothing left for this watchdog to do.
+                        // The actor dropped its `activity` sender along with
+                        // the rest of its state when it stopped for some
+                        // other reason (explicit shutdown, a failed
+                        // invocation). Nothing left for this watchdog to do.
                         return;
                     }
                     // Activity observed: re-arm the sleep instead of letting
@@ -279,10 +298,7 @@ pub fn spawn_session_with_idle_timeout<T: MepTransport + Send + 'static>(
                 }
             }
         }
-    });
-    SessionHandle {
-        dispatch: std::sync::Arc::new(actor_ref),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -568,6 +584,40 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn an_idle_stop_completes_the_mep_shutdown_handshake() {
+        let (session, requests) =
+            ready_backend_session([Ok(
+                ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
+            )])
+            .await;
+        // Spawned directly (bypassing `spawn_session_with_idle_timeout`) so
+        // this test can hold the concrete `ActorRef` and wait deterministically
+        // for `on_stop` via `wait_for_shutdown_result`, rather than inferring
+        // completion from a subsequent `invoke` failing (which only proves the
+        // mailbox stopped accepting new messages, not that `on_stop` itself
+        // has finished running).
+        let (activity, receiver) = tokio::sync::watch::channel(());
+        let actor_ref = SessionActor::spawn(SessionActor {
+            session: Some(session),
+            activity,
+        });
+        let idle = std::time::Duration::from_secs(60);
+        let _watchdog = spawn_idle_watchdog(actor_ref.clone(), receiver, idle);
+
+        tokio::time::advance(idle + std::time::Duration::from_secs(1)).await;
+        actor_ref
+            .wait_for_shutdown_result()
+            .await
+            .expect("on_stop should not error");
+
+        // Dropping the session instead of shutting it down would leave the
+        // extension running and this request unsent. Proving this here (and
+        // not just for the explicit `Shutdown` message) is the point of
+        // giving an idle-stopped actor its own `on_stop` hook.
+        assert_eq!(requests.methods(), [methods::INITIALIZE, methods::SHUTDOWN]);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn activity_resets_the_idle_timer() {
         let (session, _requests) = ready_session_answering(&[
             generate_result("first.avro"),
@@ -606,25 +656,67 @@ mod tests {
                 ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
             )])
             .await;
-        let handle = spawn_session(session);
+        // Spawned directly (bypassing `spawn_session`) so the test can hold
+        // the concrete `ActorRef` and use `wait_for_shutdown_result`, which
+        // resolves only once `on_stop` has actually returned. `SessionHandle`
+        // erases the actor type on purpose, so it has no equivalent method;
+        // polling with `yield_now` in a loop would only approximate this.
+        let (activity, _receiver) = tokio::sync::watch::channel(());
+        let actor_ref = SessionActor::spawn(SessionActor {
+            session: Some(session),
+            activity,
+        });
 
-        handle.shutdown().await.unwrap();
-
+        actor_ref.ask(Shutdown).await.unwrap();
         // The explicit `Shutdown` message already completed the MEP handshake
-        // and took `self.session`. Give the actor's own `on_stop` hook, which
-        // runs right after, a chance to execute. If it attempted the
-        // handshake again it would either need a second queued response (and
-        // so append a second SHUTDOWN request here) or panic reaching into a
-        // session that is already gone.
-        for _ in 0..8 {
-            tokio::task::yield_now().await;
-        }
+        // and took `self.session`. `on_stop` runs right after, as part of the
+        // same terminal stop; waiting for it here (rather than guessing with
+        // a fixed number of yields) is what makes the following assertion
+        // deterministic instead of racy.
+        actor_ref
+            .wait_for_shutdown_result()
+            .await
+            .expect("on_stop should not error");
 
         assert_eq!(
             requests.methods(),
             [methods::INITIALIZE, methods::SHUTDOWN],
             "on_stop should not repeat the MEP shutdown handshake"
         );
+    }
+
+    #[tokio::test]
+    async fn the_idle_watchdog_exits_when_the_actor_stops_for_another_reason() {
+        let (session, _requests) =
+            ready_backend_session([Ok(
+                ExtensionResponse::success(2, serde_json::json!({})).expect("a valid envelope")
+            )])
+            .await;
+        let (activity, receiver) = tokio::sync::watch::channel(());
+        let actor_ref = SessionActor::spawn(SessionActor {
+            session: Some(session),
+            activity,
+        });
+        // An idle duration far longer than this test will take: if the
+        // watchdog only exits by reaching its deadline (rather than noticing
+        // the actor's `activity` sender dropped), the `timeout` below fails
+        // fast instead of the test hanging for real minutes.
+        let idle = std::time::Duration::from_secs(600);
+        let watchdog = spawn_idle_watchdog(actor_ref.clone(), receiver, idle);
+
+        actor_ref.ask(Shutdown).await.unwrap();
+        actor_ref
+            .wait_for_shutdown_result()
+            .await
+            .expect("on_stop should not error");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), watchdog)
+            .await
+            .expect(
+                "the watchdog should exit as soon as the actor stops, \
+                 not linger until its idle deadline",
+            )
+            .expect("the watchdog task should not panic");
     }
 
     #[tokio::test]

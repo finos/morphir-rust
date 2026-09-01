@@ -1266,8 +1266,9 @@ verifies the artifact digest and records matching catalog and lock state.
 ### Distribution schema contract
 
 Extension release manifests, extension locks, and extension catalogs are three
-separately versioned distribution formats. Each current format writes the strict
-JSON string `"schemaVersion": "1.0"`; this version is independent of Morphir IR
+separately versioned distribution formats. Their `schemaVersion` field is a
+quoted `"major.minor"` JSON string. Each current format writes the strict JSON
+string `"schemaVersion": "1.0"`; this version is independent of Morphir IR
 versions.
 
 For each format, the reader accepts versions with the current major whose minor

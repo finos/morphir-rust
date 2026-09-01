@@ -508,3 +508,16 @@ fn dropping_cascades_through_referrers_and_leaves_a_reference_cycle_intact() {
         );
     }
 }
+
+/// A package whose only declaration is unsupported, and so gets skipped
+/// under `WarnAndSkip`, still carries its own name: `package_name` comes
+/// straight from `ProjectionPackage::package_name`, not reconstructed from a
+/// root, so a package with zero roots is not a package with no name.
+#[test]
+fn names_itself_from_the_package_even_when_every_declaration_is_skipped() {
+    let projection = skipping(vec![unsupported_alias("handler")]);
+
+    assert!(projection.roots.is_empty());
+    assert!(projection.definitions.is_empty());
+    assert_eq!(projection.package_name, "acme/customer");
+}

@@ -115,6 +115,10 @@ pub struct NamedSchema {
 /// The whole projection of one Morphir package.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SchemaProjection {
+    /// Canonical Morphir package name, taken directly from
+    /// [`ProjectionPackage::package_name`] rather than reconstructed from any
+    /// schema, so it is correct even when the package has no roots.
+    pub package_name: String,
     /// Declarations owned by the projected package, in declaration order.
     pub roots: Vec<NamedSchema>,
     /// Every reachable schema, keyed by projected name.
@@ -210,6 +214,7 @@ pub fn project(
         .filter_map(|name| definitions.get(&name).cloned())
         .collect();
     Ok(SchemaProjection {
+        package_name: package.package_name.clone(),
         roots,
         definitions,
         diagnostics,

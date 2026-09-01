@@ -38,7 +38,7 @@ pub fn render_openapi(projection: &SchemaProjection, options: &SchemaOptions) ->
 /// the rest — operation projection, the 3.0 downgrade — belongs to later
 /// plan steps. It stays a parameter because those steps read it here.
 fn render_document(projection: &SchemaProjection, _options: &SchemaOptions) -> Artifact {
-    let package_name = package_name(projection);
+    let package_name = &projection.package_name;
 
     let mut info = Map::new();
     info.insert("title".to_owned(), json!(package_name));
@@ -79,17 +79,30 @@ fn render_document(projection: &SchemaProjection, _options: &SchemaOptions) -> A
     }
 }
 
-/// The canonical Morphir package name, read out of a root's FQName
-/// (`<package>:<module>#<local>`), so it never drifts from the FQName
-/// recorded in each schema's `x-morphir-fqname`.
-///
-/// A projection with no roots has nothing to name a package after; an empty
-/// package produces no schemas either, so an empty title is the only
-/// reachable answer for that case.
-fn package_name(projection: &SchemaProjection) -> &str {
-    projection.roots.first().map_or("", |root| {
-        root.source_name
-            .split_once(':')
-            .map_or(root.source_name.as_str(), |(package, _)| package)
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduces the bug this module used to have: with no roots to read a
+    /// package name off of, `info.title` and `x-morphir-package` must still
+    /// come out as the real package name, not empty, because they are read
+    /// from `SchemaProjection::package_name` rather than reconstructed from
+    /// a root's FQName.
+    #[test]
+    fn names_the_document_from_the_projection_even_with_no_roots() {
+        let projection = SchemaProjection {
+            package_name: "acme/customer".to_owned(),
+            ..SchemaProjection::default()
+        };
+        let options = SchemaOptions::default();
+
+        let artifacts = render_openapi(&projection, &options);
+
+        assert_eq!(artifacts.len(), 1);
+        let document: Value = serde_json::from_str(&artifacts[0].content).expect("valid JSON");
+        assert_eq!(document["info"]["title"], "acme/customer");
+        assert_eq!(document["info"]["x-morphir-package"], "acme/customer");
+        assert_eq!(document["components"]["schemas"], json!({}));
+        assert_eq!(document["paths"], json!({}));
+    }
 }

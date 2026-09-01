@@ -8,7 +8,10 @@ pub mod v4;
 
 // Each integration-test crate uses a different subset of the shared facade.
 #[allow(unused_imports)]
-pub use classic::classic_customer_library;
+pub use classic::{
+    classic_colliding_names_library, classic_customer_library, classic_function_field_library,
+    classic_schema_library,
+};
 #[allow(unused_imports)]
 pub use v4::{
     v4_customer_application, v4_customer_application_with_entry_points, v4_customer_library,

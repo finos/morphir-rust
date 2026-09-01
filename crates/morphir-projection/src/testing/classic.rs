@@ -265,3 +265,228 @@ fn checked_classic(value: Value) -> Value {
         .expect("the test mother must use the canonical Classic IR shape");
     serde_json::to_value(typed).expect("Classic IR should serialize")
 }
+
+/// A Classic library covering the schema-projection forms: a record alias with
+/// a multi-word field, an optional field, a reference to a sibling declaration,
+/// and a nullary custom type.
+pub fn classic_schema_library() -> Value {
+    checked_classic(json!({
+        "formatVersion": 3,
+        "distribution": [
+            "Library",
+            [["acme"], ["customer"]],
+            [],
+            {
+                "modules": [
+                    [
+                        [["customer"]],
+                        {
+                            "access": "Public",
+                            "value": {
+                                "types": [
+                                    [
+                                        ["customer"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "A customer record.",
+                                                "value": [
+                                                    "TypeAliasDefinition",
+                                                    [],
+                                                    [
+                                                        "Record",
+                                                        {},
+                                                        [
+                                                            [
+                                                                ["customer", "id"],
+                                                                classic_ref("string", "string")
+                                                            ],
+                                                            [
+                                                                ["nickname"],
+                                                                classic_maybe(classic_ref(
+                                                                    "string", "string"
+                                                                ))
+                                                            ],
+                                                            [
+                                                                ["status"],
+                                                                classic_local_ref("status")
+                                                            ]
+                                                        ]
+                                                    ]
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    [
+                                        ["status"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "Customer status.",
+                                                "value": [
+                                                    "CustomTypeDefinition",
+                                                    [],
+                                                    {
+                                                        "access": "Public",
+                                                        "value": [
+                                                            [["inactive"], []],
+                                                            [["active"], []]
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                ],
+                                "values": [],
+                                "doc": "Customer domain."
+                            }
+                        }
+                    ]
+                ]
+            }
+        ]
+    }))
+}
+
+/// A Classic library whose two modules declare the same local type name, so any
+/// backend that derives a schema name from the local name sees a collision.
+pub fn classic_colliding_names_library() -> Value {
+    checked_classic(json!({
+        "formatVersion": 3,
+        "distribution": [
+            "Library",
+            [["acme"], ["customer"]],
+            [],
+            {
+                "modules": [
+                    classic_alias_module("customer", "A customer identifier."),
+                    classic_alias_module("billing", "A billing identifier.")
+                ]
+            }
+        ]
+    }))
+}
+
+/// A Classic library holding one projectable record alias next to a record
+/// alias whose field is a function, which no data schema can represent.
+pub fn classic_function_field_library() -> Value {
+    checked_classic(json!({
+        "formatVersion": 3,
+        "distribution": [
+            "Library",
+            [["acme"], ["customer"]],
+            [],
+            {
+                "modules": [
+                    [
+                        [["customer"]],
+                        {
+                            "access": "Public",
+                            "value": {
+                                "types": [
+                                    [
+                                        ["customer"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "A customer record.",
+                                                "value": [
+                                                    "TypeAliasDefinition",
+                                                    [],
+                                                    [
+                                                        "Record",
+                                                        {},
+                                                        [[
+                                                            ["customer", "id"],
+                                                            classic_ref("string", "string")
+                                                        ]]
+                                                    ]
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    [
+                                        ["handler"],
+                                        {
+                                            "access": "Public",
+                                            "value": {
+                                                "doc": "Holds a function as data.",
+                                                "value": [
+                                                    "TypeAliasDefinition",
+                                                    [],
+                                                    [
+                                                        "Record",
+                                                        {},
+                                                        [[
+                                                            ["run"],
+                                                            [
+                                                                "Function",
+                                                                {},
+                                                                classic_ref("string", "string"),
+                                                                classic_ref("basics", "bool")
+                                                            ]
+                                                        ]]
+                                                    ]
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                ],
+                                "values": [],
+                                "doc": "Customer domain."
+                            }
+                        }
+                    ]
+                ]
+            }
+        ]
+    }))
+}
+
+fn classic_alias_module(module: &str, doc: &str) -> Value {
+    json!([
+        [[module]],
+        {
+            "access": "Public",
+            "value": {
+                "types": [
+                    [
+                        ["customer"],
+                        {
+                            "access": "Public",
+                            "value": {
+                                "doc": doc,
+                                "value": [
+                                    "TypeAliasDefinition",
+                                    [],
+                                    classic_ref("string", "string")
+                                ]
+                            }
+                        }
+                    ]
+                ],
+                "values": [],
+                "doc": doc
+            }
+        }
+    ])
+}
+
+fn classic_local_ref(local: &str) -> Value {
+    json!([
+        "Reference",
+        {},
+        [[["acme"], ["customer"]], [["customer"]], [local]],
+        []
+    ])
+}
+
+fn classic_maybe(argument: Value) -> Value {
+    json!([
+        "Reference",
+        {},
+        [[["morphir"], ["s", "d", "k"]], [["maybe"]], ["maybe"]],
+        [argument]
+    ])
+}

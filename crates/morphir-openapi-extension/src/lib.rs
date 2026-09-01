@@ -7,9 +7,13 @@
 
 mod diagnostic;
 mod options;
+mod schema;
 
 pub use diagnostic::{SchemaDiagnostic, SchemaGenerationError};
 pub use options::{SchemaOptions, Unsupported};
+pub use schema::{
+    NamedSchema, Schema, SchemaField, SchemaProjection, SchemaVariant, project, schema_name,
+};
 
 use morphir_extension_sdk::{
     Backend, BackendCapability, Diagnostic, DiagnosticSeverity, Extension, ExtensionCapabilities,

@@ -81,6 +81,40 @@ fn version_one_tool_state_is_migrated_with_authenticated_provenance() {
     }
 }
 
+#[test]
+fn create_only_install_rejects_an_existing_tool_without_replacing_it() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    ToolInstaller::new(&home)
+        .install_new(package(&home, "1.0.0", b"desktop-v1"))
+        .unwrap();
+
+    assert!(matches!(
+        ToolInstaller::new(&home)
+            .install_new(package(&home, "2.0.0", b"desktop-v2"))
+            .unwrap_err(),
+        crate::DistributionError::ToolAlreadyInstalled { .. }
+    ));
+    assert_eq!(
+        list_installed_tools(&home).unwrap()[0].active().version(),
+        &Version::parse("1.0.0").unwrap()
+    );
+}
+
+#[test]
+fn update_only_install_requires_an_existing_tool() {
+    let root = tempfile::tempdir().unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+
+    assert!(matches!(
+        ToolInstaller::new(&home)
+            .update(package(&home, "1.0.0", b"desktop-v1"))
+            .unwrap_err(),
+        crate::DistributionError::ToolNotInstalled { .. }
+    ));
+    assert!(!home.tools_catalog_file().exists());
+}
+
 fn downgrade_tool_state_to_version_one(path: &std::path::Path) {
     fn downgrade_installed(installed: &mut serde_json::Value) {
         installed.as_object_mut().unwrap().remove("provenance");
@@ -487,7 +521,11 @@ fn failed_tool_catalog_commit_restores_the_previous_active_release() {
         catalog_path: home.tools_catalog_file(),
     };
     let error = ToolInstaller::new(&home)
-        .install_with_writer(package(&home, "2.0.0", b"desktop-v2"), &writer)
+        .install_with_writer(
+            package(&home, "2.0.0", b"desktop-v2"),
+            super::catalog::InstallPrecondition::Any,
+            &writer,
+        )
         .unwrap_err();
     assert!(error.to_string().contains("injected tool catalog failure"));
 

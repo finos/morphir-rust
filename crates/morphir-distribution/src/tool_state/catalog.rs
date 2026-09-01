@@ -402,12 +402,31 @@ impl<'home> ToolInstaller<'home> {
         err
     )]
     pub fn install(&self, package: VerifiedToolPackage) -> Result<InstalledTool> {
-        self.install_with_writer(package, &FilesystemStateWriter)
+        self.install_with_writer(package, InstallPrecondition::Any, &FilesystemStateWriter)
+    }
+
+    /// Install a tool only when its identity is not already active.
+    pub fn install_new(&self, package: VerifiedToolPackage) -> Result<InstalledTool> {
+        self.install_with_writer(
+            package,
+            InstallPrecondition::MustBeAbsent,
+            &FilesystemStateWriter,
+        )
+    }
+
+    /// Replace a tool only when its identity is already active.
+    pub fn update(&self, package: VerifiedToolPackage) -> Result<InstalledTool> {
+        self.install_with_writer(
+            package,
+            InstallPrecondition::MustBePresent,
+            &FilesystemStateWriter,
+        )
     }
 
     pub(super) fn install_with_writer(
         &self,
         mut package: VerifiedToolPackage,
+        precondition: InstallPrecondition,
         writer: &impl StateWriter,
     ) -> Result<InstalledTool> {
         let _transaction = match package.take_state_guard(self.home)? {
@@ -425,6 +444,7 @@ impl<'home> ToolInstaller<'home> {
 
         let mut tools = load_catalog_unlocked(self.home)?;
         let active = InstalledTool::from_package(&package);
+        precondition.validate(&tools, &active.tool_id)?;
         let previous = tools.remove(&active.tool_id);
         let rollback = next_rollback(previous, &active);
         let lock = ToolLock::from_package(&package, &rollback);
@@ -457,6 +477,27 @@ impl<'home> ToolInstaller<'home> {
             "tool catalog activation committed"
         );
         Ok(active)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum InstallPrecondition {
+    Any,
+    MustBeAbsent,
+    MustBePresent,
+}
+
+impl InstallPrecondition {
+    fn validate(&self, tools: &BTreeMap<ToolId, ToolCatalogEntry>, id: &ToolId) -> Result<()> {
+        match (self, tools.contains_key(id)) {
+            (Self::MustBeAbsent, true) => {
+                Err(DistributionError::ToolAlreadyInstalled { id: id.clone() })
+            }
+            (Self::MustBePresent, false) => {
+                Err(DistributionError::ToolNotInstalled { id: id.clone() })
+            }
+            _ => Ok(()),
+        }
     }
 }
 

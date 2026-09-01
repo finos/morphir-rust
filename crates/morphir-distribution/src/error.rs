@@ -282,6 +282,12 @@ pub enum DistributionError {
         /// Requested tool identity.
         id: crate::ToolId,
     },
+    /// A create-only installation found an existing catalog entry.
+    #[error("tool {id} is already installed")]
+    ToolAlreadyInstalled {
+        /// Requested tool identity.
+        id: crate::ToolId,
+    },
     /// An installed tool has no retained release eligible for rollback.
     #[error("tool {id} has no retained rollback release")]
     NoToolRollback {

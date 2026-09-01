@@ -2,6 +2,7 @@
 
 mod activation;
 mod catalog;
+mod local_package;
 mod package;
 mod package_key;
 mod raw_package;
@@ -12,8 +13,9 @@ mod verification;
 pub use activation::{VerifiedToolProcess, activate_installed_tool};
 pub use catalog::{
     InstalledTool, InstalledToolSnapshot, ToolInstaller, ToolLock, list_installed_tools,
-    read_tool_lock,
+    read_tool_lock, uninstall_tool,
 };
+pub use local_package::LocalDeveloperToolPackage;
 pub use package::{ToolPackageStore, VerifiedToolPackage};
 pub use recovery::{ToolRepairer, rollback_tool};
 

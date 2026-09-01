@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DaemonError::SessionLost`, which is distinct from an extension refusing one operation, so a
   caller holding a cached handle can tell "evict and respawn" from "retry is pointless";
   `FailedSession::into_error` recovers the underlying cause.
+- Verified installation, repair, rollback, and uninstall of explicitly unsigned local developer
+  tool packages, with durable provenance and automatic migration of existing tool state.
 - A portable `morphir-openapi` WASM backend that projects Morphir v3 and v4 specifications into
   OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. One installed extension serves both
   the `openapi` and `json-schema` targets. It renders schemas only, operations synthesized from

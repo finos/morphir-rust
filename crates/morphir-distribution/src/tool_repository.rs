@@ -504,6 +504,13 @@ fn prepare_download_destination(
             source,
         })?;
     let path = download_directory.path().join(target);
+    let parent = path
+        .parent()
+        .expect("download target inside a temporary directory has a parent");
+    fs::create_dir_all(parent).map_err(|source| DistributionError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
     Ok((download_directory, path))
 }
 
@@ -877,7 +884,7 @@ mod download_path_tests {
             prepare_download_destination(&staging, Path::new("artifacts/desktop/desktop.zip"))
                 .unwrap();
 
-        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        assert!(destination.parent().unwrap().is_dir());
         fs::write(&destination, b"verified target").unwrap();
 
         assert!(

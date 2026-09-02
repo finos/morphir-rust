@@ -19,4 +19,7 @@ pub use config::{
     user_override_candidates,
 };
 pub use extensions::{ExtensionInfo, ExtensionSource, resolve_extension_source};
-pub use out::{OutError, TaskId, TaskPaths, sanitize_segment};
+pub use out::{
+    IrDescriptor, IrLayout, OutError, RESULT_SCHEMA, TaskId, TaskPaths, TaskResult, now_rfc3339,
+    sanitize_segment,
+};

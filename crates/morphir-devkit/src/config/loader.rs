@@ -6,7 +6,7 @@ use super::discovery::{
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
     user_override_candidates,
 };
-use super::members::{expand_members, members_select};
+use super::members::{expand_members, is_member, members_select};
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
@@ -138,9 +138,10 @@ struct EnclosingWorkspace {
 ///
 /// Walks up from `member_root`'s parent looking for a configuration that
 /// declares `[workspace]` and whose `members` list selects `member_root`,
-/// literally or through a wildcard. A configuration that is unreadable,
-/// ambiguous, or not a workspace is skipped and the walk continues, so a
-/// stray file above the project can never make loading fail.
+/// literally or through a wildcard, without an `exclude` pattern ruling it out
+/// again. A configuration that is unreadable, ambiguous, or not a workspace is
+/// skipped and the walk continues, so a stray file above the project can never
+/// make loading fail.
 fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
     let mut current = member_root.parent();
     while let Some(directory) = current {
@@ -149,7 +150,12 @@ fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
                 .ok()
                 .and_then(|value| decode_config(&value, "workspace").ok())
                 .and_then(|config| config.workspace)
-            && members_select(directory, &workspace.members, member_root)
+            && members_select(
+                directory,
+                &workspace.members,
+                &workspace.exclude,
+                member_root,
+            )
         {
             return Some(EnclosingWorkspace {
                 root: directory.to_path_buf(),
@@ -164,16 +170,17 @@ fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
 /// Choose which member of a workspace to merge when the workspace's own
 /// configuration is the one being loaded.
 ///
-/// `default_member` wins. Otherwise the expanded member list decides, and a
-/// list that expands to exactly one member selects it. A wider list has no
-/// member in view, so none is merged; running inside a member directory is how
-/// a specific member is selected, and that path is handled by
-/// [`find_enclosing_workspace`].
+/// `default_member` wins, unless it names the workspace root or a directory
+/// `exclude` rules out. Otherwise the expanded member list decides, and a list
+/// that expands to exactly one member selects it. A wider list has no member in
+/// view, so none is merged; running inside a member directory is how a specific
+/// member is selected, and that path is handled by [`find_enclosing_workspace`].
 fn select_member(workspace_root: &Path, workspace: &WorkspaceSection) -> Option<PathBuf> {
     if let Some(member) = workspace.default_member.as_ref() {
-        return Some(workspace_root.join(member));
+        let member = workspace_root.join(member);
+        return is_member(workspace_root, &workspace.exclude, &member).then_some(member);
     }
-    match expand_members(workspace_root, &workspace.members).as_slice() {
+    match expand_members(workspace_root, &workspace.members, &workspace.exclude).as_slice() {
         [only] => Some(only.clone()),
         _ => None,
     }
@@ -552,6 +559,17 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect(),
         )
+    }
+
+    /// No workspace-member configuration contributed to this context. A
+    /// member that is selected but missing records a not-found source; one
+    /// that is never selected records no source at all.
+    fn no_member_was_merged(context: &ConfigContext) -> bool {
+        context.project_root.is_none()
+            && !context.sources.iter().any(|source| {
+                source.kind == ConfigSourceKind::WorkspaceMember
+                    && source.status == ConfigSourceStatus::Loaded
+            })
     }
 
     fn source(sources: &[ConfigSource], kind: ConfigSourceKind) -> &ConfigSource {
@@ -1445,5 +1463,114 @@ mod tests {
 
         assert!(context.warnings.is_empty(), "{:?}", context.warnings);
         assert_eq!(context.config.workspace.unwrap().out_dir, "build/out");
+    }
+
+    /// The repository's own monorepo fixture excludes `packages/ignored` from
+    /// a `packages/*` members list. `morphir-workspace` already refuses to
+    /// treat that directory as a member; the loader must agree, or two crates
+    /// read one configuration file two ways and the excluded project's output
+    /// would nest under the workspace out root.
+    #[test]
+    fn an_excluded_directory_is_not_a_workspace_member() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/workspace-discovery/valid-monorepo");
+        let options = ConfigLoadOptions::project_only();
+
+        let ignored = load_config_context_with(
+            &fixture
+                .join("packages")
+                .join("ignored")
+                .join("morphir.toml"),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(ignored.workspace_root, None);
+        assert_eq!(
+            ignored.project_root,
+            Some(fixture.join("packages").join("ignored"))
+        );
+
+        // A sibling the exclude list does not name still joins the workspace.
+        let orders = load_config_context_with(
+            &fixture.join("packages").join("orders").join("morphir.yaml"),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(orders.workspace_root.as_deref(), Some(fixture.as_path()));
+        assert_eq!(
+            orders.project_root,
+            Some(fixture.join("packages").join("orders"))
+        );
+    }
+
+    #[test]
+    fn an_excluded_directory_is_never_the_selected_member() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/ignored\"]\n",
+        );
+        for name in ["orders", "ignored"] {
+            write_file(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+
+        // Two directories match `packages/*`, but one is excluded, so exactly
+        // one member remains and it is selected.
+        let context = load_config_context_with(
+            &root.path().join("morphir.toml"),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("orders"))
+        );
+        assert_eq!(context.current_project.unwrap().name, "acme/orders");
+    }
+
+    /// `members = ["**"]` selects the workspace root itself. Merging the
+    /// workspace configuration a second time as the member layer would
+    /// re-attribute every value it sets to that layer, so a workspace that set
+    /// `workspace.out_dir` would be told its own key is ignored.
+    #[test]
+    fn a_workspace_is_never_its_own_member() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"**\"]\nout_dir = \"build/out\"\n\n[project]\nname = \"acme/root\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context = load_config_context_with(
+            &root.path().join("morphir.toml"),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+
+        assert!(context.warnings.is_empty(), "{:?}", context.warnings);
+        assert_eq!(
+            context.config.workspace.as_ref().unwrap().out_dir,
+            "build/out"
+        );
+        assert!(no_member_was_merged(&context));
+    }
+
+    #[test]
+    fn a_default_member_naming_the_root_selects_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\ndefault_member = \".\"\n\n[project]\nname = \"acme/root\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context = load_config_context_with(
+            &root.path().join("morphir.toml"),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+
+        assert!(no_member_was_merged(&context));
     }
 }

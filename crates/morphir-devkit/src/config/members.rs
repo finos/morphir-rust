@@ -33,12 +33,17 @@ pub(crate) fn expand_member_pattern(workspace_root: &Path, pattern: &str) -> Vec
     found
 }
 
-/// Expand every member entry of a workspace, in the order they are listed.
-pub(crate) fn expand_members(workspace_root: &Path, members: &[String]) -> Vec<PathBuf> {
+/// Expand every member entry of a workspace, in the order they are listed,
+/// dropping the workspace root itself and anything `exclude` rules out.
+pub(crate) fn expand_members(
+    workspace_root: &Path,
+    members: &[String],
+    exclude: &[String],
+) -> Vec<PathBuf> {
     let mut expanded = Vec::new();
     for member in members {
         for path in expand_member_pattern(workspace_root, member) {
-            if !expanded.contains(&path) {
+            if !expanded.contains(&path) && is_member(workspace_root, exclude, &path) {
                 expanded.push(path);
             }
         }
@@ -46,18 +51,45 @@ pub(crate) fn expand_members(workspace_root: &Path, members: &[String]) -> Vec<P
     expanded
 }
 
+/// Is `directory` a member of the workspace at `workspace_root`, given that it
+/// already matched the `members` list?
+///
+/// The workspace root is never its own member: a `members` entry such as `**`
+/// or `.` selects it, and merging the workspace configuration a second time as
+/// the member layer would misattribute every value it sets. `morphir-workspace`
+/// applies the same guard while discovering members.
+pub(crate) fn is_member(workspace_root: &Path, exclude: &[String], directory: &Path) -> bool {
+    let Ok(relative) = directory.strip_prefix(workspace_root) else {
+        return false;
+    };
+    // An empty relative path is the root; so is one made only of `.`, which is
+    // what `members = ["."]` and `default_member = "."` join to.
+    !path_segments(relative).is_empty() && !patterns_select(workspace_root, exclude, directory)
+}
+
 /// Does `directory` sit at a path that one of `members` selects, relative to
-/// `workspace_root`?
+/// `workspace_root`, and survive the `exclude` patterns?
 ///
 /// This answers the question without touching the filesystem, so it is safe to
 /// ask while walking up from a candidate member towards its workspace.
-pub(crate) fn members_select(workspace_root: &Path, members: &[String], directory: &Path) -> bool {
+pub(crate) fn members_select(
+    workspace_root: &Path,
+    members: &[String],
+    exclude: &[String],
+    directory: &Path,
+) -> bool {
+    patterns_select(workspace_root, members, directory)
+        && is_member(workspace_root, exclude, directory)
+}
+
+/// Does any pattern select `directory`, relative to `workspace_root`?
+fn patterns_select(workspace_root: &Path, patterns: &[String], directory: &Path) -> bool {
     let Ok(relative) = directory.strip_prefix(workspace_root) else {
         return false;
     };
     let actual = path_segments(relative);
-    members.iter().any(|member| {
-        let pattern = pattern_segments(member);
+    patterns.iter().any(|pattern| {
+        let pattern = pattern_segments(pattern);
         segments_match(&pattern, &actual)
     })
 }
@@ -249,11 +281,52 @@ mod tests {
             "packages/orders".to_owned(),
         ];
         assert_eq!(
-            expand_members(root.path(), &members),
+            expand_members(root.path(), &members, &[]),
             vec![
                 root.path().join("tools").join("cli"),
                 root.path().join("packages").join("orders"),
             ]
+        );
+    }
+
+    #[test]
+    fn expansion_drops_excluded_directories() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["orders", "ignored"] {
+            write(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+        let members = vec!["packages/*".to_owned()];
+        assert_eq!(
+            expand_members(root.path(), &members, &["packages/ignored".to_owned()]),
+            vec![root.path().join("packages").join("orders")]
+        );
+        assert_eq!(
+            expand_members(root.path(), &members, &["packages/*".to_owned()]),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn expansion_never_yields_the_workspace_root_itself() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"**\"]\n",
+        );
+        write(
+            &root.path().join("packages/orders/morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+        assert_eq!(
+            expand_members(root.path(), &["**".to_owned()], &[]),
+            vec![root.path().join("packages").join("orders")]
+        );
+        assert_eq!(
+            expand_members(root.path(), &[".".to_owned()], &[]),
+            Vec::<PathBuf>::new()
         );
     }
 
@@ -264,22 +337,53 @@ mod tests {
         assert!(members_select(
             root,
             &members,
+            &[],
             Path::new("/ws/packages/orders")
         ));
         assert!(!members_select(
             root,
             &members,
+            &[],
             Path::new("/ws/packages/acme/orders")
         ));
         assert!(!members_select(
             root,
             &members,
+            &[],
             Path::new("/other/packages/orders")
         ));
         assert!(members_select(
             root,
             &["packages/**".to_owned()],
+            &[],
             Path::new("/ws/packages/acme/orders")
         ));
+    }
+
+    #[test]
+    fn exclude_patterns_beat_the_members_list() {
+        let root = Path::new("/ws");
+        let members = vec!["packages/*".to_owned()];
+        assert!(!members_select(
+            root,
+            &members,
+            &["packages/ignored".to_owned()],
+            Path::new("/ws/packages/ignored")
+        ));
+        assert!(members_select(
+            root,
+            &members,
+            &["packages/ignored".to_owned()],
+            Path::new("/ws/packages/orders")
+        ));
+        // Exclude patterns take wildcards too.
+        assert!(!members_select(
+            root,
+            &members,
+            &["packages/*-internal".to_owned()],
+            Path::new("/ws/packages/tooling-internal")
+        ));
+        // The workspace root is never its own member.
+        assert!(!members_select(root, &["**".to_owned()], &[], root));
     }
 }

@@ -332,6 +332,7 @@ pub fn load_effective_config(
     sources.push(project);
 
     let root_config = decode_config(state.value(), "project")?;
+    let pre_member = state.value().clone();
     let (workspace_root, member_config) = match (enclosing, selected_root.clone(), project_config) {
         (Some(workspace), Some(member_root), Some(member_path)) => {
             let source =
@@ -380,6 +381,7 @@ pub fn load_effective_config(
         sources,
         workspace_root,
         member_root: member_config.map(|member| member.root),
+        pre_member,
         provenance,
     })
 }
@@ -448,6 +450,17 @@ pub fn load_config_context_with(
     let layout_explicit = effective_config
         .origin_for_key("ir.layout")
         .is_some_and(|origin| origin.kind != ConfigSourceKind::Defaults);
+    // The out root is a property of the whole workspace, so only the workspace
+    // configuration may set it. A member that sets it would otherwise relocate
+    // every other member's output too.
+    let member_set_out_dir = effective_config
+        .origin_for_key("workspace.out_dir")
+        .is_some_and(|origin| origin.kind == ConfigSourceKind::WorkspaceMember);
+    let out_dir_without_member = effective_config
+        .pre_member
+        .pointer("/workspace/out_dir")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let EffectiveConfig {
         value: effective,
         sources,
@@ -463,6 +476,16 @@ pub fn load_config_context_with(
         warnings.push("ir.mode is ignored because ir.layout is set explicitly".to_owned());
     }
     let mut config = config;
+    if member_set_out_dir {
+        warnings.push(
+            "workspace.out_dir is ignored in a workspace member configuration; set it in the workspace configuration"
+                .to_owned(),
+        );
+        if let Some(workspace) = config.workspace.as_mut() {
+            workspace.out_dir =
+                out_dir_without_member.unwrap_or_else(|| crate::out::DEFAULT_OUT_DIR.to_owned());
+        }
+    }
     if let Some(ir) = config.ir.as_mut()
         && let Some(mode) = ir.mode.take()
         && !layout_explicit
@@ -1339,5 +1362,88 @@ mod tests {
             context.project_root,
             Some(root.path().join("tools").join("cli"))
         );
+    }
+
+    #[test]
+    fn a_member_configuration_cannot_relocate_the_workspace_out_root() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\nout_dir = \"build/out\"\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n\n[workspace]\nout_dir = \"member-out\"\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.config.workspace.unwrap().out_dir, "build/out");
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("workspace.out_dir is ignored"),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn an_ignored_member_out_dir_falls_back_to_the_default() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n\n[workspace]\nout_dir = \"member-out\"\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(
+            context.config.workspace.as_ref().unwrap().out_dir,
+            ".morphir/out"
+        );
+        assert_eq!(
+            crate::out::resolve_out_root(None, None, Some(&context), Path::new("/scratch")),
+            root.path().join(".morphir").join("out")
+        );
+    }
+
+    #[test]
+    fn the_workspace_layer_may_still_set_the_out_root() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\nout_dir = \"build/out\"\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(context.warnings.is_empty(), "{:?}", context.warnings);
+        assert_eq!(context.config.workspace.unwrap().out_dir, "build/out");
     }
 }

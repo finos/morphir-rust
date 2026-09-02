@@ -371,6 +371,7 @@ mod tests {
         let (value, provenance) = state.into_parts();
 
         EffectiveConfig {
+            pre_member: value.clone(),
             value,
             sources: Vec::new(),
             workspace_root: None,

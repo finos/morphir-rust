@@ -218,6 +218,10 @@ pub struct EffectiveConfig {
     pub workspace_root: Option<PathBuf>,
     /// Root of the selected workspace member, when one was found.
     pub member_root: Option<PathBuf>,
+    /// Merged value as it stood before the workspace-member layer merged.
+    /// Lets the loader recover the value a key held without the member's
+    /// contribution, which the merged value alone cannot show.
+    pub(crate) pre_member: Value,
     /// Origins of the winning configuration values.
     pub(crate) provenance: ConfigProvenance,
 }

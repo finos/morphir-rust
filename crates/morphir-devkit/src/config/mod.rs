@@ -10,6 +10,7 @@
 
 pub mod discovery;
 pub mod loader;
+mod members;
 pub mod paths;
 mod provenance;
 pub mod secret;

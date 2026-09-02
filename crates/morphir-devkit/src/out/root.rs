@@ -123,41 +123,43 @@ mod tests {
         );
     }
 
-    // `load_config_context` only populates `workspace_root` when the config
-    // path handed to it is itself the workspace's primary config (it checks
-    // whether the decoded root config has a `[workspace]` section). Calling
-    // it directly on a member's own config file (as the original brief
-    // sketch did) leaves `workspace_root` `None`, so neither property this
-    // test needs to prove would hold. Mirroring
-    // `workspace_member_layers_sit_between_project_and_user_override` in
-    // `config/loader.rs`, this loads the *workspace* config path with an
-    // explicit member entry; the loader then selects and merges that member,
-    // populating both `workspace_root` and `project_root`. Member globs
-    // (`packages/*`) are also not supported yet -- `merge_workspace_member`
-    // treats glob patterns literally -- so an exact member path is used.
+    /// A member never gets its own out root, whichever of the two
+    /// configuration files the caller discovered. Loading the workspace
+    /// configuration selects the single member; loading the member's own
+    /// configuration finds the workspace by walking up. Both must land on the
+    /// same workspace-level root and the same module path.
     #[test]
     fn members_resolve_to_the_workspace_out_root() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("morphir.toml");
-        write(&workspace, "[workspace]\nmembers = [\"packages/orders\"]\n");
+        write(&workspace, "[workspace]\nmembers = [\"packages/*\"]\n");
         let member = temp.path().join("packages/orders/morphir.toml");
         write(
             &member,
             "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
         );
-        let context = load_config_context(&workspace).unwrap();
         // `cwd` is deliberately NOT the workspace root (it sits beside it,
-        // under a `scratch` directory) so this assertion can only pass if
+        // under a `scratch` directory) so these assertions can only pass if
         // the workspace root from `context` actually drove the resolution.
         // Using `cwd == workspace_root` here would let a config-ignoring
         // implementation that falls through to `cwd.join(DEFAULT_OUT_DIR)`
         // produce the same path and pass by coincidence.
         let cwd = temp.path().join("scratch");
-        assert_eq!(
-            resolve_out_root(None, None, Some(&context), &cwd),
-            temp.path().join(".morphir").join("out")
-        );
-        assert_eq!(module_path(&context), PathBuf::from("packages/orders"));
+        for entry in [&workspace, &member] {
+            let context = load_config_context(entry).unwrap();
+            assert_eq!(
+                resolve_out_root(None, None, Some(&context), &cwd),
+                temp.path().join(".morphir").join("out"),
+                "loaded from {}",
+                entry.display()
+            );
+            assert_eq!(
+                module_path(&context),
+                PathBuf::from("packages/orders"),
+                "loaded from {}",
+                entry.display()
+            );
+        }
     }
 
     #[test]

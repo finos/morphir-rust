@@ -6,6 +6,7 @@ use super::discovery::{
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
     user_override_candidates,
 };
+use super::members::{expand_members, members_select};
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
@@ -16,7 +17,7 @@ use anyhow::{Context, Result};
 use morphir_common::config::deep_merge;
 use morphir_common::config::env::{env_config_value, process_env_config_value};
 use morphir_common::config::load_config_value;
-use morphir_common::config::model::{MorphirConfig, ProjectSection};
+use morphir_common::config::model::{MorphirConfig, ProjectSection, WorkspaceSection};
 pub use morphir_config::builtin_defaults;
 use serde_json::Value;
 #[cfg(test)]
@@ -127,6 +128,57 @@ struct WorkspaceMemberConfig {
     config_path: PathBuf,
 }
 
+/// The workspace a configuration path belongs to, found by walking up.
+struct EnclosingWorkspace {
+    root: PathBuf,
+    config_path: PathBuf,
+}
+
+/// Find the workspace that owns `member_root`, if any.
+///
+/// Walks up from `member_root`'s parent looking for a configuration that
+/// declares `[workspace]` and whose `members` list selects `member_root`,
+/// literally or through a wildcard. A configuration that is unreadable,
+/// ambiguous, or not a workspace is skipped and the walk continues, so a
+/// stray file above the project can never make loading fail.
+fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
+    let mut current = member_root.parent();
+    while let Some(directory) = current {
+        if let Some(config_path) = discover_config_at(directory).ok().flatten()
+            && let Some(workspace) = load_config_value(&config_path)
+                .ok()
+                .and_then(|value| decode_config(&value, "workspace").ok())
+                .and_then(|config| config.workspace)
+            && members_select(directory, &workspace.members, member_root)
+        {
+            return Some(EnclosingWorkspace {
+                root: directory.to_path_buf(),
+                config_path,
+            });
+        }
+        current = directory.parent();
+    }
+    None
+}
+
+/// Choose which member of a workspace to merge when the workspace's own
+/// configuration is the one being loaded.
+///
+/// `default_member` wins. Otherwise the expanded member list decides, and a
+/// list that expands to exactly one member selects it. A wider list has no
+/// member in view, so none is merged; running inside a member directory is how
+/// a specific member is selected, and that path is handled by
+/// [`find_enclosing_workspace`].
+fn select_member(workspace_root: &Path, workspace: &WorkspaceSection) -> Option<PathBuf> {
+    if let Some(member) = workspace.default_member.as_ref() {
+        return Some(workspace_root.join(member));
+    }
+    match expand_members(workspace_root, &workspace.members).as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    }
+}
+
 /// Merge the selected workspace member's configuration, returning its root and primary path.
 fn merge_workspace_member(
     state: &mut ProvenanceState,
@@ -137,12 +189,10 @@ fn merge_workspace_member(
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
         return Ok(None);
     };
-    // Resolve the default member path (glob patterns are treated literally for now)
-    let Some(member) = ws.default_member.as_ref().or_else(|| ws.members.first()) else {
+    let Some(member_path) = select_member(ws_root, ws) else {
         return Ok(None);
     };
 
-    let member_path = ws_root.join(member);
     match discover_config_at(&member_path)? {
         Some(member_config) => {
             let source =
@@ -263,32 +313,59 @@ pub fn load_effective_config(
     merge_source(&mut state, &global)?;
     sources.push(global);
 
-    let project = match project_config {
-        Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.to_path_buf()),
+    // A configuration that lies inside a workspace member is the member layer,
+    // not the project layer: the enclosing workspace configuration goes
+    // underneath it so the two layers keep their documented precedence no
+    // matter which of the two files the caller happened to discover.
+    let selected_root = project_config.and_then(config_root).map(Path::to_path_buf);
+    let enclosing = selected_root.as_deref().and_then(find_enclosing_workspace);
+    let project_layer = enclosing.as_ref().map_or_else(
+        || project_config.map(Path::to_path_buf),
+        |workspace| Some(workspace.config_path.clone()),
+    );
+
+    let project = match &project_layer {
+        Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.clone()),
         None => ConfigSource::not_found(ConfigSourceKind::Project, Vec::new()),
     };
     merge_source(&mut state, &project)?;
     sources.push(project);
 
-    let project_root = project_config.and_then(config_root).map(Path::to_path_buf);
     let root_config = decode_config(state.value(), "project")?;
-    let workspace_root = root_config
-        .is_workspace()
-        .then(|| project_root.clone())
-        .flatten();
-
-    let member_config = merge_workspace_member(
-        &mut state,
-        &mut sources,
-        workspace_root.as_deref(),
-        &root_config,
-    )?;
+    let (workspace_root, member_config) = match (enclosing, selected_root.clone(), project_config) {
+        (Some(workspace), Some(member_root), Some(member_path)) => {
+            let source =
+                ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_path.to_path_buf());
+            merge_source(&mut state, &source)?;
+            sources.push(source);
+            (
+                Some(workspace.root),
+                Some(WorkspaceMemberConfig {
+                    root: member_root,
+                    config_path: member_path.to_path_buf(),
+                }),
+            )
+        }
+        _ => {
+            let workspace_root = root_config
+                .is_workspace()
+                .then(|| selected_root.clone())
+                .flatten();
+            let member = merge_workspace_member(
+                &mut state,
+                &mut sources,
+                workspace_root.as_deref(),
+                &root_config,
+            )?;
+            (workspace_root, member)
+        }
+    };
 
     merge_user_overrides(
         &mut state,
         &mut sources,
         options,
-        project_config,
+        project_layer.as_deref(),
         member_config
             .as_ref()
             .map(|member| member.config_path.as_path()),
@@ -1116,5 +1193,151 @@ mod tests {
         assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
         assert!(context.warnings[0].contains("ir.mode"));
         assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    #[test]
+    fn glob_member_patterns_expand_to_member_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        write_file(&workspace, "[workspace]\nmembers = [\"packages/*\"]\n");
+        write_file(
+            &root
+                .path()
+                .join("packages")
+                .join("orders")
+                .join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.workspace_root.as_deref(), Some(root.path()));
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("orders"))
+        );
+        assert_eq!(context.current_project.unwrap().name, "acme/orders");
+    }
+
+    #[test]
+    fn a_glob_that_expands_to_several_members_selects_none_without_a_default() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        write_file(&workspace, "[workspace]\nmembers = [\"packages/*\"]\n");
+        for name in ["orders", "billing"] {
+            write_file(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.workspace_root.as_deref(), Some(root.path()));
+        assert!(context.project_root.is_none());
+        assert!(context.current_project.is_none());
+    }
+
+    #[test]
+    fn default_member_selects_out_of_a_glob_expansion() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        write_file(
+            &workspace,
+            "[workspace]\nmembers = [\"packages/*\"]\ndefault_member = \"packages/billing\"\n",
+        );
+        for name in ["orders", "billing"] {
+            write_file(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("billing"))
+        );
+        assert_eq!(context.current_project.unwrap().name, "acme/billing");
+    }
+
+    #[test]
+    fn a_member_configuration_resolves_its_enclosing_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n\n[ir]\nformat_version = 3\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n\n[ir]\nstrict_mode = true\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.workspace_root.as_deref(), Some(root.path()));
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("orders"))
+        );
+        assert_eq!(context.config_path, member);
+        // The workspace configuration merged underneath the member's, so both
+        // layers contribute and the member wins where they overlap.
+        let ir = context.config.ir.unwrap();
+        assert_eq!(ir.format_version, 3);
+        assert!(ir.strict_mode);
+        let kinds = context
+            .sources
+            .iter()
+            .filter(|source| source.status == ConfigSourceStatus::Loaded)
+            .map(|source| source.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                ConfigSourceKind::Defaults,
+                ConfigSourceKind::Project,
+                ConfigSourceKind::WorkspaceMember,
+            ]
+        );
+        assert_eq!(
+            source(&context.sources, ConfigSourceKind::Project)
+                .path
+                .as_deref(),
+            Some(root.path().join("morphir.toml").as_path())
+        );
+    }
+
+    #[test]
+    fn a_project_an_unrelated_workspace_does_not_list_stays_standalone() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n",
+        );
+        let outsider = root.path().join("tools").join("cli").join("morphir.toml");
+        write_file(
+            &outsider,
+            "[project]\nname = \"acme/cli\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context =
+            load_config_context_with(&outsider, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(context.workspace_root.is_none());
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("tools").join("cli"))
+        );
     }
 }

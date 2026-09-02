@@ -108,7 +108,13 @@ pub struct TaskResult {
     /// IR storage descriptor for IR-producing tasks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ir: Option<IrDescriptor>,
-    /// Absolute eject target to the `value` entries copied there last time.
+    /// Absolute eject target to the files copied there last time, as paths
+    /// relative to that target — not the `value` entry names themselves. A
+    /// file-valued entry contributes its own path; a directory-valued entry
+    /// (a document-tree IR, for example) flattens to every file beneath it.
+    /// Ejecting again removes exactly the files in this list that are no
+    /// longer produced, and never a directory as a whole, so foreign
+    /// content placed in or beside an ejected directory is never at risk.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ejected: BTreeMap<String, Vec<String>>,
     /// RFC 3339 UTC timestamp of the successful run.
@@ -211,24 +217,34 @@ mod tests {
 
     #[test]
     fn records_round_trip_and_keep_unknown_fields() {
+        // `value` names the entry ("morphir-ir", a document-tree directory);
+        // `ejected` remembers the flattened files that entry actually wrote
+        // under the target, not the entry name — see the field doc comment.
         let json = r#"{
           "schema": 1,
           "task": "compile",
           "module": "",
           "language": "gleam",
           "inputs": [],
-          "value": ["morphir-ir.json"],
-          "ir": {"path": "morphir-ir.json", "layout": "single-file", "format": "json", "version": "v4"},
-          "ejected": {"/abs/dist": ["morphir-ir.json"]},
+          "value": ["morphir-ir"],
+          "ir": {"path": "morphir-ir", "layout": "document-tree", "format": "json", "version": "v4"},
+          "ejected": {"/abs/dist": ["morphir-ir/manifest.json", "morphir-ir/Module.json"]},
           "completedAt": "2026-09-02T10:00:00Z",
           "inputsHash": "sha256:abc"
         }"#;
         let record: TaskResult = serde_json::from_str(json).unwrap();
-        assert_eq!(record.ir.as_ref().unwrap().layout, IrLayout::SingleFile);
+        assert_eq!(record.ir.as_ref().unwrap().layout, IrLayout::DocumentTree);
+        assert_eq!(
+            record.ejected["/abs/dist"],
+            vec![
+                "morphir-ir/manifest.json".to_owned(),
+                "morphir-ir/Module.json".to_owned()
+            ]
+        );
         assert_eq!(record.extra["inputsHash"], "sha256:abc");
         let out = serde_json::to_value(&record).unwrap();
         assert_eq!(out["inputsHash"], "sha256:abc");
-        assert_eq!(out["ir"]["layout"], "single-file");
+        assert_eq!(out["ir"]["layout"], "document-tree");
         assert_eq!(out["completedAt"], "2026-09-02T10:00:00Z");
     }
 

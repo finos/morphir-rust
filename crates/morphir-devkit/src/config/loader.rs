@@ -42,6 +42,8 @@ pub struct ConfigContext {
     pub project_root: Option<PathBuf>,
     /// Current project if in workspace
     pub current_project: Option<ProjectSection>,
+    /// Human-readable warnings about removed or renamed keys.
+    pub warnings: Vec<String>,
 }
 
 fn resolve_file_source(
@@ -324,6 +326,28 @@ pub fn load_config_context_with_global(
     load_config_context_with(config_path, &options)
 }
 
+/// Warnings for keys that were removed or renamed. `ir.mode` is still applied
+/// as an alias for `ir.layout`; the other keys are ignored.
+pub fn deprecated_key_warnings(effective: &Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if effective.pointer("/project/output_directory").is_some() {
+        warnings.push(
+            "project.output_directory was removed; all task output lives under workspace.out_dir"
+                .to_owned(),
+        );
+    }
+    if effective.pointer("/workspace/output_dir").is_some() {
+        warnings.push("workspace.output_dir was renamed to workspace.out_dir".to_owned());
+    }
+    if effective.pointer("/ir/mode").is_some() {
+        warnings.push(
+            "ir.mode is deprecated; use ir.layout = \"single-file\" or \"document-tree\""
+                .to_owned(),
+        );
+    }
+    warnings
+}
+
 /// Load configuration from every selected source and determine workspace/project context
 pub fn load_config_context_with(
     config_path: &Path,
@@ -341,6 +365,17 @@ pub fn load_config_context_with(
     } = load_effective_config(Some(config_path), options)?;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
+
+    let warnings = deprecated_key_warnings(&effective);
+    let mut config = config;
+    if let Some(ir) = config.ir.as_mut()
+        && let Some(mode) = ir.mode.take()
+    {
+        ir.layout = match mode.as_str() {
+            "vfs" => "document-tree".to_owned(),
+            _ => "single-file".to_owned(),
+        };
+    }
 
     // Inside a workspace the project root is the selected member, if any;
     // otherwise the configuration directory is the project root.
@@ -368,6 +403,7 @@ pub fn load_config_context_with(
         morphir_dir,
         workspace_root,
         project_root,
+        warnings,
     })
 }
 
@@ -1003,5 +1039,32 @@ mod tests {
         let member = source(&context.sources, ConfigSourceKind::WorkspaceMember);
         assert_eq!(member.status, ConfigSourceStatus::NotFound);
         assert_eq!(member.candidates.len(), 6);
+    }
+
+    #[test]
+    fn removed_and_renamed_keys_produce_warnings() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\noutput_directory = \"old\"\n\n[workspace]\noutput_dir = \"old\"\n\n[ir]\nmode = \"vfs\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 3, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("project.output_directory"));
+        assert!(context.warnings[1].contains("workspace.output_dir"));
+        assert!(context.warnings[2].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    #[test]
+    fn clean_configs_have_no_warnings() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n",
+        );
+        assert!(load_config_context(&config).unwrap().warnings.is_empty());
     }
 }

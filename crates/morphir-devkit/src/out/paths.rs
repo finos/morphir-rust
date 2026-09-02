@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Errors raised while building task identities.
+/// Errors raised while building task identities and reading result records.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum OutError {
     /// The task id text was empty.
@@ -14,6 +14,12 @@ pub enum OutError {
     EmptySegment {
         /// Zero-based index of the empty segment.
         position: usize,
+    },
+    /// The text did not name an IR layout.
+    #[error("unknown IR layout `{value}`; expected `single-file` or `document-tree`")]
+    UnknownIrLayout {
+        /// Text that was offered as a layout name.
+        value: String,
     },
 }
 

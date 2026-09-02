@@ -1,11 +1,14 @@
 //! Result record written beside a task's `.dest` directory.
 
-use super::TaskId;
+use super::{OutError, TaskId};
 use anyhow::Context;
+use morphir_common::ir_transport::Layout;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Current record schema version.
@@ -19,6 +22,54 @@ pub enum IrLayout {
     SingleFile,
     /// A directory tree of logical documents with a `manifest.*` root.
     DocumentTree,
+}
+
+impl IrLayout {
+    /// The layout as it is written in a record and in configuration.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SingleFile => "single-file",
+            Self::DocumentTree => "document-tree",
+        }
+    }
+}
+
+impl fmt::Display for IrLayout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for IrLayout {
+    type Err = OutError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "single-file" => Ok(Self::SingleFile),
+            "document-tree" => Ok(Self::DocumentTree),
+            other => Err(OutError::UnknownIrLayout {
+                value: other.to_owned(),
+            }),
+        }
+    }
+}
+
+impl From<IrLayout> for Layout {
+    fn from(layout: IrLayout) -> Self {
+        match layout {
+            IrLayout::SingleFile => Self::SingleFile,
+            IrLayout::DocumentTree => Self::DocumentTree,
+        }
+    }
+}
+
+impl From<Layout> for IrLayout {
+    fn from(layout: Layout) -> Self {
+        match layout {
+            Layout::SingleFile => Self::SingleFile,
+            Layout::DocumentTree => Self::DocumentTree,
+        }
+    }
 }
 
 /// Where and how an IR-producing task stored its IR.
@@ -213,6 +264,57 @@ mod tests {
                 .all(|entry| { entry.unwrap().file_name() == "compile.json" }),
             "temp file left behind"
         );
+    }
+
+    #[test]
+    fn layouts_render_as_the_names_used_on_disk() {
+        assert_eq!(IrLayout::SingleFile.as_str(), "single-file");
+        assert_eq!(IrLayout::DocumentTree.to_string(), "document-tree");
+    }
+
+    #[test]
+    fn layouts_parse_from_exactly_the_two_written_names() {
+        assert_eq!(
+            "single-file".parse::<IrLayout>().unwrap(),
+            IrLayout::SingleFile
+        );
+        assert_eq!(
+            "document-tree".parse::<IrLayout>().unwrap(),
+            IrLayout::DocumentTree
+        );
+        assert_eq!(
+            "vfs".parse::<IrLayout>(),
+            Err(OutError::UnknownIrLayout {
+                value: "vfs".to_owned()
+            })
+        );
+        assert!(
+            "vfs"
+                .parse::<IrLayout>()
+                .unwrap_err()
+                .to_string()
+                .contains("expected `single-file` or `document-tree`")
+        );
+        // The written names are exactly the serde encoding, so a record and a
+        // parsed flag can never disagree.
+        for layout in [IrLayout::SingleFile, IrLayout::DocumentTree] {
+            assert_eq!(
+                serde_json::to_value(layout).unwrap(),
+                serde_json::Value::from(layout.as_str())
+            );
+            assert_eq!(layout.as_str().parse::<IrLayout>().unwrap(), layout);
+        }
+    }
+
+    #[test]
+    fn layouts_convert_to_and_from_the_transport_layout() {
+        for (record, transport) in [
+            (IrLayout::SingleFile, Layout::SingleFile),
+            (IrLayout::DocumentTree, Layout::DocumentTree),
+        ] {
+            assert_eq!(Layout::from(record), transport);
+            assert_eq!(IrLayout::from(transport), record);
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod extensions;
+pub mod out;
 
 pub use config::{
     ConfigContext, ConfigLayout, ConfigLoadOptions, ConfigPlatform, ConfigSource, ConfigSourceKind,
@@ -18,3 +19,4 @@ pub use config::{
     user_override_candidates,
 };
 pub use extensions::{ExtensionInfo, ExtensionSource, resolve_extension_source};
+pub use out::{OutError, TaskId, TaskPaths, sanitize_segment};

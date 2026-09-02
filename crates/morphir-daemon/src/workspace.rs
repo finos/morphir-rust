@@ -366,7 +366,7 @@ mod tests {
             r#"
 [workspace]
 members = ["packages/*"]
-output_dir = "root-output"
+out_dir = "root-output"
 
 [project]
 name = "acme/root"
@@ -374,7 +374,6 @@ version = "1.0.0"
 description = "root description"
 authors = ["Root Author"]
 source_directory = "root-src"
-output_directory = "root-project-output"
 
 [frontend]
 language = "elm"
@@ -405,7 +404,6 @@ name = "acme/orders"
 version = "2.0.0"
 description = "orders description"
 source_directory = "elm"
-output_directory = "orders-output"
 
 [codegen]
 output_format = "member-format"
@@ -419,9 +417,8 @@ output_format = "member-format"
             root_project.description.as_deref(),
             Some("root description")
         );
-        assert_eq!(root_project.output_directory, "root-project-output");
         assert_eq!(
-            workspace.config.workspace.as_ref().unwrap().output_dir,
+            workspace.config.workspace.as_ref().unwrap().out_dir,
             "root-output"
         );
         assert_eq!(
@@ -445,7 +442,6 @@ output_format = "member-format"
         let orders = workspace.get_project("acme/orders").unwrap();
         let project = orders.config.project.as_ref().unwrap();
         assert_eq!(project.description.as_deref(), Some("orders description"));
-        assert_eq!(project.output_directory, "orders-output");
         assert_eq!(
             orders.config.codegen.as_ref().unwrap().output_format,
             "member-format"
@@ -459,7 +455,7 @@ output_format = "member-format"
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
             root.path().join("morphir.toml"),
-            "[workspace]\nmembers = []\noutput_dir = 'empty-output'\n",
+            "[workspace]\nmembers = []\nout_dir = 'empty-output'\n",
         )
         .unwrap();
 
@@ -468,7 +464,7 @@ output_format = "member-format"
         assert!(workspace.projects.is_empty());
         let config = workspace.config.workspace.as_ref().unwrap();
         assert!(config.members.is_empty());
-        assert_eq!(config.output_dir, "empty-output");
+        assert_eq!(config.out_dir, "empty-output");
     }
 
     #[test]

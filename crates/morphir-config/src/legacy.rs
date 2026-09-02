@@ -35,7 +35,6 @@ pub fn normalize_legacy_config(legacy: LegacyProjectConfig) -> Value {
             "repository": null,
             "source_directory": legacy.source_directory,
             "exposed_modules": legacy.exposed_modules,
-            "output_directory": ".morphir/out",
         },
         "workspace": null,
         "frontend": null,
@@ -47,4 +46,22 @@ pub fn normalize_legacy_config(legacy: LegacyProjectConfig) -> Value {
         "extensions": {},
         "tasks": {},
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_normalization_does_not_emit_output_directory() {
+        let legacy = LegacyProjectConfig {
+            name: "acme/app".into(),
+            source_directory: "src".into(),
+            exposed_modules: vec![],
+            dependencies: Default::default(),
+            local_dependencies: Default::default(),
+        };
+        let value = normalize_legacy_config(legacy);
+        assert!(value["project"].get("output_directory").is_none());
+    }
 }

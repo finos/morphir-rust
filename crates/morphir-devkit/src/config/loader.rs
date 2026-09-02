@@ -619,14 +619,14 @@ mod tests {
         write_file(&global, "[ir]\nformat_version = 4\n");
         write_file(
             &project,
-            "[project]\nname = \"Legacy.Project\"\nversion = \"1\"\n\n[ir]\nformat_version = 3\nmode = \"classic\"\n",
+            "[project]\nname = \"Legacy.Project\"\nversion = \"1\"\n\n[ir]\nformat_version = 3\nlayout = \"single-file\"\n",
         );
 
         let context = load_config_context_with_global(&project, Some(&global)).unwrap();
 
         let ir = context.config.ir.expect("ir section");
         assert_eq!(ir.format_version, 3);
-        assert_eq!(ir.mode, "classic");
+        assert_eq!(ir.layout, "single-file");
         assert_eq!(context.effective["ir"]["format_version"], json!(3));
         assert_eq!(
             context
@@ -732,13 +732,13 @@ mod tests {
             .join("morphir.user.yaml");
         write_file(
             &workspace,
-            "[workspace]\nmembers = [\"packages/orders\"]\n\n[ir]\nformat_version = 3\nmode = \"classic\"\nstrict_mode = false\n",
+            "[workspace]\nmembers = [\"packages/orders\"]\n\n[ir]\nformat_version = 3\nlayout = \"single-file\"\nstrict_mode = false\n",
         );
         write_file(
             &member,
             "project:\n  name: acme/orders\n  version: 1.0.0\nir:\n  strict_mode: true\n",
         );
-        write_file(&workspace_user, "ir:\n  mode: vfs\n");
+        write_file(&workspace_user, "ir:\n  layout: document-tree\n");
         write_file(&member_user, "ir:\n  format_version: 4\n");
 
         let options = ConfigLoadOptions {
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(context.current_project.unwrap().name, "acme/orders");
         let ir = context.config.ir.unwrap();
         assert!(ir.strict_mode);
-        assert_eq!(ir.mode, "vfs");
+        assert_eq!(ir.layout, "document-tree");
         assert_eq!(ir.format_version, 4);
 
         let kinds = context

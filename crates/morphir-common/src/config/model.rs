@@ -97,17 +97,10 @@ pub struct ProjectSection {
     /// Exposed modules
     #[serde(default)]
     pub exposed_modules: Vec<String>,
-    /// Output directory
-    #[serde(default = "default_output_dir")]
-    pub output_directory: String,
 }
 
 pub(crate) fn default_source_dir() -> String {
     "src".to_string()
-}
-
-pub(crate) fn default_output_dir() -> String {
-    ".morphir/out".to_string()
 }
 
 /// [workspace] section
@@ -121,13 +114,14 @@ pub struct WorkspaceSection {
     pub exclude: Vec<String>,
     /// Default member for commands
     pub default_member: Option<String>,
-    /// Workspace output directory
-    #[serde(default = "default_workspace_output")]
-    pub output_dir: String,
+    /// Out directory for every task in the workspace, relative to the
+    /// workspace root.
+    #[serde(default = "default_workspace_out_dir")]
+    pub out_dir: String,
 }
 
-fn default_workspace_output() -> String {
-    ".morphir".to_string()
+fn default_workspace_out_dir() -> String {
+    ".morphir/out".to_string()
 }
 
 /// [frontend] section
@@ -155,9 +149,16 @@ pub struct IrSection {
     /// IR format version
     #[serde(default = "default_format_version")]
     pub format_version: u32,
-    /// Output mode (classic or vfs)
-    #[serde(default = "default_ir_mode")]
-    pub mode: String,
+    /// Storage layout compile writes: `single-file` or `document-tree`
+    #[serde(default = "default_ir_layout")]
+    pub layout: String,
+    /// Serialization format compile writes: `json` or `yaml`
+    #[serde(default = "default_ir_format")]
+    pub format: String,
+    /// Deprecated alias for `layout`: `classic` means `single-file`, `vfs`
+    /// means `document-tree`. Read for one release, then removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     /// Strict mode
     #[serde(default)]
     pub strict_mode: bool,
@@ -172,8 +173,12 @@ fn default_format_version() -> u32 {
     4
 }
 
-fn default_ir_mode() -> String {
-    "vfs".to_string()
+fn default_ir_layout() -> String {
+    "single-file".to_string()
+}
+
+fn default_ir_format() -> String {
+    "json".to_string()
 }
 
 /// [codegen] section
@@ -302,7 +307,7 @@ mod tests {
         assert_eq!(ir.format_version, 3);
         assert!(ir.strict_mode);
         // Pinning the version must not disturb the other IR settings.
-        assert_eq!(ir.mode, default_ir_mode());
+        assert_eq!(ir.layout, default_ir_layout());
     }
 
     /// Every version in the supported range decodes, so v3 is not a special
@@ -321,12 +326,38 @@ mod tests {
     #[test]
     fn ir_section_round_trips_through_serde() {
         let original: IrSection =
-            serde_json::from_value(json!({"format_version": 3, "mode": "classic"}))
+            serde_json::from_value(json!({"format_version": 3, "layout": "document-tree"}))
                 .expect("v3 ir section");
         let reparsed: IrSection =
             serde_json::from_value(serde_json::to_value(&original).expect("serialize"))
                 .expect("deserialize");
         assert_eq!(reparsed.format_version, 3);
-        assert_eq!(reparsed.mode, "classic");
+        assert_eq!(reparsed.layout, "document-tree");
+    }
+
+    #[test]
+    fn workspace_out_dir_defaults_to_dot_morphir_out() {
+        let config: MorphirConfig =
+            serde_json::from_value(serde_json::json!({"workspace": {"members": []}})).unwrap();
+        assert_eq!(config.workspace.unwrap().out_dir, ".morphir/out");
+    }
+
+    #[test]
+    fn ir_layout_and_format_default_to_single_file_json() {
+        let config: MorphirConfig = serde_json::from_value(serde_json::json!({"ir": {}})).unwrap();
+        let ir = config.ir.unwrap();
+        assert_eq!(ir.layout, "single-file");
+        assert_eq!(ir.format, "json");
+        assert_eq!(ir.mode, None);
+    }
+
+    #[test]
+    fn project_section_has_no_output_directory() {
+        let config: MorphirConfig = serde_json::from_value(serde_json::json!({
+            "project": {"name": "acme/app", "version": "1.0.0"}
+        }))
+        .unwrap();
+        let value = serde_json::to_value(config.project.unwrap()).unwrap();
+        assert!(value.get("output_directory").is_none());
     }
 }

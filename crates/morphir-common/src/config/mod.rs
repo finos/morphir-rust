@@ -55,7 +55,6 @@ impl From<legacy::LegacyProjectConfig> for MorphirConfig {
             description: None,
             license: None,
             repository: None,
-            output_directory: model::default_output_dir(),
         };
         let dependencies = legacy
             .dependencies

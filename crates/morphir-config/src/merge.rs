@@ -228,9 +228,9 @@ mod tests {
     fn null_overlay_does_not_introduce_keys() {
         let merged = deep_merge(
             &json!({}),
-            &json!({"frontend": null, "ir": {"mode": "vfs"}}),
+            &json!({"frontend": null, "ir": {"layout": "single-file"}}),
         );
-        assert_eq!(merged, json!({"ir": {"mode": "vfs"}}));
+        assert_eq!(merged, json!({"ir": {"layout": "single-file"}}));
     }
 
     #[test]

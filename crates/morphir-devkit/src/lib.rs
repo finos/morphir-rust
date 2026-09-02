@@ -20,6 +20,6 @@ pub use config::{
 };
 pub use extensions::{ExtensionInfo, ExtensionSource, resolve_extension_source};
 pub use out::{
-    IrDescriptor, IrLayout, OutError, RESULT_SCHEMA, TaskId, TaskPaths, TaskResult, now_rfc3339,
-    sanitize_segment,
+    DEFAULT_OUT_DIR, IrDescriptor, IrLayout, OutError, RESULT_SCHEMA, TaskId, TaskPaths,
+    TaskResult, module_path, now_rfc3339, resolve_out_root, sanitize_segment,
 };

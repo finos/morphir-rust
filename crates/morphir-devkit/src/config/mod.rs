@@ -28,9 +28,8 @@ pub use loader::{
 };
 pub use morphir_config::builtin_defaults;
 pub use paths::{
-    ensure_morphir_structure, resolve_compile_output, resolve_dist_output, resolve_generate_output,
-    resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
-    resolve_test_scenario, sanitize_project_name,
+    ensure_morphir_structure, resolve_path_relative_to_config, resolve_path_relative_to_workspace,
+    resolve_test_fixture, resolve_test_scenario,
 };
 pub use secret::{
     ExposeSecret, SecretReference, SecretResolutionContext, SecretResolutionError, SecretResolver,

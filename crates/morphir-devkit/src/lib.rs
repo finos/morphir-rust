@@ -13,10 +13,9 @@ pub use config::{
     discover_system_config, discover_user_override, discover_workspace,
     discover_workspace_detailed, discover_workspace_detailed_typed, ensure_morphir_structure,
     global_config_candidates, load_config_context, load_config_context_with,
-    load_config_context_with_global, load_effective_config, resolve_compile_output,
-    resolve_dist_output, resolve_generate_output, resolve_path_relative_to_config,
+    load_config_context_with_global, load_effective_config, resolve_path_relative_to_config,
     resolve_path_relative_to_workspace, resolve_test_fixture, resolve_test_scenario,
-    sanitize_project_name, system_config_candidates, user_override_candidates,
+    system_config_candidates, user_override_candidates,
 };
 pub use extensions::{ExtensionInfo, ExtensionSource, resolve_extension_source};
 pub use out::{

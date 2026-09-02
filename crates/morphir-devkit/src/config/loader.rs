@@ -327,7 +327,15 @@ pub fn load_config_context_with_global(
 }
 
 /// Warnings for keys that were removed or renamed. `ir.mode` is still applied
-/// as an alias for `ir.layout`; the other keys are ignored.
+/// as an alias for `ir.layout` when `ir.layout` was not itself set explicitly;
+/// the other keys are ignored.
+///
+/// Whether `ir.layout` was set explicitly cannot be decided from `effective`
+/// alone: the merged value always carries the built-in default
+/// (`ir.layout = "single-file"`) even when no source set it, so a bare
+/// pointer check can never see the difference. Callers that need that
+/// distinction (see [`load_config_context_with`]) resolve it from the
+/// configuration provenance instead and append the extra warning themselves.
 pub fn deprecated_key_warnings(effective: &Value) -> Vec<String> {
     let mut warnings = Vec::new();
     if effective.pointer("/project/output_directory").is_some() {
@@ -356,20 +364,31 @@ pub fn load_config_context_with(
     let config_dir = config_root(config_path)
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
 
+    let effective_config = load_effective_config(Some(config_path), options)?;
+    // `ir.layout` always has an entry in the merged value because the
+    // built-in defaults set it; only the provenance can tell whether a real
+    // source (as opposed to the defaults layer) set it explicitly.
+    let layout_explicit = effective_config
+        .origin_for_key("ir.layout")
+        .is_some_and(|origin| origin.kind != ConfigSourceKind::Defaults);
     let EffectiveConfig {
         value: effective,
         sources,
         workspace_root,
         member_root,
         ..
-    } = load_effective_config(Some(config_path), options)?;
+    } = effective_config;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
 
-    let warnings = deprecated_key_warnings(&effective);
+    let mut warnings = deprecated_key_warnings(&effective);
+    if effective.pointer("/ir/mode").is_some() && layout_explicit {
+        warnings.push("ir.mode is ignored because ir.layout is set explicitly".to_owned());
+    }
     let mut config = config;
     if let Some(ir) = config.ir.as_mut()
         && let Some(mode) = ir.mode.take()
+        && !layout_explicit
     {
         ir.layout = match mode.as_str() {
             "vfs" => "document-tree".to_owned(),
@@ -1066,5 +1085,36 @@ mod tests {
             "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n",
         );
         assert!(load_config_context(&config).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn explicit_layout_beats_deprecated_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"classic\"\nlayout = \"document-tree\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 2, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("ir.mode"));
+        assert!(
+            context.warnings[1].contains("ir.mode is ignored because ir.layout is set explicitly")
+        );
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    #[test]
+    fn mode_alone_maps_vfs_to_document_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"vfs\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
     }
 }

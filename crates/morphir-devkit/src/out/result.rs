@@ -219,6 +219,6 @@ mod tests {
     fn rfc3339_formatter_matches_known_instants() {
         assert_eq!(format_rfc3339(0), "1970-01-01T00:00:00Z");
         assert_eq!(format_rfc3339(951_782_400), "2000-02-29T00:00:00Z");
-        assert_eq!(format_rfc3339(1_788_688_800), "2026-09-05T14:00:00Z");
+        assert_eq!(format_rfc3339(1_788_688_800), "2026-09-06T10:00:00Z");
     }
 }

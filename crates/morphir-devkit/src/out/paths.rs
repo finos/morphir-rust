@@ -74,10 +74,14 @@ impl fmt::Display for TaskId {
     }
 }
 
-/// Replace path separators, spaces, and the parent-directory segment so a
-/// user-supplied name is one safe directory segment.
+/// Replace path separators, spaces, the parent-directory segment, and the
+/// empty segment so a user-supplied name is one safe, visible directory
+/// segment.
+///
+/// An empty segment would otherwise produce a hidden `.dest` directory and a
+/// `.json` file with no stem, so it maps to `-` the same way `..` does.
 pub fn sanitize_segment(segment: &str) -> String {
-    if segment == ".." {
+    if segment.is_empty() || segment == ".." {
         return "-".to_owned();
     }
     segment.replace(['/', ' ', '\\'], "-")
@@ -135,6 +139,27 @@ mod tests {
         assert_eq!(TaskId::generate("a b").as_str(), "generate/a-b");
         assert_eq!(TaskId::generate(r"a\b").as_str(), "generate/a-b");
         assert_eq!(TaskId::generate("..").as_str(), "generate/-");
+    }
+
+    #[test]
+    fn an_empty_name_never_produces_a_hidden_task_directory() {
+        assert_eq!(sanitize_segment(""), "-");
+        assert_eq!(TaskId::generate("").as_str(), "generate/-");
+        assert_eq!(TaskId::transform("").as_str(), "transform/-");
+
+        let paths = TaskPaths::new(
+            Path::new("/ws/.morphir/out"),
+            Path::new(""),
+            &TaskId::generate(""),
+        );
+        assert_eq!(
+            paths.dest,
+            PathBuf::from("/ws/.morphir/out/generate/-.dest")
+        );
+        assert_eq!(
+            paths.result,
+            PathBuf::from("/ws/.morphir/out/generate/-.json")
+        );
     }
 
     #[test]

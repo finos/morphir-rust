@@ -21,5 +21,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 morphir-projection = { path = "../morphir-projection", features = ["testing"] }
-jsonschema = "0.26"
+jsonschema = "0.53"
 pretty_assertions = "1.4"

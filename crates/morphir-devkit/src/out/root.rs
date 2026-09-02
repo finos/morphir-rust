@@ -146,11 +146,39 @@ mod tests {
             "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
         );
         let context = load_config_context(&workspace).unwrap();
+        // `cwd` is deliberately NOT the workspace root (it sits beside it,
+        // under a `scratch` directory) so this assertion can only pass if
+        // the workspace root from `context` actually drove the resolution.
+        // Using `cwd == workspace_root` here would let a config-ignoring
+        // implementation that falls through to `cwd.join(DEFAULT_OUT_DIR)`
+        // produce the same path and pass by coincidence.
+        let cwd = temp.path().join("scratch");
         assert_eq!(
-            resolve_out_root(None, None, Some(&context), temp.path()),
+            resolve_out_root(None, None, Some(&context), &cwd),
             temp.path().join(".morphir").join("out")
         );
         assert_eq!(module_path(&context), PathBuf::from("packages/orders"));
+    }
+
+    #[test]
+    fn an_empty_env_value_is_ignored_in_favor_of_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("morphir.toml");
+        write(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[workspace]\nout_dir = \"build/out\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        // `cwd` is deliberately NOT the config's directory, so a bug that
+        // treated the empty environment variable as present (falling
+        // through to `absolute(cwd, "")`) would resolve under `cwd` instead
+        // of under the configured `[workspace].out_dir`, and the assertion
+        // below would catch it.
+        let cwd = temp.path().join("elsewhere");
+        assert_eq!(
+            resolve_out_root(None, Some(OsStr::new("")), Some(&context), &cwd),
+            temp.path().join("build/out")
+        );
     }
 
     #[test]

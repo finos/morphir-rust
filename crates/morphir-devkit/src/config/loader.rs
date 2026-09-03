@@ -20,7 +20,9 @@ use anyhow::{Context, Result};
 use morphir_common::config::deep_merge;
 use morphir_common::config::env::{env_config_value, process_env_config_value};
 use morphir_common::config::load_config_value;
-use morphir_common::config::model::{MorphirConfig, ProjectSection, WorkspaceSection};
+use morphir_common::config::model::{
+    MorphirConfig, ProjectSection, WorkspaceSection, ir_layout_for_mode,
+};
 pub use morphir_config::builtin_defaults;
 use serde_json::Value;
 #[cfg(test)]
@@ -182,15 +184,8 @@ fn apply_ir_mode_alias(layer: &mut Value, declaring_path: &Path) -> Result<bool>
     let Some(mode) = ir.get("mode").and_then(Value::as_str) else {
         return Ok(false);
     };
-    let layout = match mode {
-        "classic" => "single-file",
-        "vfs" => "document-tree",
-        other => anyhow::bail!(
-            "ir.mode is set to {other:?} in {}, which is not a recognized value; \
-             use \"classic\" or \"vfs\"",
-            declaring_path.display()
-        ),
-    };
+    let layout = ir_layout_for_mode(mode)
+        .map_err(|message| anyhow::anyhow!("{message} (in {})", declaring_path.display()))?;
     if ir.contains_key("layout") {
         return Ok(true);
     }

@@ -47,9 +47,11 @@ use morphir_devkit::{TaskId, TaskPaths, module_path, resolve_out_root};
 let root = resolve_out_root(out_dir_flag, env_out_dir.as_deref(), Some(&context), &cwd);
 let module = module_path(&context);
 
-let compile = TaskPaths::new(&root, &module, &TaskId::compile());
-let generate = TaskPaths::new(&root, &module, &TaskId::generate("scala"));
+let compile = TaskPaths::new(&root, &module, &TaskId::compile())?;
+let generate = TaskPaths::new(&root, &module, &TaskId::generate("scala"))?;
 ```
+
+`TaskPaths::new` returns a `Result` because it checks the module path: `root.join(module_path)` is what places a task, so an absolute module path, or one holding `..`, would put the task's scratch directory outside the out root. `module_path` always returns a path that passes; the check catches a hand-built one.
 
 For a member at `packages/orders` in a workspace rooted at `<ws>`, `compile.dest` is `<ws>/.morphir/out/packages/orders/compile.dest` and `compile.result` is the record beside it, `compile.json`. A standalone project is the root module, so its paths sit directly under the out root.
 

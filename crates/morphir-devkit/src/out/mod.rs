@@ -5,13 +5,16 @@
 //! use morphir_devkit::{TaskId, TaskPaths};
 //! use std::path::Path;
 //!
+//! # fn main() -> Result<(), morphir_devkit::OutError> {
 //! let paths = TaskPaths::new(
 //!     Path::new("/ws/.morphir/out"),
 //!     Path::new("packages/orders"),
 //!     &TaskId::generate("scala"),
-//! );
+//! )?;
 //! assert!(paths.dest.ends_with("packages/orders/generate/scala.dest"));
 //! assert!(paths.result.ends_with("packages/orders/generate/scala.json"));
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod paths;

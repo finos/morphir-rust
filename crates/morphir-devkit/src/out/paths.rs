@@ -27,6 +27,16 @@ pub enum OutError {
         /// The text that was offered as a segment.
         segment: String,
     },
+    /// The module path held a component that is not an ordinary directory
+    /// name.
+    // One line on purpose, for the same reason as `UnsafeSegment` above.
+    #[error(
+        "module path `{module_path}` must be relative and made only of ordinary directory names, not `.`, `..`, a root, or a drive"
+    )]
+    UnsafeModulePath {
+        /// The module path that was offered.
+        module_path: String,
+    },
     /// The text did not name an IR layout.
     #[error("unknown IR layout `{value}`; expected `single-file` or `document-tree`")]
     UnknownIrLayout {
@@ -153,7 +163,28 @@ pub struct TaskPaths {
 impl TaskPaths {
     /// Build both locations for a task under `root`. `module_path` is the
     /// module's path relative to the workspace root; empty for the root module.
-    pub fn new(root: &Path, module_path: &Path, task: &TaskId) -> Self {
+    ///
+    /// Every component of `module_path` has to be an ordinary directory name,
+    /// because `root.join(module_path)` is what decides where the task's
+    /// `.dest` and `.json` end up: `Path::join` throws `root` away when what
+    /// it is given is absolute (or drive-relative on Windows), and a `..`
+    /// component walks back out of the out root. Either one puts a task's
+    /// scratch directory somewhere the out root does not cover, and
+    /// `prepare_dest` deletes what it finds there.
+    ///
+    /// [`module_path`](crate::module_path) always returns a path that passes,
+    /// since it is a `strip_prefix` of the project root against the workspace
+    /// root. The check is here so that a caller building one by hand cannot
+    /// get it wrong quietly.
+    pub fn new(root: &Path, module_path: &Path, task: &TaskId) -> Result<Self, OutError> {
+        if module_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(OutError::UnsafeModulePath {
+                module_path: module_path.display().to_string(),
+            });
+        }
         let mut base = root.join(module_path);
         let segments: Vec<&str> = task.segments().collect();
         let (leaf, parents) = segments
@@ -162,17 +193,23 @@ impl TaskPaths {
         for parent in parents {
             base = base.join(parent);
         }
-        Self {
+        Ok(Self {
             dest: base.join(format!("{leaf}.dest")),
             result: base.join(format!("{leaf}.json")),
-        }
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::{Component, Path, PathBuf};
+
+    /// `TaskPaths::new` for the tests that build a valid module path, which is
+    /// all of them but the one checking the rejection.
+    fn task_paths(root: &str, module_path: &str, task: &TaskId) -> TaskPaths {
+        TaskPaths::new(Path::new(root), Path::new(module_path), task).unwrap()
+    }
 
     #[test]
     fn task_ids_render_as_paths() {
@@ -201,11 +238,7 @@ mod tests {
         assert_eq!(TaskId::generate("").as_str(), "generate/-");
         assert_eq!(TaskId::transform("").as_str(), "transform/-");
 
-        let paths = TaskPaths::new(
-            Path::new("/ws/.morphir/out"),
-            Path::new(""),
-            &TaskId::generate(""),
-        );
+        let paths = task_paths("/ws/.morphir/out", "", &TaskId::generate(""));
         assert_eq!(
             paths.dest,
             PathBuf::from("/ws/.morphir/out/generate/-.dest")
@@ -266,20 +299,16 @@ mod tests {
 
     #[test]
     fn root_module_paths_sit_directly_under_the_root() {
-        let paths = TaskPaths::new(
-            Path::new("/ws/.morphir/out"),
-            Path::new(""),
-            &TaskId::compile(),
-        );
+        let paths = task_paths("/ws/.morphir/out", "", &TaskId::compile());
         assert_eq!(paths.dest, PathBuf::from("/ws/.morphir/out/compile.dest"));
         assert_eq!(paths.result, PathBuf::from("/ws/.morphir/out/compile.json"));
     }
 
     #[test]
     fn member_paths_nest_under_the_member_path() {
-        let paths = TaskPaths::new(
-            Path::new("/ws/.morphir/out"),
-            Path::new("packages/orders"),
+        let paths = task_paths(
+            "/ws/.morphir/out",
+            "packages/orders",
             &TaskId::generate("scala"),
         );
         assert_eq!(
@@ -318,5 +347,31 @@ mod tests {
                 "`{name}` sanitized to `{sanitized}`"
             );
         }
+    }
+
+    /// `root.join(module_path)` is what places a task, so a module path that
+    /// is absolute, drive-relative, or holds `..` moves the task's `.dest`
+    /// and `.json` out from under the out root — and `prepare_dest` deletes
+    /// what it finds at `.dest`.
+    #[test]
+    fn task_paths_refuse_a_module_path_that_could_leave_the_out_root() {
+        let root = Path::new("/ws/.morphir/out");
+        for module_path in ["/etc", "../outside", "packages/../..", "."] {
+            match TaskPaths::new(root, Path::new(module_path), &TaskId::compile()) {
+                Err(OutError::UnsafeModulePath { module_path: named }) => {
+                    assert_eq!(named, module_path)
+                }
+                other => panic!("`{module_path}` must be refused, got {other:?}"),
+            }
+        }
+        assert!(
+            TaskPaths::new(root, Path::new("/etc"), &TaskId::compile())
+                .unwrap_err()
+                .to_string()
+                .contains("ordinary directory names")
+        );
+        // The paths a real caller hands over still work.
+        assert!(TaskPaths::new(root, Path::new(""), &TaskId::compile()).is_ok());
+        assert!(TaskPaths::new(root, Path::new("packages/orders"), &TaskId::compile()).is_ok());
     }
 }

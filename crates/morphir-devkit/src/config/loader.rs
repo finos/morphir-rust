@@ -617,8 +617,12 @@ pub fn load_config_context_with(
         && !layout_explicit
     {
         ir.layout = match mode.as_str() {
+            "classic" => "single-file".to_owned(),
             "vfs" => "document-tree".to_owned(),
-            _ => "single-file".to_owned(),
+            other => anyhow::bail!(
+                "ir.mode is set to {other:?}, which is not a recognized value; \
+                 use \"classic\" or \"vfs\""
+            ),
         };
     }
 
@@ -1353,6 +1357,39 @@ mod tests {
         assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
         assert!(context.warnings[0].contains("ir.mode"));
         assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    #[test]
+    fn mode_alone_maps_classic_to_single_file() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"classic\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "single-file");
+    }
+
+    /// A misspelled `ir.mode` value used to fall through to `single-file`
+    /// silently. It must now fail to load, naming the bad value and the two
+    /// spellings the alias accepts.
+    #[test]
+    fn an_unknown_mode_value_fails_to_load() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"vfss\"\n",
+        );
+        let error = load_config_context(&config).expect_err("unknown ir.mode must fail to load");
+        let message = error.to_string();
+        assert!(message.contains("ir.mode"), "{message}");
+        assert!(message.contains("vfss"), "{message}");
+        assert!(message.contains("classic"), "{message}");
+        assert!(message.contains("vfs"), "{message}");
     }
 
     /// `load_config_context` stores `workspace_root`, `project_root`, and

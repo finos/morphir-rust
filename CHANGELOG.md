@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`morphir-daemon` negotiation, `morphir-distribution` publication.** An installed extension no
+  longer fails at `initialize` when the display name in its repository record differs from the
+  name the guest reports. `repository publish` derives the record name from the identifier
+  (`morphir-openapi` became "Morphir Openapi") while the guest reports "Morphir OpenAPI", so every
+  published OpenAPI bundle failed with "initialization metadata disagreed with discovery". The
+  host now holds only the version and the capability kinds to discovery and names the field that
+  drifted. A release bundle's `release.json` may also carry an optional `name`, which
+  `.github/extensions.toml` now declares for both extensions and the packaging task emits, so
+  future records use the guest's spelling.
+
 ### Changed
 
 - **Breaking (`morphir-devkit`, `morphir-common` configuration).** One Mill-style out directory

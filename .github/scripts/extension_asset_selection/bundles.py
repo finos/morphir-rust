@@ -87,7 +87,7 @@ def expected_descriptor(
     expected_commit: str,
 ) -> dict[str, Any]:
     """Build the tag- and registry-derived descriptor fields."""
-    return {
+    expected: dict[str, Any] = {
         "schemaVersion": 1,
         "shortId": short_id,
         "extensionId": extension.get("extension_id"),
@@ -99,8 +99,11 @@ def expected_descriptor(
         "irVersions": extension.get("ir_versions"),
         "artifact": artifact_name,
         "sha256": digest,
-        "gitCommit": expected_commit,
     }
+    if "name" in extension:
+        expected["name"] = extension.get("name")
+    expected["gitCommit"] = expected_commit
+    return expected
 
 
 def validate_bundle(

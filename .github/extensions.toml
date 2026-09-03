@@ -2,6 +2,7 @@
 package = "morphir-avro-extension"
 artifact = "morphir-avro-extension"
 extension_id = "morphir-avro"
+name = "Morphir Avro"
 mep_versions = ["0.1"]
 targets = ["avro"]
 ir_versions = ["3", "4"]
@@ -11,6 +12,7 @@ release_with_workspace = true
 package = "morphir-openapi-extension"
 artifact = "morphir-openapi-extension"
 extension_id = "morphir-openapi"
+name = "Morphir OpenAPI"
 mep_versions = ["0.1"]
 targets = ["openapi", "json-schema"]
 ir_versions = ["3", "4"]

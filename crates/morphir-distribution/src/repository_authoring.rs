@@ -193,6 +193,10 @@ struct ReleaseBundleDescriptor {
     sha256: Sha256Digest,
     #[serde(default)]
     git_commit: Option<String>,
+    /// Display name the guest reports at initialization. Defaults to a
+    /// title-cased spelling of the extension identifier.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 struct VerifiedReleaseBundle {
@@ -307,6 +311,16 @@ impl ReleaseBundleDescriptor {
                 "release bundle gitCommit must be non-empty when present",
             ));
         }
+        if self
+            .name
+            .as_ref()
+            .is_some_and(|name| name.trim() != name || name.is_empty())
+        {
+            return Err(invalid_bundle(
+                root.join("release.json"),
+                "release bundle name must be non-empty when present",
+            ));
+        }
         Ok(())
     }
 
@@ -320,7 +334,10 @@ impl ReleaseBundleDescriptor {
         serde_json::from_value(serde_json::json!({
             "schemaVersion": CURRENT_RELEASE_SCHEMA_VERSION,
             "id": self.extension_id,
-            "name": display_name(&self.extension_id),
+            "name": self
+                .name
+                .clone()
+                .unwrap_or_else(|| display_name(&self.extension_id)),
             "version": self.version,
             "channels": [channel],
             "mepVersions": self.mep_versions,

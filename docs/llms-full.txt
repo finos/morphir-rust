@@ -1445,12 +1445,25 @@ let context = load_config_context(&config_path)?;
 
 ## Path resolution
 
-```rust
-use morphir_devkit::{resolve_compile_output, resolve_generate_output};
+Every task writes under one workspace-level out root. `resolve_out_root` finds that root, and `TaskPaths` gives one task its scratch directory and its result record inside it.
 
-let compile_path = resolve_compile_output("My.Project", "gleam", &morphir_dir);
-let generate_path = resolve_generate_output("My.Project", "gleam", &morphir_dir);
+```rust
+use morphir_devkit::{TaskId, TaskPaths, module_path, resolve_out_root};
+
+let root = resolve_out_root(out_dir_flag, env_out_dir.as_deref(), Some(&context), &cwd);
+let module = module_path(&context);
+
+let compile = TaskPaths::new(&root, &module, &TaskId::compile())?;
+let generate = TaskPaths::new(&root, &module, &TaskId::generate("scala"))?;
 ```
+
+`TaskPaths::new` returns a `Result` because it checks the module path: `root.join(module_path)` is what places a task, so an absolute module path, or one holding `..`, would put the task's scratch directory outside the out root. `module_path` always returns a path that passes; the check catches a hand-built one.
+
+For a member at `packages/orders` in a workspace rooted at `<ws>`, `compile.dest` is `<ws>/.morphir/out/packages/orders/compile.dest` and `compile.result` is the record beside it, `compile.json`. A standalone project is the root module, so its paths sit directly under the out root.
+
+A member is identified by the path it is declared at, relative to the workspace root, not by where that directory really sits. The declared spelling still has to be a plain relative path — no absolute path, no `..`, no backslash — but the directory it names may be a symbolic link leading anywhere, including outside the workspace. Morphir reads that member's sources from wherever the link leads, warns once that it has done so, and still writes the member's output under `<ws>/.morphir/out/<declared path>/`. Confinement is a rule about what Morphir writes, not about where a declared member reads from.
+
+The root is chosen by the `--out-dir` flag, then `MORPHIR_OUT_DIR`, then `[workspace].out_dir` in the workspace configuration, then `.morphir/out` under the workspace root. `resolve_out_root` is pure: the caller reads the flag and the environment and passes them in.
 
 These helpers apply Morphir's output layout. They do not choose or activate an extension provider.
 

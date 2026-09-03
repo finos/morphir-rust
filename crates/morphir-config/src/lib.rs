@@ -26,7 +26,8 @@ pub fn builtin_defaults() -> Value {
         },
         "ir": {
             "format_version": 4,
-            "mode": "vfs",
+            "layout": "single-file",
+            "format": "json",
             "strict_mode": false,
         },
         "codegen": {

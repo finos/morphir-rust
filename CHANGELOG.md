@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (`morphir-devkit`, `morphir-common` configuration).** One Mill-style out directory
+  replaces the per-project output helpers. A workspace has exactly one out root,
+  `<workspace>/.morphir/out`; a member never gets its own. Each task owns a scratch directory,
+  `<task>.dest`, and a result record beside it, `<task>.json`, and a member's tasks nest under the
+  member's path relative to the workspace root, so a member at `packages/orders` compiles into
+  `<workspace>/.morphir/out/packages/orders/compile.dest`.
+
+  The new `out` module carries the whole layout: `resolve_out_root` picks the root from the
+  `--out-dir` flag, then `MORPHIR_OUT_DIR`, then `[workspace].out_dir`, then the default under the
+  workspace root, and is pure, so the caller reads the flag and the environment and passes them in;
+  `TaskId` and `TaskPaths` name a task and place it; `TaskResult` and `IrDescriptor` are the record,
+  which declares which files are the task's value and where its IR is stored, and preserve fields a
+  newer writer added. `ensure_morphir_structure` no longer creates `out/`; the out root creates only
+  itself.
+
+  `resolve_compile_output`, `resolve_generate_output`, `resolve_dist_output`, and
+  `sanitize_project_name` are removed. Callers move to `TaskPaths`.
+
+  In configuration, `[workspace].output_dir` is renamed to `[workspace].out_dir` and
+  `[project].output_directory` is removed. `[ir]` gains `layout` (`single-file` or `document-tree`)
+  and `format` (`json` or `yaml`), so IR storage is declared rather than assumed, and `[ir].mode`
+  becomes a deprecated optional alias for `layout` that an explicit `layout` overrides. The loader
+  warns once for each removed or renamed key it finds and otherwise ignores it, for one release.
+  `[workspace].out_dir` set in a member configuration is warned about and ignored: the out root
+  belongs to the workspace.
 - `morphir-avro-extension` is re-released as `0.1.1`. The extension SDK now states the selected
   target in a generation request, which changed the Avro crate and so the WASM it builds; the
   already-published `extension/avro/v0.1.0` assets no longer match what this commit produces, and

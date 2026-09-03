@@ -6,6 +6,10 @@ use super::discovery::{
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
     user_override_candidates,
 };
+use super::members::{
+    accept_member_directory, expand_members, is_confined, is_member, members_select,
+    unconfined_warning,
+};
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
@@ -16,7 +20,9 @@ use anyhow::{Context, Result};
 use morphir_common::config::deep_merge;
 use morphir_common::config::env::{env_config_value, process_env_config_value};
 use morphir_common::config::load_config_value;
-use morphir_common::config::model::{MorphirConfig, ProjectSection};
+use morphir_common::config::model::{
+    MorphirConfig, ProjectSection, WorkspaceSection, ir_layout_for_mode,
+};
 pub use morphir_config::builtin_defaults;
 use serde_json::Value;
 #[cfg(test)]
@@ -42,6 +48,8 @@ pub struct ConfigContext {
     pub project_root: Option<PathBuf>,
     /// Current project if in workspace
     pub current_project: Option<ProjectSection>,
+    /// Human-readable warnings about removed or renamed keys.
+    pub warnings: Vec<String>,
 }
 
 fn resolve_file_source(
@@ -64,7 +72,66 @@ fn resolve_file_source(
     }
 }
 
-fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()> {
+/// Which part of a workspace a configuration layer speaks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerScope {
+    /// The whole workspace, or a standalone project.
+    Workspace,
+    /// Only the selected workspace member: the member's own configuration, or
+    /// a user override sitting beside it.
+    Member,
+}
+
+fn merge_source(
+    state: &mut ProvenanceState,
+    source: &ConfigSource,
+    notes: &mut LayerNotes,
+) -> Result<()> {
+    merge_scoped_source(state, source, LayerScope::Workspace, notes)
+}
+
+/// What merging the individual layers noticed about them, gathered as they go
+/// by so the caller can turn it into warnings once everything is merged.
+#[derive(Debug, Default)]
+struct LayerNotes {
+    /// Files that set `workspace.out_dir` from inside a member, a key only the
+    /// workspace may set.
+    out_dir: Vec<PathBuf>,
+    /// Whether some layer set both `ir.mode` and `ir.layout`, so that layer's
+    /// own `ir.mode` had no effect.
+    ir_mode_shadowed: bool,
+}
+
+/// Merge one loaded source, first dropping the keys a member layer may not set.
+///
+/// `workspace.out_dir` is the one such key today: the out root is a property of
+/// the whole workspace, so a member that set it would relocate every other
+/// member's output as well. It is dropped from the layer before the merge
+/// rather than repaired in the merged value afterwards, so both the value and
+/// its provenance stay honest and whatever the workspace itself set — in its
+/// own configuration or in a user override beside it — simply stays in place.
+///
+/// The member scope covers the member's `morphir.toml` and the
+/// `morphir.user.toml` next to it alike. Only the member's own configuration
+/// used to be caught, because the check ran on the merged value's provenance
+/// and a user override records the kind `UserOverride` no matter which
+/// directory it came from, so an override beside a member relocated the whole
+/// workspace's out root.
+///
+/// The deprecated `ir.mode` alias is applied here too, inside the layer,
+/// before the layer meets any other. Mapping it afterwards on the merged
+/// value made the alias lose to `ir.layout` set ANYWHERE — a `layout` in the
+/// global configuration silently beat a `mode` in the project's own
+/// configuration, which is backwards. Normalised per layer, `mode` becomes
+/// that layer's `layout` and ordinary precedence decides the rest.
+/// `notes.ir_mode_shadowed` records that some layer set both, so that layer's
+/// own `mode` had no effect and the caller can say so.
+fn merge_scoped_source(
+    state: &mut ProvenanceState,
+    source: &ConfigSource,
+    scope: LayerScope,
+    notes: &mut LayerNotes,
+) -> Result<()> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
         let declaring_path = std::path::absolute(path).with_context(|| {
             format!(
@@ -73,13 +140,19 @@ fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()
                 path.display()
             )
         })?;
-        let layer = load_config_value(&declaring_path).with_context(|| {
+        let mut layer = load_config_value(&declaring_path).with_context(|| {
             format!(
                 "Failed to load {} configuration: {}",
                 source.kind.name(),
                 path.display()
             )
         })?;
+        if scope == LayerScope::Member && take_workspace_out_dir(&mut layer) {
+            notes.out_dir.push(declaring_path.clone());
+        }
+        if apply_ir_mode_alias(&mut layer, &declaring_path)? {
+            notes.ir_mode_shadowed = true;
+        }
         state.merge(
             &layer,
             ConfigOrigin {
@@ -91,14 +164,59 @@ fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()
     Ok(())
 }
 
+/// Turn one layer's `ir.mode` into that layer's `ir.layout`, reporting whether
+/// the layer set `ir.layout` itself and so ignored its own `ir.mode`.
+///
+/// `ir.mode` is left in the layer rather than removed: it is what
+/// [`deprecated_key_warnings`] reads off the merged value to say the key is
+/// deprecated, and leaving it keeps the merged value an honest record of what
+/// the files actually said. `IrSection` drops it on the way into the typed
+/// model, so nothing downstream sees both.
+///
+/// `declaring_path` only names the file in the error a misspelled value
+/// raises. That error is returned as it is, with no further context wrapped
+/// around it, so the message a user sees is the one that explains the
+/// spelling rather than a generic "failed to load" line.
+fn apply_ir_mode_alias(layer: &mut Value, declaring_path: &Path) -> Result<bool> {
+    let Some(ir) = layer.get_mut("ir").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    let Some(mode) = ir.get("mode").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let layout = ir_layout_for_mode(mode)
+        .map_err(|message| anyhow::anyhow!("{message} (in {})", declaring_path.display()))?;
+    if ir.contains_key("layout") {
+        return Ok(true);
+    }
+    ir.insert("layout".to_owned(), Value::String(layout.to_owned()));
+    Ok(false)
+}
+
+/// Remove `workspace.out_dir` from a layer, reporting whether it was there.
+fn take_workspace_out_dir(layer: &mut Value) -> bool {
+    layer
+        .get_mut("workspace")
+        .and_then(Value::as_object_mut)
+        .is_some_and(|workspace| workspace.remove("out_dir").is_some())
+}
+
 fn decode_config(value: &Value, what: &str) -> Result<MorphirConfig> {
     serde_json::from_value(value.clone())
         .with_context(|| format!("Failed to decode {what} Morphir config"))
 }
 
-fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> ConfigSource {
-    let layer = match &options.env {
-        EnvSelection::Skip => return ConfigSource::skipped(ConfigSourceKind::Environment),
+/// The path named in an `ir.mode` error raised from the environment layer,
+/// since that layer has no configuration file of its own to name.
+const ENVIRONMENT_DECLARING_PATH: &str = "<environment variables>";
+
+fn env_source(
+    state: &mut ProvenanceState,
+    options: &ConfigLoadOptions,
+    notes: &mut LayerNotes,
+) -> Result<ConfigSource> {
+    let mut layer = match &options.env {
+        EnvSelection::Skip => return Ok(ConfigSource::skipped(ConfigSourceKind::Environment)),
         EnvSelection::Process => process_env_config_value(&options.env_prefix),
         EnvSelection::Explicit(vars) => env_config_value(
             &options.env_prefix,
@@ -110,6 +228,13 @@ fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> Confi
         Some(map) if !map.is_empty() => ConfigSourceStatus::Loaded,
         _ => ConfigSourceStatus::NotFound,
     };
+    // Route the environment layer through the same `ir.mode` alias every
+    // other layer gets, so `MORPHIR_IR__MODE` is normalised to `ir.layout`
+    // before it meets the other layers instead of being merged raw and
+    // silently losing to a `layout` set anywhere below it.
+    if apply_ir_mode_alias(&mut layer, Path::new(ENVIRONMENT_DECLARING_PATH))? {
+        notes.ir_mode_shadowed = true;
+    }
     state.merge(
         &layer,
         ConfigOrigin {
@@ -117,12 +242,111 @@ fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> Confi
             path: None,
         },
     );
-    ConfigSource::new(ConfigSourceKind::Environment, None, Vec::new(), status)
+    Ok(ConfigSource::new(
+        ConfigSourceKind::Environment,
+        None,
+        Vec::new(),
+        status,
+    ))
 }
 
 struct WorkspaceMemberConfig {
     root: PathBuf,
     config_path: PathBuf,
+}
+
+/// The workspace a configuration path belongs to, found by walking up.
+struct EnclosingWorkspace {
+    root: PathBuf,
+    config_path: PathBuf,
+}
+
+/// Find the workspace that owns `member_root`, if any.
+///
+/// Walks up from `member_root`'s parent looking for a configuration that
+/// declares `[workspace]` and whose `members` list selects `member_root`,
+/// literally or through a wildcard, without an `exclude` pattern ruling it out
+/// again. A configuration that is unreadable, ambiguous, or not a workspace is
+/// skipped and the walk continues, so a stray file above the project can never
+/// make loading fail. A `members` entry that leaves the workspace directory is
+/// skipped the same way `expand_members` skips it, and adds a warning.
+fn find_enclosing_workspace(
+    member_root: &Path,
+    warnings: &mut Vec<String>,
+) -> Option<EnclosingWorkspace> {
+    let mut current = member_root.parent();
+    while let Some(directory) = current {
+        if let Some(config_path) = discover_config_at(directory).ok().flatten()
+            && let Some(workspace) = load_config_value(&config_path)
+                .ok()
+                .and_then(|value| decode_config(&value, "workspace").ok())
+                .and_then(|config| config.workspace)
+            && members_select(
+                directory,
+                &workspace.members,
+                &workspace.exclude,
+                member_root,
+                warnings,
+            )
+        {
+            return Some(EnclosingWorkspace {
+                root: directory.to_path_buf(),
+                config_path,
+            });
+        }
+        current = directory.parent();
+    }
+    None
+}
+
+/// Choose which member of a workspace to merge when the workspace's own
+/// configuration is the one being loaded.
+///
+/// `default_member` wins, unless it names the workspace root or a directory
+/// `exclude` rules out. Otherwise the expanded member list decides, and a list
+/// that expands to exactly one member selects it. A wider list has no member in
+/// view, so none is merged; running inside a member directory is how a specific
+/// member is selected, and that path is handled by [`find_enclosing_workspace`].
+///
+/// A `default_member` whose SPELLING leaves the workspace directory selects
+/// nothing and adds a warning; so does any `members` entry that does the same.
+/// Without that check `workspace_root.join("../outside")` would be accepted as
+/// a member and its configuration merged from outside the workspace entirely.
+///
+/// A member that is spelled as an ordinary relative path but is a symbolic
+/// link to a directory outside the workspace is a different matter: it is
+/// accepted, its sources are read from where the link leads, and one warning
+/// says so. The member is still identified by its declared path, so its
+/// output stays under the out root.
+fn select_member(
+    workspace_root: &Path,
+    workspace: &WorkspaceSection,
+    warnings: &mut Vec<String>,
+) -> Option<PathBuf> {
+    if let Some(member) = workspace.default_member.as_ref() {
+        if !is_confined(member) {
+            warnings.push(unconfined_warning(member));
+            return None;
+        }
+        let member = workspace_root.join(member);
+        if !is_member(workspace_root, &workspace.exclude, &member)
+            || !accept_member_directory(workspace_root, &member, warnings)
+        {
+            return None;
+        }
+        return Some(member);
+    }
+    match expand_members(
+        workspace_root,
+        &workspace.members,
+        &workspace.exclude,
+        warnings,
+    )
+    .as_slice()
+    {
+        [only] => Some(only.clone()),
+        _ => None,
+    }
 }
 
 /// Merge the selected workspace member's configuration, returning its root and primary path.
@@ -131,21 +355,21 @@ fn merge_workspace_member(
     sources: &mut Vec<ConfigSource>,
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
+    warnings: &mut Vec<String>,
+    notes: &mut LayerNotes,
 ) -> Result<Option<WorkspaceMemberConfig>> {
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
         return Ok(None);
     };
-    // Resolve the default member path (glob patterns are treated literally for now)
-    let Some(member) = ws.default_member.as_ref().or_else(|| ws.members.first()) else {
+    let Some(member_path) = select_member(ws_root, ws, warnings) else {
         return Ok(None);
     };
 
-    let member_path = ws_root.join(member);
     match discover_config_at(&member_path)? {
         Some(member_config) => {
             let source =
                 ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config.clone());
-            merge_source(state, &source)?;
+            merge_scoped_source(state, &source, LayerScope::Member, notes)?;
             sources.push(source);
             Ok(Some(WorkspaceMemberConfig {
                 root: member_path,
@@ -169,19 +393,28 @@ fn merge_user_overrides(
     options: &ConfigLoadOptions,
     project_config: Option<&Path>,
     member_config: Option<&Path>,
+    notes: &mut LayerNotes,
 ) -> Result<()> {
     match &options.user_override {
         SourceSelection::Discover => {
+            // An override beside the workspace primary speaks for the whole
+            // workspace; one beside the member primary speaks only for that
+            // member, and so may not set `workspace.out_dir`.
             let primary_paths = project_config
                 .into_iter()
-                .chain(member_config.filter(|member| Some(*member) != project_config))
+                .map(|path| (path, LayerScope::Workspace))
+                .chain(
+                    member_config
+                        .filter(|member| Some(*member) != project_config)
+                        .map(|path| (path, LayerScope::Member)),
+                )
                 .collect::<Vec<_>>();
             if primary_paths.is_empty() {
                 sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
                 return Ok(());
             }
             let mut found_layout = false;
-            for primary_path in primary_paths {
+            for (primary_path, scope) in primary_paths {
                 let Some(candidates) = user_override_candidates(primary_path) else {
                     continue;
                 };
@@ -191,7 +424,7 @@ fn merge_user_overrides(
                     &SourceSelection::Discover,
                     || candidates.to_vec(),
                 )?;
-                merge_source(state, &source)?;
+                merge_scoped_source(state, &source, scope, notes)?;
                 sources.push(source);
             }
             if !found_layout {
@@ -200,7 +433,7 @@ fn merge_user_overrides(
         }
         selection => {
             let source = resolve_file_source(ConfigSourceKind::UserOverride, selection, Vec::new)?;
-            merge_source(state, &source)?;
+            merge_source(state, &source, notes)?;
             sources.push(source);
         }
     }
@@ -233,6 +466,8 @@ pub fn load_effective_config(
     options: &ConfigLoadOptions,
 ) -> Result<EffectiveConfig> {
     let mut state = ProvenanceState::default();
+    let mut warnings = Vec::new();
+    let mut notes = LayerNotes::default();
     state.merge(
         &builtin_defaults(),
         ConfigOrigin {
@@ -250,7 +485,7 @@ pub fn load_effective_config(
     let system = resolve_file_source(ConfigSourceKind::System, &options.system, || {
         native_system_config_candidates().to_vec()
     })?;
-    merge_source(&mut state, &system)?;
+    merge_source(&mut state, &system, &mut notes)?;
     sources.push(system);
 
     let global = resolve_file_source(
@@ -258,41 +493,73 @@ pub fn load_effective_config(
         &options.global,
         native_global_config_candidates,
     )?;
-    merge_source(&mut state, &global)?;
+    merge_source(&mut state, &global, &mut notes)?;
     sources.push(global);
 
-    let project = match project_config {
-        Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.to_path_buf()),
+    // A configuration that lies inside a workspace member is the member layer,
+    // not the project layer: the enclosing workspace configuration goes
+    // underneath it so the two layers keep their documented precedence no
+    // matter which of the two files the caller happened to discover.
+    let selected_root = project_config.and_then(config_root).map(Path::to_path_buf);
+    let enclosing = selected_root
+        .as_deref()
+        .and_then(|root| find_enclosing_workspace(root, &mut warnings));
+    let project_layer = enclosing.as_ref().map_or_else(
+        || project_config.map(Path::to_path_buf),
+        |workspace| Some(workspace.config_path.clone()),
+    );
+
+    let project = match &project_layer {
+        Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.clone()),
         None => ConfigSource::not_found(ConfigSourceKind::Project, Vec::new()),
     };
-    merge_source(&mut state, &project)?;
+    merge_source(&mut state, &project, &mut notes)?;
     sources.push(project);
 
-    let project_root = project_config.and_then(config_root).map(Path::to_path_buf);
     let root_config = decode_config(state.value(), "project")?;
-    let workspace_root = root_config
-        .is_workspace()
-        .then(|| project_root.clone())
-        .flatten();
-
-    let member_config = merge_workspace_member(
-        &mut state,
-        &mut sources,
-        workspace_root.as_deref(),
-        &root_config,
-    )?;
+    let (workspace_root, member_config) = match (enclosing, selected_root.clone(), project_config) {
+        (Some(workspace), Some(member_root), Some(member_path)) => {
+            let source =
+                ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_path.to_path_buf());
+            merge_scoped_source(&mut state, &source, LayerScope::Member, &mut notes)?;
+            sources.push(source);
+            (
+                Some(workspace.root),
+                Some(WorkspaceMemberConfig {
+                    root: member_root,
+                    config_path: member_path.to_path_buf(),
+                }),
+            )
+        }
+        _ => {
+            let workspace_root = root_config
+                .is_workspace()
+                .then(|| selected_root.clone())
+                .flatten();
+            let member = merge_workspace_member(
+                &mut state,
+                &mut sources,
+                workspace_root.as_deref(),
+                &root_config,
+                &mut warnings,
+                &mut notes,
+            )?;
+            (workspace_root, member)
+        }
+    };
 
     merge_user_overrides(
         &mut state,
         &mut sources,
         options,
-        project_config,
+        project_layer.as_deref(),
         member_config
             .as_ref()
             .map(|member| member.config_path.as_path()),
+        &mut notes,
     )?;
 
-    sources.push(env_source(&mut state, options));
+    sources.push(env_source(&mut state, options, &mut notes)?);
 
     let (value, provenance) = state.into_parts();
 
@@ -301,6 +568,9 @@ pub fn load_effective_config(
         sources,
         workspace_root,
         member_root: member_config.map(|member| member.root),
+        ignored_member_out_dir: notes.out_dir,
+        ir_mode_shadowed: notes.ir_mode_shadowed,
+        warnings,
         provenance,
     })
 }
@@ -324,11 +594,55 @@ pub fn load_config_context_with_global(
     load_config_context_with(config_path, &options)
 }
 
+/// Warnings for keys that were removed or renamed. `ir.mode` is still applied
+/// as an alias for `ir.layout`, inside each layer before the layers are
+/// merged (see [`apply_ir_mode_alias`]); the other keys are ignored.
+///
+/// Whether a layer's own `ir.mode` lost to an `ir.layout` beside it cannot be
+/// decided from `effective` alone, since by then the two have been merged
+/// with everything else. [`load_config_context_with`] gets that from the
+/// merge itself and appends the extra warning.
+pub fn deprecated_key_warnings(effective: &Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if effective.pointer("/project/output_directory").is_some() {
+        warnings.push(
+            "project.output_directory was removed; all task output lives under workspace.out_dir"
+                .to_owned(),
+        );
+    }
+    if effective.pointer("/workspace/output_dir").is_some() {
+        warnings.push("workspace.output_dir was renamed to workspace.out_dir".to_owned());
+    }
+    if effective.pointer("/ir/mode").is_some() {
+        warnings.push(
+            "ir.mode is deprecated; use ir.layout = \"single-file\" or \"document-tree\""
+                .to_owned(),
+        );
+    }
+    warnings
+}
+
 /// Load configuration from every selected source and determine workspace/project context
 pub fn load_config_context_with(
     config_path: &Path,
     options: &ConfigLoadOptions,
 ) -> Result<ConfigContext> {
+    // Absolutise a relative `config_path` against the process's current
+    // directory right away, before anything derives `workspace_root`,
+    // `project_root`, or `morphir_dir` from it. Otherwise those paths stay
+    // relative, and a caller that resolves them (for example
+    // `resolve_out_root`) after the process changes directory resolves them
+    // against the new directory instead of the one the config was loaded
+    // from. This only joins with the current directory; it does not
+    // canonicalise symlinks.
+    let config_path = std::path::absolute(config_path).with_context(|| {
+        format!(
+            "Failed to stabilize configuration path: {}",
+            config_path.display()
+        )
+    })?;
+    let config_path = config_path.as_path();
+
     let config_dir = config_root(config_path)
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
 
@@ -337,11 +651,26 @@ pub fn load_config_context_with(
         sources,
         workspace_root,
         member_root,
+        ignored_member_out_dir,
+        warnings: member_warnings,
+        ir_mode_shadowed,
         ..
     } = load_effective_config(Some(config_path), options)?;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
 
+    let mut warnings = member_warnings;
+    warnings.extend(deprecated_key_warnings(&effective));
+    if ir_mode_shadowed {
+        warnings.push("ir.mode is ignored because ir.layout is set explicitly".to_owned());
+    }
+    for path in ignored_member_out_dir {
+        warnings.push(format!(
+            "workspace.out_dir is ignored in {}, which belongs to one workspace member; \
+             the out root is shared by the whole workspace, so set it in the workspace configuration",
+            path.display()
+        ));
+    }
     // Inside a workspace the project root is the selected member, if any;
     // otherwise the configuration directory is the project root.
     let project_root = if workspace_root.is_some() {
@@ -368,6 +697,7 @@ pub fn load_config_context_with(
         morphir_dir,
         workspace_root,
         project_root,
+        warnings,
     })
 }
 
@@ -397,6 +727,17 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect(),
         )
+    }
+
+    /// No workspace-member configuration contributed to this context. A
+    /// member that is selected but missing records a not-found source; one
+    /// that is never selected records no source at all.
+    fn no_member_was_merged(context: &ConfigContext) -> bool {
+        context.project_root.is_none()
+            && !context.sources.iter().any(|source| {
+                source.kind == ConfigSourceKind::WorkspaceMember
+                    && source.status == ConfigSourceStatus::Loaded
+            })
     }
 
     fn source(sources: &[ConfigSource], kind: ConfigSourceKind) -> &ConfigSource {
@@ -619,14 +960,14 @@ mod tests {
         write_file(&global, "[ir]\nformat_version = 4\n");
         write_file(
             &project,
-            "[project]\nname = \"Legacy.Project\"\nversion = \"1\"\n\n[ir]\nformat_version = 3\nmode = \"classic\"\n",
+            "[project]\nname = \"Legacy.Project\"\nversion = \"1\"\n\n[ir]\nformat_version = 3\nlayout = \"single-file\"\n",
         );
 
         let context = load_config_context_with_global(&project, Some(&global)).unwrap();
 
         let ir = context.config.ir.expect("ir section");
         assert_eq!(ir.format_version, 3);
-        assert_eq!(ir.mode, "classic");
+        assert_eq!(ir.layout, "single-file");
         assert_eq!(context.effective["ir"]["format_version"], json!(3));
         assert_eq!(
             context
@@ -732,13 +1073,13 @@ mod tests {
             .join("morphir.user.yaml");
         write_file(
             &workspace,
-            "[workspace]\nmembers = [\"packages/orders\"]\n\n[ir]\nformat_version = 3\nmode = \"classic\"\nstrict_mode = false\n",
+            "[workspace]\nmembers = [\"packages/orders\"]\n\n[ir]\nformat_version = 3\nlayout = \"single-file\"\nstrict_mode = false\n",
         );
         write_file(
             &member,
             "project:\n  name: acme/orders\n  version: 1.0.0\nir:\n  strict_mode: true\n",
         );
-        write_file(&workspace_user, "ir:\n  mode: vfs\n");
+        write_file(&workspace_user, "ir:\n  layout: document-tree\n");
         write_file(&member_user, "ir:\n  format_version: 4\n");
 
         let options = ConfigLoadOptions {
@@ -755,7 +1096,7 @@ mod tests {
         assert_eq!(context.current_project.unwrap().name, "acme/orders");
         let ir = context.config.ir.unwrap();
         assert!(ir.strict_mode);
-        assert_eq!(ir.mode, "vfs");
+        assert_eq!(ir.layout, "document-tree");
         assert_eq!(ir.format_version, 4);
 
         let kinds = context
@@ -1003,5 +1344,697 @@ mod tests {
         let member = source(&context.sources, ConfigSourceKind::WorkspaceMember);
         assert_eq!(member.status, ConfigSourceStatus::NotFound);
         assert_eq!(member.candidates.len(), 6);
+    }
+
+    #[test]
+    fn removed_and_renamed_keys_produce_warnings() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\noutput_directory = \"old\"\n\n[workspace]\noutput_dir = \"old\"\n\n[ir]\nmode = \"vfs\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 3, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("project.output_directory"));
+        assert!(context.warnings[1].contains("workspace.output_dir"));
+        assert!(context.warnings[2].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    #[test]
+    fn clean_configs_have_no_warnings() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n",
+        );
+        assert!(load_config_context(&config).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn explicit_layout_beats_deprecated_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"classic\"\nlayout = \"document-tree\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 2, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("ir.mode"));
+        assert!(
+            context.warnings[1].contains("ir.mode is ignored because ir.layout is set explicitly")
+        );
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    /// The alias is applied inside each layer, before the layers meet, so a
+    /// higher-precedence `ir.mode` beats a lower-precedence `ir.layout` the
+    /// same way any other pair of values would. Mapping the alias on the
+    /// merged value instead let a `layout` in the global configuration win
+    /// over the project's own `mode`, which is backwards.
+    #[test]
+    fn a_project_mode_beats_a_global_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("global").join("morphir.yaml");
+        let project = root.path().join("project").join("morphir.toml");
+        write_file(&global, "ir:\n  layout: document-tree\n");
+        write_file(
+            &project,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"classic\"\n",
+        );
+
+        let context = load_config_context_with_global(&project, Some(&global)).unwrap();
+
+        assert_eq!(context.config.ir.unwrap().layout, "single-file");
+        assert!(
+            !context
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("ir.mode is ignored")),
+            "no single layer set both, so nothing was shadowed: {:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn mode_alone_maps_vfs_to_document_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"vfs\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    /// The environment layer must be normalised by the same `ir.mode` alias
+    /// as every file layer. Before this fix, `env_source` merged its layer
+    /// straight into the provenance state without calling
+    /// `apply_ir_mode_alias`, so `MORPHIR_IR__MODE=vfs` was silently ignored
+    /// whenever a lower layer had already set `ir.layout`.
+    #[test]
+    fn env_mode_alias_beats_a_project_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nlayout = \"single-file\"\n",
+        );
+
+        let options = ConfigLoadOptions {
+            env: env(&[("MORPHIR_IR__MODE", "vfs")]),
+            ..ConfigLoadOptions::project_only()
+        };
+        let context = load_config_context_with(&config, &options).unwrap();
+
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    #[test]
+    fn mode_alone_maps_classic_to_single_file() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"classic\"\n",
+        );
+        let context = load_config_context(&config).unwrap();
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(context.warnings[0].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "single-file");
+    }
+
+    /// A misspelled `ir.mode` value used to fall through to `single-file`
+    /// silently. It must now fail to load, naming the bad value and the two
+    /// spellings the alias accepts.
+    #[test]
+    fn an_unknown_mode_value_fails_to_load() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"vfss\"\n",
+        );
+        let error = load_config_context(&config).expect_err("unknown ir.mode must fail to load");
+        let message = error.to_string();
+        assert!(message.contains("ir.mode"), "{message}");
+        assert!(message.contains("vfss"), "{message}");
+        assert!(message.contains("classic"), "{message}");
+        assert!(message.contains("vfs"), "{message}");
+    }
+
+    /// `load_config_context` stores `workspace_root`, `project_root`, and
+    /// `config_path` absolute, even when it is called with a relative path,
+    /// so a caller that resolves them after the process changes directory
+    /// (for example `resolve_out_root`) is not affected by that later
+    /// change. The config is written directly under the test binary's
+    /// current directory (never changed by this test) so a genuinely
+    /// relative path can be passed without touching global process state.
+    #[test]
+    fn relative_config_path_is_stored_absolute() {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_dir = PathBuf::from(format!(
+            ".tmp-relative-config-path-is-stored-absolute-{}",
+            std::process::id()
+        ));
+        let dir = cwd.join(&relative_dir);
+        let config = dir.join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n",
+        );
+
+        let relative_config = relative_dir.join("morphir.toml");
+        let result = load_config_context(&relative_config);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let context = result.unwrap();
+
+        assert!(context.config_path.is_absolute(), "{context:?}");
+        assert_eq!(context.config_path, dir.join("morphir.toml"));
+        assert_eq!(context.project_root, Some(dir));
+    }
+
+    #[test]
+    fn glob_member_patterns_expand_to_member_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        write_file(&workspace, "[workspace]\nmembers = [\"packages/*\"]\n");
+        write_file(
+            &root
+                .path()
+                .join("packages")
+                .join("orders")
+                .join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.workspace_root.as_deref(), Some(root.path()));
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("orders"))
+        );
+        assert_eq!(context.current_project.unwrap().name, "acme/orders");
+    }
+
+    #[test]
+    fn a_glob_that_expands_to_several_members_selects_none_without_a_default() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        write_file(&workspace, "[workspace]\nmembers = [\"packages/*\"]\n");
+        for name in ["orders", "billing"] {
+            write_file(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.workspace_root.as_deref(), Some(root.path()));
+        assert!(context.project_root.is_none());
+        assert!(context.current_project.is_none());
+    }
+
+    #[test]
+    fn default_member_selects_out_of_a_glob_expansion() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("morphir.toml");
+        write_file(
+            &workspace,
+            "[workspace]\nmembers = [\"packages/*\"]\ndefault_member = \"packages/billing\"\n",
+        );
+        for name in ["orders", "billing"] {
+            write_file(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("billing"))
+        );
+        assert_eq!(context.current_project.unwrap().name, "acme/billing");
+    }
+
+    #[test]
+    fn a_member_configuration_resolves_its_enclosing_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n\n[ir]\nformat_version = 3\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n\n[ir]\nstrict_mode = true\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.workspace_root.as_deref(), Some(root.path()));
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("orders"))
+        );
+        assert_eq!(context.config_path, member);
+        // The workspace configuration merged underneath the member's, so both
+        // layers contribute and the member wins where they overlap.
+        let ir = context.config.ir.unwrap();
+        assert_eq!(ir.format_version, 3);
+        assert!(ir.strict_mode);
+        let kinds = context
+            .sources
+            .iter()
+            .filter(|source| source.status == ConfigSourceStatus::Loaded)
+            .map(|source| source.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                ConfigSourceKind::Defaults,
+                ConfigSourceKind::Project,
+                ConfigSourceKind::WorkspaceMember,
+            ]
+        );
+        assert_eq!(
+            source(&context.sources, ConfigSourceKind::Project)
+                .path
+                .as_deref(),
+            Some(root.path().join("morphir.toml").as_path())
+        );
+    }
+
+    #[test]
+    fn a_project_an_unrelated_workspace_does_not_list_stays_standalone() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n",
+        );
+        let outsider = root.path().join("tools").join("cli").join("morphir.toml");
+        write_file(
+            &outsider,
+            "[project]\nname = \"acme/cli\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context =
+            load_config_context_with(&outsider, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(context.workspace_root.is_none());
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("tools").join("cli"))
+        );
+    }
+
+    #[test]
+    fn a_member_configuration_cannot_relocate_the_workspace_out_root() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\nout_dir = \"build/out\"\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n\n[workspace]\nout_dir = \"member-out\"\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(context.config.workspace.unwrap().out_dir, "build/out");
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("workspace.out_dir is ignored"),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn an_ignored_member_out_dir_falls_back_to_the_default() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n\n[workspace]\nout_dir = \"member-out\"\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert_eq!(
+            context.config.workspace.as_ref().unwrap().out_dir,
+            ".morphir/out"
+        );
+        assert_eq!(
+            crate::out::resolve_out_root(None, None, Some(&context), Path::new("/scratch")),
+            root.path().join(".morphir").join("out")
+        );
+    }
+
+    /// A one-member workspace with a `morphir.user.toml` beside the workspace
+    /// primary, beside the member primary, or both. Returns the workspace
+    /// primary path, which is what the tests load.
+    fn workspace_with_user_overrides(
+        root: &Path,
+        workspace_user: Option<&str>,
+        member_user: Option<&str>,
+    ) -> PathBuf {
+        let workspace = root.join("morphir.toml");
+        write_file(&workspace, "[workspace]\nmembers = [\"packages/orders\"]\n");
+        let member = root.join("packages").join("orders");
+        write_file(
+            &member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+        if let Some(body) = workspace_user {
+            write_file(&root.join("morphir.user.toml"), body);
+        }
+        if let Some(body) = member_user {
+            write_file(&member.join("morphir.user.toml"), body);
+        }
+        workspace
+    }
+
+    fn with_user_overrides() -> ConfigLoadOptions {
+        ConfigLoadOptions {
+            user_override: SourceSelection::Discover,
+            ..ConfigLoadOptions::project_only()
+        }
+    }
+
+    #[test]
+    fn a_user_override_beside_a_member_cannot_relocate_the_workspace_out_root() {
+        // The member's own `morphir.toml` was already refused, but a
+        // `morphir.user.toml` next to it records the source kind
+        // `UserOverride`, so the old provenance check let it through and one
+        // member's personal override moved every member's output.
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_with_user_overrides(
+            root.path(),
+            None,
+            Some("[workspace]\nout_dir = \"member-out\"\n"),
+        );
+
+        let context = load_config_context_with(&workspace, &with_user_overrides()).unwrap();
+
+        assert_eq!(
+            context.config.workspace.as_ref().unwrap().out_dir,
+            ".morphir/out"
+        );
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("workspace.out_dir is ignored"),
+            "{:?}",
+            context.warnings
+        );
+        assert!(
+            context.warnings[0].contains("morphir.user.toml"),
+            "the warning names the file it came from: {:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn a_user_override_beside_the_workspace_may_still_set_the_out_root() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_with_user_overrides(
+            root.path(),
+            Some("[workspace]\nout_dir = \"my-out\"\n"),
+            None,
+        );
+
+        let context = load_config_context_with(&workspace, &with_user_overrides()).unwrap();
+
+        assert!(context.warnings.is_empty(), "{:?}", context.warnings);
+        assert_eq!(context.config.workspace.as_ref().unwrap().out_dir, "my-out");
+    }
+
+    #[test]
+    fn a_member_override_never_beats_the_workspace_override_for_the_out_root() {
+        // Both overrides set it. The member's is dropped from its layer, so
+        // the workspace's survives rather than falling back to the default.
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_with_user_overrides(
+            root.path(),
+            Some("[workspace]\nout_dir = \"my-out\"\n"),
+            Some("[workspace]\nout_dir = \"member-out\"\n"),
+        );
+
+        let context = load_config_context_with(&workspace, &with_user_overrides()).unwrap();
+
+        assert_eq!(context.config.workspace.as_ref().unwrap().out_dir, "my-out");
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+    }
+
+    #[test]
+    fn the_workspace_layer_may_still_set_the_out_root() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\nout_dir = \"build/out\"\n",
+        );
+        let member = root
+            .path()
+            .join("packages")
+            .join("orders")
+            .join("morphir.toml");
+        write_file(
+            &member,
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context =
+            load_config_context_with(&member, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(context.warnings.is_empty(), "{:?}", context.warnings);
+        assert_eq!(context.config.workspace.unwrap().out_dir, "build/out");
+    }
+
+    /// The repository's own monorepo fixture excludes `packages/ignored` from
+    /// a `packages/*` members list. `morphir-workspace` already refuses to
+    /// treat that directory as a member; the loader must agree, or two crates
+    /// read one configuration file two ways and the excluded project's output
+    /// would nest under the workspace out root.
+    #[test]
+    fn an_excluded_directory_is_not_a_workspace_member() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/workspace-discovery/valid-monorepo");
+        let options = ConfigLoadOptions::project_only();
+
+        let ignored = load_config_context_with(
+            &fixture
+                .join("packages")
+                .join("ignored")
+                .join("morphir.toml"),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(ignored.workspace_root, None);
+        assert_eq!(
+            ignored.project_root,
+            Some(fixture.join("packages").join("ignored"))
+        );
+
+        // A sibling the exclude list does not name still joins the workspace.
+        let orders = load_config_context_with(
+            &fixture.join("packages").join("orders").join("morphir.yaml"),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(orders.workspace_root.as_deref(), Some(fixture.as_path()));
+        assert_eq!(
+            orders.project_root,
+            Some(fixture.join("packages").join("orders"))
+        );
+    }
+
+    #[test]
+    fn an_excluded_directory_is_never_the_selected_member() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/ignored\"]\n",
+        );
+        for name in ["orders", "ignored"] {
+            write_file(
+                &root.path().join("packages").join(name).join("morphir.toml"),
+                &format!("[project]\nname = \"acme/{name}\"\nversion = \"1.0.0\"\n"),
+            );
+        }
+
+        // Two directories match `packages/*`, but one is excluded, so exactly
+        // one member remains and it is selected.
+        let context = load_config_context_with(
+            &root.path().join("morphir.toml"),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+        assert_eq!(
+            context.project_root,
+            Some(root.path().join("packages").join("orders"))
+        );
+        assert_eq!(context.current_project.unwrap().name, "acme/orders");
+    }
+
+    /// `members = ["**"]` selects the workspace root itself. Merging the
+    /// workspace configuration a second time as the member layer would
+    /// re-attribute every value it sets to that layer, so a workspace that set
+    /// `workspace.out_dir` would be told its own key is ignored.
+    #[test]
+    fn a_workspace_is_never_its_own_member() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"**\"]\nout_dir = \"build/out\"\n\n[project]\nname = \"acme/root\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context = load_config_context_with(
+            &root.path().join("morphir.toml"),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+
+        assert!(context.warnings.is_empty(), "{:?}", context.warnings);
+        assert_eq!(
+            context.config.workspace.as_ref().unwrap().out_dir,
+            "build/out"
+        );
+        assert!(no_member_was_merged(&context));
+    }
+
+    /// A workspace laid out with a sibling directory the workspace does not
+    /// own, so a member entry that escapes has somewhere real to land.
+    fn workspace_beside_an_outsider(root: &Path, workspace_body: &str) -> PathBuf {
+        write_file(
+            &root.join("outside").join("morphir.toml"),
+            "[project]\nname = \"acme/outside\"\nversion = \"1.0.0\"\n",
+        );
+        let workspace = root.join("workspace").join("morphir.toml");
+        write_file(&workspace, workspace_body);
+        workspace
+    }
+
+    #[test]
+    fn a_default_member_that_leaves_the_workspace_is_ignored_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_beside_an_outsider(
+            root.path(),
+            "[workspace]\nmembers = [\"packages/*\"]\ndefault_member = \"../outside\"\n",
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(
+            no_member_was_merged(&context),
+            "a member outside the workspace must never be merged: {:?}",
+            context.sources
+        );
+        assert!(context.current_project.is_none());
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("../outside") && context.warnings[0].contains("confined"),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn an_absolute_member_entry_is_ignored_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let absolute = root.path().join("outside").to_string_lossy().into_owned();
+        let workspace = workspace_beside_an_outsider(
+            root.path(),
+            &format!(
+                "[workspace]\nmembers = [\"{}\"]\n",
+                absolute.replace('\\', "\\\\")
+            ),
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(no_member_was_merged(&context), "{:?}", context.sources);
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains(&absolute),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn a_backslash_separated_member_entry_is_ignored_with_a_warning() {
+        // A backslash is a path separator on Windows, so `..\outside` escapes
+        // there even though it is one odd directory name on Unix. The entry is
+        // refused on every platform, so a workspace behaves the same way
+        // wherever it is loaded.
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_beside_an_outsider(
+            root.path(),
+            "[workspace]\nmembers = [\"..\\\\outside\"]\n",
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(no_member_was_merged(&context), "{:?}", context.sources);
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains(r"..\outside"),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn a_default_member_naming_the_root_selects_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("morphir.toml"),
+            "[workspace]\nmembers = [\"packages/*\"]\ndefault_member = \".\"\n\n[project]\nname = \"acme/root\"\nversion = \"1.0.0\"\n",
+        );
+
+        let context = load_config_context_with(
+            &root.path().join("morphir.toml"),
+            &ConfigLoadOptions::project_only(),
+        )
+        .unwrap();
+
+        assert!(no_member_was_merged(&context));
     }
 }

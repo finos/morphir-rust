@@ -193,7 +193,8 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
     /// Ensure format.json exists at output root
     fn ensure_format_json(&self) -> Result<()> {
-        // output_dir is already .morphir/out/<project>/compile/<language>/
+        // output_dir is the compile task's scratch directory, `<task>.dest`
+        // under the workspace out root.
         let format_path = self.output_dir.join("format.json");
 
         // Only create if it doesn't exist

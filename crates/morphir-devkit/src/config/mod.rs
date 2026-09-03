@@ -10,6 +10,7 @@
 
 pub mod discovery;
 pub mod loader;
+mod members;
 pub mod paths;
 mod provenance;
 pub mod secret;
@@ -23,14 +24,13 @@ pub use discovery::{
     system_config_candidates, user_override_candidates,
 };
 pub use loader::{
-    ConfigContext, load_config_context, load_config_context_with, load_config_context_with_global,
-    load_effective_config,
+    ConfigContext, deprecated_key_warnings, load_config_context, load_config_context_with,
+    load_config_context_with_global, load_effective_config,
 };
 pub use morphir_config::builtin_defaults;
 pub use paths::{
-    ensure_morphir_structure, resolve_compile_output, resolve_dist_output, resolve_generate_output,
-    resolve_path_relative_to_config, resolve_path_relative_to_workspace, resolve_test_fixture,
-    resolve_test_scenario, sanitize_project_name,
+    ensure_morphir_structure, resolve_path_relative_to_config, resolve_path_relative_to_workspace,
+    resolve_test_fixture, resolve_test_scenario,
 };
 pub use secret::{
     ExposeSecret, SecretReference, SecretResolutionContext, SecretResolutionError, SecretResolver,

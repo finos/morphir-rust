@@ -375,6 +375,9 @@ mod tests {
             sources: Vec::new(),
             workspace_root: None,
             member_root: None,
+            ignored_member_out_dir: Vec::new(),
+            warnings: Vec::new(),
+            ir_mode_shadowed: false,
             provenance,
         }
     }

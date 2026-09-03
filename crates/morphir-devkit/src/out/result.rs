@@ -117,7 +117,12 @@ pub struct TaskResult {
     /// content placed in or beside an installed directory is never at risk.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub installed: BTreeMap<String, Vec<String>>,
-    /// RFC 3339 UTC timestamp of the successful run.
+    /// RFC 3339 UTC timestamp of the last SUCCESSFUL run. A tombstone (see
+    /// the CLI's `out_context::prepare_dest`) keeps this value from that
+    /// last success even though `value` and `ir` are cleared, so a record
+    /// with no `ir` and an empty `value` is a tombstone left by a later run
+    /// that started but did not complete — `completed_at` is not the time
+    /// of that later run.
     pub completed_at: String,
     /// Fields this version does not know. Preserved on read and write.
     #[serde(flatten)]

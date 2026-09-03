@@ -68,6 +68,51 @@ pub(crate) fn unconfined_warning(entry: &str) -> String {
     )
 }
 
+/// The warning shown for a member directory [`resolves_inside`] rejects.
+pub(crate) fn unconfined_target_warning(directory: &Path) -> String {
+    format!(
+        "workspace member '{}' resolves outside the workspace directory; it is ignored",
+        directory.display()
+    )
+}
+
+/// Does `directory` still sit under `workspace_root` once the symbolic links
+/// along the way are followed?
+///
+/// [`is_confined`] settles the spelling of an entry and nothing else, so a
+/// perfectly ordinary entry such as `packages/orders` passes it — and if
+/// `packages/orders` is a symbolic link to a directory beside the workspace,
+/// `discover_config_at` follows the link and the loader merges a configuration
+/// from outside the workspace anyway. Native workspace discovery already
+/// resolves a candidate before accepting it (`confined_canonicalize` in
+/// `workspace_discovery::traversal`); this is the same rule for the
+/// configuration loader's own member list.
+///
+/// A directory that is not there answers `true`. A literal member entry is
+/// expanded whether or not it exists, so that a listed-but-missing member is
+/// reported as a not-found source rather than disappearing, and a path with
+/// nothing behind it has no link to follow. Anything else that will not
+/// resolve — a dangling link, a directory that cannot be read — answers
+/// `false`, because a member Morphir cannot place is not one it should merge.
+///
+/// Both sides are canonicalized before comparing, so a workspace root that is
+/// itself reached through a symbolic link (a temporary directory under
+/// `/var` on macOS, say) still contains its own members.
+pub(crate) fn resolves_inside(workspace_root: &Path, directory: &Path) -> bool {
+    let canonical_directory = match std::fs::canonicalize(directory) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+    };
+    match std::fs::canonicalize(workspace_root) {
+        Ok(canonical_root) => canonical_directory.starts_with(canonical_root),
+        // The workspace root is not on disk, so nothing can be shown to sit
+        // outside it. Membership is then a purely lexical question, which the
+        // caller has already answered.
+        Err(_) => true,
+    }
+}
+
 /// The entries of `patterns` that stay inside the workspace, adding a warning
 /// for each one that does not.
 fn confined_patterns<'a>(patterns: &'a [String], warnings: &mut Vec<String>) -> Vec<&'a String> {
@@ -105,7 +150,9 @@ pub(crate) fn expand_member_pattern(workspace_root: &Path, pattern: &str) -> Vec
 /// dropping the workspace root itself and anything `exclude` rules out.
 ///
 /// An entry that would leave the workspace directory is skipped, with a
-/// warning naming it appended to `warnings`. See [`is_confined`].
+/// warning naming it appended to `warnings`. So is one that stays inside the
+/// workspace as text but resolves outside it on disk. See [`is_confined`] and
+/// [`resolves_inside`].
 pub(crate) fn expand_members(
     workspace_root: &Path,
     members: &[String],
@@ -115,9 +162,14 @@ pub(crate) fn expand_members(
     let mut expanded = Vec::new();
     for member in confined_patterns(members, warnings) {
         for path in expand_member_pattern(workspace_root, member) {
-            if !expanded.contains(&path) && is_member(workspace_root, exclude, &path) {
-                expanded.push(path);
+            if expanded.contains(&path) || !is_member(workspace_root, exclude, &path) {
+                continue;
             }
+            if !resolves_inside(workspace_root, &path) {
+                warnings.push(unconfined_target_warning(&path));
+                continue;
+            }
+            expanded.push(path);
         }
     }
     expanded
@@ -140,10 +192,14 @@ pub(crate) fn is_member(workspace_root: &Path, exclude: &[String], directory: &P
 }
 
 /// Does `directory` sit at a path that one of `members` selects, relative to
-/// `workspace_root`, and survive the `exclude` patterns?
+/// `workspace_root`, survive the `exclude` patterns, and still resolve under
+/// the workspace root on disk?
 ///
-/// This answers the question without touching the filesystem, so it is safe to
-/// ask while walking up from a candidate member towards its workspace.
+/// The pattern side of the question is answered without touching the
+/// filesystem, so it is cheap to ask while walking up from a candidate member
+/// towards its workspace. Only a directory that got that far is resolved, and
+/// one that resolves outside the workspace is refused with a warning: see
+/// [`resolves_inside`].
 pub(crate) fn members_select(
     workspace_root: &Path,
     members: &[String],
@@ -152,8 +208,16 @@ pub(crate) fn members_select(
     warnings: &mut Vec<String>,
 ) -> bool {
     let members = confined_patterns(members, warnings);
-    patterns_select_refs(workspace_root, &members, directory)
-        && is_member(workspace_root, exclude, directory)
+    if !patterns_select_refs(workspace_root, &members, directory)
+        || !is_member(workspace_root, exclude, directory)
+    {
+        return false;
+    }
+    if !resolves_inside(workspace_root, directory) {
+        warnings.push(unconfined_target_warning(directory));
+        return false;
+    }
+    true
 }
 
 /// Does any pattern select `directory`, relative to `workspace_root`?
@@ -520,6 +584,85 @@ mod tests {
         ));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("../outside"), "{warnings:?}");
+    }
+
+    /// The entry `packages/orders` is confined as text — there is nothing in
+    /// its spelling to complain about. What it names on disk is a symbolic
+    /// link to a directory beside the workspace, and following it merges a
+    /// configuration from outside the workspace entirely.
+    #[cfg(unix)]
+    #[test]
+    fn a_member_symlinked_out_of_the_workspace_is_skipped_with_a_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        let outside = temp.path().join("outside");
+        write(
+            &outside.join("morphir.toml"),
+            "[project]\nname = \"acme/outside\"\nversion = \"1.0.0\"\n",
+        );
+        std::fs::create_dir_all(root.join("packages")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("packages/orders")).unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(&root, &["packages/orders".to_owned()], &[], &mut warnings),
+            Vec::<PathBuf>::new(),
+            "a member that resolves outside the workspace may not expand to a member"
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("resolves outside the workspace"),
+            "{warnings:?}"
+        );
+        assert!(warnings[0].contains("orders"), "{warnings:?}");
+
+        // The walk-up asks the same question from the member's side.
+        let mut warnings = Vec::new();
+        assert!(!members_select(
+            &root,
+            &["packages/*".to_owned()],
+            &[],
+            &root.join("packages/orders"),
+            &mut warnings,
+        ));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("resolves outside the workspace"),
+            "{warnings:?}"
+        );
+    }
+
+    /// A symbolic link is a perfectly ordinary way to arrange a workspace, so
+    /// only the ones that leave it are refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_member_symlinked_within_the_workspace_is_still_a_member() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        write(
+            &root.join("vendor/orders/morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+        std::fs::create_dir_all(root.join("packages")).unwrap();
+        std::os::unix::fs::symlink(root.join("vendor/orders"), root.join("packages/orders"))
+            .unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(&root, &["packages/orders".to_owned()], &[], &mut warnings),
+            vec![root.join("packages").join("orders")]
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        let mut warnings = Vec::new();
+        assert!(members_select(
+            &root,
+            &["packages/*".to_owned()],
+            &[],
+            &root.join("packages/orders"),
+            &mut warnings,
+        ));
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]

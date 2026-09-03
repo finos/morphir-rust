@@ -6,7 +6,10 @@ use super::discovery::{
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
     user_override_candidates,
 };
-use super::members::{expand_members, is_confined, is_member, members_select, unconfined_warning};
+use super::members::{
+    expand_members, is_confined, is_member, members_select, resolves_inside,
+    unconfined_target_warning, unconfined_warning,
+};
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
@@ -242,6 +245,10 @@ fn find_enclosing_workspace(
 /// adds a warning; so does any `members` entry that does the same. Without that
 /// check `workspace_root.join("../outside")` would be accepted as a member and
 /// its configuration merged from outside the workspace entirely.
+///
+/// The same goes for a member that is confined as text but is a symbolic link
+/// to a directory outside the workspace: it is resolved on disk before it is
+/// accepted, and refused with a warning if it lands elsewhere.
 fn select_member(
     workspace_root: &Path,
     workspace: &WorkspaceSection,
@@ -253,7 +260,14 @@ fn select_member(
             return None;
         }
         let member = workspace_root.join(member);
-        return is_member(workspace_root, &workspace.exclude, &member).then_some(member);
+        if !is_member(workspace_root, &workspace.exclude, &member) {
+            return None;
+        }
+        if !resolves_inside(workspace_root, &member) {
+            warnings.push(unconfined_target_warning(&member));
+            return None;
+        }
+        return Some(member);
     }
     match expand_members(
         workspace_root,

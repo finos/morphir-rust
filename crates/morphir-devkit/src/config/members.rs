@@ -456,12 +456,14 @@ mod tests {
 
     #[test]
     fn entries_that_leave_the_workspace_are_skipped_with_a_warning() {
+        // A literal entry never touches the filesystem — `expand_member_pattern`
+        // joins it onto the workspace root and hands it straight to
+        // `is_member` — so the sibling directory these entries name does not
+        // have to exist for the test to be honest about what used to happen:
+        // `is_member` saw the single segment `outside`, said yes, and the
+        // loader went looking for a configuration outside the workspace.
         let root = tempfile::tempdir().unwrap();
         let outside = root.path().parent().unwrap().join("outside-member");
-        write(
-            &outside.join("morphir.toml"),
-            "[project]\nname = \"acme/outside\"\nversion = \"1.0.0\"\n",
-        );
 
         let mut warnings = Vec::new();
         let members = vec![
@@ -478,7 +480,6 @@ mod tests {
         assert!(warnings[0].contains("../outside-member"), "{warnings:?}");
         assert!(warnings[0].contains("not confined"), "{warnings:?}");
         assert!(warnings[2].contains(r"..\outside-member"), "{warnings:?}");
-        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]

@@ -156,10 +156,12 @@ class AssetFixture:
         extension_id: str,
         version: str,
         targets: list[str] | None = None,
+        name: str | None = None,
     ) -> tuple[Path, Path, Path]:
         """Add another opted-in registry package and valid downloaded bundle."""
         targets = [short_id] if targets is None else targets
         targets_toml = ", ".join(f'"{target}"' for target in targets)
+        name_toml = "" if name is None else f'name = "{name}"\n'
         registry_path = self.root / ".github" / "extensions.toml"
         with registry_path.open("a", encoding="utf-8", newline="\n") as registry:
             registry.write(
@@ -170,7 +172,7 @@ class AssetFixture:
                     package = "{package}"
                     artifact = "{artifact_base}"
                     extension_id = "{extension_id}"
-                    mep_versions = ["0.1"]
+                    {name_toml}mep_versions = ["0.1"]
                     targets = [{targets_toml}]
                     ir_versions = ["4"]
                     release_with_workspace = true
@@ -208,6 +210,7 @@ class AssetFixture:
                     "irVersions": ["4"],
                     "artifact": artifact_name,
                     "sha256": digest,
+                    **({} if name is None else {"name": name}),
                     "gitCommit": RELEASE_COMMIT,
                 },
                 indent=2,

@@ -133,6 +133,8 @@ def descriptor_bytes(
         "artifact": artifact_name,
         "sha256": digest,
     }
+    if "name" in extension:
+        descriptor["name"] = require_string(extension, "name")
     if git_commit is not None:
         descriptor["gitCommit"] = git_commit
     return (json.dumps(descriptor, indent=2) + "\n").encode("utf-8")

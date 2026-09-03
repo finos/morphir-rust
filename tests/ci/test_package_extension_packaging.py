@@ -43,6 +43,9 @@ class PackageExtensionTests(unittest.TestCase):
 
         self.assertEqual(["openapi", "json-schema"], descriptor["targets"])
         self.assertEqual("morphir-openapi", descriptor["extensionId"])
+        # The guest reports this exact spelling at initialization; a
+        # repository record derived from the identifier would not match it.
+        self.assertEqual("Morphir OpenAPI", descriptor["name"])
 
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()

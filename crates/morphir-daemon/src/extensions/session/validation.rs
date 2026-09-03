@@ -348,15 +348,23 @@ pub(in crate::extensions) fn validate_negotiation(
             "Extension initialization repeated a capability kind".into(),
         ));
     }
-    if let Some(discovered) = expected.discovered
-        && (result.extension.version != discovered.version
-            || result.extension.name != discovered.name
-            || unique != discovered.types.iter().copied().collect())
-    {
-        return Err(DaemonError::Extension(format!(
-            "Extension '{}' initialization metadata disagreed with discovery",
-            expected.id
-        )));
+    // The display name is presentation metadata. A repository record may
+    // spell it differently from the guest (for example "Morphir Openapi"
+    // derived from the identifier against the guest's "Morphir OpenAPI"), so
+    // only the version and the capability kinds are held to discovery.
+    if let Some(discovered) = expected.discovered {
+        if result.extension.version != discovered.version {
+            return Err(DaemonError::Extension(format!(
+                "Extension '{}' initialization metadata disagreed with discovery: version '{}' was discovered as '{}'",
+                expected.id, result.extension.version, discovered.version
+            )));
+        }
+        if unique != discovered.types.iter().copied().collect() {
+            return Err(DaemonError::Extension(format!(
+                "Extension '{}' initialization metadata disagreed with discovery: capability kinds changed",
+                expected.id
+            )));
+        }
     }
     if let Some(discovered) = expected.capabilities {
         let capability_scope = match discovered {

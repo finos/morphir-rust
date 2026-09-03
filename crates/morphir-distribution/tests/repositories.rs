@@ -376,6 +376,38 @@ fn publishing_a_verified_bundle_is_repeatable_and_writes_valid_metadata() {
 }
 
 #[test]
+fn publication_records_the_declared_display_name() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+    let bundle = release_bundle(root.path(), "morphir-openapi", "0.1.0", b"wasm extension");
+    let descriptor_path = bundle.join("release.json");
+    let mut descriptor: serde_json::Value =
+        serde_json::from_slice(&fs::read(&descriptor_path).unwrap()).unwrap();
+    descriptor["name"] = serde_json::json!("Morphir OpenAPI");
+    fs::write(
+        &descriptor_path,
+        serde_json::to_vec_pretty(&descriptor).unwrap(),
+    )
+    .unwrap();
+
+    let publication = repository.publish(&bundle).unwrap();
+    assert_eq!(publication.release().name(), "Morphir OpenAPI");
+
+    descriptor["name"] = serde_json::json!(" ");
+    fs::write(
+        &descriptor_path,
+        serde_json::to_vec_pretty(&descriptor).unwrap(),
+    )
+    .unwrap();
+    let other = LocalExtensionRepository::init(root.path().join("other")).unwrap();
+    let error = other.publish(&bundle).unwrap_err();
+    assert!(
+        error.to_string().contains("name must be non-empty"),
+        "{error}"
+    );
+}
+
+#[test]
 fn prerelease_publication_uses_the_resolvable_preview_channel() {
     let root = tempfile::tempdir().unwrap();
     let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();

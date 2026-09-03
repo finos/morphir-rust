@@ -146,6 +146,35 @@ class ExtensionAssetSelectionTests(unittest.TestCase):
             ):
                 fixture.select()
 
+    def test_registry_display_name_reaches_the_descriptor_and_is_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.add_extension(
+                short_id="zeta",
+                package="morphir-zeta-extension",
+                artifact_base="morphir-zeta-extension",
+                extension_id="morphir-zeta",
+                version="0.3.0",
+                name="Morphir Zeta",
+            )
+
+            selection = fixture.select("v0.2.0")
+
+            self.assertIn(
+                "morphir-zeta-extension-0.3.0.release.json",
+                [asset.name for asset in selection.uploads],
+            )
+
+    def test_rejects_descriptor_name_absent_from_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.rewrite_descriptor(name="Morphir Avro")
+
+            with self.assertRaisesRegex(
+                select_extension_assets.AssetError, "unexpected=\\['name'\\]"
+            ):
+                fixture.select()
+
     def test_rejects_descriptor_registry_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(temporary)

@@ -566,6 +566,48 @@ async fn rejects_capability_drift_from_discovery() {
 }
 
 #[tokio::test]
+async fn accepts_display_name_drift_from_discovery() {
+    let discovered = extension(vec![ExtensionType::Backend]);
+    let mut initialized = backend_initialization(true);
+    initialized.extension.name = "Example Display Name".into();
+    let response = ExtensionResponse::success(1, initialized).unwrap();
+    if let Err(failure) = Session::loaded(transport(
+        ExpectedExtension::discovered(discovered),
+        response,
+    ))
+    .initialize(params())
+    .await
+    {
+        panic!(
+            "a display name is presentation metadata, not a negotiation term: {}",
+            failure.error()
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejects_version_drift_from_discovery() {
+    let discovered = extension(vec![ExtensionType::Backend]);
+    let mut initialized = backend_initialization(true);
+    initialized.extension.version = "1.0.1".into();
+    let response = ExtensionResponse::success(1, initialized).unwrap();
+    let failure = Session::loaded(transport(
+        ExpectedExtension::discovered(discovered),
+        response,
+    ))
+    .initialize(params())
+    .await
+    .err()
+    .expect("version drift should fail");
+    let message = failure.error().to_string();
+    assert!(message.contains("disagreed with discovery"), "{message}");
+    assert!(
+        message.contains("'1.0.1' was discovered as '1.0.0'"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
 async fn rejects_duplicate_capability_kinds() {
     let response = ExtensionResponse::success(
         1,

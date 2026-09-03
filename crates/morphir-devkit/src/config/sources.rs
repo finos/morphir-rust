@@ -225,6 +225,11 @@ pub struct EffectiveConfig {
     /// Warnings raised while resolving the workspace and its members, such as
     /// a `members` entry that would leave the workspace directory.
     pub(crate) warnings: Vec<String>,
+    /// Whether some layer set both `ir.mode` and `ir.layout`, so that its own
+    /// `ir.mode` had no effect. The alias is applied inside each layer before
+    /// the layers are merged, so this is a property of one layer and not of
+    /// the merged value.
+    pub(crate) ir_mode_shadowed: bool,
     /// Origins of the winning configuration values.
     pub(crate) provenance: ConfigProvenance,
 }

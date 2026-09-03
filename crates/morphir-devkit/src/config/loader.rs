@@ -80,20 +80,24 @@ enum LayerScope {
     Member,
 }
 
-fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()> {
-    merge_scoped_source(
-        state,
-        source,
-        LayerScope::Workspace,
-        &mut IgnoredMemberKeys::default(),
-    )
+fn merge_source(
+    state: &mut ProvenanceState,
+    source: &ConfigSource,
+    notes: &mut LayerNotes,
+) -> Result<()> {
+    merge_scoped_source(state, source, LayerScope::Workspace, notes)
 }
 
-/// Files whose member layer set a key only the workspace may set.
+/// What merging the individual layers noticed about them, gathered as they go
+/// by so the caller can turn it into warnings once everything is merged.
 #[derive(Debug, Default)]
-struct IgnoredMemberKeys {
-    /// Files that set `workspace.out_dir` from inside a member.
+struct LayerNotes {
+    /// Files that set `workspace.out_dir` from inside a member, a key only the
+    /// workspace may set.
     out_dir: Vec<PathBuf>,
+    /// Whether some layer set both `ir.mode` and `ir.layout`, so that layer's
+    /// own `ir.mode` had no effect.
+    ir_mode_shadowed: bool,
 }
 
 /// Merge one loaded source, first dropping the keys a member layer may not set.
@@ -111,11 +115,20 @@ struct IgnoredMemberKeys {
 /// and a user override records the kind `UserOverride` no matter which
 /// directory it came from, so an override beside a member relocated the whole
 /// workspace's out root.
+///
+/// The deprecated `ir.mode` alias is applied here too, inside the layer,
+/// before the layer meets any other. Mapping it afterwards on the merged
+/// value made the alias lose to `ir.layout` set ANYWHERE — a `layout` in the
+/// global configuration silently beat a `mode` in the project's own
+/// configuration, which is backwards. Normalised per layer, `mode` becomes
+/// that layer's `layout` and ordinary precedence decides the rest.
+/// `notes.ir_mode_shadowed` records that some layer set both, so that layer's
+/// own `mode` had no effect and the caller can say so.
 fn merge_scoped_source(
     state: &mut ProvenanceState,
     source: &ConfigSource,
     scope: LayerScope,
-    ignored: &mut IgnoredMemberKeys,
+    notes: &mut LayerNotes,
 ) -> Result<()> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
         let declaring_path = std::path::absolute(path).with_context(|| {
@@ -133,7 +146,10 @@ fn merge_scoped_source(
             )
         })?;
         if scope == LayerScope::Member && take_workspace_out_dir(&mut layer) {
-            ignored.out_dir.push(declaring_path.clone());
+            notes.out_dir.push(declaring_path.clone());
+        }
+        if apply_ir_mode_alias(&mut layer, &declaring_path)? {
+            notes.ir_mode_shadowed = true;
         }
         state.merge(
             &layer,
@@ -144,6 +160,42 @@ fn merge_scoped_source(
         );
     }
     Ok(())
+}
+
+/// Turn one layer's `ir.mode` into that layer's `ir.layout`, reporting whether
+/// the layer set `ir.layout` itself and so ignored its own `ir.mode`.
+///
+/// `ir.mode` is left in the layer rather than removed: it is what
+/// [`deprecated_key_warnings`] reads off the merged value to say the key is
+/// deprecated, and leaving it keeps the merged value an honest record of what
+/// the files actually said. `IrSection` drops it on the way into the typed
+/// model, so nothing downstream sees both.
+///
+/// `declaring_path` only names the file in the error a misspelled value
+/// raises. That error is returned as it is, with no further context wrapped
+/// around it, so the message a user sees is the one that explains the
+/// spelling rather than a generic "failed to load" line.
+fn apply_ir_mode_alias(layer: &mut Value, declaring_path: &Path) -> Result<bool> {
+    let Some(ir) = layer.get_mut("ir").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    let Some(mode) = ir.get("mode").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let layout = match mode {
+        "classic" => "single-file",
+        "vfs" => "document-tree",
+        other => anyhow::bail!(
+            "ir.mode is set to {other:?} in {}, which is not a recognized value; \
+             use \"classic\" or \"vfs\"",
+            declaring_path.display()
+        ),
+    };
+    if ir.contains_key("layout") {
+        return Ok(true);
+    }
+    ir.insert("layout".to_owned(), Value::String(layout.to_owned()));
+    Ok(false)
 }
 
 /// Remove `workspace.out_dir` from a layer, reporting whether it was there.
@@ -289,7 +341,7 @@ fn merge_workspace_member(
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
     warnings: &mut Vec<String>,
-    ignored: &mut IgnoredMemberKeys,
+    notes: &mut LayerNotes,
 ) -> Result<Option<WorkspaceMemberConfig>> {
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
         return Ok(None);
@@ -302,7 +354,7 @@ fn merge_workspace_member(
         Some(member_config) => {
             let source =
                 ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config.clone());
-            merge_scoped_source(state, &source, LayerScope::Member, ignored)?;
+            merge_scoped_source(state, &source, LayerScope::Member, notes)?;
             sources.push(source);
             Ok(Some(WorkspaceMemberConfig {
                 root: member_path,
@@ -326,7 +378,7 @@ fn merge_user_overrides(
     options: &ConfigLoadOptions,
     project_config: Option<&Path>,
     member_config: Option<&Path>,
-    ignored: &mut IgnoredMemberKeys,
+    notes: &mut LayerNotes,
 ) -> Result<()> {
     match &options.user_override {
         SourceSelection::Discover => {
@@ -357,7 +409,7 @@ fn merge_user_overrides(
                     &SourceSelection::Discover,
                     || candidates.to_vec(),
                 )?;
-                merge_scoped_source(state, &source, scope, ignored)?;
+                merge_scoped_source(state, &source, scope, notes)?;
                 sources.push(source);
             }
             if !found_layout {
@@ -366,7 +418,7 @@ fn merge_user_overrides(
         }
         selection => {
             let source = resolve_file_source(ConfigSourceKind::UserOverride, selection, Vec::new)?;
-            merge_source(state, &source)?;
+            merge_source(state, &source, notes)?;
             sources.push(source);
         }
     }
@@ -400,7 +452,7 @@ pub fn load_effective_config(
 ) -> Result<EffectiveConfig> {
     let mut state = ProvenanceState::default();
     let mut warnings = Vec::new();
-    let mut ignored = IgnoredMemberKeys::default();
+    let mut notes = LayerNotes::default();
     state.merge(
         &builtin_defaults(),
         ConfigOrigin {
@@ -418,7 +470,7 @@ pub fn load_effective_config(
     let system = resolve_file_source(ConfigSourceKind::System, &options.system, || {
         native_system_config_candidates().to_vec()
     })?;
-    merge_source(&mut state, &system)?;
+    merge_source(&mut state, &system, &mut notes)?;
     sources.push(system);
 
     let global = resolve_file_source(
@@ -426,7 +478,7 @@ pub fn load_effective_config(
         &options.global,
         native_global_config_candidates,
     )?;
-    merge_source(&mut state, &global)?;
+    merge_source(&mut state, &global, &mut notes)?;
     sources.push(global);
 
     // A configuration that lies inside a workspace member is the member layer,
@@ -446,7 +498,7 @@ pub fn load_effective_config(
         Some(path) => ConfigSource::loaded(ConfigSourceKind::Project, path.clone()),
         None => ConfigSource::not_found(ConfigSourceKind::Project, Vec::new()),
     };
-    merge_source(&mut state, &project)?;
+    merge_source(&mut state, &project, &mut notes)?;
     sources.push(project);
 
     let root_config = decode_config(state.value(), "project")?;
@@ -454,7 +506,7 @@ pub fn load_effective_config(
         (Some(workspace), Some(member_root), Some(member_path)) => {
             let source =
                 ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_path.to_path_buf());
-            merge_scoped_source(&mut state, &source, LayerScope::Member, &mut ignored)?;
+            merge_scoped_source(&mut state, &source, LayerScope::Member, &mut notes)?;
             sources.push(source);
             (
                 Some(workspace.root),
@@ -475,7 +527,7 @@ pub fn load_effective_config(
                 workspace_root.as_deref(),
                 &root_config,
                 &mut warnings,
-                &mut ignored,
+                &mut notes,
             )?;
             (workspace_root, member)
         }
@@ -489,7 +541,7 @@ pub fn load_effective_config(
         member_config
             .as_ref()
             .map(|member| member.config_path.as_path()),
-        &mut ignored,
+        &mut notes,
     )?;
 
     sources.push(env_source(&mut state, options));
@@ -501,7 +553,8 @@ pub fn load_effective_config(
         sources,
         workspace_root,
         member_root: member_config.map(|member| member.root),
-        ignored_member_out_dir: ignored.out_dir,
+        ignored_member_out_dir: notes.out_dir,
+        ir_mode_shadowed: notes.ir_mode_shadowed,
         warnings,
         provenance,
     })
@@ -527,15 +580,13 @@ pub fn load_config_context_with_global(
 }
 
 /// Warnings for keys that were removed or renamed. `ir.mode` is still applied
-/// as an alias for `ir.layout` when `ir.layout` was not itself set explicitly;
-/// the other keys are ignored.
+/// as an alias for `ir.layout`, inside each layer before the layers are
+/// merged (see [`apply_ir_mode_alias`]); the other keys are ignored.
 ///
-/// Whether `ir.layout` was set explicitly cannot be decided from `effective`
-/// alone: the merged value always carries the built-in default
-/// (`ir.layout = "single-file"`) even when no source set it, so a bare
-/// pointer check can never see the difference. Callers that need that
-/// distinction (see [`load_config_context_with`]) resolve it from the
-/// configuration provenance instead and append the extra warning themselves.
+/// Whether a layer's own `ir.mode` lost to an `ir.layout` beside it cannot be
+/// decided from `effective` alone, since by then the two have been merged
+/// with everything else. [`load_config_context_with`] gets that from the
+/// merge itself and appends the extra warning.
 pub fn deprecated_key_warnings(effective: &Value) -> Vec<String> {
     let mut warnings = Vec::new();
     if effective.pointer("/project/output_directory").is_some() {
@@ -580,13 +631,6 @@ pub fn load_config_context_with(
     let config_dir = config_root(config_path)
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
 
-    let effective_config = load_effective_config(Some(config_path), options)?;
-    // `ir.layout` always has an entry in the merged value because the
-    // built-in defaults set it; only the provenance can tell whether a real
-    // source (as opposed to the defaults layer) set it explicitly.
-    let layout_explicit = effective_config
-        .origin_for_key("ir.layout")
-        .is_some_and(|origin| origin.kind != ConfigSourceKind::Defaults);
     let EffectiveConfig {
         value: effective,
         sources,
@@ -594,14 +638,15 @@ pub fn load_config_context_with(
         member_root,
         ignored_member_out_dir,
         warnings: member_warnings,
+        ir_mode_shadowed,
         ..
-    } = effective_config;
+    } = load_effective_config(Some(config_path), options)?;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
 
     let mut warnings = member_warnings;
     warnings.extend(deprecated_key_warnings(&effective));
-    if effective.pointer("/ir/mode").is_some() && layout_explicit {
+    if ir_mode_shadowed {
         warnings.push("ir.mode is ignored because ir.layout is set explicitly".to_owned());
     }
     for path in ignored_member_out_dir {
@@ -611,21 +656,6 @@ pub fn load_config_context_with(
             path.display()
         ));
     }
-    let mut config = config;
-    if let Some(ir) = config.ir.as_mut()
-        && let Some(mode) = ir.mode.take()
-        && !layout_explicit
-    {
-        ir.layout = match mode.as_str() {
-            "classic" => "single-file".to_owned(),
-            "vfs" => "document-tree".to_owned(),
-            other => anyhow::bail!(
-                "ir.mode is set to {other:?}, which is not a recognized value; \
-                 use \"classic\" or \"vfs\""
-            ),
-        };
-    }
-
     // Inside a workspace the project root is the selected member, if any;
     // otherwise the configuration directory is the project root.
     let project_root = if workspace_root.is_some() {
@@ -1343,6 +1373,35 @@ mod tests {
             context.warnings[1].contains("ir.mode is ignored because ir.layout is set explicitly")
         );
         assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    /// The alias is applied inside each layer, before the layers meet, so a
+    /// higher-precedence `ir.mode` beats a lower-precedence `ir.layout` the
+    /// same way any other pair of values would. Mapping the alias on the
+    /// merged value instead let a `layout` in the global configuration win
+    /// over the project's own `mode`, which is backwards.
+    #[test]
+    fn a_project_mode_beats_a_global_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("global").join("morphir.yaml");
+        let project = root.path().join("project").join("morphir.toml");
+        write_file(&global, "ir:\n  layout: document-tree\n");
+        write_file(
+            &project,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nmode = \"classic\"\n",
+        );
+
+        let context = load_config_context_with_global(&project, Some(&global)).unwrap();
+
+        assert_eq!(context.config.ir.unwrap().layout, "single-file");
+        assert!(
+            !context
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("ir.mode is ignored")),
+            "no single layer set both, so nothing was shadowed: {:?}",
+            context.warnings
+        );
     }
 
     #[test]

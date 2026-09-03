@@ -218,10 +218,10 @@ pub struct EffectiveConfig {
     pub workspace_root: Option<PathBuf>,
     /// Root of the selected workspace member, when one was found.
     pub member_root: Option<PathBuf>,
-    /// Merged value as it stood before the workspace-member layer merged.
-    /// Lets the loader recover the value a key held without the member's
-    /// contribution, which the merged value alone cannot show.
-    pub(crate) pre_member: Value,
+    /// Files belonging to the selected member that set `workspace.out_dir`,
+    /// which was dropped from their layer because the out root belongs to the
+    /// whole workspace.
+    pub(crate) ignored_member_out_dir: Vec<PathBuf>,
     /// Warnings raised while resolving the workspace and its members, such as
     /// a `members` entry that would leave the workspace directory.
     pub(crate) warnings: Vec<String>,

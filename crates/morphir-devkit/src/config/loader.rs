@@ -67,7 +67,53 @@ fn resolve_file_source(
     }
 }
 
+/// Which part of a workspace a configuration layer speaks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerScope {
+    /// The whole workspace, or a standalone project.
+    Workspace,
+    /// Only the selected workspace member: the member's own configuration, or
+    /// a user override sitting beside it.
+    Member,
+}
+
 fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()> {
+    merge_scoped_source(
+        state,
+        source,
+        LayerScope::Workspace,
+        &mut IgnoredMemberKeys::default(),
+    )
+}
+
+/// Files whose member layer set a key only the workspace may set.
+#[derive(Debug, Default)]
+struct IgnoredMemberKeys {
+    /// Files that set `workspace.out_dir` from inside a member.
+    out_dir: Vec<PathBuf>,
+}
+
+/// Merge one loaded source, first dropping the keys a member layer may not set.
+///
+/// `workspace.out_dir` is the one such key today: the out root is a property of
+/// the whole workspace, so a member that set it would relocate every other
+/// member's output as well. It is dropped from the layer before the merge
+/// rather than repaired in the merged value afterwards, so both the value and
+/// its provenance stay honest and whatever the workspace itself set — in its
+/// own configuration or in a user override beside it — simply stays in place.
+///
+/// The member scope covers the member's `morphir.toml` and the
+/// `morphir.user.toml` next to it alike. Only the member's own configuration
+/// used to be caught, because the check ran on the merged value's provenance
+/// and a user override records the kind `UserOverride` no matter which
+/// directory it came from, so an override beside a member relocated the whole
+/// workspace's out root.
+fn merge_scoped_source(
+    state: &mut ProvenanceState,
+    source: &ConfigSource,
+    scope: LayerScope,
+    ignored: &mut IgnoredMemberKeys,
+) -> Result<()> {
     if let (ConfigSourceStatus::Loaded, Some(path)) = (source.status, &source.path) {
         let declaring_path = std::path::absolute(path).with_context(|| {
             format!(
@@ -76,13 +122,16 @@ fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()
                 path.display()
             )
         })?;
-        let layer = load_config_value(&declaring_path).with_context(|| {
+        let mut layer = load_config_value(&declaring_path).with_context(|| {
             format!(
                 "Failed to load {} configuration: {}",
                 source.kind.name(),
                 path.display()
             )
         })?;
+        if scope == LayerScope::Member && take_workspace_out_dir(&mut layer) {
+            ignored.out_dir.push(declaring_path.clone());
+        }
         state.merge(
             &layer,
             ConfigOrigin {
@@ -92,6 +141,14 @@ fn merge_source(state: &mut ProvenanceState, source: &ConfigSource) -> Result<()
         );
     }
     Ok(())
+}
+
+/// Remove `workspace.out_dir` from a layer, reporting whether it was there.
+fn take_workspace_out_dir(layer: &mut Value) -> bool {
+    layer
+        .get_mut("workspace")
+        .and_then(Value::as_object_mut)
+        .is_some_and(|workspace| workspace.remove("out_dir").is_some())
 }
 
 fn decode_config(value: &Value, what: &str) -> Result<MorphirConfig> {
@@ -218,6 +275,7 @@ fn merge_workspace_member(
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
     warnings: &mut Vec<String>,
+    ignored: &mut IgnoredMemberKeys,
 ) -> Result<Option<WorkspaceMemberConfig>> {
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
         return Ok(None);
@@ -230,7 +288,7 @@ fn merge_workspace_member(
         Some(member_config) => {
             let source =
                 ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_config.clone());
-            merge_source(state, &source)?;
+            merge_scoped_source(state, &source, LayerScope::Member, ignored)?;
             sources.push(source);
             Ok(Some(WorkspaceMemberConfig {
                 root: member_path,
@@ -254,19 +312,28 @@ fn merge_user_overrides(
     options: &ConfigLoadOptions,
     project_config: Option<&Path>,
     member_config: Option<&Path>,
+    ignored: &mut IgnoredMemberKeys,
 ) -> Result<()> {
     match &options.user_override {
         SourceSelection::Discover => {
+            // An override beside the workspace primary speaks for the whole
+            // workspace; one beside the member primary speaks only for that
+            // member, and so may not set `workspace.out_dir`.
             let primary_paths = project_config
                 .into_iter()
-                .chain(member_config.filter(|member| Some(*member) != project_config))
+                .map(|path| (path, LayerScope::Workspace))
+                .chain(
+                    member_config
+                        .filter(|member| Some(*member) != project_config)
+                        .map(|path| (path, LayerScope::Member)),
+                )
                 .collect::<Vec<_>>();
             if primary_paths.is_empty() {
                 sources.push(ConfigSource::skipped(ConfigSourceKind::UserOverride));
                 return Ok(());
             }
             let mut found_layout = false;
-            for primary_path in primary_paths {
+            for (primary_path, scope) in primary_paths {
                 let Some(candidates) = user_override_candidates(primary_path) else {
                     continue;
                 };
@@ -276,7 +343,7 @@ fn merge_user_overrides(
                     &SourceSelection::Discover,
                     || candidates.to_vec(),
                 )?;
-                merge_source(state, &source)?;
+                merge_scoped_source(state, &source, scope, ignored)?;
                 sources.push(source);
             }
             if !found_layout {
@@ -319,6 +386,7 @@ pub fn load_effective_config(
 ) -> Result<EffectiveConfig> {
     let mut state = ProvenanceState::default();
     let mut warnings = Vec::new();
+    let mut ignored = IgnoredMemberKeys::default();
     state.merge(
         &builtin_defaults(),
         ConfigOrigin {
@@ -368,12 +436,11 @@ pub fn load_effective_config(
     sources.push(project);
 
     let root_config = decode_config(state.value(), "project")?;
-    let pre_member = state.value().clone();
     let (workspace_root, member_config) = match (enclosing, selected_root.clone(), project_config) {
         (Some(workspace), Some(member_root), Some(member_path)) => {
             let source =
                 ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_path.to_path_buf());
-            merge_source(&mut state, &source)?;
+            merge_scoped_source(&mut state, &source, LayerScope::Member, &mut ignored)?;
             sources.push(source);
             (
                 Some(workspace.root),
@@ -394,6 +461,7 @@ pub fn load_effective_config(
                 workspace_root.as_deref(),
                 &root_config,
                 &mut warnings,
+                &mut ignored,
             )?;
             (workspace_root, member)
         }
@@ -407,6 +475,7 @@ pub fn load_effective_config(
         member_config
             .as_ref()
             .map(|member| member.config_path.as_path()),
+        &mut ignored,
     )?;
 
     sources.push(env_source(&mut state, options));
@@ -418,7 +487,7 @@ pub fn load_effective_config(
         sources,
         workspace_root,
         member_root: member_config.map(|member| member.root),
-        pre_member,
+        ignored_member_out_dir: ignored.out_dir,
         warnings,
         provenance,
     })
@@ -488,22 +557,12 @@ pub fn load_config_context_with(
     let layout_explicit = effective_config
         .origin_for_key("ir.layout")
         .is_some_and(|origin| origin.kind != ConfigSourceKind::Defaults);
-    // The out root is a property of the whole workspace, so only the workspace
-    // configuration may set it. A member that sets it would otherwise relocate
-    // every other member's output too.
-    let member_set_out_dir = effective_config
-        .origin_for_key("workspace.out_dir")
-        .is_some_and(|origin| origin.kind == ConfigSourceKind::WorkspaceMember);
-    let out_dir_without_member = effective_config
-        .pre_member
-        .pointer("/workspace/out_dir")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
     let EffectiveConfig {
         value: effective,
         sources,
         workspace_root,
         member_root,
+        ignored_member_out_dir,
         warnings: member_warnings,
         ..
     } = effective_config;
@@ -515,17 +574,14 @@ pub fn load_config_context_with(
     if effective.pointer("/ir/mode").is_some() && layout_explicit {
         warnings.push("ir.mode is ignored because ir.layout is set explicitly".to_owned());
     }
-    let mut config = config;
-    if member_set_out_dir {
-        warnings.push(
-            "workspace.out_dir is ignored in a workspace member configuration; set it in the workspace configuration"
-                .to_owned(),
-        );
-        if let Some(workspace) = config.workspace.as_mut() {
-            workspace.out_dir =
-                out_dir_without_member.unwrap_or_else(|| crate::out::DEFAULT_OUT_DIR.to_owned());
-        }
+    for path in ignored_member_out_dir {
+        warnings.push(format!(
+            "workspace.out_dir is ignored in {}, which belongs to one workspace member; \
+             the out root is shared by the whole workspace, so set it in the workspace configuration",
+            path.display()
+        ));
     }
+    let mut config = config;
     if let Some(ir) = config.ir.as_mut()
         && let Some(mode) = ir.mode.take()
         && !layout_explicit
@@ -1472,6 +1528,101 @@ mod tests {
             crate::out::resolve_out_root(None, None, Some(&context), Path::new("/scratch")),
             root.path().join(".morphir").join("out")
         );
+    }
+
+    /// A one-member workspace with a `morphir.user.toml` beside the workspace
+    /// primary, beside the member primary, or both. Returns the workspace
+    /// primary path, which is what the tests load.
+    fn workspace_with_user_overrides(
+        root: &Path,
+        workspace_user: Option<&str>,
+        member_user: Option<&str>,
+    ) -> PathBuf {
+        let workspace = root.join("morphir.toml");
+        write_file(&workspace, "[workspace]\nmembers = [\"packages/orders\"]\n");
+        let member = root.join("packages").join("orders");
+        write_file(
+            &member.join("morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+        if let Some(body) = workspace_user {
+            write_file(&root.join("morphir.user.toml"), body);
+        }
+        if let Some(body) = member_user {
+            write_file(&member.join("morphir.user.toml"), body);
+        }
+        workspace
+    }
+
+    fn with_user_overrides() -> ConfigLoadOptions {
+        ConfigLoadOptions {
+            user_override: SourceSelection::Discover,
+            ..ConfigLoadOptions::project_only()
+        }
+    }
+
+    #[test]
+    fn a_user_override_beside_a_member_cannot_relocate_the_workspace_out_root() {
+        // The member's own `morphir.toml` was already refused, but a
+        // `morphir.user.toml` next to it records the source kind
+        // `UserOverride`, so the old provenance check let it through and one
+        // member's personal override moved every member's output.
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_with_user_overrides(
+            root.path(),
+            None,
+            Some("[workspace]\nout_dir = \"member-out\"\n"),
+        );
+
+        let context = load_config_context_with(&workspace, &with_user_overrides()).unwrap();
+
+        assert_eq!(
+            context.config.workspace.as_ref().unwrap().out_dir,
+            ".morphir/out"
+        );
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("workspace.out_dir is ignored"),
+            "{:?}",
+            context.warnings
+        );
+        assert!(
+            context.warnings[0].contains("morphir.user.toml"),
+            "the warning names the file it came from: {:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn a_user_override_beside_the_workspace_may_still_set_the_out_root() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_with_user_overrides(
+            root.path(),
+            Some("[workspace]\nout_dir = \"my-out\"\n"),
+            None,
+        );
+
+        let context = load_config_context_with(&workspace, &with_user_overrides()).unwrap();
+
+        assert!(context.warnings.is_empty(), "{:?}", context.warnings);
+        assert_eq!(context.config.workspace.as_ref().unwrap().out_dir, "my-out");
+    }
+
+    #[test]
+    fn a_member_override_never_beats_the_workspace_override_for_the_out_root() {
+        // Both overrides set it. The member's is dropped from its layer, so
+        // the workspace's survives rather than falling back to the default.
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_with_user_overrides(
+            root.path(),
+            Some("[workspace]\nout_dir = \"my-out\"\n"),
+            Some("[workspace]\nout_dir = \"member-out\"\n"),
+        );
+
+        let context = load_config_context_with(&workspace, &with_user_overrides()).unwrap();
+
+        assert_eq!(context.config.workspace.as_ref().unwrap().out_dir, "my-out");
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
     }
 
     #[test]

@@ -371,11 +371,11 @@ mod tests {
         let (value, provenance) = state.into_parts();
 
         EffectiveConfig {
-            pre_member: value.clone(),
             value,
             sources: Vec::new(),
             workspace_root: None,
             member_root: None,
+            ignored_member_out_dir: Vec::new(),
             warnings: Vec::new(),
             provenance,
         }

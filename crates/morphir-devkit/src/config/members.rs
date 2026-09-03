@@ -212,7 +212,10 @@ pub(crate) fn expand_member_pattern(workspace_root: &Path, pattern: &str) -> Vec
     }
     let segments = pattern_segments(pattern);
     let mut found = Vec::new();
-    collect_matches(workspace_root, &segments, &mut found);
+    let mut ancestors = std::fs::canonicalize(workspace_root)
+        .map(|root| vec![root])
+        .unwrap_or_default();
+    collect_matches(workspace_root, &segments, &mut ancestors, &mut found);
     found.sort();
     found.dedup();
     found
@@ -364,7 +367,21 @@ fn segment_matches(pattern: &str, name: &str) -> bool {
 
 /// Walk the tree below `directory` following `segments`, collecting the
 /// directories that both match and hold a Morphir configuration.
-fn collect_matches(directory: &Path, segments: &[&str], found: &mut Vec<PathBuf>) {
+///
+/// `ancestors` holds the canonical location of every directory the walk is
+/// currently inside, so a directory symbolic link that points back up the tree
+/// — `packages/loop -> ..`, say — is descended into once and then recognised
+/// rather than followed round and round until the stack runs out. Only the
+/// current chain is remembered, not every directory the whole walk has ever
+/// seen: two different declared paths that lead to one directory are two
+/// different members under the declared-path rule, and both must still be
+/// reported.
+fn collect_matches(
+    directory: &Path,
+    segments: &[&str],
+    ancestors: &mut Vec<PathBuf>,
+    found: &mut Vec<PathBuf>,
+) {
     let Some((head, rest)) = segments.split_first() else {
         if discover_config_at(directory).ok().flatten().is_some() {
             found.push(directory.to_path_buf());
@@ -372,9 +389,9 @@ fn collect_matches(directory: &Path, segments: &[&str], found: &mut Vec<PathBuf>
         return;
     };
     if *head == "**" {
-        collect_matches(directory, rest, found);
+        collect_matches(directory, rest, ancestors, found);
         for child in child_directories(directory) {
-            collect_matches(&child, segments, found);
+            descend(&child, segments, ancestors, found);
         }
         return;
     }
@@ -383,9 +400,31 @@ fn collect_matches(directory: &Path, segments: &[&str], found: &mut Vec<PathBuf>
             .file_name()
             .is_some_and(|name| segment_matches(head, &name.to_string_lossy()));
         if matched {
-            collect_matches(&child, rest, found);
+            descend(&child, rest, ancestors, found);
         }
     }
+}
+
+/// Continue the walk inside `child`, unless doing so would re-enter a
+/// directory the walk is already inside.
+fn descend(
+    child: &Path,
+    segments: &[&str],
+    ancestors: &mut Vec<PathBuf>,
+    found: &mut Vec<PathBuf>,
+) {
+    // A directory that cannot be canonicalized cannot be shown to close a
+    // loop either, so it is walked as it is.
+    let Ok(canonical) = std::fs::canonicalize(child) else {
+        collect_matches(child, segments, ancestors, found);
+        return;
+    };
+    if ancestors.contains(&canonical) {
+        return;
+    }
+    ancestors.push(canonical);
+    collect_matches(child, segments, ancestors, found);
+    ancestors.pop();
 }
 
 /// Visible subdirectories of `directory`. Hidden directories are skipped so a
@@ -396,7 +435,8 @@ fn collect_matches(directory: &Path, segments: &[&str], found: &mut Vec<PathBuf>
 /// `std::fs::metadata`, which follows the link, before it is ruled out. A
 /// symlinked member selected this way is an ordinary member; `expand_members`
 /// only adds a warning when it leads outside the workspace, via
-/// [`classify_member_directory`].
+/// [`classify_member_directory`]. `descend` is what stops a link that points
+/// back up the tree from making the walk run forever.
 fn child_directories(directory: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
@@ -830,6 +870,36 @@ mod tests {
         assert!(
             warnings[0].contains("outside the workspace directory"),
             "{warnings:?}"
+        );
+    }
+
+    /// A directory symlink that points back up the tree makes the wildcard
+    /// walk a cycle: `packages/loop -> ..` is a subdirectory of `packages`
+    /// that contains `packages` again. The walk has to notice it is already
+    /// inside that directory and stop, rather than recursing until the stack
+    /// runs out.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_symlink_pointing_back_up_the_tree_does_not_loop_forever() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        write(
+            &root.join("packages/orders/morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+        std::os::unix::fs::symlink("..", root.join("packages/loop")).unwrap();
+
+        let mut warnings = Vec::new();
+        let expanded = expand_members(&root, &["**".to_owned()], &[], &mut warnings);
+        assert!(
+            expanded.contains(&root.join("packages").join("orders")),
+            "{expanded:?}"
+        );
+        assert!(
+            !expanded
+                .iter()
+                .any(|path| path.to_string_lossy().contains("loop")),
+            "the walk must not report anything reached through the loop: {expanded:?}"
         );
     }
 

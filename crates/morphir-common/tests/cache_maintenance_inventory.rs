@@ -117,6 +117,10 @@ fn inventory_matches_portable_aliases_only_when_the_filesystem_resolves_them() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "needs a case-sensitive filesystem; APFS volumes are case-insensitive by default"
+)]
 #[test]
 fn a_lone_portable_alias_is_unclassified_when_its_registered_spelling_is_absent() {
     let (_root, home) = a_morphir_home();
@@ -136,6 +140,10 @@ fn a_lone_portable_alias_is_unclassified_when_its_registered_spelling_is_absent(
 }
 
 #[cfg(unix)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "needs a case-sensitive filesystem; APFS volumes are case-insensitive by default"
+)]
 #[test]
 fn portable_aliases_keep_distinct_observed_paths() {
     let (_root, home) = a_morphir_home();
@@ -170,6 +178,10 @@ fn portable_aliases_keep_distinct_observed_paths() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "needs a case-sensitive filesystem; APFS volumes are case-insensitive by default"
+)]
 #[test]
 fn hard_link_aliases_do_not_inherit_disposable_ownership() {
     let (_root, home) = a_morphir_home();
@@ -202,6 +214,10 @@ fn hard_link_aliases_do_not_inherit_disposable_ownership() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "needs a case-sensitive filesystem; APFS volumes are case-insensitive by default"
+)]
 #[test]
 fn special_file_aliases_are_never_opened_for_ownership_matching() {
     use std::os::unix::net::UnixListener;

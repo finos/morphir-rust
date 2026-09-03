@@ -7,8 +7,8 @@ use super::discovery::{
     user_override_candidates,
 };
 use super::members::{
-    expand_members, is_confined, is_member, members_select, resolves_inside,
-    unconfined_target_warning, unconfined_warning,
+    accept_member_directory, expand_members, is_confined, is_member, members_select,
+    unconfined_warning,
 };
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
@@ -241,14 +241,16 @@ fn find_enclosing_workspace(
 /// view, so none is merged; running inside a member directory is how a specific
 /// member is selected, and that path is handled by [`find_enclosing_workspace`].
 ///
-/// A `default_member` that leaves the workspace directory selects nothing and
-/// adds a warning; so does any `members` entry that does the same. Without that
-/// check `workspace_root.join("../outside")` would be accepted as a member and
-/// its configuration merged from outside the workspace entirely.
+/// A `default_member` whose SPELLING leaves the workspace directory selects
+/// nothing and adds a warning; so does any `members` entry that does the same.
+/// Without that check `workspace_root.join("../outside")` would be accepted as
+/// a member and its configuration merged from outside the workspace entirely.
 ///
-/// The same goes for a member that is confined as text but is a symbolic link
-/// to a directory outside the workspace: it is resolved on disk before it is
-/// accepted, and refused with a warning if it lands elsewhere.
+/// A member that is spelled as an ordinary relative path but is a symbolic
+/// link to a directory outside the workspace is a different matter: it is
+/// accepted, its sources are read from where the link leads, and one warning
+/// says so. The member is still identified by its declared path, so its
+/// output stays under the out root.
 fn select_member(
     workspace_root: &Path,
     workspace: &WorkspaceSection,
@@ -260,11 +262,9 @@ fn select_member(
             return None;
         }
         let member = workspace_root.join(member);
-        if !is_member(workspace_root, &workspace.exclude, &member) {
-            return None;
-        }
-        if !resolves_inside(workspace_root, &member) {
-            warnings.push(unconfined_target_warning(&member));
+        if !is_member(workspace_root, &workspace.exclude, &member)
+            || !accept_member_directory(workspace_root, &member, warnings)
+        {
             return None;
         }
         return Some(member);

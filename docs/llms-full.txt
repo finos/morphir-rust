@@ -1461,6 +1461,8 @@ let generate = TaskPaths::new(&root, &module, &TaskId::generate("scala"))?;
 
 For a member at `packages/orders` in a workspace rooted at `<ws>`, `compile.dest` is `<ws>/.morphir/out/packages/orders/compile.dest` and `compile.result` is the record beside it, `compile.json`. A standalone project is the root module, so its paths sit directly under the out root.
 
+A member is identified by the path it is declared at, relative to the workspace root, not by where that directory really sits. The declared spelling still has to be a plain relative path — no absolute path, no `..`, no backslash — but the directory it names may be a symbolic link leading anywhere, including outside the workspace. Morphir reads that member's sources from wherever the link leads, warns once that it has done so, and still writes the member's output under `<ws>/.morphir/out/<declared path>/`. Confinement is a rule about what Morphir writes, not about where a declared member reads from.
+
 The root is chosen by the `--out-dir` flag, then `MORPHIR_OUT_DIR`, then `[workspace].out_dir` in the workspace configuration, then `.morphir/out` under the workspace root. `resolve_out_root` is pure: the caller reads the flag and the environment and passes them in.
 
 These helpers apply Morphir's output layout. They do not choose or activate an extension provider.

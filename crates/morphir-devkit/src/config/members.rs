@@ -68,55 +68,120 @@ pub(crate) fn unconfined_warning(entry: &str) -> String {
     )
 }
 
-/// The warning shown for a member directory [`resolves_inside`] rejects.
-pub(crate) fn unconfined_target_warning(directory: &Path) -> String {
+/// Where a member's declared directory leads, once the symbolic links along
+/// the way have been followed.
+///
+/// A member is identified by the path it is DECLARED at, relative to the
+/// workspace root, the way a Mill module is identified by its position in the
+/// build. Where that directory really sits does not change its identity: its
+/// task output stays under `.morphir/out/<declared path>/` either way.
+/// Confinement is a rule about what Morphir WRITES — the out root and each
+/// task's `.dest` — not about where a declared member reads its sources from.
+pub(crate) enum MemberDirectory {
+    /// Nothing is on disk at that path, or it leads to a directory under the
+    /// workspace root. Either way there is nothing to say about it.
+    Ordinary,
+    /// The path leads outside the workspace directory, through a symbolic
+    /// link. Sources are read from there; the member keeps its declared
+    /// identity. Carries the resolved location, for the warning.
+    Outside(PathBuf),
+    /// Something is at that path but it does not resolve: a link with nothing
+    /// at the far end, or a directory that cannot be read. Morphir cannot say
+    /// what it would load, so it is skipped.
+    Unresolvable,
+}
+
+/// The warning shown for a member that resolves outside the workspace.
+pub(crate) fn outside_workspace_warning(
+    workspace_root: &Path,
+    directory: &Path,
+    resolved: &Path,
+) -> String {
+    let declared = directory
+        .strip_prefix(workspace_root)
+        .unwrap_or(directory)
+        .display();
     format!(
-        "workspace member '{}' resolves outside the workspace directory; it is ignored",
+        "workspace member '{declared}' resolves to '{}', outside the workspace directory; \
+         its sources are read from there, and its output stays under .morphir/out/{declared}/",
+        resolved.display()
+    )
+}
+
+/// The warning shown for a member directory that is there but does not
+/// resolve.
+pub(crate) fn unresolvable_member_warning(directory: &Path) -> String {
+    format!(
+        "workspace member '{}' does not resolve — it is a symbolic link with no target, or a \
+         directory that cannot be read; it is ignored",
         directory.display()
     )
 }
 
-/// Does `directory` still sit under `workspace_root` once the symbolic links
-/// along the way are followed?
+/// Follow `directory` and say where it leads relative to `workspace_root`.
 ///
-/// [`is_confined`] settles the spelling of an entry and nothing else, so a
-/// perfectly ordinary entry such as `packages/orders` passes it — and if
-/// `packages/orders` is a symbolic link to a directory beside the workspace,
-/// `discover_config_at` follows the link and the loader merges a configuration
-/// from outside the workspace anyway. Native workspace discovery already
-/// resolves a candidate before accepting it (`confined_canonicalize` in
-/// `workspace_discovery::traversal`); this is the same rule for the
-/// configuration loader's own member list.
-///
-/// A directory that is not there at all answers `true`. A literal member
-/// entry is expanded whether or not it exists, so that a listed-but-missing
-/// member is reported as a not-found source rather than disappearing, and a
-/// path with nothing behind it has no link to follow.
+/// A directory that is not there at all is [`MemberDirectory::Ordinary`]. A
+/// literal member entry is expanded whether or not it exists, so that a
+/// listed-but-missing member is reported as a not-found source rather than
+/// disappearing, and a path with nothing behind it has no link to follow.
 ///
 /// Anything that is there but will not resolve — a dangling link, a directory
-/// that cannot be read — answers `false`, because a member Morphir cannot
-/// place is not one it should merge. `canonicalize` reports both cases as
-/// "not found", so `symlink_metadata` is what tells them apart: it does not
-/// follow the last link, so it succeeds on a dangling one and fails on a path
-/// with nothing at it.
+/// that cannot be read — is [`MemberDirectory::Unresolvable`], because a
+/// member Morphir cannot place is not one it should merge. `canonicalize`
+/// reports both a missing path and a dangling link as "not found", so
+/// `symlink_metadata` is what tells them apart: it does not follow the last
+/// link, so it succeeds on a dangling one and fails on a path with nothing
+/// at it.
 ///
 /// Both sides are canonicalized before comparing, so a workspace root that is
 /// itself reached through a symbolic link (a temporary directory under
 /// `/var` on macOS, say) still contains its own members.
-pub(crate) fn resolves_inside(workspace_root: &Path, directory: &Path) -> bool {
+pub(crate) fn classify_member_directory(
+    workspace_root: &Path,
+    directory: &Path,
+) -> MemberDirectory {
     let canonical_directory = match std::fs::canonicalize(directory) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return std::fs::symlink_metadata(directory).is_err();
+            return if std::fs::symlink_metadata(directory).is_err() {
+                MemberDirectory::Ordinary
+            } else {
+                MemberDirectory::Unresolvable
+            };
         }
-        Err(_) => return false,
+        Err(_) => return MemberDirectory::Unresolvable,
     };
     match std::fs::canonicalize(workspace_root) {
-        Ok(canonical_root) => canonical_directory.starts_with(canonical_root),
-        // The workspace root is not on disk, so nothing can be shown to sit
-        // outside it. Membership is then a purely lexical question, which the
-        // caller has already answered.
-        Err(_) => true,
+        Ok(canonical_root) if !canonical_directory.starts_with(&canonical_root) => {
+            MemberDirectory::Outside(canonical_directory)
+        }
+        // Either the member sits under the root, or the workspace root is not
+        // on disk at all and nothing can be shown to sit outside it.
+        _ => MemberDirectory::Ordinary,
+    }
+}
+
+/// Classify `directory`, add whatever warning that calls for to `warnings`,
+/// and say whether it may be loaded as a member.
+pub(crate) fn accept_member_directory(
+    workspace_root: &Path,
+    directory: &Path,
+    warnings: &mut Vec<String>,
+) -> bool {
+    match classify_member_directory(workspace_root, directory) {
+        MemberDirectory::Ordinary => true,
+        MemberDirectory::Outside(resolved) => {
+            warnings.push(outside_workspace_warning(
+                workspace_root,
+                directory,
+                &resolved,
+            ));
+            true
+        }
+        MemberDirectory::Unresolvable => {
+            warnings.push(unresolvable_member_warning(directory));
+            false
+        }
     }
 }
 
@@ -156,10 +221,12 @@ pub(crate) fn expand_member_pattern(workspace_root: &Path, pattern: &str) -> Vec
 /// Expand every member entry of a workspace, in the order they are listed,
 /// dropping the workspace root itself and anything `exclude` rules out.
 ///
-/// An entry that would leave the workspace directory is skipped, with a
-/// warning naming it appended to `warnings`. So is one that stays inside the
-/// workspace as text but resolves outside it on disk. See [`is_confined`] and
-/// [`resolves_inside`].
+/// An entry whose SPELLING would leave the workspace directory is skipped,
+/// with a warning naming it appended to `warnings`. An entry that is spelled
+/// as an ordinary relative path but names a symbolic link to a directory
+/// outside the workspace is kept — Morphir reads its sources from where the
+/// link leads — with one warning saying so. See [`is_confined`] and
+/// [`classify_member_directory`].
 pub(crate) fn expand_members(
     workspace_root: &Path,
     members: &[String],
@@ -169,11 +236,10 @@ pub(crate) fn expand_members(
     let mut expanded = Vec::new();
     for member in confined_patterns(members, warnings) {
         for path in expand_member_pattern(workspace_root, member) {
-            if expanded.contains(&path) || !is_member(workspace_root, exclude, &path) {
-                continue;
-            }
-            if !resolves_inside(workspace_root, &path) {
-                warnings.push(unconfined_target_warning(&path));
+            if expanded.contains(&path)
+                || !is_member(workspace_root, exclude, &path)
+                || !accept_member_directory(workspace_root, &path, warnings)
+            {
                 continue;
             }
             expanded.push(path);
@@ -199,14 +265,13 @@ pub(crate) fn is_member(workspace_root: &Path, exclude: &[String], directory: &P
 }
 
 /// Does `directory` sit at a path that one of `members` selects, relative to
-/// `workspace_root`, survive the `exclude` patterns, and still resolve under
-/// the workspace root on disk?
+/// `workspace_root`, and survive the `exclude` patterns?
 ///
 /// The pattern side of the question is answered without touching the
 /// filesystem, so it is cheap to ask while walking up from a candidate member
-/// towards its workspace. Only a directory that got that far is resolved, and
-/// one that resolves outside the workspace is refused with a warning: see
-/// [`resolves_inside`].
+/// towards its workspace. Only a directory that got that far is followed on
+/// disk, and one that leads outside the workspace is still a member — it just
+/// earns a warning. See [`classify_member_directory`].
 pub(crate) fn members_select(
     workspace_root: &Path,
     members: &[String],
@@ -215,16 +280,9 @@ pub(crate) fn members_select(
     warnings: &mut Vec<String>,
 ) -> bool {
     let members = confined_patterns(members, warnings);
-    if !patterns_select_refs(workspace_root, &members, directory)
-        || !is_member(workspace_root, exclude, directory)
-    {
-        return false;
-    }
-    if !resolves_inside(workspace_root, directory) {
-        warnings.push(unconfined_target_warning(directory));
-        return false;
-    }
-    true
+    patterns_select_refs(workspace_root, &members, directory)
+        && is_member(workspace_root, exclude, directory)
+        && accept_member_directory(workspace_root, directory, warnings)
 }
 
 /// Does any pattern select `directory`, relative to `workspace_root`?
@@ -336,9 +394,9 @@ fn collect_matches(directory: &Path, segments: &[&str], found: &mut Vec<PathBuf>
 /// A directory symlink counts as a subdirectory too: `DirEntry::file_type`
 /// reports the link itself, not what it points at, so it is checked with
 /// `std::fs::metadata`, which follows the link, before it is ruled out. A
-/// symlinked member selected this way still has to resolve inside the
-/// workspace; `expand_members` applies that check, via [`resolves_inside`],
-/// to every path this function returns.
+/// symlinked member selected this way is an ordinary member; `expand_members`
+/// only adds a warning when it leads outside the workspace, via
+/// [`classify_member_directory`].
 fn child_directories(directory: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
@@ -608,11 +666,14 @@ mod tests {
 
     /// The entry `packages/orders` is confined as text — there is nothing in
     /// its spelling to complain about. What it names on disk is a symbolic
-    /// link to a directory beside the workspace, and following it merges a
-    /// configuration from outside the workspace entirely.
+    /// link to a directory beside the workspace: linking a sibling checkout
+    /// into `packages/` is an ordinary way to work, so the member is loaded
+    /// from where the link leads. It keeps the identity its declared path
+    /// gives it, so its output still lands under the workspace's out root,
+    /// and one warning says both things.
     #[cfg(unix)]
     #[test]
-    fn a_member_symlinked_out_of_the_workspace_is_skipped_with_a_warning() {
+    fn a_member_symlinked_out_of_the_workspace_is_accepted_with_a_warning() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("ws");
         let outside = temp.path().join("outside");
@@ -626,19 +687,23 @@ mod tests {
         let mut warnings = Vec::new();
         assert_eq!(
             expand_members(&root, &["packages/orders".to_owned()], &[], &mut warnings),
-            Vec::<PathBuf>::new(),
-            "a member that resolves outside the workspace may not expand to a member"
+            vec![root.join("packages").join("orders")],
+            "a member is identified by its declared path, wherever it resolves"
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].contains("resolves outside the workspace"),
+            warnings[0].contains("outside the workspace directory"),
             "{warnings:?}"
         );
-        assert!(warnings[0].contains("orders"), "{warnings:?}");
+        assert!(warnings[0].contains("packages/orders"), "{warnings:?}");
+        assert!(
+            warnings[0].contains(".morphir/out/packages/orders/"),
+            "{warnings:?}"
+        );
 
         // The walk-up asks the same question from the member's side.
         let mut warnings = Vec::new();
-        assert!(!members_select(
+        assert!(members_select(
             &root,
             &["packages/*".to_owned()],
             &[],
@@ -647,7 +712,7 @@ mod tests {
         ));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].contains("resolves outside the workspace"),
+            warnings[0].contains("outside the workspace directory"),
             "{warnings:?}"
         );
     }
@@ -741,12 +806,11 @@ mod tests {
     }
 
     /// The same wildcard walk, but the symlinked member resolves outside the
-    /// workspace. `child_directories` must still offer it to the walk — the
-    /// confinement check in `expand_members`, not the directory listing, is
-    /// what drops it, with the usual warning.
+    /// workspace. It is loaded all the same, under the declared path the glob
+    /// matched, with one warning saying where its sources come from.
     #[cfg(unix)]
     #[test]
-    fn a_symlinked_member_selected_by_a_glob_is_skipped_with_a_warning_when_it_resolves_outside() {
+    fn a_symlinked_member_selected_by_a_glob_is_loaded_with_a_warning_when_it_resolves_outside() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("ws");
         let outside = temp.path().join("outside");
@@ -760,11 +824,11 @@ mod tests {
         let mut warnings = Vec::new();
         assert_eq!(
             expand_members(&root, &["packages/*".to_owned()], &[], &mut warnings),
-            Vec::<PathBuf>::new()
+            vec![root.join("packages").join("orders")]
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].contains("resolves outside the workspace"),
+            warnings[0].contains("outside the workspace directory"),
             "{warnings:?}"
         );
     }

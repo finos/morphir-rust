@@ -15,6 +15,16 @@ pub enum OutError {
         /// Zero-based index of the empty segment.
         position: usize,
     },
+    /// One segment named something other than a single directory segment.
+    #[error(
+        "task id segment {position} (`{segment}`) must name one directory segment,          not `.`, `..`, or a path"
+    )]
+    UnsafeSegment {
+        /// Zero-based index of the offending segment.
+        position: usize,
+        /// The text that was offered as a segment.
+        segment: String,
+    },
     /// The text did not name an IR layout.
     #[error("unknown IR layout `{value}`; expected `single-file` or `document-tree`")]
     UnknownIrLayout {
@@ -44,24 +54,35 @@ impl TaskId {
         Self(format!("transform/{}", sanitize_segment(name)))
     }
 
-    /// Parse a task id written as a `/`-separated path. Segments after the
-    /// first are sanitized.
+    /// Parse a task id written as a `/`-separated path.
+    ///
+    /// Every segment has to name one ordinary directory segment, because
+    /// [`TaskPaths::new`] joins each one onto the out root in turn: an empty
+    /// segment, `.`, `..`, a segment holding a backslash (a separator on
+    /// Windows), and a Windows drive prefix such as `C:` are all refused. The
+    /// first segment is checked like every other one — it used to be taken
+    /// verbatim, so `TaskId::parse("../compile")` produced a task whose
+    /// `.dest` sat beside the out root rather than under it.
+    ///
+    /// The constructors ([`TaskId::compile`], [`TaskId::generate`],
+    /// [`TaskId::transform`]) hardcode their first segment and sanitize the
+    /// rest, so they are unaffected by this stricter rule.
     pub fn parse(text: &str) -> Result<Self, OutError> {
         if text.is_empty() {
             return Err(OutError::EmptyTaskId);
         }
-        let mut rendered = Vec::new();
         for (position, segment) in text.split('/').enumerate() {
             if segment.is_empty() {
                 return Err(OutError::EmptySegment { position });
             }
-            rendered.push(if position == 0 {
-                segment.to_owned()
-            } else {
-                sanitize_segment(segment)
-            });
+            if !is_one_directory_segment(segment) {
+                return Err(OutError::UnsafeSegment {
+                    position,
+                    segment: segment.to_owned(),
+                });
+            }
         }
-        Ok(Self(rendered.join("/")))
+        Ok(Self(text.to_owned()))
     }
 
     /// The id as text.
@@ -78,6 +99,22 @@ impl fmt::Display for TaskId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// Does this text name exactly one ordinary directory segment, so it can be
+/// joined onto a path without moving anywhere but downwards?
+///
+/// `.` and `..` move nowhere and upwards; a backslash separates directories on
+/// Windows; and a leading drive letter (`C:`) makes a path drive-relative
+/// there, which `Path::join` honours by discarding the base.
+fn is_one_directory_segment(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let drive_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && !segment.contains('\\')
+        && !drive_prefix
 }
 
 /// Replace path separators, spaces, the parent-directory segment, and the
@@ -175,9 +212,44 @@ mod tests {
             TaskId::parse("generate/"),
             Err(OutError::EmptySegment { position: 1 })
         ));
+        // A leading `/` makes the first segment empty.
+        assert!(matches!(
+            TaskId::parse("/etc/passwd"),
+            Err(OutError::EmptySegment { position: 0 })
+        ));
         assert_eq!(
             TaskId::parse("generate/scala").unwrap().as_str(),
             "generate/scala"
+        );
+        assert_eq!(TaskId::parse("compile").unwrap().as_str(), "compile");
+    }
+
+    #[test]
+    fn parse_refuses_a_first_segment_that_would_escape_the_out_root() {
+        // `TaskPaths::new` joins every segment but the last onto the out root,
+        // so a first segment of `..` used to put a task's `.dest` beside the
+        // out root instead of under it.
+        for (id, position) in [
+            ("../compile", 0),
+            ("..", 0),
+            (".", 0),
+            ("./compile", 0),
+            ("generate/..", 1),
+            (r"..\compile", 0),
+            ("C:/compile", 0),
+        ] {
+            match TaskId::parse(id) {
+                Err(OutError::UnsafeSegment { position: at, .. }) => {
+                    assert_eq!(at, position, "{id}")
+                }
+                other => panic!("`{id}` must be refused, got {other:?}"),
+            }
+        }
+        assert!(
+            TaskId::parse("../compile")
+                .unwrap_err()
+                .to_string()
+                .contains("must name one directory segment")
         );
     }
 

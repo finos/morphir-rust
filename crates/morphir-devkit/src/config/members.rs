@@ -7,12 +7,55 @@
 //! `packages/*` style of member list needs, so no glob dependency is pulled in.
 
 use super::discovery::discover_config_at;
+use morphir_workspace::RelativePath;
 use std::path::{Component, Path, PathBuf};
 
 /// Does this pattern contain a wildcard, so it has to be expanded against the
 /// filesystem rather than joined onto the workspace root?
 pub(crate) fn is_pattern(text: &str) -> bool {
     text.contains('*')
+}
+
+/// Does this `members`, `default_member`, or `exclude` entry stay inside the
+/// workspace directory?
+///
+/// It has to be asked before the entry is joined onto the workspace root,
+/// because nothing after that point can tell the difference: `path_segments`
+/// keeps only the `Normal` components, so `../outside` reduces to the single
+/// segment `outside` and looks like an ordinary member, while
+/// `workspace_root.join("../outside")` names a sibling of the workspace and the
+/// loader would merge a configuration from there.
+///
+/// `morphir-workspace` already refuses the same input with
+/// `WORKSPACE_PATH_NOT_CONFINED`, so the rule here is its `RelativePath` type
+/// rather than a second, possibly divergent, opinion: an absolute path, a
+/// Windows drive prefix, a backslash separator, and a `.` or `..` component are
+/// all rejected, and `.` alone (the workspace root itself) is allowed, since
+/// `is_member` already refuses to treat the root as its own member.
+pub(crate) fn is_confined(entry: &str) -> bool {
+    RelativePath::parse(entry).is_ok()
+}
+
+/// The warning shown for an entry [`is_confined`] rejects.
+pub(crate) fn unconfined_warning(entry: &str) -> String {
+    format!(
+        "workspace member entry '{entry}' is not confined to the workspace directory; it is ignored"
+    )
+}
+
+/// The entries of `patterns` that stay inside the workspace, adding a warning
+/// for each one that does not.
+fn confined_patterns<'a>(patterns: &'a [String], warnings: &mut Vec<String>) -> Vec<&'a String> {
+    patterns
+        .iter()
+        .filter(|pattern| {
+            let confined = is_confined(pattern);
+            if !confined {
+                warnings.push(unconfined_warning(pattern));
+            }
+            confined
+        })
+        .collect()
 }
 
 /// Expand one `[workspace].members` entry into member directories.
@@ -35,13 +78,17 @@ pub(crate) fn expand_member_pattern(workspace_root: &Path, pattern: &str) -> Vec
 
 /// Expand every member entry of a workspace, in the order they are listed,
 /// dropping the workspace root itself and anything `exclude` rules out.
+///
+/// An entry that would leave the workspace directory is skipped, with a
+/// warning naming it appended to `warnings`. See [`is_confined`].
 pub(crate) fn expand_members(
     workspace_root: &Path,
     members: &[String],
     exclude: &[String],
+    warnings: &mut Vec<String>,
 ) -> Vec<PathBuf> {
     let mut expanded = Vec::new();
-    for member in members {
+    for member in confined_patterns(members, warnings) {
         for path in expand_member_pattern(workspace_root, member) {
             if !expanded.contains(&path) && is_member(workspace_root, exclude, &path) {
                 expanded.push(path);
@@ -77,13 +124,23 @@ pub(crate) fn members_select(
     members: &[String],
     exclude: &[String],
     directory: &Path,
+    warnings: &mut Vec<String>,
 ) -> bool {
-    patterns_select(workspace_root, members, directory)
+    let members = confined_patterns(members, warnings);
+    patterns_select_refs(workspace_root, &members, directory)
         && is_member(workspace_root, exclude, directory)
 }
 
 /// Does any pattern select `directory`, relative to `workspace_root`?
 fn patterns_select(workspace_root: &Path, patterns: &[String], directory: &Path) -> bool {
+    patterns_select_refs(
+        workspace_root,
+        &patterns.iter().collect::<Vec<_>>(),
+        directory,
+    )
+}
+
+fn patterns_select_refs(workspace_root: &Path, patterns: &[&String], directory: &Path) -> bool {
     let Ok(relative) = directory.strip_prefix(workspace_root) else {
         return false;
     };
@@ -198,6 +255,16 @@ fn child_directories(directory: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// `expand_members` and `members_select` with a warning sink the test
+    /// does not inspect. Tests that check warnings call them directly.
+    fn expand(root: &Path, members: &[String], exclude: &[String]) -> Vec<PathBuf> {
+        expand_members(root, members, exclude, &mut Vec::new())
+    }
+
+    fn selects(root: &Path, members: &[String], exclude: &[String], directory: &Path) -> bool {
+        members_select(root, members, exclude, directory, &mut Vec::new())
+    }
+
     fn write(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
@@ -281,7 +348,7 @@ mod tests {
             "packages/orders".to_owned(),
         ];
         assert_eq!(
-            expand_members(root.path(), &members, &[]),
+            expand(root.path(), &members, &[]),
             vec![
                 root.path().join("tools").join("cli"),
                 root.path().join("packages").join("orders"),
@@ -300,11 +367,11 @@ mod tests {
         }
         let members = vec!["packages/*".to_owned()];
         assert_eq!(
-            expand_members(root.path(), &members, &["packages/ignored".to_owned()]),
+            expand(root.path(), &members, &["packages/ignored".to_owned()]),
             vec![root.path().join("packages").join("orders")]
         );
         assert_eq!(
-            expand_members(root.path(), &members, &["packages/*".to_owned()]),
+            expand(root.path(), &members, &["packages/*".to_owned()]),
             Vec::<PathBuf>::new()
         );
     }
@@ -321,11 +388,11 @@ mod tests {
             "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
         );
         assert_eq!(
-            expand_members(root.path(), &["**".to_owned()], &[]),
+            expand(root.path(), &["**".to_owned()], &[]),
             vec![root.path().join("packages").join("orders")]
         );
         assert_eq!(
-            expand_members(root.path(), &[".".to_owned()], &[]),
+            expand(root.path(), &[".".to_owned()], &[]),
             Vec::<PathBuf>::new()
         );
     }
@@ -334,25 +401,25 @@ mod tests {
     fn membership_is_decided_from_the_relative_path() {
         let root = Path::new("/ws");
         let members = vec!["packages/*".to_owned()];
-        assert!(members_select(
+        assert!(selects(
             root,
             &members,
             &[],
             Path::new("/ws/packages/orders")
         ));
-        assert!(!members_select(
+        assert!(!selects(
             root,
             &members,
             &[],
             Path::new("/ws/packages/acme/orders")
         ));
-        assert!(!members_select(
+        assert!(!selects(
             root,
             &members,
             &[],
             Path::new("/other/packages/orders")
         ));
-        assert!(members_select(
+        assert!(selects(
             root,
             &["packages/**".to_owned()],
             &[],
@@ -364,26 +431,82 @@ mod tests {
     fn exclude_patterns_beat_the_members_list() {
         let root = Path::new("/ws");
         let members = vec!["packages/*".to_owned()];
-        assert!(!members_select(
+        assert!(!selects(
             root,
             &members,
             &["packages/ignored".to_owned()],
             Path::new("/ws/packages/ignored")
         ));
-        assert!(members_select(
+        assert!(selects(
             root,
             &members,
             &["packages/ignored".to_owned()],
             Path::new("/ws/packages/orders")
         ));
         // Exclude patterns take wildcards too.
-        assert!(!members_select(
+        assert!(!selects(
             root,
             &members,
             &["packages/*-internal".to_owned()],
             Path::new("/ws/packages/tooling-internal")
         ));
         // The workspace root is never its own member.
-        assert!(!members_select(root, &["**".to_owned()], &[], root));
+        assert!(!selects(root, &["**".to_owned()], &[], root));
+    }
+
+    #[test]
+    fn entries_that_leave_the_workspace_are_skipped_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().parent().unwrap().join("outside-member");
+        write(
+            &outside.join("morphir.toml"),
+            "[project]\nname = \"acme/outside\"\nversion = \"1.0.0\"\n",
+        );
+
+        let mut warnings = Vec::new();
+        let members = vec![
+            "../outside-member".to_owned(),
+            outside.to_string_lossy().into_owned(),
+            r"..\outside-member".to_owned(),
+        ];
+        assert_eq!(
+            expand_members(root.path(), &members, &[], &mut warnings),
+            Vec::<PathBuf>::new(),
+            "no entry that leaves the workspace may expand to a member"
+        );
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].contains("../outside-member"), "{warnings:?}");
+        assert!(warnings[0].contains("not confined"), "{warnings:?}");
+        assert!(warnings[2].contains(r"..\outside-member"), "{warnings:?}");
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn selecting_a_member_also_skips_entries_that_leave_the_workspace() {
+        let root = Path::new("/ws");
+        let mut warnings = Vec::new();
+        assert!(!members_select(
+            root,
+            &["../outside".to_owned()],
+            &[],
+            Path::new("/outside"),
+            &mut warnings,
+        ));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("../outside"), "{warnings:?}");
+    }
+
+    #[test]
+    fn confinement_accepts_ordinary_entries_and_the_root() {
+        assert!(is_confined("packages/orders"));
+        assert!(is_confined("packages/*"));
+        assert!(is_confined("**"));
+        assert!(is_confined("."));
+        assert!(!is_confined(""));
+        assert!(!is_confined("../outside"));
+        assert!(!is_confined("packages/../../outside"));
+        assert!(!is_confined("/etc/morphir"));
+        assert!(!is_confined(r"..\outside"));
+        assert!(!is_confined(r"C:\outside"));
     }
 }

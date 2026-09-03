@@ -376,6 +376,7 @@ mod tests {
             sources: Vec::new(),
             workspace_root: None,
             member_root: None,
+            warnings: Vec::new(),
             provenance,
         }
     }

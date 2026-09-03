@@ -222,6 +222,9 @@ pub struct EffectiveConfig {
     /// Lets the loader recover the value a key held without the member's
     /// contribution, which the merged value alone cannot show.
     pub(crate) pre_member: Value,
+    /// Warnings raised while resolving the workspace and its members, such as
+    /// a `members` entry that would leave the workspace directory.
+    pub(crate) warnings: Vec<String>,
     /// Origins of the winning configuration values.
     pub(crate) provenance: ConfigProvenance,
 }

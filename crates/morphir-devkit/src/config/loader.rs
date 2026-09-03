@@ -6,7 +6,7 @@ use super::discovery::{
     native_global_config_candidates, native_system_config_candidates, project_config_candidates,
     user_override_candidates,
 };
-use super::members::{expand_members, is_member, members_select};
+use super::members::{expand_members, is_confined, is_member, members_select, unconfined_warning};
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
@@ -141,8 +141,12 @@ struct EnclosingWorkspace {
 /// literally or through a wildcard, without an `exclude` pattern ruling it out
 /// again. A configuration that is unreadable, ambiguous, or not a workspace is
 /// skipped and the walk continues, so a stray file above the project can never
-/// make loading fail.
-fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
+/// make loading fail. A `members` entry that leaves the workspace directory is
+/// skipped the same way `expand_members` skips it, and adds a warning.
+fn find_enclosing_workspace(
+    member_root: &Path,
+    warnings: &mut Vec<String>,
+) -> Option<EnclosingWorkspace> {
     let mut current = member_root.parent();
     while let Some(directory) = current {
         if let Some(config_path) = discover_config_at(directory).ok().flatten()
@@ -155,6 +159,7 @@ fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
                 &workspace.members,
                 &workspace.exclude,
                 member_root,
+                warnings,
             )
         {
             return Some(EnclosingWorkspace {
@@ -175,12 +180,32 @@ fn find_enclosing_workspace(member_root: &Path) -> Option<EnclosingWorkspace> {
 /// that expands to exactly one member selects it. A wider list has no member in
 /// view, so none is merged; running inside a member directory is how a specific
 /// member is selected, and that path is handled by [`find_enclosing_workspace`].
-fn select_member(workspace_root: &Path, workspace: &WorkspaceSection) -> Option<PathBuf> {
+///
+/// A `default_member` that leaves the workspace directory selects nothing and
+/// adds a warning; so does any `members` entry that does the same. Without that
+/// check `workspace_root.join("../outside")` would be accepted as a member and
+/// its configuration merged from outside the workspace entirely.
+fn select_member(
+    workspace_root: &Path,
+    workspace: &WorkspaceSection,
+    warnings: &mut Vec<String>,
+) -> Option<PathBuf> {
     if let Some(member) = workspace.default_member.as_ref() {
+        if !is_confined(member) {
+            warnings.push(unconfined_warning(member));
+            return None;
+        }
         let member = workspace_root.join(member);
         return is_member(workspace_root, &workspace.exclude, &member).then_some(member);
     }
-    match expand_members(workspace_root, &workspace.members, &workspace.exclude).as_slice() {
+    match expand_members(
+        workspace_root,
+        &workspace.members,
+        &workspace.exclude,
+        warnings,
+    )
+    .as_slice()
+    {
         [only] => Some(only.clone()),
         _ => None,
     }
@@ -192,11 +217,12 @@ fn merge_workspace_member(
     sources: &mut Vec<ConfigSource>,
     workspace_root: Option<&Path>,
     root_config: &MorphirConfig,
+    warnings: &mut Vec<String>,
 ) -> Result<Option<WorkspaceMemberConfig>> {
     let (Some(ws_root), Some(ws)) = (workspace_root, &root_config.workspace) else {
         return Ok(None);
     };
-    let Some(member_path) = select_member(ws_root, ws) else {
+    let Some(member_path) = select_member(ws_root, ws, warnings) else {
         return Ok(None);
     };
 
@@ -292,6 +318,7 @@ pub fn load_effective_config(
     options: &ConfigLoadOptions,
 ) -> Result<EffectiveConfig> {
     let mut state = ProvenanceState::default();
+    let mut warnings = Vec::new();
     state.merge(
         &builtin_defaults(),
         ConfigOrigin {
@@ -325,7 +352,9 @@ pub fn load_effective_config(
     // underneath it so the two layers keep their documented precedence no
     // matter which of the two files the caller happened to discover.
     let selected_root = project_config.and_then(config_root).map(Path::to_path_buf);
-    let enclosing = selected_root.as_deref().and_then(find_enclosing_workspace);
+    let enclosing = selected_root
+        .as_deref()
+        .and_then(|root| find_enclosing_workspace(root, &mut warnings));
     let project_layer = enclosing.as_ref().map_or_else(
         || project_config.map(Path::to_path_buf),
         |workspace| Some(workspace.config_path.clone()),
@@ -364,6 +393,7 @@ pub fn load_effective_config(
                 &mut sources,
                 workspace_root.as_deref(),
                 &root_config,
+                &mut warnings,
             )?;
             (workspace_root, member)
         }
@@ -389,6 +419,7 @@ pub fn load_effective_config(
         workspace_root,
         member_root: member_config.map(|member| member.root),
         pre_member,
+        warnings,
         provenance,
     })
 }
@@ -473,12 +504,14 @@ pub fn load_config_context_with(
         sources,
         workspace_root,
         member_root,
+        warnings: member_warnings,
         ..
     } = effective_config;
     let config = decode_config(&effective, "merged")
         .with_context(|| format!("Failed to load Morphir config: {}", config_path.display()))?;
 
-    let mut warnings = deprecated_key_warnings(&effective);
+    let mut warnings = member_warnings;
+    warnings.extend(deprecated_key_warnings(&effective));
     if effective.pointer("/ir/mode").is_some() && layout_explicit {
         warnings.push("ir.mode is ignored because ir.layout is set explicitly".to_owned());
     }
@@ -1555,6 +1588,91 @@ mod tests {
             "build/out"
         );
         assert!(no_member_was_merged(&context));
+    }
+
+    /// A workspace laid out with a sibling directory the workspace does not
+    /// own, so a member entry that escapes has somewhere real to land.
+    fn workspace_beside_an_outsider(root: &Path, workspace_body: &str) -> PathBuf {
+        write_file(
+            &root.join("outside").join("morphir.toml"),
+            "[project]\nname = \"acme/outside\"\nversion = \"1.0.0\"\n",
+        );
+        let workspace = root.join("workspace").join("morphir.toml");
+        write_file(&workspace, workspace_body);
+        workspace
+    }
+
+    #[test]
+    fn a_default_member_that_leaves_the_workspace_is_ignored_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_beside_an_outsider(
+            root.path(),
+            "[workspace]\nmembers = [\"packages/*\"]\ndefault_member = \"../outside\"\n",
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(
+            no_member_was_merged(&context),
+            "a member outside the workspace must never be merged: {:?}",
+            context.sources
+        );
+        assert!(context.current_project.is_none());
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("../outside") && context.warnings[0].contains("confined"),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn an_absolute_member_entry_is_ignored_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let absolute = root.path().join("outside").to_string_lossy().into_owned();
+        let workspace = workspace_beside_an_outsider(
+            root.path(),
+            &format!(
+                "[workspace]\nmembers = [\"{}\"]\n",
+                absolute.replace('\\', "\\\\")
+            ),
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(no_member_was_merged(&context), "{:?}", context.sources);
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains(&absolute),
+            "{:?}",
+            context.warnings
+        );
+    }
+
+    #[test]
+    fn a_backslash_separated_member_entry_is_ignored_with_a_warning() {
+        // A backslash is a path separator on Windows, so `..\outside` escapes
+        // there even though it is one odd directory name on Unix. The entry is
+        // refused on every platform, so a workspace behaves the same way
+        // wherever it is loaded.
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace_beside_an_outsider(
+            root.path(),
+            "[workspace]\nmembers = [\"..\\\\outside\"]\n",
+        );
+
+        let context =
+            load_config_context_with(&workspace, &ConfigLoadOptions::project_only()).unwrap();
+
+        assert!(no_member_was_merged(&context), "{:?}", context.sources);
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains(r"..\outside"),
+            "{:?}",
+            context.warnings
+        );
     }
 
     #[test]

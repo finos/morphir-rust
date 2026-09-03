@@ -1,4 +1,5 @@
 use crate::remote::config::RemoteSourceConfig;
+use morphir_workspace::RelativePath;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -115,13 +116,39 @@ pub struct WorkspaceSection {
     /// Default member for commands
     pub default_member: Option<String>,
     /// Out directory for every task in the workspace, relative to the
-    /// workspace root.
-    #[serde(default = "default_workspace_out_dir")]
+    /// workspace root, must stay inside it: no absolute path, no `..`, and no
+    /// backslash separators.
+    #[serde(
+        default = "default_workspace_out_dir",
+        deserialize_with = "deserialize_workspace_out_dir"
+    )]
     pub out_dir: String,
 }
 
 fn default_workspace_out_dir() -> String {
     ".morphir/out".to_string()
+}
+
+/// Deserialize `[workspace].out_dir`, rejecting anything that is not a
+/// relative path confined to the workspace.
+///
+/// This is a load-time property of the *configured* value only. The
+/// `--out-dir` flag and `MORPHIR_OUT_DIR` are explicit, resolved-at-runtime
+/// choices and keep their absolute-path behavior; they never go through this
+/// deserializer.
+fn deserialize_workspace_out_dir<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    RelativePath::parse(value.clone()).map_err(|_| {
+        serde::de::Error::custom(format!(
+            "workspace.out_dir is set to {value:?}, which must be a path relative to the \
+             workspace root and confined to it: no absolute path, no `..`, and no backslash \
+             separators"
+        ))
+    })?;
+    Ok(value)
 }
 
 /// [frontend] section
@@ -388,6 +415,43 @@ mod tests {
         let config: MorphirConfig =
             serde_json::from_value(serde_json::json!({"workspace": {"members": []}})).unwrap();
         assert_eq!(config.workspace.unwrap().out_dir, ".morphir/out");
+    }
+
+    #[test]
+    fn workspace_out_dir_accepts_a_normal_relative_value() {
+        let config: MorphirConfig = serde_json::from_value(
+            serde_json::json!({"workspace": {"members": [], "out_dir": "build/out"}}),
+        )
+        .unwrap();
+        assert_eq!(config.workspace.unwrap().out_dir, "build/out");
+    }
+
+    /// `workspace.out_dir` must stay inside the workspace: an absolute path
+    /// would place task output, and future cleanup, outside it.
+    #[test]
+    fn workspace_out_dir_rejects_an_absolute_path() {
+        let error = serde_json::from_value::<MorphirConfig>(
+            serde_json::json!({"workspace": {"members": [], "out_dir": "/tmp/out"}}),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("workspace.out_dir"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// `..` in `workspace.out_dir` would let the value escape the workspace
+    /// root, the same confinement rule member paths already enforce.
+    #[test]
+    fn workspace_out_dir_rejects_dot_dot() {
+        let error = serde_json::from_value::<MorphirConfig>(
+            serde_json::json!({"workspace": {"members": [], "out_dir": "../out"}}),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("workspace.out_dir"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

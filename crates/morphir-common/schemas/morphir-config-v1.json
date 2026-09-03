@@ -656,7 +656,7 @@
         "out_dir": {
           "type": "string",
           "default": ".morphir/out",
-          "description": "Out directory for every task in the workspace, relative to the workspace root."
+          "description": "Out directory for every task in the workspace, relative to the workspace root, must stay inside it."
         },
         "members": {
           "type": "array",

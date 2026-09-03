@@ -195,6 +195,46 @@ mod tests {
         assert_eq!(module_path(&context), PathBuf::new());
     }
 
+    /// A context loaded from a relative config path stores absolute roots
+    /// (see `loader::tests::relative_config_path_is_stored_absolute`), so
+    /// `resolve_out_root` must land under the config's own directory even
+    /// when the caller's `cwd` at resolution time is somewhere else
+    /// entirely. The config is written directly under the test binary's
+    /// current directory (never changed by this test) so a genuinely
+    /// relative path can be passed without touching global process state.
+    #[test]
+    fn resolve_out_root_ignores_cwd_when_the_context_was_loaded_from_a_relative_path() {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_dir = PathBuf::from(format!(
+            ".tmp-resolve-out-root-relative-context-{}",
+            std::process::id()
+        ));
+        let dir = cwd.join(&relative_dir);
+        let config = dir.join("morphir.toml");
+        write(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n",
+        );
+
+        let relative_config = relative_dir.join("morphir.toml");
+        let context_result = load_config_context(&relative_config);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let context = context_result.unwrap();
+
+        // A cwd unrelated to either the test binary's directory or the
+        // config's directory: if `resolve_out_root` resolved against it, the
+        // result would land here instead of under `dir`.
+        let unrelated_cwd = std::env::temp_dir().join(format!(
+            "resolve-out-root-unrelated-cwd-{}",
+            std::process::id()
+        ));
+
+        assert_eq!(
+            resolve_out_root(None, None, Some(&context), &unrelated_cwd),
+            dir.join(".morphir").join("out")
+        );
+    }
+
     #[test]
     fn without_config_the_root_is_under_cwd() {
         assert_eq!(

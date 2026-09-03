@@ -561,6 +561,22 @@ pub fn load_config_context_with(
     config_path: &Path,
     options: &ConfigLoadOptions,
 ) -> Result<ConfigContext> {
+    // Absolutise a relative `config_path` against the process's current
+    // directory right away, before anything derives `workspace_root`,
+    // `project_root`, or `morphir_dir` from it. Otherwise those paths stay
+    // relative, and a caller that resolves them (for example
+    // `resolve_out_root`) after the process changes directory resolves them
+    // against the new directory instead of the one the config was loaded
+    // from. This only joins with the current directory; it does not
+    // canonicalise symlinks.
+    let config_path = std::path::absolute(config_path).with_context(|| {
+        format!(
+            "Failed to stabilize configuration path: {}",
+            config_path.display()
+        )
+    })?;
+    let config_path = config_path.as_path();
+
     let config_dir = config_root(config_path)
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
 
@@ -1337,6 +1353,37 @@ mod tests {
         assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
         assert!(context.warnings[0].contains("ir.mode"));
         assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    /// `load_config_context` stores `workspace_root`, `project_root`, and
+    /// `config_path` absolute, even when it is called with a relative path,
+    /// so a caller that resolves them after the process changes directory
+    /// (for example `resolve_out_root`) is not affected by that later
+    /// change. The config is written directly under the test binary's
+    /// current directory (never changed by this test) so a genuinely
+    /// relative path can be passed without touching global process state.
+    #[test]
+    fn relative_config_path_is_stored_absolute() {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_dir = PathBuf::from(format!(
+            ".tmp-relative-config-path-is-stored-absolute-{}",
+            std::process::id()
+        ));
+        let dir = cwd.join(&relative_dir);
+        let config = dir.join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n",
+        );
+
+        let relative_config = relative_dir.join("morphir.toml");
+        let result = load_config_context(&relative_config);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let context = result.unwrap();
+
+        assert!(context.config_path.is_absolute(), "{context:?}");
+        assert_eq!(context.config_path, dir.join("morphir.toml"));
+        assert_eq!(context.project_root, Some(dir));
     }
 
     #[test]

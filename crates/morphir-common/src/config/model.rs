@@ -150,10 +150,16 @@ pub struct IrSection {
     #[serde(default = "default_format_version")]
     pub format_version: u32,
     /// Storage layout compile writes: `single-file` or `document-tree`
-    #[serde(default = "default_ir_layout")]
+    #[serde(
+        default = "default_ir_layout",
+        deserialize_with = "deserialize_ir_layout"
+    )]
     pub layout: String,
     /// Serialization format compile writes: `json` or `yaml`
-    #[serde(default = "default_ir_format")]
+    #[serde(
+        default = "default_ir_format",
+        deserialize_with = "deserialize_ir_format"
+    )]
     pub format: String,
     /// Deprecated alias for `layout`: `classic` means `single-file`, `vfs`
     /// means `document-tree`. Read for one release, then removed.
@@ -179,6 +185,48 @@ fn default_ir_layout() -> String {
 
 fn default_ir_format() -> String {
     "json".to_string()
+}
+
+/// The values `ir.layout` accepts. The JSON schema (`morphir-config-v1.json`)
+/// restricts the field the same way; keep the two in agreement.
+const IR_LAYOUT_VALUES: [&str; 2] = ["single-file", "document-tree"];
+
+/// The values `ir.format` accepts. The JSON schema (`morphir-config-v1.json`)
+/// restricts the field the same way; keep the two in agreement.
+const IR_FORMAT_VALUES: [&str; 2] = ["json", "yaml"];
+
+fn deserialize_ir_layout<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_one_of("ir.layout", &IR_LAYOUT_VALUES, deserializer)
+}
+
+fn deserialize_ir_format<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_one_of("ir.format", &IR_FORMAT_VALUES, deserializer)
+}
+
+/// Deserialize a string field, rejecting anything outside `accepted`.
+fn deserialize_one_of<'de, D>(
+    field: &str,
+    accepted: &[&str],
+    deserializer: D,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if accepted.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "{field} is set to {value:?}, which is not one of the accepted values: {}",
+            accepted.join(", ")
+        )))
+    }
 }
 
 /// [codegen] section
@@ -359,5 +407,31 @@ mod tests {
         .unwrap();
         let value = serde_json::to_value(config.project.unwrap()).unwrap();
         assert!(value.get("output_directory").is_none());
+    }
+
+    /// A typo in `ir.layout` must fail to decode, naming the field, the
+    /// value, and the two accepted spellings, rather than passing through
+    /// and failing only when a task tries to act on it.
+    #[test]
+    fn an_unknown_ir_layout_value_fails_to_decode() {
+        let error = serde_json::from_value::<IrSection>(json!({"layout": "single-fiel"}))
+            .expect_err("typo'd layout must be rejected");
+        let message = error.to_string();
+        assert!(message.contains("ir.layout"), "{message}");
+        assert!(message.contains("single-fiel"), "{message}");
+        assert!(message.contains("single-file"), "{message}");
+        assert!(message.contains("document-tree"), "{message}");
+    }
+
+    /// Same guarantee for `ir.format`.
+    #[test]
+    fn an_unknown_ir_format_value_fails_to_decode() {
+        let error = serde_json::from_value::<IrSection>(json!({"format": "yml"}))
+            .expect_err("typo'd format must be rejected");
+        let message = error.to_string();
+        assert!(message.contains("ir.format"), "{message}");
+        assert!(message.contains("yml"), "{message}");
+        assert!(message.contains("json"), "{message}");
+        assert!(message.contains("yaml"), "{message}");
     }
 }

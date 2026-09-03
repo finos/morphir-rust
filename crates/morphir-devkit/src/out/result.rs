@@ -117,12 +117,24 @@ pub struct TaskResult {
     /// content placed in or beside an installed directory is never at risk.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub installed: BTreeMap<String, Vec<String>>,
-    /// RFC 3339 UTC timestamp of the last SUCCESSFUL run. A tombstone (see
-    /// the CLI's `out_context::prepare_dest`) keeps this value from that
-    /// last success even though `value` and `ir` are cleared, so a record
-    /// with no `ir` and an empty `value` is a tombstone left by a later run
-    /// that started but did not complete — `completed_at` is not the time
-    /// of that later run.
+    /// Is this record a tombstone?
+    ///
+    /// True when a later run started, cleared this task's product, and kept
+    /// only the `installed` ledger — see the CLI's
+    /// `out_context::prepare_dest`. A successful run always writes `false`.
+    ///
+    /// The flag says so outright rather than leaving readers to infer it from
+    /// an empty `value` and a missing `ir`, because a successful run can
+    /// legitimately produce nothing: a generator that emitted no artifacts
+    /// this time has an empty `value` and still needs to retire the files it
+    /// installed last time, which a reader that guessed from the shape alone
+    /// would refuse to do.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tombstone: bool,
+    /// RFC 3339 UTC timestamp of the last SUCCESSFUL run. A tombstone keeps
+    /// this value from that last success even though `value` and `ir` are
+    /// cleared, so `completed_at` on a tombstone is not the time of the run
+    /// that wrote the tombstone.
     pub completed_at: String,
     /// Fields this version does not know. Preserved on read and write.
     #[serde(flatten)]
@@ -141,6 +153,7 @@ impl TaskResult {
             value: Vec::new(),
             ir: None,
             installed: BTreeMap::new(),
+            tombstone: false,
             completed_at: now_rfc3339(),
             extra: BTreeMap::new(),
         }
@@ -218,6 +231,32 @@ mod tests {
         assert_eq!(record.module, "packages/orders");
         assert!(record.completed_at.ends_with('Z'));
         assert_eq!(record.completed_at.len(), 20, "{}", record.completed_at);
+        assert!(!record.tombstone, "a fresh record is not a tombstone");
+    }
+
+    #[test]
+    fn the_tombstone_flag_round_trips_and_stays_out_of_an_ordinary_record() {
+        let mut record = TaskResult::new(&TaskId::compile(), Path::new(""));
+        let written = serde_json::to_value(&record).unwrap();
+        assert!(
+            written.get("tombstone").is_none(),
+            "an ordinary record does not carry the flag: {written}"
+        );
+        assert!(
+            !serde_json::from_value::<TaskResult>(written)
+                .unwrap()
+                .tombstone,
+            "a record with no `tombstone` key reads back as not a tombstone"
+        );
+
+        record.tombstone = true;
+        let written = serde_json::to_value(&record).unwrap();
+        assert_eq!(written["tombstone"], true);
+        assert!(
+            serde_json::from_value::<TaskResult>(written)
+                .unwrap()
+                .tombstone
+        );
     }
 
     #[test]

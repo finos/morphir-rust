@@ -88,12 +88,17 @@ pub(crate) fn unconfined_target_warning(directory: &Path) -> String {
 /// `workspace_discovery::traversal`); this is the same rule for the
 /// configuration loader's own member list.
 ///
-/// A directory that is not there answers `true`. A literal member entry is
-/// expanded whether or not it exists, so that a listed-but-missing member is
-/// reported as a not-found source rather than disappearing, and a path with
-/// nothing behind it has no link to follow. Anything else that will not
-/// resolve — a dangling link, a directory that cannot be read — answers
-/// `false`, because a member Morphir cannot place is not one it should merge.
+/// A directory that is not there at all answers `true`. A literal member
+/// entry is expanded whether or not it exists, so that a listed-but-missing
+/// member is reported as a not-found source rather than disappearing, and a
+/// path with nothing behind it has no link to follow.
+///
+/// Anything that is there but will not resolve — a dangling link, a directory
+/// that cannot be read — answers `false`, because a member Morphir cannot
+/// place is not one it should merge. `canonicalize` reports both cases as
+/// "not found", so `symlink_metadata` is what tells them apart: it does not
+/// follow the last link, so it succeeds on a dangling one and fails on a path
+/// with nothing at it.
 ///
 /// Both sides are canonicalized before comparing, so a workspace root that is
 /// itself reached through a symbolic link (a temporary directory under
@@ -101,7 +106,9 @@ pub(crate) fn unconfined_target_warning(directory: &Path) -> String {
 pub(crate) fn resolves_inside(workspace_root: &Path, directory: &Path) -> bool {
     let canonical_directory = match std::fs::canonicalize(directory) {
         Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return std::fs::symlink_metadata(directory).is_err();
+        }
         Err(_) => return false,
     };
     match std::fs::canonicalize(workspace_root) {
@@ -630,6 +637,34 @@ mod tests {
             warnings[0].contains("resolves outside the workspace"),
             "{warnings:?}"
         );
+    }
+
+    /// A link with nothing at the far end is not the same as no member at
+    /// all: something is there, and it does not resolve, so Morphir cannot
+    /// say where it would place it.
+    #[cfg(unix)]
+    #[test]
+    fn a_member_symlinked_to_nothing_is_skipped_with_a_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        std::fs::create_dir_all(root.join("packages")).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("gone"), root.join("packages/orders")).unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(&root, &["packages/orders".to_owned()], &[], &mut warnings),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+        // A member that is simply missing still expands, so that it is
+        // reported as a not-found source.
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(&root, &["packages/absent".to_owned()], &[], &mut warnings),
+            vec![root.join("packages").join("absent")]
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     /// A symbolic link is a perfectly ordinary way to arrange a workspace, so

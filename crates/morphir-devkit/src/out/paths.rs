@@ -129,12 +129,17 @@ fn is_one_directory_segment(segment: &str) -> bool {
         && !drive_prefix
 }
 
-/// Replace path separators, the drive-letter colon, spaces, the
-/// parent-directory segment, and the empty segment so a user-supplied name is
+/// Replace path separators, the drive-letter colon, spaces, the current- and
+/// parent-directory segments, and the empty segment so a user-supplied name is
 /// one safe, visible directory segment.
 ///
 /// An empty segment would otherwise produce a hidden `.dest` directory and a
-/// `.json` file with no stem, so it maps to `-` the same way `..` does.
+/// `.json` file with no stem, so it maps to `-` the same way `..` does. So
+/// does a lone `.`, which is a [`Component::CurDir`] rather than an ordinary
+/// name and would leave `TaskPaths::new` joining the leaf `..dest`.
+/// [`TaskId::parse`] already refuses `.` outright; the constructors sanitize
+/// it instead, since they take a name the user chose for a target or a
+/// transform rather than a task id.
 ///
 /// The colon has to go for the same reason the separators do. On Windows `C:`
 /// is a drive prefix, so a target named `C:` (or `C:\foo`) kept its colon
@@ -145,7 +150,7 @@ fn is_one_directory_segment(segment: &str) -> bool {
 /// [`Component::Prefix`] or as a separator, so a sanitized segment is always
 /// exactly one [`Component::Normal`] on every platform.
 pub fn sanitize_segment(segment: &str) -> String {
-    if segment.is_empty() || segment == ".." {
+    if segment.is_empty() || segment == "." || segment == ".." {
         return "-".to_owned();
     }
     segment.replace(['/', ' ', '\\', ':'], "-")
@@ -329,13 +334,24 @@ mod tests {
     fn sanitizing_strips_windows_drive_prefixes() {
         assert_eq!(sanitize_segment("C:"), "C-");
         assert_eq!(sanitize_segment(r"C:\foo"), "C--foo");
+        assert_eq!(sanitize_segment("."), "-");
+        assert_eq!(TaskId::generate(".").as_str(), "generate/-");
         assert_eq!(TaskId::generate("C:").as_str(), "generate/C-");
         assert_eq!(TaskId::transform(r"C:\foo").as_str(), "transform/C--foo");
 
         // The property the constructors rely on: whatever a user types, a
         // sanitized segment is exactly one ordinary path component, never a
         // prefix and never a separator.
-        for name in ["C:", r"C:\foo", r"\\server\share", "a/b", "a b", "..", ""] {
+        for name in [
+            "C:",
+            r"C:\foo",
+            r"\\server\share",
+            "a/b",
+            "a b",
+            ".",
+            "..",
+            "",
+        ] {
             let sanitized = sanitize_segment(name);
             let mut components = Path::new(&sanitized).components();
             assert!(

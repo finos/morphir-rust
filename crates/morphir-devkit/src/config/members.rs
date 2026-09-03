@@ -32,8 +32,33 @@ pub(crate) fn is_pattern(text: &str) -> bool {
 /// Windows drive prefix, a backslash separator, and a `.` or `..` component are
 /// all rejected, and `.` alone (the workspace root itself) is allowed, since
 /// `is_member` already refuses to treat the root as its own member.
+///
+/// The entry is tidied first, because `RelativePath` also refuses a redundant
+/// separator: `packages/` and `packages//orders` are perfectly ordinary member
+/// entries that the rest of this module has always accepted, and saying they
+/// leave the workspace would be untrue.
 pub(crate) fn is_confined(entry: &str) -> bool {
-    RelativePath::parse(entry).is_ok()
+    RelativePath::parse(without_redundant_separators(entry)).is_ok()
+}
+
+/// Collapse the spellings that name the same directory — a trailing separator,
+/// a doubled separator, a `.` segment — so the confinement check answers the
+/// question the entry actually asks.
+///
+/// A leading separator survives: that is the entry claiming to be absolute, and
+/// the check has to see it. So does a backslash, which is a separator on
+/// Windows and has to be refused rather than tidied away. An entry left with
+/// nothing at all is the workspace root, which `is_member` skips on its own.
+fn without_redundant_separators(entry: &str) -> String {
+    let leading = if entry.starts_with('/') { "/" } else { "" };
+    let segments: Vec<&str> = entry
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect();
+    if segments.is_empty() {
+        return if leading.is_empty() { "." } else { "/" }.to_owned();
+    }
+    format!("{leading}{}", segments.join("/"))
 }
 
 /// The warning shown for an entry [`is_confined`] rejects.
@@ -503,11 +528,56 @@ mod tests {
         assert!(is_confined("packages/*"));
         assert!(is_confined("**"));
         assert!(is_confined("."));
-        assert!(!is_confined(""));
         assert!(!is_confined("../outside"));
         assert!(!is_confined("packages/../../outside"));
         assert!(!is_confined("/etc/morphir"));
         assert!(!is_confined(r"..\outside"));
         assert!(!is_confined(r"C:\outside"));
+    }
+
+    #[test]
+    fn confinement_tolerates_redundant_separators() {
+        // These name a directory inside the workspace, however they are
+        // spelled, and `pattern_segments` has always read them that way. The
+        // confinement check has to agree, or a workspace with a trailing
+        // slash in its members list is told its member escapes.
+        for entry in [
+            "packages/",
+            "packages//orders",
+            "./packages",
+            "packages/./orders",
+        ] {
+            assert!(is_confined(entry), "{entry}");
+        }
+        // Nothing but separators is the workspace root, which is never its own
+        // member — silently skipped, not reported as an escape.
+        for entry in ["", "."] {
+            assert!(is_confined(entry), "{entry:?}");
+        }
+        // A leading separator is not redundant: it is the entry saying it is
+        // absolute, and it still has to be refused.
+        assert!(!is_confined("/packages/orders"));
+        assert!(!is_confined("/"));
+    }
+
+    #[test]
+    fn a_trailing_separator_still_expands_to_the_same_member() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            &root.path().join("packages/orders/morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(
+                root.path(),
+                &["packages/orders/".to_owned()],
+                &[],
+                &mut warnings
+            ),
+            vec![root.path().join("packages").join("orders")]
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 }

@@ -16,8 +16,10 @@ pub enum OutError {
         position: usize,
     },
     /// One segment named something other than a single directory segment.
+    // One line on purpose: a `\` continuation here reads well in the source but
+    // rustfmt rejoins it and the indentation lands in the message users see.
     #[error(
-        "task id segment {position} (`{segment}`) must name one directory segment,          not `.`, `..`, or a path"
+        "task id segment {position} (`{segment}`) must name one directory segment, not `.`, `..`, or a path"
     )]
     UnsafeSegment {
         /// Zero-based index of the offending segment.

@@ -332,13 +332,26 @@ fn collect_matches(directory: &Path, segments: &[&str], found: &mut Vec<PathBuf>
 
 /// Visible subdirectories of `directory`. Hidden directories are skipped so a
 /// wildcard never descends into `.git`, `.morphir`, or a build tree.
+///
+/// A directory symlink counts as a subdirectory too: `DirEntry::file_type`
+/// reports the link itself, not what it points at, so it is checked with
+/// `std::fs::metadata`, which follows the link, before it is ruled out. A
+/// symlinked member selected this way still has to resolve inside the
+/// workspace; `expand_members` applies that check, via [`resolves_inside`],
+/// to every path this function returns.
 fn child_directories(directory: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
     entries
         .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => true,
+            Ok(kind) if kind.is_symlink() => {
+                std::fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir())
+            }
+            _ => false,
+        })
         .map(|entry| entry.path())
         .filter(|path| {
             path.file_name()
@@ -698,6 +711,62 @@ mod tests {
             &mut warnings,
         ));
         assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// `packages/*` walks the tree with `child_directories`, which used
+    /// `DirEntry::file_type` and so never saw a directory symlink as a
+    /// subdirectory to descend into — a member reached the same way through a
+    /// literal entry was accepted, but a glob silently dropped it. A
+    /// symlinked member resolving inside the workspace must appear in the
+    /// wildcard's expansion.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_member_selected_by_a_glob_is_loaded_when_it_resolves_inside() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        write(
+            &root.join("vendor/orders/morphir.toml"),
+            "[project]\nname = \"acme/orders\"\nversion = \"1.0.0\"\n",
+        );
+        std::fs::create_dir_all(root.join("packages")).unwrap();
+        std::os::unix::fs::symlink(root.join("vendor/orders"), root.join("packages/orders"))
+            .unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(&root, &["packages/*".to_owned()], &[], &mut warnings),
+            vec![root.join("packages").join("orders")]
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// The same wildcard walk, but the symlinked member resolves outside the
+    /// workspace. `child_directories` must still offer it to the walk — the
+    /// confinement check in `expand_members`, not the directory listing, is
+    /// what drops it, with the usual warning.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_member_selected_by_a_glob_is_skipped_with_a_warning_when_it_resolves_outside() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        let outside = temp.path().join("outside");
+        write(
+            &outside.join("morphir.toml"),
+            "[project]\nname = \"acme/outside\"\nversion = \"1.0.0\"\n",
+        );
+        std::fs::create_dir_all(root.join("packages")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("packages/orders")).unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(
+            expand_members(&root, &["packages/*".to_owned()], &[], &mut warnings),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("resolves outside the workspace"),
+            "{warnings:?}"
+        );
     }
 
     #[test]

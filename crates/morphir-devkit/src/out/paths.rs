@@ -1,7 +1,7 @@
 //! Task identity and on-disk locations under the out root.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Errors raised while building task identities and reading result records.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -119,17 +119,26 @@ fn is_one_directory_segment(segment: &str) -> bool {
         && !drive_prefix
 }
 
-/// Replace path separators, spaces, the parent-directory segment, and the
-/// empty segment so a user-supplied name is one safe, visible directory
-/// segment.
+/// Replace path separators, the drive-letter colon, spaces, the
+/// parent-directory segment, and the empty segment so a user-supplied name is
+/// one safe, visible directory segment.
 ///
 /// An empty segment would otherwise produce a hidden `.dest` directory and a
 /// `.json` file with no stem, so it maps to `-` the same way `..` does.
+///
+/// The colon has to go for the same reason the separators do. On Windows `C:`
+/// is a drive prefix, so a target named `C:` (or `C:\foo`) kept its colon
+/// through this function, [`TaskPaths::new`] joined the leaf `C:.dest` onto
+/// the out root, and Windows read that as a path relative to drive C's current
+/// directory — the out root was simply dropped. With `/`, `\`, and `:` all
+/// replaced, there is nothing left that `Path::new` can read as a
+/// [`Component::Prefix`] or as a separator, so a sanitized segment is always
+/// exactly one [`Component::Normal`] on every platform.
 pub fn sanitize_segment(segment: &str) -> String {
     if segment.is_empty() || segment == ".." {
         return "-".to_owned();
     }
-    segment.replace(['/', ' ', '\\'], "-")
+    segment.replace(['/', ' ', '\\', ':'], "-")
 }
 
 /// Scratch directory and result record of one task.
@@ -281,5 +290,33 @@ mod tests {
             paths.result,
             PathBuf::from("/ws/.morphir/out/packages/orders/generate/scala.json")
         );
+    }
+
+    /// On Windows a name such as `C:` or `C:\foo` used to keep its colon, so
+    /// `TaskPaths::new` joined the leaf `C:.dest` onto the out root and
+    /// Windows resolved that against drive C's current directory instead. The
+    /// replacement is unconditional, so these assertions hold everywhere.
+    #[test]
+    fn sanitizing_strips_windows_drive_prefixes() {
+        assert_eq!(sanitize_segment("C:"), "C-");
+        assert_eq!(sanitize_segment(r"C:\foo"), "C--foo");
+        assert_eq!(TaskId::generate("C:").as_str(), "generate/C-");
+        assert_eq!(TaskId::transform(r"C:\foo").as_str(), "transform/C--foo");
+
+        // The property the constructors rely on: whatever a user types, a
+        // sanitized segment is exactly one ordinary path component, never a
+        // prefix and never a separator.
+        for name in ["C:", r"C:\foo", r"\\server\share", "a/b", "a b", "..", ""] {
+            let sanitized = sanitize_segment(name);
+            let mut components = Path::new(&sanitized).components();
+            assert!(
+                matches!(components.next(), Some(Component::Normal(_))),
+                "`{name}` sanitized to `{sanitized}`"
+            );
+            assert!(
+                components.next().is_none(),
+                "`{name}` sanitized to `{sanitized}`"
+            );
+        }
     }
 }

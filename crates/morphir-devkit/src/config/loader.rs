@@ -206,9 +206,17 @@ fn decode_config(value: &Value, what: &str) -> Result<MorphirConfig> {
         .with_context(|| format!("Failed to decode {what} Morphir config"))
 }
 
-fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> ConfigSource {
-    let layer = match &options.env {
-        EnvSelection::Skip => return ConfigSource::skipped(ConfigSourceKind::Environment),
+/// The path named in an `ir.mode` error raised from the environment layer,
+/// since that layer has no configuration file of its own to name.
+const ENVIRONMENT_DECLARING_PATH: &str = "<environment variables>";
+
+fn env_source(
+    state: &mut ProvenanceState,
+    options: &ConfigLoadOptions,
+    notes: &mut LayerNotes,
+) -> Result<ConfigSource> {
+    let mut layer = match &options.env {
+        EnvSelection::Skip => return Ok(ConfigSource::skipped(ConfigSourceKind::Environment)),
         EnvSelection::Process => process_env_config_value(&options.env_prefix),
         EnvSelection::Explicit(vars) => env_config_value(
             &options.env_prefix,
@@ -220,6 +228,13 @@ fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> Confi
         Some(map) if !map.is_empty() => ConfigSourceStatus::Loaded,
         _ => ConfigSourceStatus::NotFound,
     };
+    // Route the environment layer through the same `ir.mode` alias every
+    // other layer gets, so `MORPHIR_IR__MODE` is normalised to `ir.layout`
+    // before it meets the other layers instead of being merged raw and
+    // silently losing to a `layout` set anywhere below it.
+    if apply_ir_mode_alias(&mut layer, Path::new(ENVIRONMENT_DECLARING_PATH))? {
+        notes.ir_mode_shadowed = true;
+    }
     state.merge(
         &layer,
         ConfigOrigin {
@@ -227,7 +242,12 @@ fn env_source(state: &mut ProvenanceState, options: &ConfigLoadOptions) -> Confi
             path: None,
         },
     );
-    ConfigSource::new(ConfigSourceKind::Environment, None, Vec::new(), status)
+    Ok(ConfigSource::new(
+        ConfigSourceKind::Environment,
+        None,
+        Vec::new(),
+        status,
+    ))
 }
 
 struct WorkspaceMemberConfig {
@@ -539,7 +559,7 @@ pub fn load_effective_config(
         &mut notes,
     )?;
 
-    sources.push(env_source(&mut state, options));
+    sources.push(env_source(&mut state, options, &mut notes)?);
 
     let (value, provenance) = state.into_parts();
 
@@ -1410,6 +1430,29 @@ mod tests {
         let context = load_config_context(&config).unwrap();
         assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
         assert!(context.warnings[0].contains("ir.mode"));
+        assert_eq!(context.config.ir.unwrap().layout, "document-tree");
+    }
+
+    /// The environment layer must be normalised by the same `ir.mode` alias
+    /// as every file layer. Before this fix, `env_source` merged its layer
+    /// straight into the provenance state without calling
+    /// `apply_ir_mode_alias`, so `MORPHIR_IR__MODE=vfs` was silently ignored
+    /// whenever a lower layer had already set `ir.layout`.
+    #[test]
+    fn env_mode_alias_beats_a_project_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("morphir.toml");
+        write_file(
+            &config,
+            "[project]\nname = \"acme/app\"\nversion = \"1.0.0\"\n\n[ir]\nlayout = \"single-file\"\n",
+        );
+
+        let options = ConfigLoadOptions {
+            env: env(&[("MORPHIR_IR__MODE", "vfs")]),
+            ..ConfigLoadOptions::project_only()
+        };
+        let context = load_config_context_with(&config, &options).unwrap();
+
         assert_eq!(context.config.ir.unwrap().layout, "document-tree");
     }
 

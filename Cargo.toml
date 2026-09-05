@@ -54,9 +54,9 @@ stacker = "0.1"
 # TUI
 ratatui = "0.30"
 crossterm = "0.29"
-tuirealm = "3"
-tui-realm-stdlib = "3"
-tui-realm-textarea = "2"
+tuirealm = "4"
+tui-realm-stdlib = "4"
+tui-realm-textarea = "4"
 
 # Structured logging
 tracing = "0.1"
@@ -67,8 +67,8 @@ unicode-casefold = "0.2"
 unicode-normalization = "0.1"
 percent-encoding = "2.3.2"
 tempfile = "3"
-cap-std = "3.4.5"
-cap-fs-ext = "3.4.5"
+cap-std = "4.0.0"
+cap-fs-ext = "4.0.0"
 same-file = "1.0.6"
 fs2 = "0.4"
 

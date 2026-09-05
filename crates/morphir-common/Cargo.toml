@@ -24,12 +24,12 @@ serde-saphyr = { workspace = true }
 stacker = { workspace = true }
 secrecy = "0.10.3"
 toml = "1.0"
-dirs = "6"
+dirs = "7"
 morphir-core = { path = "../morphir-core" }
 morphir-workspace = { path = "../morphir-workspace" }
 glob = "0.3"
 indexmap = { version = "2", features = ["serde"] }
-nbformat = "~1.2"
+nbformat = "~3.0.0"
 uuid = { version = "1.0", features = ["v4"] }
 vfs = { workspace = true }
 unicode-casefold = { workspace = true }

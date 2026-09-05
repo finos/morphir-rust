@@ -570,10 +570,22 @@ version = "3.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "476f0d0003a760918ed4b1e039a59e11769030416f79c8222551d22785f7f70d"
 dependencies = [
- "cap-primitives",
- "cap-std",
- "io-lifetimes",
+ "cap-primitives 3.4.6",
+ "cap-std 3.4.6",
+ "io-lifetimes 2.0.4",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cap-fs-ext"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56ff379b70af8e08307a8f65e7040c7301cb4a572538ade16b4984f0da77847f"
+dependencies = [
+ "cap-primitives 4.0.3",
+ "cap-std 4.0.3",
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -584,13 +596,31 @@ checksum = "8e0bf07d379916947be6c4a07f43684153d710a2896c31f9e97781362895596c"
 dependencies = [
  "ambient-authority",
  "fs-set-times",
- "io-extras",
- "io-lifetimes",
+ "io-extras 0.18.4",
+ "io-lifetimes 2.0.4",
  "ipnet",
  "maybe-owned",
  "rustix 1.1.4",
  "rustix-linux-procfs",
  "windows-sys 0.59.0",
+ "winx",
+]
+
+[[package]]
+name = "cap-primitives"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b5f74729fd2f44701d1a8eb47e906cdb3ccd9ec0f02baad85a744b791940b18"
+dependencies = [
+ "ambient-authority",
+ "fs-set-times",
+ "io-extras 0.19.0",
+ "io-lifetimes 3.0.1",
+ "ipnet",
+ "maybe-owned",
+ "rustix 1.1.4",
+ "rustix-linux-procfs",
+ "windows-sys 0.61.2",
  "winx",
 ]
 
@@ -610,9 +640,21 @@ version = "3.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a59e59fa26472d29680ece6a9f8ee8b0551a719a33df2f5240bde065ecbddfd7"
 dependencies = [
- "cap-primitives",
- "io-extras",
- "io-lifetimes",
+ "cap-primitives 3.4.6",
+ "io-extras 0.18.4",
+ "io-lifetimes 2.0.4",
+ "rustix 1.1.4",
+]
+
+[[package]]
+name = "cap-std"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ec78e242cfa2cfe276807ac2ecc00315a6c97786977414bcd1c3963b6c91b8"
+dependencies = [
+ "cap-primitives 4.0.3",
+ "io-extras 0.19.0",
+ "io-lifetimes 3.0.1",
  "rustix 1.1.4",
 ]
 
@@ -623,7 +665,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b54c289326c70f1c697ebf0a31842a480932e5942b5fac92fcc46e87286b48e2"
 dependencies = [
  "ambient-authority",
- "cap-primitives",
+ "cap-primitives 3.4.6",
  "iana-time-zone",
  "once_cell",
  "rustix 1.1.4",
@@ -1373,9 +1415,9 @@ dependencies = [
 
 [[package]]
 name = "dirs"
-version = "6.0.0"
+version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+checksum = "8d57d423b3c82e89b9a24ca3091fee61f456a26edbd28d26c65906f4bc1dcd8f"
 dependencies = [
  "dirs-sys",
 ]
@@ -1766,7 +1808,7 @@ version = "0.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
- "io-lifetimes",
+ "io-lifetimes 2.0.4",
  "rustix 1.1.4",
  "windows-sys 0.59.0",
 ]
@@ -2550,8 +2592,18 @@ version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
 dependencies = [
- "io-lifetimes",
+ "io-lifetimes 2.0.4",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "io-extras"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20fd6de4ccfcc187e38bc21cfa543cb5a302cb86a8b114eb7f0bf0dc9f8ac00f"
+dependencies = [
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2559,6 +2611,12 @@ name = "io-lifetimes"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983"
+
+[[package]]
+name = "io-lifetimes"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f0fb0570afe1fed943c5c3d4102d5358592d8625fda6a0007fdbe65a92fba96"
 
 [[package]]
 name = "ipnet"
@@ -2954,9 +3012,9 @@ dependencies = [
 
 [[package]]
 name = "jupyter-protocol"
-version = "1.5.0"
+version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ebf93748a4d7fff4b475da4f50d95b1ea6cf9ed528ed5ec26db8228eabc112a"
+checksum = "670197bfdc3b171334f450d9a3ae47999e8aec048579cc3c52f752cc8ff59843"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3334,8 +3392,8 @@ name = "morphir-common"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "cap-fs-ext",
- "cap-std",
+ "cap-fs-ext 4.0.3",
+ "cap-std 4.0.3",
  "cucumber",
  "dirs",
  "flate2",
@@ -3431,7 +3489,7 @@ name = "morphir-devkit"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "cap-std",
+ "cap-std 4.0.3",
  "dirs",
  "keyring",
  "morphir-common",
@@ -3514,8 +3572,8 @@ name = "morphir-gleam-binding"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "cap-fs-ext",
- "cap-std",
+ "cap-fs-ext 4.0.3",
+ "cap-std 4.0.3",
  "chrono",
  "chumsky",
  "cucumber",
@@ -3644,9 +3702,9 @@ dependencies = [
 
 [[package]]
 name = "nbformat"
-version = "1.2.2"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89bd627a9b44814f546a1ce9dbc088599d3a030b8667b8816c07f2bd5a4507ba"
+checksum = "b2c06543f305caee515923b125a737c4d58079c063e25701f93f45077bb8d622"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5531,10 +5589,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc4592f674ce18521c2a81483873a49596655b179f71c5e05d10c1fe66c78745"
 dependencies = [
  "bitflags 2.13.1",
- "cap-fs-ext",
- "cap-std",
+ "cap-fs-ext 3.4.6",
+ "cap-std 3.4.6",
  "fd-lock",
- "io-lifetimes",
+ "io-lifetimes 2.0.4",
  "rustix 0.38.44",
  "windows-sys 0.59.0",
  "winx",
@@ -6254,13 +6312,13 @@ checksum = "46137f5bcc41a0f002ed14688e463665388a6f3a6662a12a8c315d4b8849791c"
 dependencies = [
  "async-trait",
  "bitflags 2.13.1",
- "cap-fs-ext",
+ "cap-fs-ext 3.4.6",
  "cap-rand",
- "cap-std",
+ "cap-std 3.4.6",
  "cap-time-ext",
  "fs-set-times",
- "io-extras",
- "io-lifetimes",
+ "io-extras 0.18.4",
+ "io-lifetimes 2.0.4",
  "log",
  "rustix 1.1.4",
  "system-interface",

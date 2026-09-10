@@ -26,4 +26,4 @@ indexmap = { version = "2", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serde"] }
 
 [dev-dependencies]
-rstest = "0.26"
+rstest = "0.27"

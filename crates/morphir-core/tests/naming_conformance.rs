@@ -295,8 +295,8 @@ fn path_and_fqname_cases_match_the_corpus() {
 fn truncation_cases_match_the_corpus() {
     for c in corpus().truncation_cases {
         assert_eq!(
-            morphir_core::naming::truncate_stem(&c.escaped_stem, c.available),
-            c.truncated_stem,
+            morphir_core::naming::truncate_stem(&c.escaped_stem, c.available).as_deref(),
+            Some(c.truncated_stem.as_str()),
             "{}",
             c.escaped_stem
         );

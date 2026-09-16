@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (`morphir-core` naming).** `truncate_stem` returns `Option<String>` and answers
+  `None` when the budget it is given is below `MIN_TRUNCATED_STEM_BUDGET` (11). A truncated stem is
+  `__` plus eight hex digits of the content hash plus at least one character of the name, so a
+  smaller budget has no truncation to offer; it used to return the ten-character hash suffix
+  anyway, which overran the caller's path budget.
 - **Breaking (`morphir-devkit`, `morphir-common` configuration).** One Mill-style out directory
   replaces the per-project output helpers. A workspace has exactly one out root,
   `<workspace>/.morphir/out`; a member never gets its own. Each task owns a scratch directory,

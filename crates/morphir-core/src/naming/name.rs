@@ -277,11 +277,15 @@ impl Name {
     /// segment under [`NameStyle::Uppercase`], and [`NameStyle::DoubledHyphen`]
     /// admits no uppercase. A name carrying no initialism is legal under both and
     /// decodes identically.
+    /// The empty string is not a name. A name has at least one segment, and a segment has at
+    /// least one character — `parse_uppercase` already refuses an empty segment, so `"a--b"` under
+    /// the uppercase encoding and `"a/"` through [`Path`](super::Path) were refused while `""`
+    /// itself was not. Admitting it produced a value that re-encodes to nothing, and made this
+    /// function disagree with `ir::v4`'s cursor-carrying `decode_name`, which has always refused
+    /// it as `invalid_name`.
     pub fn from_canonical_string(source: &str) -> Result<Self, String> {
         if source.is_empty() {
-            return Ok(Name {
-                segments: Vec::new(),
-            });
+            return Err("a canonical name has at least one segment".to_string());
         }
 
         let has_doubled = source.contains("--");

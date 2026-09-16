@@ -351,3 +351,53 @@ fn a_path_segment_that_is_not_a_name_carries_an_invalid_name_diagnostic() {
         morphir_core::ir::DiagnosticCode::InvalidName
     );
 }
+
+/// The empty string is not a name. The conformance corpus lists `""` among its reject cases,
+/// valid under neither encoding, and `ir::v4`'s cursor-carrying `decode_name` has always refused
+/// it as `invalid_name`; `Name::from_canonical_string` used to admit it and hand back a name with
+/// no segments, which re-encodes to nothing.
+#[test]
+fn the_empty_string_is_not_a_name() {
+    assert!(Name::from_canonical_string("").is_err());
+
+    let error = serde_json::from_str::<Name>("\"\"").unwrap_err();
+    let diagnostic =
+        morphir_core::ir::Diagnostic::from_serde_error(&error).expect("a carried diagnostic");
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::InvalidName
+    );
+}
+
+/// A path is a run of names separated by `/`, so a doubled separator is an empty segment and an
+/// empty segment is not a name. This is the consequence of the rule above one level up: `"a//b"`
+/// used to decode to a three-segment path whose middle name was empty.
+#[test]
+fn a_path_admits_no_empty_segment() {
+    use morphir_core::naming::Path;
+
+    assert!(Path::from_canonical_string("a//b").is_err());
+    assert!(Path::from_canonical_string("a/").is_err());
+    // The empty path itself stays legal: a package with no module path spells its module path
+    // as the empty string, and that is a path with no segments rather than one empty segment.
+    assert!(
+        Path::from_canonical_string("")
+            .expect("the empty path")
+            .is_empty()
+    );
+}
+
+/// `FQName`'s wire form is a string, and it has to stay a string in the published schema. The
+/// reader is written out now rather than derived through `#[serde(try_from = "String")]`, so
+/// `schemars` is told `with = "String"` explicitly; without it the derive would describe the
+/// struct's three fields as an object and every schema consumer would see a breaking change.
+#[test]
+fn the_fqname_schema_is_a_string() {
+    let schema = schemars::schema_for!(FQName);
+    let json = serde_json::to_value(&schema).expect("the schema serializes");
+    assert_eq!(json["type"], "string", "got {json}");
+    assert!(
+        json.get("properties").is_none(),
+        "the schema describes the wire string, not the struct: {json}"
+    );
+}

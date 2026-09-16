@@ -241,12 +241,9 @@ fn reject_cases_match_the_corpus() {
         let accepted = Name::from_canonical_string(input).is_ok();
         let expected = case.valid_as.uppercase || case.valid_as.doubled_hyphen;
 
-        // The empty string is a legal empty Name rather than a parse failure.
-        if input.is_empty() {
-            assert!(Name::from_canonical_string(input).unwrap().is_empty());
-            continue;
-        }
-
+        // The empty string used to be carved out here as "a legal empty Name rather than a parse
+        // failure". The corpus never said that: it lists `""` as valid under neither encoding,
+        // like every other reject case. The decoder now agrees with it.
         assert_eq!(
             accepted,
             expected,

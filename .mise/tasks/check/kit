@@ -35,13 +35,47 @@ case "$(uname -m)" in
 esac
 
 ASSET="mck-$VERSION-$OS-$ARCH"
-URL="https://github.com/finos/morphir-typescript/releases/download/v$VERSION/$ASSET"
+RELEASE="https://github.com/finos/morphir-typescript/releases/download/v$VERSION"
+
+# The checksum tool is spelled differently on the two platforms, and only GNU coreutils has the
+# `-c` form that reads a SHA256SUMS line.
+verify() {
+    file=$1
+    expected=$2
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$file" | cut -d' ' -f1)
+    else
+        actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
+    fi
+    [ "$actual" = "$expected" ] || {
+        echo "checksum mismatch for $ASSET: expected $expected, got $actual" >&2
+        return 1
+    }
+}
 
 if [ ! -x "$DRIVER" ]; then
     echo "Fetching the mck driver $VERSION for $OS-$ARCH..."
     mkdir -p "$BIN_DIR"
-    curl --fail --location --silent --show-error --output "$DRIVER" "$URL"
-    chmod +x "$DRIVER"
+    # Downloaded beside the target and moved into place only once it is whole and verified, so an
+    # interrupted or corrupt fetch never leaves something at $DRIVER that the next run would take
+    # for a good cached copy.
+    TEMP="$DRIVER.download.$$"
+    SUMS="$BIN_DIR/SHA256SUMS.$VERSION.$$"
+    trap 'rm -f "$TEMP" "$SUMS"' EXIT
+    curl --fail --location --silent --show-error --output "$TEMP" "$RELEASE/$ASSET"
+    curl --fail --location --silent --show-error --output "$SUMS" "$RELEASE/SHA256SUMS"
+
+    EXPECTED=$(awk -v asset="$ASSET" '$2 == asset || $2 == "*" asset { print $1 }' "$SUMS")
+    [ -n "$EXPECTED" ] || {
+        echo "SHA256SUMS for v$VERSION has no line for $ASSET." >&2
+        exit 1
+    }
+    verify "$TEMP" "$EXPECTED" || exit 1
+
+    chmod +x "$TEMP"
+    mv "$TEMP" "$DRIVER"
+    rm -f "$SUMS"
+    trap - EXIT
 fi
 
 echo "Building the adapter..."
@@ -50,11 +84,24 @@ cargo build -p morphir-mck-adapter
 
 echo "Running the kit..."
 mkdir -p "$(dirname "$REPORT")"
-# The driver exits non-zero when any case failed. That is not this task's verdict — the list of
-# cases a kit defect is open against is — so the status is kept and reported after the
-# adjudication rather than ending the run here.
+# A report from a previous run must never be what gets adjudicated, so the old one goes before
+# the driver starts rather than being counted on to be overwritten.
+rm -f "$REPORT"
+
+# The driver exits 1 when any case failed. That is not this task's verdict — the list of cases a
+# kit defect is open against is — so 1 is kept and reported after the adjudication. Any other
+# non-zero status is the driver itself failing (a crash, a missing binary, a bad argument), and
+# there is nothing to adjudicate then.
 DRIVER_STATUS=0
 "$DRIVER" run --adapter target/debug/mck-adapter-rust --report "$REPORT" || DRIVER_STATUS=$?
+if [ "$DRIVER_STATUS" -gt 1 ]; then
+    echo "The mck driver exited $DRIVER_STATUS, which is not a case verdict." >&2
+    exit "$DRIVER_STATUS"
+fi
+[ -f "$REPORT" ] || {
+    echo "The driver exited $DRIVER_STATUS but wrote no report at $REPORT." >&2
+    exit 1
+}
 
 echo "Adjudicating the report against allowed-failing.json..."
 cargo test -p morphir-mck-adapter --test report

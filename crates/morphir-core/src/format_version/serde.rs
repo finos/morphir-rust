@@ -77,10 +77,9 @@ fn scalar_to_baseline_u32(scalar: ScalarValue) -> Result<u32, FormatVersionDiagn
     let normalized = NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::reference())?;
     match normalized.canonical {
         CanonicalSpelling::Integer(version) => Ok(version),
-        CanonicalSpelling::String(release) => Err(FormatVersionDiagnostic::new(
-            "unsupported_format_version_revision",
-            format!("release {release} is recognized but not supported as a baseline integer"),
-        )),
+        CanonicalSpelling::String(release) => Err(
+            FormatVersionDiagnostic::unsupported_format_version_minor(&release),
+        ),
     }
 }
 

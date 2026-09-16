@@ -37,7 +37,7 @@ pub(super) fn build_tree_from_capability(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn build_tree_with(
     root: &Dir,
     canonical_root: &Path,

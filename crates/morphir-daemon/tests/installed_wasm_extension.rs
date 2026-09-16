@@ -84,9 +84,14 @@ async fn installed_wasm_runs_the_common_mep_lifecycle() {
             ("projection".into(), json!("protocol-public")),
             (
                 "type_mappings".into(),
+                // The keys are FQNames, and an FQName is matched by the name it
+                // spells, not by the characters. `morphir/SDK` is how the
+                // canonical fixture -- and the Avro backend's own SDK table --
+                // spells the SDK package; `morphir/sdk` would name a different
+                // package and quietly override nothing.
                 json!({
-                    "morphir/sdk:string#string": { "type": "bytes" },
-                    "morphir/sdk:basics#int": { "type": "double" }
+                    "morphir/SDK:string#string": { "type": "bytes" },
+                    "morphir/SDK:basics#int": { "type": "double" }
                 }),
             ),
         ]

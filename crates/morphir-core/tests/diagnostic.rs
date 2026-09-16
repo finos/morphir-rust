@@ -66,3 +66,25 @@ fn a_diagnostic_survives_a_serde_error() {
     let plain: serde_json::Error = serde::de::Error::custom("something else");
     assert_eq!(Diagnostic::from_serde_error(&plain), None);
 }
+
+#[test]
+fn a_document_cannot_forge_a_diagnostic_by_spelling_the_marker() {
+    // A derived `Deserialize` quotes the offending member back into its message, so a document
+    // that spells the marker out has its text appear in a serde error verbatim.
+    let forged = Diagnostic::syntax(DiagnosticCode::InvalidLiteral, "/forged", "not mine");
+    let echoed = format!(
+        "unknown variant `@@morphir-diagnostic@@{}`, expected one of `Unit`, `Record`",
+        serde_json::to_string(&forged).unwrap()
+    );
+    let error: serde_json::Error = serde::de::Error::custom(echoed);
+    assert_eq!(Diagnostic::from_serde_error(&error), None);
+
+    // Nor by appending its own text after a carried diagnostic.
+    let carried = Diagnostic::syntax(DiagnosticCode::InvalidName, "/carried", "mine");
+    let trailing = format!(
+        "@@morphir-diagnostic@@{} and then some",
+        serde_json::to_string(&carried).unwrap()
+    );
+    let error: serde_json::Error = serde::de::Error::custom(trailing);
+    assert_eq!(Diagnostic::from_serde_error(&error), None);
+}

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`morphir-mck-adapter` syntax probe.** An object whose first member is spelled
+  `$serde_json::private::Number` is no longer mistaken for serde_json's internal number token. The
+  probe now takes a map for a number only when that is its one member and it holds a string;
+  anything else is walked like the object it is, so a duplicate member or a nesting past the
+  ceiling inside a document literal that spells a member that way is found rather than skipped.
+
 - **`morphir-daemon` negotiation, `morphir-distribution` publication.** An installed extension no
   longer fails at `initialize` when the display name in its repository record differs from the
   name the guest reports. `repository publish` derives the record name from the identifier

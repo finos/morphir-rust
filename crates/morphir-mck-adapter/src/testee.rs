@@ -264,6 +264,12 @@ struct Probe {
 /// serde_json's `arbitrary_precision` feature carries a number through `deserialize_any` as a
 /// one-member map under this reserved key, so the probe would otherwise count every number as a
 /// container and read its lexeme as a member name.
+///
+/// The key alone does not make a map the token: a document literal is free to spell a member this
+/// way. The whole shape does — exactly this one member, holding a string — and [`Probe::visit_map`]
+/// checks the shape before it takes a map for a number. A map that is only shaped like the token
+/// is indistinguishable from one at this layer, because it is exactly what serde_json emits for a
+/// number, but anything else is walked like the ordinary object it is.
 const NUMBER_TOKEN: &str = "$serde_json::private::Number";
 
 impl<'de> DeserializeSeed<'de> for Probe {
@@ -294,14 +300,42 @@ impl<'de> Visitor<'de> for Probe {
         let Some(first) = map.next_key::<String>()? else {
             return self.enter::<A::Error>().map(|_| ());
         };
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let depth;
+        let mut key;
+
         if first == NUMBER_TOKEN {
-            map.next_value::<serde::de::IgnoredAny>()?;
-            return Ok(());
+            // Only the token's whole shape is the token. The value decides the first half of it,
+            // and reading it also walks it when it turns out to belong to a user object, so the
+            // level that object owes is charged there rather than here.
+            match map.next_value_seed(NumberTokenValue { outer: &self })? {
+                TokenValue::Lexeme => match map.next_key::<String>()? {
+                    // Exactly one member, holding a string: serde_json's number token.
+                    None => return Ok(()),
+                    // A user object whose first member is spelled like the token and holds a
+                    // string. The string carried nothing to walk, so only the level is still
+                    // owed, and the rest of the members are read like any other object's.
+                    Some(next) => {
+                        depth = self.enter::<A::Error>()?;
+                        seen.insert(first);
+                        key = next;
+                    }
+                },
+                TokenValue::Walked(walked) => {
+                    depth = walked;
+                    seen.insert(first);
+                    match map.next_key::<String>()? {
+                        Some(next) => key = next,
+                        None => return Ok(()),
+                    }
+                }
+            }
+        } else {
+            depth = self.enter::<A::Error>()?;
+            key = first;
         }
 
-        let depth = self.enter::<A::Error>()?;
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut key = first;
         loop {
             // The member name goes in raw, not JSON-Pointer-escaped: the reference reader
             // (`packages/ir/src/codec/json/value.ts`) builds the cursor this way and the kit
@@ -366,6 +400,108 @@ impl<'de> Visitor<'de> for Probe {
 
     fn visit_none<E: serde::de::Error>(self) -> Result<(), E> {
         Ok(())
+    }
+}
+
+/// What the value under a [`NUMBER_TOKEN`] key turned out to be.
+enum TokenValue {
+    /// A string, which is what serde_json puts a number's lexeme in.
+    Lexeme,
+    /// Anything else, so the map holding it is a user object. The value has already been walked,
+    /// and the level that object owes has already been charged; this is the depth it was charged.
+    Walked(usize),
+}
+
+/// Reads the value under a [`NUMBER_TOKEN`] key and says which of the two it was.
+///
+/// It cannot just look, because a value read is a value consumed: whatever this finds has to be
+/// walked here or not at all. So the two answers are "a string, nothing to walk" and "walked it,
+/// here is the depth I charged the object for".
+struct NumberTokenValue<'probe> {
+    /// The map the key was read from, at its own position — not yet entered.
+    outer: &'probe Probe,
+}
+
+impl<'probe> NumberTokenValue<'probe> {
+    /// The probe for the value, with the level the object owes charged.
+    fn walker<E: serde::de::Error>(&self) -> Result<Probe, E> {
+        Ok(Probe {
+            cursor: format!("{}/{NUMBER_TOKEN}", self.outer.cursor),
+            depth: self.outer.enter::<E>()?,
+        })
+    }
+}
+
+impl<'de, 'probe> DeserializeSeed<'de> for NumberTokenValue<'probe> {
+    type Value = TokenValue;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<TokenValue, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de, 'probe> Visitor<'de> for NumberTokenValue<'probe> {
+    type Value = TokenValue;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("any JSON value")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, _value: &str) -> Result<TokenValue, E> {
+        Ok(TokenValue::Lexeme)
+    }
+
+    fn visit_map<A>(self, map: A) -> Result<TokenValue, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let walker = self.walker::<A::Error>()?;
+        let depth = walker.depth;
+        walker.visit_map(map)?;
+        Ok(TokenValue::Walked(depth))
+    }
+
+    fn visit_seq<A>(self, seq: A) -> Result<TokenValue, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let walker = self.walker::<A::Error>()?;
+        let depth = walker.depth;
+        walker.visit_seq(seq)?;
+        Ok(TokenValue::Walked(depth))
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _value: bool) -> Result<TokenValue, E> {
+        self.walker::<E>()
+            .map(|walker| TokenValue::Walked(walker.depth))
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _value: i64) -> Result<TokenValue, E> {
+        self.walker::<E>()
+            .map(|walker| TokenValue::Walked(walker.depth))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _value: u64) -> Result<TokenValue, E> {
+        self.walker::<E>()
+            .map(|walker| TokenValue::Walked(walker.depth))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _value: f64) -> Result<TokenValue, E> {
+        self.walker::<E>()
+            .map(|walker| TokenValue::Walked(walker.depth))
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<TokenValue, E> {
+        self.walker::<E>()
+            .map(|walker| TokenValue::Walked(walker.depth))
+    }
+
+    fn visit_none<E: serde::de::Error>(self) -> Result<TokenValue, E> {
+        self.walker::<E>()
+            .map(|walker| TokenValue::Walked(walker.depth))
     }
 }
 

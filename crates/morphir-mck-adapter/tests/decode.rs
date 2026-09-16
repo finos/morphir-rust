@@ -165,6 +165,75 @@ fn a_duplicate_member_is_found_inside_an_array_too() {
     }
 }
 
+/// A document literal may spell a member like serde_json's reserved number key, and an object
+/// that only looks like the number token is still an object the probe has to walk.
+#[test]
+fn a_member_spelled_like_the_number_token_is_still_walked() {
+    // Shaped like the token — one member under the reserved key — but holding an object rather
+    // than a lexeme string, so the duplicate inside it has to be found.
+    match decode(&req(
+        NodeKind::Literal,
+        r#"{"DocumentLiteral":{"$serde_json::private::Number":{"a":1,"a":2}}}"#,
+        PathMode::Current,
+    )) {
+        DecodeResponse::Err { diagnostic } => {
+            assert_eq!(
+                diagnostic.code,
+                morphir_core::ir::DiagnosticCode::DuplicateMember
+            );
+            assert_eq!(
+                diagnostic.cursor,
+                "/DocumentLiteral/$serde_json::private::Number/a"
+            );
+        }
+        o => panic!("{o:?}"),
+    }
+
+    // The reserved key beside another member is a plain object too, whatever its value is.
+    match decode(&req(
+        NodeKind::Literal,
+        r#"{"DocumentLiteral":{"$serde_json::private::Number":"1","a":1,"a":2}}"#,
+        PathMode::Current,
+    )) {
+        DecodeResponse::Err { diagnostic } => {
+            assert_eq!(
+                diagnostic.code,
+                morphir_core::ir::DiagnosticCode::DuplicateMember
+            );
+            assert_eq!(diagnostic.cursor, "/DocumentLiteral/a");
+        }
+        o => panic!("{o:?}"),
+    }
+
+    // And a repeat of the reserved key itself is a duplicate like any other.
+    match decode(&req(
+        NodeKind::Literal,
+        r#"{"DocumentLiteral":{"$serde_json::private::Number":"1","$serde_json::private::Number":"2"}}"#,
+        PathMode::Current,
+    )) {
+        DecodeResponse::Err { diagnostic } => assert_eq!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::DuplicateMember
+        ),
+        o => panic!("{o:?}"),
+    }
+
+    // Nor can the reserved key be a door around the nesting ceiling: the object holding it is a
+    // container, and so is everything under it.
+    let input = format!(
+        "{{\"$serde_json::private::Number\":{}{}}}",
+        "[".repeat(MAX_DEPTH),
+        "]".repeat(MAX_DEPTH)
+    );
+    match decode(&req(NodeKind::Value, &input, PathMode::Current)) {
+        DecodeResponse::Err { diagnostic } => assert_eq!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::NestingTooDeep
+        ),
+        o => panic!("{o:?}"),
+    }
+}
+
 /// The ceiling the reference reader states (`MAX_DEPTH` in its JSON value layer).
 const MAX_DEPTH: usize = 1000;
 

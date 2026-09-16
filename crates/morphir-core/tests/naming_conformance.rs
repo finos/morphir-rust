@@ -4,7 +4,7 @@
 //! `format-version-conformance.json` is. It covers both canonical encodings, so
 //! it does not change when `CANONICAL_STYLE` is flipped.
 
-use morphir_core::naming::{Name, NameStyle, Segment};
+use morphir_core::naming::{ModuleName, Name, NameStyle, PackageName, Segment};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -15,6 +15,8 @@ struct Corpus {
     reject_cases: Vec<RejectCase>,
     path_cases: Vec<PathCase>,
     fq_name_cases: Vec<FqNameCase>,
+    qualified_module_name_cases: Vec<QualifiedModuleNameCase>,
+    truncation_cases: Vec<TruncationCase>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +88,24 @@ struct PathCase {
 struct FqNameCase {
     canonical: Canonical,
     document_tree_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QualifiedModuleNameCase {
+    package_path: Canonical,
+    module_path: Canonical,
+    canonical: Canonical,
+    document_tree_path: String,
+    dependency_tree_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TruncationCase {
+    escaped_stem: String,
+    available: usize,
+    truncated_stem: String,
 }
 
 fn corpus() -> Corpus {
@@ -270,6 +290,39 @@ fn path_and_fqname_cases_match_the_corpus() {
         assert!(
             case.document_tree_path.starts_with("pkg/"),
             "document tree path shape"
+        );
+    }
+}
+
+#[test]
+fn truncation_cases_match_the_corpus() {
+    for c in corpus().truncation_cases {
+        assert_eq!(
+            morphir_core::naming::truncate_stem(&c.escaped_stem, c.available),
+            c.truncated_stem,
+            "{}",
+            c.escaped_stem
+        );
+    }
+}
+
+#[test]
+fn qualified_module_name_cases_match_the_corpus() {
+    for c in corpus().qualified_module_name_cases {
+        let (pkg, module) = c.canonical.uppercase.split_once(':').unwrap();
+        let pkg = PackageName::from_canonical_string(pkg).unwrap();
+        let module = ModuleName::from_canonical_string(module).unwrap();
+        assert_eq!(pkg.to_canonical_string(), c.package_path.uppercase);
+        assert_eq!(module.to_canonical_string(), c.module_path.uppercase);
+        let pkg_dir = morphir_core::naming::escaped_path(pkg.path());
+        let mod_dir = morphir_core::naming::escaped_path(module.path());
+        assert_eq!(
+            format!("pkg/{pkg_dir}/{mod_dir}/module.json"),
+            c.document_tree_path
+        );
+        assert_eq!(
+            format!("deps/{pkg_dir}/@/{mod_dir}/module.json"),
+            c.dependency_tree_path
         );
     }
 }

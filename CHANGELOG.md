@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `morphir-package` provides draft `0.1.0-draft.1` metadata normalization,
+  exact-byte SHA-256 digests, offline schema validation and closed Library-set
+  integrity checks using the Rust IR v4 codec. This experimental package library
+  does not resolve dependencies, install packages or write a full `morphir.lock`.
+- `mck-adapter-rust --suite package` exposes these operations to the shared MCK
+  driver. The default and `--suite ir` retain the existing IR protocol.
+
 ### Fixed
 
 - **`morphir-common` YAML encoding.** A `DocumentLiteral` number the YAML encoder cannot carry

@@ -336,6 +336,16 @@ fn decode_name(value: &JsonValue, cursor: &str) -> Result<Name, Diagnostic> {
     let text = value
         .as_str()
         .ok_or_else(|| invalid_type(cursor, "a name must be a canonical string"))?;
+    // `Name::from_canonical_string` reads the empty string as a name with no segments, which is
+    // not a name any document can spell. Refusing it here keeps a stray `""` a diagnostic
+    // rather than a value that re-encodes to nothing.
+    if text.is_empty() {
+        return Err(Diagnostic::normalization(
+            DiagnosticCode::InvalidName,
+            cursor,
+            "a name has at least one segment",
+        ));
+    }
     Name::from_canonical_string(text)
         .map_err(|error| Diagnostic::normalization(DiagnosticCode::InvalidName, cursor, error))
 }

@@ -27,9 +27,11 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
 use super::attributes::ValueAttributes;
+use super::legacy::accept_member;
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::types::{Incompleteness, Type};
+use crate::ir::DiagnosticError;
 use crate::naming::{FQName, Name};
 
 // ============================================================================
@@ -562,7 +564,9 @@ impl Serialize for ValueDefinition {
 ///
 /// Decision 0008 spells them as a list, one entry per target platform. The single-binding
 /// spelling that carried `externalName` and `targetPlatform` beside the body's own members is
-/// read as a one-entry list for the window of decision 0006.
+/// read as a one-entry list for the window of decision 0006: each member goes through
+/// [`accept_member`], so at `path=current` it earns a `legacy_spelling` warning at its own
+/// cursor and once the window closes it is refused as an unknown member.
 fn external_bindings<E: de::Error>(
     externals: Option<Vec<ExternalBinding>>,
     external_name: Option<String>,
@@ -572,10 +576,16 @@ fn external_bindings<E: de::Error>(
         return Ok(externals);
     }
     match (external_name, target_platform) {
-        (Some(external_name), Some(target_platform)) => Ok(vec![ExternalBinding {
-            target_platform,
-            external_name,
-        }]),
+        (Some(external_name), Some(target_platform)) => {
+            for member in ["externalName", "targetPlatform"] {
+                accept_member("ExternalBody", member, &format!("/ExternalBody/{member}"))
+                    .map_err(|diagnostic| E::custom(DiagnosticError(diagnostic)))?;
+            }
+            Ok(vec![ExternalBinding {
+                target_platform,
+                external_name,
+            }])
+        }
         _ => Err(de::Error::missing_field("externals")),
     }
 }

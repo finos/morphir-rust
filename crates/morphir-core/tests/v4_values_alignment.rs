@@ -1,8 +1,12 @@
 //! Value expressions decode and re-encode the way the Morphir Compatibility Kit's `Value` cases
 //! spell them (decisions 0005, 0006, 0008 and 0009).
+//!
+//! Every fixture below is this crate's own: the kit is the oracle for these rules, so no case's
+//! JSON is reproduced here. The names, packages, literals and source positions are deliberately
+//! unlike any the kit uses, and the rules are what the assertions pin.
 
 use morphir_core::ir::v4::{
-    Literal, SourceLocation, SpellingMode, TypeEncoding, Value, ValueAttributes,
+    Literal, SourceLocation, SpellingMode, TypeEncoding, Value, ValueAttributes, ValueBody,
     with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode};
@@ -48,76 +52,94 @@ fn all_normalize_to(accepted: &[serde_json::Value], expected: serde_json::Value)
 #[test]
 fn a_bare_array_is_a_list_and_a_bare_scalar_is_a_literal() {
     let list = json!({ "List": [
-        { "Literal": { "IntegerLiteral": 1 } },
-        { "Literal": { "IntegerLiteral": 2 } },
-        { "Literal": { "IntegerLiteral": 3 } }
+        { "Literal": { "IntegerLiteral": 11 } },
+        { "Literal": { "IntegerLiteral": 12 } },
+        { "Literal": { "IntegerLiteral": 13 } }
     ] });
     all_normalize_to(
         &[
             list.clone(),
-            json!([1, 2, 3]),
-            json!({ "List": [1, 2, 3] }),
-            json!({ "List": { "items": [1, 2, 3] } }),
-            json!({ "List": { "attributes": {}, "items": [1, 2, 3] } }),
+            json!([11, 12, 13]),
+            json!({ "List": [11, 12, 13] }),
+            json!({ "List": { "items": [11, 12, 13] } }),
+            json!({ "List": { "attributes": {}, "items": [11, 12, 13] } }),
         ],
         list,
     );
 
     assert!(matches!(
-        val(json!(true)).unwrap(),
-        Value::Literal(_, Literal::Bool(true))
+        val(json!(false)).unwrap(),
+        Value::Literal(_, Literal::Bool(false))
     ));
     assert!(matches!(
-        val(json!(42)).unwrap(),
-        Value::Literal(_, Literal::Integer(42))
+        val(json!(-8)).unwrap(),
+        Value::Literal(_, Literal::Integer(-8))
     ));
+    // The lexeme's point is what makes a bare number a float rather than an integer.
     assert_eq!(
-        canonical(&val(json!(4.0)).unwrap()),
-        json!({ "Literal": { "FloatLiteral": 4.0 } })
+        canonical(&val(json!(2.5)).unwrap()),
+        json!({ "Literal": { "FloatLiteral": 2.5 } })
     );
 }
 
 #[test]
 fn a_bare_string_is_a_variable_or_a_reference_by_its_shape() {
-    assert!(matches!(val(json!("x")).unwrap(), Value::Variable(_, _)));
+    assert!(matches!(val(json!("qty")).unwrap(), Value::Variable(_, _)));
     assert!(matches!(
-        val(json!("morphir/SDK:basics#negate")).unwrap(),
+        val(json!("acme/shop:orders#discount")).unwrap(),
         Value::Reference(_, _)
     ));
 
     all_normalize_to(
         &[
-            json!({ "Variable": "x" }),
-            json!("x"),
-            json!({ "Variable": { "attributes": {}, "name": "x" } }),
+            json!({ "Variable": "qty" }),
+            json!("qty"),
+            json!({ "Variable": { "attributes": {}, "name": "qty" } }),
         ],
-        json!({ "Variable": "x" }),
+        json!({ "Variable": "qty" }),
     );
     all_normalize_to(
         &[
-            json!({ "Reference": "morphir/SDK:basics#add" }),
-            json!("morphir/SDK:basics#add"),
-            json!({ "Reference": { "attributes": {}, "fqname": "morphir/SDK:basics#add" } }),
+            json!({ "Reference": "acme/shop:orders#total" }),
+            json!("acme/shop:orders#total"),
+            json!({ "Reference": { "attributes": {}, "fqname": "acme/shop:orders#total" } }),
         ],
-        json!({ "Reference": "morphir/SDK:basics#add" }),
+        json!({ "Reference": "acme/shop:orders#total" }),
     );
 }
 
 #[test]
+fn a_bare_string_that_spells_neither_a_name_nor_an_fqname_is_refused() {
+    // A string at a value position is a name or an FQName; a string that is neither is a
+    // malformed name, reported where it was written rather than silently becoming a variable.
+    for spelling in [json!("Not A Name"), json!("Orders"), json!("")] {
+        let diagnostic = val(spelling.clone()).unwrap_err();
+        assert_eq!(diagnostic.code, DiagnosticCode::InvalidName, "{spelling}");
+        assert_eq!(diagnostic.cursor, "", "{spelling}");
+    }
+
+    // Inside a list the cursor points at the item that carries it.
+    let diagnostic = val(json!(["qty", "Not A Name"])).unwrap_err();
+    assert_eq!(diagnostic.code, DiagnosticCode::InvalidName);
+    assert_eq!(diagnostic.cursor, "/1");
+}
+
+#[test]
 fn a_tuple_always_carries_its_wrapper() {
-    let tuple = json!({ "Tuple": [{ "Variable": "x" }, { "Literal": { "IntegerLiteral": 1 } }] });
+    let tuple =
+        json!({ "Tuple": [{ "Variable": "qty" }, { "Literal": { "IntegerLiteral": 19 } }] });
     all_normalize_to(
         &[
             tuple.clone(),
-            json!({ "Tuple": { "elements": [{ "Variable": "x" }, { "Literal": { "IntegerLiteral": 1 } }] } }),
-            json!({ "Tuple": { "attributes": {}, "elements": [{ "Variable": "x" }, 1] } }),
+            json!({ "Tuple": { "elements": [{ "Variable": "qty" }, { "Literal": { "IntegerLiteral": 19 } }] } }),
+            json!({ "Tuple": { "attributes": {}, "elements": [{ "Variable": "qty" }, 19] } }),
         ],
         tuple,
     );
 
     // The same array without the wrapper is a List, not a Tuple.
     assert!(matches!(
-        val(json!([{ "Variable": "x" }, 1])).unwrap(),
+        val(json!([{ "Variable": "qty" }, 19])).unwrap(),
         Value::List(_, _)
     ));
 }
@@ -126,14 +148,14 @@ fn a_tuple_always_carries_its_wrapper() {
 fn a_literal_value_accepts_every_literal_shorthand() {
     all_normalize_to(
         &[
-            json!({ "Literal": { "IntegerLiteral": 42 } }),
-            json!({ "Literal": 42 }),
-            json!(42),
-            json!({ "Literal": { "IntegerLiteral": { "value": 42 } } }),
-            json!({ "Literal": { "WholeNumberLiteral": 42 } }),
-            json!({ "Literal": { "attributes": {}, "literal": { "IntegerLiteral": 42 } } }),
+            json!({ "Literal": { "IntegerLiteral": 7 } }),
+            json!({ "Literal": 7 }),
+            json!(7),
+            json!({ "Literal": { "IntegerLiteral": { "value": 7 } } }),
+            json!({ "Literal": { "WholeNumberLiteral": 7 } }),
+            json!({ "Literal": { "attributes": {}, "literal": { "IntegerLiteral": 7 } } }),
         ],
-        json!({ "Literal": { "IntegerLiteral": 42 } }),
+        json!({ "Literal": { "IntegerLiteral": 7 } }),
     );
 }
 
@@ -144,21 +166,23 @@ fn a_literal_value_accepts_every_literal_shorthand() {
 #[test]
 fn if_then_else_member_names_and_the_window() {
     let canonical_form = json!({ "IfThenElse": {
-        "condition": { "Literal": { "BoolLiteral": true } },
-        "then": { "Literal": { "IntegerLiteral": 1 } },
-        "else": { "Literal": { "IntegerLiteral": 2 } }
+        "condition": { "Literal": { "BoolLiteral": false } },
+        "then": { "Literal": { "IntegerLiteral": 21 } },
+        "else": { "Literal": { "IntegerLiteral": 22 } }
     } });
     all_normalize_to(
         &[
             canonical_form.clone(),
-            json!({ "IfThenElse": { "attributes": {}, "condition": true, "then": 1, "else": 2 } }),
+            json!({ "IfThenElse": {
+                "attributes": {}, "condition": false, "then": 21, "else": 22
+            } }),
         ],
         canonical_form.clone(),
     );
 
     assert_eq!(
         normalizes(
-            json!({ "IfThenElse": { "condition": true, "thenBranch": 1, "elseBranch": 2 } }),
+            json!({ "IfThenElse": { "condition": false, "thenBranch": 21, "elseBranch": 22 } }),
             canonical_form,
         ),
         vec![
@@ -171,18 +195,18 @@ fn if_then_else_member_names_and_the_window() {
 #[test]
 fn field_access_names_its_target_and_the_window_keeps_the_older_spelling() {
     let canonical_form =
-        json!({ "Field": { "target": { "Variable": "record" }, "name": "field-name" } });
+        json!({ "Field": { "target": { "Variable": "cart" }, "name": "line-total" } });
     all_normalize_to(
         &[
             canonical_form.clone(),
-            json!({ "Field": { "attributes": {}, "target": "record", "name": "field-name" } }),
+            json!({ "Field": { "attributes": {}, "target": "cart", "name": "line-total" } }),
         ],
         canonical_form.clone(),
     );
 
     assert_eq!(
         normalizes(
-            json!({ "Field": { "subject": { "Variable": "record" }, "fieldName": "field-name" } }),
+            json!({ "Field": { "subject": { "Variable": "cart" }, "fieldName": "line-total" } }),
             canonical_form,
         ),
         vec![
@@ -196,22 +220,22 @@ fn field_access_names_its_target_and_the_window_keeps_the_older_spelling() {
 fn a_let_definition_names_its_binding_definition_and_body() {
     let definition = json!({ "ExpressionBody": {
         "inputTypes": {},
-        "outputType": "morphir/SDK:basics#int",
-        "body": { "Literal": { "IntegerLiteral": 1 } }
+        "outputType": "acme/shop:money#amount",
+        "body": { "Literal": { "IntegerLiteral": 30 } }
     } });
     let canonical_form = json!({ "LetDefinition": {
-        "name": "x",
+        "name": "qty",
         "definition": definition,
-        "in": { "Variable": "x" }
+        "in": { "Variable": "qty" }
     } });
     all_normalize_to(
         &[
             canonical_form.clone(),
             json!({ "LetDefinition": {
                 "attributes": {},
-                "name": "x",
+                "name": "qty",
                 "definition": definition,
-                "in": { "Variable": "x" }
+                "in": { "Variable": "qty" }
             } }),
         ],
         canonical_form.clone(),
@@ -220,9 +244,9 @@ fn a_let_definition_names_its_binding_definition_and_body() {
     assert_eq!(
         normalizes(
             json!({ "LetDefinition": {
-                "valueName": "x",
+                "valueName": "qty",
                 "valueDefinition": definition,
-                "inValue": { "Variable": "x" }
+                "inValue": { "Variable": "qty" }
             } }),
             canonical_form,
         ),
@@ -237,12 +261,12 @@ fn a_let_definition_names_its_binding_definition_and_body() {
 #[test]
 fn a_let_recursion_keys_its_definitions_by_name() {
     let canonical_form = json!({ "LetRecursion": {
-        "definitions": { "f": { "ExpressionBody": {
+        "definitions": { "loop-step": { "ExpressionBody": {
             "inputTypes": {},
-            "outputType": "morphir/SDK:basics#int",
-            "body": { "Variable": "f" }
+            "outputType": "acme/shop:money#amount",
+            "body": { "Variable": "loop-step" }
         } } },
-        "in": { "Variable": "f" }
+        "in": { "Variable": "loop-step" }
     } });
     all_normalize_to(
         std::slice::from_ref(&canonical_form),
@@ -253,12 +277,12 @@ fn a_let_recursion_keys_its_definitions_by_name() {
 #[test]
 fn a_pattern_match_names_the_value_it_matches_on() {
     let canonical_form = json!({ "PatternMatch": {
-        "value": { "Variable": "x" },
+        "value": { "Variable": "qty" },
         "cases": [
-            { "pattern": { "LiteralPattern": { "IntegerLiteral": 0 } },
-              "body": { "Literal": { "BoolLiteral": true } } },
+            { "pattern": { "LiteralPattern": { "IntegerLiteral": 5 } },
+              "body": { "Literal": { "StringLiteral": "few" } } },
             { "pattern": { "WildcardPattern": {} },
-              "body": { "Literal": { "BoolLiteral": false } } }
+              "body": { "Literal": { "StringLiteral": "many" } } }
         ]
     } });
     all_normalize_to(
@@ -268,7 +292,7 @@ fn a_pattern_match_names_the_value_it_matches_on() {
 
     // `subject` is a Field member name, never a PatternMatch one.
     let (refused, _) = with_spelling_mode(SpellingMode::Current, || {
-        val(json!({ "PatternMatch": { "subject": "x", "cases": [] } }))
+        val(json!({ "PatternMatch": { "subject": "qty", "cases": [] } }))
     });
     assert_eq!(
         refused.unwrap_err().code,
@@ -280,16 +304,16 @@ fn a_pattern_match_names_the_value_it_matches_on() {
 #[test]
 fn an_update_record_names_its_target_and_its_fields() {
     let canonical_form = json!({ "UpdateRecord": {
-        "target": { "Variable": "record" },
-        "fields": { "name": { "Literal": { "StringLiteral": "new" } } }
+        "target": { "Variable": "cart" },
+        "fields": { "label": { "Literal": { "StringLiteral": "revised" } } }
     } });
     all_normalize_to(
         &[
             canonical_form.clone(),
             json!({ "UpdateRecord": {
                 "attributes": {},
-                "target": { "Variable": "record" },
-                "fields": { "name": { "Literal": { "StringLiteral": "new" } } }
+                "target": { "Variable": "cart" },
+                "fields": { "label": { "Literal": { "StringLiteral": "revised" } } }
             } }),
         ],
         canonical_form,
@@ -303,15 +327,15 @@ fn an_update_record_names_its_target_and_its_fields() {
 #[test]
 fn record_fields_live_under_fields_and_the_direct_map_warns_once() {
     let canonical_form = json!({ "Record": { "fields": {
-        "name": { "Variable": "x" },
-        "age": { "Literal": { "IntegerLiteral": 25 } }
+        "label": { "Variable": "qty" },
+        "count": { "Literal": { "IntegerLiteral": 99 } }
     } } });
     all_normalize_to(
         &[
             canonical_form.clone(),
             json!({ "Record": { "attributes": {}, "fields": {
-                "name": { "Variable": "x" },
-                "age": { "Literal": { "IntegerLiteral": 25 } }
+                "label": { "Variable": "qty" },
+                "count": { "Literal": { "IntegerLiteral": 99 } }
             } } }),
         ],
         canonical_form.clone(),
@@ -321,8 +345,8 @@ fn record_fields_live_under_fields_and_the_direct_map_warns_once() {
     assert_eq!(
         normalizes(
             json!({ "Record": { "attrs": {}, "fields": {
-                "name": { "Variable": "x" },
-                "age": { "Literal": { "IntegerLiteral": 25 } }
+                "label": { "Variable": "qty" },
+                "count": { "Literal": { "IntegerLiteral": 99 } }
             } } }),
             canonical_form.clone(),
         ),
@@ -330,8 +354,8 @@ fn record_fields_live_under_fields_and_the_direct_map_warns_once() {
     );
     let (result, warnings) = with_spelling_mode(SpellingMode::Current, || {
         val(json!({ "Record": {
-            "name": { "Variable": "x" },
-            "age": { "Literal": { "IntegerLiteral": 25 } }
+            "label": { "Variable": "qty" },
+            "count": { "Literal": { "IntegerLiteral": 99 } }
         } }))
     });
     assert_eq!(canonical(&result.unwrap()), canonical_form);
@@ -343,49 +367,49 @@ fn record_fields_live_under_fields_and_the_direct_map_warns_once() {
 fn a_constructor_and_a_field_function_carry_their_name_directly() {
     all_normalize_to(
         &[
-            json!({ "Constructor": "morphir/SDK:maybe#just" }),
-            json!({ "Constructor": { "attributes": {}, "fqname": "morphir/SDK:maybe#just" } }),
+            json!({ "Constructor": "acme/shop:orders#placed" }),
+            json!({ "Constructor": { "attributes": {}, "fqname": "acme/shop:orders#placed" } }),
         ],
-        json!({ "Constructor": "morphir/SDK:maybe#just" }),
+        json!({ "Constructor": "acme/shop:orders#placed" }),
     );
     all_normalize_to(
         &[
-            json!({ "FieldFunction": "name" }),
-            json!({ "FieldFunction": { "attributes": {}, "name": "name" } }),
+            json!({ "FieldFunction": "line-total" }),
+            json!({ "FieldFunction": { "attributes": {}, "name": "line-total" } }),
         ],
-        json!({ "FieldFunction": "name" }),
+        json!({ "FieldFunction": "line-total" }),
     );
 }
 
 #[test]
 fn an_apply_a_lambda_and_a_unit_keep_their_member_names() {
     let apply = json!({ "Apply": {
-        "function": { "Reference": "morphir/SDK:basics#negate" },
-        "argument": { "Literal": { "IntegerLiteral": 1 } }
+        "function": { "Reference": "acme/shop:orders#discount" },
+        "argument": { "Literal": { "IntegerLiteral": 40 } }
     } });
     all_normalize_to(
         &[
             apply.clone(),
             json!({ "Apply": {
                 "attributes": {},
-                "function": { "Reference": "morphir/SDK:basics#negate" },
-                "argument": { "Literal": { "IntegerLiteral": 1 } }
+                "function": { "Reference": "acme/shop:orders#discount" },
+                "argument": { "Literal": { "IntegerLiteral": 40 } }
             } }),
         ],
         apply,
     );
 
     let lambda = json!({ "Lambda": {
-        "pattern": { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "x" } },
-        "body": { "Variable": "x" }
+        "pattern": { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "qty" } },
+        "body": { "Variable": "qty" }
     } });
     all_normalize_to(
         &[
             lambda.clone(),
             json!({ "Lambda": {
                 "attributes": {},
-                "pattern": { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "x" } },
-                "body": { "Variable": "x" }
+                "pattern": { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "qty" } },
+                "body": { "Variable": "qty" }
             } }),
         ],
         lambda,
@@ -404,11 +428,11 @@ fn an_apply_a_lambda_and_a_unit_keep_their_member_names() {
 fn a_destructure_names_its_pattern_value_and_body() {
     let canonical_form = json!({ "Destructure": {
         "pattern": { "TuplePattern": [
-            { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "a" } },
+            { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "head" } },
             { "WildcardPattern": {} }
         ] },
-        "value": { "Variable": "pair" },
-        "in": { "Variable": "a" }
+        "value": { "Variable": "entry" },
+        "in": { "Variable": "head" }
     } });
     all_normalize_to(
         &[
@@ -416,11 +440,11 @@ fn a_destructure_names_its_pattern_value_and_body() {
             json!({ "Destructure": {
                 "attributes": {},
                 "pattern": { "TuplePattern": [
-                    { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "a" } },
+                    { "AsPattern": { "pattern": { "WildcardPattern": {} }, "name": "head" } },
                     { "WildcardPattern": {} }
                 ] },
-                "value": { "Variable": "pair" },
-                "in": { "Variable": "a" }
+                "value": { "Variable": "entry" },
+                "in": { "Variable": "head" }
             } }),
         ],
         canonical_form,
@@ -428,20 +452,20 @@ fn a_destructure_names_its_pattern_value_and_body() {
 }
 
 // =============================================================================
-// Decision 0008: Hole stays, Native and External leave
+// Decision 0008: Hole stays a value, Native and External become definition bodies
 // =============================================================================
 
 #[test]
 fn hole_keeps_its_reason_and_an_optional_expected_type() {
     let canonical_form = json!({ "Hole": {
-        "reason": { "UnresolvedReference": { "target": "my-org/project:module#deleted" } }
+        "reason": { "UnresolvedReference": { "target": "acme/shop:orders#retired" } }
     } });
     all_normalize_to(
         &[
             canonical_form.clone(),
             json!({ "Hole": {
                 "attributes": {},
-                "reason": { "UnresolvedReference": { "target": "my-org/project:module#deleted" } }
+                "reason": { "UnresolvedReference": { "target": "acme/shop:orders#retired" } }
             } }),
         ],
         canonical_form,
@@ -449,7 +473,7 @@ fn hole_keeps_its_reason_and_an_optional_expected_type() {
 
     let with_type = json!({ "Hole": {
         "reason": { "Draft": {} },
-        "expectedType": "morphir/SDK:basics#int"
+        "expectedType": "acme/shop:money#amount"
     } });
     all_normalize_to(std::slice::from_ref(&with_type), with_type.clone());
 }
@@ -458,7 +482,7 @@ fn hole_keeps_its_reason_and_an_optional_expected_type() {
 fn native_and_external_are_not_value_expressions() {
     assert_eq!(
         val(json!({ "Native": {
-            "fqname": "morphir/SDK:basics#add",
+            "fqname": "acme/shop:orders#total",
             "nativeInfo": { "hint": { "Arithmetic": {} } }
         } }))
         .unwrap_err()
@@ -467,13 +491,73 @@ fn native_and_external_are_not_value_expressions() {
     );
     assert_eq!(
         val(json!({ "External": {
-            "externalName": "console.log",
-            "targetPlatform": "javascript"
+            "externalName": "cart.total",
+            "targetPlatform": "erlang"
         } }))
         .unwrap_err()
         .code,
         DiagnosticCode::UnknownNode
     );
+}
+
+#[test]
+fn an_external_body_carries_one_binding_per_target_platform() {
+    let body = json!({ "ExternalBody": { "externals": [
+        { "targetPlatform": "erlang", "externalName": "cart:total" },
+        { "targetPlatform": "elixir", "externalName": "Cart.total" }
+    ] } });
+    let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || {
+        serde_json::from_value::<ValueBody>(body.clone())
+    });
+    let decoded = decoded.unwrap();
+    assert!(
+        matches!(&decoded, ValueBody::External { externals, fallback }
+            if externals.len() == 2 && fallback.is_none())
+    );
+    assert!(warnings.is_empty());
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), body);
+}
+
+#[test]
+fn the_single_binding_external_spelling_warns_at_each_member_and_closes_with_the_window() {
+    let one_binding = json!({ "ExternalBody": {
+        "externalName": "cart.total",
+        "targetPlatform": "erlang"
+    } });
+
+    let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || {
+        serde_json::from_value::<ValueBody>(one_binding.clone())
+    });
+    let decoded = decoded.unwrap();
+    assert!(matches!(&decoded, ValueBody::External { externals, .. } if externals.len() == 1));
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|warning| (warning.code, warning.cursor.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DiagnosticCode::LegacySpelling, "/ExternalBody/externalName"),
+            (
+                DiagnosticCode::LegacySpelling,
+                "/ExternalBody/targetPlatform"
+            )
+        ]
+    );
+    // A reader never writes the spelling back: the one binding becomes the list.
+    assert_eq!(
+        serde_json::to_value(&decoded).unwrap(),
+        json!({ "ExternalBody": { "externals": [
+            { "targetPlatform": "erlang", "externalName": "cart.total" }
+        ] } })
+    );
+
+    let (refused, _) = with_spelling_mode(SpellingMode::Pinned, || {
+        serde_json::from_value::<ValueBody>(one_binding)
+    });
+    let diagnostic = Diagnostic::from_serde_error(&refused.unwrap_err())
+        .expect("codec errors carry a Diagnostic");
+    assert_eq!(diagnostic.code, DiagnosticCode::UnknownMember);
+    assert_eq!(diagnostic.cursor, "/ExternalBody/externalName");
 }
 
 // =============================================================================
@@ -484,14 +568,14 @@ fn native_and_external_are_not_value_expressions() {
 fn a_node_that_carries_attributes_writes_the_expanded_spelling() {
     let canonical_form = json!({ "Variable": {
         "attributes": { "source": {
-            "startLine": 3, "startColumn": 5, "endLine": 3, "endColumn": 6
+            "startLine": 12, "startColumn": 4, "endLine": 12, "endColumn": 9
         } },
-        "name": "x"
+        "name": "qty"
     } });
     let decoded = val(canonical_form.clone()).unwrap();
     assert_eq!(
         decoded.attributes().source,
-        Some(SourceLocation::new(3, 5, 3, 6))
+        Some(SourceLocation::new(12, 4, 12, 9))
     );
     assert_eq!(canonical(&decoded), canonical_form);
 
@@ -505,7 +589,7 @@ fn a_node_that_carries_attributes_writes_the_expanded_spelling() {
 #[test]
 fn a_diagnostic_inside_a_value_points_at_the_spelling_the_input_used() {
     let (refused, _) = with_spelling_mode(SpellingMode::Current, || {
-        val(json!({ "IfThenElse": { "condition": true, "thenBranch": null, "else": 2 } }))
+        val(json!({ "IfThenElse": { "condition": true, "thenBranch": null, "else": 22 } }))
     });
     let diagnostic = refused.unwrap_err();
     assert_eq!(diagnostic.cursor, "/IfThenElse/thenBranch");
@@ -516,7 +600,7 @@ fn a_value_wrapper_this_reader_does_not_know_is_an_unknown_node() {
     for spelling in [
         json!({ "Draft": {} }),
         json!({ "IncompleteBody": {} }),
-        json!({ "Variable": "x", "Unit": {} }),
+        json!({ "Variable": "qty", "Unit": {} }),
     ] {
         assert_eq!(
             val(spelling.clone()).unwrap_err().code,

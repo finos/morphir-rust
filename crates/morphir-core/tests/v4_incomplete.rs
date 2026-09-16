@@ -44,13 +44,15 @@ fn value_attributes_hold_a_concrete_inferred_type() {
 }
 
 #[test]
-fn incomplete_value_preserves_optional_output_and_partial_body() {
+fn incomplete_value_definition_leaves_its_output_type_open() {
+    // Decision 0008: an incomplete definition is a body of its own, and its `outputType` is
+    // optional because the definition may not have one yet. A partially written expression is
+    // a `Hole` inside a body, not a member of this one.
     let json = serde_json::json!({
         "inputTypes": {},
         "body": {
             "IncompleteBody": {
-                "incompleteness": { "Draft": {} },
-                "partialBody": { "Unit": {} }
+                "incompleteness": { "Draft": {} }
             }
         }
     });
@@ -61,7 +63,7 @@ fn incomplete_value_preserves_optional_output_and_partial_body() {
     assert!(matches!(
         decoded.body,
         ValueBody::Incomplete {
-            partial_body: Some(_),
+            output_type: None,
             ..
         }
     ));

@@ -136,8 +136,10 @@ fn convert_type_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 IndexMap::new()
             };
-            // Compact format: fields directly under Record
-            serde_json::json!({ "Record": fields })
+            // Decisions 0004 and 0006: the field map lives under `fields`; carrying it
+            // directly under the wrapper is the pre-decision spelling, which a reader accepts
+            // for one release with a warning and no writer emits.
+            serde_json::json!({ "Record": { "fields": fields } })
         }
         "ExtensibleRecord" => {
             // Classic format can be either:
@@ -361,8 +363,10 @@ fn convert_value_expr_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 IndexMap::new()
             };
-            // Compact format: fields directly under Record
-            serde_json::json!({ "Record": fields })
+            // Decisions 0004 and 0006: the field map lives under `fields`; carrying it
+            // directly under the wrapper is the pre-decision spelling, which a reader accepts
+            // for one release with a warning and no writer emits.
+            serde_json::json!({ "Record": { "fields": fields } })
         }
         "Field" => {
             // Classic: ["Field", {attrs}, target_expr, ["field", "name"]]

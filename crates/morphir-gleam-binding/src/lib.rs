@@ -708,10 +708,10 @@ morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);
 mod tests {
     use super::*;
     use morphir_core::ir::v4::{
-        Access as MorphirAccess, AccessControlled, Distribution, Documented, FormatVersion, IRFile,
-        Incompleteness, InputTypeEntry, LibraryContent, ModuleDefinition, PackageDefinition,
-        PackageSpecification, SpecsContent, Type, TypeAttributes, TypeDefinition,
-        TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
+        Access as MorphirAccess, AccessControlled, Distribution, Documented, ExternalBinding,
+        FormatVersion, IRFile, Incompleteness, InputTypeEntry, LibraryContent, ModuleDefinition,
+        PackageDefinition, PackageSpecification, SpecsContent, Type, TypeAttributes,
+        TypeDefinition, TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
     };
     use std::collections::HashMap;
 
@@ -929,8 +929,11 @@ mod tests {
                             )]),
                             output_type: Some(Type::unit(TypeAttributes::default())),
                             body: ValueBody::External {
-                                external_name: "unused".into(),
-                                target_platform: "test".into(),
+                                externals: vec![ExternalBinding {
+                                    target_platform: "test".into(),
+                                    external_name: "unused".into(),
+                                }],
+                                fallback: None,
                             },
                         },
                     ),

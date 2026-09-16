@@ -71,7 +71,8 @@ pub use types::{
 
 // Re-export value definition types
 pub use value::{
-    HoleReason, InputTypeEntry, NativeHint, ValueBody, ValueDefinition, ValueSpecification,
+    ExternalBinding, HoleReason, InputTypeEntry, NativeHint, ValueBody, ValueDefinition,
+    ValueSpecification,
 };
 
 // Re-export legacy type_def types for backward compatibility

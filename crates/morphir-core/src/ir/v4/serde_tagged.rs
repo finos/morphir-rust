@@ -26,15 +26,10 @@ use super::serde_v4;
 use super::type_def::ConstructorArg;
 use super::types::{Field, Type};
 use super::value::{
-    HoleReason, InputType, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value,
-    ValueDefinition,
+    HoleReason, InputType, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition,
 };
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
 use crate::naming::{FQName, Name};
-
-fn parse_canonical_name<E: de::Error>(source: &str) -> Result<Name, E> {
-    Name::from_canonical_string(source).map_err(E::custom)
-}
 
 // =============================================================================
 // Type Serialization
@@ -1297,436 +1292,500 @@ impl<'de> Deserialize<'de> for ConstructorArg {
     }
 }
 
-// Deserialize for Value (complex, needs visitor)
+// =============================================================================
+// Value Deserialization
+// =============================================================================
+
+/// The v4 value wrapper tags.
+///
+/// A bare array is a List, so a leading element that names one of these is not an item in the
+/// list but a Classic tagged array, which a v4 reader refuses as an unknown node.
+const VALUE_TAGS: &[&str] = &[
+    "Literal",
+    "Constructor",
+    "Tuple",
+    "List",
+    "Record",
+    "Variable",
+    "Reference",
+    "Field",
+    "FieldFunction",
+    "Apply",
+    "Lambda",
+    "LetDefinition",
+    "LetRecursion",
+    "Destructure",
+    "IfThenElse",
+    "PatternMatch",
+    "UpdateRecord",
+    "Unit",
+    "Hole",
+];
+
 impl<'de> Deserialize<'de> for Value {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        // Use deserialize_any to accept V4 objects and Classic arrays
-        deserializer.deserialize_any(ValueVisitor)
+        // Read the node as JSON first, for the reason the literal decode does: serde_json's
+        // `Value` is what implements the arbitrary-precision protocol, so a number keeps the
+        // lexeme it was written with.
+        let value = JsonValue::deserialize(deserializer)?;
+        decode_value(&value, "").map_err(carry)
     }
 }
 
-struct ValueVisitor;
-
-impl<'de> Visitor<'de> for ValueVisitor {
-    type Value = Value;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str(
-            "V4 object { \"Variable\": { \"name\": \"x\" } } or Classic array [\"Literal\", attrs, lit]",
-        )
-    }
-
-    /// V4 object wrapper format: { "Variable": { "name": "x" } }
-    fn visit_map<M>(self, mut map: M) -> Result<Value, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        use indexmap::IndexMap;
-
-        let (tag, value): (String, serde_json::Value) = map
-            .next_entry()?
-            .ok_or_else(|| de::Error::custom("expected object wrapper with single key"))?;
-
-        match tag.as_str() {
-            "Literal" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    literal: Literal,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Literal(attrs, content.literal))
-            }
-            "Constructor" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    fqname: String,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let fqname = FQName::from_canonical_string(&content.fqname)
-                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
-                Ok(Value::Constructor(attrs, fqname))
-            }
-            "Tuple" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    elements: Vec<Value>,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Tuple(attrs, content.elements))
-            }
-            "List" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    items: Vec<Value>,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::List(attrs, content.items))
-            }
-            "Record" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    fields: IndexMap<String, Value>,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let fields = content
-                    .fields
-                    .into_iter()
-                    .map(|(name, value)| {
-                        Ok(RecordFieldEntry(
-                            parse_canonical_name::<M::Error>(&name)?,
-                            value,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, M::Error>>()?;
-                Ok(Value::Record(attrs, fields))
-            }
-            "Variable" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    name: String,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let name = parse_canonical_name::<M::Error>(&content.name)?;
-                Ok(Value::Variable(attrs, name))
-            }
-            "Reference" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    fqname: String,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let fqname = FQName::from_canonical_string(&content.fqname)
-                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
-                Ok(Value::Reference(attrs, fqname))
-            }
-            "Field" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    value: Value,
-                    name: String,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let name = parse_canonical_name::<M::Error>(&content.name)?;
-                Ok(Value::Field(attrs, Box::new(content.value), name))
-            }
-            "FieldFunction" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    name: String,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let name = parse_canonical_name::<M::Error>(&content.name)?;
-                Ok(Value::FieldFunction(attrs, name))
-            }
-            "Apply" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    function: Value,
-                    argument: Value,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Apply(
-                    attrs,
-                    Box::new(content.function),
-                    Box::new(content.argument),
+/// Decodes one value expression at `cursor`.
+///
+/// Decision 0009 gives the shorthands: a bare array is a List, a bare number or boolean is a
+/// literal, and a bare string is a Variable when it spells a name and a Reference when it spells
+/// an FQName. A Tuple always carries its wrapper. Every other node is a single-member wrapper
+/// whose payload may open with `attributes`.
+fn decode_value(value: &JsonValue, cursor: &str) -> Result<Value, Diagnostic> {
+    match value {
+        JsonValue::String(text) => {
+            if looks_like_fqname(text) {
+                Ok(Value::Reference(
+                    ValueAttributes::default(),
+                    decode_fqname(value, cursor)?,
+                ))
+            } else {
+                Ok(Value::Variable(
+                    ValueAttributes::default(),
+                    decode_name(value, cursor)?,
                 ))
             }
-            "Lambda" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    pattern: Pattern,
-                    body: Value,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Lambda(
-                    attrs,
-                    content.pattern,
-                    Box::new(content.body),
-                ))
-            }
-            "LetDefinition" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    name: String,
-                    definition: ValueDefinition,
-                    body: Value,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let name = parse_canonical_name::<M::Error>(&content.name)?;
-                Ok(Value::LetDefinition(
-                    attrs,
-                    name,
-                    Box::new(content.definition),
-                    Box::new(content.body),
-                ))
-            }
-            "LetRecursion" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    bindings: Vec<LetBinding>,
-                    body: Value,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::LetRecursion(
-                    attrs,
-                    content.bindings,
-                    Box::new(content.body),
-                ))
-            }
-            "Destructure" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    pattern: Pattern,
-                    value: Value,
-                    body: Value,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Destructure(
-                    attrs,
-                    content.pattern,
-                    Box::new(content.value),
-                    Box::new(content.body),
-                ))
-            }
-            "IfThenElse" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    condition: Value,
-                    then_branch: Value,
-                    else_branch: Value,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::IfThenElse(
-                    attrs,
-                    Box::new(content.condition),
-                    Box::new(content.then_branch),
-                    Box::new(content.else_branch),
-                ))
-            }
-            "PatternMatch" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    subject: Value,
-                    cases: Vec<PatternCase>,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::PatternMatch(
-                    attrs,
-                    Box::new(content.subject),
-                    content.cases,
-                ))
-            }
-            "UpdateRecord" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    record: Value,
-                    updates: Vec<RecordFieldEntry>,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::UpdateRecord(
-                    attrs,
-                    Box::new(content.record),
-                    content.updates,
-                ))
-            }
-            "Unit" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Unit(attrs))
-            }
-            "Hole" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    reason: HoleReason,
-                    tpe: Option<Type>,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::Hole(
-                    attrs,
-                    content.reason,
-                    content.tpe.map(Box::new),
-                ))
-            }
-            "Native" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    fqname: String,
-                    info: NativeInfo,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                let fqname = FQName::from_canonical_string(&content.fqname)
-                    .map_err(|e| de::Error::custom(format!("invalid FQName: {}", e)))?;
-                Ok(Value::Native(attrs, fqname, content.info))
-            }
-            "External" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Content {
-                    external_name: String,
-                    target_platform: String,
-                    attrs: Option<ValueAttributes>,
-                }
-                let content: Content = serde_json::from_value(value).map_err(de::Error::custom)?;
-                let attrs = content.attrs.unwrap_or_default();
-                Ok(Value::External(
-                    attrs,
-                    content.external_name,
-                    content.target_platform,
-                ))
-            }
-            _ => Err(de::Error::unknown_variant(
-                &tag,
-                &[
-                    "Literal",
-                    "Constructor",
-                    "Tuple",
-                    "List",
-                    "Record",
-                    "Variable",
-                    "Reference",
-                    "Field",
-                    "FieldFunction",
-                    "Apply",
-                    "Lambda",
-                    "LetDefinition",
-                    "LetRecursion",
-                    "Destructure",
-                    "IfThenElse",
-                    "PatternMatch",
-                    "UpdateRecord",
-                    "Unit",
-                    "Hole",
-                    "Native",
-                    "External",
-                ],
-            )),
         }
-    }
-
-    /// Classic tagged array format: ["Literal", attrs, lit]
-    fn visit_seq<V>(self, mut seq: V) -> Result<Value, V::Error>
-    where
-        V: SeqAccess<'de>,
-    {
-        let tag: String = seq
-            .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-
-        match tag.as_str() {
-            "Literal" | "literal" => {
-                let attrs: ValueAttributes = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let lit: Literal = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Ok(Value::Literal(attrs, lit))
+        JsonValue::Array(items) => {
+            if let Some(JsonValue::String(head)) = items.first()
+                && (VALUE_TAGS.contains(&head.as_str()) || LITERAL_TAGS.contains(&head.as_str()))
+            {
+                return Err(unknown_node_at(
+                    cursor,
+                    format!("{head} is not a value expression"),
+                ));
             }
-            "Constructor" | "constructor" => {
-                let attrs: ValueAttributes = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let fqname: FQName = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Ok(Value::Constructor(attrs, fqname))
-            }
-            "Variable" | "variable" => {
-                let attrs: ValueAttributes = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let name: Name = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Ok(Value::Variable(attrs, name))
-            }
-            "Reference" | "reference" => {
-                let attrs: ValueAttributes = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let fqname: FQName = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Ok(Value::Reference(attrs, fqname))
-            }
-            "Unit" | "unit" => {
-                let attrs: ValueAttributes = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(Value::Unit(attrs))
-            }
-            // Other variants handled by V4 object format
-            _ => Err(de::Error::unknown_variant(
-                &tag,
-                &["Literal", "Constructor", "Variable", "Reference", "Unit"],
-            )),
+            Ok(Value::List(
+                ValueAttributes::default(),
+                decode_value_list(value, cursor)?,
+            ))
         }
+        JsonValue::Object(wrapper) => {
+            let mut entries = wrapper.iter();
+            let (tag, payload) = entries.next().ok_or_else(|| {
+                unknown_node_at(cursor, "an empty object is not a value expression")
+            })?;
+            if entries.next().is_some() {
+                return Err(unknown_node_at(
+                    cursor,
+                    "an object with more than one member is not a value expression",
+                ));
+            }
+            decode_value_wrapper(tag, payload, cursor)
+        }
+        JsonValue::Bool(_) | JsonValue::Number(_) => Ok(Value::Literal(
+            ValueAttributes::default(),
+            decode_literal(value, cursor)?,
+        )),
+        JsonValue::Null => Err(invalid_type(cursor, "null is not a value expression")),
     }
+}
+
+fn decode_value_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<Value, Diagnostic> {
+    let at = format!("{cursor}/{tag}");
+    match tag {
+        "Literal" => {
+            // The payload is the literal itself, unless it is the expanded spelling, which
+            // carries the literal under `literal` and may open with `attributes`.
+            if is_expanded_literal(payload) {
+                let members = wrapper_members(tag, payload, &at, &["attributes", "literal"])?;
+                let attributes = decode_value_attributes(&members, &at)?;
+                let literal = decode_literal(
+                    required(&members, "literal", &at)?,
+                    &member_cursor(&members, "literal", &at),
+                )?;
+                return Ok(Value::Literal(attributes, literal));
+            }
+            Ok(Value::Literal(
+                ValueAttributes::default(),
+                decode_literal(payload, &at)?,
+            ))
+        }
+        "Variable" => {
+            if payload.is_string() {
+                return Ok(Value::Variable(
+                    ValueAttributes::default(),
+                    decode_name(payload, &at)?,
+                ));
+            }
+            let members = wrapper_members(tag, payload, &at, &["attributes", "name"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let name = decode_name(
+                required(&members, "name", &at)?,
+                &member_cursor(&members, "name", &at),
+            )?;
+            Ok(Value::Variable(attributes, name))
+        }
+        "FieldFunction" => {
+            if payload.is_string() {
+                return Ok(Value::FieldFunction(
+                    ValueAttributes::default(),
+                    decode_name(payload, &at)?,
+                ));
+            }
+            let members = wrapper_members(tag, payload, &at, &["attributes", "name"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let name = decode_name(
+                required(&members, "name", &at)?,
+                &member_cursor(&members, "name", &at),
+            )?;
+            Ok(Value::FieldFunction(attributes, name))
+        }
+        "Reference" | "Constructor" => {
+            let (attributes, fqname) = if payload.is_string() {
+                (ValueAttributes::default(), decode_fqname(payload, &at)?)
+            } else {
+                let members = wrapper_members(tag, payload, &at, &["attributes", "fqname"])?;
+                let attributes = decode_value_attributes(&members, &at)?;
+                let fqname = decode_fqname(
+                    required(&members, "fqname", &at)?,
+                    &member_cursor(&members, "fqname", &at),
+                )?;
+                (attributes, fqname)
+            };
+            Ok(match tag {
+                "Reference" => Value::Reference(attributes, fqname),
+                _ => Value::Constructor(attributes, fqname),
+            })
+        }
+        "Tuple" => {
+            if payload.is_array() {
+                return Ok(Value::Tuple(
+                    ValueAttributes::default(),
+                    decode_value_list(payload, &at)?,
+                ));
+            }
+            let members = wrapper_members(tag, payload, &at, &["attributes", "elements"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let elements = decode_value_list(
+                required(&members, "elements", &at)?,
+                &member_cursor(&members, "elements", &at),
+            )?;
+            Ok(Value::Tuple(attributes, elements))
+        }
+        "List" => {
+            if payload.is_array() {
+                return Ok(Value::List(
+                    ValueAttributes::default(),
+                    decode_value_list(payload, &at)?,
+                ));
+            }
+            let members = wrapper_members(tag, payload, &at, &["attributes", "items"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let items = decode_value_list(
+                required(&members, "items", &at)?,
+                &member_cursor(&members, "items", &at),
+            )?;
+            Ok(Value::List(attributes, items))
+        }
+        "Record" => {
+            if let JsonValue::Object(written) = payload
+                && is_legacy_value_field_map(written)
+            {
+                let first = written
+                    .keys()
+                    .next()
+                    .expect("a legacy field map is never empty");
+                record_legacy_form_warning(&at, first)?;
+                return Ok(Value::Record(
+                    ValueAttributes::default(),
+                    decode_value_fields(payload, &at)?,
+                ));
+            }
+            let members = wrapper_members(tag, payload, &at, &["attributes", "fields"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let fields = decode_value_fields(
+                required(&members, "fields", &at)?,
+                &member_cursor(&members, "fields", &at),
+            )?;
+            Ok(Value::Record(attributes, fields))
+        }
+        "Unit" => {
+            let members = wrapper_members(tag, payload, &at, &["attributes"])?;
+            Ok(Value::Unit(decode_value_attributes(&members, &at)?))
+        }
+        "Apply" => {
+            let members =
+                wrapper_members(tag, payload, &at, &["attributes", "function", "argument"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let function = decode_member_value(&members, "function", &at)?;
+            let argument = decode_member_value(&members, "argument", &at)?;
+            Ok(Value::Apply(
+                attributes,
+                Box::new(function),
+                Box::new(argument),
+            ))
+        }
+        "IfThenElse" => {
+            let members = wrapper_members(
+                tag,
+                payload,
+                &at,
+                &["attributes", "condition", "then", "else"],
+            )?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let condition = decode_member_value(&members, "condition", &at)?;
+            let then_branch = decode_member_value(&members, "then", &at)?;
+            let else_branch = decode_member_value(&members, "else", &at)?;
+            Ok(Value::IfThenElse(
+                attributes,
+                Box::new(condition),
+                Box::new(then_branch),
+                Box::new(else_branch),
+            ))
+        }
+        "Field" => {
+            let members = wrapper_members(tag, payload, &at, &["attributes", "target", "name"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let target = decode_member_value(&members, "target", &at)?;
+            let name = decode_name(
+                required(&members, "name", &at)?,
+                &member_cursor(&members, "name", &at),
+            )?;
+            Ok(Value::Field(attributes, Box::new(target), name))
+        }
+        "Lambda" => {
+            let members = wrapper_members(tag, payload, &at, &["attributes", "pattern", "body"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let pattern = decode_pattern(
+                required(&members, "pattern", &at)?,
+                &member_cursor(&members, "pattern", &at),
+            )?;
+            let body = decode_member_value(&members, "body", &at)?;
+            Ok(Value::Lambda(attributes, pattern, Box::new(body)))
+        }
+        "LetDefinition" => {
+            let members = wrapper_members(
+                tag,
+                payload,
+                &at,
+                &["attributes", "name", "definition", "in"],
+            )?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let name = decode_name(
+                required(&members, "name", &at)?,
+                &member_cursor(&members, "name", &at),
+            )?;
+            let definition = decode_value_definition(
+                required(&members, "definition", &at)?,
+                &member_cursor(&members, "definition", &at),
+            )?;
+            let body = decode_member_value(&members, "in", &at)?;
+            Ok(Value::LetDefinition(
+                attributes,
+                name,
+                Box::new(definition),
+                Box::new(body),
+            ))
+        }
+        "LetRecursion" => {
+            let members = wrapper_members(tag, payload, &at, &["attributes", "definitions", "in"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let definitions_cursor = member_cursor(&members, "definitions", &at);
+            let definitions = required(&members, "definitions", &at)?
+                .as_object()
+                .ok_or_else(|| {
+                    invalid_type(
+                        &definitions_cursor,
+                        "definitions is an object keyed by the bound name",
+                    )
+                })?
+                .iter()
+                .map(|(name, definition)| {
+                    let binding_cursor = format!("{definitions_cursor}/{name}");
+                    Ok(LetBinding::new(
+                        decode_name(&JsonValue::String(name.clone()), &binding_cursor)?,
+                        decode_value_definition(definition, &binding_cursor)?,
+                    ))
+                })
+                .collect::<Result<_, Diagnostic>>()?;
+            let body = decode_member_value(&members, "in", &at)?;
+            Ok(Value::LetRecursion(attributes, definitions, Box::new(body)))
+        }
+        "Destructure" => {
+            let members =
+                wrapper_members(tag, payload, &at, &["attributes", "pattern", "value", "in"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let pattern = decode_pattern(
+                required(&members, "pattern", &at)?,
+                &member_cursor(&members, "pattern", &at),
+            )?;
+            let value = decode_member_value(&members, "value", &at)?;
+            let body = decode_member_value(&members, "in", &at)?;
+            Ok(Value::Destructure(
+                attributes,
+                pattern,
+                Box::new(value),
+                Box::new(body),
+            ))
+        }
+        "PatternMatch" => {
+            let members = wrapper_members(tag, payload, &at, &["attributes", "value", "cases"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let value = decode_member_value(&members, "value", &at)?;
+            let cases = decode_pattern_cases(
+                required(&members, "cases", &at)?,
+                &member_cursor(&members, "cases", &at),
+            )?;
+            Ok(Value::PatternMatch(attributes, Box::new(value), cases))
+        }
+        "UpdateRecord" => {
+            let members = wrapper_members(tag, payload, &at, &["attributes", "target", "fields"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let target = decode_member_value(&members, "target", &at)?;
+            let fields = decode_value_fields(
+                required(&members, "fields", &at)?,
+                &member_cursor(&members, "fields", &at),
+            )?;
+            Ok(Value::UpdateRecord(attributes, Box::new(target), fields))
+        }
+        "Hole" => {
+            let members =
+                wrapper_members(tag, payload, &at, &["attributes", "reason", "expectedType"])?;
+            let attributes = decode_value_attributes(&members, &at)?;
+            let reason_cursor = member_cursor(&members, "reason", &at);
+            let reason: HoleReason =
+                serde_json::from_value(required(&members, "reason", &at)?.clone())
+                    .map_err(|error| unknown_node_at(&reason_cursor, error.to_string()))?;
+            let expected = match members.get("expectedType") {
+                None => None,
+                Some(member) => Some(Box::new(decode_type(
+                    member.value,
+                    &format!("{at}/{}", member.seen),
+                )?)),
+            };
+            Ok(Value::Hole(attributes, reason, expected))
+        }
+        // Decision 0008 makes a native operation and an external binding properties of a
+        // definition, so `Native` and `External` where a value expression belongs are unknown
+        // nodes.
+        _ => Err(unknown_node_at(
+            cursor,
+            format!("{tag} is not a value expression"),
+        )),
+    }
+}
+
+/// Whether a `Literal` wrapper's payload is the expanded spelling rather than the literal itself.
+///
+/// The three names are the ones the expanded spelling can open with; a literal tag is never one
+/// of them.
+fn is_expanded_literal(payload: &JsonValue) -> bool {
+    match payload {
+        JsonValue::Object(written) => {
+            written.contains_key("literal")
+                || written.contains_key("attributes")
+                || written.contains_key("attrs")
+        }
+        _ => false,
+    }
+}
+
+/// Whether an object is a Record value's field map carried directly, the spelling decision 0006
+/// keeps alive for one release.
+///
+/// Every key must be a canonical `Name`; the values are not checked, because at a value position
+/// anything at all — a bare number, a string, an array — is a legal value expression, so there
+/// is nothing a shape test could rule out. `fields`, `attributes` and `attrs` are legal names,
+/// so they are excluded explicitly: an object carrying one of them is the expanded spelling.
+fn is_legacy_value_field_map(members: &serde_json::Map<String, JsonValue>) -> bool {
+    !members.is_empty()
+        && !members.contains_key("fields")
+        && !members.contains_key("attributes")
+        && !members.contains_key("attrs")
+        && members.keys().all(|member| spells_a_field_name(member))
+}
+
+fn decode_value_list(value: &JsonValue, cursor: &str) -> Result<Vec<Value>, Diagnostic> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid_type(cursor, "expected an array of value expressions"))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| decode_value(item, &format!("{cursor}/{index}")))
+        .collect()
+}
+
+/// Decodes a field map at a value position: an object keyed by field name, whose order is the
+/// field order.
+fn decode_value_fields(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<Vec<RecordFieldEntry>, Diagnostic> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| invalid_type(cursor, "fields must be an object keyed by field name"))?;
+    fields
+        .iter()
+        .map(|(name, field)| {
+            let field_cursor = format!("{cursor}/{name}");
+            Ok(RecordFieldEntry(
+                decode_name(&JsonValue::String(name.clone()), &field_cursor)?,
+                decode_value(field, &field_cursor)?,
+            ))
+        })
+        .collect()
+}
+
+/// Decodes a required member that carries a value expression, reporting it at the spelling the
+/// input used.
+fn decode_member_value(
+    members: &Members<'_>,
+    name: &str,
+    cursor: &str,
+) -> Result<Value, Diagnostic> {
+    decode_value(
+        required(members, name, cursor)?,
+        &member_cursor(members, name, cursor),
+    )
+}
+
+/// Decodes a pattern match's cases: an array of `{ "pattern": …, "body": … }` objects.
+fn decode_pattern_cases(value: &JsonValue, cursor: &str) -> Result<Vec<PatternCase>, Diagnostic> {
+    let cases = value
+        .as_array()
+        .ok_or_else(|| invalid_type(cursor, "cases is an array of pattern and body pairs"))?;
+    cases
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            let at = format!("{cursor}/{index}");
+            let members = wrapper_members("PatternMatchCase", case, &at, &["pattern", "body"])?;
+            Ok(PatternCase(
+                decode_pattern(
+                    required(&members, "pattern", &at)?,
+                    &member_cursor(&members, "pattern", &at),
+                )?,
+                decode_value(
+                    required(&members, "body", &at)?,
+                    &member_cursor(&members, "body", &at),
+                )?,
+            ))
+        })
+        .collect()
+}
+
+/// Decodes a value definition nested inside a value expression.
+///
+/// The definition's own decode is a derived one, so a diagnostic raised inside it arrives as a
+/// serde error; the marker it carries is recovered here, and anything without one is reported at
+/// the member that holds the definition.
+fn decode_value_definition(value: &JsonValue, cursor: &str) -> Result<ValueDefinition, Diagnostic> {
+    serde_json::from_value::<ValueDefinition>(value.clone()).map_err(|error| {
+        Diagnostic::from_serde_error(&error)
+            .unwrap_or_else(|| invalid_type(cursor, error.to_string()))
+    })
 }
 
 // =============================================================================
@@ -1735,7 +1794,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
 
 #[cfg(test)]
 mod tests {
-    use super::super::value::NativeHint;
+    use super::super::value::{NativeHint, NativeInfo};
     use super::*;
 
     #[test]

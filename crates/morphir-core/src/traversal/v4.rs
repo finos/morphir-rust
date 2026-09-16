@@ -96,15 +96,15 @@ pub fn walk_definition<V: V4Visitor + ?Sized>(
     }
     match &definition.body {
         v4::ValueBody::Expression(value) => visitor.visit_value(cursor, value),
-        v4::ValueBody::Incomplete {
-            partial_body: Some(value),
+        // An external definition's fallback body is an ordinary expression, so it is walked.
+        v4::ValueBody::External {
+            fallback: Some(value),
             ..
         } => visitor.visit_value(cursor, value),
-        v4::ValueBody::Native(_)
-        | v4::ValueBody::External { .. }
-        | v4::ValueBody::Incomplete {
-            partial_body: None, ..
-        } => {}
+        // An incomplete body's `outputType` is the definition's own, already walked above.
+        v4::ValueBody::Native { .. }
+        | v4::ValueBody::External { fallback: None, .. }
+        | v4::ValueBody::Incomplete { .. } => {}
     }
 }
 
@@ -185,8 +185,6 @@ pub fn walk_value<V: V4Visitor + ?Sized>(
         | v4::Value::Unit(_)
         | v4::Value::Variable(_, _)
         | v4::Value::Reference(_, _)
-        | v4::Value::Hole(_, _, _)
-        | v4::Value::Native(_, _, _)
-        | v4::Value::External(_, _, _) => {}
+        | v4::Value::Hole(_, _, _) => {}
     }
 }

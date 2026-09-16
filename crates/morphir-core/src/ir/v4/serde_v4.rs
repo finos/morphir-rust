@@ -17,9 +17,7 @@ use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::types::Type;
-use super::value::{
-    HoleReason, LetBinding, NativeInfo, PatternCase, RecordFieldEntry, Value, ValueDefinition,
-};
+use super::value::{HoleReason, RecordFieldEntry, Value, ValueDefinition};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TypeEncoding {
@@ -510,456 +508,342 @@ where
     serde::Deserialize::deserialize(deserializer)
 }
 
-/// Serialize a Value in V4 object wrapper format
+/// Serialize a Value in its canonical v4 spelling.
+///
+/// Decision 0009's shorthands are what a writer uses when a node has nothing else to say about
+/// itself: a variable is its name, a reference and a constructor are their FQName, a list and a
+/// tuple are their items, and a literal carries its payload directly. Decision 0005 keeps an
+/// empty `attributes` unwritten; a node that does carry attributes writes the expanded spelling
+/// instead, `attributes` first.
 pub fn serialize_value<S>(val: &Value, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
+    let attributes = written_value(val.attributes());
+    let mut map = serializer.serialize_map(Some(1))?;
     match val {
-        Value::Literal(attrs, lit) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
+        Value::Literal(_, literal) => match attributes {
+            None => map.serialize_entry("Literal", literal)?,
+            Some(_) => map.serialize_entry(
                 "Literal",
                 &LiteralValueContent {
-                    literal: lit,
-                    attrs: Some(attrs),
+                    attributes,
+                    literal,
                 },
-            )?;
-            map.end()
-        }
-        Value::Constructor(attrs, fqname) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
+            )?,
+        },
+        Value::Constructor(_, fqname) => match attributes {
+            None => map.serialize_entry("Constructor", &fqname.to_canonical_string())?,
+            Some(_) => map.serialize_entry(
                 "Constructor",
-                &ConstructorValueContent {
+                &FqNameValueContent {
+                    attributes,
                     fqname: fqname.to_canonical_string(),
-                    attrs: Some(attrs),
                 },
-            )?;
-            map.end()
-        }
-        Value::Tuple(attrs, elements) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
+            )?,
+        },
+        Value::Reference(_, fqname) => match attributes {
+            None => map.serialize_entry("Reference", &fqname.to_canonical_string())?,
+            Some(_) => map.serialize_entry(
+                "Reference",
+                &FqNameValueContent {
+                    attributes,
+                    fqname: fqname.to_canonical_string(),
+                },
+            )?,
+        },
+        Value::Variable(_, name) => match attributes {
+            None => map.serialize_entry("Variable", &name.to_canonical_string())?,
+            Some(_) => map.serialize_entry(
+                "Variable",
+                &NamedValueContent {
+                    attributes,
+                    name: name.to_canonical_string(),
+                },
+            )?,
+        },
+        Value::FieldFunction(_, name) => match attributes {
+            None => map.serialize_entry("FieldFunction", &name.to_canonical_string())?,
+            Some(_) => map.serialize_entry(
+                "FieldFunction",
+                &NamedValueContent {
+                    attributes,
+                    name: name.to_canonical_string(),
+                },
+            )?,
+        },
+        Value::Tuple(_, elements) => match attributes {
+            None => map.serialize_entry("Tuple", elements)?,
+            Some(_) => map.serialize_entry(
                 "Tuple",
                 &TupleValueContent {
+                    attributes,
                     elements,
-                    attrs: Some(attrs),
                 },
-            )?;
-            map.end()
-        }
-        Value::List(attrs, items) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "List",
-                &ListValueContent {
-                    items,
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Record(attrs, fields) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            let fields_map: IndexMap<String, &Value> =
-                fields.iter().map(|f| (f.0.to_string(), &f.1)).collect();
-            map.serialize_entry(
-                "Record",
-                &RecordValueContent {
-                    fields: fields_map,
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Variable(attrs, name) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Variable",
-                &VariableValueContent {
-                    name: name.to_string(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Reference(attrs, fqname) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Reference",
-                &ReferenceValueContent {
-                    fqname: fqname.to_canonical_string(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Field(attrs, value, name) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Field",
-                &FieldValueContent {
-                    value: value.as_ref(),
-                    name: name.to_string(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::FieldFunction(attrs, name) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "FieldFunction",
-                &FieldFunctionContent {
-                    name: name.to_string(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Apply(attrs, function, argument) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Apply",
-                &ApplyContent {
-                    function: function.as_ref(),
-                    argument: argument.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Lambda(attrs, pattern, body) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Lambda",
-                &LambdaContent {
-                    pattern,
-                    body: body.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::LetDefinition(attrs, name, definition, body) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "LetDefinition",
-                &LetDefinitionContent {
-                    name: name.to_string(),
-                    definition: definition.as_ref(),
-                    body: body.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::LetRecursion(attrs, bindings, body) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "LetRecursion",
-                &LetRecursionContent {
-                    bindings,
-                    body: body.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Destructure(attrs, pattern, value, body) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Destructure",
-                &DestructureContent {
-                    pattern,
-                    value: value.as_ref(),
-                    body: body.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::IfThenElse(attrs, condition, then_branch, else_branch) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "IfThenElse",
-                &IfThenElseContent {
-                    condition: condition.as_ref(),
-                    then_branch: then_branch.as_ref(),
-                    else_branch: else_branch.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::PatternMatch(attrs, subject, cases) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "PatternMatch",
-                &PatternMatchContent {
-                    subject: subject.as_ref(),
-                    cases,
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::UpdateRecord(attrs, record, updates) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "UpdateRecord",
-                &UpdateRecordContent {
-                    record: record.as_ref(),
-                    updates,
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Unit(attrs) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Unit", &ValueUnitContent { attrs: Some(attrs) })?;
-            map.end()
-        }
-        Value::Hole(attrs, reason, tpe) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Hole",
-                &HoleContent {
-                    reason,
-                    tpe: tpe.as_ref().map(|t: &Box<_>| t.as_ref()),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::Native(attrs, fqname, info) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "Native",
-                &NativeValueContent {
-                    fqname: fqname.to_canonical_string(),
-                    info,
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Value::External(attrs, external_name, target_platform) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "External",
-                &ExternalContent {
-                    external_name: external_name.clone(),
-                    target_platform: target_platform.clone(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
+            )?,
+        },
+        Value::List(_, items) => match attributes {
+            None => map.serialize_entry("List", items)?,
+            Some(_) => map.serialize_entry("List", &ListValueContent { attributes, items })?,
+        },
+        Value::Record(_, fields) => map.serialize_entry(
+            "Record",
+            &RecordValueContent {
+                attributes,
+                fields: field_values(fields),
+            },
+        )?,
+        Value::Field(_, target, name) => map.serialize_entry(
+            "Field",
+            &FieldValueContent {
+                attributes,
+                target: target.as_ref(),
+                name: name.to_canonical_string(),
+            },
+        )?,
+        Value::Apply(_, function, argument) => map.serialize_entry(
+            "Apply",
+            &ApplyContent {
+                attributes,
+                function: function.as_ref(),
+                argument: argument.as_ref(),
+            },
+        )?,
+        Value::Lambda(_, pattern, body) => map.serialize_entry(
+            "Lambda",
+            &LambdaContent {
+                attributes,
+                pattern,
+                body: body.as_ref(),
+            },
+        )?,
+        Value::LetDefinition(_, name, definition, body) => map.serialize_entry(
+            "LetDefinition",
+            &LetDefinitionContent {
+                attributes,
+                name: name.to_canonical_string(),
+                definition: definition.as_ref(),
+                body: body.as_ref(),
+            },
+        )?,
+        Value::LetRecursion(_, bindings, body) => map.serialize_entry(
+            "LetRecursion",
+            &LetRecursionContent {
+                attributes,
+                definitions: bindings
+                    .iter()
+                    .map(|binding| (binding.name().to_canonical_string(), binding.definition()))
+                    .collect(),
+                body: body.as_ref(),
+            },
+        )?,
+        Value::Destructure(_, pattern, value, body) => map.serialize_entry(
+            "Destructure",
+            &DestructureContent {
+                attributes,
+                pattern,
+                value: value.as_ref(),
+                body: body.as_ref(),
+            },
+        )?,
+        Value::IfThenElse(_, condition, then_branch, else_branch) => map.serialize_entry(
+            "IfThenElse",
+            &IfThenElseContent {
+                attributes,
+                condition: condition.as_ref(),
+                then_branch: then_branch.as_ref(),
+                else_branch: else_branch.as_ref(),
+            },
+        )?,
+        Value::PatternMatch(_, value, cases) => map.serialize_entry(
+            "PatternMatch",
+            &PatternMatchContent {
+                attributes,
+                value: value.as_ref(),
+                cases: cases
+                    .iter()
+                    .map(|case| PatternCaseContent {
+                        pattern: case.pattern(),
+                        body: case.body(),
+                    })
+                    .collect(),
+            },
+        )?,
+        Value::UpdateRecord(_, target, fields) => map.serialize_entry(
+            "UpdateRecord",
+            &UpdateRecordContent {
+                attributes,
+                target: target.as_ref(),
+                fields: field_values(fields),
+            },
+        )?,
+        Value::Unit(_) => map.serialize_entry("Unit", &ValueUnitContent { attributes })?,
+        Value::Hole(_, reason, expected_type) => map.serialize_entry(
+            "Hole",
+            &HoleContent {
+                attributes,
+                reason,
+                expected_type: expected_type.as_ref().map(|tpe| tpe.as_ref()),
+            },
+        )?,
     }
+    map.end()
 }
 
-// Helper structs for V4 Value serialization
+/// A record's fields keep their declaration order, which is the order the entries carry.
+fn field_values(fields: &[RecordFieldEntry]) -> IndexMap<String, &Value> {
+    fields
+        .iter()
+        .map(|field| (field.name().to_canonical_string(), field.value()))
+        .collect()
+}
+
+// Helper structs for V4 Value serialization. `attributes` is declared first in each, which is
+// the order the expanded spelling writes it in.
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LiteralValueContent<'a> {
-    #[serde(serialize_with = "serialize_literal")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     literal: &'a Literal,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ConstructorValueContent<'a> {
+struct FqNameValueContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     fqname: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
+struct NamedValueContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
+    name: String,
+}
+
+#[derive(Serialize)]
 struct TupleValueContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     elements: &'a Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ListValueContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     items: &'a Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct RecordValueContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     fields: IndexMap<String, &'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct VariableValueContent<'a> {
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReferenceValueContent<'a> {
-    fqname: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct FieldValueContent<'a> {
-    #[serde(serialize_with = "serialize_value")]
-    value: &'a Value,
-    name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    target: &'a Value,
+    name: String,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FieldFunctionContent<'a> {
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ApplyContent<'a> {
-    #[serde(serialize_with = "serialize_value")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     function: &'a Value,
-    #[serde(serialize_with = "serialize_value")]
     argument: &'a Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LambdaContent<'a> {
-    #[serde(serialize_with = "serialize_pattern")]
-    pattern: &'a Pattern,
-    #[serde(serialize_with = "serialize_value")]
-    body: &'a Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    pattern: &'a Pattern,
+    body: &'a Value,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LetDefinitionContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     name: String,
     definition: &'a ValueDefinition,
-    #[serde(serialize_with = "serialize_value")]
+    #[serde(rename = "in")]
     body: &'a Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LetRecursionContent<'a> {
-    bindings: &'a Vec<LetBinding>,
-    #[serde(serialize_with = "serialize_value")]
-    body: &'a Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    definitions: IndexMap<String, &'a ValueDefinition>,
+    #[serde(rename = "in")]
+    body: &'a Value,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct DestructureContent<'a> {
-    #[serde(serialize_with = "serialize_pattern")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     pattern: &'a Pattern,
-    #[serde(serialize_with = "serialize_value")]
     value: &'a Value,
-    #[serde(serialize_with = "serialize_value")]
+    #[serde(rename = "in")]
     body: &'a Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct IfThenElseContent<'a> {
-    #[serde(serialize_with = "serialize_value")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     condition: &'a Value,
-    #[serde(serialize_with = "serialize_value")]
+    #[serde(rename = "then")]
     then_branch: &'a Value,
-    #[serde(serialize_with = "serialize_value")]
+    #[serde(rename = "else")]
     else_branch: &'a Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct PatternMatchContent<'a> {
-    #[serde(serialize_with = "serialize_value")]
-    subject: &'a Value,
-    cases: &'a Vec<PatternCase>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    value: &'a Value,
+    cases: Vec<PatternCaseContent<'a>>,
+}
+
+/// A pattern match case is an object, not a pair: `{ "pattern": …, "body": … }`.
+#[derive(Serialize)]
+struct PatternCaseContent<'a> {
+    pattern: &'a Pattern,
+    body: &'a Value,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct UpdateRecordContent<'a> {
-    #[serde(serialize_with = "serialize_value")]
-    record: &'a Value,
-    updates: &'a Vec<RecordFieldEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    target: &'a Value,
+    fields: IndexMap<String, &'a Value>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ValueUnitContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HoleContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     reason: &'a HoleReason,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tpe: Option<&'a Type>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeValueContent<'a> {
-    fqname: String,
-    info: &'a NativeInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ExternalContent<'a> {
-    external_name: String,
-    target_platform: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    expected_type: Option<&'a Type>,
 }
 
 // =============================================================================

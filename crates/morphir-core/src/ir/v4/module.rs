@@ -99,12 +99,14 @@ impl<T: Serialize> Serialize for Documented<T> {
                 flattened.extend(members);
                 serde_json::Value::Object(flattened).serialize(serializer)
             }
-            other => {
-                let mut wrapper = serde_json::Map::with_capacity(2);
-                wrapper.insert("doc".to_owned(), doc);
-                wrapper.insert("value".to_owned(), other);
-                serde_json::Value::Object(wrapper).serialize(serializer)
-            }
+            // `{ "doc", "value" }` is the pre-decision spelling: a reader still accepts it for
+            // the window of decision 0006, and no writer in this workspace emits one. A node
+            // that is not an object has nowhere to flatten `doc` into, so it is refused rather
+            // than written the old way.
+            other => Err(serde::ser::Error::custom(format!(
+                "documentation is flattened beside the node it documents, so a documented node \
+                 must serialize as an object; this one wrote {other}"
+            ))),
         }
     }
 }
@@ -168,5 +170,54 @@ impl<'de> Deserialize<'de> for ModuleDefinition {
             deserializer,
             super::serde_document::decode_module_definition,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn documentation_is_flattened_beside_the_node_it_documents() {
+        let documented = Documented::new(
+            Some(Documentation::from("What this names.".to_owned())),
+            serde_json::json!({ "TypeAliasDefinition": { "typeParams": [] } }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(&documented).unwrap(),
+            serde_json::json!({
+                "doc": "What this names.",
+                "TypeAliasDefinition": { "typeParams": [] }
+            })
+        );
+    }
+
+    #[test]
+    fn a_node_that_is_not_an_object_has_nowhere_to_flatten_documentation_into() {
+        // The pre-decision `{ "doc", "value" }` wrapper is a spelling a reader still accepts and
+        // no writer emits, so a node that cannot carry a flattened `doc` is a serialization
+        // failure rather than a quiet fallback to the older form.
+        let documented = Documented::new(
+            Some(Documentation::from("What this names.".to_owned())),
+            serde_json::json!("morphir/SDK:string#string"),
+        );
+
+        let error = serde_json::to_value(&documented).unwrap_err().to_string();
+        assert!(
+            error.contains("must serialize as an object"),
+            "unexpected error: {error}"
+        );
+        assert!(!error.contains("\"value\""), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn an_undocumented_node_is_written_as_itself() {
+        let documented = Documented::new(None, serde_json::json!({ "Unit": {} }));
+
+        assert_eq!(
+            serde_json::to_value(&documented).unwrap(),
+            serde_json::json!({ "Unit": {} })
+        );
     }
 }

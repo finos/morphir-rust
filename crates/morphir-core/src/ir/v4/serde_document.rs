@@ -695,6 +695,15 @@ fn decode_externals(
     cursor: &str,
 ) -> Result<Vec<ExternalBinding>, Diagnostic> {
     if let Some(member) = members.get("externals") {
+        // `externalName` and `targetPlatform` are members of this body only as the window
+        // spelling of `externals` itself. Beside a list they name nothing, and dropping them
+        // silently would lose whatever the author meant by writing them.
+        for stray in ["externalName", "targetPlatform"] {
+            if members.contains_key(stray) {
+                return Err(unknown_member(&format!("{cursor}/{stray}"), stray));
+            }
+        }
+
         let at = member_cursor(members, "externals", cursor);
         let entries = member
             .value
@@ -1085,9 +1094,26 @@ fn format_version_diagnostic(
     error: crate::format_version::FormatVersionDiagnostic,
     cursor: &str,
 ) -> Diagnostic {
-    // The contract's categories are spelled exactly as the kit's codes are.
-    let code = serde_json::from_value::<DiagnosticCode>(JsonValue::String(error.code().to_owned()))
-        .unwrap_or(DiagnosticCode::InvalidFormatVersionType);
+    // The shared format-version contract's categories and the kit's diagnostic codes are the
+    // same vocabulary, listed here rather than mapped by name so that renaming a category on
+    // either side is a compile error or a failing assertion rather than a silent downgrade.
+    let code = match error.code() {
+        "missing_format_version" => DiagnosticCode::MissingFormatVersion,
+        "duplicate_format_version" => DiagnosticCode::DuplicateFormatVersion,
+        "invalid_format_version_type" => DiagnosticCode::InvalidFormatVersionType,
+        "invalid_format_version_syntax" => DiagnosticCode::InvalidFormatVersionSyntax,
+        "format_version_out_of_range" => DiagnosticCode::FormatVersionOutOfRange,
+        "unsupported_format_version_major" => DiagnosticCode::UnsupportedFormatVersionMajor,
+        "unsupported_format_version_revision" => DiagnosticCode::UnsupportedFormatVersionRevision,
+        other => {
+            debug_assert!(
+                false,
+                "the format-version contract reported the category {other}, which is not one of \
+                 the kit's diagnostic codes"
+            );
+            DiagnosticCode::InvalidFormatVersionType
+        }
+    };
     Diagnostic::normalization(code, cursor, error.message())
 }
 

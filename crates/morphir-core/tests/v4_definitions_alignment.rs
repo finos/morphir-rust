@@ -394,6 +394,31 @@ fn a_target_platform_is_unique_within_a_definitions_bindings() {
 }
 
 #[test]
+fn the_single_binding_members_name_nothing_beside_a_list_of_bindings() {
+    // `externalName` and `targetPlatform` are members of an external body only as the window
+    // spelling of `externals` itself. Written beside a list they are not a second binding and
+    // not a legacy spelling of anything, so they are refused where the author wrote them rather
+    // than dropped.
+    for stray in ["externalName", "targetPlatform"] {
+        let mut body = json!({ "ExternalBody": {
+            "inputTypes": {},
+            "outputType": MONEY,
+            "externals": [{ "targetPlatform": "elixir", "externalName": "Shop.total" }]
+        } });
+        body["ExternalBody"][stray] = json!("Shop.stray");
+
+        let (refused, warnings) = decode_watching::<ValueDefinition>(body);
+        let refused = refused.unwrap_err();
+        assert_eq!(refused.code, DiagnosticCode::UnknownMember);
+        assert_eq!(refused.cursor, format!("/ExternalBody/{stray}"));
+        assert!(
+            warnings.is_empty(),
+            "a stray member is not the window spelling"
+        );
+    }
+}
+
+#[test]
 fn a_complete_body_states_its_output_type_and_an_incomplete_one_may_not_have_one_yet() {
     let refused = decode::<ValueDefinition>(json!({ "ExpressionBody": {
         "inputTypes": {},

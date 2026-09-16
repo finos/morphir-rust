@@ -255,7 +255,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                                     // Gleam's constructor arguments are positional, and a
                                     // Morphir name has at least one segment, so the position
                                     // names them: `arg-1`, `arg-2`, …
-                                    name: Name::from(format!("arg{}", position + 1).as_str()),
+                                    name: Name::from(format!("arg-{}", position + 1).as_str()),
                                     arg_type: morphir_type,
                                 }
                             })

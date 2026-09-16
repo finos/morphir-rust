@@ -197,49 +197,54 @@ fn looks_like_fqname(text: &str) -> bool {
     text.contains(':') && text.contains('#')
 }
 
-/// Whether a JSON value is shaped like a type expression, without decoding it.
+/// Whether a single-member object is positioned as a node wrapper.
 ///
-/// Used to tell the Record wrapper carrying its field map directly from a Record wrapper
-/// carrying a misspelled member. A structural test keeps the check free of side effects: a
-/// trial decode would record the nested node's `legacy_spelling` warnings twice.
-fn looks_like_type(value: &JsonValue) -> bool {
-    match value {
-        JsonValue::String(_) | JsonValue::Array(_) => true,
-        JsonValue::Object(members) => {
-            members.len() == 1
-                && members
-                    .keys()
-                    .next()
-                    .is_some_and(|tag| TYPE_TAGS.contains(&tag.as_str()))
-        }
-        _ => false,
-    }
+/// The tag is not checked against [`TYPE_TAGS`]: the question here is only whether the author
+/// wrote something where a type belongs, and `decode_type` is what decides whether the tag
+/// names a node. Keeping the two apart is what lets `{ "Hole": { ... } }` inside a field map be
+/// refused as an unknown node at its own cursor, rather than reported as a bad member name one
+/// level up.
+fn is_wrapper_shaped(members: &serde_json::Map<String, JsonValue>) -> bool {
+    members.len() == 1
+        && members
+            .keys()
+            .next()
+            .is_some_and(|tag| !spells_a_field_name(tag))
 }
 
 /// Whether an object is a Record's field map carried directly, the spelling the schema
 /// documented until 2026-09-04.
 ///
-/// A field name is a canonical `Name`, which is never capitalised the way a wrapper tag is, so
-/// a member naming a node means the object is a wrapper rather than a field map. That check is
-/// what keeps `{ "Hole": { "reason": { ... } } }` an unknown node instead of a record with a
-/// field called `hole`.
+/// Every key must be a canonical `Name` and every value must be type-shaped, or itself a field
+/// map by this same rule. Requiring a canonical `Name` is what separates a field map from a
+/// wrapper without naming the wrappers: a canonical name admits no mixed-case segment, so no
+/// node tag — `Hole` and `Draft` included, not only the seven a `Type` can be — can be mistaken
+/// for a field name. `fields`, `attributes` and `attrs` are legal names, so they are excluded
+/// explicitly: an object carrying one of them is the expanded spelling, not a field map.
 fn is_legacy_field_map(members: &serde_json::Map<String, JsonValue>) -> bool {
     !members.is_empty()
         && !members.contains_key("fields")
         && !members.contains_key("attributes")
         && !members.contains_key("attrs")
-        && !members
-            .keys()
-            .any(|member| TYPE_TAGS.contains(&member.as_str()))
+        && members.keys().all(|member| spells_a_field_name(member))
         && members.values().all(looks_like_field_type)
 }
 
-/// A field's value inside a legacy field map is a type expression, or another legacy field map:
-/// the spelling nests, and each level earns its own warning.
+/// Whether `member` spells a field name, which is a non-empty canonical [`Name`].
+fn spells_a_field_name(member: &str) -> bool {
+    !member.is_empty() && Name::from_canonical_string(member).is_ok()
+}
+
+/// A field's value inside a legacy field map is written where a type belongs, or is another
+/// legacy field map: the spelling nests, and each level earns its own warning.
+///
+/// A structural test keeps this free of side effects: a trial decode would record the nested
+/// node's `legacy_spelling` warnings twice.
 fn looks_like_field_type(value: &JsonValue) -> bool {
     match value {
-        JsonValue::Object(members) => looks_like_type(value) || is_legacy_field_map(members),
-        other => looks_like_type(other),
+        JsonValue::String(_) | JsonValue::Array(_) => true,
+        JsonValue::Object(members) => is_wrapper_shaped(members) || is_legacy_field_map(members),
+        _ => false,
     }
 }
 

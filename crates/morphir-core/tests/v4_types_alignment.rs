@@ -120,6 +120,49 @@ fn a_legacy_field_map_nests_and_each_level_warns_at_its_own_cursor() {
 }
 
 #[test]
+fn a_node_tag_inside_a_legacy_field_map_is_still_an_unknown_node() {
+    // A field name is a canonical Name, which admits no mixed-case segment, so `Hole` cannot be
+    // read as a field and the nested wrapper is refused where it stands.
+    let (result, _) = with_spelling_mode(SpellingMode::Current, || {
+        decode(json!({
+            "Record": {
+                "addr": {
+                    "Hole": {
+                        "reason": {
+                            "TypeMismatch": {
+                                "expected": "morphir/SDK:basics#int",
+                                "found": "morphir/SDK:string#string"
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+    });
+    let e = result.unwrap_err();
+    assert_eq!(e.code, DiagnosticCode::UnknownNode);
+    assert_eq!(e.cursor, "/Record/addr");
+}
+
+#[test]
+fn an_initialism_is_a_legal_field_name_in_a_legacy_field_map() {
+    let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || {
+        decode(json!({ "Record": { "ID": "morphir/SDK:string#string" } }))
+    });
+    assert_eq!(
+        canonical(&decoded.unwrap()),
+        json!({ "Record": { "fields": { "ID": "morphir/SDK:string#string" } } })
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|w| (w.code, w.cursor.as_str()))
+            .collect::<Vec<_>>(),
+        [(DiagnosticCode::LegacySpelling, "/Record")]
+    );
+}
+
+#[test]
 fn a_scalar_where_a_type_belongs_carries_a_diagnostic() {
     for scalar in [json!(42), json!(null), json!(true), json!(1.5)] {
         let e = decode(scalar.clone()).unwrap_err();

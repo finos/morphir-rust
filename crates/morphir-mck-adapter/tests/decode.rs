@@ -35,30 +35,32 @@ fn a_type_variable_shorthand_decodes_to_itself() {
     }
 }
 
+/// `current` and `pinned` are the two module paths a binding exposes, not a spelling window, and
+/// the driver holds them to the same verdict fence by fence. A legacy member therefore warns
+/// identically on both.
 #[test]
-fn a_legacy_member_warns_at_current_and_fails_at_pinned() {
+fn a_legacy_member_warns_the_same_way_on_both_paths() {
     let input =
         r#"{"Function":{"arg":"morphir/SDK:basics#int","result":"morphir/SDK:string#string"}}"#;
-    match decode(&req(NodeKind::Type, input, PathMode::Current)) {
-        DecodeResponse::Ok {
-            warnings,
-            canonical,
-            ..
-        } => {
-            assert_eq!(warnings.len(), 2);
-            assert_eq!(
-                canonical["json"],
-                "{ \"Function\": { \"parameterType\": \"morphir/SDK:basics#int\", \"returnType\": \"morphir/SDK:string#string\" } }\n"
-            );
+    let expected = "{ \"Function\": { \"parameterType\": \"morphir/SDK:basics#int\", \"returnType\": \"morphir/SDK:string#string\" } }\n";
+    for path in [PathMode::Current, PathMode::Pinned] {
+        match decode(&req(NodeKind::Type, input, path)) {
+            DecodeResponse::Ok {
+                warnings,
+                canonical,
+                ..
+            } => {
+                assert_eq!(warnings.len(), 2, "on {path:?}");
+                assert!(
+                    warnings
+                        .iter()
+                        .all(|w| w.code == morphir_core::ir::DiagnosticCode::LegacySpelling),
+                    "on {path:?}: {warnings:?}"
+                );
+                assert_eq!(canonical["json"], expected, "on {path:?}");
+            }
+            other => panic!("on {path:?}: {other:?}"),
         }
-        other => panic!("{other:?}"),
-    }
-    match decode(&req(NodeKind::Type, input, PathMode::Pinned)) {
-        DecodeResponse::Err { diagnostic } => assert_eq!(
-            diagnostic.code,
-            morphir_core::ir::DiagnosticCode::UnknownMember
-        ),
-        other => panic!("{other:?}"),
     }
 }
 
@@ -89,8 +91,10 @@ fn syntax_errors_carry_the_kit_codes() {
     }
 }
 
+/// A case pinned to version 3 spells its canonical in version 3, so a version 3 decode reads and
+/// writes the classic model and the fence round-trips byte for byte.
 #[test]
-fn a_v3_literal_decodes_through_migration() {
+fn a_v3_value_round_trips_in_the_classic_spelling() {
     let r = DecodeRequest {
         version: 3,
         ..req(
@@ -100,12 +104,45 @@ fn a_v3_literal_decodes_through_migration() {
         )
     };
     match decode(&r) {
-        DecodeResponse::Ok { canonical, .. } => {
+        DecodeResponse::Ok {
+            canonical, kind, ..
+        } => {
             assert_eq!(
                 canonical["json"],
-                "{ \"Literal\": { \"IntegerLiteral\": 42 } }\n"
-            )
+                "[\"Literal\", {}, [\"WholeNumberLiteral\", 42]]\n"
+            );
+            assert_eq!(kind, "Literal");
         }
+        o => panic!("{o:?}"),
+    }
+}
+
+/// `strip` in the classic model is writing `{}` where an inferred type was, which is the same
+/// thing an untyped classic document already says.
+#[test]
+fn a_v3_value_with_an_inferred_type_strips_back_to_empty_attributes() {
+    let typed = r#"["Variable", ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []], ["x"]]"#;
+    let r = DecodeRequest {
+        version: 3,
+        ..req(NodeKind::Value, typed, PathMode::Current)
+    };
+    match decode(&r) {
+        DecodeResponse::Ok { canonical, .. } => {
+            assert_eq!(canonical["json"], "[\"Variable\", {}, [\"x\"]]\n")
+        }
+        o => panic!("{o:?}"),
+    }
+    let kept = DecodeRequest {
+        version: 3,
+        strip: false,
+        ..req(NodeKind::Value, typed, PathMode::Current)
+    };
+    match decode(&kept) {
+        DecodeResponse::Ok { canonical, .. } => assert!(
+            canonical["json"].contains("Reference"),
+            "the inferred type should survive strip: false, got {}",
+            canonical["json"]
+        ),
         o => panic!("{o:?}"),
     }
 }
@@ -141,9 +178,12 @@ fn a_document_deeper_than_the_nesting_limit_is_refused() {
         .expect("join");
 }
 
+/// The ceiling the reference reader states (`MAX_DEPTH` in its JSON value layer).
+const MAX_DEPTH: usize = 1000;
+
 fn nesting_limit() {
-    // 513 nested arrays: one more than the limit the reader admits.
-    let input = format!("{}{}", "[".repeat(513), "]".repeat(513));
+    // One more container than the reader admits.
+    let input = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
     match decode(&req(NodeKind::Value, &input, PathMode::Current)) {
         DecodeResponse::Err { diagnostic } => {
             assert_eq!(
@@ -154,14 +194,28 @@ fn nesting_limit() {
         }
         o => panic!("{o:?}"),
     }
-    // 512 is admitted, so the limit is the boundary and not an off-by-one.
-    let input = format!("{}{}", "[".repeat(512), "]".repeat(512));
+    // Exactly at the ceiling is admitted, so the limit is the boundary and not an off-by-one.
+    let input = format!("{}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
     match decode(&req(NodeKind::Value, &input, PathMode::Current)) {
         DecodeResponse::Err { diagnostic } => assert_ne!(
             diagnostic.code,
             morphir_core::ir::DiagnosticCode::NestingTooDeep
         ),
         DecodeResponse::Ok { .. } => {}
+        o => panic!("{o:?}"),
+    }
+    // A number is a scalar, not a container: it must not consume a nesting level. With
+    // `arbitrary_precision` on, serde delivers one as a map, so this is the case that catches a
+    // probe charging it depth.
+    let input = format!("{}1{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
+    match decode(&req(NodeKind::Value, &input, PathMode::Current)) {
+        DecodeResponse::Err { diagnostic } => assert_ne!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::NestingTooDeep,
+            "a number at the ceiling is not a container"
+        ),
+        DecodeResponse::Ok { .. } => {}
+        o => panic!("{o:?}"),
     }
 }
 
@@ -232,19 +286,42 @@ fn the_distribution_node_is_the_whole_document() {
 }
 
 #[test]
-fn a_name_decodes_at_version_3_through_the_legacy_word_array() {
+fn a_name_stays_a_word_array_at_version_3() {
     let r = DecodeRequest {
         version: 3,
         ..req(
             NodeKind::Name,
-            r#"["value","in","u","s","d"]"#,
+            r#"["value", "in", "u", "s", "d"]"#,
             PathMode::Current,
         )
     };
     match decode(&r) {
-        DecodeResponse::Ok { canonical, .. } => {
-            assert_eq!(canonical["json"], "\"value-in-USD\"\n")
-        }
+        DecodeResponse::Ok { canonical, .. } => assert_eq!(
+            canonical["json"],
+            "[\"value\", \"in\", \"u\", \"s\", \"d\"]\n"
+        ),
+        o => panic!("{o:?}"),
+    }
+}
+
+/// A profile or a version outside `capabilities` is a protocol failure, not a diagnostic about
+/// the document, so it never spends one of the kit's codes.
+#[test]
+fn an_undeclared_profile_or_version_is_refused_as_a_protocol_error() {
+    let yaml = DecodeRequest {
+        profile: Profile::Yaml,
+        ..req(NodeKind::Type, "a", PathMode::Current)
+    };
+    match decode(&yaml) {
+        DecodeResponse::Refused { diagnostic } => assert_eq!(diagnostic.code, "protocol_error"),
+        o => panic!("{o:?}"),
+    }
+    let ancient = DecodeRequest {
+        version: 2,
+        ..req(NodeKind::Type, "\"a\"", PathMode::Current)
+    };
+    match decode(&ancient) {
+        DecodeResponse::Refused { diagnostic } => assert_eq!(diagnostic.code, "protocol_error"),
         o => panic!("{o:?}"),
     }
 }

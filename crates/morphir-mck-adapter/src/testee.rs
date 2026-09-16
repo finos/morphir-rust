@@ -4,6 +4,22 @@
 //! spelling of what it read, the node kind a `rejected expect=<Kind>` fence names, and the
 //! legacy spellings accepted on the way (`protocol.schema.json`'s `DecodeSuccess`). The
 //! spellings themselves are morphir-core's; nothing here decides what a member is called.
+//!
+//! # `current` and `pinned`
+//!
+//! The kit's two path modes are the two *module paths* a binding exposes — its newest pinned
+//! version module and the current alias that points at it — and the driver requires the two to
+//! agree fence by fence (kit README, "Before any of that, the driver asks the testee for its
+//! capabilities"). They are not a spelling window: this binding has one set of readers, so both
+//! modes decode identically, and a legacy spelling accepted under decision 0006's window warns
+//! the same way on each. morphir-core's `SpellingMode::Pinned` is the mechanism that closes that
+//! window at a later release, not something a path mode selects.
+//!
+//! # Version 3
+//!
+//! A version 3 node is read into the classic model and written back in the classic spelling.
+//! `decode` does not migrate: the driver holds the answer against the case's own canonical
+//! fence, and a case pinned to version 3 spells its canonical in version 3.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -23,20 +39,39 @@ use morphir_core::ir::v4::{
     ValueSpecification, with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
-use morphir_core::migration::{self, MigrationContext, MigrationDiagnostic};
 use morphir_core::naming::{FQName, Name, Path};
 
-use crate::protocol::{DecodeRequest, DecodeResponse, NodeKind, PathMode, Profile};
+use crate::protocol::{
+    DecodeRequest, DecodeResponse, NodeKind, PathMode, Profile, ProtocolDiagnostic,
+};
 
-/// How many nested containers a document may carry.
+/// How many nested containers a document may carry, matching the reference reader's own ceiling
+/// (`MAX_DEPTH` in `packages/ir/src/codec/json/value.ts`).
 ///
 /// A reader that follows arbitrary nesting turns a small input into a deep recursion, so the
 /// profile puts a ceiling on it and reports `nesting_too_deep` rather than failing some other
 /// way at some other depth.
-const MAX_DEPTH: usize = 512;
+const MAX_DEPTH: usize = 1000;
 
 /// Reads one node and answers with its canonical spelling or the diagnostic that refused it.
 pub fn decode(req: &DecodeRequest) -> DecodeResponse {
+    // Neither of these can happen while the driver honours `capabilities`, and neither is a
+    // statement about the document, so they answer `protocol_error` rather than spending one of
+    // the kit's diagnostic codes on "this binding does not do that".
+    if req.profile != Profile::Json {
+        return DecodeResponse::Refused {
+            diagnostic: ProtocolDiagnostic::new("this binding decodes the json profile only"),
+        };
+    }
+    if !matches!(req.version, 3 | 4) {
+        return DecodeResponse::Refused {
+            diagnostic: ProtocolDiagnostic::new(format!(
+                "this binding decodes IR versions 3 and 4, not {}",
+                req.version
+            )),
+        };
+    }
+
     match read(req) {
         Ok((node, warnings)) => {
             let node = if req.strip { node.stripped() } else { node };
@@ -54,30 +89,17 @@ pub fn decode(req: &DecodeRequest) -> DecodeResponse {
 }
 
 fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
-    if req.profile != Profile::Json {
-        return Err(Diagnostic::syntax(
-            DiagnosticCode::InvalidYaml,
-            "/",
-            "this binding reads the json profile only",
-        ));
-    }
-
     // A repeated member and a document nested past the ceiling are properties of the text, not
     // of any node, so they are settled before the text becomes a value: `serde_json::Value`
     // folds a repeated member onto the last one written and would hide it.
-    if let Some(diagnostic) = check_duplicates(&req.input) {
+    if let Some(diagnostic) = probe_syntax(&req.input) {
         return Err(diagnostic);
     }
 
-    match req.version {
-        4 => read_v4(req),
-        3 => read_v3(req).map(|node| (node, Vec::new())),
-        other => Err(Diagnostic::normalization(
-            DiagnosticCode::InvalidType,
-            "/",
-            format!("this binding reads IR versions 3 and 4, not {other}"),
-        )),
+    if req.version == 3 {
+        return read_v3(req).map(|node| (node, Vec::new()));
     }
+    read_v4(req)
 }
 
 // =============================================================================
@@ -86,9 +108,11 @@ fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
 
 fn read_v4(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
     let value = parse_json(&req.input)?;
+    // Both path modes read through the same readers, so both decode under the open window (see
+    // the module's note on `current` and `pinned`). `req.path` is matched rather than ignored so
+    // the day the two paths differ, this is where that shows up.
     let mode = match req.path {
-        PathMode::Current => SpellingMode::Current,
-        PathMode::Pinned => SpellingMode::Pinned,
+        PathMode::Current | PathMode::Pinned => SpellingMode::Current,
     };
     let (node, warnings) = with_spelling_mode(mode, || read_v4_node(req.node, value));
     Ok((node?, warnings))
@@ -164,14 +188,15 @@ fn invalid_json(error: serde_json::Error) -> Diagnostic {
 // Duplicate members and nesting
 // =============================================================================
 
-/// Reports the second occurrence of a repeated object member, or a document nested past
-/// [`MAX_DEPTH`].
+/// The two syntactic rules a `serde_json::Value` cannot carry: no repeated object member, and no
+/// more than [`MAX_DEPTH`] nested containers.
 ///
-/// `serde_json::Value` cannot answer either question: it keeps one entry per key, so the second
-/// `"a"` in `{"a":1,"a":2}` is gone by the time a value exists, and its own recursion limit
-/// fails before this reader's ceiling is reached. The probe below walks the token stream
-/// instead, carrying the JSON pointer of where it is, and stops at the first thing it finds.
-pub fn check_duplicates(text: &str) -> Option<Diagnostic> {
+/// `Value` keeps one entry per key, so the second `"a"` in `{"a":1,"a":2}` is gone by the time a
+/// value exists, and serde_json's own recursion limit fails before this reader's ceiling is
+/// reached. The probe below walks the token stream instead, carrying the JSON pointer of where
+/// it is, and stops at the first thing it finds: `duplicate_member` at the second occurrence, or
+/// `nesting_too_deep` at the container that crossed the ceiling.
+pub fn probe_syntax(text: &str) -> Option<Diagnostic> {
     let mut deserializer = serde_json::Deserializer::from_str(text);
     deserializer.disable_recursion_limit();
     match (Probe {
@@ -189,6 +214,10 @@ pub fn check_duplicates(text: &str) -> Option<Diagnostic> {
 
 /// One position in the token stream: the JSON pointer of the value about to be read and how
 /// many containers are already open around it.
+///
+/// The cursor is built the way the reference reader builds it: empty at the root, then
+/// `<parent>/<member or index>` with the member name written out as it appears. A diagnostic at
+/// the root reports `/` (see [`cursor_or_root`]).
 ///
 /// This is a [`DeserializeSeed`] rather than a [`Deserialize`] because the cursor and the depth
 /// have to travel *into* each member, and a `Deserialize` impl is handed nothing but the
@@ -225,24 +254,35 @@ impl<'de> Visitor<'de> for Probe {
     where
         A: MapAccess<'de>,
     {
+        // The reserved-number check comes before the depth guard, not inside the loop: a number
+        // is a scalar the profile counts at no depth at all, and charging it a nesting level
+        // would make the ceiling depend on whether the innermost value happened to be a number.
+        let Some(first) = map.next_key::<String>()? else {
+            return self.enter::<A::Error>().map(|_| ());
+        };
+        if first == NUMBER_TOKEN {
+            map.next_value::<serde::de::IgnoredAny>()?;
+            return Ok(());
+        }
+
         let depth = self.enter::<A::Error>()?;
         let mut seen: HashSet<String> = HashSet::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if key == NUMBER_TOKEN {
-                map.next_value::<serde::de::IgnoredAny>()?;
-                continue;
-            }
-            let cursor = format!("{}/{}", self.cursor, escape(&key));
+        let mut key = first;
+        loop {
+            let cursor = format!("{}/{}", self.cursor, key);
             if !seen.insert(key.clone()) {
                 return Err(carry(Diagnostic::syntax(
                     DiagnosticCode::DuplicateMember,
                     cursor,
-                    format!("member {key} is written more than once"),
+                    format!("duplicate member \"{key}\""),
                 )));
             }
             map.next_value_seed(Probe { cursor, depth })?;
+            match map.next_key::<String>()? {
+                Some(next) => key = next,
+                None => return Ok(()),
+            }
         }
-        Ok(())
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
@@ -299,116 +339,290 @@ impl Probe {
         if depth > MAX_DEPTH {
             return Err(carry(Diagnostic::syntax(
                 DiagnosticCode::NestingTooDeep,
-                &self.cursor,
-                format!("more than {MAX_DEPTH} nested containers"),
+                cursor_or_root(&self.cursor),
+                format!("nesting deeper than {MAX_DEPTH} is not accepted"),
             )));
         }
         Ok(depth)
     }
 }
 
-fn carry<E: serde::de::Error>(diagnostic: Diagnostic) -> E {
-    E::custom(DiagnosticError(diagnostic))
+/// A cursor as a diagnostic reports it: the root is the whole document, spelled `/`.
+fn cursor_or_root(cursor: &str) -> &str {
+    if cursor.is_empty() { "/" } else { cursor }
 }
 
-/// A member name as a JSON pointer reference token (RFC 6901).
-fn escape(member: &str) -> String {
-    member.replace('~', "~0").replace('/', "~1")
+fn carry<E: serde::de::Error>(diagnostic: Diagnostic) -> E {
+    E::custom(DiagnosticError(diagnostic))
 }
 
 // =============================================================================
 // Version 3
 // =============================================================================
 
-/// The classic value attribute: a `{}` before type inference has run, an inferred type after.
+/// The classic value attribute: `{}` before type inference has run, the inferred type after.
+///
+/// Reading it as an `Attrs` rather than as a bare `Type` is what lets both kinds of classic
+/// document through the same reader, and it is also what makes `strip` expressible: clearing a
+/// value's attributes is `Attrs::None`, which writes back as `{}`.
 type ClassicAnnotation = classic::Attrs<classic::Type<classic::Attrs>>;
 
-fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
-    fn of<T: for<'de> Deserialize<'de>, U>(
-        text: &str,
-        migrate: impl FnOnce(&T, &mut MigrationContext) -> Result<U, MigrationDiagnostic>,
-        wrap: fn(U) -> Node,
-    ) -> Result<Node, Diagnostic> {
-        let classic: T = serde_json::from_str(text).map_err(|error| recover(&error))?;
-        let mut context = MigrationContext::default();
-        migrate(&classic, &mut context)
-            .map(wrap)
-            .map_err(migration_failed)
-    }
+/// A classic value expression as this adapter reads one.
+type ClassicValue = classic::Value<classic::Attrs, ClassicAnnotation>;
+type ClassicPattern = classic::Pattern<ClassicAnnotation>;
+type ClassicDefinition = classic::value::Definition<classic::Attrs, ClassicAnnotation>;
+type ClassicValueDefinition = classic::ValueDefinition<classic::Attrs, ClassicAnnotation>;
+type ClassicArgument = classic::value::ValueArgument<classic::Attrs, ClassicAnnotation>;
 
-    fn pure<T: for<'de> Deserialize<'de>, U>(
+fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
+    fn of<T: for<'de> Deserialize<'de>>(
         text: &str,
-        migrate: impl FnOnce(&T) -> U,
-        wrap: fn(U) -> Node,
+        wrap: fn(T) -> Node,
     ) -> Result<Node, Diagnostic> {
-        let classic: T = serde_json::from_str(text).map_err(|error| recover(&error))?;
-        Ok(wrap(migrate(&classic)))
+        serde_json::from_str::<T>(text)
+            .map(wrap)
+            .map_err(|error| recover(&error))
     }
 
     let text = &req.input;
     match req.node {
-        NodeKind::Name => pure::<classic::Name, _>(text, migration::migrate_name, Node::Name),
-        NodeKind::Path => pure::<classic::Path, _>(text, migration::migrate_path, Node::Path),
-        NodeKind::FQName => {
-            pure::<classic::FQName, _>(text, migration::migrate_fqname, Node::FQName)
-        }
-        NodeKind::Literal => {
-            pure::<classic::Literal, _>(text, migration::migrate_literal, Node::Literal)
-        }
-        NodeKind::Type => {
-            of::<classic::Type<classic::Attrs>, _>(text, migration::migrate_type, Node::Type)
-        }
-        NodeKind::Pattern => of::<classic::Pattern<ClassicAnnotation>, _>(
-            text,
-            migration::migrate_pattern,
-            Node::Pattern,
-        ),
-        NodeKind::Value => of::<classic::Value<classic::Attrs, ClassicAnnotation>, _>(
-            text,
-            migration::migrate_value,
-            Node::Value,
-        ),
-        NodeKind::ValueDefinition => {
-            of::<classic::ValueDefinition<classic::Attrs, ClassicAnnotation>, _>(
-                text,
-                migration::migrate_value_definition,
-                Node::ValueDefinition,
-            )
-        }
-        NodeKind::ModuleDefinition => {
-            of::<classic::ModuleDefinition<classic::Attrs, ClassicAnnotation>, _>(
-                text,
-                migration::migrate_module_definition,
-                Node::ModuleDefinition,
-            )
-        }
-        NodeKind::IRFile | NodeKind::Distribution => {
-            let classic: classic::Distribution =
-                serde_json::from_str(text).map_err(|error| recover(&error))?;
-            migration::migrate_distribution(&classic, Default::default())
-                .map(|migrated| Node::IRFile(migrated.value))
-                .map_err(migration_failed)
-        }
-        // Classic has no spelling for these on their own, so there is nothing to migrate from.
+        NodeKind::Name => of(text, Node::ClassicName),
+        NodeKind::Path => of(text, Node::ClassicPath),
+        NodeKind::FQName => of(text, Node::ClassicFQName),
+        NodeKind::Literal => of(text, Node::ClassicLiteral),
+        NodeKind::Type => of(text, Node::ClassicType),
+        NodeKind::Pattern => of(text, Node::ClassicPattern),
+        NodeKind::Value => of(text, Node::ClassicValue),
+        NodeKind::ValueDefinition => of(text, Node::ClassicValueDefinition),
+        // The rest are nodes a classic document only ever carries inside a whole distribution,
+        // whose value attribute is the inferred type itself rather than something a reader can
+        // clear — so there is no version 3 answer this adapter can give for them on their own.
         NodeKind::FormatVersion
         | NodeKind::TypeSpecification
         | NodeKind::TypeDefinition
         | NodeKind::ValueSpecification
         | NodeKind::AccessControlledTypeDefinition
         | NodeKind::AccessControlledValueDefinition
-        | NodeKind::ModuleSpecification => Err(Diagnostic::normalization(
+        | NodeKind::ModuleDefinition
+        | NodeKind::ModuleSpecification
+        | NodeKind::IRFile
+        | NodeKind::Distribution => Err(Diagnostic::normalization(
             DiagnosticCode::UnknownNode,
             "/",
             format!(
-                "{:?} is not a node a version 3 document spells on its own",
+                "{:?} is not a node this binding reads on its own at version 3",
                 req.node
             ),
         )),
     }
 }
 
-fn migration_failed(diagnostic: MigrationDiagnostic) -> Diagnostic {
-    Diagnostic::normalization(DiagnosticCode::InvalidType, "/", diagnostic.message)
+/// Clearing a classic value's attributes is writing `{}` in each attribute position — which is
+/// the same thing an untyped classic document already says.
+///
+/// A classic *type* attribute is `Attrs<()>`, and no input the profile admits decodes it as
+/// anything but `Attrs::None`, so a type carries nothing to clear and is returned as it came.
+fn strip_classic_value(node: ClassicValue) -> ClassicValue {
+    let attributes = classic::Attrs::None;
+    match node {
+        classic::Value::Apply(_, function, argument) => classic::Value::Apply(
+            attributes,
+            Box::new(strip_classic_value(*function)),
+            Box::new(strip_classic_value(*argument)),
+        ),
+        classic::Value::Constructor(_, name) => classic::Value::Constructor(attributes, name),
+        classic::Value::Destructure(_, pattern, subject, body) => classic::Value::Destructure(
+            attributes,
+            strip_classic_pattern(pattern),
+            Box::new(strip_classic_value(*subject)),
+            Box::new(strip_classic_value(*body)),
+        ),
+        classic::Value::Field(_, target, name) => {
+            classic::Value::Field(attributes, Box::new(strip_classic_value(*target)), name)
+        }
+        classic::Value::FieldFunction(_, name) => classic::Value::FieldFunction(attributes, name),
+        classic::Value::IfThenElse(_, condition, then_branch, else_branch) => {
+            classic::Value::IfThenElse(
+                attributes,
+                Box::new(strip_classic_value(*condition)),
+                Box::new(strip_classic_value(*then_branch)),
+                Box::new(strip_classic_value(*else_branch)),
+            )
+        }
+        classic::Value::Lambda(_, pattern, body) => classic::Value::Lambda(
+            attributes,
+            strip_classic_pattern(pattern),
+            Box::new(strip_classic_value(*body)),
+        ),
+        classic::Value::LetDefinition(_, name, definition, body) => classic::Value::LetDefinition(
+            attributes,
+            name,
+            Box::new(strip_classic_definition(*definition)),
+            Box::new(strip_classic_value(*body)),
+        ),
+        classic::Value::LetRecursion(_, bindings, body) => classic::Value::LetRecursion(
+            attributes,
+            bindings
+                .into_iter()
+                .map(|(name, definition)| (name, Box::new(strip_classic_definition(*definition))))
+                .collect(),
+            Box::new(strip_classic_value(*body)),
+        ),
+        classic::Value::List(_, values) => classic::Value::List(
+            attributes,
+            values.into_iter().map(strip_classic_value).collect(),
+        ),
+        classic::Value::Literal(_, literal) => classic::Value::Literal(attributes, literal),
+        classic::Value::PatternMatch(_, subject, cases) => classic::Value::PatternMatch(
+            attributes,
+            Box::new(strip_classic_value(*subject)),
+            cases
+                .into_iter()
+                .map(|(pattern, body)| (strip_classic_pattern(pattern), strip_classic_value(body)))
+                .collect(),
+        ),
+        classic::Value::Record(_, fields) => classic::Value::Record(
+            attributes,
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, strip_classic_value(value)))
+                .collect(),
+        ),
+        classic::Value::Tuple(_, values) => classic::Value::Tuple(
+            attributes,
+            values.into_iter().map(strip_classic_value).collect(),
+        ),
+        classic::Value::Unit(_) => classic::Value::Unit(attributes),
+        classic::Value::Update(_, record, fields) => classic::Value::Update(
+            attributes,
+            Box::new(strip_classic_value(*record)),
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, strip_classic_value(value)))
+                .collect(),
+        ),
+        classic::Value::Variable(_, name) => classic::Value::Variable(attributes, name),
+        classic::Value::Reference(_, name) => classic::Value::Reference(attributes, name),
+    }
+}
+
+fn strip_classic_pattern(node: ClassicPattern) -> ClassicPattern {
+    let attributes = classic::Attrs::None;
+    match node {
+        classic::Pattern::Wildcard(_) => classic::Pattern::Wildcard(attributes),
+        classic::Pattern::As(_, pattern, name) => {
+            classic::Pattern::As(attributes, Box::new(strip_classic_pattern(*pattern)), name)
+        }
+        classic::Pattern::Tuple(_, patterns) => classic::Pattern::Tuple(
+            attributes,
+            patterns.into_iter().map(strip_classic_pattern).collect(),
+        ),
+        classic::Pattern::Constructor(_, name, arguments) => classic::Pattern::Constructor(
+            attributes,
+            name,
+            arguments.into_iter().map(strip_classic_pattern).collect(),
+        ),
+        classic::Pattern::EmptyList(_) => classic::Pattern::EmptyList(attributes),
+        classic::Pattern::HeadTail(_, head, tail) => classic::Pattern::HeadTail(
+            attributes,
+            Box::new(strip_classic_pattern(*head)),
+            Box::new(strip_classic_pattern(*tail)),
+        ),
+        classic::Pattern::Literal(_, literal) => classic::Pattern::Literal(attributes, literal),
+        classic::Pattern::Unit(_) => classic::Pattern::Unit(attributes),
+        classic::Pattern::Variable(_, name) => classic::Pattern::Variable(attributes, name),
+    }
+}
+
+fn strip_classic_argument(argument: ClassicArgument) -> ClassicArgument {
+    classic::value::ValueArgument {
+        name: argument.name,
+        annotation: classic::Attrs::None,
+        ty: argument.ty,
+    }
+}
+
+fn strip_classic_definition(definition: ClassicDefinition) -> ClassicDefinition {
+    classic::value::Definition {
+        input_types: definition
+            .input_types
+            .into_iter()
+            .map(strip_classic_argument)
+            .collect(),
+        output_type: definition.output_type,
+        body: Box::new(strip_classic_value(*definition.body)),
+    }
+}
+
+fn strip_classic_value_definition(definition: ClassicValueDefinition) -> ClassicValueDefinition {
+    classic::ValueDefinition {
+        input_types: definition
+            .input_types
+            .into_iter()
+            .map(strip_classic_argument)
+            .collect(),
+        output_type: definition.output_type,
+        body: strip_classic_value(definition.body),
+    }
+}
+
+fn classic_literal_kind(literal: &classic::Literal) -> &'static str {
+    match literal {
+        classic::Literal::Bool(_) => "BoolLiteral",
+        classic::Literal::Char(_) => "CharLiteral",
+        classic::Literal::String(_) => "StringLiteral",
+        classic::Literal::WholeNumber(_) => "WholeNumberLiteral",
+        classic::Literal::Float(_) => "FloatLiteral",
+    }
+}
+
+fn classic_type_kind(node: &classic::Type<classic::Attrs>) -> &'static str {
+    match node {
+        classic::Type::ExtensibleRecord(..) => "ExtensibleRecord",
+        classic::Type::Function(..) => "Function",
+        classic::Type::Record(..) => "Record",
+        classic::Type::Reference(..) => "Reference",
+        classic::Type::Tuple(..) => "Tuple",
+        classic::Type::Unit(_) => "Unit",
+        classic::Type::Variable(..) => "Variable",
+    }
+}
+
+fn classic_pattern_kind(node: &ClassicPattern) -> &'static str {
+    match node {
+        classic::Pattern::Wildcard(_) => "WildcardPattern",
+        classic::Pattern::As(..) => "AsPattern",
+        classic::Pattern::Tuple(..) => "TuplePattern",
+        classic::Pattern::Constructor(..) => "ConstructorPattern",
+        classic::Pattern::EmptyList(_) => "EmptyListPattern",
+        classic::Pattern::HeadTail(..) => "HeadTailPattern",
+        classic::Pattern::Literal(..) => "LiteralPattern",
+        classic::Pattern::Unit(_) => "UnitPattern",
+        classic::Pattern::Variable(..) => "VariablePattern",
+    }
+}
+
+fn classic_value_kind(node: &ClassicValue) -> &'static str {
+    match node {
+        classic::Value::Apply(..) => "Apply",
+        classic::Value::Constructor(..) => "Constructor",
+        classic::Value::Destructure(..) => "Destructure",
+        classic::Value::Field(..) => "Field",
+        classic::Value::FieldFunction(..) => "FieldFunction",
+        classic::Value::IfThenElse(..) => "IfThenElse",
+        classic::Value::Lambda(..) => "Lambda",
+        classic::Value::LetDefinition(..) => "LetDefinition",
+        classic::Value::LetRecursion(..) => "LetRecursion",
+        classic::Value::List(..) => "List",
+        classic::Value::Literal(..) => "Literal",
+        classic::Value::PatternMatch(..) => "PatternMatch",
+        classic::Value::Record(..) => "Record",
+        classic::Value::Tuple(..) => "Tuple",
+        classic::Value::Unit(_) => "Unit",
+        classic::Value::Update(..) => "UpdateRecord",
+        classic::Value::Variable(..) => "Variable",
+        classic::Value::Reference(..) => "Reference",
+    }
 }
 
 // =============================================================================
@@ -435,6 +649,16 @@ enum Node {
     ModuleDefinition(ModuleDefinition),
     ModuleSpecification(ModuleSpecification),
     IRFile(IRFile),
+    // Version 3 stays in the classic model: it is read, stripped and written there, so a case
+    // pinned to version 3 is answered in the spelling its own canonical fence uses.
+    ClassicName(classic::Name),
+    ClassicPath(classic::Path),
+    ClassicFQName(classic::FQName),
+    ClassicLiteral(classic::Literal),
+    ClassicType(classic::Type<classic::Attrs>),
+    ClassicPattern(ClassicPattern),
+    ClassicValue(ClassicValue),
+    ClassicValueDefinition(ClassicValueDefinition),
 }
 
 impl Node {
@@ -459,6 +683,14 @@ impl Node {
             Node::ModuleDefinition(_) => "ModuleDefinition",
             Node::ModuleSpecification(_) => "ModuleSpecification",
             Node::IRFile(node) => distribution_kind(&node.distribution),
+            Node::ClassicName(_) => "Name",
+            Node::ClassicPath(_) => "Path",
+            Node::ClassicFQName(_) => "FQName",
+            Node::ClassicLiteral(node) => classic_literal_kind(node),
+            Node::ClassicType(node) => classic_type_kind(node),
+            Node::ClassicPattern(node) => classic_pattern_kind(node),
+            Node::ClassicValue(node) => classic_value_kind(node),
+            Node::ClassicValueDefinition(_) => "ValueDefinition",
         }
     }
 
@@ -494,7 +726,13 @@ impl Node {
                 format_version: node.format_version,
                 distribution: strip_distribution(node.distribution),
             }),
-            // Names, paths and the format version carry no attributes at all.
+            Node::ClassicPattern(node) => Node::ClassicPattern(strip_classic_pattern(node)),
+            Node::ClassicValue(node) => Node::ClassicValue(strip_classic_value(node)),
+            Node::ClassicValueDefinition(node) => {
+                Node::ClassicValueDefinition(strip_classic_value_definition(node))
+            }
+            // Names, paths, literals, the format version and a classic type carry no attributes
+            // a reader can clear.
             other => other,
         }
     }
@@ -528,6 +766,14 @@ impl Node {
             Node::ModuleSpecification(node) => text(node),
             // `formatVersion` first, then `distribution`: the root member order of the file.
             Node::IRFile(node) => text(node),
+            Node::ClassicName(node) => text(node),
+            Node::ClassicPath(node) => text(node),
+            Node::ClassicFQName(node) => text(node),
+            Node::ClassicLiteral(node) => text(node),
+            Node::ClassicType(node) => text(node),
+            Node::ClassicPattern(node) => text(node),
+            Node::ClassicValue(node) => text(node),
+            Node::ClassicValueDefinition(node) => text(node),
         }
     }
 }
@@ -535,15 +781,18 @@ impl Node {
 /// Writes a value in the JSON profile's canonical text form.
 ///
 /// The profile's writer is not `serde_json::to_string`: a non-empty object is padded inside its
-/// braces and its members separated by `, `, while an array is not padded, and a number keeps
-/// the lexeme it was written with. The driver compares canonicals as strings (kit README, "What
-/// the driver does with a case"), so this is part of the contract rather than a style.
+/// braces and its members separated by `, `, while an array is not padded. The driver compares
+/// canonicals as strings (kit README, "What the driver does with a case"), so this is part of
+/// the contract rather than a style.
 fn write_canonical(value: &Json) -> String {
     match value {
         Json::Null => "null".to_string(),
         Json::Bool(true) => "true".to_string(),
         Json::Bool(false) => "false".to_string(),
-        // `arbitrary_precision` keeps the lexeme, so `Display` writes the number back as it came.
+        // What `arbitrary_precision` buys is that a number *parsed from text* keeps the lexeme
+        // it was written with, which is what a `DocumentLiteral` payload needs. It buys nothing
+        // for a number the model holds as a machine number: `Literal::Float` is an `f64`, so
+        // `1.0e2` comes back out as `100.0`. No case pins a float lexeme today.
         Json::Number(number) => number.to_string(),
         Json::String(_) => serde_json::to_string(value).expect("a string always serializes"),
         Json::Array(elements) if elements.is_empty() => "[]".to_string(),

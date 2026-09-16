@@ -136,6 +136,13 @@ pub enum DecodeResponse {
     Err {
         diagnostic: Diagnostic,
     },
+    /// The request asked for something this binding said it could not do (a profile or an IR
+    /// version outside its `capabilities`). That is not a statement about the document, so it
+    /// answers `protocol_error` rather than spending one of the kit's diagnostic codes. On the
+    /// wire it is the same `{ ok: false, diagnostic }` shape as [`DecodeResponse::Err`].
+    Refused {
+        diagnostic: ProtocolDiagnostic,
+    },
 }
 
 impl Serialize for DecodeResponse {
@@ -158,6 +165,12 @@ impl Serialize for DecodeResponse {
                 map.end()
             }
             DecodeResponse::Err { diagnostic } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("ok", &false)?;
+                map.serialize_entry("diagnostic", diagnostic)?;
+                map.end()
+            }
+            DecodeResponse::Refused { diagnostic } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("ok", &false)?;
                 map.serialize_entry("diagnostic", diagnostic)?;

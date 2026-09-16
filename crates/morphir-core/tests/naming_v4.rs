@@ -306,3 +306,48 @@ fn package_name_accepts_classic_arrays_and_writes_canonical_strings() {
 
     assert_eq!(serde_json::to_string(&package).unwrap(), r#""morphir/SDK""#);
 }
+
+/// A name the grammar refuses has to come back as `invalid_name` with a cursor, not as prose in
+/// somebody else's error type. Reporting through `serde::de::Error::custom(String)` loses both,
+/// and leaves a caller nothing to answer with but `invalid_type` — which is a statement about
+/// the JSON shape and not about the name.
+#[test]
+fn a_string_that_is_not_a_name_carries_an_invalid_name_diagnostic() {
+    for text in ["\"has space\"", "\"Mixed\"", "\"a--b-C\""] {
+        let error = serde_json::from_str::<Name>(text).unwrap_err();
+        let diagnostic = morphir_core::ir::Diagnostic::from_serde_error(&error)
+            .unwrap_or_else(|| panic!("{text} should carry a diagnostic"));
+        assert_eq!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::InvalidName,
+            "{text}"
+        );
+        assert_eq!(diagnostic.cursor, "/", "{text}");
+    }
+}
+
+/// A JSON value that is neither a string nor an array of words is a shape complaint, so it is
+/// `invalid_type` rather than `invalid_name`.
+#[test]
+fn a_name_that_is_not_a_string_or_an_array_carries_an_invalid_type_diagnostic() {
+    let error = serde_json::from_str::<Name>("42").unwrap_err();
+    let diagnostic =
+        morphir_core::ir::Diagnostic::from_serde_error(&error).expect("a carried diagnostic");
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::InvalidType
+    );
+}
+
+/// The same rule one level down: a path is a slash-separated run of names, and a segment that is
+/// not a name is the path's `invalid_name`, not an `invalid_type`.
+#[test]
+fn a_path_segment_that_is_not_a_name_carries_an_invalid_name_diagnostic() {
+    let error = serde_json::from_str::<morphir_core::naming::Path>("\"acme/Mixed\"").unwrap_err();
+    let diagnostic =
+        morphir_core::ir::Diagnostic::from_serde_error(&error).expect("a carried diagnostic");
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::InvalidName
+    );
+}

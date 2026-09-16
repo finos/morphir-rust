@@ -11,6 +11,7 @@
 //! disjoint, so a union decoder is unambiguous, and flipping the constant is
 //! therefore backward compatible for every reader.
 
+use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -596,6 +597,18 @@ impl Serialize for Name {
     }
 }
 
+/// Reads a name from either canonical string encoding or the legacy word array.
+///
+/// Every refusal carries a [`Diagnostic`] with one of the kit's codes and a JSON pointer, wrapped
+/// in a [`DiagnosticError`] so it survives serde's `Display`-only error channel: a name that is
+/// not a name is `invalid_name`, and a JSON value that is neither a string nor an array of
+/// strings is `invalid_type`. Reporting through `serde::de::Error::custom(String)` instead —
+/// which is what this impl used to do — loses both the code and the cursor, and the caller can
+/// then only answer `invalid_type` for every bad name.
+///
+/// The cursor is the root: a bare `Name` is read at the root of whatever value was handed in.
+/// Inside a v4 document a name is read by the cursor-carrying decoder in `ir::v4`, which points
+/// at the member the author wrote.
 impl<'de> Deserialize<'de> for Name {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -603,23 +616,34 @@ impl<'de> Deserialize<'de> for Name {
     {
         use serde::de;
 
+        fn carry<E: de::Error>(code: DiagnosticCode, message: String) -> E {
+            E::custom(DiagnosticError(Diagnostic::normalization(
+                code, "/", message,
+            )))
+        }
+
         // Accept both canonical string encodings and the legacy array.
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
-            serde_json::Value::String(s) => {
-                Name::from_canonical_string(&s).map_err(de::Error::custom)
-            }
+            serde_json::Value::String(s) => Name::from_canonical_string(&s)
+                .map_err(|error| carry(DiagnosticCode::InvalidName, error)),
             serde_json::Value::Array(arr) => {
                 let words: Result<Vec<String>, _> = arr
                     .into_iter()
                     .map(|v| match v {
                         serde_json::Value::String(s) => Ok(s),
-                        _ => Err(de::Error::custom("expected string in Name array")),
+                        _ => Err(carry(
+                            DiagnosticCode::InvalidType,
+                            "a legacy name is an array of words".to_string(),
+                        )),
                     })
                     .collect();
                 Ok(Name::from_words(words?))
             }
-            _ => Err(de::Error::custom("expected string or array for Name")),
+            _ => Err(carry(
+                DiagnosticCode::InvalidType,
+                "a name is a canonical string or a legacy array of words".to_string(),
+            )),
         }
     }
 }

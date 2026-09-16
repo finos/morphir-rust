@@ -1,4 +1,5 @@
 use super::Name;
+use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -60,6 +61,12 @@ impl Serialize for Path {
     }
 }
 
+/// Reads a path from the canonical slash-separated string or the legacy array of legacy names.
+///
+/// Refusals carry a [`Diagnostic`] through [`DiagnosticError`] for the same reason
+/// [`Name`]'s reader does: a code and a cursor have to survive serde's `Display`-only error
+/// channel, or the caller can only answer `invalid_type`. A segment that is not a name is
+/// refused by [`Name`]'s own reader, whose error already carries its diagnostic.
 impl<'de> Deserialize<'de> for Path {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -71,9 +78,13 @@ impl<'de> Deserialize<'de> for Path {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
             // V4 canonical string format: "my-org/my-lib" or "test-package"
-            serde_json::Value::String(s) => {
-                Path::from_canonical_string(&s).map_err(de::Error::custom)
-            }
+            serde_json::Value::String(s) => Path::from_canonical_string(&s).map_err(|error| {
+                de::Error::custom(DiagnosticError(Diagnostic::normalization(
+                    DiagnosticCode::InvalidName,
+                    "/",
+                    error,
+                )))
+            }),
             // Classic array format: [["my"], ["org"], ["my"], ["lib"]]
             serde_json::Value::Array(arr) => {
                 let segments: Result<Vec<Name>, _> = arr
@@ -84,7 +95,13 @@ impl<'de> Deserialize<'de> for Path {
                     segments: segments?,
                 })
             }
-            _ => Err(de::Error::custom("expected string or array for Path")),
+            _ => Err(de::Error::custom(DiagnosticError(
+                Diagnostic::normalization(
+                    DiagnosticCode::InvalidType,
+                    "/",
+                    "a path is a canonical string or a legacy array of names",
+                ),
+            ))),
         }
     }
 }

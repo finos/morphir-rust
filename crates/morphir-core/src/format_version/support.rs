@@ -122,6 +122,12 @@ impl Interval {
     }
 
     fn contains(&self, r: &ReleaseTriplet) -> bool {
+        // An absent lower bound reaches down to the domain floor and no
+        // further, so the floor is checked here rather than only where a bound
+        // is written: a table cannot contain a release the domain does not have.
+        if *r < DOMAIN_FLOOR {
+            return false;
+        }
         if let Some(lower) = &self.lower {
             match lower.cmp(r) {
                 Ordering::Greater => return false,
@@ -498,4 +504,21 @@ impl SupportTable {
 /// Reference support table from the parent specification.
 pub fn default_support_table() -> SupportTable {
     SupportTable::reference()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_absent_lower_bound_reaches_only_to_the_domain_floor() {
+        let table = SupportTable::parse("(,4.1.0)").expect("an open-below table");
+        // The domain names no release before 3.0.0, so a table cannot contain
+        // one however far down its lower side is left open.
+        for release in [ReleaseTriplet::new(2, 0, 0), ReleaseTriplet::new(1, 0, 0)] {
+            assert!(!table.contains(&release), "{release} is below the floor");
+            assert_eq!(table.check(&release), Compatibility::UnsupportedMajor);
+        }
+        assert!(table.contains(&ReleaseTriplet::new(3, 0, 0)));
+    }
 }

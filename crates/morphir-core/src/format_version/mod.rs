@@ -17,7 +17,7 @@ pub use serde::{FormatVersionBaselineSeed, deserialize_baseline_u32};
 pub use support::{
     Compatibility, Interval, REFERENCE_SUPPORT_TABLE, SupportTable, default_support_table,
 };
-pub use triplet::ReleaseTriplet;
+pub use triplet::{COMPONENT_MAX, ReleaseTriplet};
 
 /// Result of recognizing and normalizing one `formatVersion` scalar.
 #[derive(Debug, Clone, PartialEq, Eq)]

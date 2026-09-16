@@ -91,7 +91,7 @@ pub(super) fn to_yaml_text<T: Serialize + ?Sized>(
     value: &T,
 ) -> Result<String, TransportDiagnostic> {
     stacker::grow(IR_RECURSION_STACK_BYTES, || {
-        let plain = PlainValue::of(value).map_err(YamlCodec::encode_error)?;
+        let plain = PlainValue::of(value)?;
         serde_saphyr::to_string_with_options(&plain, YamlCodec::serializer_options())
             .map_err(YamlCodec::encode_error)
     })

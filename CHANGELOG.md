@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`morphir-common` YAML encoding.** A `DocumentLiteral` number the YAML encoder cannot carry
+  exactly is no longer written rounded through `f64` or retyped as a YAML string, which changed the
+  payload on a JSON→YAML→JSON round trip. It is refused with `morphir::ir::yaml::invalid_literal`
+  at the encoding stage, naming the lexeme; see Known limitations.
 - **`morphir-mck-adapter` syntax probe.** An object whose first member is spelled
   `$serde_json::private::Number` is no longer mistaken for serde_json's internal number token. The
   probe now takes a map for a number only when that is its one member and it holds a string;
@@ -308,6 +312,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Extension resolution now rejects releases without a host-supported MEP version, and v2 exact locks authenticate launch arguments, capabilities, and MEP versions before activation; legacy v1 locks are rejected explicitly
+
+### Known limitations
+
+- **YAML encoding stage: document-literal numbers wider than `f64`.** The JSON codec carries a
+  `DocumentLiteral` number's lexeme verbatim; the YAML encoder cannot. serde-saphyr offers no way
+  to emit a scalar verbatim — a serializer reaches it through serde's data model, whose widest
+  number is `u64`, `i64`, or `f64` — so a number that none of those three writes back unchanged
+  (`0.123456789012345678901`, or an integer wider than `u64` that is not a round one) is refused
+  with `morphir::ir::yaml::invalid_literal` at the encoding stage rather than written rounded or
+  retyped as a string. Encode such a document as JSON. Lifting this needs a raw-scalar escape
+  hatch in the YAML serializer.
 
 ## [0.2.0] - 2026-01-24
 

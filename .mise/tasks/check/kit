@@ -1,0 +1,64 @@
+#!/bin/sh
+#MISE description="Run the Morphir Compatibility Kit against the adapter and adjudicate the report"
+
+# The kit is the oracle for what the IR spellings mean: the driver reads its cases, drives this
+# binding's adapter over the JSON-lines testee protocol, and writes one record per fence. This
+# task fetches the driver, runs it, and then hands the report to `tests/report.rs`, which holds
+# the failing cases against `crates/morphir-mck-adapter/allowed-failing.json`.
+#
+# The released driver embeds the kit, so there is no --kit argument. Running against a working
+# copy of the kit instead is `bun <morphir-typescript>/packages/mck/src/cli.ts run --kit <kit>`.
+
+set -eu
+
+VERSION=$(cat .config/mck-driver-version)
+REPORT=.dev/out/mck/report.json
+BIN_DIR=.dev/bin
+DRIVER="$BIN_DIR/mck-$VERSION"
+
+# The release publishes one binary per platform, named for the pair `uname` reports.
+case "$(uname -s)" in
+    Darwin) OS=darwin ;;
+    Linux) OS=linux ;;
+    *)
+        echo "check:kit runs on Linux and macOS; on Windows run the driver from source with bun." >&2
+        exit 1
+        ;;
+esac
+case "$(uname -m)" in
+    arm64 | aarch64) ARCH=arm64 ;;
+    x86_64 | amd64) ARCH=x64 ;;
+    *)
+        echo "no mck driver is published for $(uname -m)." >&2
+        exit 1
+        ;;
+esac
+
+ASSET="mck-$VERSION-$OS-$ARCH"
+URL="https://github.com/finos/morphir-typescript/releases/download/v$VERSION/$ASSET"
+
+if [ ! -x "$DRIVER" ]; then
+    echo "Fetching the mck driver $VERSION for $OS-$ARCH..."
+    mkdir -p "$BIN_DIR"
+    curl --fail --location --silent --show-error --output "$DRIVER" "$URL"
+    chmod +x "$DRIVER"
+fi
+
+echo "Building the adapter..."
+# The adapter is not in the workspace's default-members, so it is named explicitly.
+cargo build -p morphir-mck-adapter
+
+echo "Running the kit..."
+mkdir -p "$(dirname "$REPORT")"
+# The driver exits non-zero when any case failed. That is not this task's verdict — the list of
+# cases a kit defect is open against is — so the status is kept and reported after the
+# adjudication rather than ending the run here.
+DRIVER_STATUS=0
+"$DRIVER" run --adapter target/debug/mck-adapter-rust --report "$REPORT" || DRIVER_STATUS=$?
+
+echo "Adjudicating the report against allowed-failing.json..."
+cargo test -p morphir-mck-adapter --test report
+
+if [ "$DRIVER_STATUS" -ne 0 ]; then
+    echo "The driver exited $DRIVER_STATUS; every failing case is in allowed-failing.json." >&2
+fi

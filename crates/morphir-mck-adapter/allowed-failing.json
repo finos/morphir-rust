@@ -1,0 +1,4 @@
+{
+	"$comment": "Case ids the Morphir Compatibility Kit is allowed to fail against this binding, each with the reason it is here. A case belongs in this list only while a kit defect is open against it; a codec bug is fixed, never listed. tests/report.rs holds the driver's report against this list in both directions, so a case that starts passing has to be taken out.",
+	"cases": []
+}

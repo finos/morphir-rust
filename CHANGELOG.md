@@ -210,6 +210,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Reference` (0009). The SDK package is canonically spelled `morphir/SDK` (0011). Both v4 schemas share one legacy
   name-array grammar and one `FileStem` definition (0012). Every renamed or restructured spelling above decodes for
   one release with a `legacy_spelling` warning at the member's cursor, and is refused after it.
+- **Breaking (public API and emitted bytes), the ripples of the v4 alignment above.**
+  `EntryPointKind` gained `Job` and `Policy`, so `x-morphir-entry-point-kind` has two new values a
+  consumer may see and a downstream `match` on the enum — public in `morphir-core` and in
+  `morphir-projection` — needs two new arms. `morphir-projection` normalizes a
+  `DerivedTypeSpecification` to an opaque declaration: a derived type is nominally distinct from
+  the type it is built from, and the conversions relating them are not in the model, so a backend
+  sees a named type whose structure it must not assume rather than the underlying one. The
+  `openapi` and `json-schema` renderers now order every object's member by name at every depth, so
+  the bytes they emit change for any document whose builder happened to insert members in another
+  order; the projected content is the same. The Gleam backend refuses a dependency whose
+  `formatVersion` it does not support (`DEPENDENCY_IR_VERSION_MISMATCH`) instead of carrying on as
+  though it were the supported one. Object member order is insertion order workspace-wide:
+  `morphir-core` builds `serde_json` with `preserve_order`, and cargo unifies features, so every
+  crate in the workspace reading JSON through it keeps a document's member order rather than
+  sorting it.
 
 ### Deprecated
 

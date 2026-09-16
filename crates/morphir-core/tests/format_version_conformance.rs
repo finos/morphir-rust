@@ -1,7 +1,7 @@
 //! Conformance tests for scalar format-version recognition and support tables.
 
 use morphir_core::format_version::{
-    Compatibility, NormalizedFormatVersion, ScalarValue, SupportTable,
+    CanonicalSpelling, Compatibility, NormalizedFormatVersion, ScalarValue, SupportTable,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -26,6 +26,7 @@ struct ScalarCase {
 #[derive(Debug, Deserialize)]
 struct NormalizationExpectation {
     normalized: Option<String>,
+    canonical: Option<Value>,
     diagnostic: Option<String>,
 }
 
@@ -88,6 +89,16 @@ fn release(text: &str) -> morphir_core::format_version::ReleaseTriplet {
     )
 }
 
+/// The table every production reader uses is the table the corpus is written
+/// against, so a corpus that moved cannot leave `reference()` behind.
+#[test]
+fn the_reference_table_is_the_corpus_table() {
+    assert_eq!(
+        SupportTable::reference().canonical(),
+        fixture().support_table
+    );
+}
+
 #[test]
 fn scalar_cases_match_parent_conformance_corpus() {
     let support = support_table();
@@ -111,6 +122,17 @@ fn scalar_cases_match_parent_conformance_corpus() {
             normalized.release.to_exact_string(),
             case.normalization.normalized.unwrap()
         );
+        if let Some(expected) = case.normalization.canonical {
+            let canonical = match expected {
+                Value::Number(number) => CanonicalSpelling::Integer(
+                    u32::try_from(number.as_u64().expect("a canonical integer spelling"))
+                        .expect("a canonical integer spelling in range"),
+                ),
+                Value::String(text) => CanonicalSpelling::String(text),
+                other => panic!("unknown canonical spelling {other}"),
+            };
+            assert_eq!(normalized.canonical, canonical, "{:?}", case.value);
+        }
         if let Some(expected) = case.compatibility {
             assert_eq!(
                 normalized.compatibility,

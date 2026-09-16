@@ -49,6 +49,26 @@ fn supported_baseline_version_spellings_select_the_exact_decoder() {
 }
 
 #[test]
+fn every_patch_of_a_supported_minor_selects_its_major_decoder() {
+    for (mut ir, version) in [
+        (
+            mothers::classic_customer_library(),
+            serde_json::json!("3.0.1"),
+        ),
+        (
+            mothers::classic_customer_library(),
+            serde_json::json!("3.0.5"),
+        ),
+        (mothers::v4_customer_library(), serde_json::json!("4.0.1")),
+    ] {
+        let baseline = normalize(&ir).unwrap();
+        ir["formatVersion"] = version.clone();
+        let patched = normalize(&ir).unwrap_or_else(|error| panic!("{version}: {error}"));
+        assert_eq!(patched, baseline, "version was {version}");
+    }
+}
+
+#[test]
 fn format_version_errors_are_classified_before_distribution_decoding() {
     for (version, code) in [
         (serde_json::json!("4.x"), "invalid_format_version_syntax"),
@@ -66,6 +86,10 @@ fn format_version_errors_are_classified_before_distribution_decoding() {
             "unsupported_format_version_minor",
         ),
         (serde_json::json!(5), "unsupported_format_version_major"),
+        (
+            serde_json::json!("5.0.0"),
+            "unsupported_format_version_major",
+        ),
         (serde_json::json!(true), "invalid_format_version_type"),
     ] {
         let mut ir = serde_json::json!({

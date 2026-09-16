@@ -336,25 +336,6 @@ impl SupportTable {
         Self { intervals: out }
     }
 
-    /// Each release as an exact interval, normalised and merged.
-    pub fn from_releases(releases: impl IntoIterator<Item = ReleaseTriplet>) -> Self {
-        Self::merged(
-            releases
-                .into_iter()
-                .map(|r| {
-                    Interval {
-                        lower: Some(r),
-                        lower_inclusive: true,
-                        upper: Some(r),
-                        upper_inclusive: true,
-                    }
-                    .normalised(&r.to_exact_string())
-                    .expect("an exact interval is never empty")
-                })
-                .collect(),
-        )
-    }
-
     /// Return the reference support table from the parent specification.
     pub fn reference() -> Self {
         Self::parse(REFERENCE_SUPPORT_TABLE).expect("the reference table parses")

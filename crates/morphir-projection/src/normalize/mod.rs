@@ -1,6 +1,7 @@
 mod v3;
 mod v4;
 
+use morphir_core::format_version::{Compatibility, ReleaseTriplet, SupportTable};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -159,15 +160,31 @@ fn recognize_version(ir: &Value) -> Result<SupportedVersion, NormalizeError> {
             });
         }
     };
-    match release {
-        (3, 0, 0) => Ok(SupportedVersion::V3),
-        (4, 0, 0) => Ok(SupportedVersion::V4),
-        (3 | 4, minor, patch) => Err(NormalizeError::UnsupportedFormatVersionMinor {
-            major: release.0,
+    supported_version(release)
+}
+
+/// Decide support from the declared table, then dispatch on the major family.
+///
+/// `with_integer_version` rewrites `formatVersion` to the major before decoding,
+/// so every supported patch of a supported minor reaches the same decoder as its
+/// baseline.
+fn supported_version(release: (u32, u32, u32)) -> Result<SupportedVersion, NormalizeError> {
+    let (major, minor, patch) = release;
+    let triplet = ReleaseTriplet::new(major, minor, patch);
+    match SupportTable::reference().check(&triplet) {
+        Compatibility::Supported => match major {
+            3 => Ok(SupportedVersion::V3),
+            4 => Ok(SupportedVersion::V4),
+            major => Err(NormalizeError::UnsupportedFormatVersionMajor { major }),
+        },
+        Compatibility::UnsupportedMinor => Err(NormalizeError::UnsupportedFormatVersionMinor {
+            major,
             minor,
             patch,
         }),
-        (major, _, _) => Err(NormalizeError::UnsupportedFormatVersionMajor { major }),
+        Compatibility::UnsupportedMajor => {
+            Err(NormalizeError::UnsupportedFormatVersionMajor { major })
+        }
     }
 }
 

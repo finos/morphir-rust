@@ -257,6 +257,8 @@ pub(super) fn entry_point_kind(kind: EntryPointKind) -> &'static str {
         EntryPointKind::Main => "main",
         EntryPointKind::Command => "command",
         EntryPointKind::Handler => "handler",
+        EntryPointKind::Job => "job",
+        EntryPointKind::Policy => "policy",
     }
 }
 

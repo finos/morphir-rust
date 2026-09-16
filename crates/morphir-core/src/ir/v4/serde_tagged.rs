@@ -76,7 +76,7 @@ struct TypeVisitor {
     cursor: String,
 }
 
-fn carry<E: de::Error>(diagnostic: Diagnostic) -> E {
+pub(super) fn carry<E: de::Error>(diagnostic: Diagnostic) -> E {
     E::custom(DiagnosticError(diagnostic))
 }
 
@@ -174,7 +174,7 @@ impl TypeVisitor {
     }
 }
 
-fn invalid_type(cursor: &str, message: impl Into<String>) -> Diagnostic {
+pub(super) fn invalid_type(cursor: &str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::normalization(DiagnosticCode::InvalidType, cursor, message)
 }
 
@@ -182,7 +182,7 @@ fn unknown_node(cursor: &str, seen: &str) -> Diagnostic {
     unknown_node_at(cursor, format!("{seen} is not a type expression"))
 }
 
-fn unknown_node_at(cursor: &str, message: impl Into<String>) -> Diagnostic {
+pub(super) fn unknown_node_at(cursor: &str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::normalization(DiagnosticCode::UnknownNode, cursor, message)
 }
 
@@ -249,7 +249,7 @@ fn looks_like_field_type(value: &JsonValue) -> bool {
 
 /// Reads a wrapper payload's members, mapping each spelling onto the node's canonical member
 /// name through the decision 0006 window table.
-fn wrapper_members<'a>(
+pub(super) fn wrapper_members<'a>(
     node: &str,
     payload: &'a JsonValue,
     cursor: &str,
@@ -295,15 +295,15 @@ fn wrapper_members<'a>(
 
 /// One accepted member: its value, and the spelling the input actually used, so a diagnostic
 /// inside a member written the legacy way points at the member the author can find.
-struct Member<'a> {
-    value: &'a JsonValue,
-    seen: &'a str,
+pub(super) struct Member<'a> {
+    pub(super) value: &'a JsonValue,
+    pub(super) seen: &'a str,
 }
 
-type Members<'a> = IndexMap<&'static str, Member<'a>>;
+pub(super) type Members<'a> = IndexMap<&'static str, Member<'a>>;
 
 /// The JSON pointer of `name`, spelled the way the input spelled it.
-fn member_cursor(members: &Members<'_>, name: &str, cursor: &str) -> String {
+pub(super) fn member_cursor(members: &Members<'_>, name: &str, cursor: &str) -> String {
     match members.get(name) {
         Some(member) => format!("{cursor}/{}", member.seen),
         None => format!("{cursor}/{name}"),
@@ -318,7 +318,7 @@ fn decode_attributes(members: &Members<'_>, cursor: &str) -> Result<TypeAttribut
     }
 }
 
-fn required<'a>(
+pub(super) fn required<'a>(
     members: &Members<'a>,
     name: &str,
     cursor: &str,
@@ -332,7 +332,7 @@ fn required<'a>(
     })
 }
 
-fn decode_name(value: &JsonValue, cursor: &str) -> Result<Name, Diagnostic> {
+pub(super) fn decode_name(value: &JsonValue, cursor: &str) -> Result<Name, Diagnostic> {
     let text = value
         .as_str()
         .ok_or_else(|| invalid_type(cursor, "a name must be a canonical string"))?;
@@ -350,7 +350,7 @@ fn decode_name(value: &JsonValue, cursor: &str) -> Result<Name, Diagnostic> {
         .map_err(|error| Diagnostic::normalization(DiagnosticCode::InvalidName, cursor, error))
 }
 
-fn decode_fqname(value: &JsonValue, cursor: &str) -> Result<FQName, Diagnostic> {
+pub(super) fn decode_fqname(value: &JsonValue, cursor: &str) -> Result<FQName, Diagnostic> {
     let text = value
         .as_str()
         .ok_or_else(|| invalid_type(cursor, "an FQName must be a canonical string"))?;
@@ -431,7 +431,7 @@ fn decode_legacy_field_map(
 /// The spellings are the ones the Morphir Compatibility Kit's `Type` cases pin: a bare string
 /// is a variable or a no-argument reference, a bare array is a Tuple, and every other node is
 /// a single-member wrapper whose payload may open with `attributes`.
-fn decode_type(value: &JsonValue, cursor: &str) -> Result<Type, Diagnostic> {
+pub(super) fn decode_type(value: &JsonValue, cursor: &str) -> Result<Type, Diagnostic> {
     match value {
         JsonValue::String(text) => {
             if looks_like_fqname(text) {
@@ -1351,7 +1351,7 @@ impl<'de> Deserialize<'de> for Value {
 /// literal, and a bare string is a Variable when it spells a name and a Reference when it spells
 /// an FQName. A Tuple always carries its wrapper. Every other node is a single-member wrapper
 /// whose payload may open with `attributes`.
-fn decode_value(value: &JsonValue, cursor: &str) -> Result<Value, Diagnostic> {
+pub(super) fn decode_value(value: &JsonValue, cursor: &str) -> Result<Value, Diagnostic> {
     match value {
         JsonValue::String(text) => {
             if looks_like_fqname(text) {
@@ -1786,16 +1786,10 @@ fn decode_pattern_cases(value: &JsonValue, cursor: &str) -> Result<Vec<PatternCa
         .collect()
 }
 
-/// Decodes a value definition nested inside a value expression.
-///
-/// The definition's own decode is a derived one, so a diagnostic raised inside it arrives as a
-/// serde error; the marker it carries is recovered here, and anything without one is reported at
-/// the member that holds the definition.
+/// Decodes a value definition nested inside a value expression, carrying the cursor of the
+/// member that holds it so a diagnostic inside a let definition's body reports its full path.
 fn decode_value_definition(value: &JsonValue, cursor: &str) -> Result<ValueDefinition, Diagnostic> {
-    serde_json::from_value::<ValueDefinition>(value.clone()).map_err(|error| {
-        Diagnostic::from_serde_error(&error)
-            .unwrap_or_else(|| invalid_type(cursor, error.to_string()))
-    })
+    super::serde_document::decode_value_definition(value, cursor)
 }
 
 // =============================================================================

@@ -27,11 +27,9 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
 use super::attributes::ValueAttributes;
-use super::legacy::accept_member;
 use super::literal::Literal;
 use super::pattern::Pattern;
 use super::types::{Incompleteness, Type};
-use crate::ir::DiagnosticError;
 use crate::naming::{FQName, Name};
 
 // ============================================================================
@@ -191,9 +189,13 @@ pub enum NativeHint {
 }
 
 /// Information about a native operation (V4 only)
+///
+/// `{ "hint": { "Arithmetic": {} } }`. A description is optional and is written only when the
+/// definition has one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeInfo {
     pub hint: NativeHint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
@@ -250,10 +252,11 @@ pub enum ValueBody {
     },
 
     /// Incomplete value definition (V4 only)
-    Incomplete {
-        incompleteness: Incompleteness,
-        output_type: Option<Type>,
-    },
+    ///
+    /// The output type lives on the [`ValueDefinition`], where every body's does; it is optional
+    /// there because an incomplete definition may not have one yet, and required on the wire for
+    /// the three complete bodies.
+    Incomplete { incompleteness: Incompleteness },
 }
 
 impl Value {
@@ -429,11 +432,28 @@ impl NativeInfo {
 // ============================================================================
 
 /// Value specification (just the signature)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `{ "inputs": { "a": "morphir/SDK:basics#int" }, "output": "morphir/SDK:basics#int" }`. The
+/// inputs are an object keyed by parameter name, whose order is the parameter order; an array of
+/// `[name, type]` pairs is accepted beside it. `inputTypes` and `outputType` belong to a value
+/// *definition*'s bodies, not here.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSpecification {
     pub inputs: IndexMap<String, Type>,
     pub output: Type,
+}
+
+impl<'de> Deserialize<'de> for ValueSpecification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_value_specification,
+        )
+    }
 }
 
 // ============================================================================
@@ -544,14 +564,11 @@ impl Serialize for ValueDefinition {
                     body: fallback.as_deref(),
                 },
             )?,
-            ValueBody::Incomplete {
-                incompleteness,
-                output_type,
-            } => map.serialize_entry(
+            ValueBody::Incomplete { incompleteness } => map.serialize_entry(
                 "IncompleteBody",
                 &IncompleteDefinitionContent {
                     input_types: &self.input_types,
-                    output_type: self.output_type.as_ref().or(output_type.as_ref()),
+                    output_type: self.output_type.as_ref(),
                     incompleteness,
                 },
             )?,
@@ -560,144 +577,17 @@ impl Serialize for ValueDefinition {
     }
 }
 
-/// Reads an external body's bindings.
-///
-/// Decision 0008 spells them as a list, one entry per target platform. The single-binding
-/// spelling that carried `externalName` and `targetPlatform` beside the body's own members is
-/// read as a one-entry list for the window of decision 0006: each member goes through
-/// [`accept_member`], so at `path=current` it earns a `legacy_spelling` warning at its own
-/// cursor and once the window closes it is refused as an unknown member.
-fn external_bindings<E: de::Error>(
-    externals: Option<Vec<ExternalBinding>>,
-    external_name: Option<String>,
-    target_platform: Option<String>,
-) -> Result<Vec<ExternalBinding>, E> {
-    if let Some(externals) = externals {
-        return Ok(externals);
-    }
-    match (external_name, target_platform) {
-        (Some(external_name), Some(target_platform)) => {
-            for member in ["externalName", "targetPlatform"] {
-                accept_member("ExternalBody", member, &format!("/ExternalBody/{member}"))
-                    .map_err(|diagnostic| E::custom(DiagnosticError(diagnostic)))?;
-            }
-            Ok(vec![ExternalBinding {
-                target_platform,
-                external_name,
-            }])
-        }
-        _ => Err(de::Error::missing_field("externals")),
-    }
-}
-
-fn deserialize_input_types<E: de::Error>(
-    values: IndexMap<String, serde_json::Value>,
-) -> Result<IndexMap<String, InputTypeEntry>, E> {
-    values
-        .into_iter()
-        .map(|(name, value)| {
-            let entry = serde_json::from_value::<Type>(value.clone())
-                .map(|input_type| InputTypeEntry {
-                    type_attributes: None,
-                    input_type,
-                })
-                .or_else(|_| serde_json::from_value::<InputTypeEntry>(value))
-                .map_err(de::Error::custom)?;
-            Ok((name, entry))
-        })
-        .collect()
-}
-
 impl<'de> Deserialize<'de> for ValueDefinition {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Common {
-            #[serde(default)]
-            input_types: IndexMap<String, serde_json::Value>,
-            output_type: Option<Type>,
-            body: Option<Value>,
-            native_info: Option<NativeInfo>,
-            externals: Option<Vec<ExternalBinding>>,
-            external_name: Option<String>,
-            target_platform: Option<String>,
-            incompleteness: Option<Incompleteness>,
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| de::Error::custom("expected a value definition wrapper"))?;
-        if object.contains_key("inputTypes") {
-            #[derive(Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct Legacy {
-                #[serde(default)]
-                input_types: IndexMap<String, serde_json::Value>,
-                output_type: Option<Type>,
-                body: ValueBody,
-            }
-            let legacy: Legacy = serde_json::from_value(value).map_err(de::Error::custom)?;
-            return Ok(Self {
-                input_types: deserialize_input_types(legacy.input_types)?,
-                output_type: legacy.output_type,
-                body: legacy.body,
-            });
-        }
-        let (tag, content) = object
-            .iter()
-            .next()
-            .ok_or_else(|| de::Error::custom("empty value definition wrapper"))?;
-        let content: Common = serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-        let input_types = deserialize_input_types(content.input_types)?;
-        let body = match tag.as_str() {
-            "ExpressionBody" => ValueBody::Expression(
-                content
-                    .body
-                    .ok_or_else(|| de::Error::missing_field("body"))?,
-            ),
-            "NativeBody" => ValueBody::Native {
-                native_info: content
-                    .native_info
-                    .ok_or_else(|| de::Error::missing_field("nativeInfo"))?,
-            },
-            "ExternalBody" => ValueBody::External {
-                externals: external_bindings(
-                    content.externals,
-                    content.external_name,
-                    content.target_platform,
-                )?,
-                fallback: content.body.map(Box::new),
-            },
-            "IncompleteBody" => ValueBody::Incomplete {
-                incompleteness: content
-                    .incompleteness
-                    .ok_or_else(|| de::Error::missing_field("incompleteness"))?,
-                output_type: content.output_type.clone(),
-            },
-            _ => {
-                return Err(de::Error::unknown_variant(
-                    tag,
-                    &[
-                        "ExpressionBody",
-                        "NativeBody",
-                        "ExternalBody",
-                        "IncompleteBody",
-                    ],
-                ));
-            }
-        };
-        Ok(Self {
-            input_types,
-            output_type: content.output_type,
-            body,
-        })
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_value_definition,
+        )
     }
 }
-
 /// Input type entry
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -765,13 +655,7 @@ impl Serialize for ValueBody {
                 map.serialize_entry("ExpressionBody", &ExpressionBodySerContent { body })?;
             }
             ValueBody::Native { native_info } => {
-                map.serialize_entry(
-                    "NativeBody",
-                    &NativeBodySerContent {
-                        hint: native_info.hint.clone(),
-                        description: native_info.description.clone(),
-                    },
-                )?;
+                map.serialize_entry("NativeBody", &NativeBodySerContent { native_info })?;
             }
             ValueBody::External {
                 externals,
@@ -785,16 +669,10 @@ impl Serialize for ValueBody {
                     },
                 )?;
             }
-            ValueBody::Incomplete {
-                incompleteness,
-                output_type,
-            } => {
+            ValueBody::Incomplete { incompleteness } => {
                 map.serialize_entry(
                     "IncompleteBody",
-                    &IncompleteBodySerContent {
-                        incompleteness,
-                        output_type: output_type.as_ref(),
-                    },
+                    &IncompleteBodySerContent { incompleteness },
                 )?;
             }
         }
@@ -808,11 +686,10 @@ struct ExpressionBodySerContent<'a> {
     body: &'a Value,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct NativeBodySerContent {
-    hint: NativeHint,
-    description: Option<String>,
+struct NativeBodySerContent<'a> {
+    native_info: &'a NativeInfo,
 }
 
 #[derive(Serialize)]
@@ -823,22 +700,10 @@ struct ExternalBodySerContent<'a> {
     body: Option<&'a Value>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExternalBodyContent {
-    externals: Option<Vec<ExternalBinding>>,
-    external_name: Option<String>,
-    target_platform: Option<String>,
-    #[serde(default)]
-    body: Option<Value>,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteBodySerContent<'a> {
     incompleteness: &'a Incompleteness,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output_type: Option<&'a Type>,
 }
 
 impl<'de> Deserialize<'de> for ValueBody {
@@ -846,61 +711,12 @@ impl<'de> Deserialize<'de> for ValueBody {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        if let serde_json::Value::Object(map) = &value {
-            if let Some(content) = map.get("ExpressionBody") {
-                let body_json = content
-                    .get("body")
-                    .ok_or_else(|| de::Error::missing_field("body"))?;
-                let body: Value =
-                    serde_json::from_value(body_json.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Expression(body));
-            }
-            if let Some(content) = map.get("NativeBody") {
-                let parsed: NativeBodySerContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Native {
-                    native_info: NativeInfo {
-                        hint: parsed.hint,
-                        description: parsed.description,
-                    },
-                });
-            }
-            if let Some(content) = map.get("ExternalBody") {
-                let parsed: ExternalBodyContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::External {
-                    externals: external_bindings(
-                        parsed.externals,
-                        parsed.external_name,
-                        parsed.target_platform,
-                    )?,
-                    fallback: parsed.body.map(Box::new),
-                });
-            }
-            if let Some(content) = map.get("IncompleteBody") {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct IncompleteBodyContent {
-                    incompleteness: Incompleteness,
-                    #[serde(default)]
-                    output_type: Option<Type>,
-                }
-
-                let parsed: IncompleteBodyContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Incomplete {
-                    incompleteness: parsed.incompleteness,
-                    output_type: parsed.output_type,
-                });
-            }
-        }
-        Err(de::Error::custom(
-            "expected ExpressionBody, NativeBody, ExternalBody, or IncompleteBody wrapper",
-        ))
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_value_body,
+        )
     }
 }
-
 // ============================================================================
 // SERIALIZATION SUPPORT FOR NATIVE HINT
 // ============================================================================

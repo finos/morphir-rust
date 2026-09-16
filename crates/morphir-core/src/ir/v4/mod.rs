@@ -7,7 +7,7 @@
 //! dictionaries rather than arrays of tuples.
 
 use schemars::JsonSchema;
-use serde::de::{self, Deserializer};
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use crate::format_version::{
@@ -23,6 +23,7 @@ pub mod literal;
 pub mod module;
 pub mod package;
 pub mod pattern;
+pub mod serde_document;
 pub mod serde_tagged;
 pub mod serde_v4;
 pub mod type_def;
@@ -82,12 +83,25 @@ pub use type_def::{
     TypeDefinition as LegacyTypeDefinition, TypeSpecification as LegacyTypeSpecification,
 };
 
-/// Top-level IR file structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Top-level IR file structure.
+///
+/// `formatVersion` comes first and `distribution` second; a document that writes them the other
+/// way round is the same document. A top-level `$meta` member is reserved for a tool's own
+/// bookkeeping: a reader ignores it rather than refusing it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IRFile {
     pub format_version: FormatVersion,
     pub distribution: Distribution,
+}
+
+impl<'de> Deserialize<'de> for IRFile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde_document::deserialize_with(deserializer, serde_document::decode_ir_file)
+    }
 }
 
 /// Format version - accepts both string "4.0.0" and integer 4 using the shared contract.
@@ -136,11 +150,7 @@ impl<'de> Deserialize<'de> for FormatVersion {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let scalar = ScalarValue::from_json(&value).map_err(de::Error::custom)?;
-        let normalized = NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::reference())
-            .map_err(de::Error::custom)?;
-        Ok(normalized.canonical.into())
+        serde_document::deserialize_with(deserializer, serde_document::decode_format_version)
     }
 }
 

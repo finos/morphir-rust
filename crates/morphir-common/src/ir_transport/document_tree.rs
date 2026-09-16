@@ -322,7 +322,7 @@ fn write_definition_module(
                 name: name.clone(),
                 doc: definition.value.doc.clone(),
                 def: DefinitionPayload {
-                    access: definition.access.clone(),
+                    access: definition.access,
                     value: definition.value.value.clone(),
                 },
             },
@@ -341,7 +341,7 @@ fn write_definition_module(
                 name: name.clone(),
                 doc: definition.value.doc.clone(),
                 def: DefinitionPayload {
-                    access: definition.access.clone(),
+                    access: definition.access,
                     value: definition.value.value.clone(),
                 },
             },
@@ -356,7 +356,7 @@ fn write_definition_module(
         &ModuleManifest {
             format_version: FormatVersion::Integer(4),
             path: path.to_owned(),
-            access: Some(module.access.clone()),
+            access: Some(module.access),
             doc: module.value.doc.clone(),
             types: module.value.types.keys().cloned().collect(),
             values: module.value.values.keys().cloned().collect(),

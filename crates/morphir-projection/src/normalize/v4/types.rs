@@ -122,6 +122,17 @@ pub(super) fn normalize_type_specification(
                 doc,
             }
         }
+        // A derived type is nominally distinct from the type it is built from, and the two
+        // conversions that relate them are not part of this model. Opaque is the true statement
+        // a projection can make about it: a named type whose structure it must not assume.
+        v4::TypeSpecification::DerivedTypeSpecification { type_params, .. } => {
+            TypeDeclaration::Opaque {
+                source_name,
+                name,
+                type_params: normalize_names(type_params),
+                doc,
+            }
+        }
     }
 }
 

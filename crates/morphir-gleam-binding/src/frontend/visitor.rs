@@ -248,10 +248,14 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                         let args: Vec<ConstructorArg> = v
                             .fields
                             .iter()
-                            .map(|field_type| {
+                            .enumerate()
+                            .map(|(position, field_type)| {
                                 let morphir_type = self.convert_type_expr(field_type);
                                 ConstructorArg {
-                                    name: Name::from(""), // Gleam doesn't name constructor args
+                                    // Gleam's constructor arguments are positional, and a
+                                    // Morphir name has at least one segment, so the position
+                                    // names them: `arg-1`, `arg-2`, …
+                                    name: Name::from(format!("arg{}", position + 1).as_str()),
                                     arg_type: morphir_type,
                                 }
                             })

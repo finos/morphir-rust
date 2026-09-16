@@ -75,8 +75,6 @@ pub const LEGACY: &[(&str, &str, &str)] = &[
     ("LetDefinition", "valueName", "name"),
     ("LetDefinition", "valueDefinition", "definition"),
     ("LetDefinition", "inValue", "in"),
-    ("ValueSpecification", "inputs", "inputTypes"),
-    ("ValueSpecification", "output", "outputType"),
     ("ExternalBody", "externalName", "externals"),
     ("ExternalBody", "targetPlatform", "externals"),
 ];
@@ -139,11 +137,22 @@ pub fn accept_member(node: &str, seen: &str, cursor: &str) -> Result<&'static st
 /// wrapper itself at `cursor`. Once the window closes the shape is refused as an unknown
 /// member at the first member that would have had to be a canonical one.
 pub fn record_legacy_form_warning(cursor: &str, first_member: &str) -> Result<(), Diagnostic> {
+    accept_legacy_form(cursor, &format!("{cursor}/{first_member}"), first_member)
+}
+
+/// Accepts a legacy *shape* for the window of decision 0006.
+///
+/// `warn_at` is where the `legacy_spelling` warning lands while the window is open, and
+/// `refuse_at` is where the `unknown_member` diagnostic lands once it has closed. They differ
+/// only for shapes whose warning has no misspelled member to point at; a wrapper the author
+/// wrote by name — a definition nested under `value` beside its access tag, say — reports at the
+/// same cursor either way.
+pub fn accept_legacy_form(warn_at: &str, refuse_at: &str, member: &str) -> Result<(), Diagnostic> {
     match MODE.get() {
         SpellingMode::Current => {
             let warning = Warning {
                 code: DiagnosticCode::LegacySpelling,
-                cursor: cursor.to_string(),
+                cursor: warn_at.to_string(),
             };
             WARNINGS.with(|warnings| {
                 if let Some(collected) = warnings.borrow_mut().as_mut() {
@@ -154,8 +163,8 @@ pub fn record_legacy_form_warning(cursor: &str, first_member: &str) -> Result<()
         }
         SpellingMode::Pinned => Err(Diagnostic::normalization(
             DiagnosticCode::UnknownMember,
-            format!("{cursor}/{first_member}"),
-            format!("unexpected member {first_member}"),
+            refuse_at,
+            format!("unexpected member {member}"),
         )),
     }
 }

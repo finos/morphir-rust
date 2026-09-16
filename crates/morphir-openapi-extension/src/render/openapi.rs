@@ -231,6 +231,8 @@ fn entry_point_kind_key(kind: EntryPointKind) -> &'static str {
         EntryPointKind::Main => "main",
         EntryPointKind::Command => "command",
         EntryPointKind::Handler => "handler",
+        EntryPointKind::Job => "job",
+        EntryPointKind::Policy => "policy",
     }
 }
 

@@ -84,19 +84,27 @@ impl<T: Serialize> Serialize for Documented<T> {
     where
         S: serde::Serializer,
     {
-        if let Some(doc) = &self.doc {
-            #[derive(Serialize)]
-            struct Repr<'a, T> {
-                doc: &'a Documentation,
-                value: &'a T,
+        let Some(doc) = &self.doc else {
+            return self.value.serialize(serializer);
+        };
+
+        // Decision 0010: `doc` is a flattened member placed first beside the documented node's
+        // own members, rather than a wrapper the node sits under.
+        let written = serde_json::to_value(&self.value).map_err(serde::ser::Error::custom)?;
+        let doc = serde_json::to_value(doc).map_err(serde::ser::Error::custom)?;
+        match written {
+            serde_json::Value::Object(members) => {
+                let mut flattened = serde_json::Map::with_capacity(members.len() + 1);
+                flattened.insert("doc".to_owned(), doc);
+                flattened.extend(members);
+                serde_json::Value::Object(flattened).serialize(serializer)
             }
-            Repr {
-                doc,
-                value: &self.value,
+            other => {
+                let mut wrapper = serde_json::Map::with_capacity(2);
+                wrapper.insert("doc".to_owned(), doc);
+                wrapper.insert("value".to_owned(), other);
+                serde_json::Value::Object(wrapper).serialize(serializer)
             }
-            .serialize(serializer)
-        } else {
-            self.value.serialize(serializer)
         }
     }
 }
@@ -109,41 +117,18 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        if let Some(object) = value.as_object()
-            && object.contains_key("doc")
-            && object.contains_key("value")
-        {
-            let doc =
-                serde_json::from_value(object["doc"].clone()).map_err(serde::de::Error::custom)?;
-            let value = serde_json::from_value(object["value"].clone())
-                .map_err(serde::de::Error::custom)?;
-            return Ok(Self {
-                doc: Some(doc),
-                value,
-            });
-        }
+        use super::serde_document::{carried, recover};
 
-        if let Some(object) = value.as_object_mut()
-            && let Some(doc) = object.remove("doc")
-        {
-            let doc = serde_json::from_value(doc).map_err(serde::de::Error::custom)?;
-            let value = serde_json::from_value(serde_json::Value::Object(std::mem::take(object)))
-                .map_err(serde::de::Error::custom)?;
-            return Ok(Self {
-                doc: Some(doc),
-                value,
-            });
-        }
-
-        serde_json::from_value(value)
-            .map(|value| Self { doc: None, value })
-            .map_err(serde::de::Error::custom)
+        let value = serde_json::Value::deserialize(deserializer)?;
+        super::serde_document::decode_documented(&value, "", |payload, cursor| {
+            serde_json::from_value::<T>(payload.clone()).map_err(|error| recover(&error, cursor))
+        })
+        .map_err(carried)
     }
 }
 
 /// Module specification (public API only)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleSpecification {
     pub types: IndexMap<String, Documented<TypeSpecification>>,
@@ -152,12 +137,36 @@ pub struct ModuleSpecification {
     pub doc: Option<Documentation>,
 }
 
+impl<'de> Deserialize<'de> for ModuleSpecification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_module_specification,
+        )
+    }
+}
+
 /// Module definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleDefinition {
     pub types: IndexMap<String, AccessControlled<Documented<TypeDefinition>>>,
     pub values: IndexMap<String, AccessControlled<Documented<ValueDefinition>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<Documentation>,
+}
+
+impl<'de> Deserialize<'de> for ModuleDefinition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_module_definition,
+        )
+    }
 }

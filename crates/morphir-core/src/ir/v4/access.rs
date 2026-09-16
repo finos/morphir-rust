@@ -4,16 +4,40 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Access control
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Access {
     Public,
     Private,
 }
 
-/// Generic wrapper for access-controlled values
+impl Access {
+    /// The canonical variant tag this access level is written with.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Access::Public => "Public",
+            Access::Private => "Private",
+        }
+    }
+
+    /// The access level a wrapper tag names, if it names one.
+    ///
+    /// `Public` and `Private` are the canonical tags; `pub`, `public`, `priv` and `private` are
+    /// the shorthands a reader accepts silently beside them.
+    pub fn from_tag(tag: &str) -> Option<Access> {
+        match tag {
+            "Public" | "pub" | "public" => Some(Access::Public),
+            "Private" | "priv" | "private" => Some(Access::Private),
+            _ => None,
+        }
+    }
+}
+
+/// Generic wrapper for access-controlled values.
 ///
-/// This matches morphir-elm's AccessControlled type, which is a generic wrapper
-/// that can be applied to any type that needs access control.
+/// The canonical spelling is the access level as the variant tag with the controlled value as
+/// its payload: `{ "Public": { "TypeAliasDefinition": { … } } }`. A reader also accepts the
+/// access level as a flattened member beside the value (`{ "access": "Public", … }`), the same
+/// with the value nested under `value`, and the `pub`/`priv` shorthands — all silently.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessControlled<T> {
     pub access: Access,
@@ -25,16 +49,11 @@ impl<T: Serialize> Serialize for AccessControlled<T> {
     where
         S: serde::Serializer,
     {
-        #[derive(Serialize)]
-        struct Repr<'a, T> {
-            access: &'a Access,
-            value: &'a T,
-        }
-        Repr {
-            access: &self.access,
-            value: &self.value,
-        }
-        .serialize(serializer)
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry(self.access.tag(), &self.value)?;
+        map.end()
     }
 }
 
@@ -46,20 +65,12 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let mut object = serde_json::Value::deserialize(deserializer)?;
-        let object = object
-            .as_object_mut()
-            .ok_or_else(|| serde::de::Error::custom("expected an access-controlled object"))?;
-        let access = object
-            .remove("access")
-            .ok_or_else(|| serde::de::Error::missing_field("access"))?;
-        let access = serde_json::from_value(access).map_err(serde::de::Error::custom)?;
-        let value = if let Some(value) = object.remove("value") {
-            value
-        } else {
-            serde_json::Value::Object(std::mem::take(object))
-        };
-        let value = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-        Ok(Self { access, value })
+        use super::serde_document::{carried, recover};
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        super::serde_document::decode_access_controlled(&value, "", |payload, cursor| {
+            serde_json::from_value::<T>(payload.clone()).map_err(|error| recover(&error, cursor))
+        })
+        .map_err(carried)
     }
 }

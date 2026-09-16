@@ -82,6 +82,29 @@ impl Interval {
         }
     }
 
+    /// Order two lower bounds by the first release each one actually admits,
+    /// not by the release each is spelled with.
+    ///
+    /// At the patch maximum an exclusive bound survives canonicalisation, so
+    /// `(4.0.4294967295,..)` and `[4.0.4294967295,..)` share a numeral but not a
+    /// starting release, and only the admitted release orders them. An absent
+    /// lower bound reaches down to the domain floor; a bound with no successor
+    /// at all admits nothing and sorts last, though [`Interval::normalised`] has
+    /// already rejected that interval as empty.
+    fn compare_lower_bound(&self, other: &Interval) -> Ordering {
+        match (self.smallest_admitted(), other.smallest_admitted()) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+            (Some(mine), Some(theirs)) => mine.cmp(&theirs).then_with(|| {
+                // Same first admitted release: the inclusive spelling comes
+                // first, so the bound the merge keeps is the one that also
+                // admits its own numeral.
+                other.lower_inclusive.cmp(&self.lower_inclusive)
+            }),
+        }
+    }
+
     /// Does `release` satisfy the upper bound? A missing upper bound admits everything.
     fn below_upper(&self, release: &ReleaseTriplet) -> bool {
         match &self.upper {
@@ -311,12 +334,24 @@ impl SupportTable {
             (None, None) => Ordering::Equal,
             (None, _) => Ordering::Less,
             (_, None) => Ordering::Greater,
-            (Some(x), Some(y)) => x.cmp(y),
+            _ => a.compare_lower_bound(b),
         });
         let mut out: Vec<Interval> = Vec::new();
         for i in intervals {
             match out.last_mut() {
                 Some(last) if last.touches(&i) => {
+                    // The union's lower bound is the one that admits the earlier
+                    // release, and on a tie the more inclusive one. Sorting has
+                    // already put that bound on `last`, but saying it here keeps
+                    // the merge true on its own terms. An absent lower bound is
+                    // the most inclusive of all, reaching to the domain floor.
+                    let (lower, lower_inclusive) = match (&last.lower, &i.lower) {
+                        (None, _) | (_, None) => (None, false),
+                        _ if last.compare_lower_bound(&i).is_le() => {
+                            (last.lower, last.lower_inclusive)
+                        }
+                        _ => (i.lower, i.lower_inclusive),
+                    };
                     let (upper, upper_inclusive) = match (&last.upper, &i.upper) {
                         (None, _) | (_, None) => (None, false),
                         (Some(a), Some(b)) => match a.cmp(b) {
@@ -327,6 +362,8 @@ impl SupportTable {
                             }
                         },
                     };
+                    last.lower = lower;
+                    last.lower_inclusive = lower_inclusive;
                     last.upper = upper;
                     last.upper_inclusive = upper_inclusive;
                 }
@@ -459,7 +496,12 @@ impl SupportTable {
                     format!("{} and earlier", hi.to_exact_string())
                 }
                 (None, Some(hi)) => format!("earlier than {}", hi.to_exact_string()),
-                (Some(lo), None) => format!("{} and later", lo.to_exact_string()),
+                // "and later" would claim `lo` itself, which an exclusive bound
+                // excludes; with no upper bound to lean on, "after" has to say it.
+                (Some(lo), None) if i.lower_inclusive => {
+                    format!("{} and later", lo.to_exact_string())
+                }
+                (Some(lo), None) => format!("after {}", lo.to_exact_string()),
                 (Some(lo), Some(hi)) => {
                     let start = if i.lower_inclusive {
                         lo.to_exact_string()
@@ -501,5 +543,33 @@ mod tests {
             assert_eq!(table.check(&release), Compatibility::UnsupportedMajor);
         }
         assert!(table.contains(&ReleaseTriplet::new(3, 0, 0)));
+    }
+
+    #[test]
+    fn an_inclusive_lower_bound_wins_over_an_exclusive_one_at_the_same_numeral() {
+        // `(4.0.4294967295,..)` starts at 4.1.0 and `[4.0.4294967295]` starts at
+        // 4.0.4294967295, so the union holds 4.0.4294967295 whichever order the
+        // two are written in. Keeping the exclusive bound would drop a release
+        // the input named.
+        for input in [
+            "(4.0.4294967295,4.2.0),[4.0.4294967295]",
+            "[4.0.4294967295],(4.0.4294967295,4.2.0)",
+        ] {
+            let table = SupportTable::parse(input).expect("a table with equal numerals");
+            assert_eq!(table.canonical(), "[4.0.4294967295,4.2.0)", "{input}");
+            assert!(
+                table.contains(&ReleaseTriplet::new(4, 0, u32::MAX)),
+                "{input} keeps the release its inclusive bound admits"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exclusive_lower_bound_with_no_upper_bound_reads_as_after() {
+        let table = SupportTable::parse("(4.0.4294967295,)").expect("an open-above table");
+        assert_eq!(table.canonical(), "(4.0.4294967295,)");
+        assert_eq!(table.render_prose(), "after 4.0.4294967295");
+        assert_eq!(table.render_cargo(), vec![">4.0.4294967295".to_owned()]);
+        assert!(table.render_elm().is_err());
     }
 }

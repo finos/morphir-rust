@@ -18,6 +18,7 @@ use crate::format_version::{
 pub mod access;
 pub mod attributes;
 pub mod distribution;
+pub mod legacy;
 pub mod literal;
 pub mod module;
 pub mod package;
@@ -39,6 +40,7 @@ pub use access::{Access, AccessControlled};
 
 // Re-export core expression types
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
+pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
 pub use literal::Literal;
 pub use pattern::Pattern;
 pub use serde_v4::{TypeEncoding, with_type_encoding};

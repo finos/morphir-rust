@@ -89,7 +89,6 @@ pub(crate) fn json_lexeme(text: &str) -> String {
 /// True when a plain spelling of `text` would be read back as something other than a string.
 ///
 /// The canonical writer uses this to decide whether a string has to be quoted.
-#[allow(dead_code)] // Used by the canonical writer (task 3).
 pub(crate) fn resolves_non_string(text: &str) -> bool {
     matches!(
         text,

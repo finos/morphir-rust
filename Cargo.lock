@@ -3554,6 +3554,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "morphir-mck-adapter"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "morphir-common",
+ "morphir-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "morphir-okf"
 version = "0.2.0"
 dependencies = [

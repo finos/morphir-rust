@@ -61,6 +61,12 @@ const MAX_DEPTH: usize = 1000;
 /// frames do not fit in the stack a thread is given by default — on Windows the main thread's
 /// stack is whatever the linker reserved, which is 1 MiB unless someone says otherwise. So the
 /// work runs on a thread with a stack this crate states rather than inherits.
+///
+/// This is what one request reserves, not what a kit run reserves. [`decode`] spawns one scoped
+/// thread per request and joins it before returning, so the stack is gone before the answer is
+/// written: a run of hundreds of cases holds one of these at a time, never one per case. It is
+/// reserved address space in any event — a shallow document commits the pages it touches and no
+/// more.
 const DECODE_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 /// Reads one node and answers with its canonical spelling or the diagnostic that refused it.

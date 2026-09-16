@@ -3,7 +3,7 @@
 //! Decision 0006 gives a set of pre-decision member spellings a one-release acceptance window:
 //! they decode successfully at `path=current` with a `legacy_spelling` warning at the member's
 //! cursor, and are rejected once the window closes (`path=pinned`). This module is the shared
-//! table and lookup the decoders in later tasks call so every node applies the same rule.
+//! table and lookup every v4 decoder calls, so every node applies the same rule.
 
 use std::cell::{Cell, RefCell};
 
@@ -60,8 +60,8 @@ pub fn take_warnings() -> Vec<Warning> {
 
 /// The legacy member table for the decision 0006 window: `(node, legacy, canonical)`.
 ///
-/// A `node` of `"*"` matches every node kind. The table is authoritative for every v4 decoder
-/// from Task 3 onward; it was checked against the Morphir Compatibility Kit's
+/// A `node` of `"*"` matches every node kind. The table is authoritative for every v4 decoder in
+/// this workspace; it was checked against the Morphir Compatibility Kit's
 /// `accepted warning=legacy_spelling` fences (`spec/ir/mck/*.md`) before being committed.
 pub const LEGACY: &[(&str, &str, &str)] = &[
     ("*", "attrs", "attributes"),
@@ -81,11 +81,14 @@ pub const LEGACY: &[(&str, &str, &str)] = &[
 
 /// Returns the canonical member name for `seen` inside node `node`.
 ///
-/// `seen` is accepted silently when it already is a canonical member (for `node` or the
-/// wildcard `"*"`). When `seen` is a legacy spelling for `node` or `"*"`, the mode decides what
-/// happens: `Current` records a `legacy_spelling` warning at `cursor` and returns the canonical
-/// name; `Pinned` returns an `unknown_member` diagnostic. Any other `seen` is always
-/// `unknown_member`.
+/// This decides the spelling question alone, not whether the member belongs: the only names it
+/// answers about are the ones [`LEGACY`] mentions. `seen` is accepted silently when it is the
+/// canonical half of a row for `node` or for the wildcard `"*"` — so `attributes` is accepted for
+/// every node, including nodes that carry none, and a canonical member no row renames (`fields`,
+/// say) is `unknown_member` here and has to be recognized by its decoder. When `seen` is the
+/// legacy half of such a row, the mode decides: `Current` records a `legacy_spelling` warning at
+/// `cursor` and returns the canonical name; `Pinned` returns an `unknown_member` diagnostic. Any
+/// other `seen` is always `unknown_member`.
 pub fn accept_member(node: &str, seen: &str, cursor: &str) -> Result<&'static str, Diagnostic> {
     if let Some(canonical) = LEGACY.iter().find_map(|(candidate_node, _, canonical)| {
         ((*candidate_node == node || *candidate_node == "*") && *canonical == seen)
@@ -175,14 +178,13 @@ mod tests {
 
     #[test]
     fn every_node_specific_legacy_row_has_a_distinct_legacy_spelling() {
+        // `accept_member` takes the first row matching `(node, seen)`, so a repeated pair would
+        // make one of the two rows' canonical names unreachable.
+        let mut seen = std::collections::HashSet::new();
         for (node, legacy, _canonical) in LEGACY {
-            assert_ne!(
-                *node, "",
-                "empty node name is not allowed in the legacy table"
-            );
-            assert_ne!(
-                *legacy, "",
-                "empty legacy spelling is not allowed in the legacy table"
+            assert!(
+                seen.insert((*node, *legacy)),
+                "the legacy table spells {legacy} for {node} more than once"
             );
         }
     }

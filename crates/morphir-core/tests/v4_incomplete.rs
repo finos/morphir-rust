@@ -8,7 +8,7 @@ fn incomplete_type_preserves_partial_expression() {
         "fixtures/ir/v4/incomplete-type-definition-example.json"
     ))
     .unwrap();
-    let value = fixture["examples"]["draftWithPartialBody"].clone();
+    let value = fixture["examples"]["draftWithPartialTypeExp"].clone();
 
     let decoded: TypeDefinition = serde_json::from_value(value).unwrap();
     let encoded = serde_json::to_value(decoded).unwrap();
@@ -49,22 +49,14 @@ fn incomplete_value_definition_leaves_its_output_type_open() {
     // optional because the definition may not have one yet. A partially written expression is
     // a `Hole` inside a body, not a member of this one.
     let json = serde_json::json!({
-        "inputTypes": {},
-        "body": {
-            "IncompleteBody": {
-                "incompleteness": { "Draft": {} }
-            }
+        "IncompleteBody": {
+            "inputTypes": {},
+            "incompleteness": { "Draft": {} }
         }
     });
 
     let decoded: ValueDefinition = serde_json::from_value(json).unwrap();
 
     assert!(decoded.output_type.is_none());
-    assert!(matches!(
-        decoded.body,
-        ValueBody::Incomplete {
-            output_type: None,
-            ..
-        }
-    ));
+    assert!(matches!(decoded.body, ValueBody::Incomplete { .. }));
 }

@@ -119,9 +119,9 @@ fn incomplete_public_entry_points_remain_available_to_unsupported_policy() {
 
 #[test]
 fn entry_point_targets_must_be_canonical_public_values() {
+    // A target that does not spell an FQName at all no longer reaches normalization: the v4
+    // decoder refuses the document, which the test below pins.
     for (target, expected_reason) in [
-        ("not-an-fqname", "invalid"),
-        ("acme/customer:domain#findCustomer", "invalid"),
         ("acme/customer:domain#missing", "dangling"),
         ("acme/customer:domain#helper", "private"),
         ("acme/customer:private-module#hidden", "private"),
@@ -132,6 +132,32 @@ fn entry_point_targets_must_be_canonical_public_values() {
         let error = normalize(&ir).unwrap_err();
         assert_eq!(error.code(), "invalid_entry_point_target");
         assert!(error.to_string().contains(expected_reason), "{error}");
+    }
+}
+
+#[test]
+fn an_entry_point_target_that_does_not_spell_an_fqname_is_refused_by_the_reader() {
+    for target in ["not-an-fqname", "acme/customer:domain#findCustomer"] {
+        let ir = serde_json::json!({
+            "formatVersion": 4,
+            "distribution": { "Application": {
+                "packageName": "acme/customer",
+                "dependencies": {},
+                "def": { "modules": {} },
+                "entryPoints": { "candidate": { "target": target, "kind": "command" } }
+            } }
+        });
+        let error = serde_json::from_value::<morphir_core::ir::v4::IRFile>(ir).unwrap_err();
+        let diagnostic = morphir_core::ir::Diagnostic::from_serde_error(&error)
+            .expect("a refused target carries a diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::InvalidFqname
+        );
+        assert_eq!(
+            diagnostic.cursor,
+            "/distribution/Application/entryPoints/candidate/target"
+        );
     }
 }
 

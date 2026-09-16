@@ -1,33 +1,36 @@
 {
-  "description": "V4 Incompleteness examples for testing morphir-rust compliance",
+  "description": "Incompleteness in its decided v4 spelling: a hole says why under `reason`, a draft takes an empty payload.",
   "examples": {
     "holeWithUnresolvedReference": {
-      "Incompleteness": {
-        "Hole": {
-          "reason": {
-            "UnresolvedReference": {
-              "target": "acme/finance:ledger#calculate-balance"
-            }
+      "Hole": {
+        "reason": {
+          "UnresolvedReference": {
+            "target": "acme/finance:ledger#calculate-balance"
           }
         }
       }
     },
     "holeWithTypeMismatch": {
-      "Incompleteness": {
-        "Hole": {
-          "reason": {
-            "TypeMismatch": {
-              "expected": "Int",
-              "found": "String"
-            }
+      "Hole": {
+        "reason": {
+          "TypeMismatch": {
+            "expected": "morphir/SDK:basics#int",
+            "found": "morphir/SDK:string#string"
+          }
+        }
+      }
+    },
+    "holeWithDeletedDuringRefactor": {
+      "Hole": {
+        "reason": {
+          "DeletedDuringRefactor": {
+            "tx-id": "tx-2026-02-11"
           }
         }
       }
     },
     "draft": {
-      "Incompleteness": {
-        "Draft": {}
-      }
+      "Draft": {}
     }
   }
 }

@@ -86,9 +86,10 @@ fn distribution_wrapper_rejects_extra_entries() {
     });
 
     let error = serde_json::from_value::<Distribution>(source).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("exactly one distribution wrapper entry")
+    let diagnostic = morphir_core::ir::Diagnostic::from_serde_error(&error)
+        .expect("a distribution refusal carries a diagnostic");
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::InvalidDistributionShape
     );
 }

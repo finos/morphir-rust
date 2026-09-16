@@ -1,8 +1,7 @@
 formatVersion: 4
 distribution:
   Library:
-    packageName:
-      - - example
+    packageName: example
     dependencies: {}
     def:
       modules: {}

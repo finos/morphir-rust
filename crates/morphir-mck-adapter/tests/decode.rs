@@ -165,23 +165,17 @@ fn a_duplicate_member_is_found_inside_an_array_too() {
     }
 }
 
-/// Both halves of the nesting check run on a thread with room for the recursion a document at
-/// the ceiling actually costs: the decoders recurse once per level, and an unoptimized build's
-/// frames are wide enough that the default test-thread stack is not enough for 512 of them.
-#[test]
-fn a_document_deeper_than_the_nesting_limit_is_refused() {
-    std::thread::Builder::new()
-        .stack_size(32 * 1024 * 1024)
-        .spawn(nesting_limit)
-        .expect("spawn")
-        .join()
-        .expect("join");
-}
-
 /// The ceiling the reference reader states (`MAX_DEPTH` in its JSON value layer).
 const MAX_DEPTH: usize = 1000;
 
-fn nesting_limit() {
+/// A document at or past the ceiling is answered, not crashed into.
+///
+/// This test spawns no thread of its own and asks for no stack: `decode` supplies the stack the
+/// recursion costs, so a caller on an ordinary thread — the framing loop on the process's main
+/// thread, or a test thread — gets `nesting_too_deep` back rather than a stack overflow. That is
+/// the whole point of the ceiling being a stated number.
+#[test]
+fn a_document_deeper_than_the_nesting_limit_is_refused() {
     // One more container than the reader admits.
     let input = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
     match decode(&req(NodeKind::Value, &input, PathMode::Current)) {

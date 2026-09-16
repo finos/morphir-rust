@@ -53,8 +53,36 @@ use crate::protocol::{
 /// way at some other depth.
 const MAX_DEPTH: usize = 1000;
 
+/// The stack every decode runs on.
+///
+/// [`MAX_DEPTH`] is a promise: a document nesting that many containers is conforming, and the
+/// answer to one nesting a container more is `nesting_too_deep`, not a crashed process. Both the
+/// syntax probe and the readers recurse once per level, and 1000 levels of an unoptimized build's
+/// frames do not fit in the stack a thread is given by default — on Windows the main thread's
+/// stack is whatever the linker reserved, which is 1 MiB unless someone says otherwise. So the
+/// work runs on a thread with a stack this crate states rather than inherits.
+const DECODE_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 /// Reads one node and answers with its canonical spelling or the diagnostic that refused it.
+///
+/// The reading itself is [`decode_here`]; this wrapper only supplies the stack it needs (see
+/// [`DECODE_STACK_BYTES`]). Scoped so the request does not have to be cloned, and the thread is
+/// joined before this returns, so nothing about the answer changes.
 pub fn decode(req: &DecodeRequest) -> DecodeResponse {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DECODE_STACK_BYTES)
+            .spawn_scoped(scope, || decode_here(req))
+            .expect("a decode thread")
+            .join()
+            // A panic in the decoder is this adapter's bug, not a statement about the document,
+            // and the framing loop has no way to answer one honestly. Resuming it lets the
+            // process die the way it would have without the thread.
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn decode_here(req: &DecodeRequest) -> DecodeResponse {
     // Neither of these can happen while the driver honours `capabilities`, and neither is a
     // statement about the document, so they answer `protocol_error` rather than spending one of
     // the kit's diagnostic codes on "this binding does not do that".

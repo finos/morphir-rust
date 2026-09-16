@@ -95,3 +95,30 @@ fn a_line_that_is_not_json_at_all_is_a_protocol_error() {
     let response = response_to("{not json");
     assert_protocol_error(&response, None);
 }
+
+/// A document nested past the profile's ceiling is answered over the wire, on whatever stack the
+/// framing loop happens to be on — here the default test-thread stack, in the binary the process
+/// main thread. The decoders recurse once per nesting level, so without `decode` stating the
+/// stack it runs on, a conforming-looking document could abort the process instead of getting
+/// the `nesting_too_deep` the profile promises.
+#[test]
+fn a_document_nested_past_the_ceiling_answers_over_the_wire() {
+    // One container more than the reference reader's `MAX_DEPTH`.
+    let depth = 1001;
+    let document = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+    let line = serde_json::json!({
+        "id": 1,
+        "op": "decode",
+        "version": 4,
+        "profile": "json",
+        "path": "current",
+        "strip": true,
+        "node": "Value",
+        "input": document,
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["diagnostic"]["code"], "nesting_too_deep");
+    assert_eq!(response["diagnostic"]["stage"], "syntax");
+}

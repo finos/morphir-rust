@@ -21,6 +21,7 @@ struct RuntimeArtifact {
     _root: TempDir,
     artifact: VerifiedExtensionArtifact,
     installed_path: PathBuf,
+    #[cfg(unix)]
     staging_directory: PathBuf,
     working_directory: PathBuf,
 }
@@ -30,6 +31,7 @@ mod runtime_mother {
 
     #[derive(Clone, Copy)]
     enum MetadataShape {
+        #[cfg(unix)]
         Backend,
         FrontendBackend,
         FrontendWorkspace,
@@ -285,6 +287,7 @@ mod runtime_mother {
             })
         };
         let capabilities = match spec.metadata {
+            #[cfg(unix)]
             MetadataShape::Backend => serde_json::json!(["backend"]),
             MetadataShape::FrontendBackend => serde_json::json!(["frontend", "backend"]),
             MetadataShape::FrontendWorkspace => serde_json::json!(["frontend", "workspace"]),
@@ -312,10 +315,15 @@ mod runtime_mother {
                 }),
             );
         }
-        if matches!(
+        #[cfg(unix)]
+        let is_backend = matches!(
             spec.metadata,
             MetadataShape::Backend | MetadataShape::FrontendBackend
-        ) {
+        );
+        #[cfg(not(unix))]
+        let is_backend = matches!(spec.metadata, MetadataShape::FrontendBackend);
+
+        if is_backend {
             record.as_object_mut().unwrap().insert(
                 "backend".into(),
                 serde_json::json!({
@@ -343,6 +351,7 @@ mod runtime_mother {
             .unwrap();
         let installed = ExtensionInstaller::new(&home).install(selected).unwrap();
         let installed_path = home.root().join(installed.store_path());
+        #[cfg(unix)]
         let staging_directory = home.temp_dir().join("extensions");
         let artifact = activate_installed(&home, &extension_id).unwrap();
         let working_directory = root.path().join("workspace");
@@ -352,6 +361,7 @@ mod runtime_mother {
             _root: root,
             artifact,
             installed_path,
+            #[cfg(unix)]
             staging_directory,
             working_directory,
         }

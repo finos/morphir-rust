@@ -188,6 +188,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret references for environment variables, files, direct commands, and native operating-system keyrings, with provenance-aware resolution and protected diagnostic output
 - Layout-derived adjacent user overrides for root `morphir.{toml,yaml}` primaries (`morphir.user.{toml,yaml}`), hidden `.morphir/morphir.{toml,yaml}` primaries (`.morphir/morphir.user.{toml,yaml}`), and dot-config `.config/morphir/config.{toml,yaml}` primaries (`.config/morphir/config.user.{toml,yaml}`), including project, workspace, and member configurations
 - `MORPHIR_HOME` environment variable relocating the Morphir home directory (default `~/.morphir`, `%USERPROFILE%\.morphir` on Windows), with `morphir_common::home` providing the shared resolution: the tool, distribution, and extension registries, the global log fallback, and the user-home global configuration candidate follow the relocated home. Remote-source and extension caches now default to `<MORPHIR_HOME>/cache` (rather than the platform cache directory), so sandboxed and hermetic environments never touch the real user directories
+- `morphir-mck-adapter`, an `mck-adapter-rust` binding that drives this workspace's v4 codec through the [Morphir Compatibility Kit](https://github.com/finos/morphir/tree/main/spec/ir/mck), and the `check:kit` task and `kit-conformance` CI job that run the kit against it on every change
+- A `Diagnostic` type carrying the kit's stage, code, message, and cursor, and `DocumentLiteral` for a v4 document-tree literal value
+- The document-tree file-stem projection now escapes and truncates a name the filesystem cannot hold verbatim, in place of the ad hoc handling it replaced
 
 ### Changed
 
@@ -195,12 +198,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `load_config_context` now merges every configuration layer instead of only the global user and project files
 - A `null` overlay value no longer overrides a lower-precedence value; legacy `morphir.json` projects keep global settings intact
 - During greenfield development, the workspace Rust baseline follows the current stable release and is now Rust 1.98
+- **Breaking (Morphir IR v4 JSON vocabulary).** The v4 codec now follows the [Morphir Compatibility
+  Kit](https://github.com/finos/morphir/tree/main/spec/ir/mck) and knowledge base Decision Records 0004 through
+  0015. A `Record` type or value spells its fields under a `fields` member (0004); every node's optional
+  `attributes` member is the first member of its expanded payload (0005); node member names follow the schema
+  (0006), with these renames: `attrs` becomes `attributes`; `IfThenElse`'s `thenBranch`/`elseBranch` become
+  `then`/`else`; `Field`'s `subject`/`fieldName` become `target`/`name`; `LetDefinition`'s
+  `valueName`/`valueDefinition`/`inValue` become `name`/`definition`/`in`. A `Function` type's `arg`/`argumentType`
+  becomes `parameterType`, and its `result` becomes `returnType` (0007). A bare array is a `Tuple` at type position
+  and a `List` at value position; a bare boolean or number is a literal; a bare string is a `Variable` or a
+  `Reference` (0009). The SDK package is canonically spelled `morphir/SDK` (0011). Both v4 schemas share one legacy
+  name-array grammar and one `FileStem` definition (0012). Every renamed or restructured spelling above decodes for
+  one release with a `legacy_spelling` warning at the member's cursor, and is refused after it.
 
 ### Deprecated
 
 ### Removed
 
 - **Breaking:** the `morphir` CLI crate, its integration tests, the release workflow that published CLI binaries, and the installer and launcher scripts (`scripts/install.*`, `scripts/morphir.*`). The canonical `morphir` CLI is now built, released, and documented from [finos/morphir](https://github.com/finos/morphir), which consumes this workspace's library crates through a git submodule. Install it by following [Installing Morphir](https://github.com/finos/morphir/blob/main/INSTALLING.md); library crates are unaffected
+- **Breaking (Morphir IR v4).** The `Native` and `External` value expressions. A native or foreign operation is now
+  always a definition body — `NativeBody` or `ExternalBody` — and every use site is a `Reference` to it, per
+  knowledge base Decision Record 0008. `ExternalBody` carries a list of per-target bindings and an optional
+  fallback body; its single-binding `externalName`/`targetPlatform` spelling decodes for one release as a
+  one-entry `externals` list, with a `legacy_spelling` warning, and is refused after it.
+- The Classic (IR v3) tagged-array leniency inside a version-4 document. A Classic tagged array read where a v4
+  node is expected is now an `unknown_node` refusal through the kit's diagnostic, rather than being accepted as a
+  tuple of strings.
 
 ### Fixed
 

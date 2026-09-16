@@ -104,6 +104,23 @@ impl<'de> Deserialize<'de> for IRFile {
     }
 }
 
+/// Decodes a version 4 document from an already-parsed value tree, with its warnings.
+///
+/// This is the entry a reader uses when it produced the value tree itself — the YAML profile
+/// reader, say — rather than handing a document to serde. It decodes exactly what
+/// `Deserialize for IRFile` decodes, and collects the `legacy_spelling` warnings the serde path
+/// leaves to its caller's `with_spelling_mode` scope.
+pub fn decode_ir_file_with_warnings(
+    value: &serde_json::Value,
+) -> Result<(IRFile, Vec<crate::ir::Warning>), crate::ir::DiagnosticError> {
+    let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || {
+        serde_document::decode_ir_file(value, "")
+    });
+    decoded
+        .map(|file| (file, warnings))
+        .map_err(crate::ir::DiagnosticError)
+}
+
 /// Format version - accepts both string "4.0.0" and integer 4 using the shared contract.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub enum FormatVersion {

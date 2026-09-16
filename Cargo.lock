@@ -3385,6 +3385,7 @@ name = "morphir-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "granit-parser",
  "indexmap",
  "lasso",
  "rstest",

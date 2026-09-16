@@ -131,6 +131,35 @@ pub fn accept_member(node: &str, seen: &str, cursor: &str) -> Result<&'static st
     ))
 }
 
+/// Accepts a whole *shape* that decision 0006's window keeps alive, rather than a single
+/// renamed member.
+///
+/// A Record wrapper that carries its field map directly — the spelling the schema documented
+/// until 2026-09-04 — has no misspelled member to point at, so the warning lands on the
+/// wrapper itself at `cursor`. Once the window closes the shape is refused as an unknown
+/// member at the first member that would have had to be a canonical one.
+pub fn record_legacy_form_warning(cursor: &str, first_member: &str) -> Result<(), Diagnostic> {
+    match MODE.get() {
+        SpellingMode::Current => {
+            let warning = Warning {
+                code: DiagnosticCode::LegacySpelling,
+                cursor: cursor.to_string(),
+            };
+            WARNINGS.with(|warnings| {
+                if let Some(collected) = warnings.borrow_mut().as_mut() {
+                    collected.push(warning);
+                }
+            });
+            Ok(())
+        }
+        SpellingMode::Pinned => Err(Diagnostic::normalization(
+            DiagnosticCode::UnknownMember,
+            format!("{cursor}/{first_member}"),
+            format!("unexpected member {first_member}"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,6 +11,8 @@ use crate::naming::Name;
 /// Type specification (public API view of a type)
 // The variant names include "Specification" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
+// See the note on `ir::v4::types::TypeSpecification`: the type expression stays inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TypeSpecification {
@@ -39,6 +41,8 @@ pub struct AccessControlledTypeDefinition {
 }
 
 /// Type definition - uses wrapper object format
+// See the note on `ir::v4::types::TypeSpecification`: the type expression stays inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDefinition {
     TypeAliasDefinition {

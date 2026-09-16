@@ -1,11 +1,12 @@
 //! V4 object wrapper serialization for Morphir IR.
 //!
-//! V4 uses object wrapper format for all expressions:
-//! - `{ "Variable": { "name": "a" } }` instead of `["Variable", {}, ["a"]]`
-//! - `{ "Reference": { "fqname": "morphir/sdk:basics#int" } }` instead of `["Reference", {}, ...]`
+//! Every expression is a single-member wrapper rather than a Classic tagged array:
+//! `{ "Variable": { "name": "a" } }` instead of `["Variable", {}, ["a"]]`.
 //!
-//! This module provides serialization helpers for Type, Pattern, Value,
-//! and Literal using the V4 object wrapper format.
+//! For type expressions [`TypeEncoding::Compact`] is the canonical spelling. It writes the
+//! shortest form a reader accepts — `"a"` for a variable, `"morphir/SDK:basics#int"` for a
+//! reference with no arguments — and falls back to the expanded spelling, whose payload opens
+//! with `attributes`, exactly when a node carries attributes worth writing (decision 0005).
 
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -77,8 +78,8 @@ where
             map.serialize_entry(
                 "Variable",
                 &VariableContent {
-                    name: name.to_string(),
-                    attrs: Some(attrs),
+                    attributes: written(attrs),
+                    name: name.to_canonical_string(),
                 },
             )?;
             map.end()
@@ -88,9 +89,9 @@ where
             map.serialize_entry(
                 "Reference",
                 &ReferenceContent {
+                    attributes: written(attrs),
                     fqname: fqname.to_canonical_string(),
                     args,
-                    attrs: Some(attrs),
                 },
             )?;
             map.end()
@@ -100,40 +101,31 @@ where
             map.serialize_entry(
                 "Tuple",
                 &TupleContent {
+                    attributes: written(attrs),
                     elements,
-                    attrs: Some(attrs),
                 },
             )?;
             map.end()
         }
         Type::Record(attrs, fields) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            // V4 Record fields are object: { "fieldName": typeExpr }
-            let fields_map: IndexMap<String, &Type> = fields
-                .iter()
-                .map(|f| (f.name.to_string(), &f.tpe))
-                .collect();
             map.serialize_entry(
                 "Record",
                 &RecordContent {
-                    fields: fields_map,
-                    attrs: Some(attrs),
+                    attributes: written(attrs),
+                    fields: field_map(fields),
                 },
             )?;
             map.end()
         }
         Type::ExtensibleRecord(attrs, var, fields) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            let fields_map: IndexMap<String, &Type> = fields
-                .iter()
-                .map(|f| (f.name.to_string(), &f.tpe))
-                .collect();
             map.serialize_entry(
                 "ExtensibleRecord",
                 &ExtensibleRecordContent {
-                    variable: var.to_string(),
-                    fields: fields_map,
-                    attrs: Some(attrs),
+                    attributes: written(attrs),
+                    variable: var.to_canonical_string(),
+                    fields: field_map(fields),
                 },
             )?;
             map.end()
@@ -143,19 +135,38 @@ where
             map.serialize_entry(
                 "Function",
                 &FunctionContent {
-                    argument_type: arg.as_ref(),
+                    attributes: written(attrs),
+                    parameter_type: arg.as_ref(),
                     return_type: result.as_ref(),
-                    attrs: Some(attrs),
                 },
             )?;
             map.end()
         }
         Type::Unit(attrs) => {
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Unit", &UnitContent { attrs: Some(attrs) })?;
+            map.serialize_entry(
+                "Unit",
+                &UnitContent {
+                    attributes: written(attrs),
+                },
+            )?;
             map.end()
         }
     }
+}
+
+/// Decision 0005: an empty `attributes` member is accepted but never written.
+fn written(attrs: &TypeAttributes) -> Option<&TypeAttributes> {
+    (attrs != &TypeAttributes::default()).then_some(attrs)
+}
+
+/// A record's fields are an object keyed by field name, so the declaration order is the
+/// order of the members.
+fn field_map(fields: &[crate::ir::v4::types::Field]) -> IndexMap<String, &Type> {
+    fields
+        .iter()
+        .map(|field| (field.name.to_canonical_string(), &field.tpe))
+        .collect()
 }
 
 // Helper structs for V4 Type serialization
@@ -163,53 +174,53 @@ where
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VariableContent<'a> {
-    name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
+    attributes: Option<&'a TypeAttributes>,
+    name: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReferenceContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a TypeAttributes>,
     fqname: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     args: &'a Vec<Type>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TupleContent<'a> {
-    elements: &'a Vec<Type>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
+    attributes: Option<&'a TypeAttributes>,
+    elements: &'a Vec<Type>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecordContent<'a> {
-    fields: IndexMap<String, &'a Type>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
+    attributes: Option<&'a TypeAttributes>,
+    fields: IndexMap<String, &'a Type>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExtensibleRecordContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a TypeAttributes>,
     variable: String,
     fields: IndexMap<String, &'a Type>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FunctionContent<'a> {
-    argument_type: &'a Type,
-    return_type: &'a Type,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
+    attributes: Option<&'a TypeAttributes>,
+    parameter_type: &'a Type,
+    return_type: &'a Type,
 }
 
 struct ReferenceArgs<'a> {
@@ -257,26 +268,24 @@ where
             map.end()
         }
         Type::Record(_, fields) => {
-            let fields: IndexMap<String, &Type> = fields
-                .iter()
-                .map(|field| (field.name.to_canonical_string(), &field.tpe))
-                .collect();
             let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("Record", &fields)?;
+            map.serialize_entry(
+                "Record",
+                &RecordContent {
+                    attributes: None,
+                    fields: field_map(fields),
+                },
+            )?;
             map.end()
         }
         Type::ExtensibleRecord(_, variable, fields) => {
-            let fields: IndexMap<String, &Type> = fields
-                .iter()
-                .map(|field| (field.name.to_canonical_string(), &field.tpe))
-                .collect();
             let mut map = serializer.serialize_map(Some(1))?;
             map.serialize_entry(
                 "ExtensibleRecord",
                 &ExtensibleRecordContent {
+                    attributes: None,
                     variable: variable.to_canonical_string(),
-                    fields,
-                    attrs: None,
+                    fields: field_map(fields),
                 },
             )?;
             map.end()
@@ -286,9 +295,9 @@ where
             map.serialize_entry(
                 "Function",
                 &FunctionContent {
-                    argument_type: argument,
+                    attributes: None,
+                    parameter_type: argument,
                     return_type: result,
-                    attrs: None,
                 },
             )?;
             map.end()
@@ -305,7 +314,7 @@ where
 #[serde(rename_all = "camelCase")]
 struct UnitContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a TypeAttributes>,
+    attributes: Option<&'a TypeAttributes>,
 }
 
 // =============================================================================

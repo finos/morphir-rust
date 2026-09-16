@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use morphir_extension_sdk::Artifact;
 use serde_json::{Map, Value, json};
 
-use crate::render::named_schema_body;
+use crate::render::{in_canonical_member_order, named_schema_body};
 use crate::schema::references;
 use crate::{NamedSchema, Schema, SchemaProjection};
 
@@ -55,7 +55,7 @@ fn render_document(root: &NamedSchema, definitions: &BTreeMap<String, NamedSchem
         path: artifact_path(root),
         content: format!(
             "{}\n",
-            serde_json::to_string_pretty(&Value::Object(document))
+            serde_json::to_string_pretty(&in_canonical_member_order(Value::Object(document)))
                 .expect("a schema document made of Value::Object and String always serializes")
         ),
         binary: false,

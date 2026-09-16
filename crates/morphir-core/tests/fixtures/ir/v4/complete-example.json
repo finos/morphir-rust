@@ -33,17 +33,17 @@
                 "list": {
                   "TypeAliasSpecification": {
                     "typeParams": ["a"],
-                    "typeExp": ["morphir/sdk:list#list", "a"]
+                    "typeExp": { "Reference": ["morphir/sdk:list#list", "a"] }
                   }
                 }
               },
               "values": {
                 "map": {
                   "inputs": {
-                    "f": ["Function", {}, "a", "b"],
-                    "list": ["morphir/sdk:list#list", "a"]
+                    "f": { "Function": { "parameterType": "a", "returnType": "b" } },
+                    "list": { "Reference": ["morphir/sdk:list#list", "a"] }
                   },
-                  "output": ["morphir/sdk:list#list", "b"]
+                  "output": { "Reference": ["morphir/sdk:list#list", "b"] }
                 }
               }
             }
@@ -78,7 +78,7 @@
                     "typeExp": {
                       "Record": {
                         "fields": {
-                          "assets": ["morphir/sdk:list#list", "regulation:u-s/f-r-2052-a/data-tables/inflows#assets"]
+                          "assets": { "Reference": ["morphir/sdk:list#list", "regulation:u-s/f-r-2052-a/data-tables/inflows#assets"] }
                         }
                       }
                     }

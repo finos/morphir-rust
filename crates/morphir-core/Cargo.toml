@@ -20,7 +20,8 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# `preserve_order` keeps a record's field order, which the IR treats as declaration order.
+serde_json = { version = "1.0", features = ["preserve_order"] }
 schemars = { version = "1.0", features = ["derive", "indexmap2"] }
 indexmap = { version = "2", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serde"] }

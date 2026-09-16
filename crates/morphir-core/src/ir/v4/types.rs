@@ -26,9 +26,12 @@ use crate::naming::{FQName, Name};
 
 /// A type expression with V4 attributes.
 ///
-/// Type expressions form the type system of Morphir IR. Each variant
-/// carries `TypeAttributes` which can store metadata like
-/// source locations, type constraints, or extensions.
+/// Type expressions form the type system of Morphir IR. Each variant carries `TypeAttributes`,
+/// which can store metadata like source locations, type constraints, or extensions.
+///
+/// Incompleteness is not one of these variants: a `Hole` is a value expression, and the
+/// incompleteness vocabulary a definition carries is not a type expression at all, so a reader
+/// that meets `Hole` or `Draft` where a type belongs refuses it as an unknown node.
 ///
 /// # Examples
 ///
@@ -39,37 +42,45 @@ use crate::naming::{FQName, Name};
 pub enum Type {
     /// Type variable (generic type parameter)
     ///
-    /// Example: `a` in `List a`
+    /// `a` in `List a`, written `"a"`.
     Variable(TypeAttributes, Name),
 
-    /// Reference to a named type
+    /// Reference to a named type, with its type arguments
     ///
-    /// Example: `List Int` is `Reference(_, fqname_of_list, [Type::Reference(_, fqname_of_int, [])])`
+    /// `Int` is `"morphir/SDK:basics#int"`; `List a` is
+    /// `{ "Reference": ["morphir/SDK:list#list", "a"] }`. A reference with arguments always
+    /// carries its wrapper, because a bare array is a Tuple.
     Reference(TypeAttributes, FQName, Vec<Type>),
 
     /// Tuple type (product type with positional elements)
     ///
-    /// Example: `(Int, String, Bool)`
+    /// `( Int, String )` is
+    /// `{ "Tuple": ["morphir/SDK:basics#int", "morphir/SDK:string#string"] }`.
     Tuple(TypeAttributes, Vec<Type>),
 
     /// Record type (product type with named fields)
     ///
-    /// Example: `{ name : String, age : Int }`
+    /// `{ name : String }` is
+    /// `{ "Record": { "fields": { "name": "morphir/SDK:string#string" } } }`. The fields are an
+    /// object keyed by field name, so `attributes` can sit beside them and the declaration
+    /// order is the member order.
     Record(TypeAttributes, Vec<Field>),
 
     /// Extensible record type (record with a row variable)
     ///
-    /// Example: `{ a | name : String }` where `a` is the row variable
+    /// `{ r | email : String }` is
+    /// `{ "ExtensibleRecord": { "variable": "r", "fields": { "email": "morphir/SDK:string#string" } } }`.
     ExtensibleRecord(TypeAttributes, Name, Vec<Field>),
 
-    /// Function type (arrow type)
+    /// Function type (arrow type), from its parameter type to its return type
     ///
-    /// Example: `Int -> String`
+    /// `Int -> String` is
+    /// `{ "Function": { "parameterType": "morphir/SDK:basics#int", "returnType": "morphir/SDK:string#string" } }`.
     Function(TypeAttributes, Box<Type>, Box<Type>),
 
     /// Unit type (empty tuple, void equivalent)
     ///
-    /// Example: `()`
+    /// `()` is `{ "Unit": {} }`.
     Unit(TypeAttributes),
 }
 
@@ -148,6 +159,12 @@ impl Field {
 /// Type specification (public API view of a type)
 // The variant names include "Specification" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
+// A type expression is held inline rather than boxed: it is the payload a reader reaches for on
+// every declaration, and `TypeAttributes` carries two `serde_json::Value` members, which
+// `preserve_order` makes wide enough for Clippy to notice the difference between this variant and
+// the ones carrying no type expression at all. Boxing would trade that width for an indirection on
+// the hot path and change a widely matched public enum.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpecification {
     /// Type alias specification

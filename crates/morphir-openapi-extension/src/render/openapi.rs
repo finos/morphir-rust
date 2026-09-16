@@ -11,7 +11,7 @@ use morphir_extension_sdk::Artifact;
 use serde_json::{Map, Value, json};
 
 use crate::render::downgrade::downgrade;
-use crate::render::{named_schema_body, schema_body};
+use crate::render::{in_canonical_member_order, named_schema_body, schema_body};
 use crate::{
     HttpMethod, OpenApiVersion, Operation, ParameterBinding, Schema, SchemaDiagnostic, SchemaField,
     SchemaOptions, SchemaProjection, operation_id,
@@ -112,7 +112,7 @@ fn render_document(
         path: "openapi.json".to_owned(),
         content: format!(
             "{}\n",
-            serde_json::to_string_pretty(&document)
+            serde_json::to_string_pretty(&in_canonical_member_order(document))
                 .expect("a document made of Value::Object and String always serializes")
         ),
         binary: false,

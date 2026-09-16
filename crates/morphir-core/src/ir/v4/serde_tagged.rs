@@ -118,6 +118,65 @@ impl<'de> Visitor<'de> for TypeVisitor {
         let value = JsonValue::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
         decode_type(&value, &self.cursor).map_err(carry)
     }
+
+    // A scalar is refused here rather than through the default visitor methods, which build a
+    // plain serde error that carries no code or cursor. `deserialize_any` dispatches every
+    // narrower integer and float width to these, so the four below cover every JSON scalar.
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Type, E>
+    where
+        E: de::Error,
+    {
+        Err(self.refuse_scalar())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Type, E>
+    where
+        E: de::Error,
+    {
+        Err(self.refuse_scalar())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Type, E>
+    where
+        E: de::Error,
+    {
+        Err(self.refuse_scalar())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Type, E>
+    where
+        E: de::Error,
+    {
+        Err(self.refuse_scalar())
+    }
+
+    fn visit_unit<E>(self) -> Result<Type, E>
+    where
+        E: de::Error,
+    {
+        Err(self.refuse_scalar())
+    }
+
+    fn visit_none<E>(self) -> Result<Type, E>
+    where
+        E: de::Error,
+    {
+        Err(self.refuse_scalar())
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Type, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl TypeVisitor {
+    fn refuse_scalar<E: de::Error>(&self) -> E {
+        carry(invalid_type(&self.cursor, "expected a type expression"))
+    }
 }
 
 fn invalid_type(cursor: &str, message: impl Into<String>) -> Diagnostic {
@@ -157,6 +216,33 @@ fn looks_like_type(value: &JsonValue) -> bool {
     }
 }
 
+/// Whether an object is a Record's field map carried directly, the spelling the schema
+/// documented until 2026-09-04.
+///
+/// A field name is a canonical `Name`, which is never capitalised the way a wrapper tag is, so
+/// a member naming a node means the object is a wrapper rather than a field map. That check is
+/// what keeps `{ "Hole": { "reason": { ... } } }` an unknown node instead of a record with a
+/// field called `hole`.
+fn is_legacy_field_map(members: &serde_json::Map<String, JsonValue>) -> bool {
+    !members.is_empty()
+        && !members.contains_key("fields")
+        && !members.contains_key("attributes")
+        && !members.contains_key("attrs")
+        && !members
+            .keys()
+            .any(|member| TYPE_TAGS.contains(&member.as_str()))
+        && members.values().all(looks_like_field_type)
+}
+
+/// A field's value inside a legacy field map is a type expression, or another legacy field map:
+/// the spelling nests, and each level earns its own warning.
+fn looks_like_field_type(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Object(members) => looks_like_type(value) || is_legacy_field_map(members),
+        other => looks_like_type(other),
+    }
+}
+
 /// Reads a wrapper payload's members, mapping each spelling onto the node's canonical member
 /// name through the decision 0006 window table.
 fn wrapper_members<'a>(
@@ -164,7 +250,7 @@ fn wrapper_members<'a>(
     payload: &'a JsonValue,
     cursor: &str,
     canonical_members: &[&'static str],
-) -> Result<IndexMap<&'static str, &'a JsonValue>, Diagnostic> {
+) -> Result<Members<'a>, Diagnostic> {
     let payload = payload
         .as_object()
         .ok_or_else(|| invalid_type(cursor, format!("the {node} payload must be an object")))?;
@@ -188,6 +274,10 @@ fn wrapper_members<'a>(
                     })?
             }
         };
+        let member = Member {
+            value: member,
+            seen,
+        };
         if accepted.insert(canonical, member).is_some() {
             return Err(Diagnostic::normalization(
                 DiagnosticCode::DuplicateMember,
@@ -199,13 +289,28 @@ fn wrapper_members<'a>(
     Ok(accepted)
 }
 
-type Members<'a> = IndexMap<&'static str, &'a JsonValue>;
+/// One accepted member: its value, and the spelling the input actually used, so a diagnostic
+/// inside a member written the legacy way points at the member the author can find.
+struct Member<'a> {
+    value: &'a JsonValue,
+    seen: &'a str,
+}
+
+type Members<'a> = IndexMap<&'static str, Member<'a>>;
+
+/// The JSON pointer of `name`, spelled the way the input spelled it.
+fn member_cursor(members: &Members<'_>, name: &str, cursor: &str) -> String {
+    match members.get(name) {
+        Some(member) => format!("{cursor}/{}", member.seen),
+        None => format!("{cursor}/{name}"),
+    }
+}
 
 fn decode_attributes(members: &Members<'_>, cursor: &str) -> Result<TypeAttributes, Diagnostic> {
     match members.get("attributes") {
         None => Ok(TypeAttributes::default()),
-        Some(value) => serde_json::from_value((*value).clone())
-            .map_err(|error| invalid_type(&format!("{cursor}/attributes"), error.to_string())),
+        Some(member) => serde_json::from_value(member.value.clone())
+            .map_err(|error| invalid_type(&format!("{cursor}/{}", member.seen), error.to_string())),
     }
 }
 
@@ -214,7 +319,7 @@ fn required<'a>(
     name: &str,
     cursor: &str,
 ) -> Result<&'a JsonValue, Diagnostic> {
-    members.get(name).copied().ok_or_else(|| {
+    members.get(name).map(|member| member.value).ok_or_else(|| {
         Diagnostic::normalization(
             DiagnosticCode::MissingMember,
             cursor,
@@ -251,7 +356,15 @@ fn decode_type_list(value: &JsonValue, cursor: &str) -> Result<Vec<Type>, Diagno
 }
 
 /// Decodes a field map: an object keyed by field name, whose order is the field order.
-fn decode_fields(value: &JsonValue, cursor: &str) -> Result<Vec<Field>, Diagnostic> {
+///
+/// `decode_field_type` reads each field's type, which is what separates the canonical `fields`
+/// member from a legacy field map: only the latter lets a field's own value be another legacy
+/// field map.
+fn decode_fields(
+    value: &JsonValue,
+    cursor: &str,
+    decode_field_type: fn(&JsonValue, &str) -> Result<Type, Diagnostic>,
+) -> Result<Vec<Field>, Diagnostic> {
     let fields = value
         .as_object()
         .ok_or_else(|| invalid_type(cursor, "fields must be an object keyed by field name"))?;
@@ -263,10 +376,40 @@ fn decode_fields(value: &JsonValue, cursor: &str) -> Result<Vec<Field>, Diagnost
                 name: Name::from_canonical_string(name).map_err(|error| {
                     Diagnostic::normalization(DiagnosticCode::InvalidName, &field_cursor, error)
                 })?,
-                tpe: decode_type(tpe, &field_cursor)?,
+                tpe: decode_field_type(tpe, &field_cursor)?,
             })
         })
         .collect()
+}
+
+/// Decodes a field of a legacy field map, which may itself be another legacy field map.
+///
+/// Only reachable from inside a legacy Record, so a bare object at an ordinary type position —
+/// `{ "Hole": ... }`, say — is still an unknown node.
+fn decode_type_or_legacy_field_map(value: &JsonValue, cursor: &str) -> Result<Type, Diagnostic> {
+    if let JsonValue::Object(members) = value
+        && is_legacy_field_map(members)
+    {
+        return decode_legacy_field_map(value, members, cursor);
+    }
+    decode_type(value, cursor)
+}
+
+/// Decodes a Record written as its field map directly, warning at the object that carries it.
+fn decode_legacy_field_map(
+    value: &JsonValue,
+    members: &serde_json::Map<String, JsonValue>,
+    cursor: &str,
+) -> Result<Type, Diagnostic> {
+    let first = members
+        .keys()
+        .next()
+        .expect("a legacy field map is never empty");
+    record_legacy_form_warning(cursor, first)?;
+    Ok(Type::Record(
+        TypeAttributes::default(),
+        decode_fields(value, cursor, decode_type_or_legacy_field_map)?,
+    ))
 }
 
 /// Decodes one type expression at `cursor`.
@@ -327,7 +470,10 @@ fn decode_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<Type, 
         "Variable" => {
             let members = wrapper_members(tag, payload, &at, &["attributes", "name"])?;
             let attributes = decode_attributes(&members, &at)?;
-            let name = decode_name(required(&members, "name", &at)?, &format!("{at}/name"))?;
+            let name = decode_name(
+                required(&members, "name", &at)?,
+                &member_cursor(&members, "name", &at),
+            )?;
             Ok(Type::Variable(attributes, name))
         }
         "Reference" => {
@@ -356,11 +502,13 @@ fn decode_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<Type, 
             }
             let members = wrapper_members(tag, payload, &at, &["attributes", "fqname", "args"])?;
             let attributes = decode_attributes(&members, &at)?;
-            let fqname =
-                decode_fqname(required(&members, "fqname", &at)?, &format!("{at}/fqname"))?;
+            let fqname = decode_fqname(
+                required(&members, "fqname", &at)?,
+                &member_cursor(&members, "fqname", &at),
+            )?;
             let args = match members.get("args") {
                 None => Vec::new(),
-                Some(value) => decode_type_list(value, &format!("{at}/args"))?,
+                Some(member) => decode_type_list(member.value, &format!("{at}/{}", member.seen))?,
             };
             Ok(Type::Reference(attributes, fqname, args))
         }
@@ -375,33 +523,23 @@ fn decode_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<Type, 
             let attributes = decode_attributes(&members, &at)?;
             let elements = decode_type_list(
                 required(&members, "elements", &at)?,
-                &format!("{at}/elements"),
+                &member_cursor(&members, "elements", &at),
             )?;
             Ok(Type::Tuple(attributes, elements))
         }
         "Record" => {
-            if let JsonValue::Object(payload_members) = payload {
-                let carries_the_field_map_directly = !payload_members.is_empty()
-                    && !payload_members.contains_key("fields")
-                    && !payload_members.contains_key("attributes")
-                    && !payload_members.contains_key("attrs")
-                    && payload_members.values().all(looks_like_type);
-                if carries_the_field_map_directly {
-                    let first = payload_members
-                        .keys()
-                        .next()
-                        .expect("a non-empty object has a first member");
-                    record_legacy_form_warning(&at, first)?;
-                    return Ok(Type::Record(
-                        TypeAttributes::default(),
-                        decode_fields(payload, &at)?,
-                    ));
-                }
+            if let JsonValue::Object(payload_members) = payload
+                && is_legacy_field_map(payload_members)
+            {
+                return decode_legacy_field_map(payload, payload_members, &at);
             }
             let members = wrapper_members(tag, payload, &at, &["attributes", "fields"])?;
             let attributes = decode_attributes(&members, &at)?;
-            let fields =
-                decode_fields(required(&members, "fields", &at)?, &format!("{at}/fields"))?;
+            let fields = decode_fields(
+                required(&members, "fields", &at)?,
+                &member_cursor(&members, "fields", &at),
+                decode_type,
+            )?;
             Ok(Type::Record(attributes, fields))
         }
         "ExtensibleRecord" => {
@@ -410,10 +548,13 @@ fn decode_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<Type, 
             let attributes = decode_attributes(&members, &at)?;
             let variable = decode_name(
                 required(&members, "variable", &at)?,
-                &format!("{at}/variable"),
+                &member_cursor(&members, "variable", &at),
             )?;
-            let fields =
-                decode_fields(required(&members, "fields", &at)?, &format!("{at}/fields"))?;
+            let fields = decode_fields(
+                required(&members, "fields", &at)?,
+                &member_cursor(&members, "fields", &at),
+                decode_type,
+            )?;
             Ok(Type::ExtensibleRecord(attributes, variable, fields))
         }
         "Function" => {
@@ -426,11 +567,11 @@ fn decode_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<Type, 
             let attributes = decode_attributes(&members, &at)?;
             let parameter = decode_type(
                 required(&members, "parameterType", &at)?,
-                &format!("{at}/parameterType"),
+                &member_cursor(&members, "parameterType", &at),
             )?;
             let result = decode_type(
                 required(&members, "returnType", &at)?,
-                &format!("{at}/returnType"),
+                &member_cursor(&members, "returnType", &at),
             )?;
             Ok(Type::Function(
                 attributes,

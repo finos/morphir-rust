@@ -4,7 +4,7 @@
 use morphir_core::ir::v4::{
     SpellingMode, Type, TypeAttributes, TypeEncoding, with_spelling_mode, with_type_encoding,
 };
-use morphir_core::ir::{Diagnostic, DiagnosticCode};
+use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
 use morphir_core::naming::{FQName, Name};
 use serde_json::json;
 
@@ -90,6 +90,52 @@ fn record_fields_live_under_fields() {
         decode(json!({ "Record": { "id": "morphir/SDK:string#string" } }))
     });
     assert_eq!(pinned.unwrap_err().code, DiagnosticCode::UnknownMember);
+}
+
+#[test]
+fn a_legacy_field_map_nests_and_each_level_warns_at_its_own_cursor() {
+    let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || {
+        decode(json!({ "Record": { "addr": { "street": "morphir/SDK:string#string" } } }))
+    });
+    assert_eq!(
+        canonical(&decoded.unwrap()),
+        json!({
+            "Record": {
+                "fields": {
+                    "addr": { "Record": { "fields": { "street": "morphir/SDK:string#string" } } }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|w| (w.code, w.cursor.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (DiagnosticCode::LegacySpelling, "/Record"),
+            (DiagnosticCode::LegacySpelling, "/Record/addr"),
+        ]
+    );
+}
+
+#[test]
+fn a_scalar_where_a_type_belongs_carries_a_diagnostic() {
+    for scalar in [json!(42), json!(null), json!(true), json!(1.5)] {
+        let e = decode(scalar.clone()).unwrap_err();
+        assert_eq!(e.code, DiagnosticCode::InvalidType, "for {scalar}");
+        assert_eq!(e.stage, DiagnosticStage::Normalization, "for {scalar}");
+    }
+}
+
+#[test]
+fn a_diagnostic_inside_a_legacy_member_points_at_the_spelling_the_input_used() {
+    let (result, _) = with_spelling_mode(SpellingMode::Current, || {
+        decode(json!({ "Variable": { "attrs": 7, "name": "a" } }))
+    });
+    let e = result.unwrap_err();
+    assert_eq!(e.code, DiagnosticCode::InvalidType);
+    assert_eq!(e.cursor, "/Variable/attrs");
 }
 
 #[test]

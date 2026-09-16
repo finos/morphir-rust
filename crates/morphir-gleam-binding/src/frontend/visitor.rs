@@ -755,7 +755,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         match literal {
             Literal::Bool { value } => MorphirLiteral::Bool(*value),
             Literal::Int { value } => MorphirLiteral::Integer(*value),
-            Literal::Float { value } => MorphirLiteral::Float(*value),
+            Literal::Float { value } => MorphirLiteral::float(*value),
             Literal::String { value } => MorphirLiteral::String(value.clone()),
             Literal::Char { value } => MorphirLiteral::Char(*value),
         }

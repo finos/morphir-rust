@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 use std::cell::Cell;
+use std::str::FromStr;
 
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
@@ -331,9 +332,14 @@ where
         Literal::Char(v) => map.serialize_entry("CharLiteral", &v.to_string())?,
         Literal::String(v) => map.serialize_entry("StringLiteral", v)?,
         Literal::Integer(v) => map.serialize_entry("IntegerLiteral", v)?,
-        // A whole-numbered float still has to read back as a float, which is what serde_json's
-        // float formatting gives: `4.0`, never `4`.
-        Literal::Float(v) => map.serialize_entry("FloatLiteral", v)?,
+        // A float is written from its lexeme, so the spelling it was read with survives and a
+        // whole-numbered float still reads back as a float: `4.0`, never `4`. With
+        // `arbitrary_precision`, a `Number` built from text serializes as that text.
+        Literal::Float(v) => map.serialize_entry(
+            "FloatLiteral",
+            &serde_json::Number::from_str(v.lexeme())
+                .expect("a FloatLiteral lexeme is a JSON number"),
+        )?,
         Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v)?,
         Literal::Document(v) => map.serialize_entry("DocumentLiteral", v)?,
     }

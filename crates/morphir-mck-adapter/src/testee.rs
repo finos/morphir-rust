@@ -963,9 +963,8 @@ fn write_canonical(value: &Json) -> String {
         Json::Bool(true) => "true".to_string(),
         Json::Bool(false) => "false".to_string(),
         // What `arbitrary_precision` buys is that a number *parsed from text* keeps the lexeme
-        // it was written with, which is what a `DocumentLiteral` payload needs. It buys nothing
-        // for a number the model holds as a machine number: `Literal::Float` is an `f64`, so
-        // `1.0e2` comes back out as `100.0`. No case pins a float lexeme today.
+        // it was written with, which is what a `DocumentLiteral` payload needs. `Literal::Float`
+        // now carries its lexeme too, so `1.0e2` comes back out as `1.0e2` rather than `100.0`.
         Json::Number(number) => number.to_string(),
         Json::String(_) => serde_json::to_string(value).expect("a string always serializes"),
         Json::Array(elements) if elements.is_empty() => "[]".to_string(),

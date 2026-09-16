@@ -221,6 +221,8 @@ pub fn load_ir(path: &Path) -> Result<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::{LoadedDistribution, load_distribution};
+    #[cfg(unix)]
+    use crate::vfs::OsVfs;
     use crate::vfs::{FileMetadata, MemoryVfs, Vfs};
     use indexmap::IndexMap;
     use morphir_core::ir::v4::{
@@ -274,6 +276,18 @@ mod tests {
 
         fn metadata(&self, _path: &Path) -> io::Result<FileMetadata> {
             unreachable!("the current traversal does not query metadata")
+        }
+    }
+
+    #[cfg(unix)]
+    fn empty_module() -> AccessControlled<ModuleDefinition> {
+        AccessControlled {
+            access: Access::Public,
+            value: ModuleDefinition {
+                types: IndexMap::new(),
+                values: IndexMap::new(),
+                doc: None,
+            },
         }
     }
 

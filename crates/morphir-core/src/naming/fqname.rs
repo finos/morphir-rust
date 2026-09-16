@@ -35,6 +35,10 @@ impl FQName {
         let pkg_params = parts[0];
         let mod_params = parts[1];
         let local_name = parts[2];
+        // The empty string does not name anything, so `a:b:` is not a fully qualified name.
+        if local_name.is_empty() {
+            return None;
+        }
 
         Some(Self::new(
             Path::new(pkg_params),

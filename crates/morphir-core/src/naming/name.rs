@@ -220,7 +220,16 @@ impl Name {
 
     /// Parse permissively. The canonical encodings are tried first, then
     /// `snake_case`, `kebab-case`, `camelCase` and `PascalCase`.
+    ///
+    /// The input has to name something. A v4 name is one or more segments, and the empty string
+    /// is not a name any document can spell: every v4 reader refuses it, and a segment-less
+    /// `Name` re-encodes to nothing. Because there is no such name to return, and no error
+    /// channel here to say so, a debug build asserts instead, so a caller handing this an empty
+    /// string is a test failure rather than a document nothing will read. A caller reading a name
+    /// out of a document wants [`Name::from_canonical_string`], which refuses the empty string
+    /// with a diagnostic.
     pub fn from(name: &str) -> Self {
+        debug_assert!(!name.is_empty(), "the empty string does not name anything");
         if name.is_empty() {
             return Name {
                 segments: Vec::new(),

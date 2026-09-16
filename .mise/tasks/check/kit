@@ -54,7 +54,7 @@ verify() {
 }
 
 if [ ! -x "$DRIVER" ]; then
-    echo "Fetching the mck driver $VERSION for $OS-$ARCH..."
+    echo "Fetching the mck driver $VERSION for $OS-$ARCH..." >&2
     mkdir -p "$BIN_DIR"
     # Downloaded beside the target and moved into place only once it is whole and verified, so an
     # interrupted or corrupt fetch never leaves something at $DRIVER that the next run would take
@@ -78,11 +78,11 @@ if [ ! -x "$DRIVER" ]; then
     trap - EXIT
 fi
 
-echo "Building the adapter..."
+echo "Building the adapter..." >&2
 # The adapter is not in the workspace's default-members, so it is named explicitly.
 cargo build -p morphir-mck-adapter
 
-echo "Running the kit..."
+echo "Running the kit..." >&2
 mkdir -p "$(dirname "$REPORT")"
 # A report from a previous run must never be what gets adjudicated, so the old one goes before
 # the driver starts rather than being counted on to be overwritten.
@@ -103,7 +103,7 @@ fi
     exit 1
 }
 
-echo "Adjudicating the report against allowed-failing.json..."
+echo "Adjudicating the report against allowed-failing.json..." >&2
 cargo test -p morphir-mck-adapter --test report
 
 if [ "$DRIVER_STATUS" -ne 0 ]; then

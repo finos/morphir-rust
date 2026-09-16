@@ -808,13 +808,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_unsupported_outer_compile_ir_revision() {
+    fn rejects_an_unsupported_outer_compile_ir_minor() {
         let error = validate_method_result(
             methods::COMPILE,
             &compile_request("4.1.0"),
             successful_result("4.1.0", v4_library_distribution()),
         )
-        .expect_err("unsupported outer IR revisions must fail host validation");
+        .expect_err("unsupported outer IR minor revisions must fail host validation");
 
         assert!(
             error.to_string().contains("unsupported irVersion"),

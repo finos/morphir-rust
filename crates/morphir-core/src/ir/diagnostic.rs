@@ -29,7 +29,7 @@ pub enum DiagnosticCode {
     InvalidFormatVersionSyntax,
     FormatVersionOutOfRange,
     UnsupportedFormatVersionMajor,
-    UnsupportedFormatVersionRevision,
+    UnsupportedFormatVersionMinor,
     InvalidYaml,
     UnsupportedYamlFeature,
 }

@@ -73,10 +73,10 @@ impl FormatVersionDiagnostic {
         )
     }
 
-    pub(crate) fn unsupported_format_version_revision(release: &str) -> Self {
+    pub(crate) fn unsupported_format_version_minor(release: &str) -> Self {
         Self::new(
-            "unsupported_format_version_revision",
-            format!("release {release} is recognized but not supported"),
+            "unsupported_format_version_minor",
+            format!("release {release} is a minor revision this reader does not support"),
         )
     }
 }

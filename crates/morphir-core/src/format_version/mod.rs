@@ -14,8 +14,10 @@ pub use canonical::CanonicalSpelling;
 pub use diagnostic::FormatVersionDiagnostic;
 pub use parse::ScalarValue;
 pub use serde::{FormatVersionBaselineSeed, deserialize_baseline_u32};
-pub use support::{Compatibility, SupportTable, default_support_table};
-pub use triplet::ReleaseTriplet;
+pub use support::{
+    Compatibility, Interval, REFERENCE_SUPPORT_TABLE, SupportTable, default_support_table,
+};
+pub use triplet::{COMPONENT_MAX, ReleaseTriplet};
 
 /// Result of recognizing and normalizing one `formatVersion` scalar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,10 +73,10 @@ mod tests {
     }
 
     #[test]
-    fn string_three_one_zero_is_unsupported_revision() {
+    fn string_three_one_zero_is_unsupported_minor() {
         let normalized = normalize_json(json!("3.1.0")).expect("recognized revision");
         assert_eq!(normalized.release, ReleaseTriplet::new(3, 1, 0));
-        assert_eq!(normalized.compatibility, Compatibility::UnsupportedRevision);
+        assert_eq!(normalized.compatibility, Compatibility::UnsupportedMinor);
     }
 
     #[test]

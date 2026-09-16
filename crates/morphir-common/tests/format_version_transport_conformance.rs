@@ -6,8 +6,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct ConformanceFixture {
-    #[serde(rename = "supportedVersions")]
-    supported_versions: Vec<String>,
+    #[serde(rename = "supportTable")]
+    support_table: String,
     #[serde(rename = "headerOrderCases")]
     header_order_cases: Vec<HeaderOrderCase>,
     #[serde(rename = "rootDiagnosticCases")]
@@ -36,20 +36,7 @@ fn fixture() -> ConformanceFixture {
 }
 
 fn support_table() -> SupportTable {
-    SupportTable::from_releases(
-        fixture()
-            .supported_versions
-            .iter()
-            .map(|release| {
-                let mut parts = release.split('.');
-                morphir_core::format_version::ReleaseTriplet::new(
-                    parts.next().unwrap().parse().unwrap(),
-                    parts.next().unwrap().parse().unwrap(),
-                    parts.next().unwrap().parse().unwrap(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    )
+    SupportTable::parse(&fixture().support_table).expect("the corpus support table parses")
 }
 
 #[test]

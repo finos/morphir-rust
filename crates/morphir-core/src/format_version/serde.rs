@@ -4,9 +4,7 @@ use std::fmt;
 
 use serde::de::{self, DeserializeSeed, Deserializer, Visitor};
 
-use super::{
-    CanonicalSpelling, FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable,
-};
+use super::{FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable};
 
 /// Deserialize a normalized baseline `formatVersion` major as `u32`.
 pub fn deserialize_baseline_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
@@ -74,14 +72,18 @@ impl<'de> Visitor<'de> for FormatVersionBaselineVisitor {
 }
 
 fn scalar_to_baseline_u32(scalar: ScalarValue) -> Result<u32, FormatVersionDiagnostic> {
-    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::reference())?;
-    match normalized.canonical {
-        CanonicalSpelling::Integer(version) => Ok(version),
-        CanonicalSpelling::String(release) => Err(FormatVersionDiagnostic::new(
-            "unsupported_format_version_revision",
-            format!("release {release} is recognized but not supported as a baseline integer"),
-        )),
+    let support = SupportTable::reference();
+    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support)?;
+    // The classic model is keyed by major, and the patch promise says a reader
+    // that understands `N.m.0` reads every `N.m.p`. So compatibility against the
+    // table decides, not the canonical spelling: a supported later patch such as
+    // `"3.0.1"` still maps to its major.
+    if let Some(diagnostic) =
+        support.unsupported_diagnostic(&normalized.release, normalized.compatibility)
+    {
+        return Err(diagnostic);
     }
+    Ok(normalized.release.major())
 }
 
 #[cfg(test)]
@@ -103,5 +105,41 @@ mod tests {
         let value: VersionField =
             serde_json::from_str(r#"{"formatVersion":"3.0.0"}"#).expect("baseline string");
         assert_eq!(value.format_version, 3);
+    }
+
+    fn baseline(value: &str) -> Result<u32, String> {
+        scalar_to_baseline_u32(ScalarValue::String(value.to_owned()))
+            .map_err(|diagnostic| diagnostic.code().to_string())
+    }
+
+    #[test]
+    fn supported_later_patches_map_to_their_major() {
+        assert_eq!(baseline("3.0.1"), Ok(3));
+        assert_eq!(baseline("4.0.1"), Ok(4));
+    }
+
+    #[test]
+    fn unsupported_minor_is_reported_as_a_minor() {
+        assert_eq!(
+            baseline("3.1.0"),
+            Err("unsupported_format_version_minor".to_owned())
+        );
+    }
+
+    #[test]
+    fn unsupported_major_is_reported_as_a_major() {
+        assert_eq!(
+            baseline("5.0.0"),
+            Err("unsupported_format_version_major".to_owned())
+        );
+    }
+
+    #[test]
+    fn integer_four_deserializes_to_baseline_four() {
+        assert_eq!(
+            scalar_to_baseline_u32(ScalarValue::Integer(4))
+                .map_err(|diagnostic| diagnostic.code().to_string()),
+            Ok(4)
+        );
     }
 }

@@ -734,7 +734,7 @@ fn the_format_version_spellings_are_the_shared_contracts() {
     );
     assert_eq!(
         decode::<FormatVersion>(json!("4.2.0")).unwrap_err().code,
-        DiagnosticCode::UnsupportedFormatVersionRevision
+        DiagnosticCode::UnsupportedFormatVersionMinor
     );
 }
 

@@ -1843,10 +1843,10 @@ distribution: {}}"#;
     }
 
     #[test]
-    fn unsupported_revision_fails_before_replay() {
+    fn unsupported_minor_fails_before_replay() {
         let source = br#"{"formatVersion":"3.1.0","distribution":[]}"#;
         let error = probe_json_root(&mut &source[..], &SupportTable::reference()).unwrap_err();
-        assert_eq!(error.code(), "unsupported_format_version_revision");
+        assert_eq!(error.code(), "unsupported_format_version_minor");
     }
 
     #[test]

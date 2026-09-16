@@ -2,27 +2,29 @@ use morphir_common::loader::load_ir;
 use serde_json::json;
 
 #[test]
-fn load_ir_normalizes_the_exact_classic_v3_release_string() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("morphir-ir.json");
-    std::fs::write(
-        &path,
-        serde_json::to_vec(&json!({
-            "formatVersion": "3.0.0",
-            "distribution": ["Library", [["local"]], [], {"modules": []}]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+fn load_ir_normalizes_every_supported_classic_v3_release_string() {
+    for version in ["3.0.0", "3.0.1"] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("morphir-ir.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "formatVersion": version,
+                "distribution": ["Library", [["local"]], [], {"modules": []}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
-    let loaded = load_ir(&path).unwrap();
+        let loaded = load_ir(&path).unwrap_or_else(|error| panic!("{version}: {error}"));
 
-    assert_eq!(loaded["formatVersion"], 3);
+        assert_eq!(loaded["formatVersion"], 3, "{version}");
+    }
 }
 
 #[test]
-fn load_ir_does_not_normalize_other_classic_version_strings() {
-    for version in ["3.", "3.0.1"] {
+fn load_ir_does_not_normalize_unsupported_classic_version_strings() {
+    for version in ["3.", "3.1.0"] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("morphir-ir.json");
         std::fs::write(

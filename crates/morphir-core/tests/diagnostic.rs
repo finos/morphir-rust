@@ -40,7 +40,7 @@ fn every_kit_code_round_trips() {
         "invalid_format_version_syntax",
         "format_version_out_of_range",
         "unsupported_format_version_major",
-        "unsupported_format_version_revision",
+        "unsupported_format_version_minor",
         "invalid_yaml",
         "unsupported_yaml_feature",
     ] {

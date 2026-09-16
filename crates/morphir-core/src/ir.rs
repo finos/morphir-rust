@@ -13,6 +13,10 @@
 // Legacy support
 pub mod classic;
 
+// Diagnostics shared by every IR codec
+pub mod diagnostic;
+pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticError, DiagnosticStage, Warning};
+
 // V4 is the primary format
 pub mod v4;
 

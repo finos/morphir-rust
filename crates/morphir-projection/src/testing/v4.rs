@@ -32,11 +32,9 @@ pub fn v4_customer_application_with_entry_points(entry_points: Value) -> Value {
         "value": documented(
             "An incomplete handler.",
             json!({
-                "inputTypes": {},
-                "body": {
-                    "IncompleteBody": {
-                        "incompleteness": { "Draft": {} }
-                    }
+                "IncompleteBody": {
+                    "inputTypes": {},
+                    "incompleteness": { "Draft": {} }
                 }
             })
         )
@@ -69,7 +67,7 @@ pub fn v4_customer_specs() -> Value {
                                 json!({
                                     "TypeAliasSpecification": {
                                         "typeParams": [],
-                                        "typeExp": { "Record": { "name": STRING, "id": STRING } }
+                                        "typeExp": { "Record": { "fields": { "name": STRING, "id": STRING } } }
                                     }
                                 })
                             ),
@@ -154,13 +152,15 @@ pub fn v4_incomplete_library() -> Value {
                                                 "typeParams": ["a"],
                                                 "incompleteness": {
                                                     "Hole": {
-                                                        "UnresolvedReference": {
-                                                            "target": "acme/customer:domain#missing"
+                                                        "reason": {
+                                                            "UnresolvedReference": {
+                                                                "target": "acme/customer:domain#missing"
+                                                            }
                                                         }
                                                     }
                                                 },
                                                 "partialTypeExp": {
-                                                    "Record": { "id": STRING }
+                                                    "Record": { "fields": { "id": STRING } }
                                                 }
                                             }
                                         })
@@ -258,7 +258,9 @@ fn v4_library_content() -> Value {
                                         "TypeAliasDefinition": {
                                             "typeParams": [],
                                             "typeExp": {
-                                                "Record": { "name": STRING, "id": STRING }
+                                                "Record": {
+                                                    "fields": { "name": STRING, "id": STRING }
+                                                }
                                             }
                                         }
                                     })
@@ -335,9 +337,11 @@ fn v4_value(doc: &str, access: &str, inputs: Value, output: Value) -> Value {
         "value": documented(
             doc,
             json!({
-                "inputTypes": inputs,
-                "outputType": output,
-                "body": { "ExpressionBody": { "body": { "Unit": {} } } }
+                "ExpressionBody": {
+                    "inputTypes": inputs,
+                    "outputType": output,
+                    "body": { "Unit": {} }
+                }
             })
         )
     })

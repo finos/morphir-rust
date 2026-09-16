@@ -110,19 +110,26 @@ impl EventTransform for ClassicToV4 {
             SemanticEventKind::Begin(DistributionHeader::ClassicV3Library { package }) => {
                 SemanticEventKind::Begin(DistributionHeader::V4Library {
                     format_version: v4::FormatVersion::Integer(4),
-                    package: PackageName::new(migrate_path(&package)),
+                    package: PackageName::new(
+                        migrate_path(&package, &self.context.cursor)
+                            .map_err(TransportDiagnostic::from)?,
+                    ),
                 })
             }
             SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
                 package,
                 specification,
             }) => SemanticEventKind::Dependency(DependencyEvent::V4 {
-                package: migrate_path(&package).to_canonical_string(),
+                package: migrate_path(&package, &self.context.cursor)
+                    .map_err(TransportDiagnostic::from)?
+                    .to_canonical_string(),
                 specification: migrate_package_specification(&specification, &mut self.context)
                     .map_err(TransportDiagnostic::from)?,
             }),
             SemanticEventKind::Module(ModuleEvent::ClassicV3(module)) => {
-                let path = migrate_path(&module.path).to_canonical_string();
+                let path = migrate_path(&module.path, &self.context.cursor)
+                    .map_err(TransportDiagnostic::from)?
+                    .to_canonical_string();
                 let migrated = v4::AccessControlled {
                     access: migrate_access(&module.definition.access),
                     value: migrate_module_definition(&module.definition.value, &mut self.context)

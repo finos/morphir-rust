@@ -11,7 +11,7 @@
 //! let t: Type = Type::Unit(TypeAttributes::default());
 //! ```
 
-use serde::de::{self, Deserializer};
+use serde::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
@@ -26,9 +26,12 @@ use crate::naming::{FQName, Name};
 
 /// A type expression with V4 attributes.
 ///
-/// Type expressions form the type system of Morphir IR. Each variant
-/// carries `TypeAttributes` which can store metadata like
-/// source locations, type constraints, or extensions.
+/// Type expressions form the type system of Morphir IR. Each variant carries `TypeAttributes`,
+/// which can store metadata like source locations, type constraints, or extensions.
+///
+/// Incompleteness is not one of these variants: a `Hole` is a value expression, and the
+/// incompleteness vocabulary a definition carries is not a type expression at all, so a reader
+/// that meets `Hole` or `Draft` where a type belongs refuses it as an unknown node.
 ///
 /// # Examples
 ///
@@ -39,37 +42,45 @@ use crate::naming::{FQName, Name};
 pub enum Type {
     /// Type variable (generic type parameter)
     ///
-    /// Example: `a` in `List a`
+    /// `a` in `List a`, written `"a"`.
     Variable(TypeAttributes, Name),
 
-    /// Reference to a named type
+    /// Reference to a named type, with its type arguments
     ///
-    /// Example: `List Int` is `Reference(_, fqname_of_list, [Type::Reference(_, fqname_of_int, [])])`
+    /// `Int` is `"morphir/SDK:basics#int"`; `List a` is
+    /// `{ "Reference": ["morphir/SDK:list#list", "a"] }`. A reference with arguments always
+    /// carries its wrapper, because a bare array is a Tuple.
     Reference(TypeAttributes, FQName, Vec<Type>),
 
     /// Tuple type (product type with positional elements)
     ///
-    /// Example: `(Int, String, Bool)`
+    /// `( Int, String )` is
+    /// `{ "Tuple": ["morphir/SDK:basics#int", "morphir/SDK:string#string"] }`.
     Tuple(TypeAttributes, Vec<Type>),
 
     /// Record type (product type with named fields)
     ///
-    /// Example: `{ name : String, age : Int }`
+    /// `{ name : String }` is
+    /// `{ "Record": { "fields": { "name": "morphir/SDK:string#string" } } }`. The fields are an
+    /// object keyed by field name, so `attributes` can sit beside them and the declaration
+    /// order is the member order.
     Record(TypeAttributes, Vec<Field>),
 
     /// Extensible record type (record with a row variable)
     ///
-    /// Example: `{ a | name : String }` where `a` is the row variable
+    /// `{ r | email : String }` is
+    /// `{ "ExtensibleRecord": { "variable": "r", "fields": { "email": "morphir/SDK:string#string" } } }`.
     ExtensibleRecord(TypeAttributes, Name, Vec<Field>),
 
-    /// Function type (arrow type)
+    /// Function type (arrow type), from its parameter type to its return type
     ///
-    /// Example: `Int -> String`
+    /// `Int -> String` is
+    /// `{ "Function": { "parameterType": "morphir/SDK:basics#int", "returnType": "morphir/SDK:string#string" } }`.
     Function(TypeAttributes, Box<Type>, Box<Type>),
 
     /// Unit type (empty tuple, void equivalent)
     ///
-    /// Example: `()`
+    /// `()` is `{ "Unit": {} }`.
     Unit(TypeAttributes),
 }
 
@@ -148,6 +159,12 @@ impl Field {
 /// Type specification (public API view of a type)
 // The variant names include "Specification" suffix as per the Morphir specification
 #[allow(clippy::enum_variant_names)]
+// A type expression is held inline rather than boxed: it is the payload a reader reaches for on
+// every declaration, and `TypeAttributes` carries two `serde_json::Value` members, which
+// `preserve_order` makes wide enough for Clippy to notice the difference between this variant and
+// the ones carrying no type expression at all. Boxing would trade that width for an indirection on
+// the hot path and change a widely matched public enum.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpecification {
     /// Type alias specification
@@ -161,6 +178,17 @@ pub enum TypeSpecification {
     CustomTypeSpecification {
         type_params: Vec<Name>,
         constructors: Vec<ConstructorSpecification>,
+    },
+    /// A type built from another one, with the two conversions between them
+    ///
+    /// `{ "DerivedTypeSpecification": { "typeParams": [], "baseType": …, "fromBaseType": …,
+    /// "toBaseType": … } }`. All four members are required, and the two conversions are FQNames
+    /// rather than expressions.
+    DerivedTypeSpecification {
+        type_params: Vec<Name>,
+        base_type: Type,
+        from_base_type: FQName,
+        to_base_type: FQName,
     },
 }
 
@@ -186,6 +214,14 @@ impl Serialize for TypeSpecification {
         struct Custom<'a> {
             type_params: &'a [Name],
             constructors: indexmap::IndexMap<String, Vec<(&'a Name, &'a Type)>>,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Derived<'a> {
+            type_params: &'a [Name],
+            base_type: &'a Type,
+            from_base_type: String,
+            to_base_type: String,
         }
 
         let mut map = serializer.serialize_map(Some(1))?;
@@ -225,6 +261,20 @@ impl Serialize for TypeSpecification {
                         .collect(),
                 },
             )?,
+            Self::DerivedTypeSpecification {
+                type_params,
+                base_type,
+                from_base_type,
+                to_base_type,
+            } => map.serialize_entry(
+                "DerivedTypeSpecification",
+                &Derived {
+                    type_params,
+                    base_type,
+                    from_base_type: from_base_type.to_canonical_string(),
+                    to_base_type: to_base_type.to_canonical_string(),
+                },
+            )?,
         }
         map.end()
     }
@@ -235,76 +285,10 @@ impl<'de> Deserialize<'de> for TypeSpecification {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Alias {
-            #[serde(default)]
-            type_params: Vec<Name>,
-            type_exp: Type,
-        }
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Opaque {
-            #[serde(default)]
-            type_params: Vec<Name>,
-        }
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Custom {
-            #[serde(default)]
-            type_params: Vec<Name>,
-            constructors: indexmap::IndexMap<String, Vec<(Name, Type)>>,
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| de::Error::custom("expected a type specification wrapper"))?;
-        if let Some(content) = object
-            .get("TypeAliasSpecification")
-            .or_else(|| object.get("typeAliasSpecification"))
-        {
-            let content: Alias =
-                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-            return Ok(Self::TypeAliasSpecification {
-                type_params: content.type_params,
-                type_expr: content.type_exp,
-            });
-        }
-        if let Some(content) = object
-            .get("OpaqueTypeSpecification")
-            .or_else(|| object.get("opaqueTypeSpecification"))
-        {
-            let content: Opaque =
-                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-            return Ok(Self::OpaqueTypeSpecification {
-                type_params: content.type_params,
-            });
-        }
-        if let Some(content) = object
-            .get("CustomTypeSpecification")
-            .or_else(|| object.get("customTypeSpecification"))
-        {
-            let content: Custom =
-                serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-            return Ok(Self::CustomTypeSpecification {
-                type_params: content.type_params,
-                constructors: content
-                    .constructors
-                    .into_iter()
-                    .map(|(name, args)| {
-                        Ok(ConstructorSpecification {
-                            name: Name::from_canonical_string(&name).map_err(de::Error::custom)?,
-                            args: args
-                                .into_iter()
-                                .map(|(name, arg_type)| ConstructorArgSpec { name, arg_type })
-                                .collect(),
-                        })
-                    })
-                    .collect::<Result<_, _>>()?,
-            });
-        }
-        Err(de::Error::custom("unknown type specification wrapper"))
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_type_specification,
+        )
     }
 }
 
@@ -332,6 +316,10 @@ pub struct ConstructorArgSpec {
 /// Reason for an incomplete type (V4 only)
 ///
 /// Used when a type cannot be fully resolved due to errors or work in progress.
+///
+/// A hole says why it is one: `{ "Hole": { "reason": { "Draft": {} } } }`. A draft is
+/// deliberately unfinished rather than broken, so it has no reason at all and takes an empty
+/// payload: `{ "Draft": {} }`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Incompleteness {
     /// Type has unresolved dependencies or errors
@@ -345,10 +333,15 @@ impl Serialize for Incompleteness {
     where
         S: Serializer,
     {
+        #[derive(Serialize)]
+        struct HoleContent<'a> {
+            reason: &'a HoleReason,
+        }
+
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             Incompleteness::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
-            Incompleteness::Hole(reason) => map.serialize_entry("Hole", reason)?,
+            Incompleteness::Hole(reason) => map.serialize_entry("Hole", &HoleContent { reason })?,
         }
         map.end()
     }
@@ -359,32 +352,10 @@ impl<'de> Deserialize<'de> for Incompleteness {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match &value {
-            serde_json::Value::Object(map) => {
-                if let Some((key, content)) = map.iter().next() {
-                    match key.as_str() {
-                        "Draft" => Ok(Incompleteness::Draft),
-                        "Hole" => {
-                            let reason: HoleReason = serde_json::from_value(content.clone())
-                                .map_err(de::Error::custom)?;
-                            Ok(Incompleteness::Hole(reason))
-                        }
-                        _ => Err(de::Error::unknown_variant(key, &["Draft", "Hole"])),
-                    }
-                } else {
-                    Err(de::Error::custom("empty object for Incompleteness"))
-                }
-            }
-            // Also accept string format for backward compatibility (Draft only)
-            serde_json::Value::String(s) => match s.as_str() {
-                "Draft" => Ok(Incompleteness::Draft),
-                _ => Err(de::Error::unknown_variant(s, &["Draft"])),
-            },
-            _ => Err(de::Error::custom(
-                "expected object or string for Incompleteness",
-            )),
-        }
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_incompleteness,
+        )
     }
 }
 
@@ -490,21 +461,14 @@ impl Serialize for TypeDefinition {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TypeAliasDefContent {
     type_params: Vec<Name>,
     type_exp: Type,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CustomTypeDefContent {
-    type_params: Vec<Name>,
-    constructors: AccessControlled<Vec<ConstructorDefinition>>,
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteTypeDefContent {
     type_params: Vec<Name>,
@@ -518,70 +482,10 @@ impl<'de> Deserialize<'de> for TypeDefinition {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        if let serde_json::Value::Object(map) = &value {
-            if let Some(content) = map.get("TypeAliasDefinition") {
-                let parsed: TypeAliasDefContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(TypeDefinition::TypeAliasDefinition {
-                    type_params: parsed.type_params,
-                    type_expr: parsed.type_exp,
-                });
-            }
-            if let Some(content) = map.get("CustomTypeDefinition") {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Canonical {
-                    #[serde(default)]
-                    type_params: Vec<Name>,
-                    access: super::Access,
-                    constructors: indexmap::IndexMap<String, Vec<(Name, Type)>>,
-                }
-                if let Ok(parsed) = serde_json::from_value::<Canonical>(content.clone()) {
-                    return Ok(TypeDefinition::CustomTypeDefinition {
-                        type_params: parsed.type_params,
-                        constructors: AccessControlled {
-                            access: parsed.access,
-                            value: parsed
-                                .constructors
-                                .into_iter()
-                                .map(|(name, args)| {
-                                    Ok(ConstructorDefinition {
-                                        name: Name::from_canonical_string(&name)
-                                            .map_err(de::Error::custom)?,
-                                        args: args
-                                            .into_iter()
-                                            .map(|(name, arg_type)| ConstructorArg {
-                                                name,
-                                                arg_type,
-                                            })
-                                            .collect(),
-                                    })
-                                })
-                                .collect::<Result<_, D::Error>>()?,
-                        },
-                    });
-                }
-                let parsed: CustomTypeDefContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(TypeDefinition::CustomTypeDefinition {
-                    type_params: parsed.type_params,
-                    constructors: parsed.constructors,
-                });
-            }
-            if let Some(content) = map.get("IncompleteTypeDefinition") {
-                let parsed: IncompleteTypeDefContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(TypeDefinition::IncompleteTypeDefinition {
-                    type_params: parsed.type_params,
-                    incompleteness: parsed.incompleteness,
-                    partial_type_expr: parsed.partial_type_exp,
-                });
-            }
-        }
-        Err(de::Error::custom(
-            "expected TypeAliasDefinition, CustomTypeDefinition, or IncompleteTypeDefinition wrapper",
-        ))
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_type_definition,
+        )
     }
 }
 

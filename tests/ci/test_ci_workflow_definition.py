@@ -86,6 +86,7 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
             "lint-yaml",
             "docs-generated",
             "lint-rust",
+            "kit-conformance",
             "build-wasm",
             "workspace-wasm",
             "test-native-extension",

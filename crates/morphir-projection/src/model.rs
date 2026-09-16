@@ -231,6 +231,10 @@ pub enum EntryPointKind {
     Command,
     /// An event or request handler.
     Handler,
+    /// A scheduled or batch job.
+    Job,
+    /// A policy evaluation entry point.
+    Policy,
 }
 
 /// Metadata attached to a declared v4 application entry point.

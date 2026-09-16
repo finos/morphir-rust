@@ -35,3 +35,18 @@ fn rejects_a_non_v3_classic_distribution_at_the_typed_boundary() {
 
     assert_eq!(error.code, "unsupported-source-version");
 }
+
+#[test]
+fn refuses_a_classic_name_with_no_words_rather_than_migrating_it_to_nothing() {
+    // `[[]]` is a Classic path holding one name with no words. A v4 name is one or more
+    // segments, and every v4 reader refuses the empty string where a name belongs, so this has
+    // no v4 spelling: the migration owes a diagnostic rather than a document nothing will read.
+    let source: classic::Distribution = serde_json::from_str(
+        r#"{"formatVersion": 3, "distribution": ["Library", [[]], [], {"modules": []}]}"#,
+    )
+    .unwrap();
+
+    let error = migrate_distribution(&source, MigrationOptions::default()).unwrap_err();
+
+    assert_eq!(error.code, "empty-name");
+}

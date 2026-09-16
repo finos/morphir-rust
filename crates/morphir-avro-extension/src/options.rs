@@ -45,12 +45,33 @@ impl Default for AvroOptions {
     }
 }
 
+/// Sorts every object's members, at every depth.
+///
+/// `deny_unknown_fields` reports the first unknown member serde meets, so without this the
+/// diagnostic a host reads back would depend on the order it happened to build its option map
+/// in. The top-level map is already canonicalized into a `BTreeMap`; this extends the same
+/// guarantee to the nested objects a host passes through, such as a type mapping.
+fn sorted_members(value: &Value) -> Value {
+    match value {
+        Value::Object(members) => Value::Object(
+            members
+                .iter()
+                .map(|(key, member)| (key.clone(), sorted_members(member)))
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(sorted_members).collect()),
+        scalar => scalar.clone(),
+    }
+}
+
 impl AvroOptions {
     /// Decode backend options without coercing the JSON values supplied by the host.
     pub fn from_map(options: &HashMap<String, Value>) -> Result<Self, AvroDiagnostic> {
         let options = options
             .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
+            .map(|(key, value)| (key.clone(), sorted_members(value)))
             .collect::<BTreeMap<_, _>>();
 
         let value = serde_json::to_value(options)

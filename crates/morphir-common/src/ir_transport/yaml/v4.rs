@@ -8,7 +8,7 @@ use morphir_core::traversal::{
     DependencyEvent, DistributionHeader, IrCursor, ModuleEvent, SemanticEvent, SemanticEventKind,
 };
 
-use super::{YamlCodec, stream_event_error};
+use super::{YamlCodec, stream_event_error, to_yaml_text};
 use crate::ir_transport::{EventSink, TransportDiagnostic};
 
 enum V4YamlDistribution {
@@ -47,8 +47,7 @@ impl<'writer> V4YamlEventEncoder<'writer> {
     }
 
     fn inline(value: &impl serde::Serialize) -> Result<String, TransportDiagnostic> {
-        let rendered = serde_saphyr::to_string_with_options(value, YamlCodec::serializer_options())
-            .map_err(YamlCodec::encode_error)?;
+        let rendered = to_yaml_text(value)?;
         let rendered = rendered.trim_end_matches(['\r', '\n']);
         if rendered.contains('\n') {
             return Err(YamlCodec::encode_error(
@@ -63,9 +62,7 @@ impl<'writer> V4YamlEventEncoder<'writer> {
         value: &impl serde::Serialize,
         indent: usize,
     ) -> Result<(), TransportDiagnostic> {
-        let rendered = serde_saphyr::to_string_with_options(value, YamlCodec::serializer_options())
-            .map_err(YamlCodec::encode_error)?
-            .replace("\r\n", "\n");
+        let rendered = to_yaml_text(value)?.replace("\r\n", "\n");
         let padding = " ".repeat(indent);
         for line in rendered.trim_end_matches('\n').lines() {
             self.write(&padding)?;

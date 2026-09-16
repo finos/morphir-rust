@@ -1,4 +1,6 @@
 use super::*;
+
+#[cfg(unix)]
 #[test]
 fn root_replaced_after_capability_open_is_rejected_by_identity() {
     let parent = tempfile::tempdir().unwrap();

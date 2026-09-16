@@ -13,9 +13,34 @@ pub mod openapi;
 pub use json_schema::render_json_schema;
 pub use openapi::render_openapi;
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value, json};
 
 use crate::{NamedSchema, Schema, SchemaVariant};
+
+/// Orders every object's members by name, at every depth.
+///
+/// Both renderers assemble their document as a [`Value`] and print it, so without this the
+/// bytes they write would follow the order the builder happened to insert members in. Member
+/// order carries no meaning in JSON Schema or OpenAPI, so sorting makes a rendered artifact a
+/// function of the projection alone and keeps a reviewed document reviewable by diff.
+pub(crate) fn in_canonical_member_order(value: Value) -> Value {
+    match value {
+        Value::Object(members) => Value::Object(
+            members
+                .into_iter()
+                .map(|(name, member)| (name, in_canonical_member_order(member)))
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(in_canonical_member_order).collect())
+        }
+        scalar => scalar,
+    }
+}
 
 /// The JSON object body of one named schema: its own keywords, plus the
 /// `x-morphir-fqname` and optional `description` every named schema carries.

@@ -75,3 +75,9 @@ venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Morphir Compatibility Kit run: the downloaded driver and the report it writes
+# (`mise run check:kit`). The driver is a release asset and the report is a run's output;
+# neither is source.
+.dev/bin/
+.dev/out/

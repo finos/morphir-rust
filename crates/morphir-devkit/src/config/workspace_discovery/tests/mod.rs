@@ -14,10 +14,13 @@ use super::{
     },
     budget::{PayloadBudget, PayloadKind, entry_bytes},
     mounts::{apply_user_override_selection, selected_mount},
-    traversal::{BoundaryEvent, TraversalBudgets, build_tree_with},
+    traversal::TraversalBudgets,
     *,
 };
 use crate::config::sources::SourceSelection;
+
+#[cfg(unix)]
+use super::traversal::{BoundaryEvent, build_tree_with};
 
 #[cfg(unix)]
 use std::os::unix::fs::symlink;

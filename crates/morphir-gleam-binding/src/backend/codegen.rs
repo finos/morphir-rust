@@ -1,7 +1,10 @@
 //! Gleam code generation from Morphir IR
 
 use morphir_common::vfs::{MemoryVfs, Vfs};
-use morphir_core::ir::v4::{Distribution as MorphirDistribution, IRFile, PackageDefinition};
+use morphir_core::ir::v4::{
+    Distribution as MorphirDistribution, FormatVersion as MorphirFormatVersion, IRFile,
+    PackageDefinition,
+};
 use morphir_core::naming::ModuleName;
 use morphir_extension_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -49,6 +52,22 @@ pub fn generate_gleam(
     ir: &serde_json::Value,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
+    // The release is judged before the document is read. A v4 reader refuses a release it does
+    // not support outright, so without this the legacy fallbacks below would answer for it and
+    // report whatever they made of the document instead of the version that was the problem.
+    if let Some(written) = ir.get("formatVersion") {
+        let release = serde_json::from_value::<MorphirFormatVersion>(written.clone())
+            .ok()
+            .and_then(|version| version.normalize().ok())
+            .map(|normalized| normalized.release.to_exact_string());
+        if release.as_deref() != Some(crate::GLEAM_IR_VERSION) {
+            return Err(ExtensionError::execution(format!(
+                "unsupported Morphir IR formatVersion '{written}'; Gleam supports '{}'",
+                crate::GLEAM_IR_VERSION
+            )));
+        }
+    }
+
     if let Ok(ir_file) = serde_json::from_value::<IRFile>(ir.clone()) {
         let normalized = ir_file.format_version.normalize().map_err(|error| {
             ExtensionError::execution(format!("Invalid Morphir IR formatVersion: {error}"))

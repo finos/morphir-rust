@@ -1,34 +1,24 @@
 {
-  "description": "V4 HoleReason examples for testing morphir-rust compliance",
+  "description": "Hole reasons in their decided v4 spellings. A reason is the wrapper itself; a hole nests it under `reason`.",
   "examples": {
     "unresolvedReference": {
-      "HoleReason": {
-        "UnresolvedReference": {
-          "target": "my-org/my-package:domain/users#get-user"
-        }
+      "UnresolvedReference": {
+        "target": "my-org/my-package:domain/users#get-user"
       }
     },
     "deletedDuringRefactor": {
-      "HoleReason": {
-        "DeletedDuringRefactor": {
-          "tx-id": "refactor-2026-01-30-001"
-        }
+      "DeletedDuringRefactor": {
+        "tx-id": "refactor-2026-01-30-001"
       }
     },
     "typeMismatch": {
-      "HoleReason": {
-        "TypeMismatch": {
-          "expected": "morphir/sdk:basics#int",
-          "found": "morphir/sdk:string#string"
-        }
+      "TypeMismatch": {
+        "expected": "morphir/SDK:basics#int",
+        "found": "morphir/SDK:string#string"
       }
+    },
+    "draft": {
+      "Draft": {}
     }
-  },
-  "legacyStringFormats": {
-    "comment": "These string formats should be accepted for backward compatibility",
-    "examples": [
-      "DeletedDuringRefactor",
-      "TypeMismatch"
-    ]
   }
 }

@@ -4,7 +4,7 @@
     "Library": {
       "packageName": "regulation",
       "dependencies": {
-        "morphir/sdk": {
+        "morphir/SDK": {
           "modules": {
             "basics": {
               "types": {
@@ -21,10 +21,10 @@
               "values": {
                 "add": {
                   "inputs": {
-                    "a": "morphir/sdk:basics#int",
-                    "b": "morphir/sdk:basics#int"
+                    "a": "morphir/SDK:basics#int",
+                    "b": "morphir/SDK:basics#int"
                   },
-                  "output": "morphir/sdk:basics#int"
+                  "output": "morphir/SDK:basics#int"
                 }
               }
             },
@@ -32,18 +32,40 @@
               "types": {
                 "list": {
                   "TypeAliasSpecification": {
-                    "typeParams": ["a"],
-                    "typeExp": ["morphir/sdk:list#list", "a"]
+                    "typeParams": [
+                      "a"
+                    ],
+                    "typeExp": {
+                      "Reference": [
+                        "morphir/SDK:list#list",
+                        "a"
+                      ]
+                    }
                   }
                 }
               },
               "values": {
                 "map": {
                   "inputs": {
-                    "f": ["Function", {}, "a", "b"],
-                    "list": ["morphir/sdk:list#list", "a"]
+                    "f": {
+                      "Function": {
+                        "parameterType": "a",
+                        "returnType": "b"
+                      }
+                    },
+                    "list": {
+                      "Reference": [
+                        "morphir/SDK:list#list",
+                        "a"
+                      ]
+                    }
                   },
-                  "output": ["morphir/sdk:list#list", "b"]
+                  "output": {
+                    "Reference": [
+                      "morphir/SDK:list#list",
+                      "b"
+                    ]
+                  }
                 }
               }
             }
@@ -78,7 +100,12 @@
                     "typeExp": {
                       "Record": {
                         "fields": {
-                          "assets": ["morphir/sdk:list#list", "regulation:u-s/f-r-2052-a/data-tables/inflows#assets"]
+                          "assets": {
+                            "Reference": [
+                              "morphir/SDK:list#list",
+                              "regulation:u-s/f-r-2052-a/data-tables/inflows#assets"
+                            ]
+                          }
                         }
                       }
                     }
@@ -92,13 +119,10 @@
                     "inputTypes": {
                       "tables": "regulation:u-s/f-r-2052-a/data-tables#data-tables"
                     },
-                    "outputType": "morphir/sdk:basics#float",
+                    "outputType": "morphir/SDK:basics#float",
                     "body": {
                       "Literal": {
-                        "attributes": {},
-                        "literal": {
-                          "FloatLiteral": 0.0
-                        }
+                        "FloatLiteral": 0.0
                       }
                     }
                   }

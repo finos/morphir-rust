@@ -90,5 +90,7 @@ fn normalize_entry_point_kind(kind: v4::EntryPointKind) -> EntryPointKind {
         v4::EntryPointKind::Main => EntryPointKind::Main,
         v4::EntryPointKind::Command => EntryPointKind::Command,
         v4::EntryPointKind::Handler => EntryPointKind::Handler,
+        v4::EntryPointKind::Job => EntryPointKind::Job,
+        v4::EntryPointKind::Policy => EntryPointKind::Policy,
     }
 }

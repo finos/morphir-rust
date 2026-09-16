@@ -284,13 +284,21 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             morphir_core::ir::v4::ValueBody::Expression(body) => {
                 self.generate_value_expr(output, body)?;
             }
-            morphir_core::ir::v4::ValueBody::Native(info) => {
+            morphir_core::ir::v4::ValueBody::Native { native_info } => {
                 output.push_str("// native: ");
-                output.push_str(&format!("{:?}", info.hint));
+                output.push_str(&format!("{:?}", native_info.hint));
             }
-            morphir_core::ir::v4::ValueBody::External { external_name, .. } => {
+            morphir_core::ir::v4::ValueBody::External { externals, .. } => {
                 output.push_str("// external: ");
-                output.push_str(external_name);
+                output.push_str(
+                    &externals
+                        .iter()
+                        .map(|binding| {
+                            format!("{}={}", binding.target_platform, binding.external_name)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
             }
             morphir_core::ir::v4::ValueBody::Incomplete { .. } => {
                 output.push_str("todo // incomplete");
@@ -495,6 +503,14 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push('\'');
                 output.push(*c);
                 output.push('\'');
+            }
+            // Gleam has no schema-less document type, so a document literal has no source
+            // spelling here rather than a lossy one.
+            MorphirLiteral::Document(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "a document literal has no Gleam spelling",
+                ));
             }
         }
         Ok(())

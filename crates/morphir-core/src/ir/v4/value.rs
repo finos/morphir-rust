@@ -145,18 +145,13 @@ pub enum Value {
     ///
     /// Represents values that couldn't be fully resolved or compiled.
     /// Used for incremental compilation and error recovery.
+    ///
+    /// Decision 0008 keeps the hole a value expression, with an optional expected type:
+    /// `{ "Hole": { "reason": { "Draft": {} }, "expectedType": "morphir/SDK:basics#int" } }`.
+    /// It is the only V4-only value expression: a native operation and an external binding are
+    /// properties of a *definition*, so they live in [`ValueBody`] and a reader refuses
+    /// `{ "Native": … }` or `{ "External": … }` where a value expression belongs.
     Hole(ValueAttributes, HoleReason, Option<Box<Type>>),
-
-    /// Native platform operation (V4 only)
-    ///
-    /// Represents operations that are implemented natively by the platform
-    /// rather than having an IR body.
-    Native(ValueAttributes, FQName, NativeInfo),
-
-    /// External FFI call (V4 only)
-    ///
-    /// References an external function implementation.
-    External(ValueAttributes, String, String), // external_name, target_platform
 }
 
 /// Reason why a value is incomplete/broken (V4 only)
@@ -194,9 +189,13 @@ pub enum NativeHint {
 }
 
 /// Information about a native operation (V4 only)
+///
+/// `{ "hint": { "Arithmetic": {} } }`. A description is optional and is written only when the
+/// definition has one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeInfo {
     pub hint: NativeHint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
@@ -220,9 +219,23 @@ pub struct PatternCase(pub Pattern, pub Value);
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetBinding(pub Name, pub ValueDefinition);
 
-/// The body of a value definition
+/// One target platform's binding for an external definition.
 ///
-/// V4 format supports Expression, Native, External, and Incomplete body types.
+/// `{ "targetPlatform": "javascript", "externalName": "console.log" }`. Decision 0008 makes a
+/// target platform unique within a definition's bindings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalBinding {
+    pub target_platform: String,
+    pub external_name: String,
+}
+
+/// The body of a value definition.
+///
+/// Decision 0008: a native operation, an external binding and an incompleteness are properties
+/// of a definition rather than expressions, so these four bodies are where they live. An
+/// external definition carries one binding per target platform and may still carry a fallback
+/// body, which is what lets a Gleam-style external with a body encode without loss.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum ValueBody {
@@ -230,19 +243,20 @@ pub enum ValueBody {
     Expression(Value),
 
     /// Native/builtin operation - no IR body (V4 only)
-    Native(NativeInfo),
+    Native { native_info: NativeInfo },
 
     /// External FFI definition (V4 only)
     External {
-        external_name: String,
-        target_platform: String,
+        externals: Vec<ExternalBinding>,
+        fallback: Option<Box<Value>>,
     },
 
     /// Incomplete value definition (V4 only)
-    Incomplete {
-        incompleteness: Incompleteness,
-        partial_body: Option<Value>,
-    },
+    ///
+    /// The output type lives on the [`ValueDefinition`], where every body's does; it is optional
+    /// there because an incomplete definition may not have one yet, and required on the wire for
+    /// the three complete bodies.
+    Incomplete { incompleteness: Incompleteness },
 }
 
 impl Value {
@@ -268,8 +282,6 @@ impl Value {
             Value::UpdateRecord(a, _, _) => a,
             Value::Unit(a) => a,
             Value::Hole(a, _, _) => a,
-            Value::Native(a, _, _) => a,
-            Value::External(a, _, _) => a,
         }
     }
 
@@ -420,11 +432,28 @@ impl NativeInfo {
 // ============================================================================
 
 /// Value specification (just the signature)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `{ "inputs": { "a": "morphir/SDK:basics#int" }, "output": "morphir/SDK:basics#int" }`. The
+/// inputs are an object keyed by parameter name, whose order is the parameter order; an array of
+/// `[name, type]` pairs is accepted beside it. `inputTypes` and `outputType` belong to a value
+/// *definition*'s bodies, not here.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSpecification {
     pub inputs: IndexMap<String, Type>,
     pub output: Type,
+}
+
+impl<'de> Deserialize<'de> for ValueSpecification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_value_specification,
+        )
+    }
 }
 
 // ============================================================================
@@ -479,8 +508,9 @@ struct ExternalDefinitionContent<'a> {
     #[serde(serialize_with = "serialize_input_types")]
     input_types: &'a IndexMap<String, InputTypeEntry>,
     output_type: &'a Type,
-    external_name: &'a str,
-    target_platform: &'a str,
+    externals: &'a [ExternalBinding],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<&'a Value>,
 }
 
 #[derive(Serialize)]
@@ -489,10 +519,8 @@ struct IncompleteDefinitionContent<'a> {
     #[serde(serialize_with = "serialize_input_types")]
     input_types: &'a IndexMap<String, InputTypeEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    output_type: &'a Option<Type>,
+    output_type: Option<&'a Type>,
     incompleteness: &'a Incompleteness,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    partial_body: &'a Option<Value>,
 }
 
 impl Serialize for ValueDefinition {
@@ -512,7 +540,7 @@ impl Serialize for ValueDefinition {
                     body,
                 },
             )?,
-            ValueBody::Native(native_info) => map.serialize_entry(
+            ValueBody::Native { native_info } => map.serialize_entry(
                 "NativeBody",
                 &NativeDefinitionContent {
                     input_types: &self.input_types,
@@ -523,8 +551,8 @@ impl Serialize for ValueDefinition {
                 },
             )?,
             ValueBody::External {
-                external_name,
-                target_platform,
+                externals,
+                fallback,
             } => map.serialize_entry(
                 "ExternalBody",
                 &ExternalDefinitionContent {
@@ -532,20 +560,16 @@ impl Serialize for ValueDefinition {
                     output_type: self.output_type.as_ref().ok_or_else(|| {
                         serde::ser::Error::custom("ExternalBody requires outputType")
                     })?,
-                    external_name,
-                    target_platform,
+                    externals,
+                    body: fallback.as_deref(),
                 },
             )?,
-            ValueBody::Incomplete {
-                incompleteness,
-                partial_body,
-            } => map.serialize_entry(
+            ValueBody::Incomplete { incompleteness } => map.serialize_entry(
                 "IncompleteBody",
                 &IncompleteDefinitionContent {
                     input_types: &self.input_types,
-                    output_type: &self.output_type,
+                    output_type: self.output_type.as_ref(),
                     incompleteness,
-                    partial_body,
                 },
             )?,
         }
@@ -553,114 +577,17 @@ impl Serialize for ValueDefinition {
     }
 }
 
-fn deserialize_input_types<E: de::Error>(
-    values: IndexMap<String, serde_json::Value>,
-) -> Result<IndexMap<String, InputTypeEntry>, E> {
-    values
-        .into_iter()
-        .map(|(name, value)| {
-            let entry = serde_json::from_value::<Type>(value.clone())
-                .map(|input_type| InputTypeEntry {
-                    type_attributes: None,
-                    input_type,
-                })
-                .or_else(|_| serde_json::from_value::<InputTypeEntry>(value))
-                .map_err(de::Error::custom)?;
-            Ok((name, entry))
-        })
-        .collect()
-}
-
 impl<'de> Deserialize<'de> for ValueDefinition {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Common {
-            #[serde(default)]
-            input_types: IndexMap<String, serde_json::Value>,
-            output_type: Option<Type>,
-            body: Option<Value>,
-            native_info: Option<NativeInfo>,
-            external_name: Option<String>,
-            target_platform: Option<String>,
-            incompleteness: Option<Incompleteness>,
-            partial_body: Option<Value>,
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| de::Error::custom("expected a value definition wrapper"))?;
-        if object.contains_key("inputTypes") {
-            #[derive(Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct Legacy {
-                #[serde(default)]
-                input_types: IndexMap<String, serde_json::Value>,
-                output_type: Option<Type>,
-                body: ValueBody,
-            }
-            let legacy: Legacy = serde_json::from_value(value).map_err(de::Error::custom)?;
-            return Ok(Self {
-                input_types: deserialize_input_types(legacy.input_types)?,
-                output_type: legacy.output_type,
-                body: legacy.body,
-            });
-        }
-        let (tag, content) = object
-            .iter()
-            .next()
-            .ok_or_else(|| de::Error::custom("empty value definition wrapper"))?;
-        let content: Common = serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-        let input_types = deserialize_input_types(content.input_types)?;
-        let body = match tag.as_str() {
-            "ExpressionBody" => ValueBody::Expression(
-                content
-                    .body
-                    .ok_or_else(|| de::Error::missing_field("body"))?,
-            ),
-            "NativeBody" => ValueBody::Native(
-                content
-                    .native_info
-                    .ok_or_else(|| de::Error::missing_field("nativeInfo"))?,
-            ),
-            "ExternalBody" => ValueBody::External {
-                external_name: content
-                    .external_name
-                    .ok_or_else(|| de::Error::missing_field("externalName"))?,
-                target_platform: content
-                    .target_platform
-                    .ok_or_else(|| de::Error::missing_field("targetPlatform"))?,
-            },
-            "IncompleteBody" => ValueBody::Incomplete {
-                incompleteness: content
-                    .incompleteness
-                    .ok_or_else(|| de::Error::missing_field("incompleteness"))?,
-                partial_body: content.partial_body,
-            },
-            _ => {
-                return Err(de::Error::unknown_variant(
-                    tag,
-                    &[
-                        "ExpressionBody",
-                        "NativeBody",
-                        "ExternalBody",
-                        "IncompleteBody",
-                    ],
-                ));
-            }
-        };
-        Ok(Self {
-            input_types,
-            output_type: content.output_type,
-            body,
-        })
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_value_definition,
+        )
     }
 }
-
 /// Input type entry
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -708,7 +635,7 @@ impl ValueDefinition {
         ValueDefinition {
             input_types: inputs,
             output_type: Some(output_type),
-            body: ValueBody::Native(info),
+            body: ValueBody::Native { native_info: info },
         }
     }
 }
@@ -727,37 +654,25 @@ impl Serialize for ValueBody {
             ValueBody::Expression(body) => {
                 map.serialize_entry("ExpressionBody", &ExpressionBodySerContent { body })?;
             }
-            ValueBody::Native(info) => {
-                map.serialize_entry(
-                    "NativeBody",
-                    &NativeBodySerContent {
-                        hint: info.hint.clone(),
-                        description: info.description.clone(),
-                    },
-                )?;
+            ValueBody::Native { native_info } => {
+                map.serialize_entry("NativeBody", &NativeBodySerContent { native_info })?;
             }
             ValueBody::External {
-                external_name,
-                target_platform,
+                externals,
+                fallback,
             } => {
                 map.serialize_entry(
                     "ExternalBody",
                     &ExternalBodySerContent {
-                        external_name: external_name.clone(),
-                        target_platform: target_platform.clone(),
+                        externals,
+                        body: fallback.as_deref(),
                     },
                 )?;
             }
-            ValueBody::Incomplete {
-                incompleteness,
-                partial_body,
-            } => {
+            ValueBody::Incomplete { incompleteness } => {
                 map.serialize_entry(
                     "IncompleteBody",
-                    &IncompleteBodySerContent {
-                        incompleteness,
-                        partial_body: partial_body.as_ref(),
-                    },
+                    &IncompleteBodySerContent { incompleteness },
                 )?;
             }
         }
@@ -771,26 +686,24 @@ struct ExpressionBodySerContent<'a> {
     body: &'a Value,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct NativeBodySerContent {
-    hint: NativeHint,
-    description: Option<String>,
+struct NativeBodySerContent<'a> {
+    native_info: &'a NativeInfo,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ExternalBodySerContent {
-    external_name: String,
-    target_platform: String,
+struct ExternalBodySerContent<'a> {
+    externals: &'a [ExternalBinding],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<&'a Value>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteBodySerContent<'a> {
     incompleteness: &'a Incompleteness,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    partial_body: Option<&'a Value>,
 }
 
 impl<'de> Deserialize<'de> for ValueBody {
@@ -798,55 +711,12 @@ impl<'de> Deserialize<'de> for ValueBody {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        if let serde_json::Value::Object(map) = &value {
-            if let Some(content) = map.get("ExpressionBody") {
-                let body_json = content
-                    .get("body")
-                    .ok_or_else(|| de::Error::missing_field("body"))?;
-                let body: Value =
-                    serde_json::from_value(body_json.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Expression(body));
-            }
-            if let Some(content) = map.get("NativeBody") {
-                let parsed: NativeBodySerContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Native(NativeInfo {
-                    hint: parsed.hint,
-                    description: parsed.description,
-                }));
-            }
-            if let Some(content) = map.get("ExternalBody") {
-                let parsed: ExternalBodySerContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::External {
-                    external_name: parsed.external_name,
-                    target_platform: parsed.target_platform,
-                });
-            }
-            if let Some(content) = map.get("IncompleteBody") {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct IncompleteBodyContent {
-                    incompleteness: Incompleteness,
-                    #[serde(default)]
-                    partial_body: Option<Value>,
-                }
-
-                let parsed: IncompleteBodyContent =
-                    serde_json::from_value(content.clone()).map_err(de::Error::custom)?;
-                return Ok(ValueBody::Incomplete {
-                    incompleteness: parsed.incompleteness,
-                    partial_body: parsed.partial_body,
-                });
-            }
-        }
-        Err(de::Error::custom(
-            "expected ExpressionBody, NativeBody, ExternalBody, or IncompleteBody wrapper",
-        ))
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_value_body,
+        )
     }
 }
-
 // ============================================================================
 // SERIALIZATION SUPPORT FOR NATIVE HINT
 // ============================================================================
@@ -1118,7 +988,7 @@ mod tests {
             Type::unit(TypeAttributes::default()),
             NativeInfo::new(NativeHint::Arithmetic, Some("add operation".to_string())),
         );
-        assert!(matches!(def.body, ValueBody::Native(_)));
+        assert!(matches!(def.body, ValueBody::Native { .. }));
     }
 
     // Tests from value_def.rs

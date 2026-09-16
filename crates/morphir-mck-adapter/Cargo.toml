@@ -1,0 +1,32 @@
+[package]
+name = "morphir-mck-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Morphir Compatibility Kit adapter for morphir-rust: the JSON-lines testee protocol"
+
+[[bin]]
+name = "mck-adapter-rust"
+path = "src/main.rs"
+
+[dependencies]
+morphir-core = { path = "../morphir-core" }
+morphir-common = { path = "../morphir-common" }
+serde = { version = "1.0", features = ["derive"] }
+# `unbounded_depth` lets the adapter turn off serde_json's own 128-level recursion limit so the
+# nesting ceiling the reader reports is the profile's, not the parser's.
+serde_json = { version = "1.0", features = [
+    "preserve_order",
+    "arbitrary_precision",
+    "unbounded_depth",
+] }
+anyhow = { workspace = true }
+
+[dev-dependencies]

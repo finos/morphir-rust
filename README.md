@@ -33,6 +33,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-extension-sdk` | SDK and MEP contracts for WebAssembly extensions. |
 | `morphir-gleam-binding` | Gleam frontend and backend extension integration. |
 | `morphir-kb` | Operational layer for OKF knowledge bundles. |
+| `morphir-mck-adapter` | The Morphir Compatibility Kit adapter: `mck-adapter-rust`, a JSON-lines transport over the v4 codec that the kit driver runs against. |
 | `morphir-okf` | Pure OKF model, parsing, and loading support. |
 | `morphir-openapi-extension` | OpenAPI and JSON Schema backend that projects Morphir v3/v4 specifications to OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. |
 | `morphir-projection` | Shared Morphir IR normalization that backend extensions project from. |

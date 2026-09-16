@@ -4,6 +4,7 @@ use morphir_core::traversal::IrCursor;
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::YamlCodec;
+use super::plain::PlainValue;
 use crate::ir_transport::{IR_RECURSION_STACK_BYTES, SourceSpan, Stage, TransportDiagnostic};
 
 pub(crate) fn validate_yaml_profile(input: &[u8]) -> Result<(), TransportDiagnostic> {
@@ -82,11 +83,22 @@ pub(crate) fn decode_document<T: DeserializeOwned>(input: &[u8]) -> Result<T, Tr
     })
 }
 
-pub(crate) fn encode_document<T: Serialize>(value: &T) -> Result<Vec<u8>, TransportDiagnostic> {
-    let mut rendered = stacker::grow(IR_RECURSION_STACK_BYTES, || {
-        serde_saphyr::to_string_with_options(value, YamlCodec::serializer_options())
+/// Renders `value` as one YAML document body, with no trailing-newline normalization.
+///
+/// Everything the YAML codec writes goes through here, so nothing reaches serde-saphyr without
+/// [`PlainValue`]'s rewrite first — see its documentation for why a raw value cannot.
+pub(super) fn to_yaml_text<T: Serialize + ?Sized>(
+    value: &T,
+) -> Result<String, TransportDiagnostic> {
+    stacker::grow(IR_RECURSION_STACK_BYTES, || {
+        let plain = PlainValue::of(value)?;
+        serde_saphyr::to_string_with_options(&plain, YamlCodec::serializer_options())
             .map_err(YamlCodec::encode_error)
-    })?;
+    })
+}
+
+pub(crate) fn encode_document<T: Serialize>(value: &T) -> Result<Vec<u8>, TransportDiagnostic> {
+    let mut rendered = to_yaml_text(value)?;
     rendered = rendered.replace("\r\n", "\n");
     if !rendered.ends_with('\n') {
         rendered.push('\n');

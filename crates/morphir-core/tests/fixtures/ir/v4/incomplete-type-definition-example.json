@@ -1,5 +1,5 @@
 {
-  "description": "V4 IncompleteTypeDefinition examples for testing morphir-rust compliance",
+  "description": "Incomplete type definitions in their decided v4 spellings: `typeParams`, an `incompleteness`, and the optional `partialTypeExp` the author had written.",
   "examples": {
     "holeWithUnresolvedReference": {
       "IncompleteTypeDefinition": {
@@ -12,11 +12,10 @@
               }
             }
           }
-        },
-        "partialTypeExp": null
+        }
       }
     },
-    "draftWithPartialBody": {
+    "draftWithPartialTypeExp": {
       "IncompleteTypeDefinition": {
         "typeParams": [],
         "incompleteness": {
@@ -24,8 +23,10 @@
         },
         "partialTypeExp": {
           "Record": {
-            "id": "morphir/sdk:string#string",
-            "name": "morphir/sdk:string#string"
+            "fields": {
+              "id": "morphir/SDK:string#string",
+              "name": "morphir/SDK:string#string"
+            }
           }
         }
       }
@@ -37,13 +38,12 @@
           "Hole": {
             "reason": {
               "TypeMismatch": {
-                "expected": "Function",
-                "found": "Record"
+                "expected": "morphir/SDK:basics#int",
+                "found": "morphir/SDK:string#string"
               }
             }
           }
-        },
-        "partialTypeExp": null
+        }
       }
     }
   }

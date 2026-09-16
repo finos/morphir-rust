@@ -17,8 +17,8 @@ fn test_integer_literal_serialize() {
 
 #[test]
 fn test_integer_literal_deserialize_v4_format() {
-    // V4 canonical format
-    let json = r#"["IntegerLiteral", 42]"#;
+    // V4 canonical format: a single-member wrapper carrying the value directly
+    let json = r#"{ "IntegerLiteral": 42 }"#;
 
     let lit: Literal = serde_json::from_str(json).unwrap();
 
@@ -30,8 +30,8 @@ fn test_integer_literal_deserialize_v4_format() {
 
 #[test]
 fn test_integer_literal_deserialize_legacy_whole_number() {
-    // V3 legacy format - should still be accepted
-    let json = r#"["WholeNumberLiteral", 99]"#;
+    // The spelling IntegerLiteral replaced - still accepted on input, never written
+    let json = r#"{ "WholeNumberLiteral": 99 }"#;
 
     let lit: Literal = serde_json::from_str(json).unwrap();
 

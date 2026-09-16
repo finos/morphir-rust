@@ -1,49 +1,11 @@
 {
-  "description": "V4 NativeHint examples for testing morphir-rust compliance",
+  "description": "Native operation hints in their decided v4 spellings: a single-member wrapper, empty unless the hint carries a payload.",
   "examples": {
-    "arithmetic": {
-      "NativeHint": {
-        "Arithmetic": {}
-      }
-    },
-    "comparison": {
-      "NativeHint": {
-        "Comparison": {}
-      }
-    },
-    "stringOp": {
-      "NativeHint": {
-        "StringOp": {}
-      }
-    },
-    "collectionOp": {
-      "NativeHint": {
-        "CollectionOp": {}
-      }
-    },
-    "platformSpecificWasm": {
-      "NativeHint": {
-        "PlatformSpecific": {
-          "platform": "wasm"
-        }
-      }
-    },
-    "platformSpecificJavaScript": {
-      "NativeHint": {
-        "PlatformSpecific": {
-          "platform": "javascript"
-        }
-      }
-    }
-  },
-  "legacyStringFormats": {
-    "comment": "These string formats should be accepted for backward compatibility",
-    "examples": [
-      "Arithmetic",
-      "Comparison",
-      "StringOp",
-      "CollectionOp",
-      "PlatformSpecific"
-    ]
+    "arithmetic": { "Arithmetic": {} },
+    "comparison": { "Comparison": {} },
+    "stringOp": { "StringOp": {} },
+    "collectionOp": { "CollectionOp": {} },
+    "platformSpecificWasm": { "PlatformSpecific": { "platform": "wasm" } },
+    "platformSpecificJavaScript": { "PlatformSpecific": { "platform": "javascript" } }
   }
 }

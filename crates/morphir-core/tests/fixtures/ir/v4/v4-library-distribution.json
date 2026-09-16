@@ -12,24 +12,20 @@
               "types": {
                 "user-id": {
                   "access": "Public",
-                  "value": {
-                    "TypeAliasDefinition": {
-                      "typeParams": [],
-                      "typeExp": "morphir/sdk:string#string"
-                    }
+                  "TypeAliasDefinition": {
+                    "typeParams": [],
+                    "typeExp": "morphir/SDK:string#string"
                   }
                 },
                 "incomplete-user": {
                   "access": "Private",
-                  "value": {
-                    "IncompleteTypeDefinition": {
-                      "typeParams": [],
-                      "incompleteness": {
-                        "Draft": {}
-                      },
-                      "partialTypeExp": {
-                        "Record": {
-                          "id": "morphir/sdk:string#string"
+                  "IncompleteTypeDefinition": {
+                    "typeParams": [],
+                    "incompleteness": { "Draft": {} },
+                    "partialTypeExp": {
+                      "Record": {
+                        "fields": {
+                          "id": "morphir/SDK:string#string"
                         }
                       }
                     }
@@ -39,47 +35,33 @@
               "values": {
                 "get-user-name": {
                   "access": "Public",
-                  "value": {
+                  "ExpressionBody": {
                     "inputTypes": {
-                      "user": {
-                        "type": "example/v4-test:domain#user-id"
-                      }
+                      "user": "example/v4-test:domain#user-id"
                     },
-                    "outputType": "morphir/sdk:string#string",
+                    "outputType": "morphir/SDK:string#string",
                     "body": {
-                      "ExpressionBody": {
-                        "body": {
-                          "Hole": {
-                            "attributes": {},
-                            "reason": {
-                              "UnresolvedReference": {
-                                "target": "example/v4-test:domain#user-name-lookup"
-                              }
-                            },
-                            "expectedType": "morphir/sdk:string#string"
+                      "Hole": {
+                        "reason": {
+                          "UnresolvedReference": {
+                            "target": "example/v4-test:domain#user-name-lookup"
                           }
-                        }
+                        },
+                        "expectedType": "morphir/SDK:string#string"
                       }
                     }
                   }
                 },
                 "native-add": {
                   "access": "Public",
-                  "value": {
+                  "NativeBody": {
                     "inputTypes": {
-                      "a": {
-                        "type": "morphir/sdk:basics#int"
-                      },
-                      "b": {
-                        "type": "morphir/sdk:basics#int"
-                      }
+                      "a": "morphir/SDK:basics#int",
+                      "b": "morphir/SDK:basics#int"
                     },
-                    "outputType": "morphir/sdk:basics#int",
-                    "body": {
-                      "NativeBody": {
-                        "hint": { "Arithmetic": {} },
-                        "description": "Native integer addition"
-                      }
+                    "outputType": "morphir/SDK:basics#int",
+                    "nativeInfo": {
+                      "hint": { "Arithmetic": {} }
                     }
                   }
                 }

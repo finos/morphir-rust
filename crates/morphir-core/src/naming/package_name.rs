@@ -52,6 +52,11 @@ impl PackageName {
         &self.0
     }
 
+    /// Get the underlying Path. Equivalent to [`PackageName::as_path`].
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
     /// Convert to the underlying Path
     pub fn into_path(self) -> Path {
         self.0
@@ -60,6 +65,16 @@ impl PackageName {
     /// Check if the package name is empty
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Render using [`super::CANONICAL_STYLE`].
+    pub fn to_canonical_string(&self) -> String {
+        self.0.to_canonical_string()
+    }
+
+    /// Parse a canonical package path in either encoding.
+    pub fn from_canonical_string(source: &str) -> Result<Self, String> {
+        Path::from_canonical_string(source).map(Self)
     }
 }
 

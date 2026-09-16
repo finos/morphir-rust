@@ -106,6 +106,11 @@ fn parse_fqname_from_string(s: &str) -> Option<FQName> {
         return None;
     }
 
+    // The empty string does not name anything, so a reference with nothing after `#` names none.
+    if name.is_empty() {
+        return None;
+    }
+
     let package_path = Path::new(pm_parts[0]);
     let module_path = Path::new(pm_parts[1]);
     let local_name = Name::from(name);

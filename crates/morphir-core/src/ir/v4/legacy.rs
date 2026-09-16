@@ -1,0 +1,191 @@
+//! The thread-local spelling mode and the legacy member table for the decision 0006 window.
+//!
+//! Decision 0006 gives a set of pre-decision member spellings a one-release acceptance window:
+//! they decode successfully at `path=current` with a `legacy_spelling` warning at the member's
+//! cursor, and are rejected once the window closes (`path=pinned`). This module is the shared
+//! table and lookup every v4 decoder calls, so every node applies the same rule.
+
+use std::cell::{Cell, RefCell};
+
+use crate::ir::{Diagnostic, DiagnosticCode, Warning};
+
+/// Which spelling window a decode runs under.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpellingMode {
+    /// Decision 0006's one-release window: legacy spellings decode with a warning.
+    Current,
+    /// The window has closed: legacy spellings are rejected as unknown members.
+    Pinned,
+}
+
+thread_local! {
+    static MODE: Cell<SpellingMode> = const { Cell::new(SpellingMode::Current) };
+    static WARNINGS: RefCell<Option<Vec<Warning>>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` with the spelling mode set (thread-local, like `with_type_encoding`), collecting any
+/// `legacy_spelling` warnings [`accept_member`] records during the call.
+///
+/// Outside a `with_spelling_mode` call the mode is `Current` and any warnings `accept_member`
+/// would have recorded are dropped instead.
+pub fn with_spelling_mode<R>(mode: SpellingMode, f: impl FnOnce() -> R) -> (R, Vec<Warning>) {
+    struct Restore(SpellingMode, Option<Vec<Warning>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MODE.set(self.0);
+            WARNINGS.with(|warnings| *warnings.borrow_mut() = self.1.take());
+        }
+    }
+
+    let previous_mode = MODE.replace(mode);
+    let previous_warnings = WARNINGS.with(|warnings| warnings.borrow_mut().replace(Vec::new()));
+    let _restore = Restore(previous_mode, previous_warnings);
+
+    let result = f();
+    let warnings = WARNINGS.with(|warnings| warnings.borrow_mut().take().unwrap_or_default());
+    (result, warnings)
+}
+
+/// Drains and returns the warnings collected so far on this thread, leaving the collector (if
+/// any is active) empty.
+pub fn take_warnings() -> Vec<Warning> {
+    WARNINGS.with(|warnings| {
+        let mut warnings = warnings.borrow_mut();
+        match warnings.as_mut() {
+            Some(collected) => std::mem::take(collected),
+            None => Vec::new(),
+        }
+    })
+}
+
+/// The legacy member table for the decision 0006 window: `(node, legacy, canonical)`.
+///
+/// A `node` of `"*"` matches every node kind. The table is authoritative for every v4 decoder in
+/// this workspace; it was checked against the Morphir Compatibility Kit's
+/// `accepted warning=legacy_spelling` fences (`spec/ir/mck/*.md`) before being committed.
+pub const LEGACY: &[(&str, &str, &str)] = &[
+    ("*", "attrs", "attributes"),
+    ("Function", "argumentType", "parameterType"),
+    ("Function", "arg", "parameterType"),
+    ("Function", "result", "returnType"),
+    ("IfThenElse", "thenBranch", "then"),
+    ("IfThenElse", "elseBranch", "else"),
+    ("Field", "subject", "target"),
+    ("Field", "fieldName", "name"),
+    ("LetDefinition", "valueName", "name"),
+    ("LetDefinition", "valueDefinition", "definition"),
+    ("LetDefinition", "inValue", "in"),
+    ("ExternalBody", "externalName", "externals"),
+    ("ExternalBody", "targetPlatform", "externals"),
+];
+
+/// Returns the canonical member name for `seen` inside node `node`.
+///
+/// This decides the spelling question alone, not whether the member belongs: the only names it
+/// answers about are the ones [`LEGACY`] mentions. `seen` is accepted silently when it is the
+/// canonical half of a row for `node` or for the wildcard `"*"` — so `attributes` is accepted for
+/// every node, including nodes that carry none, and a canonical member no row renames (`fields`,
+/// say) is `unknown_member` here and has to be recognized by its decoder. When `seen` is the
+/// legacy half of such a row, the mode decides: `Current` records a `legacy_spelling` warning at
+/// `cursor` and returns the canonical name; `Pinned` returns an `unknown_member` diagnostic. Any
+/// other `seen` is always `unknown_member`.
+pub fn accept_member(node: &str, seen: &str, cursor: &str) -> Result<&'static str, Diagnostic> {
+    if let Some(canonical) = LEGACY.iter().find_map(|(candidate_node, _, canonical)| {
+        ((*candidate_node == node || *candidate_node == "*") && *canonical == seen)
+            .then_some(*canonical)
+    }) {
+        return Ok(canonical);
+    }
+
+    if let Some(canonical) = LEGACY
+        .iter()
+        .find_map(|(candidate_node, legacy, canonical)| {
+            ((*candidate_node == node || *candidate_node == "*") && *legacy == seen)
+                .then_some(*canonical)
+        })
+    {
+        return match MODE.get() {
+            SpellingMode::Current => {
+                let warning = Warning {
+                    code: DiagnosticCode::LegacySpelling,
+                    cursor: cursor.to_string(),
+                };
+                WARNINGS.with(|warnings| {
+                    if let Some(collected) = warnings.borrow_mut().as_mut() {
+                        collected.push(warning);
+                    }
+                });
+                Ok(canonical)
+            }
+            SpellingMode::Pinned => Err(Diagnostic::normalization(
+                DiagnosticCode::UnknownMember,
+                cursor,
+                format!("unexpected member {seen}"),
+            )),
+        };
+    }
+
+    Err(Diagnostic::normalization(
+        DiagnosticCode::UnknownMember,
+        cursor,
+        format!("unexpected member {seen}"),
+    ))
+}
+
+/// Accepts a whole *shape* that decision 0006's window keeps alive, rather than a single
+/// renamed member.
+///
+/// A Record wrapper that carries its field map directly — the spelling the schema documented
+/// until 2026-09-04 — has no misspelled member to point at, so the warning lands on the
+/// wrapper itself at `cursor`. Once the window closes the shape is refused as an unknown
+/// member at the first member that would have had to be a canonical one.
+pub fn record_legacy_form_warning(cursor: &str, first_member: &str) -> Result<(), Diagnostic> {
+    accept_legacy_form(cursor, &format!("{cursor}/{first_member}"), first_member)
+}
+
+/// Accepts a legacy *shape* for the window of decision 0006.
+///
+/// `warn_at` is where the `legacy_spelling` warning lands while the window is open, and
+/// `refuse_at` is where the `unknown_member` diagnostic lands once it has closed. They differ
+/// only for shapes whose warning has no misspelled member to point at; a wrapper the author
+/// wrote by name — a definition nested under `value` beside its access tag, say — reports at the
+/// same cursor either way.
+pub fn accept_legacy_form(warn_at: &str, refuse_at: &str, member: &str) -> Result<(), Diagnostic> {
+    match MODE.get() {
+        SpellingMode::Current => {
+            let warning = Warning {
+                code: DiagnosticCode::LegacySpelling,
+                cursor: warn_at.to_string(),
+            };
+            WARNINGS.with(|warnings| {
+                if let Some(collected) = warnings.borrow_mut().as_mut() {
+                    collected.push(warning);
+                }
+            });
+            Ok(())
+        }
+        SpellingMode::Pinned => Err(Diagnostic::normalization(
+            DiagnosticCode::UnknownMember,
+            refuse_at,
+            format!("unexpected member {member}"),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_node_specific_legacy_row_has_a_distinct_legacy_spelling() {
+        // `accept_member` takes the first row matching `(node, seen)`, so a repeated pair would
+        // make one of the two rows' canonical names unreachable.
+        let mut seen = std::collections::HashSet::new();
+        for (node, legacy, _canonical) in LEGACY {
+            assert!(
+                seen.insert((*node, *legacy)),
+                "the legacy table spells {legacy} for {node} more than once"
+            );
+        }
+    }
+}

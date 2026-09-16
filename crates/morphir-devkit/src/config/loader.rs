@@ -1851,8 +1851,16 @@ mod tests {
     /// would nest under the workspace out root.
     #[test]
     fn an_excluded_directory_is_not_a_workspace_member() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/workspace-discovery/valid-monorepo");
+        // `load_config_context_with` stabilizes its input through
+        // `std::path::absolute`, which lexically normalizes `..` segments on
+        // Windows (via `GetFullPathNameW`) but preserves them on Unix. The
+        // fixture path is normalized here the same way so the expected and
+        // actual paths agree on both platforms.
+        let fixture = std::path::absolute(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/workspace-discovery/valid-monorepo"),
+        )
+        .unwrap();
         let options = ConfigLoadOptions::project_only();
 
         let ignored = load_config_context_with(

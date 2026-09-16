@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`morphir-common` YAML encoding.** A `DocumentLiteral` number the YAML encoder cannot carry
+  exactly is no longer written rounded through `f64` or retyped as a YAML string, which changed the
+  payload on a JSON→YAML→JSON round trip. It is refused with `morphir::ir::yaml::invalid_literal`
+  at the encoding stage, naming the lexeme; see Known limitations.
+- **`morphir-mck-adapter` syntax probe.** An object whose first member is spelled
+  `$serde_json::private::Number` is no longer mistaken for serde_json's internal number token. The
+  probe now takes a map for a number only when that is its one member and it holds a string;
+  anything else is walked like the object it is, so a duplicate member or a nesting past the
+  ceiling inside a document literal that spells a member that way is found rather than skipped.
+
 - **`morphir-daemon` negotiation, `morphir-distribution` publication.** An installed extension no
   longer fails at `initialize` when the display name in its repository record differs from the
   name the guest reports. `repository publish` derives the record name from the identifier
@@ -21,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (`morphir-core` naming).** `truncate_stem` returns `Option<String>` and answers
+  `None` when the budget it is given is below `MIN_TRUNCATED_STEM_BUDGET` (11). A truncated stem is
+  `__` plus eight hex digits of the content hash plus at least one character of the name, so a
+  smaller budget has no truncation to offer; it used to return the ten-character hash suffix
+  anyway, which overran the caller's path budget.
 - **Breaking (`morphir-devkit`, `morphir-common` configuration).** One Mill-style out directory
   replaces the per-project output helpers. A workspace has exactly one out root,
   `<workspace>/.morphir/out`; a member never gets its own. Each task owns a scratch directory,
@@ -188,6 +203,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret references for environment variables, files, direct commands, and native operating-system keyrings, with provenance-aware resolution and protected diagnostic output
 - Layout-derived adjacent user overrides for root `morphir.{toml,yaml}` primaries (`morphir.user.{toml,yaml}`), hidden `.morphir/morphir.{toml,yaml}` primaries (`.morphir/morphir.user.{toml,yaml}`), and dot-config `.config/morphir/config.{toml,yaml}` primaries (`.config/morphir/config.user.{toml,yaml}`), including project, workspace, and member configurations
 - `MORPHIR_HOME` environment variable relocating the Morphir home directory (default `~/.morphir`, `%USERPROFILE%\.morphir` on Windows), with `morphir_common::home` providing the shared resolution: the tool, distribution, and extension registries, the global log fallback, and the user-home global configuration candidate follow the relocated home. Remote-source and extension caches now default to `<MORPHIR_HOME>/cache` (rather than the platform cache directory), so sandboxed and hermetic environments never touch the real user directories
+- `morphir-mck-adapter`, an `mck-adapter-rust` binding that drives this workspace's v4 codec through the [Morphir Compatibility Kit](https://github.com/finos/morphir/tree/main/spec/ir/mck), and the `check:kit` task and `kit-conformance` CI job that run the kit against it on every change
+- A `Diagnostic` type carrying the kit's stage, code, message, and cursor, and `DocumentLiteral` for a v4 document-tree literal value
+- The document-tree file-stem projection now escapes and truncates a name the filesystem cannot hold verbatim, in place of the ad hoc handling it replaced
 
 ### Changed
 
@@ -195,12 +213,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `load_config_context` now merges every configuration layer instead of only the global user and project files
 - A `null` overlay value no longer overrides a lower-precedence value; legacy `morphir.json` projects keep global settings intact
 - During greenfield development, the workspace Rust baseline follows the current stable release and is now Rust 1.98
+- **Breaking (Morphir IR v4 JSON vocabulary).** The v4 codec now follows the [Morphir Compatibility
+  Kit](https://github.com/finos/morphir/tree/main/spec/ir/mck) and knowledge base Decision Records 0004 through
+  0015. A `Record` type or value spells its fields under a `fields` member (0004); every node's optional
+  `attributes` member is the first member of its expanded payload (0005); node member names follow the schema
+  (0006), with these renames: `attrs` becomes `attributes`; `IfThenElse`'s `thenBranch`/`elseBranch` become
+  `then`/`else`; `Field`'s `subject`/`fieldName` become `target`/`name`; `LetDefinition`'s
+  `valueName`/`valueDefinition`/`inValue` become `name`/`definition`/`in`. A `Function` type's `arg`/`argumentType`
+  becomes `parameterType`, and its `result` becomes `returnType` (0007). A bare array is a `Tuple` at type position
+  and a `List` at value position; a bare boolean or number is a literal; a bare string is a `Variable` or a
+  `Reference` (0009). The SDK package is canonically spelled `morphir/SDK` (0011). Both v4 schemas share one legacy
+  name-array grammar and one `FileStem` definition (0012). Every renamed or restructured spelling above decodes for
+  one release with a `legacy_spelling` warning at the member's cursor, and is refused after it.
+- **Breaking (public API and emitted bytes), the ripples of the v4 alignment above.**
+  `EntryPointKind` gained `Job` and `Policy`, so `x-morphir-entry-point-kind` has two new values a
+  consumer may see and a downstream `match` on the enum — public in `morphir-core` and in
+  `morphir-projection` — needs two new arms. `morphir-projection` normalizes a
+  `DerivedTypeSpecification` to an opaque declaration: a derived type is nominally distinct from
+  the type it is built from, and the conversions relating them are not in the model, so a backend
+  sees a named type whose structure it must not assume rather than the underlying one. The
+  `openapi` and `json-schema` renderers now order every object's member by name at every depth, so
+  the bytes they emit change for any document whose builder happened to insert members in another
+  order; the projected content is the same. The Gleam backend refuses a dependency whose
+  `formatVersion` it does not support (`DEPENDENCY_IR_VERSION_MISMATCH`) instead of carrying on as
+  though it were the supported one. Object member order is insertion order workspace-wide:
+  `morphir-core` builds `serde_json` with `preserve_order`, and cargo unifies features, so every
+  crate in the workspace reading JSON through it keeps a document's member order rather than
+  sorting it.
 
 ### Deprecated
 
 ### Removed
 
 - **Breaking:** the `morphir` CLI crate, its integration tests, the release workflow that published CLI binaries, and the installer and launcher scripts (`scripts/install.*`, `scripts/morphir.*`). The canonical `morphir` CLI is now built, released, and documented from [finos/morphir](https://github.com/finos/morphir), which consumes this workspace's library crates through a git submodule. Install it by following [Installing Morphir](https://github.com/finos/morphir/blob/main/INSTALLING.md); library crates are unaffected
+- **Breaking (Morphir IR v4).** The `Native` and `External` value expressions. A native or foreign operation is now
+  always a definition body — `NativeBody` or `ExternalBody` — and every use site is a `Reference` to it, per
+  knowledge base Decision Record 0008. `ExternalBody` carries a list of per-target bindings and an optional
+  fallback body; its single-binding `externalName`/`targetPlatform` spelling decodes for one release as a
+  one-entry `externals` list, with a `legacy_spelling` warning, and is refused after it.
+- The Classic (IR v3) tagged-array leniency inside a version-4 document. A Classic tagged array read where a v4
+  node is expected is now an `unknown_node` refusal through the kit's diagnostic, rather than being accepted as a
+  tuple of strings.
 
 ### Fixed
 
@@ -259,6 +312,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Extension resolution now rejects releases without a host-supported MEP version, and v2 exact locks authenticate launch arguments, capabilities, and MEP versions before activation; legacy v1 locks are rejected explicitly
+
+### Known limitations
+
+- **YAML encoding stage: document-literal numbers wider than `f64`.** The JSON codec carries a
+  `DocumentLiteral` number's lexeme verbatim; the YAML encoder cannot. serde-saphyr offers no way
+  to emit a scalar verbatim — a serializer reaches it through serde's data model, whose widest
+  number is `u64`, `i64`, or `f64` — so a number that none of those three writes back unchanged
+  (`0.123456789012345678901`, or an integer wider than `u64` that is not a round one) is refused
+  with `morphir::ir::yaml::invalid_literal` at the encoding stage rather than written rounded or
+  retyped as a string. Encode such a document as JSON. Lifting this needs a raw-scalar escape
+  hatch in the YAML serializer.
 
 ## [0.2.0] - 2026-01-24
 

@@ -27,7 +27,12 @@ schemars = { version = "1.0", features = ["derive", "indexmap2"] }
 indexmap = { version = "2", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serde"] }
 # The YAML profile reader walks this parser's event stream directly.
-granit-parser = { version = "1.2.0", default-features = false, features = ["std"] }
+granit-parser = { version = "1.2.0", default-features = false, features = [
+    "std",
+    # `error_messages` is what gives a `ScanError` its human-readable text; without it an
+    # `invalid_yaml` diagnostic would carry an empty message.
+    "error_messages",
+] }
 sha2 = "0.11"
 
 [dev-dependencies]

@@ -56,9 +56,16 @@ fn is_non_finite(s: &str) -> bool {
     matches!(d, ".inf" | ".Inf" | ".INF" | ".nan" | ".NaN" | ".NAN")
 }
 
+/// YAML 1.1's octal and hexadecimal integers: `0o` or `0x` and at least one hex digit, unsigned.
+///
+/// This mirrors the reference reader's `/^0[ox][0-9a-fA-F]+$/`. Anything outside it — `0xZZ`,
+/// a bare `0x`, an upper-case `0X1F`, a signed `-0xF` — is not one of these spellings at all, so
+/// it stays a plain string rather than being refused.
 fn is_octal_or_hex(s: &str) -> bool {
-    let d = s.strip_prefix(['-', '+']).unwrap_or(s);
-    d.starts_with("0o") || d.starts_with("0x") || d.starts_with("0O") || d.starts_with("0X")
+    let Some(digits) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0x")) else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// The shortest JSON spelling of a YAML float lexeme that preserves its digits.

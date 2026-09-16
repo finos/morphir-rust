@@ -171,10 +171,12 @@ pub fn read(text: &str) -> Result<Value, Diagnostic> {
     };
     for item in Parser::new_from_str_with_options(text, options) {
         let (event, span) = item.map_err(|e| {
+            // `info()` is the parser's own description; its `Display` would repeat the position
+            // that `line` and `column` already carry.
             diagnostic(
                 DiagnosticCode::InvalidYaml,
                 &r.cursor(),
-                e.to_string(),
+                e.info(),
                 Some(e.marker()),
             )
         })?;
@@ -231,9 +233,11 @@ pub fn read(text: &str) -> Result<Value, Diagnostic> {
                     let key = match style {
                         ScalarStyle::Plain => {
                             if scalar == "<<" {
+                                // The key's own position, as the reference reader reports it.
+                                let cursor = format!("{}/<<", r.cursor());
                                 return Err(diagnostic(
                                     DiagnosticCode::UnsupportedYamlFeature,
-                                    &r.cursor(),
+                                    &cursor,
                                     "merge keys are not part of the profile",
                                     at(&span),
                                 ));

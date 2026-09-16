@@ -47,7 +47,7 @@ fn features() {
     );
     assert_eq!(
         code("base: {x: 1}\nchild:\n  <<: {x: 2}\n"),
-        ("unsupported_yaml_feature".into(), "/child".into())
+        ("unsupported_yaml_feature".into(), "/child/<<".into())
     );
     assert_eq!(
         code("a: 1\na: 2\n"),
@@ -107,6 +107,7 @@ fn invalid_literals() {
         "a: -007\n",
         "a: 0o17\n",
         "a: 0xF\n",
+        "a: 0x1F\n",
         "a: .inf\n",
         "a: -.inf\n",
         "a: .nan\n",
@@ -116,6 +117,15 @@ fn invalid_literals() {
             code(text),
             ("invalid_literal".into(), "/a".into()),
             "{text}"
+        );
+    }
+    // Only the reference's exact octal and hexadecimal spellings are refused; anything else is
+    // an ordinary string (parse.ts `OCTAL_OR_HEX`, /^0[ox][0-9a-fA-F]+$/).
+    for text in ["0xZZ", "0x", "0o", "0X1F", "-0xF"] {
+        assert_eq!(
+            value(&format!("a: {text}\n"))["a"],
+            json!(text),
+            "{text} should be a string"
         );
     }
     assert_eq!(value("a: 0\n")["a"], json!(0));
@@ -140,6 +150,22 @@ fn shapes_and_cursors() {
     assert_eq!(code(&deep).0, "nesting_too_deep");
     let ok = "[".repeat(1000) + &"]".repeat(1000);
     assert!(read(&ok).is_ok());
+}
+
+#[test]
+fn a_parser_error_keeps_its_description() {
+    let d = read("a: [1, 2\n").expect_err("an unterminated flow sequence");
+    assert_eq!(d.code, morphir_core::ir::DiagnosticCode::InvalidYaml);
+    assert!(!d.message.is_empty(), "the parser's description is carried");
+    // granit names the flow sequence by its bracket: "unclosed bracket '['".
+    assert!(
+        d.message.contains("unclosed bracket"),
+        "unexpected message: {}",
+        d.message
+    );
+    // The position rides in `line`/`column` rather than in the message text.
+    assert!(!d.message.contains("column"), "{}", d.message);
+    assert!(d.line.is_some() && d.column.is_some());
 }
 
 #[test]

@@ -303,6 +303,9 @@ impl<'de> Visitor<'de> for Probe {
         let mut seen: HashSet<String> = HashSet::new();
         let mut key = first;
         loop {
+            // The member name goes in raw, not JSON-Pointer-escaped: the reference reader
+            // (`packages/ir/src/codec/json/value.ts`) builds the cursor this way and the kit
+            // README makes that reader the convention a binding mirrors.
             let cursor = format!("{}/{}", self.cursor, key);
             if !seen.insert(key.clone()) {
                 return Err(carry(Diagnostic::syntax(

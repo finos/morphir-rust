@@ -37,9 +37,9 @@ pub enum NormalizeError {
         /// Requested major generation.
         major: u32,
     },
-    /// The requested revision is newer than the supported baseline.
-    #[error("unsupported Morphir IR format revision: {major}.{minor}.{patch}")]
-    UnsupportedFormatVersionRevision {
+    /// The requested minor revision is outside this reader's support table.
+    #[error("release {major}.{minor}.{patch} is a minor revision this reader does not support")]
+    UnsupportedFormatVersionMinor {
         /// Requested major component.
         major: u32,
         /// Requested minor component.
@@ -79,7 +79,7 @@ impl NormalizeError {
             Self::InvalidFormatVersionSyntax { .. } => "invalid_format_version_syntax",
             Self::FormatVersionOutOfRange { .. } => "format_version_out_of_range",
             Self::UnsupportedFormatVersionMajor { .. } => "unsupported_format_version_major",
-            Self::UnsupportedFormatVersionRevision { .. } => "unsupported_format_version_revision",
+            Self::UnsupportedFormatVersionMinor { .. } => "unsupported_format_version_minor",
             Self::InvalidEntryPointTarget { .. } => "invalid_entry_point_target",
             Self::DuplicateEntryPointTarget { .. } => "duplicate_entry_point_target",
             Self::Decode(_) => "invalid_ir",
@@ -162,7 +162,7 @@ fn recognize_version(ir: &Value) -> Result<SupportedVersion, NormalizeError> {
     match release {
         (3, 0, 0) => Ok(SupportedVersion::V3),
         (4, 0, 0) => Ok(SupportedVersion::V4),
-        (3 | 4, minor, patch) => Err(NormalizeError::UnsupportedFormatVersionRevision {
+        (3 | 4, minor, patch) => Err(NormalizeError::UnsupportedFormatVersionMinor {
             major: release.0,
             minor,
             patch,

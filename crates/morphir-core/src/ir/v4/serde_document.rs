@@ -1104,7 +1104,7 @@ fn format_version_diagnostic(
         "invalid_format_version_syntax" => DiagnosticCode::InvalidFormatVersionSyntax,
         "format_version_out_of_range" => DiagnosticCode::FormatVersionOutOfRange,
         "unsupported_format_version_major" => DiagnosticCode::UnsupportedFormatVersionMajor,
-        "unsupported_format_version_revision" => DiagnosticCode::UnsupportedFormatVersionRevision,
+        "unsupported_format_version_minor" => DiagnosticCode::UnsupportedFormatVersionMinor,
         other => {
             debug_assert!(
                 false,

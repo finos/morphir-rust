@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (format-version diagnostics, MCK capabilities).** The diagnostic code
+  `unsupported_format_version_revision` is renamed `unsupported_format_version_minor`, with no
+  alias: `DiagnosticCode::UnsupportedFormatVersionMinor` in `morphir-core` and
+  `NormalizeError::UnsupportedFormatVersionMinor` in `morphir-projection` carry the new spelling,
+  and the message reads "release {release} is a minor revision this reader does not support". The
+  MCK adapter's capabilities reply gains `formatVersions`, the canonical spelling of this binding's
+  support table (`[3.0.0,3.1.0),[4.0.0,4.1.0)`), which `protocol.schema.json` now requires; a
+  driver older than that schema refuses the reply as an unknown field.
 - **Breaking (`morphir-core` naming).** `truncate_stem` returns `Option<String>` and answers
   `None` when the budget it is given is below `MIN_TRUNCATED_STEM_BUDGET` (11). A truncated stem is
   `__` plus eight hex digits of the content hash plus at least one character of the name, so a

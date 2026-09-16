@@ -7,6 +7,7 @@
 //! names and casing included. Every request payload struct rejects unknown
 //! fields on the wire, matching the schema's `additionalProperties: false`.
 
+use morphir_core::format_version::SupportTable;
 use morphir_core::ir::{Diagnostic, Warning};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -113,6 +114,10 @@ pub struct Capabilities {
     pub contract_version: u32,
     pub binding: String,
     pub language: String,
+    /// The canonical spelling of this binding's format-version support table,
+    /// e.g. `[3.0.0,3.1.0),[4.0.0,4.1.0)`. `rename_all = "camelCase"` spells
+    /// the member `formatVersions`, as `protocol.schema.json` requires.
+    pub format_versions: String,
     pub versions: Vec<u32>,
     pub profiles: Vec<Profile>,
     pub layouts: Vec<String>,
@@ -182,13 +187,15 @@ impl Serialize for DecodeResponse {
 
 /// The stage-one capabilities this binding reports, per `protocol.schema.json`
 /// contract version 1 and the worked exchange in `protocol.example.json`: IR
-/// versions 3 and 4, the `json` profile only, the `single` layout, both path
+/// versions 3 and 4 with this reader's support table as `formatVersions`,
+/// the `json` profile only, the `single` layout, both path
 /// modes, and every node kind the kit names.
 pub fn capabilities() -> Capabilities {
     Capabilities {
         contract_version: 1,
         binding: "morphir-rust".to_string(),
         language: "rust".to_string(),
+        format_versions: SupportTable::reference().canonical(),
         versions: vec![3, 4],
         profiles: vec![Profile::Json],
         layouts: vec!["single".to_string()],

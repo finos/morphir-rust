@@ -59,11 +59,11 @@ fn format_version_errors_are_classified_before_distribution_decoding() {
         ),
         (
             serde_json::json!("3.1.0"),
-            "unsupported_format_version_revision",
+            "unsupported_format_version_minor",
         ),
         (
             serde_json::json!("4.1.0"),
-            "unsupported_format_version_revision",
+            "unsupported_format_version_minor",
         ),
         (serde_json::json!(5), "unsupported_format_version_major"),
         (serde_json::json!(true), "invalid_format_version_type"),

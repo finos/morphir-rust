@@ -20,7 +20,13 @@ path = "src/main.rs"
 morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order", "arbitrary_precision"] }
+# `unbounded_depth` lets the adapter turn off serde_json's own 128-level recursion limit so the
+# nesting ceiling the reader reports is the profile's, not the parser's.
+serde_json = { version = "1.0", features = [
+    "preserve_order",
+    "arbitrary_precision",
+    "unbounded_depth",
+] }
 anyhow = { workspace = true }
 
 [dev-dependencies]

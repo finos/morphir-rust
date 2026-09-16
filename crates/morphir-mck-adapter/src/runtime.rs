@@ -4,13 +4,14 @@
 //! its reader and writer so it can be driven from `main.rs` against real
 //! stdin/stdout, or from a test against an in-memory buffer.
 //!
-//! This stage answers `capabilities` and `exit` directly. `decode`,
-//! `readTree` and `writeTree` are accepted by framing but the decode
-//! operation is not implemented yet, so each answers with a diagnostic
-//! saying so; a later change will route them to [`crate::testee`] instead.
+//! `capabilities` and `exit` are answered here; `decode` goes to
+//! [`crate::testee`]. `readTree` and `writeTree` answer a `protocol_error`:
+//! this binding does not declare the `tree` layout, so the driver never sends
+//! them, and an adapter that is asked to do what it said it cannot do has no
+//! document to report a diagnostic about.
 
 use crate::protocol::{ProtocolDiagnostic, Request, capabilities, parse_line};
-use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
+use crate::testee::decode;
 use serde_json::{Map, Value};
 use std::io::{self, BufRead, Write};
 
@@ -33,8 +34,17 @@ pub fn run<R: BufRead, W: Write>(reader: R, mut writer: W) -> io::Result<()> {
                 write_line(&mut writer, capabilities_response(id))?;
             }
             Ok((_, Request::Exit)) => break,
-            Ok((id, Request::Decode(_) | Request::ReadTree(_) | Request::WriteTree(_))) => {
-                write_line(&mut writer, unsupported_response(id))?;
+            Ok((id, Request::Decode(request))) => {
+                write_line(&mut writer, decode_response(id, &decode(&request)))?;
+            }
+            Ok((id, Request::ReadTree(_) | Request::WriteTree(_))) => {
+                write_line(
+                    &mut writer,
+                    protocol_error_response(
+                        Some(id),
+                        &ProtocolDiagnostic::new("unsupported in this stage"),
+                    ),
+                )?;
             }
             Err((id, diagnostic)) => {
                 write_line(&mut writer, protocol_error_response(id, &diagnostic))?;
@@ -43,18 +53,6 @@ pub fn run<R: BufRead, W: Write>(reader: R, mut writer: W) -> io::Result<()> {
     }
 
     Ok(())
-}
-
-/// The diagnostic this stage answers `decode`, `readTree` and `writeTree`
-/// with: the request parsed fine, but the decode operation is not
-/// implemented yet.
-fn unsupported() -> Diagnostic {
-    Diagnostic::new(
-        DiagnosticCode::InvalidJson,
-        DiagnosticStage::Syntax,
-        "",
-        "unsupported in this stage",
-    )
 }
 
 fn capabilities_response(id: u64) -> Value {
@@ -68,14 +66,15 @@ fn capabilities_response(id: u64) -> Value {
     Value::Object(object)
 }
 
-fn unsupported_response(id: u64) -> Value {
+/// The `decode` answer with the envelope's `id` merged in, the way
+/// `capabilities` is: the response types carry the content, and the wire
+/// envelope's `id` is added where the line is written.
+fn decode_response(id: u64, response: &crate::protocol::DecodeResponse) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), Value::from(id));
-    object.insert("ok".to_string(), Value::from(false));
-    object.insert(
-        "diagnostic".to_string(),
-        serde_json::to_value(unsupported()).expect("diagnostic serialize"),
-    );
+    if let Value::Object(fields) = serde_json::to_value(response).expect("decode response") {
+        object.extend(fields);
+    }
     Value::Object(object)
 }
 

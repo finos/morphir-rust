@@ -41,7 +41,7 @@ impl Default for MigrationContext {
     }
 }
 
-fn migrate_name(name: &classic::Name) -> Name {
+pub fn migrate_name(name: &classic::Name) -> Name {
     // Classic words are letter-fragmented for acronyms; `from_words` collapses a
     // run of two or more single-letter words back into one initialism.
     Name::from_words(
@@ -63,7 +63,7 @@ pub fn migrate_path(path: &classic::Path) -> Path {
     }
 }
 
-fn migrate_fqname(name: &classic::FQName) -> FQName {
+pub fn migrate_fqname(name: &classic::FQName) -> FQName {
     FQName::new(
         migrate_path(&name.package_path),
         migrate_path(&name.module_path),
@@ -75,15 +75,53 @@ fn type_attributes(_attributes: &classic::Attrs) -> v4::TypeAttributes {
     v4::TypeAttributes::default()
 }
 
-fn value_attributes(
-    inferred_type: &classic::Type<classic::Attrs>,
-    context: &mut MigrationContext,
-) -> Result<v4::ValueAttributes, MigrationDiagnostic> {
-    Ok(v4::ValueAttributes {
-        source: None,
-        inferred_type: Some(Box::new(migrate_type(inferred_type, context)?)),
-        extensions: serde_json::Value::Null,
-    })
+/// The classic value attribute a v4 [`v4::ValueAttributes`] is built from.
+///
+/// A morphir-elm value carries its inferred type in the value attribute once type inference has
+/// run, and an empty attribute (`{}`) before it has — the spelling the Morphir Compatibility
+/// Kit's `versions-0001` case uses. Both are legal classic documents, so the migration is
+/// generic over the attribute rather than fixed to the typed one.
+pub trait ValueAnnotation {
+    fn to_value_attributes(
+        &self,
+        context: &mut MigrationContext,
+    ) -> Result<v4::ValueAttributes, MigrationDiagnostic>;
+}
+
+impl ValueAnnotation for classic::Type<classic::Attrs> {
+    fn to_value_attributes(
+        &self,
+        context: &mut MigrationContext,
+    ) -> Result<v4::ValueAttributes, MigrationDiagnostic> {
+        Ok(v4::ValueAttributes {
+            source: None,
+            inferred_type: Some(Box::new(migrate_type(self, context)?)),
+            extensions: serde_json::Value::Null,
+        })
+    }
+}
+
+/// An untyped classic attribute carries nothing a v4 node keeps.
+impl ValueAnnotation for () {
+    fn to_value_attributes(
+        &self,
+        _context: &mut MigrationContext,
+    ) -> Result<v4::ValueAttributes, MigrationDiagnostic> {
+        Ok(v4::ValueAttributes::default())
+    }
+}
+
+/// `{}` is empty attributes; anything else is whatever `A` makes of it.
+impl<A: ValueAnnotation> ValueAnnotation for classic::Attrs<A> {
+    fn to_value_attributes(
+        &self,
+        context: &mut MigrationContext,
+    ) -> Result<v4::ValueAttributes, MigrationDiagnostic> {
+        match self {
+            classic::Attrs::None => Ok(v4::ValueAttributes::default()),
+            classic::Attrs::Some(annotation) => annotation.to_value_attributes(context),
+        }
+    }
 }
 
 pub fn migrate_literal(value: &classic::Literal) -> v4::Literal {
@@ -152,21 +190,21 @@ pub fn migrate_type(
     }
 }
 
-pub fn migrate_pattern(
-    value: &classic::Pattern<classic::Type<classic::Attrs>>,
+pub fn migrate_pattern<VA: ValueAnnotation>(
+    value: &classic::Pattern<VA>,
     context: &mut MigrationContext,
 ) -> Result<v4::Pattern, MigrationDiagnostic> {
     match value {
         classic::Pattern::Wildcard(attributes) => Ok(v4::Pattern::WildcardPattern(
-            value_attributes(attributes, context)?,
+            attributes.to_value_attributes(context)?,
         )),
         classic::Pattern::As(attributes, pattern, name) => Ok(v4::Pattern::AsPattern(
-            value_attributes(attributes, context)?,
+            attributes.to_value_attributes(context)?,
             Box::new(migrate_pattern(pattern, context)?),
             migrate_name(name),
         )),
         classic::Pattern::Tuple(attributes, patterns) => Ok(v4::Pattern::TuplePattern(
-            value_attributes(attributes, context)?,
+            attributes.to_value_attributes(context)?,
             patterns
                 .iter()
                 .map(|pattern| migrate_pattern(pattern, context))
@@ -174,7 +212,7 @@ pub fn migrate_pattern(
         )),
         classic::Pattern::Constructor(attributes, name, arguments) => {
             Ok(v4::Pattern::ConstructorPattern(
-                value_attributes(attributes, context)?,
+                attributes.to_value_attributes(context)?,
                 migrate_fqname(name),
                 arguments
                     .iter()
@@ -183,32 +221,32 @@ pub fn migrate_pattern(
             ))
         }
         classic::Pattern::EmptyList(attributes) => Ok(v4::Pattern::EmptyListPattern(
-            value_attributes(attributes, context)?,
+            attributes.to_value_attributes(context)?,
         )),
         classic::Pattern::HeadTail(attributes, head, tail) => Ok(v4::Pattern::HeadTailPattern(
-            value_attributes(attributes, context)?,
+            attributes.to_value_attributes(context)?,
             Box::new(migrate_pattern(head, context)?),
             Box::new(migrate_pattern(tail, context)?),
         )),
         classic::Pattern::Literal(attributes, literal) => Ok(v4::Pattern::LiteralPattern(
-            value_attributes(attributes, context)?,
+            attributes.to_value_attributes(context)?,
             migrate_literal(literal),
         )),
-        classic::Pattern::Unit(attributes) => Ok(v4::Pattern::UnitPattern(value_attributes(
-            attributes, context,
-        )?)),
+        classic::Pattern::Unit(attributes) => Ok(v4::Pattern::UnitPattern(
+            attributes.to_value_attributes(context)?,
+        )),
         classic::Pattern::Variable(attributes, name) => Ok(v4::Pattern::AsPattern(
-            value_attributes(attributes, context)?,
-            Box::new(v4::Pattern::WildcardPattern(value_attributes(
-                attributes, context,
-            )?)),
+            attributes.to_value_attributes(context)?,
+            Box::new(v4::Pattern::WildcardPattern(
+                attributes.to_value_attributes(context)?,
+            )),
             migrate_name(name),
         )),
     }
 }
 
-pub fn migrate_definition(
-    definition: &classic::Definition<classic::Attrs, classic::Type<classic::Attrs>>,
+pub fn migrate_definition<VA: ValueAnnotation>(
+    definition: &classic::Definition<classic::Attrs, VA>,
     context: &mut MigrationContext,
 ) -> Result<v4::ValueDefinition, MigrationDiagnostic> {
     migrate_value_definition_parts(
@@ -219,8 +257,8 @@ pub fn migrate_definition(
     )
 }
 
-pub fn migrate_value_definition(
-    definition: &classic::ValueDefinition<classic::Attrs, classic::Type<classic::Attrs>>,
+pub fn migrate_value_definition<VA: ValueAnnotation>(
+    definition: &classic::ValueDefinition<classic::Attrs, VA>,
     context: &mut MigrationContext,
 ) -> Result<v4::ValueDefinition, MigrationDiagnostic> {
     migrate_value_definition_parts(
@@ -231,10 +269,10 @@ pub fn migrate_value_definition(
     )
 }
 
-fn migrate_value_definition_parts(
-    input_types: &[classic::value::ValueArgument<classic::Attrs, classic::Type<classic::Attrs>>],
+fn migrate_value_definition_parts<VA: ValueAnnotation>(
+    input_types: &[classic::value::ValueArgument<classic::Attrs, VA>],
     output_type: &classic::Type<classic::Attrs>,
-    body: &classic::Value<classic::Attrs, classic::Type<classic::Attrs>>,
+    body: &classic::Value<classic::Attrs, VA>,
     context: &mut MigrationContext,
 ) -> Result<v4::ValueDefinition, MigrationDiagnostic> {
     let mut inputs = IndexMap::with_capacity(input_types.len());
@@ -242,7 +280,7 @@ fn migrate_value_definition_parts(
         inputs.insert(
             migrate_name(&input.name).to_canonical_string(),
             v4::InputTypeEntry {
-                type_attributes: Some(value_attributes(&input.annotation, context)?),
+                type_attributes: Some(input.annotation.to_value_attributes(context)?),
                 input_type: migrate_type(&input.ty, context)?,
             },
         );
@@ -254,11 +292,11 @@ fn migrate_value_definition_parts(
     })
 }
 
-pub fn migrate_value(
-    value: &classic::Value<classic::Attrs, classic::Type<classic::Attrs>>,
+pub fn migrate_value<VA: ValueAnnotation>(
+    value: &classic::Value<classic::Attrs, VA>,
     context: &mut MigrationContext,
 ) -> Result<v4::Value, MigrationDiagnostic> {
-    let attributes = value_attributes(
+    let attributes = {
         match value {
             classic::Value::Apply(a, ..)
             | classic::Value::Constructor(a, ..)
@@ -278,9 +316,9 @@ pub fn migrate_value(
             | classic::Value::Update(a, ..)
             | classic::Value::Variable(a, ..)
             | classic::Value::Reference(a, ..) => a,
-        },
-        context,
-    )?;
+        }
+    }
+    .to_value_attributes(context)?;
 
     Ok(match value {
         classic::Value::Apply(_, function, argument) => v4::Value::Apply(
@@ -564,8 +602,8 @@ pub fn migrate_package_specification(
     })
 }
 
-pub fn migrate_module_definition(
-    definition: &classic::ModuleDefinition<classic::Attrs, classic::Type<classic::Attrs>>,
+pub fn migrate_module_definition<VA: ValueAnnotation>(
+    definition: &classic::ModuleDefinition<classic::Attrs, VA>,
     context: &mut MigrationContext,
 ) -> Result<v4::ModuleDefinition, MigrationDiagnostic> {
     let types = definition

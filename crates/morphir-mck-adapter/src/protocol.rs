@@ -121,10 +121,15 @@ pub struct Capabilities {
 }
 
 /// The answer to `decode` or `readTree`.
+///
+/// `kind` is a string rather than a [`NodeKind`] because it answers a different question from
+/// the request's `node`: the kit's `rejected expect=<Kind>` fences name the *variant* a node
+/// decoded to (a `List` at a value position, say), not the node kind that was asked for, and
+/// `protocol.schema.json` types the member as a plain string for that reason.
 #[derive(Debug, Clone)]
 pub enum DecodeResponse {
     Ok {
-        kind: NodeKind,
+        kind: String,
         canonical: BTreeMap<String, String>,
         warnings: Vec<Warning>,
     },

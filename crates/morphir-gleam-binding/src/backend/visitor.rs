@@ -496,6 +496,14 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push(*c);
                 output.push('\'');
             }
+            // Gleam has no schema-less document type, so a document literal has no source
+            // spelling here rather than a lossy one.
+            MorphirLiteral::Document(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "a document literal has no Gleam spelling",
+                ));
+            }
         }
         Ok(())
     }

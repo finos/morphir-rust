@@ -3,16 +3,16 @@
 //! This module defines the `Literal` type which represents constant values
 //! that can appear in Morphir IR expressions.
 //!
-//! Serialization uses V4 object wrapper format:
-//! - `{ "IntegerLiteral": { "value": 42 } }`
-//! - `{ "StringLiteral": { "value": "hello" } }`
+//! A literal is a single-member wrapper whose payload is the value itself:
+//! `{ "IntegerLiteral": 42 }`, `{ "CharLiteral": "a" }`, `{ "DecimalLiteral": "10.50" }`.
+//! `{ "IntegerLiteral": { "value": 42 } }` is also accepted, but never written.
 //!
-//! Deserialization accepts V4 and Classic formats for backward compatibility.
+//! The decode lives in [`super::serde_tagged`] and the encode in [`super::serde_v4`], so every
+//! v4 node reports its diagnostics the same way.
 
-use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde::ser::{SerializeMap, Serializer};
-use serde::{Deserialize, Serialize};
-use std::fmt;
+use serde::{Serialize, Serializer};
+
+use super::serde_v4;
 
 /// Literal constant values.
 ///
@@ -21,208 +21,41 @@ use std::fmt;
 /// any runtime computation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
-    /// Boolean literal (true or false)
+    /// Boolean literal (true or false): `{ "BoolLiteral": true }`
     Bool(bool),
 
-    /// Character literal (single Unicode character)
+    /// Character literal, one code point carried as a string: `{ "CharLiteral": "a" }`
     Char(char),
 
-    /// String literal (UTF-8 text)
+    /// String literal (UTF-8 text): `{ "StringLiteral": "s" }`
     String(String),
 
-    /// Integer literal
+    /// Integer literal: `{ "IntegerLiteral": 42 }`
     Integer(i64),
 
-    /// Floating-point literal
+    /// Floating-point literal: `{ "FloatLiteral": 1.5 }`
     Float(f64),
 
-    /// Decimal literal (stored as string for arbitrary precision)
+    /// Decimal literal, carried as text so no binding coerces it to a float:
+    /// `{ "DecimalLiteral": "10.50" }`
     Decimal(String),
+
+    /// Document literal: a schema-less JSON-like tree carried verbatim, typed as
+    /// `morphir/SDK:document#document`. Its payload is the document itself, so
+    /// `{ "DocumentLiteral": { "value": 1 } }` is the one-member document `{ "value": 1 }`.
+    ///
+    /// Number lexemes survive the round trip, which is why `serde_json` is built here with
+    /// `arbitrary_precision`. See the decision on the document literal on
+    /// <https://morphir.finos.org/docs/spec/ir/>.
+    Document(serde_json::Value),
 }
 
-// V4 serialization: { "IntegerLiteral": { "value": 42 } }
 impl Serialize for Literal {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        match self {
-            Literal::Bool(v) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("BoolLiteral", v)?;
-                map.end()
-            }
-            Literal::Char(v) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("CharLiteral", &v.to_string())?;
-                map.end()
-            }
-            Literal::String(v) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("StringLiteral", v)?;
-                map.end()
-            }
-            Literal::Integer(v) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("IntegerLiteral", v)?;
-                map.end()
-            }
-            Literal::Float(v) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("FloatLiteral", v)?;
-                map.end()
-            }
-            Literal::Decimal(v) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("DecimalLiteral", v)?;
-                map.end()
-            }
-        }
-    }
-}
-
-// V4 deserialization with Classic fallback
-impl<'de> Deserialize<'de> for Literal {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(LiteralVisitor)
-    }
-}
-
-struct LiteralVisitor;
-
-impl<'de> Visitor<'de> for LiteralVisitor {
-    type Value = Literal;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("V4 object { \"IntegerLiteral\": { \"value\": 42 } } or Classic array")
-    }
-
-    /// V4 object wrapper format: { "IntegerLiteral": { "value": 42 } }
-    fn visit_map<M>(self, mut map: M) -> Result<Literal, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        fn compact_or_expanded(value: serde_json::Value) -> serde_json::Value {
-            match value {
-                serde_json::Value::Object(mut object) if object.contains_key("value") => {
-                    object.remove("value").unwrap()
-                }
-                value => value,
-            }
-        }
-
-        let (tag, value): (String, serde_json::Value) = map
-            .next_entry()?
-            .ok_or_else(|| de::Error::custom("expected object wrapper with single key"))?;
-
-        match tag.as_str() {
-            "BoolLiteral" => serde_json::from_value(compact_or_expanded(value))
-                .map(Literal::Bool)
-                .map_err(de::Error::custom),
-            "CharLiteral" => {
-                let content: String = serde_json::from_value(compact_or_expanded(value))
-                    .map_err(de::Error::custom)?;
-                let c = content
-                    .chars()
-                    .next()
-                    .ok_or_else(|| de::Error::custom("empty char literal"))?;
-                Ok(Literal::Char(c))
-            }
-            "StringLiteral" => serde_json::from_value(compact_or_expanded(value))
-                .map(Literal::String)
-                .map_err(de::Error::custom),
-            "IntegerLiteral" | "WholeNumberLiteral" => {
-                serde_json::from_value(compact_or_expanded(value))
-                    .map(Literal::Integer)
-                    .map_err(de::Error::custom)
-            }
-            "FloatLiteral" => serde_json::from_value(compact_or_expanded(value))
-                .map(Literal::Float)
-                .map_err(de::Error::custom),
-            "DecimalLiteral" => serde_json::from_value(compact_or_expanded(value))
-                .map(Literal::Decimal)
-                .map_err(de::Error::custom),
-            _ => Err(de::Error::unknown_variant(
-                &tag,
-                &[
-                    "BoolLiteral",
-                    "CharLiteral",
-                    "StringLiteral",
-                    "IntegerLiteral",
-                    "WholeNumberLiteral",
-                    "FloatLiteral",
-                    "DecimalLiteral",
-                ],
-            )),
-        }
-    }
-
-    /// Classic tagged array format: ["IntegerLiteral", 42]
-    fn visit_seq<V>(self, mut seq: V) -> Result<Literal, V::Error>
-    where
-        V: SeqAccess<'de>,
-    {
-        let tag: String = seq
-            .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-
-        match tag.as_str() {
-            "BoolLiteral" => {
-                let value: bool = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(Literal::Bool(value))
-            }
-            "CharLiteral" => {
-                let value: String = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let c = value
-                    .chars()
-                    .next()
-                    .ok_or_else(|| de::Error::custom("empty char literal"))?;
-                Ok(Literal::Char(c))
-            }
-            "StringLiteral" => {
-                let value: String = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(Literal::String(value))
-            }
-            "IntegerLiteral" | "WholeNumberLiteral" => {
-                let value: i64 = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(Literal::Integer(value))
-            }
-            "FloatLiteral" => {
-                let value: f64 = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(Literal::Float(value))
-            }
-            "DecimalLiteral" => {
-                let value: String = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(Literal::Decimal(value))
-            }
-            _ => Err(de::Error::unknown_variant(
-                &tag,
-                &[
-                    "BoolLiteral",
-                    "CharLiteral",
-                    "StringLiteral",
-                    "IntegerLiteral",
-                    "WholeNumberLiteral",
-                    "FloatLiteral",
-                    "DecimalLiteral",
-                ],
-            )),
-        }
+        serde_v4::serialize_literal(self, serializer)
     }
 }
 
@@ -256,6 +89,11 @@ impl Literal {
     pub fn decimal(value: impl Into<String>) -> Self {
         Literal::Decimal(value.into())
     }
+
+    /// Create a new document literal from a JSON-like tree
+    pub fn document(value: serde_json::Value) -> Self {
+        Literal::Document(value)
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +113,10 @@ mod tests {
         assert_eq!(
             Literal::decimal("123.456"),
             Literal::Decimal("123.456".to_string())
+        );
+        assert_eq!(
+            Literal::document(serde_json::json!({ "a": 1 })),
+            Literal::Document(serde_json::json!({ "a": 1 }))
         );
     }
 

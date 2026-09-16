@@ -655,7 +655,7 @@ fn convert_pattern_to_v4(json: &serde_json::Value) -> serde_json::Value {
             } else {
                 vec![]
             };
-            serde_json::json!({ "ConstructorPattern": { "fqname": fqname, "args": args } })
+            serde_json::json!({ "ConstructorPattern": { "fqname": fqname, "patterns": args } })
         }
         "EmptyListPattern" => serde_json::json!({ "EmptyListPattern": {} }),
         "HeadTailPattern" => {
@@ -674,11 +674,12 @@ fn convert_pattern_to_v4(json: &serde_json::Value) -> serde_json::Value {
         }
         "LiteralPattern" => {
             // Classic: ["LiteralPattern", {attrs}, literal_value]
+            // The v4 payload is the literal itself, not a `value` member.
             if arr.len() > 2 {
                 let literal = convert_literal_to_v4(&arr[2]);
-                serde_json::json!({ "LiteralPattern": { "value": literal } })
+                serde_json::json!({ "LiteralPattern": literal })
             } else {
-                serde_json::json!({ "LiteralPattern": { "value": null } })
+                json.clone()
             }
         }
         "UnitPattern" => serde_json::json!({ "UnitPattern": {} }),
@@ -720,11 +721,13 @@ fn convert_literal_to_v4(json: &serde_json::Value) -> serde_json::Value {
                 serde_json::json!({ "StringLiteral": "" })
             }
         }
-        "WholeNumberLiteral" => {
+        // WholeNumberLiteral is accepted on input and never written: a v4 writer spells it
+        // IntegerLiteral.
+        "WholeNumberLiteral" | "IntegerLiteral" => {
             if arr.len() > 1 {
-                serde_json::json!({ "WholeNumberLiteral": arr[1] })
+                serde_json::json!({ "IntegerLiteral": arr[1] })
             } else {
-                serde_json::json!({ "WholeNumberLiteral": 0 })
+                serde_json::json!({ "IntegerLiteral": 0 })
             }
         }
         "FloatLiteral" => {

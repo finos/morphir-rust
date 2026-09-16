@@ -321,53 +321,25 @@ struct UnitContent<'a> {
 // Literal V4 Serialization
 // =============================================================================
 
-/// Serialize Literal in V4 object wrapper format
+/// Serialize a Literal in its canonical v4 spelling: the payload sits directly under the tag,
+/// so `{ "IntegerLiteral": 42 }` rather than `{ "IntegerLiteral": { "value": 42 } }`.
 pub fn serialize_literal<S>(lit: &Literal, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
+    let mut map = serializer.serialize_map(Some(1))?;
     match lit {
-        Literal::Bool(v) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("BoolLiteral", &LiteralValue { value: v })?;
-            map.end()
-        }
-        Literal::Char(v) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "CharLiteral",
-                &LiteralValue {
-                    value: v.to_string(),
-                },
-            )?;
-            map.end()
-        }
-        Literal::String(v) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("StringLiteral", &LiteralValue { value: v })?;
-            map.end()
-        }
-        Literal::Integer(v) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("IntegerLiteral", &LiteralValue { value: v })?;
-            map.end()
-        }
-        Literal::Float(v) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("FloatLiteral", &LiteralValue { value: v })?;
-            map.end()
-        }
-        Literal::Decimal(v) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("DecimalLiteral", &LiteralValue { value: v })?;
-            map.end()
-        }
+        Literal::Bool(v) => map.serialize_entry("BoolLiteral", v)?,
+        Literal::Char(v) => map.serialize_entry("CharLiteral", &v.to_string())?,
+        Literal::String(v) => map.serialize_entry("StringLiteral", v)?,
+        Literal::Integer(v) => map.serialize_entry("IntegerLiteral", v)?,
+        // A whole-numbered float still has to read back as a float, which is what serde_json's
+        // float formatting gives: `4.0`, never `4`.
+        Literal::Float(v) => map.serialize_entry("FloatLiteral", v)?,
+        Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v)?,
+        Literal::Document(v) => map.serialize_entry("DocumentLiteral", v)?,
     }
-}
-
-#[derive(Serialize)]
-struct LiteralValue<T: Serialize> {
-    value: T,
+    map.end()
 }
 
 // =============================================================================
@@ -387,148 +359,130 @@ pub mod pattern_serde {
     }
 }
 
-/// Serialize a Pattern in V4 object wrapper format
+/// Serialize a Pattern in its canonical v4 spelling.
+///
+/// A tuple is an array of patterns and a literal pattern carries the literal directly, so a
+/// pattern that has nothing to say about itself is as short as the reader allows. Decision 0005
+/// keeps an empty `attributes` unwritten; a pattern that does carry attributes writes the
+/// expanded spelling instead, `attributes` first.
 pub fn serialize_pattern<S>(pat: &Pattern, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
+    let attributes = written_value(pat.attributes());
+    let mut map = serializer.serialize_map(Some(1))?;
     match pat {
-        Pattern::WildcardPattern(attrs) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "WildcardPattern",
-                &PatternAttrsContent { attrs: Some(attrs) },
-            )?;
-            map.end()
+        Pattern::WildcardPattern(_) => {
+            map.serialize_entry("WildcardPattern", &PatternAttributes { attributes })?
         }
-        Pattern::AsPattern(attrs, pattern, name) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "AsPattern",
-                &AsPatternContent {
-                    pattern,
-                    name: name.to_string(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
+        Pattern::EmptyListPattern(_) => {
+            map.serialize_entry("EmptyListPattern", &PatternAttributes { attributes })?
         }
-        Pattern::TuplePattern(attrs, elements) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
+        Pattern::UnitPattern(_) => {
+            map.serialize_entry("UnitPattern", &PatternAttributes { attributes })?
+        }
+        Pattern::AsPattern(_, pattern, name) => map.serialize_entry(
+            "AsPattern",
+            &AsPatternContent {
+                attributes,
+                pattern,
+                name: name.to_canonical_string(),
+            },
+        )?,
+        Pattern::TuplePattern(_, patterns) => match attributes {
+            None => map.serialize_entry("TuplePattern", patterns)?,
+            Some(_) => map.serialize_entry(
                 "TuplePattern",
                 &TuplePatternContent {
-                    elements,
-                    attrs: Some(attrs),
+                    attributes,
+                    patterns,
                 },
-            )?;
-            map.end()
-        }
-        Pattern::ConstructorPattern(attrs, fqname, args) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "ConstructorPattern",
-                &ConstructorPatternContent {
-                    fqname: fqname.to_canonical_string(),
-                    args,
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Pattern::EmptyListPattern(attrs) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "EmptyListPattern",
-                &PatternAttrsContent { attrs: Some(attrs) },
-            )?;
-            map.end()
-        }
-        Pattern::HeadTailPattern(attrs, head, tail) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
-                "HeadTailPattern",
-                &HeadTailPatternContent {
-                    head: head.as_ref(),
-                    tail: tail.as_ref(),
-                    attrs: Some(attrs),
-                },
-            )?;
-            map.end()
-        }
-        Pattern::LiteralPattern(attrs, lit) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry(
+            )?,
+        },
+        Pattern::ConstructorPattern(_, fqname, patterns) => map.serialize_entry(
+            "ConstructorPattern",
+            &ConstructorPatternContent {
+                attributes,
+                fqname: fqname.to_canonical_string(),
+                patterns,
+            },
+        )?,
+        Pattern::HeadTailPattern(_, head, tail) => map.serialize_entry(
+            "HeadTailPattern",
+            &HeadTailPatternContent {
+                attributes,
+                head: head.as_ref(),
+                tail: tail.as_ref(),
+            },
+        )?,
+        Pattern::LiteralPattern(_, lit) => match attributes {
+            None => map.serialize_entry("LiteralPattern", lit)?,
+            Some(_) => map.serialize_entry(
                 "LiteralPattern",
                 &LiteralPatternContent {
+                    attributes,
                     literal: lit,
-                    attrs: Some(attrs),
                 },
-            )?;
-            map.end()
-        }
-        Pattern::UnitPattern(attrs) => {
-            let mut map = serializer.serialize_map(Some(1))?;
-            map.serialize_entry("UnitPattern", &PatternAttrsContent { attrs: Some(attrs) })?;
-            map.end()
-        }
+            )?,
+        },
     }
+    map.end()
 }
 
-// Helper structs for V4 Pattern serialization
+/// Decision 0005: an empty `attributes` member is accepted but never written.
+fn written_value(attrs: &ValueAttributes) -> Option<&ValueAttributes> {
+    (attrs != &ValueAttributes::default()).then_some(attrs)
+}
+
+// Helper structs for V4 Pattern serialization. `attributes` is declared first in each, which is
+// the order the expanded spelling writes it in.
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PatternAttrsContent<'a> {
+struct PatternAttributes<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AsPatternContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     #[serde(serialize_with = "serialize_pattern")]
     pattern: &'a Pattern,
     name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct TuplePatternContent<'a> {
-    elements: &'a Vec<Pattern>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    patterns: &'a Vec<Pattern>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ConstructorPatternContent<'a> {
-    fqname: String,
-    args: &'a Vec<Pattern>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
+    attributes: Option<&'a ValueAttributes>,
+    fqname: String,
+    patterns: &'a Vec<Pattern>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct HeadTailPatternContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     #[serde(serialize_with = "serialize_pattern")]
     head: &'a Pattern,
     #[serde(serialize_with = "serialize_pattern")]
     tail: &'a Pattern,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LiteralPatternContent<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attributes: Option<&'a ValueAttributes>,
     #[serde(serialize_with = "serialize_literal")]
     literal: &'a Literal,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attrs: Option<&'a ValueAttributes>,
 }
 
 // =============================================================================

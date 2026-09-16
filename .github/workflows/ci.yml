@@ -105,6 +105,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-kit-
 
+      - name: Test package library and adapter protocols
+        run: cargo test --locked -p morphir-package -p morphir-mck-adapter
+
+      - name: Lint package library and adapter
+        run: |
+          rustup component add clippy
+          cargo clippy --locked -p morphir-package -p morphir-mck-adapter --all-targets -- -D warnings
+
       - name: Run the Morphir Compatibility Kit against the adapter
         run: mise run check:kit
 

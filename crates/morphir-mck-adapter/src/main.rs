@@ -11,6 +11,18 @@ use morphir_mck_adapter::runtime::run;
 use std::io;
 
 fn main() -> Result<()> {
-    run(io::stdin().lock(), io::stdout())?;
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] | ["--suite", "ir"] => run(io::stdin().lock(), io::stdout())?,
+        ["--suite", "package"] => {
+            morphir_mck_adapter::package::run(io::stdin().lock(), io::stdout())?
+        }
+        _ => anyhow::bail!("usage: mck-adapter-rust [--suite ir|package]"),
+    }
     Ok(())
 }

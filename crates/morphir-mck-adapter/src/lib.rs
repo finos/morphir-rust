@@ -7,6 +7,7 @@
 //! [`testee`] will carry the operations that answer each request once they
 //! exist.
 
+pub mod package;
 pub mod protocol;
 pub mod runtime;
 pub mod testee;

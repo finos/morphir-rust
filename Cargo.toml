@@ -21,6 +21,7 @@ default-members = [
     "crates/morphir-kb",
     "crates/morphir-okf",
     "crates/morphir-openapi-extension",
+    "crates/morphir-package",
     "crates/morphir-projection",
     "crates/morphir-runtime",
     "crates/morphir-wasm-binding",

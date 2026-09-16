@@ -7,20 +7,10 @@
 //! names and casing included. Every request payload struct rejects unknown
 //! fields on the wire, matching the schema's `additionalProperties: false`.
 
-use morphir_core::ir::{Diagnostic, DiagnosticCode, Warning};
+use morphir_core::ir::{Diagnostic, Warning};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-
-/// An incoming line's envelope: the request id, and everything else in the
-/// object (including `op`) left un-interpreted so [`parse_line`] can dispatch
-/// on `op` before validating the rest against the matching request shape.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Envelope {
-    pub id: u64,
-    #[serde(flatten)]
-    pub body: Map<String, Value>,
-}
 
 /// A parsed request, tagged by its `op` on the wire.
 #[derive(Debug, Clone)]
@@ -172,7 +162,8 @@ impl Serialize for DecodeResponse {
     }
 }
 
-/// The stage-one capabilities this binding reports (spec section 4.2): IR
+/// The stage-one capabilities this binding reports, per `protocol.schema.json`
+/// contract version 1 and the worked exchange in `protocol.example.json`: IR
 /// versions 3 and 4, the `json` profile only, the `single` layout, both path
 /// modes, and every node kind the kit names.
 pub fn capabilities() -> Capabilities {
@@ -207,34 +198,80 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// A diagnostic for a line the adapter could not turn into a request: not
-/// JSON at all, missing `id`, an unrecognized `op`, or a request payload
-/// with a missing, mistyped or extra field. The cursor is the line's root
-/// (`""`), since framing failures have no member to point at yet.
-fn invalid_json(message: impl Into<String>) -> Diagnostic {
-    Diagnostic::syntax(DiagnosticCode::InvalidJson, "", message)
+/// A protocol-level failure: the line could not be turned into a request at
+/// all (not JSON, not an object, a missing or non-integer `id`, an unknown
+/// `op`, or a request payload with a missing or extra field). This is a
+/// framing failure, not one of morphir-core's kit diagnostic codes, so it
+/// gets its own `protocol_error` code rather than widening
+/// [`morphir_core::ir::DiagnosticCode`]. The cursor is the line's root
+/// (`"/"`), since a framing failure has no member to point at yet.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProtocolDiagnostic {
+    pub code: String,
+    pub stage: String,
+    pub cursor: String,
+    pub message: String,
+}
+
+impl ProtocolDiagnostic {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: "protocol_error".to_string(),
+            stage: "syntax".to_string(),
+            cursor: "/".to_string(),
+            message: message.into(),
+        }
+    }
 }
 
 /// Parses one line of the adapter protocol into its request id and request.
 ///
-/// A line that is not valid JSON at all carries no id, so the error side
-/// carries `None`. A line that is valid JSON with a readable `id` but an
-/// invalid body (unknown `op`, a missing field, or an extra field the
-/// matching request shape does not declare) carries `Some(id)`, so the
-/// caller can still answer the request that asked.
-pub fn parse_line(line: &str) -> Result<(u64, Request), (Option<u64>, Diagnostic)> {
-    let value: Value =
-        serde_json::from_str(line).map_err(|err| (None, invalid_json(err.to_string())))?;
+/// An `id` is only ever reported once it is fully valid (an integer of at
+/// least 1, per `protocol.schema.json`'s `"id": { "minimum": 1 }`), matching
+/// the reference adapter's rule that a bad envelope answers with `id: null`
+/// even when a number happened to be present. Once the envelope's `id` is
+/// valid, a further failure (an unknown `op`, or a request payload with a
+/// missing or extra field) still names that `id`, so the caller can answer
+/// the request that asked.
+pub fn parse_line(line: &str) -> Result<(u64, Request), (Option<u64>, ProtocolDiagnostic)> {
+    let value: Value = serde_json::from_str(line).map_err(|err| {
+        (
+            None,
+            ProtocolDiagnostic::new(format!("not a JSON line: {err}")),
+        )
+    })?;
 
-    let id_hint = value.get("id").and_then(Value::as_u64);
+    let mut object = match value {
+        Value::Object(map) => map,
+        _ => {
+            return Err((
+                None,
+                ProtocolDiagnostic::new("message must be a JSON object"),
+            ));
+        }
+    };
 
-    let envelope: Envelope =
-        serde_json::from_value(value).map_err(|err| (id_hint, invalid_json(err.to_string())))?;
+    let id = extract_id(&object).map_err(|message| (None, ProtocolDiagnostic::new(message)))?;
+    object.remove("id");
 
-    let request = request_from_body(envelope.body)
-        .map_err(|message| (Some(envelope.id), invalid_json(message)))?;
+    let request = request_from_body(object)
+        .map_err(|message| (Some(id), ProtocolDiagnostic::new(message)))?;
 
-    Ok((envelope.id, request))
+    Ok((id, request))
+}
+
+/// `id` must be present and an integer, and at least 1 (ids start at 1 and
+/// increase by one, so 0 and negatives are not ids at all — the same rule
+/// `protocol.schema.json` states as `"id": { "minimum": 1 }`).
+fn extract_id(object: &Map<String, Value>) -> Result<u64, String> {
+    match object.get("id") {
+        None => Err("missing id".to_string()),
+        Some(value) => match value.as_i64() {
+            None => Err("missing id".to_string()),
+            Some(id) if id < 1 => Err(format!("\"id\" must be at least 1, got {id}")),
+            Some(id) => Ok(id as u64),
+        },
+    }
 }
 
 /// Dispatches on `op`, then validates the remaining fields against the

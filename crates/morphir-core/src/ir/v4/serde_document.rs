@@ -31,7 +31,7 @@ use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecifica
 use super::package::{PackageDefinition, PackageSpecification};
 use super::serde_tagged::{
     Members, carry, decode_fqname, decode_name, decode_type, decode_value, invalid_type,
-    member_cursor, required, unknown_node_at, wrapper_members,
+    member_cursor, required, unknown_node_at, wrapper_members, wrapper_members_of,
 };
 use super::tree_files::{
     DistributionKind, DistributionManifestFile, ExpectedEntries, MIN_PATH_BUDGET, ModuleEntries,
@@ -938,10 +938,10 @@ pub(in crate::ir) fn decode_module_specification(
     )?;
     Ok(ModuleSpecification {
         annotations: decode_annotations(&members, cursor)?,
-        types: decode_keyed(&members, "types", cursor, |value, cursor| {
+        types: decode_keyed_names(&members, "types", cursor, |value, cursor| {
             decode_documented(value, cursor, decode_type_specification)
         })?,
-        values: decode_keyed(&members, "values", cursor, |value, cursor| {
+        values: decode_keyed_names(&members, "values", cursor, |value, cursor| {
             decode_documented(value, cursor, decode_value_specification)
         })?,
         doc: decode_optional_doc(&members, cursor)?,
@@ -961,12 +961,12 @@ pub(in crate::ir) fn decode_module_definition(
         &["types", "values", "doc"],
     )?;
     Ok(ModuleDefinition {
-        types: decode_keyed(&members, "types", cursor, |value, cursor| {
+        types: decode_keyed_names(&members, "types", cursor, |value, cursor| {
             decode_access_controlled(value, cursor, |value, cursor| {
                 decode_documented(value, cursor, decode_type_definition)
             })
         })?,
-        values: decode_keyed(&members, "values", cursor, |value, cursor| {
+        values: decode_keyed_names(&members, "values", cursor, |value, cursor| {
             decode_access_controlled(value, cursor, |value, cursor| {
                 decode_documented(value, cursor, decode_value_definition)
             })
@@ -1001,6 +1001,46 @@ fn decode_keyed<T>(
     };
     let at = member_cursor(members, name, cursor);
     decode_map(member.value, &at, decode_entry)
+}
+
+/// [`decode_keyed`] for a member whose keys are names rather than paths.
+fn decode_keyed_names<T>(
+    members: &Members<'_>,
+    name: &str,
+    cursor: &str,
+    decode_entry: impl Fn(&JsonValue, &str) -> Result<T, Diagnostic>,
+) -> Result<IndexMap<String, T>, Diagnostic> {
+    let Some(member) = members.get(name) else {
+        return Ok(IndexMap::new());
+    };
+    let at = member_cursor(members, name, cursor);
+    decode_named_map(member.value, &at, decode_entry)
+}
+
+/// [`decode_map`] where every key is a name.
+///
+/// The key is read as a [`Name`] before its entry is decoded, so a listing keyed by something that
+/// cannot be a name is refused at the key rather than carried into the model — which is what a
+/// module's `types` and `values` need, and what a package's `modules` does not: a module key is a
+/// *path*, which a name is not.
+///
+/// The key is kept as it was written rather than re-spelled from the parsed name. The two are the
+/// same text for every key this accepts, and keeping the written one means the reader moves no
+/// bytes a writer did not ask it to.
+fn decode_named_map<T>(
+    value: &JsonValue,
+    cursor: &str,
+    decode_entry: impl Fn(&JsonValue, &str) -> Result<T, Diagnostic>,
+) -> Result<IndexMap<String, T>, Diagnostic> {
+    let entries = members_of(value, cursor, "a map keyed by name")?;
+    entries
+        .iter()
+        .map(|(name, written)| {
+            let at = format!("{cursor}/{name}");
+            decode_name(&JsonValue::String(name.clone()), &at)?;
+            Ok((name.clone(), decode_entry(written, &at)?))
+        })
+        .collect()
 }
 
 fn decode_map<T>(
@@ -1296,14 +1336,14 @@ fn root_without_meta<'a>(
     value: &'a JsonValue,
     cursor: &str,
     what: &str,
-) -> Result<std::borrow::Cow<'a, JsonValue>, Diagnostic> {
+) -> Result<std::borrow::Cow<'a, serde_json::Map<String, JsonValue>>, Diagnostic> {
     let members = members_of(value, cursor, what)?;
     if !members.contains_key("$meta") {
-        return Ok(std::borrow::Cow::Borrowed(value));
+        return Ok(std::borrow::Cow::Borrowed(members));
     }
     let mut rest = members.clone();
     rest.remove("$meta");
-    Ok(std::borrow::Cow::Owned(JsonValue::Object(rest)))
+    Ok(std::borrow::Cow::Owned(rest))
 }
 
 /// Every file of a tree repeats the format version at its root and is checked for support against
@@ -1345,11 +1385,8 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
     cursor: &str,
 ) -> Result<DistributionManifestFile, Diagnostic> {
     let root = root_without_meta(value, cursor, "a distribution manifest")?;
-    let raw = root
-        .as_object()
-        .expect("root_without_meta answers with an object");
-    let format_version = decode_file_format_version(raw, cursor)?;
-    let members = wrapper_members(
+    let format_version = decode_file_format_version(&root, cursor)?;
+    let members = wrapper_members_of(
         "DistributionManifestFile",
         &root,
         cursor,
@@ -1366,20 +1403,23 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
         ],
     )?;
 
+    // Every required member is fetched before any of them is read, so a file missing one answers
+    // `missing_member` rather than whatever the first member that *is* present happens to say.
+    let written_distribution = required(&members, "distribution", cursor)?;
+    let written_package = required(&members, "package", cursor)?;
+    let written_path_budget = required(&members, "pathBudget", cursor)?;
+
     let kind_at = member_cursor(&members, "distribution", cursor);
-    let kind = text_of(required(&members, "distribution", cursor)?, &kind_at)?;
+    let kind = text_of(written_distribution, &kind_at)?;
     let distribution = DistributionKind::parse(&kind).ok_or_else(|| {
         invalid_distribution_shape(&kind_at, format!("unknown distribution \"{kind}\""))
     })?;
 
     let package_at = member_cursor(&members, "package", cursor);
-    let package = parse_package_name(
-        &text_of(required(&members, "package", cursor)?, &package_at)?,
-        &package_at,
-    )?;
+    let package = parse_package_name(&text_of(written_package, &package_at)?, &package_at)?;
 
     let budget_at = member_cursor(&members, "pathBudget", cursor);
-    let path_budget = decode_path_budget(required(&members, "pathBudget", cursor)?, &budget_at)?;
+    let path_budget = decode_path_budget(written_path_budget, &budget_at)?;
 
     let dependencies = match members.get("dependencies") {
         None => Vec::new(),
@@ -1428,19 +1468,36 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
     })
 }
 
+/// Decodes `pathBudget`: a number first, then an integer of at least [`MIN_PATH_BUDGET`].
+///
+/// The two are separate answers. Something that is not a number at all is a type error about the
+/// member, the way any other mistyped member is; only a number gets to be measured against the
+/// floor.
 fn decode_path_budget(value: &JsonValue, cursor: &str) -> Result<u32, Diagnostic> {
+    let JsonValue::Number(number) = value else {
+        return Err(expected_string_like(cursor, "a number", value));
+    };
     let refuse = || {
         invalid_type(
             cursor,
             format!("pathBudget must be an integer of at least {MIN_PATH_BUDGET}"),
         )
     };
-    let budget = value.as_u64().ok_or_else(refuse)?;
+    let budget = number.as_u64().ok_or_else(refuse)?;
     let budget = u32::try_from(budget).map_err(|_| refuse())?;
     if budget < MIN_PATH_BUDGET {
         return Err(refuse());
     }
     Ok(budget)
+}
+
+/// `expected <what>, found <kind>`: the wording every tree-file reader uses when a member is the
+/// wrong sort of JSON value.
+fn expected_string_like(cursor: &str, what: &str, found: &JsonValue) -> Diagnostic {
+    invalid_type(
+        cursor,
+        format!("expected {what}, found {}", describe_json(found)),
+    )
 }
 
 /// Decodes the manifest's `dependencies`: the package names whose bodies live under `deps/`.
@@ -1487,11 +1544,8 @@ pub(in crate::ir) fn decode_module_manifest_file(
     expect: ExpectedEntries,
 ) -> Result<ModuleManifestFile, Diagnostic> {
     let root = root_without_meta(value, cursor, "a module manifest")?;
-    let raw = root
-        .as_object()
-        .expect("root_without_meta answers with an object");
-    let format_version = decode_file_format_version(raw, cursor)?;
-    let members = wrapper_members(
+    let format_version = decode_file_format_version(&root, cursor)?;
+    let members = wrapper_members_of(
         "ModuleManifestFile",
         &root,
         cursor,
@@ -1510,7 +1564,7 @@ pub(in crate::ir) fn decode_module_manifest_file(
     // `module` is an accepted spelling of `path` rather than a legacy one in decision 0006's
     // window, so it is listed as a member of its own and read silently; the writer still only ever
     // emits `path`.
-    let spelled = match (members.get("path"), members.get("module")) {
+    let (spelled, written_path) = match (members.get("path"), members.get("module")) {
         (Some(_), Some(_)) => {
             return Err(Diagnostic::normalization(
                 DiagnosticCode::UnknownMember,
@@ -1518,8 +1572,8 @@ pub(in crate::ir) fn decode_module_manifest_file(
                 "module is the legacy spelling of path; write only one",
             ));
         }
-        (Some(_), None) => "path",
-        (None, Some(_)) => "module",
+        (Some(member), None) => ("path", member.value),
+        (None, Some(member)) => ("module", member.value),
         (None, None) => {
             return Err(Diagnostic::normalization(
                 DiagnosticCode::MissingMember,
@@ -1528,14 +1582,7 @@ pub(in crate::ir) fn decode_module_manifest_file(
             ));
         }
     };
-    let path_at = format!("{cursor}/{spelled}");
-    let path = decode_module_name(
-        members
-            .get(spelled)
-            .expect("the spelling that was present")
-            .value,
-        &path_at,
-    )?;
+    let path = decode_module_name(written_path, &format!("{cursor}/{spelled}"))?;
 
     let access = match members.get("access") {
         None => Access::Public,
@@ -1594,6 +1641,10 @@ fn decode_module_name(value: &JsonValue, cursor: &str) -> Result<ModuleName, Dia
 
 /// Decodes a module manifest's `doc`: one string, or — accepted only here — an array of lines,
 /// joined the way the text would have read.
+///
+/// Only an absent member is no documentation. A `doc` that is written and is not an array goes
+/// through the string check, so a `null` is a type error rather than a quiet nothing: a manifest
+/// that says `doc: null` is saying something the model has no way to keep.
 fn decode_manifest_doc(
     members: &Members<'_>,
     cursor: &str,
@@ -1603,15 +1654,22 @@ fn decode_manifest_doc(
     };
     let at = member_cursor(members, "doc", cursor);
     match member.value {
-        JsonValue::Null => Ok(None),
         JsonValue::Array(items) => {
             let mut lines = Vec::with_capacity(items.len());
             for (index, item) in items.iter().enumerate() {
-                lines.push(text_of(item, &format!("{at}/{index}"))?);
+                lines.push(expect_string(item, &format!("{at}/{index}"))?);
             }
             Ok(Some(Documentation::new(lines.join("\n"))))
         }
-        other => decode_documentation(other, &at).map(Some),
+        other => expect_string(other, &at).map(|text| Some(Documentation::new(text))),
+    }
+}
+
+/// A string, or a type error naming what was found instead.
+fn expect_string(value: &JsonValue, cursor: &str) -> Result<String, Diagnostic> {
+    match value {
+        JsonValue::String(text) => Ok(text.clone()),
+        other => Err(expected_string_like(cursor, "a string", other)),
     }
 }
 
@@ -1637,22 +1695,23 @@ fn decode_module_entries<D, S>(
             .collect::<Result<Vec<_>, _>>()
             .map(ModuleEntries::Names),
         JsonValue::Object(_) => match expect {
-            ExpectedEntries::Definitions => {
-                decode_map(member.value, &at, decode_definition).map(ModuleEntries::Definitions)
-            }
+            ExpectedEntries::Definitions => decode_named_map(member.value, &at, decode_definition)
+                .map(ModuleEntries::Definitions),
             // A definition where a specification was expected is a mistake about what the tree
             // holds, so it is reported as one here rather than reaching the specification reader
             // and coming back as an unknown variant wrapper.
-            ExpectedEntries::Specifications => decode_map(member.value, &at, |value, cursor| {
-                if looks_access_controlled(value) {
-                    return Err(invalid_distribution_shape(
-                        cursor,
-                        "expected a specification, found an access-controlled definition",
-                    ));
-                }
-                decode_specification(value, cursor)
-            })
-            .map(ModuleEntries::Specifications),
+            ExpectedEntries::Specifications => {
+                decode_named_map(member.value, &at, |value, cursor| {
+                    if looks_access_controlled(value) {
+                        return Err(invalid_distribution_shape(
+                            cursor,
+                            "expected a specification, found an access-controlled definition",
+                        ));
+                    }
+                    decode_specification(value, cursor)
+                })
+                .map(ModuleEntries::Specifications)
+            }
         },
         other => Err(invalid_type(
             &at,
@@ -1776,20 +1835,17 @@ fn decode_node_file<D, S>(
     decode_specification: impl Fn(&JsonValue, &str) -> Result<S, Diagnostic>,
 ) -> Result<(FormatVersion, Name, NodeFileBody<D, S>), Diagnostic> {
     let root = root_without_meta(value, cursor, "a node file")?;
-    let raw = root
-        .as_object()
-        .expect("root_without_meta answers with an object");
-    let format_version = decode_file_format_version(raw, cursor)?;
-    let members = wrapper_members(
+    let format_version = decode_file_format_version(&root, cursor)?;
+    let members = wrapper_members_of(
         node,
         &root,
         cursor,
         &["formatVersion", "name", "def", "spec"],
     )?;
-    let name = decode_name(
-        required(&members, "name", cursor)?,
-        &member_cursor(&members, "name", cursor),
-    )?;
+    // `name` is fetched before anything else is read, so a file missing it answers `missing_member`
+    // rather than whatever its body happens to say.
+    let written_name = required(&members, "name", cursor)?;
+    let name = decode_name(written_name, &member_cursor(&members, "name", cursor))?;
 
     let body = match (members.get("def"), members.get("spec")) {
         (Some(member), None) => NodeFileBody::Def(decode_definition(

@@ -267,6 +267,19 @@ fn a_path_budget_below_the_floor_is_refused() {
 }
 
 #[test]
+fn a_path_budget_that_is_not_a_number_is_refused_as_a_type_error_first() {
+    // A budget that is not a number at all is a mistake about the member's type, not about the
+    // floor: only a number is measured against 64.
+    let text = r#"{ "formatVersion": 4, "distribution": "Library", "package": "acme/shop", "pathBudget": "4000" }"#;
+    assert_refused(
+        &refusal::<DistributionManifestFile>(text),
+        DiagnosticCode::InvalidType,
+        "/pathBudget",
+        "expected a number, found string",
+    );
+}
+
+#[test]
 fn a_path_budget_that_is_not_an_integer_is_refused() {
     let text = r#"{ "formatVersion": 4, "distribution": "Library", "package": "acme/shop", "pathBudget": 4000.5 }"#;
     assert_refused(
@@ -380,6 +393,57 @@ fn a_manifest_missing_a_required_member_is_refused() {
 }
 
 // =============================================================================
+// Required members are settled before any value is read
+// =============================================================================
+
+#[test]
+fn a_manifest_missing_a_required_member_says_so_before_reading_a_bad_one() {
+    // `distribution` names no kind and `pathBudget` is absent. What is missing is settled first,
+    // so the answer is about the member that is not there.
+    let text = r#"{ "formatVersion": 4, "distribution": "Widget", "package": "acme/shop" }"#;
+    assert_refused(
+        &refusal::<DistributionManifestFile>(text),
+        DiagnosticCode::MissingMember,
+        "",
+        "missing member pathBudget",
+    );
+}
+
+#[test]
+fn a_module_manifest_missing_its_path_says_so_before_reading_a_bad_listing() {
+    let text = r#"{ "formatVersion": 4, "types": "sku", "values": [] }"#;
+    assert_refused(
+        &refusal::<ModuleManifestFile>(text),
+        DiagnosticCode::MissingMember,
+        "",
+        "missing member \"path\"",
+    );
+}
+
+#[test]
+fn a_type_definition_file_missing_its_name_says_so_before_reading_its_body() {
+    // Both `def` and `spec`, and no `name`: the missing member is the answer.
+    let text = r#"{ "formatVersion": 4, "def": { "Public": { "TypeAliasDefinition": { "typeParams": [], "typeExp": "morphir/SDK:string#string" } } }, "spec": { "OpaqueTypeSpecification": {} } }"#;
+    assert_refused(
+        &refusal::<TypeDefinitionFile>(text),
+        DiagnosticCode::MissingMember,
+        "",
+        "missing member name",
+    );
+}
+
+#[test]
+fn a_value_definition_file_missing_its_name_says_so_before_reading_its_body() {
+    let text = r#"{ "formatVersion": 4, "def": "not a definition" }"#;
+    assert_refused(
+        &refusal::<ValueDefinitionFile>(text),
+        DiagnosticCode::MissingMember,
+        "",
+        "missing member name",
+    );
+}
+
+// =============================================================================
 // The module manifest
 // =============================================================================
 
@@ -449,9 +513,26 @@ fn a_doc_given_as_lines_is_joined_and_written_as_one_string() {
 #[test]
 fn a_doc_line_that_is_not_a_string_is_refused_at_its_index() {
     let text = r#"{ "formatVersion": 4, "path": "orders", "doc": ["first", 2], "types": [], "values": [] }"#;
-    let diagnostic = refusal::<ModuleManifestFile>(text);
-    assert_eq!(diagnostic.code, DiagnosticCode::InvalidType);
-    assert_eq!(diagnostic.cursor, "/doc/1");
+    assert_refused(
+        &refusal::<ModuleManifestFile>(text),
+        DiagnosticCode::InvalidType,
+        "/doc/1",
+        "expected a string, found number",
+    );
+}
+
+#[test]
+fn a_null_doc_is_refused_rather_than_read_as_no_documentation() {
+    // Only an absent `doc` is no documentation. A manifest that writes `doc: null` is saying
+    // something the model has no way to keep, so it is refused where it was written.
+    let text =
+        r#"{ "formatVersion": 4, "path": "orders", "doc": null, "types": [], "values": [] }"#;
+    assert_refused(
+        &refusal::<ModuleManifestFile>(text),
+        DiagnosticCode::InvalidType,
+        "/doc",
+        "expected a string, found null",
+    );
 }
 
 #[test]
@@ -482,6 +563,27 @@ fn a_types_member_that_is_neither_an_array_nor_an_object_is_refused() {
         DiagnosticCode::InvalidType,
         "/types",
         "expected an array of names or an object of entries, found string",
+    );
+}
+
+#[test]
+fn an_inline_listing_key_that_is_not_a_name_is_refused_at_the_key() {
+    let text = r#"{ "formatVersion": 4, "path": "orders", "types": { "Not A Name": { "Public": { "TypeAliasDefinition": { "typeParams": [], "typeExp": "morphir/SDK:string#string" } } } }, "values": [] }"#;
+    let diagnostic = refusal::<ModuleManifestFile>(text);
+    assert_eq!(diagnostic.code, DiagnosticCode::InvalidName);
+    assert_eq!(diagnostic.cursor, "/types/Not A Name");
+}
+
+/// The same rule in a single document: a module's `types` and `values` are keyed by name there
+/// too, and the same decoder settles both.
+#[test]
+fn a_single_documents_module_listing_key_that_is_not_a_name_is_refused_at_the_key() {
+    let text = r#"{ "formatVersion": 4, "distribution": { "Library": { "packageName": "acme/shop", "def": { "modules": { "orders": { "Public": { "types": { "Not A Name": { "Public": { "TypeAliasDefinition": { "typeParams": [], "typeExp": "morphir/SDK:string#string" } } } }, "values": {} } } } } } } }"#;
+    let diagnostic = refusal_of_ir_file(text);
+    assert_eq!(diagnostic.code, DiagnosticCode::InvalidName);
+    assert_eq!(
+        diagnostic.cursor,
+        "/distribution/Library/def/modules/orders/Public/types/Not A Name"
     );
 }
 

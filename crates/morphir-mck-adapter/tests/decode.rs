@@ -371,11 +371,14 @@ fn a_name_stays_a_word_array_at_version_3() {
 /// the document, so it never spends one of the kit's codes.
 #[test]
 fn an_undeclared_profile_or_version_is_refused_as_a_protocol_error() {
-    let yaml = DecodeRequest {
+    // Version 3 is read through the classic JSON decoders only; there is no classic YAML
+    // spelling for this binding to answer with.
+    let ancient_yaml = DecodeRequest {
+        version: 3,
         profile: Profile::Yaml,
         ..req(NodeKind::Type, "a", PathMode::Current)
     };
-    match decode(&yaml) {
+    match decode(&ancient_yaml) {
         DecodeResponse::Refused { diagnostic } => assert_eq!(diagnostic.code, "protocol_error"),
         o => panic!("{o:?}"),
     }
@@ -386,6 +389,60 @@ fn an_undeclared_profile_or_version_is_refused_as_a_protocol_error() {
     match decode(&ancient) {
         DecodeResponse::Refused { diagnostic } => assert_eq!(diagnostic.code, "protocol_error"),
         o => panic!("{o:?}"),
+    }
+}
+
+/// The YAML profile is read by morphir-core's YAML reader and answered under the `yaml` key. A
+/// bare `Reference` writes back as the FQName on its own, the way kit case types-0002 spells it.
+#[test]
+fn a_yaml_request_decodes_and_answers_canonical_yaml() {
+    let r = DecodeRequest {
+        profile: Profile::Yaml,
+        ..req(
+            NodeKind::Type,
+            "Reference: morphir/SDK:basics#int\n",
+            PathMode::Current,
+        )
+    };
+    match decode(&r) {
+        DecodeResponse::Ok {
+            canonical,
+            warnings,
+            kind,
+        } => {
+            assert_eq!(
+                canonical.get("yaml").map(String::as_str),
+                Some("morphir/SDK:basics#int\n")
+            );
+            assert!(!canonical.contains_key("json"));
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(kind, "Reference");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A YAML document's own syntax rules are the reader's to report, in the kit's codes and with the
+/// kit's cursors — not a protocol failure and not a JSON diagnostic.
+#[test]
+fn a_yaml_request_reports_profile_diagnostics() {
+    let r = DecodeRequest {
+        profile: Profile::Yaml,
+        ..req(
+            NodeKind::Distribution,
+            "formatVersion: 4\nformatVersion: 4\n",
+            PathMode::Current,
+        )
+    };
+    match decode(&r) {
+        DecodeResponse::Err { diagnostic } => {
+            assert_eq!(
+                diagnostic.code,
+                morphir_core::ir::DiagnosticCode::DuplicateMember
+            );
+            assert_eq!(diagnostic.cursor, "/formatVersion");
+        }
+        other => panic!("{other:?}"),
     }
 }
 

@@ -93,9 +93,12 @@ fn decode_here(req: &DecodeRequest) -> DecodeResponse {
     // Neither of these can happen while the driver honours `capabilities`, and neither is a
     // statement about the document, so they answer `protocol_error` rather than spending one of
     // the kit's diagnostic codes on "this binding does not do that".
-    if req.profile != Profile::Json {
+    //
+    // Version 3 is read and written in the classic model, whose only spelling is JSON: the kit's
+    // version 3 cases carry no yaml fence, so there is nothing for this binding to answer.
+    if req.version == 3 && req.profile == Profile::Yaml {
         return DecodeResponse::Refused {
-            diagnostic: ProtocolDiagnostic::new("this binding decodes the json profile only"),
+            diagnostic: ProtocolDiagnostic::new("this binding decodes version 3 as json only"),
         };
     }
     if !matches!(req.version, 3 | 4) {
@@ -110,10 +113,10 @@ fn decode_here(req: &DecodeRequest) -> DecodeResponse {
     match read(req) {
         Ok((node, warnings)) => {
             let node = if req.strip { node.stripped() } else { node };
-            match node.write() {
+            match node.write(req.profile) {
                 Ok(text) => DecodeResponse::Ok {
                     kind: node.kind().to_string(),
-                    canonical: BTreeMap::from([("json".to_string(), format!("{text}\n"))]),
+                    canonical: BTreeMap::from([(profile_key(req.profile).to_string(), text)]),
                     warnings,
                 },
                 Err(diagnostic) => DecodeResponse::Err { diagnostic },
@@ -123,26 +126,43 @@ fn decode_here(req: &DecodeRequest) -> DecodeResponse {
     }
 }
 
-fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
-    // A repeated member and a document nested past the ceiling are properties of the text, not
-    // of any node, so they are settled before the text becomes a value: `serde_json::Value`
-    // folds a repeated member onto the last one written and would hide it.
-    if let Some(diagnostic) = probe_syntax(&req.input) {
-        return Err(diagnostic);
+/// The key a canonical answer is filed under: the profile the request asked for.
+fn profile_key(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Json => "json",
+        Profile::Yaml => "yaml",
     }
+}
 
-    if req.version == 3 {
-        return read_v3(req).map(|node| (node, Vec::new()));
-    }
-    read_v4(req)
+fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
+    let value = match req.profile {
+        Profile::Json => {
+            // A repeated member and a document nested past the ceiling are properties of the
+            // text, not of any node, so they are settled before the text becomes a value:
+            // `serde_json::Value` folds a repeated member onto the last one written and would
+            // hide it.
+            if let Some(diagnostic) = probe_syntax(&req.input) {
+                return Err(diagnostic);
+            }
+
+            if req.version == 3 {
+                return read_v3(req).map(|node| (node, Vec::new()));
+            }
+            parse_json(&req.input)?
+        }
+        // The YAML reader walks the document itself, so the repeated member and the nesting
+        // ceiling are already its answers, in the kit's codes and with the kit's cursors; there
+        // is no separate probe. Version 3 never reaches here (`decode_here` refuses it).
+        Profile::Yaml => morphir_core::ir::yaml::read(&req.input)?,
+    };
+    read_v4(req, value)
 }
 
 // =============================================================================
 // Version 4
 // =============================================================================
 
-fn read_v4(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
-    let value = parse_json(&req.input)?;
+fn read_v4(req: &DecodeRequest, value: Json) -> Result<(Node, Vec<Warning>), Diagnostic> {
     // Both path modes read through the same readers, so both decode under the open window (see
     // the module's note on `current` and `pinned`). `req.path` is matched rather than ignored so
     // the day the two paths differ, this is where that shows up.
@@ -911,14 +931,28 @@ impl Node {
         }
     }
 
-    /// The canonical JSON spelling of this node, in the compact type encoding.
-    fn write(&self) -> Result<String, Diagnostic> {
-        fn text<T: Serialize>(node: &T) -> Result<String, Diagnostic> {
-            let value = with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(node))
-                .map_err(|error| {
+    /// The canonical spelling of this node in the requested profile, in the compact type
+    /// encoding, with the one trailing newline a canonical fence carries.
+    ///
+    /// Both profiles write the same value tree — the node's compact serialisation — so a case's
+    /// two canonical fences are two spellings of one answer rather than two answers.
+    fn write(&self, profile: Profile) -> Result<String, Diagnostic> {
+        let value = self.value()?;
+        Ok(match profile {
+            Profile::Json => format!("{}\n", write_canonical(&value)),
+            // The YAML writer ends its output with the newline itself.
+            Profile::Yaml => morphir_core::ir::yaml::write_canonical(&value),
+        })
+    }
+
+    /// This node as the value tree both canonical writers spell, in the compact type encoding.
+    fn value(&self) -> Result<Json, Diagnostic> {
+        fn text<T: Serialize>(node: &T) -> Result<Json, Diagnostic> {
+            with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(node)).map_err(
+                |error| {
                     Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
-                })?;
-            Ok(write_canonical(&value))
+                },
+            )
         }
 
         match self {

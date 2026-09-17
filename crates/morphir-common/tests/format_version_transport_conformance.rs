@@ -1,13 +1,14 @@
 //! Conformance tests for JSON and YAML root probing and replay transport.
 //!
 //! The JSON path is probed before it is decoded, so a `probe_*` call is what the corpus's header
-//! and root cases exercise. The YAML path has no probe: `morphir_core::ir::yaml::read` builds the
-//! whole value tree and `YamlCodec` takes `formatVersion` from it, so the corpus is exercised
-//! through the codec itself.
+//! and root cases exercise. The YAML path has no streaming probe: `morphir_core::ir::yaml::read`
+//! builds the whole value tree and `YamlCodec` takes `formatVersion` from it, so the corpus's
+//! root cases are exercised through the codec itself and its header observations through
+//! `probe_yaml_header`, which reads them off that tree.
 
 use morphir_common::ir_transport::{
     CodecOptions, EventSink, FormatId, IrCodec, IrVersion, Layout, TransportDiagnostic, YamlCodec,
-    probe_json_root, probe_json_slice,
+    probe_json_root, probe_json_slice, probe_yaml_header,
 };
 use morphir_core::format_version::SupportTable;
 use morphir_core::traversal::SemanticEvent;
@@ -177,10 +178,22 @@ fn header_order_cases_match_parent_conformance_corpus() {
                     None => assert!(probe.observations.is_empty()),
                 }
             }
-            // The YAML reader builds the whole value tree before anything is decided, so member
-            // order costs it nothing and it raises no `format_version_not_first` observation.
-            // What the corpus still pins on this path is that either order decodes.
-            "yaml" => decode_yaml(&case.source, IrVersion::V3).expect("header order case"),
+            // The YAML reader builds the whole value tree, which preserves member order, so the
+            // corpus's observation is answerable here exactly as it is on the JSON path. The
+            // corpus pins both halves: the observation, and that either order decodes.
+            "yaml" => {
+                let observations =
+                    probe_yaml_header(case.source.as_bytes()).expect("header order case");
+                match case.warning {
+                    Some(expected) => assert!(
+                        observations
+                            .iter()
+                            .any(|observation| observation.code == expected)
+                    ),
+                    None => assert!(observations.is_empty()),
+                }
+                decode_yaml(&case.source, IrVersion::V3).expect("header order case");
+            }
             other => panic!("unsupported format {other}"),
         }
     }

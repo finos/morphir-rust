@@ -42,7 +42,7 @@ pub use access::{Access, AccessControlled};
 // Re-export core expression types
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
-pub use literal::{FloatLiteral, Literal};
+pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};
 pub use pattern::Pattern;
 pub use serde_v4::{TypeEncoding, with_type_encoding};
 pub use types::{Field, Type};

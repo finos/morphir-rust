@@ -202,11 +202,22 @@ impl Serialize for WireDiagnostic<'_> {
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
+        // Destructured rather than read member by member: a new field on the core `Diagnostic`
+        // has to be decided about here — sent or deliberately dropped — and this makes that a
+        // compile error instead of a response the driver silently cannot read.
+        let Diagnostic {
+            code,
+            stage,
+            cursor,
+            message,
+            line: _,
+            column: _,
+        } = self.0;
         let mut map = serializer.serialize_map(Some(4))?;
-        map.serialize_entry("code", &self.0.code)?;
-        map.serialize_entry("stage", &self.0.stage)?;
-        map.serialize_entry("cursor", &self.0.cursor)?;
-        map.serialize_entry("message", &self.0.message)?;
+        map.serialize_entry("code", code)?;
+        map.serialize_entry("stage", stage)?;
+        map.serialize_entry("cursor", cursor)?;
+        map.serialize_entry("message", message)?;
         map.end()
     }
 }

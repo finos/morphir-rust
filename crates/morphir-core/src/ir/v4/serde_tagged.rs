@@ -816,11 +816,9 @@ fn decode_number_literal(value: &JsonValue, cursor: &str) -> Result<Literal, Dia
 /// `Number::to_string`, which is how `1.0e2` stays `1.0e2` instead of becoming `100.0`.
 fn float_from_json(value: &JsonValue) -> Option<FloatLiteral> {
     let lexeme = value.as_number()?.to_string();
-    // A number the reader cannot hold as an `f64` overflows to an infinity, which is not a
-    // literal this model carries.
-    FloatLiteral::from_lexeme(&lexeme)
-        .ok()
-        .filter(|float| float.value().is_finite())
+    // `from_lexeme` is the gate: it refuses a spelling that is not a JSON number and a magnitude
+    // no `f64` can hold, which is the number the reader cannot carry.
+    FloatLiteral::from_lexeme(&lexeme).ok()
 }
 
 // =============================================================================

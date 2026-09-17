@@ -23,8 +23,8 @@ use serde_json::Value as Json;
 
 use super::semantic::{self, SemanticFile};
 use super::{
-    CodecOptions, EventSink, EventSource, FormatId, IR_RECURSION_STACK_BYTES, IrCodec, IrVersion,
-    SourceSpan, Stage, TransportDiagnostic,
+    CodecOptions, EventSink, EventSource, FormatId, HeaderObservation, IR_RECURSION_STACK_BYTES,
+    IrCodec, IrVersion, SourceSpan, Stage, TransportDiagnostic,
 };
 
 const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
@@ -101,6 +101,39 @@ pub(crate) fn read_value(input: &[u8]) -> Result<Json, TransportDiagnostic> {
     stacker::grow(IR_RECURSION_STACK_BYTES, || {
         profile::read(text).map_err(transport_diagnostic)
     })
+}
+
+/// The non-fatal header observations a root mapping carries, as the JSON root probe reports them.
+///
+/// The profile reader preserves member order, so a `formatVersion` that does not come first is as
+/// answerable here as it is on the JSON path, and the shared conformance corpus pins the same
+/// observation for both profiles. Replay measurements are a JSON-probe concept — the YAML reader
+/// has already read the whole document — so an observation from here carries none.
+pub(crate) fn header_observations(value: &Json) -> Vec<HeaderObservation> {
+    let Some(members) = value.as_object() else {
+        return Vec::new();
+    };
+    let first_is_format_version = members
+        .keys()
+        .next()
+        .is_some_and(|first| first == "formatVersion");
+    if members.contains_key("formatVersion") && !first_is_format_version {
+        return vec![HeaderObservation {
+            code: "format_version_not_first",
+            message: "formatVersion is valid but does not appear first in the root mapping".into(),
+            replay: None,
+        }];
+    }
+    Vec::new()
+}
+
+/// Reads one profile-conforming YAML document and reports its header observations.
+///
+/// This is the YAML counterpart of [`probe_json_root`](super::probe_json_root)'s `observations`:
+/// `IrCodec::decode` has no channel for a non-fatal observation, so a caller that wants them asks
+/// for them here.
+pub fn probe_yaml_header(input: &[u8]) -> Result<Vec<HeaderObservation>, TransportDiagnostic> {
+    Ok(header_observations(&read_value(input)?))
 }
 
 /// Wraps one of the kit's diagnostics as a transport diagnostic.
@@ -276,6 +309,11 @@ impl IrCodec for YamlCodec {
     ) -> Result<(), TransportDiagnostic> {
         let input = Self::read_input(reader)?;
         let value = read_value(&input)?;
+        // The same header observations the JSON codec's root probe raises, raised on the same
+        // document. Neither codec has anywhere to send a non-fatal observation from `decode` —
+        // the JSON codec drops `probe.observations` here too — so a caller that wants them calls
+        // `probe_yaml_header`; what matters is that the YAML path can still answer them.
+        let _observations = header_observations(&value);
         let normalized = format_version_of(&value, &SupportTable::reference())?;
         stacker::grow(IR_RECURSION_STACK_BYTES, || match options.version() {
             IrVersion::V3 => {

@@ -161,10 +161,41 @@ fn a_located_diagnostic_is_answered_without_its_line_and_column() {
     let response = response_to(&line.to_string());
     assert_eq!(response["ok"], false);
     assert_eq!(response["diagnostic"]["code"], "invalid_literal");
-    let members: Vec<&String> = response["diagnostic"]
+    assert_eq!(
+        diagnostic_members(&response),
+        ["code", "stage", "cursor", "message"]
+    );
+}
+
+/// The JSON profile answers the same four-member diagnostic. The wire shape changed for both
+/// profiles, and the JSON one is what the kit adjudicates most of its fences through, so it is
+/// held to the shape too rather than inheriting the YAML case's guarantee.
+#[test]
+fn a_json_diagnostic_is_answered_with_the_same_four_members() {
+    let line = serde_json::json!({
+        "id": 1,
+        "op": "decode",
+        "version": 4,
+        "profile": "json",
+        "path": "current",
+        "strip": true,
+        "node": "Literal",
+        "input": "{\"IntegerLiteral\": ",
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["diagnostic"]["code"], "invalid_json");
+    assert_eq!(
+        diagnostic_members(&response),
+        ["code", "stage", "cursor", "message"]
+    );
+}
+
+/// The members of a response's diagnostic, in the order it wrote them.
+fn diagnostic_members(response: &serde_json::Value) -> Vec<&String> {
+    response["diagnostic"]
         .as_object()
         .expect("a diagnostic object")
         .keys()
-        .collect();
-    assert_eq!(members, ["code", "stage", "cursor", "message"]);
+        .collect()
 }

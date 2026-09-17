@@ -21,6 +21,13 @@ enum Frame {
     },
 }
 
+/// What [`Reader::place`] found wrong, decided while the frame stack is borrowed and reported
+/// once that borrow has ended and the cursor can be read.
+enum Fault {
+    DuplicateMember(String),
+    NonStringKey(&'static str),
+}
+
 struct Reader {
     stack: Vec<Frame>,
     root: Option<Value>,
@@ -51,10 +58,12 @@ fn at(span: &Span) -> Option<&Marker> {
 /// so the profile's blanket refusal of directives is decided on the source text.
 fn has_directive(text: &str) -> bool {
     for line in text.lines() {
-        let t = line.trim_start();
-        if t.starts_with('%') {
+        // A directive is only ever unindented, so the `%` has to be the line's first byte. An
+        // indented `%` opens a plain scalar, which the profile has no quarrel with.
+        if line.starts_with('%') {
             return true;
         }
+        let t = line.trim_start();
         if t.starts_with("---") || (!t.is_empty() && !t.starts_with('#')) {
             return false;
         }
@@ -110,41 +119,56 @@ impl Reader {
     }
 
     fn place(&mut self, value: Value, span: &Span) -> Result<(), Diagnostic> {
-        // The cursor of the node being placed: for a mapping value the enclosing frame still
-        // carries its pending key, which is also the cursor a duplicate member reports.
-        let cursor = self.cursor();
-        match self.stack.last_mut() {
-            None => self.root = Some(value),
-            Some(Frame::Seq(items)) => items.push(value),
+        // `place` runs once per node, so the cursor — which walks the frame stack building a
+        // string — is computed only when one of the two faults is being reported. The stack is
+        // left exactly as the cursor of the offending node needs it: the frame holding a repeated
+        // member keeps its pending key, and a non-string key never took one.
+        let fault = match self.stack.last_mut() {
+            None => {
+                self.root = Some(value);
+                None
+            }
+            Some(Frame::Seq(items)) => {
+                items.push(value);
+                None
+            }
             Some(Frame::Map {
                 members,
                 pending_key,
             }) => match pending_key.take() {
                 Some(key) => {
                     if members.contains_key(&key) {
-                        return Err(diagnostic(
-                            DiagnosticCode::DuplicateMember,
-                            &cursor,
-                            format!("member \"{key}\" appears twice"),
-                            at(span),
-                        ));
+                        *pending_key = Some(key.clone());
+                        Some(Fault::DuplicateMember(key))
+                    } else {
+                        members.insert(key, value);
+                        None
                     }
-                    members.insert(key, value);
                 }
                 None => match value {
-                    Value::String(key) => *pending_key = Some(key),
-                    other => {
-                        return Err(diagnostic(
-                            DiagnosticCode::InvalidType,
-                            &cursor,
-                            format!("mapping keys must be strings, got {}", kind_name(&other)),
-                            at(span),
-                        ));
+                    Value::String(key) => {
+                        *pending_key = Some(key);
+                        None
                     }
+                    other => Some(Fault::NonStringKey(kind_name(&other))),
                 },
             },
+        };
+        match fault {
+            None => Ok(()),
+            Some(Fault::DuplicateMember(key)) => Err(diagnostic(
+                DiagnosticCode::DuplicateMember,
+                &self.cursor(),
+                format!("member \"{key}\" appears twice"),
+                at(span),
+            )),
+            Some(Fault::NonStringKey(kind)) => Err(diagnostic(
+                DiagnosticCode::InvalidType,
+                &self.cursor(),
+                format!("mapping keys must be strings, got {kind}"),
+                at(span),
+            )),
         }
-        Ok(())
     }
 }
 

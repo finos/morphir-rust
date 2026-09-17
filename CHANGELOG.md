@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its canonical writer (`read`, `write_canonical`, `read_ir_file`, `write_ir_file`), so a YAML
   document becomes the same value tree the JSON reader builds, with the kit's diagnostic codes and
   JSON-pointer cursors. The MCK adapter declares the `yaml` profile.
+- `morphir_common::ir_transport::probe_yaml_header` reports the header observations a YAML root
+  mapping carries — `format_version_not_first` — as the JSON root probe reports them, so the
+  shared conformance corpus is answered for both profiles.
 
 ### Fixed
 

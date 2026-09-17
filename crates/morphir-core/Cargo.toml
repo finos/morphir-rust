@@ -35,6 +35,10 @@ lasso = { version = "0.7", features = ["multi-threaded", "serde"] }
 # The YAML profile reader walks this parser's event stream directly; the pin and its features are
 # the workspace's, so nothing else in the tree can link a second copy.
 granit-parser = { workspace = true }
+# The JSON reader's duplicate-member/nesting probe and its parse both recurse once per nesting
+# level; `stacker::maybe_grow` lets `json::read` grow a large stack on demand instead of assuming
+# its caller's, the way morphir-common's own IR transport already does.
+stacker = { workspace = true }
 sha2 = "0.11"
 # A DecimalLiteral is a genuine decimal; the lexeme is carried beside it because the wire keeps the
 # spelling. Both build on num-bigint, which IntegerLiteral uses directly.

@@ -24,35 +24,42 @@ use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
 /// at some other depth.
 pub const MAX_DEPTH: usize = 1000;
 
-/// The stack a read runs on.
+/// The stack `read` grows onto when it needs to, rather than assumes it already has.
 ///
 /// [`MAX_DEPTH`] is a promise: a document nesting that many containers is conforming, and the
 /// answer to one nesting a container more is `nesting_too_deep`, not a crashed process. Both the
 /// syntax probe and the parser recurse once per level, and 1000 levels of an unoptimized build's
 /// frames do not fit in the stack a thread is given by default — on Windows the main thread's
-/// stack is whatever the linker reserved, which is 1 MiB unless someone says otherwise. So the
-/// work runs on a thread with a stack this crate states rather than inherits, and every caller —
-/// the mck adapter's own decode thread, the document-tree layout, or a test — gets the ceiling's
-/// answer rather than a stack overflow, regardless of the stack it called in on.
+/// stack is whatever the linker reserved, which is 1 MiB unless someone says otherwise. This is
+/// the size of the stack [`stacker::maybe_grow`] allocates when [`RED_ZONE`] says the caller's own
+/// stack is too shallow to recurse that far, matching `morphir-common`'s own
+/// `IR_RECURSION_STACK_BYTES` and the mck adapter's own decode-thread stack.
 const READ_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+/// How much headroom `read` demands before it recurses, below which [`stacker::maybe_grow`] grows
+/// a fresh [`READ_STACK_BYTES`] stack rather than running the probe and the parse on what the
+/// caller's stack has left.
+///
+/// This has to be large enough that an ordinary caller — a test thread, a plain function call from
+/// the document-tree layout reading one file among hundreds, the process's main thread — always
+/// grows before recursing [`MAX_DEPTH`] levels: with less than this much free, a document at the
+/// ceiling could run out of native stack partway through the probe or the parse, on a build
+/// without optimizations giving each recursive frame its least economical layout. It also has to
+/// be small enough that a caller already running on a stack [`READ_STACK_BYTES`] or larger — the
+/// mck adapter's own decode thread, or a document-tree read that already grew once for the whole
+/// tree — is not made to grow again for every file.
+const RED_ZONE: usize = 16 * 1024 * 1024;
 
 /// Reads a JSON document under the storage profile: no repeated object member, no more than
 /// [`MAX_DEPTH`] nested containers, and otherwise whatever `serde_json` accepts.
 ///
-/// Runs on a thread with [`READ_STACK_BYTES`] reserved, so a document at the nesting ceiling
-/// answers `nesting_too_deep` rather than overflowing whatever stack the caller happens to be on.
+/// Grows onto a [`READ_STACK_BYTES`] stack via [`stacker::maybe_grow`] when the caller's own stack
+/// is shallower than [`RED_ZONE`], so a document at the nesting ceiling answers `nesting_too_deep`
+/// rather than overflowing whatever stack the caller happens to be on — without paying for a
+/// spawned thread on every call, which matters here because the document-tree layout calls this
+/// once per file of a tree.
 pub fn read(text: &str) -> Result<Json, Diagnostic> {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(READ_STACK_BYTES)
-            .spawn_scoped(scope, || read_here(text))
-            .expect("a json reader thread")
-            .join()
-            // A panic in the reader is this crate's bug, not a statement about the document, and
-            // there is no honest diagnostic to answer with. Resuming it lets the process die the
-            // way it would have without the thread.
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
+    stacker::maybe_grow(RED_ZONE, READ_STACK_BYTES, || read_here(text))
 }
 
 fn read_here(text: &str) -> Result<Json, Diagnostic> {

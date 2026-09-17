@@ -696,6 +696,45 @@ fn two_names_sharing_a_file_stem_are_refused_at_the_physical_node_path() {
 }
 
 #[test]
+fn two_module_keys_escaping_to_one_directory_leave_one_entry_per_path() {
+    // `user-ID` and `user--id` are the two canonical encodings of one name, and nothing validates
+    // a module key on read, so both modules lay their files out under `pkg/acme/user-_id/`. The
+    // reference accumulates into a map, so the shared module manifest keeps the position it first
+    // took and carries the second module's bytes.
+    let mut modules = IndexMap::new();
+    modules.insert("user-ID".to_owned(), module_with_types(&["alpha"]));
+    modules.insert("user--id".to_owned(), module_with_types(&["beta"]));
+
+    let file = IRFile {
+        format_version: FormatVersion::Integer(4),
+        distribution: morphir_core::ir::Distribution::Library(morphir_core::ir::LibraryContent {
+            package_name: package("acme"),
+            dependencies: IndexMap::new(),
+            def: morphir_core::ir::PackageDefinition { modules },
+        }),
+    };
+
+    let written = write_tree(&file, &policy(Profile::Yaml, 4000)).expect("both modules write");
+
+    assert_eq!(
+        written
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "manifest",
+            "pkg/acme/user-_id/module",
+            "pkg/acme/user-_id/alpha.type",
+            "pkg/acme/user-_id/beta.type",
+        ],
+    );
+    assert_eq!(
+        written[1].1,
+        "formatVersion: 4\npath: user-ID\ntypes: [beta]\nvalues: []\n",
+    );
+}
+
+#[test]
 fn a_module_key_that_is_not_a_path_is_refused_at_the_module_it_would_have_written() {
     // The model keys its modules by their canonical string, which the reference's `NamedModule`
     // carried as a parsed name; a key that names nothing has no directory of its own, so the

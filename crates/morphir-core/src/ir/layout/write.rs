@@ -21,6 +21,8 @@
 //! The per-module writers are public and take one module each, so a caller streaming a
 //! distribution can emit a module's files without holding the whole tree.
 
+use std::collections::{HashMap, HashSet};
+
 use indexmap::IndexMap;
 use serde::Serialize;
 
@@ -166,12 +168,14 @@ pub fn write_specification_module(
 /// The list is the tree in emission order: the distribution manifest, the own package's modules,
 /// then the dependencies in the order the model lists them. A `Library` or `Specs` tree's
 /// dependencies are package specifications; an `Application` links its dependencies statically, so
-/// its `deps/` holds definitions (distributions-0010).
+/// its `deps/` holds definitions (distributions-0010). A logical path appears exactly once, at the
+/// position it was first written and carrying the last text written to it — see [`Files`].
 ///
 /// Fails with `invalid_distribution_shape` when the path budget cannot hold the tree, or when a
 /// module specification carries annotations a tree has nowhere to put.
 pub fn write_tree(file: &IRFile, policy: &TreePolicy) -> Result<Vec<(String, String)>, Diagnostic> {
-    let mut out = vec![write_manifest(file, policy)];
+    let mut out = Files::default();
+    out.set(write_manifest(file, policy));
     let format_version = &file.format_version;
 
     match &file.distribution {
@@ -240,7 +244,37 @@ pub fn write_tree(file: &IRFile, policy: &TreePolicy) -> Result<Vec<(String, Str
         }
     }
 
-    Ok(out)
+    Ok(out.into_vec())
+}
+
+/// The tree as the reference accumulates it: a map keyed by logical path, iterated in the order
+/// each path was *first* written.
+///
+/// Two module keys can escape to one directory — `user-ID` and `user--id` are the two canonical
+/// encodings of one name, and nothing validates a module key on read — so two modules can write
+/// the same paths. The reference's `Map.set` keeps one entry per path: the last value written,
+/// under the position the path first took. Accumulating into a plain list instead would emit the
+/// path twice, and a tree is a map of files.
+#[derive(Default)]
+struct Files {
+    entries: Vec<(String, String)>,
+    positions: HashMap<String, usize>,
+}
+
+impl Files {
+    fn set(&mut self, (path, text): (String, String)) {
+        match self.positions.get(&path) {
+            Some(&at) => self.entries[at].1 = text,
+            None => {
+                self.positions.insert(path.clone(), self.entries.len());
+                self.entries.push((path, text));
+            }
+        }
+    }
+
+    fn into_vec(self) -> Vec<(String, String)> {
+        self.entries
+    }
 }
 
 // =============================================================================
@@ -253,17 +287,12 @@ fn write_definition_modules(
     definition: &PackageDefinition,
     format_version: &FormatVersion,
     policy: &TreePolicy,
-    out: &mut Vec<(String, String)>,
+    out: &mut Files,
 ) -> Result<(), Diagnostic> {
     for (name, module) in &definition.modules {
-        out.extend(write_definition_module(
-            root,
-            package,
-            name,
-            module,
-            format_version,
-            policy,
-        )?);
+        for file in write_definition_module(root, package, name, module, format_version, policy)? {
+            out.set(file);
+        }
     }
     Ok(())
 }
@@ -274,17 +303,13 @@ fn write_specification_modules(
     specification: &PackageSpecification,
     format_version: &FormatVersion,
     policy: &TreePolicy,
-    out: &mut Vec<(String, String)>,
+    out: &mut Files,
 ) -> Result<(), Diagnostic> {
     for (name, module) in &specification.modules {
-        out.extend(write_specification_module(
-            root,
-            package,
-            name,
-            module,
-            format_version,
-            policy,
-        )?);
+        for file in write_specification_module(root, package, name, module, format_version, policy)?
+        {
+            out.set(file);
+        }
     }
     Ok(())
 }
@@ -379,7 +404,7 @@ fn stems_for<'a, T>(
 ) -> Result<Vec<Stem<'a, T>>, Diagnostic> {
     let prefix = module_dir_prefix(root, dir);
     let suffix = format!(".{}{}", kind.as_str(), policy.profile.extension());
-    let mut seen: Vec<String> = Vec::with_capacity(items.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(items.len());
     let mut out = Vec::with_capacity(items.len());
 
     for (key, value) in items {
@@ -397,7 +422,7 @@ fn stems_for<'a, T>(
                 ),
             ));
         }
-        seen.push(chosen.stem.clone());
+        seen.insert(chosen.stem.clone());
         out.push(Stem {
             name,
             value,

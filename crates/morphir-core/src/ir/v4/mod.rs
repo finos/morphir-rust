@@ -27,7 +27,6 @@ pub mod pattern;
 pub mod serde_document;
 pub mod serde_tagged;
 pub mod serde_v4;
-pub mod type_def;
 pub mod types;
 pub mod value;
 
@@ -78,13 +77,6 @@ pub use types::{
 // Re-export value definition types
 pub use value::{
     ExternalBinding, HoleReason, NativeHint, ValueBody, ValueDefinition, ValueSpecification,
-};
-
-// Re-export legacy type_def types for backward compatibility
-pub use type_def::{
-    AccessControlledConstructors, AccessControlledTypeDefinition,
-    ConstructorArg as TypeDefConstructorArg, ConstructorDefinition as TypeDefConstructorDefinition,
-    TypeDefinition as LegacyTypeDefinition, TypeSpecification as LegacyTypeSpecification,
 };
 
 /// Top-level IR file structure.

@@ -24,7 +24,6 @@ use super::legacy::{accept_member, record_legacy_form_warning};
 use super::literal::{FloatLiteral, Literal};
 use super::pattern::Pattern;
 use super::serde_v4;
-use super::type_def::ConstructorArg;
 use super::types::{Field, Type};
 use super::value::{HoleReason, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition};
 use crate::ir::decimal::DecimalLiteral;
@@ -1281,51 +1280,6 @@ impl<'de> Deserialize<'de> for LetBinding {
         }
 
         deserializer.deserialize_seq(LetBindingVisitor)
-    }
-}
-
-// ConstructorArg(Name, Type) - serialize as [name, type]
-impl Serialize for ConstructorArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(2))?;
-        seq.serialize_element(&self.0)?;
-        seq.serialize_element(&self.1)?;
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for ConstructorArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct ConstructorArgVisitor;
-
-        impl<'de> Visitor<'de> for ConstructorArgVisitor {
-            type Value = ConstructorArg;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a tuple [name, type]")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<ConstructorArg, V::Error>
-            where
-                V: SeqAccess<'de>,
-            {
-                let name = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let tpe = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(ConstructorArg(name, tpe))
-            }
-        }
-
-        deserializer.deserialize_seq(ConstructorArgVisitor)
     }
 }
 

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Python extension release bundles include frontend language and backend target
+  metadata. CI builds and uploads the bundle and verifies offline installation,
+  compilation and generation. The `extension/python/v0.1.0` release tag publishes
+  the WASM guest, checksum and descriptor through the extension release pipeline.
+- Local extension repositories accept frontend-only and combined frontend/backend
+  bundles while retaining support for existing backend-only descriptors.
+
 - Python integer literals preserve arbitrary precision through compilation and
   generation, including hexadecimal, octal and binary source literals.
 

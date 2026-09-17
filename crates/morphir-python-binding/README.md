@@ -334,7 +334,7 @@ cargo test --locked -p morphir-python-binding
 cargo run --locked -p morphir-python-binding --example python_adt
 rustup target add wasm32-unknown-unknown
 cargo build --locked --release -p morphir-python-binding --target wasm32-unknown-unknown
-cargo test --locked -p morphir-daemon --test python_extension -- --ignored
+cargo test --locked -p morphir-daemon --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
 ```
 
 The example prints JSON containing compiled IR and generated source for the
@@ -354,6 +354,18 @@ capabilities through the actual WASM guest.
 `MORPHIR_PYTHON_WASM` can select a different guest file for that test.
 The native `NativeExtension::frontend_backend(PythonExtension)` adapter exposes
 the same MEP methods without requiring a WASM runtime.
+
+Build the installable release bundle with `mise run extension:artifact:python`.
+This runs native tests, builds and validates the WASM guest, packages its checksum
+and descriptor, and tests publication, installation and both capabilities with a
+fresh Morphir Home after removing the source repository. The three bundle files
+are written to `.morphir/build/extensions/python/`.
+
+CI uploads these files as `morphir-python-extension-bundle`. Tags such as
+`extension/python/v0.1.0` publish the same tested bundle as GitHub release assets.
+The descriptor declares language `python` (`.py`), target `python`, MEP `0.1`
+and IR `4`; these declarations cover only the subset documented above. The
+release is a Morphir WASM extension, not a PyPI package or a CPython import module.
 
 For installation with the parent Morphir CLI, see the
 [Python extension guide](../../docs/tutorials/python-extension.md).

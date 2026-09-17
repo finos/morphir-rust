@@ -120,6 +120,10 @@ def descriptor_bytes(
     digest: str,
     git_commit: str | None,
 ) -> bytes:
+    languages = frontend_languages(extension) if "languages" in extension else None
+    targets = extension.get("targets", [])
+    if targets != [] or languages is None:
+        targets = require_string_list(extension, "targets")
     descriptor = {
         "schemaVersion": 1,
         "shortId": short_id,
@@ -128,16 +132,40 @@ def descriptor_bytes(
         "version": version,
         "mepVersions": require_string_list(extension, "mep_versions"),
         "runtime": "wasm",
-        "targets": require_string_list(extension, "targets"),
+        "targets": targets,
         "irVersions": require_string_list(extension, "ir_versions"),
         "artifact": artifact_name,
         "sha256": digest,
     }
+    if languages is not None:
+        descriptor["languages"] = languages
     if "name" in extension:
         descriptor["name"] = require_string(extension, "name")
     if git_commit is not None:
         descriptor["gitCommit"] = git_commit
     return (json.dumps(descriptor, indent=2) + "\n").encode("utf-8")
+
+
+def frontend_languages(extension: dict[str, Any]) -> list[dict[str, Any]]:
+    languages = extension.get("languages")
+    if not isinstance(languages, list) or not languages:
+        raise PackageError("frontend languages must be a non-empty list")
+    result = []
+    seen = set()
+    for language in languages:
+        if not isinstance(language, dict) or set(language) != {"id", "file_extensions"}:
+            raise PackageError("frontend language requires id and file_extensions")
+        identifier = require_string(language, "id")
+        extensions = require_string_list(language, "file_extensions")
+        if identifier.strip() != identifier or identifier in seen:
+            raise PackageError("frontend language IDs must be trimmed and unique")
+        if len(set(extensions)) != len(extensions) or any(
+            not value.startswith(".") or value.strip() != value for value in extensions
+        ):
+            raise PackageError("frontend file extensions must be dot-prefixed, trimmed and unique")
+        seen.add(identifier)
+        result.append({"id": identifier, "fileExtensions": extensions})
+    return result
 
 
 def expected_bundle(

@@ -1,4 +1,4 @@
-# Rust type frontend and backend
+# Rust frontend and type backend
 
 `morphir-rust-binding` implements the `morphir-rust` extension. It provides MEP
 `frontend/compile` and `backend/generate` natively and as an Extism WASM guest.
@@ -6,7 +6,8 @@ Both capabilities advertise IR versions `3` and `4`, language/target `rust` and
 source suffix `.rs`. Syn parses source without running rustc, macros or build
 scripts. The shared `morphir-core` codecs and typed migration handle the IR.
 
-This first increment translates types. It does not compile function bodies or
+The frontend translates types and explicitly annotated native/external function
+declarations for IR v4. It does not compile function bodies or
 implement Morphir value semantics. It does not claim complete Rust language
 support or extension-level MCK conformance.
 
@@ -61,13 +62,13 @@ is `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`, `De
 
 Imports, module declarations, dependency compilation, references, lifetimes,
 traits, bounds, const generics, default type parameters, enum discriminants,
-macro invocations and other attributes are rejected. Mixed public/private struct
+macro invocations and attributes other than those documented here are rejected. Mixed public/private struct
 fields are rejected. Syn is a syntax parser: successful conversion does not claim
 that rustc has checked the original source. Use `cargo check` on source projects
 when compiler validation is needed.
 
 With `typesOnly: true`, standalone function items are omitted with a warning.
-With `typesOnly: false`, encountering a function fails. Constants, statics and
+With `typesOnly: false`, unannotated functions fail; annotated bindings require IR v4. Constants, statics and
 implementation blocks are unsupported. Failure returns diagnostics without
 partial IR. Source diagnostics carry URI and zero-based UTF-16 positions.
 
@@ -77,6 +78,48 @@ Unsupported major/minor versions fail. CLI context options `outputDir`,
 `sourceRootUri`, `sourceRoot`, `emitParseStage`, `emitParseStageFatal` are validated.
 Parse-stage output is unavailable: a request warns or fails when marked fatal.
 Unknown options fail.
+
+## IR v4 native and external declarations
+
+Set `typesOnly: false` and `irVersion: "4"` to extract annotated function
+signatures:
+
+```rust
+#[morphir::native(hint = "arithmetic", description = "Integer addition")]
+pub fn add(a: i64, b: i64) -> i64 { a + b }
+
+#[morphir::external(target = "rust", name = "vendor::lookup")]
+#[morphir::external(target = "javascript", name = "store.lookup")]
+pub fn lookup(id: i64) -> Option<String> { unimplemented!() }
+```
+
+`native` produces `NativeBody`, an operation whose implementation belongs to the
+runtime. Supported hints are `arithmetic`, `comparison`, `string_op`,
+`collection_op` and `platform_specific`. The last requires a nonblank `platform`
+string; other hints reject that key. `description` is optional.
+
+`external` produces `ExternalBody` with an explicit target platform and symbol
+name. Repeat it for different targets. Both strings must be nonblank, and targets
+must be unique. Symbols are opaque names, so the frontend does not resolve or
+validate a Rust path. A declaration cannot combine native and external bindings.
+Metadata accepts only the documented keys with string literal values.
+
+These are source extraction attributes read by Syn. This crate does not provide
+procedural macros that make the annotations compile with rustc. The frontend
+parses function bodies for Rust syntax but does not execute or translate them,
+and does not include them as an external fallback implementation.
+
+Signatures use the same supported types and unconstrained type parameters as type
+declarations. Parameters must be plain identifiers. Async, const, unsafe, ABI and
+variadic functions, receivers, destructuring, `ref`/`mut` parameter bindings,
+lifetimes and trait bounds are rejected. Visibility, documentation and parameter
+order are preserved. Binding names cannot collide after normalization with other
+bindings or module constructors.
+
+IR v3 rejects these declarations with `RS_BINDING_VERSION`. With `typesOnly: true`,
+both versions validate binding annotations and signatures, then omit them with
+`RS_VALUES_UNSUPPORTED` warnings. The backend still omits all values with a
+warning; it does not generate native or external implementations.
 
 ## Generated Rust
 

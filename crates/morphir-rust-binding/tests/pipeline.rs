@@ -6,6 +6,50 @@ use morphir_rust_binding::RustExtension;
 use quote::ToTokens;
 
 #[test]
+fn binding_declarations_compile_through_native_mep() {
+    let extension = NativeExtension::frontend_backend(RustExtension).unwrap();
+    let request = CompileRequest {
+        language_id: "rust".into(),
+        documents: vec![SourceDocument {
+            uri: "models.rs".into(),
+            language_id: "rust".into(),
+            version: 1,
+            text: r#"
+                #[morphir::native(hint = "arithmetic")]
+                pub fn add(a: i64, b: i64) -> i64 { panic!("must not execute") }
+                #[morphir::external(target = "rust", name = "vendor::identity")]
+                pub fn identity<T>(value: T) -> T { value }
+            "#
+            .into(),
+        }],
+        package: CompilePackage {
+            name: "acme/example".into(),
+            exposed_modules: vec!["Models".into()],
+        },
+        options: CompileOptions {
+            types_only: false,
+            ir_version: "4".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let response = extension
+        .protocol()
+        .handle(ExtensionRequest::new(methods::COMPILE, request, 1).unwrap());
+    assert!(response.error.is_none());
+    let compiled: CompileResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert!(compiled.success, "{:?}", compiled.diagnostics);
+    let ir = compiled.ir.unwrap();
+    let _: morphir_core::ir::v4::IRFile = serde_json::from_value(ir.clone()).unwrap();
+    let values = &ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"];
+    assert!(values["add"]["Public"]["NativeBody"].is_object(), "{ir:#}");
+    assert!(
+        values["identity"]["Public"]["ExternalBody"].is_object(),
+        "{ir:#}"
+    );
+}
+
+#[test]
 fn types_compile_and_generate_through_native_mep_in_both_versions() {
     for version in ["3", "4"] {
         let extension = NativeExtension::frontend_backend(RustExtension).unwrap();

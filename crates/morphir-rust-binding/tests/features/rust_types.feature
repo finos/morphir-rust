@@ -2,6 +2,11 @@ Feature: Rust type models through Morphir
   Rust domain models can be compiled to supported Morphir IR versions and
   generated as Rust that a downstream crate can use.
 
+  Scenario: Extract native and external declarations
+    Given Rust functions annotated as native and external bindings
+    When I compile the bindings to Morphir IR version 4
+    Then the IR preserves both binding kinds and their signatures
+
   Scenario Outline: Compile and generate a product and a sum
     Given a Rust model with a product and a sum with payloads
     When I compile the model to Morphir IR version "<version>"

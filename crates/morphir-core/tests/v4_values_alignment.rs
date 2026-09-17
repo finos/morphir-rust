@@ -73,7 +73,7 @@ fn a_bare_array_is_a_list_and_a_bare_scalar_is_a_literal() {
     ));
     assert!(matches!(
         val(json!(-8)).unwrap(),
-        Value::Literal(_, Literal::Integer(-8))
+        Value::Literal(_, Literal::Integer(n)) if n == num_bigint::BigInt::from(-8)
     ));
     // The lexeme's point is what makes a bare number a float rather than an integer.
     assert_eq!(

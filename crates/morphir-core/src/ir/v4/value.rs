@@ -917,8 +917,11 @@ mod tests {
     // Tests from value_expr.rs
     #[test]
     fn test_literal_value() {
-        let val: Value = Value::literal(ValueAttributes::default(), Literal::Integer(42));
-        assert!(matches!(val, Value::Literal(_, Literal::Integer(42))));
+        let val: Value = Value::literal(ValueAttributes::default(), Literal::Integer(42.into()));
+        assert!(matches!(
+            val,
+            Value::Literal(_, Literal::Integer(n)) if n == num_bigint::BigInt::from(42)
+        ));
     }
 
     #[test]

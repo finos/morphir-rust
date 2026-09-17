@@ -12,6 +12,7 @@
 
 use std::str::FromStr;
 
+use num_bigint::BigInt;
 use serde::{Serialize, Serializer};
 
 use crate::ir::decimal::DecimalLiteral;
@@ -139,8 +140,9 @@ pub enum Literal {
     /// String literal (UTF-8 text): `{ "StringLiteral": "s" }`
     String(String),
 
-    /// Integer literal: `{ "IntegerLiteral": 42 }`
-    Integer(i64),
+    /// Integer literal of arbitrary precision: `{ "IntegerLiteral": 42 }`; the payload is a JSON
+    /// number lexeme with no point and no exponent.
+    Integer(BigInt),
 
     /// Floating-point literal: `{ "FloatLiteral": 1.5 }`
     ///
@@ -188,8 +190,8 @@ impl Literal {
     }
 
     /// Create a new integer literal
-    pub fn integer(value: i64) -> Self {
-        Literal::Integer(value)
+    pub fn integer(value: impl Into<BigInt>) -> Self {
+        Literal::Integer(value.into())
     }
 
     /// Create a new float literal
@@ -220,7 +222,7 @@ mod tests {
             Literal::string("hello"),
             Literal::String("hello".to_string())
         );
-        assert_eq!(Literal::integer(42), Literal::Integer(42));
+        assert_eq!(Literal::integer(42), Literal::Integer(BigInt::from(42)));
         assert_eq!(
             Literal::float(2.5),
             Literal::Float(FloatLiteral::from_f64(2.5))

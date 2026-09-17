@@ -12,6 +12,7 @@
 //! document `["Variable", {}, ["a"]]` is an unknown node.
 
 use indexmap::IndexMap;
+use num_bigint::BigInt;
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
@@ -756,14 +757,14 @@ fn decode_literal_wrapper(
             .as_str()
             .map(|text| Literal::String(text.to_owned()))
             .ok_or_else(|| invalid_literal(&at, "a StringLiteral carries a string")),
-        "IntegerLiteral" | "WholeNumberLiteral" => {
-            payload.as_i64().map(Literal::Integer).ok_or_else(|| {
+        "IntegerLiteral" | "WholeNumberLiteral" => integer_from_json(payload)
+            .map(Literal::Integer)
+            .ok_or_else(|| {
                 invalid_literal(
                     &at,
-                    "an IntegerLiteral carries a whole number this reader can hold",
+                    "an IntegerLiteral carries a whole-number lexeme with no point and no exponent",
                 )
-            })
-        }
+            }),
         "FloatLiteral" => float_from_json(payload)
             .map(Literal::Float)
             .ok_or_else(|| invalid_literal(&at, "a FloatLiteral carries a number")),
@@ -810,12 +811,22 @@ fn decode_char_literal(payload: &JsonValue, cursor: &str) -> Result<Literal, Dia
 /// A bare number is an integer literal when it is a whole number this reader can hold, and a
 /// float otherwise.
 fn decode_number_literal(value: &JsonValue, cursor: &str) -> Result<Literal, Diagnostic> {
-    if let Some(whole) = value.as_i64() {
+    if let Some(whole) = integer_from_json(value) {
         return Ok(Literal::Integer(whole));
     }
     float_from_json(value)
         .map(Literal::Float)
         .ok_or_else(|| invalid_literal(cursor, "this number is outside the reader's range"))
+}
+
+/// Reads a JSON number as an integer literal when its lexeme has no point and no exponent
+/// (decision 0009), at any size.
+fn integer_from_json(value: &JsonValue) -> Option<BigInt> {
+    let lexeme = value.as_number()?.to_string();
+    if lexeme.contains(['.', 'e', 'E']) {
+        return None;
+    }
+    BigInt::parse_bytes(lexeme.as_bytes(), 10)
 }
 
 /// Reads a JSON number as a float literal, keeping the lexeme it was written with.
@@ -1830,20 +1841,20 @@ mod tests {
     #[test]
     fn test_pattern_literal_roundtrip() {
         let pattern: Pattern =
-            Pattern::LiteralPattern(ValueAttributes::default(), Literal::Integer(42));
+            Pattern::LiteralPattern(ValueAttributes::default(), Literal::Integer(42.into()));
         let json = serde_json::to_string(&pattern).unwrap();
         assert!(json.contains("LiteralPattern"));
 
         let parsed: Pattern = serde_json::from_str(&json).unwrap();
         assert!(matches!(
             parsed,
-            Pattern::LiteralPattern(_, Literal::Integer(42))
+            Pattern::LiteralPattern(_, Literal::Integer(n)) if n == BigInt::from(42)
         ));
     }
 
     #[test]
     fn test_value_literal_serialization() {
-        let val: Value = Value::Literal(ValueAttributes::default(), Literal::Integer(42));
+        let val: Value = Value::Literal(ValueAttributes::default(), Literal::Integer(42.into()));
         let json = serde_json::to_string(&val).unwrap();
         assert!(json.contains("Literal"));
         assert!(json.contains("IntegerLiteral"));

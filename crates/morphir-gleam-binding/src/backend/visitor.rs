@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(output, "True");
 
         output.clear();
-        let lit = MorphirLiteral::Integer(42);
+        let lit = MorphirLiteral::Integer(42.into());
         visitor.generate_literal(&mut output, &lit).unwrap();
         assert_eq!(output, "42");
 

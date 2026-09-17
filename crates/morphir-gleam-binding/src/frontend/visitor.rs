@@ -15,6 +15,7 @@ use morphir_core::ir::v4::{
 };
 use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
+use num_bigint::BigInt;
 use serde_json;
 use std::io::Result;
 use std::path::{Path, PathBuf};
@@ -754,7 +755,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     fn convert_literal(&self, literal: &Literal) -> MorphirLiteral {
         match literal {
             Literal::Bool { value } => MorphirLiteral::Bool(*value),
-            Literal::Int { value } => MorphirLiteral::Integer(*value),
+            Literal::Int { value } => MorphirLiteral::Integer(BigInt::from(*value)),
             Literal::Float { value } => MorphirLiteral::float(*value),
             Literal::String { value } => MorphirLiteral::String(value.clone()),
             Literal::Char { value } => MorphirLiteral::Char(*value),

@@ -96,8 +96,8 @@ fn value_attributes_become_a_concrete_inferred_type() {
     let migrated = migrate_value(&classic, &mut context).unwrap();
 
     assert!(matches!(
-        migrated,
-        v4::Value::Literal(_, v4::Literal::Integer(42))
+        &migrated,
+        v4::Value::Literal(_, v4::Literal::Integer(n)) if n == &num_bigint::BigInt::from(42)
     ));
     assert!(migrated.attributes().inferred_type.is_some());
 }

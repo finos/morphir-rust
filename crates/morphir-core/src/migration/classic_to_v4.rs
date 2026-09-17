@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use num_bigint::BigInt;
 
 use crate::ir::{classic, v4};
 use crate::migration::{MigrationDiagnostic, MigrationOptions, MigrationReport};
@@ -154,7 +155,7 @@ pub fn migrate_literal(value: &classic::Literal) -> v4::Literal {
         classic::Literal::Bool(value) => v4::Literal::Bool(*value),
         classic::Literal::Char(value) => v4::Literal::Char(*value),
         classic::Literal::String(value) => v4::Literal::String(value.clone()),
-        classic::Literal::WholeNumber(value) => v4::Literal::Integer(*value),
+        classic::Literal::WholeNumber(value) => v4::Literal::Integer(BigInt::from(*value)),
         // Classic holds a float as a machine number with no lexeme, so the migrated literal is
         // spelled the shortest way that reads back as the same number.
         classic::Literal::Float(value) => v4::Literal::Float(v4::FloatLiteral::from_f64(*value)),

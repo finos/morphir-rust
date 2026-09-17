@@ -149,10 +149,10 @@ mod tests {
 
     #[test]
     fn test_literal_pattern() {
-        let p: Pattern = Pattern::literal(ValueAttributes::default(), Literal::Integer(42));
+        let p: Pattern = Pattern::literal(ValueAttributes::default(), Literal::Integer(42.into()));
         assert!(matches!(
             p,
-            Pattern::LiteralPattern(_, Literal::Integer(42))
+            Pattern::LiteralPattern(_, Literal::Integer(n)) if n == num_bigint::BigInt::from(42)
         ));
     }
 }

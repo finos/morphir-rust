@@ -40,6 +40,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-projection` | Shared Morphir IR normalization that backend extensions project from. |
 | `morphir-python-binding` | Ruff-based frontend and backend for a Morphir IR v4 subset of Python ADTs, tuples and conditional functions, available natively and as a WebAssembly extension. |
 | `morphir-runtime` | Reserved runtime crate; currently a minimal scaffold. |
+| `morphir-rust-binding` | Syn-based Rust type frontend and code generator for Morphir IR v3 and v4, available natively and as a WebAssembly extension. |
 | `morphir-tests` | Shared acceptance and Cucumber test harness. |
 | `morphir-wasm-binding` | Backend extension that generates WebAssembly and WAT from Morphir IR. |
 | `morphir-workspace` | Portable workspace discovery protocol and algorithms. |

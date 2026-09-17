@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Python integer literals preserve arbitrary precision through compilation and
+  generation, including hexadecimal, octal and binary source literals.
+
+- Python fixed tuple aliases and tuple-valued expressions now compile and generate,
+  including nested tuples and type-checked conditional returns. The binding README
+  documents its supported IR nodes, runnable examples and conformance boundaries.
+
+- The Python extension supports annotated pure function bodies with returning
+  `if`/`elif`/`else` branches, conditional expressions and scalar comparisons.
+  Both compilation and generation validate boolean conditions, branch types
+  and return types, with native and WASM roundtrip coverage.
+
 - `morphir-python-binding` provides a Ruff-based Python ADT frontend and backend
   as one native or WASM MEP extension. Frozen dataclasses and named unions map
   to IR v4 records and custom types, with roundtrip tests and explicit diagnostics

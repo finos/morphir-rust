@@ -27,7 +27,7 @@ impl TestDriver {
                 dependencies: vec![],
                 options: CompileOptions {
                     ir_version: "4".into(),
-                    types_only: true,
+                    types_only: false,
                     ..Default::default()
                 },
             })
@@ -82,9 +82,19 @@ fn model(world: &mut PythonWorld) {
     world.driver.source = include_str!("fixtures/models.py").into();
 }
 
-#[given("a Python model containing a function")]
+#[given("a Python model containing an unannotated function")]
 fn function(world: &mut PythonWorld) {
     world.driver.source = "def value():\n    return 1\n".into();
+}
+
+#[given("annotated Python functions with conditional bodies")]
+fn conditionals(world: &mut PythonWorld) {
+    world.driver.source = include_str!("fixtures/conditionals.py").into();
+}
+
+#[given("Python tuple aliases and tuple-valued functions")]
+fn tuples(world: &mut PythonWorld) {
+    world.driver.source = include_str!("fixtures/tuples.py").into();
 }
 
 #[when("I compile the model and generate Python")]

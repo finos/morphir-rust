@@ -4,13 +4,29 @@ use morphir_python_binding::PythonExtension;
 
 fn main() -> Result<()> {
     let extension = NativeExtension::frontend_backend(PythonExtension)?;
+    let (uri, text) = match std::env::args().nth(1) {
+        Some(path) => {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|error| ExtensionError::ExecutionFailed(format!("{path}: {error}")))?;
+            (path, text)
+        }
+        None => (
+            "models.py".into(),
+            format!(
+                "{}\n{}\n{}",
+                include_str!("../tests/fixtures/models.py"),
+                include_str!("../tests/fixtures/conditionals.py"),
+                include_str!("../tests/fixtures/tuples.py")
+            ),
+        ),
+    };
     let request = CompileRequest {
         language_id: "python".into(),
         documents: vec![SourceDocument {
-            uri: "models.py".into(),
+            uri,
             language_id: "python".into(),
             version: 1,
-            text: include_str!("../tests/fixtures/models.py").into(),
+            text,
         }],
         package: CompilePackage {
             name: "acme/example".into(),
@@ -18,7 +34,7 @@ fn main() -> Result<()> {
         },
         dependencies: vec![],
         options: CompileOptions {
-            types_only: true,
+            types_only: false,
             ir_version: "4".into(),
             ..Default::default()
         },

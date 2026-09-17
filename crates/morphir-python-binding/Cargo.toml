@@ -6,12 +6,13 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Python algebraic data type frontend and backend for Morphir"
+description = "Python ADT, tuple and conditional function frontend and backend for Morphir"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+num-bigint.workspace = true
 morphir-core = { path = "../morphir-core" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 ruff_python_parser.workspace = true

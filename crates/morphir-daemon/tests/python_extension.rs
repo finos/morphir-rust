@@ -52,7 +52,7 @@ impl PythonExtensionDriver {
                     dependencies: vec![],
                     options: CompileOptions {
                         ir_version: "4.0.0".into(),
-                        types_only: true,
+                        types_only: false,
                         ..Default::default()
                     },
                 },
@@ -64,7 +64,7 @@ impl PythonExtensionDriver {
 
 #[tokio::test]
 #[ignore = "requires the independently built morphir-python-binding WASM guest"]
-async fn python_adt_roundtrip_through_the_real_wasm_extension() {
+async fn python_adt_and_conditional_roundtrip_through_the_real_wasm_extension() {
     let driver = PythonExtensionDriver::load();
     let initialized: InitializeResult = driver
         .container
@@ -84,10 +84,16 @@ async fn python_adt_roundtrip_through_the_real_wasm_extension() {
     assert!(initialized.capabilities.frontend.unwrap().compile);
     assert!(initialized.capabilities.backend.unwrap().generate);
     let compiled = driver
-        .compile(include_str!("../../morphir-python-binding/tests/fixtures/models.py").into())
+        .compile(format!(
+            "{}\n{}\n{}",
+            include_str!("../../morphir-python-binding/tests/fixtures/models.py"),
+            include_str!("../../morphir-python-binding/tests/fixtures/conditionals.py"),
+            include_str!("../../morphir-python-binding/tests/fixtures/tuples.py")
+        ))
         .await;
     assert!(compiled.success, "{:?}", compiled.diagnostics);
     let ir = compiled.ir.unwrap();
+    assert!(ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"]["choose"]["Public"]["ExpressionBody"]["body"].get("IfThenElse").is_some());
     let generated: GenerateResult = driver
         .container
         .call(

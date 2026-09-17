@@ -7,6 +7,8 @@ use ruff_python_ast::{Expr, Operator, Stmt, StmtClassDef};
 use ruff_text_size::{Ranged, TextRange};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod functions;
+
 pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, String)> {
     if request.language_id != "python"
         || !matches!(request.options.ir_version.as_str(), "4" | "4.0.0")
@@ -80,6 +82,12 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, S
     })?;
     let module = lower(parsed.suite(), &package, &module_name)
         .map_err(|e| at(e, &document.uri, &document.text, parsed.syntax().range()))?;
+    if request.options.types_only && !module.values.is_empty() {
+        return Err(error(
+            "PY004",
+            "typesOnly is not supported for Python functions; compile with typesOnly false",
+        ));
+    }
     let ir = IRFile {
         format_version: FormatVersion::Integer(4),
         distribution: Distribution::Library(LibraryContent {
@@ -111,7 +119,9 @@ pub(crate) fn parse_stage_requested(request: &CompileRequest) -> bool {
 fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<ModuleDefinition> {
     let mut classes = BTreeMap::new();
     let mut sums = BTreeMap::new();
+    let mut tuple_aliases = BTreeMap::new();
     let mut declared = BTreeSet::new();
+    let mut functions = BTreeMap::new();
     let mut dataclass_imported = false;
     for (index, statement) in statements.iter().enumerate() {
         match statement {
@@ -153,14 +163,24 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
                 let name = expr_name(&alias.name)?;
                 declare(&mut declared, name)?;
                 names::type_name(&names::identifier(name)?)?;
+                if matches!(alias.value.as_ref(), Expr::Subscript(subscript) if matches!(subscript.value.as_ref(), Expr::Name(name) if name.id.as_str() == "tuple"))
+                {
+                    tuple_aliases.insert(name.to_owned(), alias.value.as_ref());
+                    continue;
+                }
                 let mut variants = vec![];
                 union_members(&alias.value, &mut variants)?;
                 sums.insert(name.to_owned(), variants);
             }
+            Stmt::FunctionDef(function) => {
+                declare(&mut declared, function.name.as_str())?;
+                names::field_name(&names::identifier(function.name.as_str())?)?;
+                functions.insert(function.name.to_string(), function);
+            }
             _ => {
                 return Err(error(
                     "PY004",
-                    "Only frozen dataclasses and non-generic type aliases of dataclass variants are supported",
+                    "Only frozen dataclasses, non-generic sum or tuple aliases and annotated pure functions are supported",
                 ));
             }
         }
@@ -183,8 +203,28 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
         .map(String::as_str)
         .filter(|n| !owned_variants.contains(n))
         .chain(sums.keys().map(String::as_str))
+        .chain(tuple_aliases.keys().map(String::as_str))
         .collect();
     let mut definitions = BTreeMap::new();
+    let mut resolved_aliases = crate::values::TupleAliases::new();
+    for (name, expression) in &tuple_aliases {
+        let canonical = names::identifier(name)?.to_canonical_string();
+        let type_expr = annotation(expression, package, module, &type_names)?;
+        resolved_aliases.insert(
+            format!("{}:{module}#{canonical}", package.to_canonical_string()),
+            type_expr.clone(),
+        );
+        definitions.insert(
+            canonical,
+            TypeDefinition::TypeAliasDefinition {
+                type_params: vec![],
+                type_expr,
+            },
+        );
+    }
+    for alias in resolved_aliases.values() {
+        crate::values::resolve_aliases(alias, &resolved_aliases)?;
+    }
     for (name, class) in &classes {
         if !owned_variants.contains(name.as_str()) {
             definitions.insert(
@@ -228,7 +268,24 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
             .into_iter()
             .map(|(name, definition)| (name, public(Documented::new(None, definition))))
             .collect(),
-        values: Default::default(),
+        values: functions
+            .into_iter()
+            .map(|(name, function)| {
+                Ok((
+                    names::identifier(&name)?.to_canonical_string(),
+                    public(Documented::new(
+                        None,
+                        functions::lower(
+                            function,
+                            package,
+                            module,
+                            &type_names,
+                            &resolved_aliases,
+                        )?,
+                    )),
+                ))
+            })
+            .collect::<Outcome<_>>()?,
         doc: None,
     })
 }

@@ -6,6 +6,7 @@ mod declarations;
 mod recursion;
 mod source;
 mod types;
+mod values;
 
 use crate::{Outcome, error};
 use morphir_core::{
@@ -30,6 +31,15 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
     };
     let mut definitions = Vec::new();
     let mut values = Vec::new();
+    let mut expressions = Vec::new();
+    if !request.options.types_only {
+        source.unique(file.items.iter().flat_map(|item| match item {
+            syn::Item::Fn(f) => vec![f.sig.ident.clone()],
+            syn::Item::Struct(s) => vec![s.ident.clone()],
+            syn::Item::Enum(e) => e.variants.iter().map(|v| v.ident.clone()).collect(),
+            _ => vec![],
+        }))?;
+    }
     let mut diagnostics = settings.diagnostics;
     for item in &file.items {
         if let syn::Item::Fn(function) = item {
@@ -50,10 +60,11 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
             let mut diagnostic = source.error(
                 syn::spanned::Spanned::span(function),
                 "RS_VALUES_UNSUPPORTED",
-                "Rust executable values are not supported",
+                "Type-only compilation omitted a Rust function",
             );
             if !request.options.types_only {
-                return Err(diagnostic);
+                expressions.push(values::lower(&context, function)?);
+                continue;
             }
             diagnostic.severity = morphir_extension_sdk::DiagnosticSeverity::Warning;
             diagnostics.push(diagnostic);
@@ -75,7 +86,7 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
                         access: settings.access,
                         value: ModuleDefinition {
                             types: definitions,
-                            values: vec![],
+                            values: expressions,
                             doc: (!doc.is_empty()).then_some(doc),
                         },
                     },
@@ -97,7 +108,7 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
             .modules
             .get_index_mut(0)
             .expect("one source module was migrated");
-        module.value.values = values.into_iter().collect();
+        module.value.values.extend(values);
         serde_json::to_value(migrated.value)
     }
     .map_err(|e| error("RS_SERIALIZATION", e.to_string()))?;

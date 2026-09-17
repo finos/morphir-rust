@@ -2,6 +2,7 @@ mod declarations;
 mod ir;
 mod names;
 mod types;
+mod values;
 
 use crate::{Outcome, error};
 use ir::{Body, Package};
@@ -58,6 +59,16 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<GenerateResult> {
             },
         );
     }
+    for function in &package.functions {
+        let name = field_name(&function.owner.name)?;
+        reserve(
+            renderer
+                .names
+                .entry(function.owner.module.clone())
+                .or_default(),
+            &name,
+        )?;
+    }
     for module in package.modules.keys() {
         if module.is_empty() {
             continue;
@@ -86,6 +97,12 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<GenerateResult> {
             .items
             .push(tokens);
     }
+    for function in &package.functions {
+        let tokens = values::render(&mut renderer, function)?;
+        root.ensure(&module_names(&function.owner.module)?, Access::Public)
+            .items
+            .push(tokens);
+    }
     for (module, helpers) in renderer.helpers {
         root.ensure(&module_names(&module)?, Access::Public)
             .items
@@ -98,7 +115,7 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<GenerateResult> {
         let mut diagnostic = error(
             "RS_VALUES_OMITTED",
             format!(
-                "Type-only generation omitted {} value declarations",
+                "Generation omitted {} non-expression value declarations",
                 package.omitted_values
             ),
         );

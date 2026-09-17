@@ -104,14 +104,49 @@ pub fn walk_definition<V: V4Visitor + ?Sized>(
         }
         | v4::ValueBody::Incomplete {
             partial_body: Some(value),
-            ..
+            incompleteness: v4::Incompleteness::Draft,
         } => visitor.visit_value(cursor, value),
+        // A hole's own `partialBody` is a type, not a value, but it is still author-written
+        // content a caller needs to see (e.g. a reference inside it).
+        v4::ValueBody::Incomplete {
+            partial_body: Some(value),
+            incompleteness:
+                v4::Incompleteness::Hole {
+                    partial_body: Some(hole_type),
+                    ..
+                },
+        } => {
+            visitor.visit_value(cursor, value);
+            cursor.with_segment(CursorSegment::Branch("hole"), |cursor| {
+                visitor.visit_type(cursor, hole_type);
+            });
+        }
+        v4::ValueBody::Incomplete {
+            partial_body: None,
+            incompleteness:
+                v4::Incompleteness::Hole {
+                    partial_body: Some(hole_type),
+                    ..
+                },
+        } => {
+            cursor.with_segment(CursorSegment::Branch("hole"), |cursor| {
+                visitor.visit_type(cursor, hole_type);
+            });
+        }
         // A native body has no expression at all, and an incomplete body's `outputType` is the
         // definition's own, already walked above.
         v4::ValueBody::Native { .. }
         | v4::ValueBody::External { fallback: None, .. }
         | v4::ValueBody::Incomplete {
-            partial_body: None, ..
+            partial_body: None,
+            incompleteness: v4::Incompleteness::Draft,
+        }
+        | v4::ValueBody::Incomplete {
+            incompleteness:
+                v4::Incompleteness::Hole {
+                    partial_body: None, ..
+                },
+            ..
         } => {}
     }
 }
@@ -201,7 +236,8 @@ pub fn walk_value<V: V4Visitor + ?Sized>(
 mod tests {
     use super::*;
     use crate::ir::v4::{
-        Incompleteness, Type, TypeAttributes, Value, ValueAttributes, ValueBody, ValueDefinition,
+        HoleReason, Incompleteness, Type, TypeAttributes, Value, ValueAttributes, ValueBody,
+        ValueDefinition,
     };
     use crate::naming::FQName;
 
@@ -241,6 +277,57 @@ mod tests {
                 partial_body: partial_body.map(Box::new),
             },
         }
+    }
+
+    /// Collects every type reference a walk reaches, mirroring `References` but for the type
+    /// side of a walk.
+    #[derive(Default)]
+    struct TypeReferences(Vec<String>);
+
+    impl V4Visitor for TypeReferences {
+        fn visit_type(&mut self, cursor: &mut IrCursor, value: &Type) {
+            if let Type::Reference(_, target, _) = value {
+                self.0.push(target.to_canonical_string());
+            }
+            walk_type(self, cursor, value);
+        }
+    }
+
+    fn type_references_of(definition: &ValueDefinition) -> Vec<String> {
+        let mut visitor = TypeReferences::default();
+        visitor.visit_definition(&mut IrCursor::root(), definition);
+        visitor.0
+    }
+
+    fn type_reference(target: &str) -> Type {
+        Type::Reference(
+            TypeAttributes::default(),
+            FQName::from_canonical_string(target).unwrap(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn a_walk_reaches_a_type_reference_inside_an_incomplete_bodys_hole_partial_body() {
+        // A hole's `partialBody` is the type the author had written before the value became a
+        // hole; a visitor that only follows the value-side `partialBody` would silently miss it.
+        let definition = ValueDefinition {
+            input_types: Default::default(),
+            output_type: Some(Type::unit(TypeAttributes::default())),
+            body: ValueBody::Incomplete {
+                incompleteness: Incompleteness::Hole {
+                    reason: HoleReason::DeletedDuringRefactor {
+                        tx_id: "tx-1".to_string(),
+                    },
+                    partial_body: Some(type_reference("acme/shop:pricing#money")),
+                },
+                partial_body: None,
+            },
+        };
+        assert_eq!(
+            type_references_of(&definition),
+            vec!["acme/shop:pricing#money".to_string()]
+        );
     }
 
     #[test]

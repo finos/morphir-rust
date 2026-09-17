@@ -104,6 +104,12 @@ pub enum NodeKind {
     ModuleSpecification,
     IRFile,
     Distribution,
+    // The four files a document tree is made of. They are node kinds in their own right, so a kit
+    // case can pin one on its own without a tree around it.
+    DistributionManifestFile,
+    ModuleManifestFile,
+    TypeDefinitionFile,
+    ValueDefinitionFile,
 }
 
 /// The stage-one capabilities this binding reports, without the envelope
@@ -256,6 +262,10 @@ pub fn capabilities() -> Capabilities {
             NodeKind::ModuleSpecification,
             NodeKind::IRFile,
             NodeKind::Distribution,
+            NodeKind::DistributionManifestFile,
+            NodeKind::ModuleManifestFile,
+            NodeKind::TypeDefinitionFile,
+            NodeKind::ValueDefinitionFile,
         ],
     }
 }

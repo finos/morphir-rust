@@ -27,6 +27,7 @@ pub mod pattern;
 pub mod serde_document;
 pub mod serde_tagged;
 pub mod serde_v4;
+pub mod tree_files;
 pub mod types;
 pub mod value;
 
@@ -67,6 +68,13 @@ pub use module::{Documentation, Documented, ModuleDefinition, ModuleSpecificatio
 
 // Re-export package types
 pub use package::{PackageDefinition, PackageSpecification};
+
+// Re-export the four files a document tree is made of
+pub use tree_files::{
+    DistributionKind, DistributionManifestFile, ExpectedEntries, FILE_STEM_PATTERN,
+    MIN_PATH_BUDGET, ModuleEntries, ModuleManifestFile, NodeFileBody, TypeDefinitionFile,
+    ValueDefinitionFile, is_escaped_stem,
+};
 
 // Re-export type definition types
 pub use types::{

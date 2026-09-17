@@ -30,12 +30,14 @@ use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::{
     AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
-    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution, Documented,
-    Field, FormatVersion, IRFile, Incompleteness, LetBinding, LibraryContent, Literal,
-    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageSpecification, Pattern,
+    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution,
+    DistributionManifestFile, Documented, Field, FormatVersion, IRFile, Incompleteness, LetBinding,
+    LibraryContent, Literal, ModuleDefinition, ModuleEntries, ModuleManifestFile,
+    ModuleSpecification, NodeFileBody, PackageDefinition, PackageSpecification, Pattern,
     PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
-    TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
-    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
+    TypeDefinition, TypeDefinitionFile, TypeEncoding, TypeSpecification, Value, ValueAttributes,
+    ValueBody, ValueDefinition, ValueDefinitionFile, ValueSpecification, with_spelling_mode,
+    with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, Warning};
 use morphir_core::naming::{FQName, Name, Path};
@@ -191,6 +193,12 @@ fn read_v4_node(kind: NodeKind, value: Json) -> Result<Node, Diagnostic> {
         // The kit names the whole document `Distribution` as well as `IRFile`; both spell the
         // same node, a format version beside the distribution it applies to.
         NodeKind::IRFile | NodeKind::Distribution => of(value, Node::IRFile),
+        // A tree file read on its own, with no tree around it: a module manifest therefore reads
+        // an inline listing as definitions, which is what the reference's own node reader does.
+        NodeKind::DistributionManifestFile => of(value, Node::DistributionManifestFile),
+        NodeKind::ModuleManifestFile => of(value, Node::ModuleManifestFile),
+        NodeKind::TypeDefinitionFile => of(value, Node::TypeDefinitionFile),
+        NodeKind::ValueDefinitionFile => of(value, Node::ValueDefinitionFile),
     }
 }
 
@@ -254,7 +262,12 @@ fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
         | NodeKind::ModuleDefinition
         | NodeKind::ModuleSpecification
         | NodeKind::IRFile
-        | NodeKind::Distribution => Err(Diagnostic::normalization(
+        | NodeKind::Distribution
+        // A document tree is a version 4 layout; version 3 has no file of any of these kinds.
+        | NodeKind::DistributionManifestFile
+        | NodeKind::ModuleManifestFile
+        | NodeKind::TypeDefinitionFile
+        | NodeKind::ValueDefinitionFile => Err(Diagnostic::normalization(
             DiagnosticCode::UnknownNode,
             "/",
             format!(
@@ -497,6 +510,12 @@ enum Node {
     ModuleDefinition(ModuleDefinition),
     ModuleSpecification(ModuleSpecification),
     IRFile(IRFile),
+    // The four files a document tree is made of. Each is a node in its own right, so it is read,
+    // stripped and written here the way every other node is.
+    DistributionManifestFile(DistributionManifestFile),
+    ModuleManifestFile(ModuleManifestFile),
+    TypeDefinitionFile(TypeDefinitionFile),
+    ValueDefinitionFile(ValueDefinitionFile),
     // Version 3 stays in the classic model: it is read, stripped and written there, so a case
     // pinned to version 3 is answered in the spelling its own canonical fence uses.
     ClassicName(classic::Name),
@@ -532,6 +551,21 @@ impl Node {
             Node::ModuleDefinition(_) => "ModuleDefinition",
             Node::ModuleSpecification(_) => "ModuleSpecification",
             Node::IRFile(node) => distribution_kind(&node.distribution),
+            // A manifest has no variants: it is the file kind itself.
+            Node::DistributionManifestFile(_) => "DistributionManifestFile",
+            Node::ModuleManifestFile(_) => "ModuleManifestFile",
+            // A node file answers with what is inside it, the way a bare definition or
+            // specification node does.
+            Node::TypeDefinitionFile(node) => match &node.body {
+                NodeFileBody::Def(definition) => type_definition_kind(&definition.value.value),
+                NodeFileBody::Spec(specification) => type_specification_kind(&specification.value),
+            },
+            // A value specification has no variants, so a spec file answers with the name of what
+            // it holds, the way a bare ValueSpecification node does.
+            Node::ValueDefinitionFile(node) => match &node.body {
+                NodeFileBody::Def(definition) => value_definition_kind(&definition.value.value),
+                NodeFileBody::Spec(_) => "ValueSpecification",
+            },
             Node::ClassicName(_) => "Name",
             Node::ClassicPath(_) => "Path",
             Node::ClassicFQName(_) => "FQName",
@@ -575,6 +609,45 @@ impl Node {
             Node::IRFile(node) => Node::IRFile(IRFile {
                 format_version: node.format_version,
                 distribution: strip_distribution(node.distribution),
+            }),
+            // A distribution manifest is names, a kind and a budget: nothing it holds carries
+            // attributes, so it is returned as it came (the `other` arm below would do the same,
+            // but saying so here keeps the four file kinds together).
+            Node::DistributionManifestFile(node) => Node::DistributionManifestFile(node),
+            Node::ModuleManifestFile(node) => Node::ModuleManifestFile(ModuleManifestFile {
+                types: strip_module_entries(node.types, strip_access_controlled_type_definition, {
+                    |specification| strip_documented(specification, strip_type_specification)
+                }),
+                values: strip_module_entries(
+                    node.values,
+                    strip_access_controlled_value_definition,
+                    |specification| strip_documented(specification, strip_value_specification),
+                ),
+                ..node
+            }),
+            Node::TypeDefinitionFile(node) => Node::TypeDefinitionFile(TypeDefinitionFile {
+                body: match node.body {
+                    NodeFileBody::Def(definition) => {
+                        NodeFileBody::Def(strip_access_controlled_type_definition(definition))
+                    }
+                    NodeFileBody::Spec(specification) => NodeFileBody::Spec(strip_documented(
+                        specification,
+                        strip_type_specification,
+                    )),
+                },
+                ..node
+            }),
+            Node::ValueDefinitionFile(node) => Node::ValueDefinitionFile(ValueDefinitionFile {
+                body: match node.body {
+                    NodeFileBody::Def(definition) => {
+                        NodeFileBody::Def(strip_access_controlled_value_definition(definition))
+                    }
+                    NodeFileBody::Spec(specification) => NodeFileBody::Spec(strip_documented(
+                        specification,
+                        strip_value_specification,
+                    )),
+                },
+                ..node
             }),
             Node::ClassicPattern(node) => Node::ClassicPattern(strip_classic_pattern(node)),
             Node::ClassicValue(node) => Node::ClassicValue(strip_classic_value(node)),
@@ -631,6 +704,10 @@ impl Node {
             Node::ModuleSpecification(node) => text(node),
             // `formatVersion` first, then `distribution`: the root member order of the file.
             Node::IRFile(node) => text(node),
+            Node::DistributionManifestFile(node) => text(node),
+            Node::ModuleManifestFile(node) => text(node),
+            Node::TypeDefinitionFile(node) => text(node),
+            Node::ValueDefinitionFile(node) => text(node),
             Node::ClassicName(node) => text(node),
             Node::ClassicPath(node) => text(node),
             Node::ClassicFQName(node) => text(node),
@@ -1078,6 +1155,48 @@ fn strip_access_controlled<T>(
         access: node.access,
         value: strip(node.value),
     }
+}
+
+/// A module manifest's `types` or `values` with every attribute inside it cleared.
+///
+/// A names-style listing holds nothing but names, so it has nothing to strip; the bodies it names
+/// live in the node files beside the manifest and are stripped when those are read.
+fn strip_module_entries<D, S>(
+    entries: ModuleEntries<D, S>,
+    strip_definition: impl Fn(D) -> D,
+    strip_specification: impl Fn(S) -> S,
+) -> ModuleEntries<D, S> {
+    match entries {
+        ModuleEntries::Names(names) => ModuleEntries::Names(names),
+        ModuleEntries::Definitions(items) => ModuleEntries::Definitions(
+            items
+                .into_iter()
+                .map(|(name, definition)| (name, strip_definition(definition)))
+                .collect(),
+        ),
+        ModuleEntries::Specifications(items) => ModuleEntries::Specifications(
+            items
+                .into_iter()
+                .map(|(name, specification)| (name, strip_specification(specification)))
+                .collect(),
+        ),
+    }
+}
+
+fn strip_access_controlled_type_definition(
+    node: AccessControlled<Documented<TypeDefinition>>,
+) -> AccessControlled<Documented<TypeDefinition>> {
+    strip_access_controlled(node, |documented| {
+        strip_documented(documented, strip_type_definition)
+    })
+}
+
+fn strip_access_controlled_value_definition(
+    node: AccessControlled<Documented<ValueDefinition>>,
+) -> AccessControlled<Documented<ValueDefinition>> {
+    strip_access_controlled(node, |documented| {
+        strip_documented(documented, strip_value_definition)
+    })
 }
 
 fn strip_documented<T>(node: Documented<T>, strip: impl FnOnce(T) -> T) -> Documented<T> {

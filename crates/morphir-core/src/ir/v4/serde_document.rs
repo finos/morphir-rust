@@ -33,6 +33,10 @@ use super::serde_tagged::{
     Members, carry, decode_fqname, decode_name, decode_type, decode_value, invalid_type,
     member_cursor, required, unknown_node_at, wrapper_members,
 };
+use super::tree_files::{
+    DistributionKind, DistributionManifestFile, ExpectedEntries, MIN_PATH_BUDGET, ModuleEntries,
+    ModuleManifestFile, NodeFileBody, TypeDefinitionFile, ValueDefinitionFile, is_escaped_stem,
+};
 use super::types::{
     ConstructorArg, ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification,
     Incompleteness, Type, TypeDefinition, TypeSpecification,
@@ -44,14 +48,14 @@ use super::value::{
 use super::{FormatVersion, IRFile};
 use crate::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
-use crate::naming::{Name, PackageName};
+use crate::naming::{ModuleName, Name, PackageName};
 
 /// Reads the node as JSON and hands it to a cursor-carrying decoder, starting at the root.
 ///
 /// A `Deserialize` impl gets no way to learn its own path, so the cursor a nested node reports
 /// is relative to wherever the decode was entered. A whole document entered at [`IRFile`] is
 /// therefore located absolutely; a fragment decoded on its own is located within itself.
-pub(super) fn deserialize_with<'de, D, T>(
+pub(in crate::ir) fn deserialize_with<'de, D, T>(
     deserializer: D,
     decode: fn(&JsonValue, &str) -> Result<T, Diagnostic>,
 ) -> Result<T, D::Error>
@@ -114,7 +118,7 @@ fn single_member<'a>(
 
 /// Decodes documentation: one string (definitions-0028; decision 0010). An array of lines is
 /// tolerated only inside a module manifest file of a document tree, never here.
-pub(super) fn decode_documentation(
+pub(in crate::ir) fn decode_documentation(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<Documentation, Diagnostic> {
@@ -130,7 +134,7 @@ pub(super) fn decode_documentation(
 /// silently: the access level flattened next to the node's own members
 /// (`{ "access": "Public", … }`), the same with the node under `value`, and the `pub`/`private`
 /// shorthands (definitions-0001, 0017, 0018, 0019).
-pub(super) fn decode_access_controlled<T>(
+pub(in crate::ir) fn decode_access_controlled<T>(
     value: &JsonValue,
     cursor: &str,
     inner: impl FnOnce(&JsonValue, &str) -> Result<T, Diagnostic>,
@@ -182,7 +186,7 @@ fn decode_access(value: &JsonValue, cursor: &str) -> Result<Access, Diagnostic> 
 /// Decision 0010 flattens `doc` beside the node's own members and places it first. The nested
 /// wrapper that put the node under `value` decodes for the window of decision 0006, with a
 /// `legacy_spelling` warning at the `value` member (definitions-0006, 0010, 0017, 0018, 0019).
-pub(super) fn decode_documented<T>(
+pub(in crate::ir) fn decode_documented<T>(
     value: &JsonValue,
     cursor: &str,
     inner: impl FnOnce(&JsonValue, &str) -> Result<T, Diagnostic>,
@@ -382,7 +386,7 @@ fn decode_constructor_map<T>(
 }
 
 /// Decodes a type definition wrapper (definitions-0001, 0003, 0014, 0015).
-pub(super) fn decode_type_definition(
+pub(in crate::ir) fn decode_type_definition(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<TypeDefinition, Diagnostic> {
@@ -447,7 +451,7 @@ pub(super) fn decode_type_definition(
 }
 
 /// Decodes a type specification wrapper (definitions-0002, 0011, 0012, 0013).
-pub(super) fn decode_type_specification(
+pub(in crate::ir) fn decode_type_specification(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<TypeSpecification, Diagnostic> {
@@ -659,7 +663,7 @@ pub(super) fn decode_native_hint(
 /// `inputs` is an object keyed by parameter name; an array of `[name, type]` pairs is accepted
 /// beside it, which is what a reader meets from a writer that kept the parameters ordered as a
 /// list.
-pub(super) fn decode_value_specification(
+pub(in crate::ir) fn decode_value_specification(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<ValueSpecification, Diagnostic> {
@@ -732,7 +736,7 @@ const BODY_TAGS: &[&str] = &[
 ];
 
 /// Decodes a whole value definition: a body wrapper carrying the definition's signature.
-pub(super) fn decode_value_definition(
+pub(in crate::ir) fn decode_value_definition(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<ValueDefinition, Diagnostic> {
@@ -922,7 +926,7 @@ fn text_of(value: &JsonValue, cursor: &str) -> Result<String, Diagnostic> {
 // =============================================================================
 
 /// Decodes a module specification: the public face of a module (definitions-0010).
-pub(super) fn decode_module_specification(
+pub(in crate::ir) fn decode_module_specification(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<ModuleSpecification, Diagnostic> {
@@ -946,7 +950,7 @@ pub(super) fn decode_module_specification(
 
 /// Decodes a module definition: its types and values, each access-controlled and each able to
 /// carry documentation (distributions-0004, 0007).
-pub(super) fn decode_module_definition(
+pub(in crate::ir) fn decode_module_definition(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<ModuleDefinition, Diagnostic> {
@@ -1015,7 +1019,7 @@ fn decode_map<T>(
 }
 
 /// Decodes a package specification: its modules' public faces.
-pub(super) fn decode_package_specification(
+pub(in crate::ir) fn decode_package_specification(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<PackageSpecification, Diagnostic> {
@@ -1026,7 +1030,7 @@ pub(super) fn decode_package_specification(
 }
 
 /// Decodes a package definition: its modules, each access-controlled.
-pub(super) fn decode_package_definition(
+pub(in crate::ir) fn decode_package_definition(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<PackageDefinition, Diagnostic> {
@@ -1047,7 +1051,7 @@ fn invalid_distribution_shape(cursor: &str, message: impl Into<String>) -> Diagn
 }
 
 /// Decodes a distribution (distributions-0002 to 0007).
-pub(super) fn decode_distribution(
+pub(in crate::ir) fn decode_distribution(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<Distribution, Diagnostic> {
@@ -1207,7 +1211,7 @@ fn decode_entry_points(value: &JsonValue, cursor: &str) -> Result<EntryPoints, D
 /// `formatVersion` comes first and `distribution` second; a document that writes them the other
 /// way round is the same document. `$meta` is reserved for the files of a document tree, not for
 /// a single document, so it is unknown here (distributions-0009).
-pub(super) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
+pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
     let members = members_of(value, cursor, "a version 4 document")?;
     for member in members.keys() {
         if !matches!(member.as_str(), "formatVersion" | "distribution") {
@@ -1232,7 +1236,7 @@ pub(super) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, 
 
 /// Decodes `formatVersion` through the shared format-version contract, reporting its stable
 /// category as one of the kit's diagnostic codes (distributions-0001).
-pub(super) fn decode_format_version(
+pub(in crate::ir) fn decode_format_version(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<FormatVersion, Diagnostic> {
@@ -1278,13 +1282,541 @@ fn format_version_diagnostic(
     Diagnostic::normalization(code, cursor, error.message())
 }
 
+// =============================================================================
+// The four files of a document tree
+// =============================================================================
+
+/// The root object of a tree file, with the reserved top-level `$meta` taken off.
+///
+/// `$meta` is stripped here rather than listed as an optional member of all four kinds: a member
+/// check that never sees it can never report it, and a model that never holds it can never write
+/// it back (decision 0014). Only the *top-level* member is reserved; a nested one is an unknown
+/// member wherever it sits.
+fn root_without_meta<'a>(
+    value: &'a JsonValue,
+    cursor: &str,
+    what: &str,
+) -> Result<std::borrow::Cow<'a, JsonValue>, Diagnostic> {
+    let members = members_of(value, cursor, what)?;
+    if !members.contains_key("$meta") {
+        return Ok(std::borrow::Cow::Borrowed(value));
+    }
+    let mut rest = members.clone();
+    rest.remove("$meta");
+    Ok(std::borrow::Cow::Owned(JsonValue::Object(rest)))
+}
+
+/// Every file of a tree repeats the format version at its root and is checked for support against
+/// the same table a whole document is checked against, so the two cannot drift.
+///
+/// Read before the member check and off the raw root, so a file with no `formatVersion` answers
+/// `missing_format_version` — what a single document answers — rather than a plain
+/// `missing_member`.
+fn decode_file_format_version(
+    root: &serde_json::Map<String, JsonValue>,
+    cursor: &str,
+) -> Result<FormatVersion, Diagnostic> {
+    let written = root.get("formatVersion").ok_or_else(|| {
+        Diagnostic::normalization(
+            DiagnosticCode::MissingFormatVersion,
+            cursor,
+            "the root has no formatVersion member",
+        )
+    })?;
+    decode_format_version(written, &format!("{cursor}/formatVersion"))
+}
+
+/// What to call a JSON value in a message, the way every reader that has to say what it found
+/// instead calls it.
+fn describe_json(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
+/// Decodes a distribution manifest file: the root of a document tree.
+pub(in crate::ir) fn decode_distribution_manifest_file(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<DistributionManifestFile, Diagnostic> {
+    let root = root_without_meta(value, cursor, "a distribution manifest")?;
+    let raw = root
+        .as_object()
+        .expect("root_without_meta answers with an object");
+    let format_version = decode_file_format_version(raw, cursor)?;
+    let members = wrapper_members(
+        "DistributionManifestFile",
+        &root,
+        cursor,
+        &[
+            "formatVersion",
+            "distribution",
+            "package",
+            "pathBudget",
+            "dependencies",
+            "entryPoints",
+            "version",
+            "created",
+            "layout",
+        ],
+    )?;
+
+    let kind_at = member_cursor(&members, "distribution", cursor);
+    let kind = text_of(required(&members, "distribution", cursor)?, &kind_at)?;
+    let distribution = DistributionKind::parse(&kind).ok_or_else(|| {
+        invalid_distribution_shape(&kind_at, format!("unknown distribution \"{kind}\""))
+    })?;
+
+    let package_at = member_cursor(&members, "package", cursor);
+    let package = parse_package_name(
+        &text_of(required(&members, "package", cursor)?, &package_at)?,
+        &package_at,
+    )?;
+
+    let budget_at = member_cursor(&members, "pathBudget", cursor);
+    let path_budget = decode_path_budget(required(&members, "pathBudget", cursor)?, &budget_at)?;
+
+    let dependencies = match members.get("dependencies") {
+        None => Vec::new(),
+        Some(member) => decode_dependency_names(
+            member.value,
+            &member_cursor(&members, "dependencies", cursor),
+        )?,
+    };
+
+    // Only an Application has entry points, so the member is unknown on the other two kinds rather
+    // than merely ignored.
+    let entry_points = match members.get("entryPoints") {
+        None => EntryPoints::new(),
+        Some(member) => {
+            let at = member_cursor(&members, "entryPoints", cursor);
+            if distribution != DistributionKind::Application {
+                return Err(Diagnostic::normalization(
+                    DiagnosticCode::UnknownMember,
+                    &at,
+                    format!(
+                        "unknown member \"entryPoints\" on a {} manifest",
+                        distribution.as_str()
+                    ),
+                ));
+            }
+            decode_entry_points(member.value, &at)?
+        }
+    };
+
+    // `version`, `created` and `layout` are recorded by whatever wrote the tree and mean nothing
+    // to a reader; they are still type-checked, so a mistyped one is caught here rather than
+    // carried through unseen.
+    for key in ["version", "created", "layout"] {
+        if let Some(member) = members.get(key) {
+            text_of(member.value, &member_cursor(&members, key, cursor))?;
+        }
+    }
+
+    Ok(DistributionManifestFile {
+        format_version,
+        distribution,
+        package,
+        path_budget,
+        dependencies,
+        entry_points,
+    })
+}
+
+fn decode_path_budget(value: &JsonValue, cursor: &str) -> Result<u32, Diagnostic> {
+    let refuse = || {
+        invalid_type(
+            cursor,
+            format!("pathBudget must be an integer of at least {MIN_PATH_BUDGET}"),
+        )
+    };
+    let budget = value.as_u64().ok_or_else(refuse)?;
+    let budget = u32::try_from(budget).map_err(|_| refuse())?;
+    if budget < MIN_PATH_BUDGET {
+        return Err(refuse());
+    }
+    Ok(budget)
+}
+
+/// Decodes the manifest's `dependencies`: the package names whose bodies live under `deps/`.
+///
+/// A manifest that lists the same dependency twice would give the layout two package roots with
+/// the identical directory prefix, so it is reported here, at the second occurrence.
+/// `duplicate_member` is the closest code the kit has — the array plays the role a JSON object's
+/// members would.
+fn decode_dependency_names(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<Vec<PackageName>, Diagnostic> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid_type(cursor, "dependencies is an array of package names"))?;
+    let mut names: Vec<PackageName> = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let at = format!("{cursor}/{index}");
+        let name = parse_package_name(&text_of(item, &at)?, &at)?;
+        let canonical = name.to_canonical_string();
+        if names
+            .iter()
+            .any(|seen| seen.to_canonical_string() == canonical)
+        {
+            return Err(Diagnostic::normalization(
+                DiagnosticCode::DuplicateMember,
+                &at,
+                format!("duplicate dependency \"{canonical}\""),
+            ));
+        }
+        names.push(name);
+    }
+    Ok(names)
+}
+
+/// Decodes a module manifest file: what a module is, and what it holds.
+///
+/// `expect` says how an inline `types` or `values` object is read. The layout knows it from the
+/// distribution kind and the root the module sits under; it is never guessed from the shape,
+/// because a specification that happens to look access-controlled would then read as a definition.
+pub(in crate::ir) fn decode_module_manifest_file(
+    value: &JsonValue,
+    cursor: &str,
+    expect: ExpectedEntries,
+) -> Result<ModuleManifestFile, Diagnostic> {
+    let root = root_without_meta(value, cursor, "a module manifest")?;
+    let raw = root
+        .as_object()
+        .expect("root_without_meta answers with an object");
+    let format_version = decode_file_format_version(raw, cursor)?;
+    let members = wrapper_members(
+        "ModuleManifestFile",
+        &root,
+        cursor,
+        &[
+            "formatVersion",
+            "path",
+            "module",
+            "access",
+            "doc",
+            "types",
+            "values",
+            "fileNames",
+        ],
+    )?;
+
+    // `module` is an accepted spelling of `path` rather than a legacy one in decision 0006's
+    // window, so it is listed as a member of its own and read silently; the writer still only ever
+    // emits `path`.
+    let spelled = match (members.get("path"), members.get("module")) {
+        (Some(_), Some(_)) => {
+            return Err(Diagnostic::normalization(
+                DiagnosticCode::UnknownMember,
+                format!("{cursor}/module"),
+                "module is the legacy spelling of path; write only one",
+            ));
+        }
+        (Some(_), None) => "path",
+        (None, Some(_)) => "module",
+        (None, None) => {
+            return Err(Diagnostic::normalization(
+                DiagnosticCode::MissingMember,
+                cursor,
+                "missing member \"path\"",
+            ));
+        }
+    };
+    let path_at = format!("{cursor}/{spelled}");
+    let path = decode_module_name(
+        members
+            .get(spelled)
+            .expect("the spelling that was present")
+            .value,
+        &path_at,
+    )?;
+
+    let access = match members.get("access") {
+        None => Access::Public,
+        Some(member) => decode_access(member.value, &member_cursor(&members, "access", cursor))?,
+    };
+
+    let doc = decode_manifest_doc(&members, cursor)?;
+
+    let types = decode_module_entries(
+        &members,
+        "types",
+        cursor,
+        expect,
+        |value, cursor| {
+            decode_access_controlled(value, cursor, |value, cursor| {
+                decode_documented(value, cursor, decode_type_definition)
+            })
+        },
+        |value, cursor| decode_documented(value, cursor, decode_type_specification),
+    )?;
+    let values = decode_module_entries(
+        &members,
+        "values",
+        cursor,
+        expect,
+        |value, cursor| {
+            decode_access_controlled(value, cursor, |value, cursor| {
+                decode_documented(value, cursor, decode_value_definition)
+            })
+        },
+        |value, cursor| decode_documented(value, cursor, decode_value_specification),
+    )?;
+
+    let mut listed = types.listed_names();
+    listed.extend(values.listed_names());
+    let file_names = decode_file_names(&members, cursor, &listed)?;
+
+    Ok(ModuleManifestFile {
+        format_version,
+        path,
+        access,
+        doc,
+        types,
+        values,
+        file_names,
+    })
+}
+
+fn decode_module_name(value: &JsonValue, cursor: &str) -> Result<ModuleName, Diagnostic> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| invalid_type(cursor, "a module name must be a canonical string"))?;
+    ModuleName::from_canonical_string(text)
+        .map_err(|error| Diagnostic::normalization(DiagnosticCode::InvalidPath, cursor, error))
+}
+
+/// Decodes a module manifest's `doc`: one string, or — accepted only here — an array of lines,
+/// joined the way the text would have read.
+fn decode_manifest_doc(
+    members: &Members<'_>,
+    cursor: &str,
+) -> Result<Option<Documentation>, Diagnostic> {
+    let Some(member) = members.get("doc") else {
+        return Ok(None);
+    };
+    let at = member_cursor(members, "doc", cursor);
+    match member.value {
+        JsonValue::Null => Ok(None),
+        JsonValue::Array(items) => {
+            let mut lines = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                lines.push(text_of(item, &format!("{at}/{index}"))?);
+            }
+            Ok(Some(Documentation::new(lines.join("\n"))))
+        }
+        other => decode_documentation(other, &at).map(Some),
+    }
+}
+
+/// Decodes a module manifest's `types` or `values`: absent, an array of names, or an object of
+/// entries read as whatever the caller expected.
+fn decode_module_entries<D, S>(
+    members: &Members<'_>,
+    name: &str,
+    cursor: &str,
+    expect: ExpectedEntries,
+    decode_definition: impl Fn(&JsonValue, &str) -> Result<D, Diagnostic>,
+    decode_specification: impl Fn(&JsonValue, &str) -> Result<S, Diagnostic>,
+) -> Result<ModuleEntries<D, S>, Diagnostic> {
+    let Some(member) = members.get(name) else {
+        return Ok(ModuleEntries::Names(Vec::new()));
+    };
+    let at = member_cursor(members, name, cursor);
+    match member.value {
+        JsonValue::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| decode_name(item, &format!("{at}/{index}")))
+            .collect::<Result<Vec<_>, _>>()
+            .map(ModuleEntries::Names),
+        JsonValue::Object(_) => match expect {
+            ExpectedEntries::Definitions => {
+                decode_map(member.value, &at, decode_definition).map(ModuleEntries::Definitions)
+            }
+            // A definition where a specification was expected is a mistake about what the tree
+            // holds, so it is reported as one here rather than reaching the specification reader
+            // and coming back as an unknown variant wrapper.
+            ExpectedEntries::Specifications => decode_map(member.value, &at, |value, cursor| {
+                if looks_access_controlled(value) {
+                    return Err(invalid_distribution_shape(
+                        cursor,
+                        "expected a specification, found an access-controlled definition",
+                    ));
+                }
+                decode_specification(value, cursor)
+            })
+            .map(ModuleEntries::Specifications),
+        },
+        other => Err(invalid_type(
+            &at,
+            format!(
+                "expected an array of names or an object of entries, found {}",
+                describe_json(other)
+            ),
+        )),
+    }
+}
+
+/// The two shapes [`decode_access_controlled`] recognizes, used only to tell a definition from a
+/// specification where the caller said which it expected.
+fn looks_access_controlled(value: &JsonValue) -> bool {
+    let Some(members) = value.as_object() else {
+        return false;
+    };
+    if members.contains_key("access") {
+        return true;
+    }
+    members.len() == 1
+        && members
+            .keys()
+            .next()
+            .is_some_and(|key| key == "Public" || key == "Private")
+}
+
+/// Decodes `fileNames`: the names whose stem was truncated for the path budget, each with the stem
+/// its file is under.
+///
+/// A reader trusts what it finds here — it never recomputes the truncation — so the checks are
+/// that the key is a name, that the name is one the module lists, and that the stem is a stem.
+fn decode_file_names(
+    members: &Members<'_>,
+    cursor: &str,
+    listed: &[String],
+) -> Result<Vec<(Name, String)>, Diagnostic> {
+    let Some(member) = members.get("fileNames") else {
+        return Ok(Vec::new());
+    };
+    let at = member_cursor(members, "fileNames", cursor);
+    let entries = members_of(member.value, &at, "fileNames")?;
+    let mut recorded = Vec::with_capacity(entries.len());
+    for (key, written) in entries {
+        let key_at = format!("{at}/{key}");
+        let name = decode_name(&JsonValue::String(key.clone()), &key_at)?;
+        if !listed.contains(&name.to_canonical_string()) {
+            return Err(invalid_distribution_shape(
+                &key_at,
+                "fileNames key not listed in types or values",
+            ));
+        }
+        let stem = text_of(written, &key_at)?;
+        if !is_escaped_stem(&stem) {
+            return Err(Diagnostic::normalization(
+                DiagnosticCode::InvalidName,
+                &key_at,
+                format!("\"{stem}\" is not an escaped stem"),
+            ));
+        }
+        recorded.push((name, stem));
+    }
+    Ok(recorded)
+}
+
+/// Decodes a `<stem>.type` file.
+pub(in crate::ir) fn decode_type_definition_file(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<TypeDefinitionFile, Diagnostic> {
+    let (format_version, name, body) = decode_node_file(
+        value,
+        cursor,
+        "TypeDefinitionFile",
+        |value, cursor| {
+            decode_access_controlled(value, cursor, |value, cursor| {
+                decode_documented(value, cursor, decode_type_definition)
+            })
+        },
+        |value, cursor| decode_documented(value, cursor, decode_type_specification),
+    )?;
+    Ok(TypeDefinitionFile {
+        format_version,
+        name,
+        body,
+    })
+}
+
+/// Decodes a `<stem>.value` file.
+pub(in crate::ir) fn decode_value_definition_file(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<ValueDefinitionFile, Diagnostic> {
+    let (format_version, name, body) = decode_node_file(
+        value,
+        cursor,
+        "ValueDefinitionFile",
+        |value, cursor| {
+            decode_access_controlled(value, cursor, |value, cursor| {
+                decode_documented(value, cursor, decode_value_definition)
+            })
+        },
+        |value, cursor| decode_documented(value, cursor, decode_value_specification),
+    )?;
+    Ok(ValueDefinitionFile {
+        format_version,
+        name,
+        body,
+    })
+}
+
+/// The shape both node files share: a format version, a name, and exactly one of `def` and `spec`.
+///
+/// Which of the two a file carries decides what it means, so neither and both are shape errors at
+/// the file's root rather than a missing or an unknown member.
+fn decode_node_file<D, S>(
+    value: &JsonValue,
+    cursor: &str,
+    node: &str,
+    decode_definition: impl Fn(&JsonValue, &str) -> Result<D, Diagnostic>,
+    decode_specification: impl Fn(&JsonValue, &str) -> Result<S, Diagnostic>,
+) -> Result<(FormatVersion, Name, NodeFileBody<D, S>), Diagnostic> {
+    let root = root_without_meta(value, cursor, "a node file")?;
+    let raw = root
+        .as_object()
+        .expect("root_without_meta answers with an object");
+    let format_version = decode_file_format_version(raw, cursor)?;
+    let members = wrapper_members(
+        node,
+        &root,
+        cursor,
+        &["formatVersion", "name", "def", "spec"],
+    )?;
+    let name = decode_name(
+        required(&members, "name", cursor)?,
+        &member_cursor(&members, "name", cursor),
+    )?;
+
+    let body = match (members.get("def"), members.get("spec")) {
+        (Some(member), None) => NodeFileBody::Def(decode_definition(
+            member.value,
+            &member_cursor(&members, "def", cursor),
+        )?),
+        (None, Some(member)) => NodeFileBody::Spec(decode_specification(
+            member.value,
+            &member_cursor(&members, "spec", cursor),
+        )?),
+        _ => {
+            return Err(invalid_distribution_shape(
+                cursor,
+                "exactly one of def or spec",
+            ));
+        }
+    };
+    Ok((format_version, name, body))
+}
+
 /// Recovers a [`Diagnostic`] a nested derived decode smuggled through serde, or builds one at
 /// `cursor` when there is none to recover.
-pub(super) fn recover(error: &serde_json::Error, cursor: &str) -> Diagnostic {
+pub(in crate::ir) fn recover(error: &serde_json::Error, cursor: &str) -> Diagnostic {
     Diagnostic::from_serde_error(error).unwrap_or_else(|| invalid_type(cursor, error.to_string()))
 }
 
 /// Carries a [`Diagnostic`] out through a serde error, for the derived impls that still wrap one.
-pub(super) fn carried<E: serde::de::Error>(diagnostic: Diagnostic) -> E {
+pub(in crate::ir) fn carried<E: serde::de::Error>(diagnostic: Diagnostic) -> E {
     E::custom(DiagnosticError(diagnostic))
 }

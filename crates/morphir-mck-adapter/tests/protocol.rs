@@ -29,7 +29,23 @@ fn capabilities_match_the_stage_one_contract() {
     assert_eq!(caps["profiles"], serde_json::json!(["json", "yaml"]));
     assert_eq!(caps["layouts"], serde_json::json!(["single"]));
     assert_eq!(caps["paths"], serde_json::json!(["current", "pinned"]));
-    assert_eq!(caps["nodes"].as_array().unwrap().len(), 18);
+    // The eighteen nodes of a single document, plus the four files a document tree is made of.
+    assert_eq!(caps["nodes"].as_array().unwrap().len(), 22);
+    for file in [
+        "DistributionManifestFile",
+        "ModuleManifestFile",
+        "TypeDefinitionFile",
+        "ValueDefinitionFile",
+    ] {
+        assert!(
+            caps["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|node| node == file),
+            "{file}"
+        );
+    }
 }
 
 /// `protocol.schema.json` requires `formatVersions` in the capabilities reply,

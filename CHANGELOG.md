@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `morphir_common::ir_transport::probe_yaml_header` reports the header observations a YAML root
   mapping carries — `format_version_not_first` — as the JSON root probe reports them, so the
   shared conformance corpus is answered for both profiles.
+- `morphir-package::resolution` implements the draft `0.1.0-draft.2`
+  `flat-library` resolver with phased validation, replay, complete backtracking,
+  deterministic update ranking and structured failure witnesses. The MCK adapter
+  exposes it with `--suite package --contract 0.1.0-draft.2` while preserving the
+  draft-1 package protocol.
 
 ### Fixed
 

@@ -143,7 +143,7 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
 // Inspect the exact JSON number lexeme. An integer has enough trailing mantissa
 // zeroes plus exponent to cover its fractional digits. Exponents are compared as
 // decimal strings, so even a huge exponent neither overflows nor expands digits.
-fn positive_integer_id(id: &Value) -> bool {
+pub(crate) fn positive_integer_id(id: &Value) -> bool {
     let Value::Number(number) = id else {
         return false;
     };

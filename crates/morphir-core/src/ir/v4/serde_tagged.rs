@@ -20,7 +20,7 @@ use std::fmt;
 
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::legacy::{accept_member, record_legacy_form_warning};
-use super::literal::Literal;
+use super::literal::{FloatLiteral, Literal};
 use super::pattern::Pattern;
 use super::serde_v4;
 use super::type_def::ConstructorArg;
@@ -763,8 +763,7 @@ fn decode_literal_wrapper(
                 )
             })
         }
-        "FloatLiteral" => payload
-            .as_f64()
+        "FloatLiteral" => float_from_json(payload)
             .map(Literal::Float)
             .ok_or_else(|| invalid_literal(&at, "a FloatLiteral carries a number")),
         // A decimal is carried as a string so that no binding coerces it to a float.
@@ -806,10 +805,20 @@ fn decode_number_literal(value: &JsonValue, cursor: &str) -> Result<Literal, Dia
     if let Some(whole) = value.as_i64() {
         return Ok(Literal::Integer(whole));
     }
-    value
-        .as_f64()
+    float_from_json(value)
         .map(Literal::Float)
         .ok_or_else(|| invalid_literal(cursor, "this number is outside the reader's range"))
+}
+
+/// Reads a JSON number as a float literal, keeping the lexeme it was written with.
+///
+/// With `arbitrary_precision`, a number parsed from text reports its original spelling from
+/// `Number::to_string`, which is how `1.0e2` stays `1.0e2` instead of becoming `100.0`.
+fn float_from_json(value: &JsonValue) -> Option<FloatLiteral> {
+    let lexeme = value.as_number()?.to_string();
+    // `from_lexeme` is the gate: it refuses a spelling that is not a JSON number and a magnitude
+    // no `f64` can hold, which is the number the reader cannot carry.
+    FloatLiteral::from_lexeme(&lexeme).ok()
 }
 
 // =============================================================================

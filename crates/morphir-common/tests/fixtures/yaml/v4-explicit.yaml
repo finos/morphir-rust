@@ -4,4 +4,17 @@ distribution:
     packageName: example
     dependencies: {}
     def:
-      modules: {}
+      modules:
+        domain:
+          access: Public
+          value:
+            types:
+              user-id:
+                access: Public
+                TypeAliasDefinition:
+                  typeParams: []
+                  typeExp:
+                    Reference:
+                      fqname: morphir/SDK:string#string
+                      args: []
+            values: {}

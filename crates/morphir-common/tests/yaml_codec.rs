@@ -18,7 +18,25 @@ const V4_JSON: &str = r#"{
     "Library": {
       "packageName": "example",
       "dependencies": {},
-      "def": {"modules": {}}
+      "def": {
+        "modules": {
+          "domain": {
+            "access": "Public",
+            "value": {
+              "types": {
+                "user-id": {
+                  "access": "Public",
+                  "TypeAliasDefinition": {
+                    "typeParams": [],
+                    "typeExp": "morphir/SDK:string#string"
+                  }
+                }
+              },
+              "values": {}
+            }
+          }
+        }
+      }
     }
   }
 }"#;
@@ -26,6 +44,7 @@ const V4_JSON: &str = r#"{
 const V3_YAML: &str = include_str!("fixtures/yaml/v3-explicit.yaml");
 const V4_EXPLICIT_YAML: &str = include_str!("fixtures/yaml/v4-explicit.yaml");
 const V4_READABLE_YAML: &str = include_str!("fixtures/yaml/v4-readable.yaml");
+const TIMESTAMP_YAML: &str = include_str!("fixtures/yaml/accepted/timestamp-is-a-string.yaml");
 
 #[derive(Default)]
 struct CollectingSink(Vec<SemanticEvent>);
@@ -179,6 +198,30 @@ fn v4_library_distribution_round_trips_through_yaml() {
     );
 }
 
+/// A type expression with no attributes is written compactly — `morphir/SDK:string#string`, not
+/// an expanded `Reference` wrapper. The encoding is a thread-local that defaults to `Expanded`,
+/// so the codec has to select the canonical one; without that, every type in a YAML artifact
+/// came out in the long spelling.
+#[test]
+fn v4_yaml_writes_type_expressions_in_the_canonical_compact_spelling() {
+    let yaml_options = options(IrVersion::V4, FormatId::yaml());
+    let events = decode(
+        &JsonCodec::new(),
+        V4_JSON,
+        &options(IrVersion::V4, FormatId::json()),
+    )
+    .expect("the v4 document decodes");
+
+    let yaml = encode(&YamlCodec::new(), events, &yaml_options).expect("the file encodes");
+
+    assert!(
+        yaml.contains("typeExp: morphir/SDK:string#string"),
+        "expected the compact spelling:\n{yaml}"
+    );
+    // `fqname` is the expanded `Reference` wrapper's member, and nothing else writes it.
+    assert!(!yaml.contains("fqname:"), "{yaml}");
+}
+
 #[test]
 fn quoted_and_block_scalars_are_not_treated_as_yaml_syntax() {
     let source = r#"
@@ -249,37 +292,32 @@ fn rejected_yaml_has_stable_located_diagnostics() {
         (
             "fixtures/yaml/rejected/alias-expansion.yaml",
             include_str!("fixtures/yaml/rejected/alias-expansion.yaml"),
-            "morphir::ir::yaml::alias_not_allowed",
+            "morphir::ir::yaml::unsupported_yaml_feature",
         ),
         (
             "fixtures/yaml/rejected/custom-tag.yaml",
             include_str!("fixtures/yaml/rejected/custom-tag.yaml"),
-            "morphir::ir::yaml::unsupported_tag",
+            "morphir::ir::yaml::unsupported_yaml_feature",
         ),
         (
             "fixtures/yaml/rejected/cyclic-alias.yaml",
             include_str!("fixtures/yaml/rejected/cyclic-alias.yaml"),
-            "morphir::ir::yaml::alias_not_allowed",
+            "morphir::ir::yaml::unsupported_yaml_feature",
         ),
         (
             "fixtures/yaml/rejected/duplicate-key.yaml",
             include_str!("fixtures/yaml/rejected/duplicate-key.yaml"),
-            "duplicate_format_version",
+            "morphir::ir::yaml::duplicate_member",
         ),
         (
             "fixtures/yaml/rejected/multiple-documents.yaml",
             include_str!("fixtures/yaml/rejected/multiple-documents.yaml"),
-            "morphir::ir::yaml::multiple_documents",
+            "morphir::ir::yaml::invalid_yaml",
         ),
         (
             "fixtures/yaml/rejected/non-finite-number.yaml",
             include_str!("fixtures/yaml/rejected/non-finite-number.yaml"),
-            "morphir::ir::yaml::non_finite_number",
-        ),
-        (
-            "fixtures/yaml/rejected/timestamp-coercion.yaml",
-            include_str!("fixtures/yaml/rejected/timestamp-coercion.yaml"),
-            "morphir::ir::yaml::ambiguous_scalar",
+            "morphir::ir::yaml::invalid_literal",
         ),
     ];
     let codec = YamlCodec::new();
@@ -304,4 +342,61 @@ fn rejected_yaml_has_stable_located_diagnostics() {
         assert!(source_span.column > 0, "{fixture}");
         assert!(diagnostic.guidance().is_some(), "{fixture}");
     }
+}
+
+/// A date-looking plain scalar is a string, not a timestamp: the profile's scalar resolution has
+/// booleans, null, integers, floats and nothing else, so `2026-08-28` is text. This fixture used
+/// to be `rejected/timestamp-coercion.yaml`, refused as an ambiguous scalar.
+#[test]
+fn a_date_looking_scalar_decodes_as_a_string() {
+    decode(
+        &YamlCodec::new(),
+        TIMESTAMP_YAML,
+        &options(IrVersion::V4, FormatId::yaml()),
+    )
+    .expect("the timestamp fixture decodes");
+
+    let value = morphir_core::ir::yaml::read(TIMESTAMP_YAML).expect("the fixture reads");
+    assert_eq!(
+        value
+            .pointer("/distribution/Library/def/modules/notes/value/doc")
+            .expect("the module doc"),
+        &serde_json::Value::String("2026-08-28".to_owned())
+    );
+}
+
+/// YAML output is the profile's canonical spelling, byte for byte with the kit's writer.
+#[test]
+fn yaml_output_is_canonical() {
+    let input =
+        include_str!("../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json");
+    let version = IrVersion::V4;
+    let events = decode(
+        &JsonCodec::new(),
+        input,
+        &options(version, FormatId::json()),
+    )
+    .unwrap();
+    let yaml = encode(
+        &YamlCodec::new(),
+        events,
+        &options(version, FormatId::yaml()),
+    )
+    .unwrap();
+
+    // `write_ir_file` is the same writer over the same file, and it is what fixes the canonical
+    // type encoding: comparing against a tree serialized outside that scope would pin the
+    // expanded spelling instead.
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_str(input).unwrap();
+    let expected = morphir_core::ir::yaml::write_ir_file(&file);
+    assert_eq!(yaml, expected);
+    assert!(
+        expected.contains("typeExp: morphir/SDK:string#string"),
+        "{expected}"
+    );
+
+    // Flow sequences for scalar-only sequences, and exactly one trailing newline.
+    assert!(yaml.contains("typeParams: []"), "{yaml}");
+    assert!(yaml.ends_with('\n') && !yaml.ends_with("\n\n"), "{yaml}");
+    assert!(!yaml.contains('\r'), "{yaml}");
 }

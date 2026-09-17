@@ -42,7 +42,7 @@ pub use access::{Access, AccessControlled};
 // Re-export core expression types
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
-pub use literal::Literal;
+pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};
 pub use pattern::Pattern;
 pub use serde_v4::{TypeEncoding, with_type_encoding};
 pub use types::{Field, Type};
@@ -102,6 +102,23 @@ impl<'de> Deserialize<'de> for IRFile {
     {
         serde_document::deserialize_with(deserializer, serde_document::decode_ir_file)
     }
+}
+
+/// Decodes a version 4 document from an already-parsed value tree, with its warnings.
+///
+/// This is the entry a reader uses when it produced the value tree itself — the YAML profile
+/// reader, say — rather than handing a document to serde. It decodes exactly what
+/// `Deserialize for IRFile` decodes, and collects the `legacy_spelling` warnings the serde path
+/// leaves to its caller's `with_spelling_mode` scope.
+pub fn decode_ir_file_with_warnings(
+    value: &serde_json::Value,
+) -> Result<(IRFile, Vec<crate::ir::Warning>), crate::ir::DiagnosticError> {
+    let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || {
+        serde_document::decode_ir_file(value, "")
+    });
+    decoded
+        .map(|file| (file, warnings))
+        .map_err(crate::ir::DiagnosticError)
 }
 
 /// Format version - accepts both string "4.0.0" and integer 4 using the shared contract.

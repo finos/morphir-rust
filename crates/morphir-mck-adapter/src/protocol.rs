@@ -172,7 +172,7 @@ impl Serialize for DecodeResponse {
             DecodeResponse::Err { diagnostic } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("ok", &false)?;
-                map.serialize_entry("diagnostic", diagnostic)?;
+                map.serialize_entry("diagnostic", &WireDiagnostic(diagnostic))?;
                 map.end()
             }
             DecodeResponse::Refused { diagnostic } => {
@@ -185,10 +185,47 @@ impl Serialize for DecodeResponse {
     }
 }
 
+/// A [`Diagnostic`] as the protocol carries one: `code`, `stage`, `cursor` and `message`, and
+/// nothing else.
+///
+/// morphir-core's diagnostic also carries the `line` and `column` a syntax failure was found at,
+/// which are for a person reading a file, not for the driver — and `protocol.schema.json`'s
+/// `Diagnostic` is `additionalProperties: false`, so sending them makes the whole response
+/// unreadable to the driver rather than merely verbose. The YAML reader locates every diagnostic
+/// it raises, so this is the difference between the kit's yaml fences being adjudicated and the
+/// adapter being declared unavailable.
+struct WireDiagnostic<'a>(&'a Diagnostic);
+
+impl Serialize for WireDiagnostic<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        // Destructured rather than read member by member: a new field on the core `Diagnostic`
+        // has to be decided about here — sent or deliberately dropped — and this makes that a
+        // compile error instead of a response the driver silently cannot read.
+        let Diagnostic {
+            code,
+            stage,
+            cursor,
+            message,
+            line: _,
+            column: _,
+        } = self.0;
+        let mut map = serializer.serialize_map(Some(4))?;
+        map.serialize_entry("code", code)?;
+        map.serialize_entry("stage", stage)?;
+        map.serialize_entry("cursor", cursor)?;
+        map.serialize_entry("message", message)?;
+        map.end()
+    }
+}
+
 /// The stage-one capabilities this binding reports, per `protocol.schema.json`
 /// contract version 1 and the worked exchange in `protocol.example.json`: IR
 /// versions 3 and 4 with this reader's support table as `formatVersions`,
-/// the `json` profile only, the `single` layout, both path
+/// the `json` and `yaml` profiles, the `single` layout, both path
 /// modes, and every node kind the kit names.
 pub fn capabilities() -> Capabilities {
     Capabilities {
@@ -197,7 +234,7 @@ pub fn capabilities() -> Capabilities {
         language: "rust".to_string(),
         format_versions: SupportTable::reference().canonical(),
         versions: vec![3, 4],
-        profiles: vec![Profile::Json],
+        profiles: vec![Profile::Json, Profile::Yaml],
         layouts: vec!["single".to_string()],
         paths: vec![PathMode::Current, PathMode::Pinned],
         nodes: vec![

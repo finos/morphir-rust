@@ -44,7 +44,7 @@ fn a_literal_carries_its_payload_directly_under_its_tag() {
             Literal::String("hi".into()),
         ),
         (json!({ "IntegerLiteral": -7 }), Literal::Integer(-7)),
-        (json!({ "FloatLiteral": 2.5 }), Literal::Float(2.5)),
+        (json!({ "FloatLiteral": 2.5 }), Literal::float(2.5)),
         (
             json!({ "DecimalLiteral": "0.010" }),
             Literal::Decimal("0.010".into()),
@@ -59,15 +59,51 @@ fn a_literal_carries_its_payload_directly_under_its_tag() {
 fn a_float_is_written_so_it_reads_back_as_a_float() {
     // A whole-numbered float must not be written as an integer, or a reader would decode it as
     // an IntegerLiteral.
-    let text = serde_json::to_string(&Literal::Float(4.0)).unwrap();
+    let text = serde_json::to_string(&Literal::float(4.0)).unwrap();
     assert!(
         text.contains("4.0") || text.contains("4e0"),
         "a float needs a decimal point or an exponent: {text}"
     );
     assert_eq!(
         serde_json::from_str::<Literal>(&text).unwrap(),
-        Literal::Float(4.0)
+        Literal::float(4.0)
     );
+}
+
+#[test]
+fn a_float_literal_keeps_its_lexeme_through_json() {
+    let text = r#"{ "Literal": { "FloatLiteral": 1.0e2 } }"#;
+    let value: morphir_core::ir::v4::Value = serde_json::from_str(text).unwrap();
+    let json = serde_json::to_string(&value).unwrap();
+    // The exponent survives rather than collapsing to the value's shortest spelling. The `+` is
+    // serde_json's doing: with `arbitrary_precision` its number scanner writes an exponent as
+    // `e+2` whatever the source wrote, so `1.0e2` is the one part of a JSON lexeme this reader
+    // cannot hold verbatim. A reader that hands `FloatLiteral::from_lexeme` the raw text — the
+    // YAML profile's — keeps the spelling exactly.
+    assert!(json.contains("1.0e+2"), "{json}");
+    assert!(!json.contains("100.0"), "{json}");
+}
+
+#[test]
+fn a_float_literal_keeps_its_trailing_zeros_through_json() {
+    let text = r#"{ "Literal": { "FloatLiteral": 1.50 } }"#;
+    let value: morphir_core::ir::v4::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        serde_json::to_string(&value).unwrap(),
+        r#"{"Literal":{"FloatLiteral":1.50}}"#
+    );
+}
+
+#[test]
+fn float_literals_compare_by_value_not_spelling() {
+    use morphir_core::ir::v4::FloatLiteral;
+    assert_eq!(
+        FloatLiteral::from_lexeme("1.0e2").unwrap(),
+        FloatLiteral::from_f64(100.0)
+    );
+    assert_eq!(FloatLiteral::from_f64(4.0).lexeme(), "4.0");
+    assert_eq!(FloatLiteral::from_f64(0.1).lexeme(), "0.1");
+    assert_eq!(FloatLiteral::from_lexeme("1.50").unwrap().lexeme(), "1.50");
 }
 
 #[test]

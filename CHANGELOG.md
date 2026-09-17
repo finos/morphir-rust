@@ -15,13 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not resolve dependencies, install packages or write a full `morphir.lock`.
 - `mck-adapter-rust --suite package` exposes these operations to the shared MCK
   driver. The default and `--suite ir` retain the existing IR protocol.
+- **The YAML profile through the kit.** `morphir_core::ir::yaml` holds the profile's reader and
+  its canonical writer (`read`, `write_canonical`, `read_ir_file`, `write_ir_file`), so a YAML
+  document becomes the same value tree the JSON reader builds, with the kit's diagnostic codes and
+  JSON-pointer cursors. The MCK adapter declares the `yaml` profile.
+- `morphir_common::ir_transport::probe_yaml_header` reports the header observations a YAML root
+  mapping carries — `format_version_not_first` — as the JSON root probe reports them, so the
+  shared conformance corpus is answered for both profiles.
 
 ### Fixed
 
-- **`morphir-common` YAML encoding.** A `DocumentLiteral` number the YAML encoder cannot carry
-  exactly is no longer written rounded through `f64` or retyped as a YAML string, which changed the
-  payload on a JSON→YAML→JSON round trip. It is refused with `morphir::ir::yaml::invalid_literal`
-  at the encoding stage, naming the lexeme; see Known limitations.
+- **`morphir-common` YAML encoding.** A `DocumentLiteral` number is written with the lexeme it
+  was read with. It used to be rounded through `f64` or retyped as a YAML string, which changed
+  the payload on a JSON→YAML→JSON round trip; for a while it was refused instead. The canonical
+  writer takes the lexeme straight from the value tree, so `9007199254740993` and `0.10` survive
+  both profiles and neither encoder can emit serde_json's private number token.
 - **`morphir-mck-adapter` syntax probe.** An object whose first member is spelled
   `$serde_json::private::Number` is no longer mistaken for serde_json's internal number token. The
   probe now takes a map for a number only when that is its one member and it holds a string;
@@ -40,6 +48,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (`morphir-common` YAML codec, diagnostic codes).** `YamlCodec` decodes and encodes
+  through morphir-core: a document is read into the value tree and then into the concrete model,
+  and output is the profile's canonical style — block mappings, flow sequences for sequences that
+  hold no mapping, plain scalars unless quoting is required, `\n` breaks and exactly one trailing
+  newline. Date-looking scalars are strings (`created: 2026-08-28` is the text, not a timestamp),
+  and `Literal::Float` carries its lexeme.
+
+  YAML diagnostics now use the kit's codes under `morphir::ir::yaml::`:
+
+  | Was | Is |
+  | --- | --- |
+  | `morphir::ir::yaml::duplicate_key` | `morphir::ir::yaml::duplicate_member` |
+  | `morphir::ir::yaml::alias_not_allowed` | `morphir::ir::yaml::unsupported_yaml_feature` |
+  | `morphir::ir::yaml::unsupported_tag` | `morphir::ir::yaml::unsupported_yaml_feature` |
+  | `morphir::ir::yaml::merge_key_not_allowed` | `morphir::ir::yaml::unsupported_yaml_feature` |
+  | `morphir::ir::yaml::multiple_documents` | `morphir::ir::yaml::invalid_yaml` |
+  | `morphir::ir::yaml::non_finite_number` | `morphir::ir::yaml::invalid_literal` |
+  | `morphir::ir::yaml::ambiguous_scalar` | removed — the value is a string |
+  | `morphir::ir::yaml::invalid_ir` | the specific semantic code |
+  | `morphir::ir::yaml::budget_exceeded` | `morphir::ir::yaml::nesting_too_deep`, or the parser's `invalid_yaml` |
+
+  A YAML document with a repeated root `formatVersion` answers `morphir::ir::yaml::duplicate_member`
+  rather than `duplicate_format_version`: a repeated member is settled before any member means
+  anything. Every other format-version code is unchanged and is the same bare code the JSON path
+  answers.
 - **Breaking (format-version diagnostics, MCK capabilities).** The diagnostic code
   `unsupported_format_version_revision` is renamed `unsupported_format_version_minor`, with no
   alias: `DiagnosticCode::UnsupportedFormatVersionMinor` in `morphir-core` and
@@ -274,6 +307,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Classic (IR v3) tagged-array leniency inside a version-4 document. A Classic tagged array read where a v4
   node is expected is now an `unknown_node` refusal through the kit's diagnostic, rather than being accepted as a
   tuple of strings.
+- `morphir-common`'s private YAML machinery: `PlainValue` (the number rewrite that stood between a
+  value and serde-saphyr), the YAML lexical pre-scan that decided anchors, tags, merge keys and
+  timestamps on the source text, the streaming YAML event encoders, and the YAML scanners in the
+  root probe (`probe_yaml_slice`, which is no longer exported). The kit's reader and canonical
+  writer answer all of it, and `morphir-common` no longer depends on `serde-saphyr`.
 
 ### Fixed
 
@@ -332,17 +370,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Extension resolution now rejects releases without a host-supported MEP version, and v2 exact locks authenticate launch arguments, capabilities, and MEP versions before activation; legacy v1 locks are rejected explicitly
-
-### Known limitations
-
-- **YAML encoding stage: document-literal numbers wider than `f64`.** The JSON codec carries a
-  `DocumentLiteral` number's lexeme verbatim; the YAML encoder cannot. serde-saphyr offers no way
-  to emit a scalar verbatim — a serializer reaches it through serde's data model, whose widest
-  number is `u64`, `i64`, or `f64` — so a number that none of those three writes back unchanged
-  (`0.123456789012345678901`, or an integer wider than `u64` that is not a round one) is refused
-  with `morphir::ir::yaml::invalid_literal` at the encoding stage rather than written rounded or
-  retyped as a string. Encode such a document as JSON. Lifting this needs a raw-scalar escape
-  hatch in the YAML serializer.
 
 ## [0.2.0] - 2026-01-24
 

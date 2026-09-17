@@ -155,7 +155,9 @@ pub fn migrate_literal(value: &classic::Literal) -> v4::Literal {
         classic::Literal::Char(value) => v4::Literal::Char(*value),
         classic::Literal::String(value) => v4::Literal::String(value.clone()),
         classic::Literal::WholeNumber(value) => v4::Literal::Integer(*value),
-        classic::Literal::Float(value) => v4::Literal::Float(*value),
+        // Classic holds a float as a machine number with no lexeme, so the migrated literal is
+        // spelled the shortest way that reads back as the same number.
+        classic::Literal::Float(value) => v4::Literal::Float(v4::FloatLiteral::from_f64(*value)),
     }
 }
 

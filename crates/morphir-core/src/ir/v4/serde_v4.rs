@@ -331,9 +331,11 @@ where
         Literal::Char(v) => map.serialize_entry("CharLiteral", &v.to_string())?,
         Literal::String(v) => map.serialize_entry("StringLiteral", v)?,
         Literal::Integer(v) => map.serialize_entry("IntegerLiteral", v)?,
-        // A whole-numbered float still has to read back as a float, which is what serde_json's
-        // float formatting gives: `4.0`, never `4`.
-        Literal::Float(v) => map.serialize_entry("FloatLiteral", v)?,
+        // A float is written from the number it was read as, so the spelling survives the round
+        // trip: `1.0e2` comes back out as `1.0e2`, and a float written `4` comes back out as `4`.
+        // The tag is what says it is a float, so an integral spelling loses nothing. With
+        // `arbitrary_precision`, a `Number` built from text serializes as that text.
+        Literal::Float(v) => map.serialize_entry("FloatLiteral", v.number())?,
         Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v)?,
         Literal::Document(v) => map.serialize_entry("DocumentLiteral", v)?,
     }

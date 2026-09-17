@@ -20,6 +20,12 @@ pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticError, DiagnosticStag
 // V4 is the primary format
 pub mod v4;
 
+// The JSON storage profile's canonical writer
+pub mod json;
+
+// The native YAML storage profile
+pub mod yaml;
+
 // Re-export serde_tagged from v4 for backward compatibility
 pub use v4::serde_tagged;
 

@@ -1,0 +1,13 @@
+formatVersion: 4
+distribution:
+  Library:
+    packageName: example
+    dependencies: {}
+    def:
+      modules:
+        notes:
+          access: Public
+          value:
+            types: {}
+            values: {}
+            doc: 2026-08-28

@@ -27,9 +27,9 @@ pub use options::{
 pub use pipeline::{EventTransform, Pipeline, PipelineSink, Retention};
 pub use root_probe::{
     HeaderObservation, JsonRootProbe, PrefixedReader, ProbedJsonReader, ReplayKind,
-    ReplayObservation, observation_diagnostic, probe_json_root, probe_json_slice, probe_yaml_slice,
+    ReplayObservation, observation_diagnostic, probe_json_root, probe_json_slice,
 };
-pub use yaml::YamlCodec;
+pub use yaml::{YamlCodec, probe_yaml_header};
 
 pub use single_file::{ClassicV3ModuleVisitor, visit_classic_v3, visit_classic_v3_deserializer};
 

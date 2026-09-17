@@ -50,6 +50,14 @@ thiserror = "2.0"
 miette = { version = "7", features = ["fancy"] }
 vfs = "0.13"
 serde-saphyr = { version = "1", default-features = false, features = ["deserialize", "serialize"] }
+# The YAML profile reader walks this parser's event stream directly, and `serde-saphyr` re-exports
+# the same crate to `morphir-config`, so the pin lives here and is exact: one parser version links
+# into the workspace, and the version the message assertions are written against is the version
+# that ships.
+#
+# `error_messages` is what gives a `ScanError` its human-readable text; without it an
+# `invalid_yaml` diagnostic would carry an empty message.
+granit-parser = { version = "=1.2.0", default-features = false, features = ["std", "error_messages"] }
 stacker = "0.1"
 
 # TUI

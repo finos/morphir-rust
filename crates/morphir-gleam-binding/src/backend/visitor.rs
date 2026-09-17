@@ -489,7 +489,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(&i.to_string());
             }
             MorphirLiteral::Float(f) => {
-                output.push_str(&f.to_string());
+                output.push_str(&f.value().to_string());
             }
             MorphirLiteral::Decimal(d) => {
                 output.push_str(d);

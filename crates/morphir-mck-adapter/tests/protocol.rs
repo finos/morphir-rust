@@ -26,7 +26,7 @@ fn capabilities_match_the_stage_one_contract() {
     assert_eq!(caps["language"], "rust");
     assert_eq!(caps["formatVersions"], "[3.0.0,3.1.0),[4.0.0,4.1.0)");
     assert_eq!(caps["versions"], serde_json::json!([3, 4]));
-    assert_eq!(caps["profiles"], serde_json::json!(["json"]));
+    assert_eq!(caps["profiles"], serde_json::json!(["json", "yaml"]));
     assert_eq!(caps["layouts"], serde_json::json!(["single"]));
     assert_eq!(caps["paths"], serde_json::json!(["current", "pinned"]));
     assert_eq!(caps["nodes"].as_array().unwrap().len(), 18);
@@ -139,4 +139,63 @@ fn a_document_nested_past_the_ceiling_answers_over_the_wire() {
     assert_eq!(response["ok"], false);
     assert_eq!(response["diagnostic"]["code"], "nesting_too_deep");
     assert_eq!(response["diagnostic"]["stage"], "syntax");
+}
+
+/// `protocol.schema.json`'s `Diagnostic` is `additionalProperties: false`, and morphir-core's
+/// diagnostic carries the line and column a syntax failure was found at. A response carrying
+/// them is not merely verbose — the driver cannot read it at all, and declares the adapter
+/// unavailable for the rest of the run. Every YAML diagnostic is located, so this is the whole
+/// yaml profile's adjudication.
+#[test]
+fn a_located_diagnostic_is_answered_without_its_line_and_column() {
+    let line = serde_json::json!({
+        "id": 1,
+        "op": "decode",
+        "version": 4,
+        "profile": "yaml",
+        "path": "current",
+        "strip": true,
+        "node": "Literal",
+        "input": "IntegerLiteral: 0o17\n",
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["diagnostic"]["code"], "invalid_literal");
+    assert_eq!(
+        diagnostic_members(&response),
+        ["code", "stage", "cursor", "message"]
+    );
+}
+
+/// The JSON profile answers the same four-member diagnostic. The wire shape changed for both
+/// profiles, and the JSON one is what the kit adjudicates most of its fences through, so it is
+/// held to the shape too rather than inheriting the YAML case's guarantee.
+#[test]
+fn a_json_diagnostic_is_answered_with_the_same_four_members() {
+    let line = serde_json::json!({
+        "id": 1,
+        "op": "decode",
+        "version": 4,
+        "profile": "json",
+        "path": "current",
+        "strip": true,
+        "node": "Literal",
+        "input": "{\"IntegerLiteral\": ",
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["diagnostic"]["code"], "invalid_json");
+    assert_eq!(
+        diagnostic_members(&response),
+        ["code", "stage", "cursor", "message"]
+    );
+}
+
+/// The members of a response's diagnostic, in the order it wrote them.
+fn diagnostic_members(response: &serde_json::Value) -> Vec<&String> {
+    response["diagnostic"]
+        .as_object()
+        .expect("a diagnostic object")
+        .keys()
+        .collect()
 }

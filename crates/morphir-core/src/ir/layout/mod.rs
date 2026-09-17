@@ -3,10 +3,11 @@
 //!
 //! Mirrors `IR/src/layout/{index,paths,stems,write-tree}.ts` in `ecosystem/morphir-typescript`;
 //! see `.dev/docs/superpowers/maps/2026-09-17-reference-tree-layout-map.md`. [`paths`] and
-//! [`stems`] supply what a tree reader and a tree writer are both built on; [`write`] lays a
-//! distribution out as a tree.
+//! [`stems`] supply what a tree reader and a tree writer are both built on; [`read`] assembles a
+//! tree into a distribution and [`write`] lays one back out.
 
 pub mod paths;
+pub mod read;
 pub mod stems;
 pub mod write;
 
@@ -14,6 +15,7 @@ pub use paths::{
     MANIFEST, NodeFileKind, PathKind, Root, VERSION_SLOT, classify, from_physical, module_dir,
     module_dir_prefix, module_manifest_path, node_file_path, package_dir, to_physical,
 };
+pub use read::read_tree;
 pub use stems::{StemResult, stem_for};
 pub use write::{
     TreePolicy, write_definition_module, write_manifest, write_specification_module, write_tree,

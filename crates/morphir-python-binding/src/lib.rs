@@ -25,6 +25,7 @@
 
 mod backend;
 mod frontend;
+mod modules;
 mod names;
 mod values;
 
@@ -84,11 +85,11 @@ impl Frontend for PythonExtension {
             vec![]
         };
         Ok(match frontend::compile(&request) {
-            Ok((ir, module)) => CompileResult {
+            Ok((ir, modules)) => CompileResult {
                 success: true,
                 ir_version: Some("4".into()),
                 ir: Some(ir),
-                modules: vec![module],
+                modules,
                 diagnostics,
             },
             Err(diagnostic) => CompileResult {
@@ -111,9 +112,9 @@ impl Frontend for PythonExtension {
 impl Backend for PythonExtension {
     fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
         Ok(match backend::generate(&request) {
-            Ok(artifact) => GenerateResult {
+            Ok(artifacts) => GenerateResult {
                 success: true,
-                artifacts: vec![artifact],
+                artifacts,
                 diagnostics: vec![],
             },
             Err(diagnostic) => GenerateResult {

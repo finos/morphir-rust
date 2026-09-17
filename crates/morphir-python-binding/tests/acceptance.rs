@@ -5,21 +5,28 @@ use morphir_python_binding::PythonExtension;
 #[derive(Debug, Default)]
 struct TestDriver {
     source: String,
+    additional: Vec<SourceDocument>,
     compiled: Option<CompileResult>,
     generated: Option<GenerateResult>,
 }
 
 impl TestDriver {
     fn compile(&self, text: String) -> CompileResult {
+        let mut documents = vec![SourceDocument {
+            uri: "models.py".into(),
+            language_id: "python".into(),
+            version: 1,
+            text,
+        }];
+        documents.extend(self.additional.clone());
+        self.compile_documents(documents)
+    }
+
+    fn compile_documents(&self, documents: Vec<SourceDocument>) -> CompileResult {
         PythonExtension
             .compile(CompileRequest {
                 language_id: "python".into(),
-                documents: vec![SourceDocument {
-                    uri: "models.py".into(),
-                    language_id: "python".into(),
-                    version: 1,
-                    text,
-                }],
+                documents,
                 package: CompilePackage {
                     name: "acme/example".into(),
                     exposed_modules: vec![],
@@ -50,10 +57,19 @@ impl TestDriver {
     }
 
     fn assert_roundtrip(&self) {
-        let recompiled = self.compile(
-            self.generated.as_ref().unwrap().artifacts[0]
-                .content
-                .clone(),
+        let recompiled = self.compile_documents(
+            self.generated
+                .as_ref()
+                .unwrap()
+                .artifacts
+                .iter()
+                .map(|a| SourceDocument {
+                    uri: a.path.clone(),
+                    language_id: "python".into(),
+                    version: 1,
+                    text: a.content.clone(),
+                })
+                .collect(),
         );
         assert!(recompiled.success, "{:?}", recompiled.diagnostics);
         assert_eq!(recompiled.ir, self.compiled.as_ref().unwrap().ir);
@@ -97,6 +113,20 @@ fn tuples(world: &mut PythonWorld) {
     world.driver.source = include_str!("fixtures/tuples.py").into();
 }
 
+#[given("Python modules with imported ADTs and tuple aliases")]
+fn modules(world: &mut PythonWorld) {
+    world.driver.source = format!(
+        "{}\n{}",
+        include_str!("fixtures/models.py"),
+        include_str!("fixtures/tuples.py")
+    );
+    world.driver.additional.push(SourceDocument {
+        uri: "rules.py".into(),
+        language_id: "python".into(),
+        version: 1,
+        text: include_str!("fixtures/modules/rules.py").into(),
+    });
+}
 #[when("I compile the model and generate Python")]
 fn roundtrip(world: &mut PythonWorld) {
     world.driver.compile_and_generate();

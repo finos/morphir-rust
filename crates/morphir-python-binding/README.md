@@ -13,8 +13,9 @@ functions. It does not implement all Python syntax or all Morphir IR nodes, and
 does not claim full Morphir Compatibility Kit conformance for this extension.
 It has no dependency on `finos/morphir-python`.
 
-The examples below describe this checkout. Build the extension from source and
-use the [local installation guide](../../docs/tutorials/python-extension.md).
+The examples below describe this checkout. Multi-module support is not included
+in the published `extension/python/v0.1.0` bundle. Build this checkout and use the
+[local installation guide](../../docs/tutorials/python-extension.md) to try it.
 
 ## A complete model
 
@@ -75,7 +76,7 @@ The frontend rejects its imports, calls, assignments and assertions.
 | `tuple[A, B]` | Tuple type |
 | `type Point = tuple[float, float]` | Type alias with a tuple body |
 | `(x, y)` or `return x, y` | Tuple value with ordered elements |
-| Local type annotation | Fully qualified reference in the current package and module |
+| Local or imported type annotation | Fully qualified reference to its defining module in the current package |
 | Annotated function | Value definition with typed parameters and an expression body |
 | Returning `if`/`elif`/`else`, or `a if condition else b` | `IfThenElse` with `condition`, `then`, and `else` members |
 
@@ -90,10 +91,12 @@ instead. A one-variant sum is spelled `type Wrapped = Variant`.
 Recursive fields work with postponed annotations. These mappings preserve
 declarations; Python itself does not enforce annotation types at runtime.
 
-Each request contains exactly one `.py` source document. Its filename determines
-the module name, so `models.py` becomes `models`. The package name must be a
+Each request contains one or more `.py` source documents. A source-relative path
+determines its module name: `models.py` becomes `models`, and
+`domain/order_items.py` becomes `domain/order-items`. The package name must be a
 canonical Morphir package path such as `acme/example`. An empty `exposedModules`
-exposes this module; otherwise the list must name this module alone. All emitted
+exposes every module; otherwise the list must name every module, using canonical
+paths or dotted names such as `Domain.OrderItems`. All emitted
 types, constructors and functions are public. Declaration names use Morphir's
 existing name codec, including uppercase initialism segments. Collisions after
 normalization are errors. Names must be ASCII identifiers without a leading
@@ -104,11 +107,61 @@ become the reserved word `class`, so it is rejected. `zip_code` becomes the
 Morphir name `zip-code` and generates back as `zip_code`. Type and constructor
 names generate in PascalCase; field, function and parameter names use snake_case.
 
-The backend returns one relative `.py` artifact. It rejects names that cannot
+The backend returns one relative `.py` artifact per module. It rejects names that cannot
 roundtrip through this spelling, including collisions across types, constructors
 and functions after Morphir name normalization. The common Morphir pattern where
 a type and its single constructor share a name therefore needs distinct names
 for this first Python subset.
+
+## Multiple modules and imports
+
+Compile all source files together in one request. For example, save the complete
+model above as `models.py` and this function as `rules.py`:
+
+```python
+from __future__ import annotations
+from models import Decision as Result
+
+def select_decision(flag: bool, first: Result, second: Result) -> Result:
+    if flag:
+        return first
+    else:
+        return second
+```
+
+The function's parameter and result types reference
+`acme/example:models#decision`. Import aliases do not create new IR types.
+Imported record, sum and tuple types work in fields, constructor parameters and
+function signatures. Tuple aliases resolve across modules when checking returns.
+The order of source documents does not affect the resulting IR.
+
+Supported imports include `from models import Decision`, optional `as` aliases,
+`import models`, `import domain.models as model`, and relative imports such as
+`from .models import Decision` or `from ..models import Decision` inside nested
+modules. `from domain import models` also binds a source module. Imports must
+resolve to files supplied in the request, and named type imports must refer to
+declarations in that module. Importing functions, constructors or re-exported
+names, wildcard imports, lazy imports and external package imports are rejected.
+The existing `dataclasses.dataclass` and `__future__.annotations` imports remain
+supported. A sum's variant classes must stay in the same module as its alias.
+
+Relative document paths are relative to the source root. For multiple absolute
+paths or file URIs, set the MEP option `sourceRootUri`; the CLI does this when
+compiling a directory. Absolute documents outside that root, duplicate module
+names after normalization, and a file that is also a package directory such as
+`models.py` alongside `models/item.py` are errors. A single absolute document
+without a root retains the original filename-based behavior.
+
+Nested modules use Python namespace packages. `__init__.py` modules and package
+initialization code are not supported. Generated paths preserve the directory
+structure, and generated imports use absolute module paths with collision-free
+aliases. Put the generated directory on Python's import path. The backend uses
+module imports and postponed annotations, so mutually referring record types
+can be generated without eager cross-module type imports. Recursive tuple aliases
+remain unsupported. No imports execute during compilation or generation.
+
+Run `cargo run -p morphir-python-binding --example python_modules` for a complete
+native MEP example with imported ADTs and tuple aliases.
 
 ## Conditional function bodies
 
@@ -232,9 +285,9 @@ through that codec. There is no v1-v3 migration in this extension.
 
 | IR area | Frontend emits / backend accepts |
 | --- | --- |
-| Distribution | `Library`, exactly one module, empty dependency map, public definitions |
+| Distribution | `Library`, one or more modules, empty dependency map, public definitions |
 | Type definitions | Non-generic record aliases, fixed tuple aliases, custom types with public constructors |
-| Type expressions | The four SDK scalar references, local type references, fixed tuples; a record at a record-alias body |
+| Type expressions | The four SDK scalar references, same-package type references across modules, fixed tuples; a record at a record-alias body |
 | Value definitions | `ExpressionBody` with annotated inputs and a required output type |
 | Value expressions | Parameter `Variable`, scalar `Literal`, fixed `Tuple`, `IfThenElse`, and fully applied two-argument SDK scalar comparisons |
 | Literal kinds | `BoolLiteral`, arbitrary-precision `IntegerLiteral`, finite `FloatLiteral`, `StringLiteral` |
@@ -244,7 +297,7 @@ Unsupported IR includes `Specs` and `Application` distributions, dependencies,
 private definitions, generic types, opaque types, empty custom types, extensible
 records, unit and function types, free type variables, and other SDK types such
 as List, Maybe and Decimal. Arbitrary aliases such as an alias directly to `int`
-are not supported. Local references must resolve within the supported module.
+are not supported. Type references must resolve within the supplied package.
 
 Unsupported value forms include record construction or field access,
 constructor application, general calls or references, lists, arithmetic,
@@ -266,6 +319,7 @@ Current evidence is scoped to the checked-in cases:
 | --- | --- |
 | [ADT integration tests](tests/pipeline.rs) | Expected IR mappings, independent custom-type input, recursive references, naming and rejection boundaries |
 | [Function and tuple integration tests](tests/conditionals.rs) | Exact `IfThenElse`/tuple encodings, alias expansion, branch/type validation and round-trips |
+| [Module integration tests](tests/modules.rs) | Absolute and relative imports, nested modules, cyclic record references, import collisions and cross-module tuple checking |
 | [Acceptance scenarios](tests/features/adt.feature) | Supported models pass through the public extension API; unsupported input returns diagnostics |
 | [WASM host test](../morphir-daemon/tests/python_extension.rs) | Capability negotiation and compile/generate/recompile through an actual Extism guest; run by CI |
 | Example verification | Generated example IR checked against the v4 JSON Schema, and selected generated Python branch/tuple results checked in Python 3.14.7 |
@@ -278,13 +332,13 @@ also do not enforce argument types at runtime.
 
 ## Current boundary
 
-Supported fields are scalars, local references and fixed tuples of at least two
-elements. The two imports shown above, frozen dataclasses, non-generic
+Supported fields are scalars, same-package references and fixed tuples of at least two
+elements. The imports described above, frozen dataclasses, non-generic
 `type` aliases of dataclass variants or fixed tuples, and annotated pure functions
 are the accepted module statements.
 Comments and whitespace are not preserved. Methods, field defaults,
 inheritance, arbitrary decorators or imports, docstrings, generic parameters,
-containers, optional fields, quoted annotations and multi-module compilation
+containers, optional fields, quoted annotations and cross-package dependencies
 are rejected. Function calls, constructor calls, assignments, loops, bare returns,
 decorated or async functions, parameter defaults, variadic parameters,
 positional-only or keyword-only parameters, chained comparisons, and boolean
@@ -307,8 +361,9 @@ whose false path reaches the end of the function without a return, and
 Compile functions with `typesOnly=false`. A request containing functions with
 `typesOnly=true` returns a diagnostic; bodies are never silently dropped. ADT-only
 sources accept either value. `irVersion` accepts `4` or `4.0.0`. The CLI's
-`outputDir` and `sourceRootUri` string options are accepted as context, without
-filesystem access. `emitParseStage=true` produces warning `PY006`; combining it
+`outputDir` string option is accepted as context; `sourceRootUri` determines
+module paths for absolute document URIs. Neither grants filesystem access.
+`emitParseStage=true` produces warning `PY006`; combining it
 with `emitParseStageFatal=true` fails. Other options are rejected.
 
 | Code | Meaning |

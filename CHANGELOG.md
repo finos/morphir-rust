@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Python compilation and generation support multiple modules in one package,
+  including nested paths, absolute and relative type imports, aliases and
+  cross-module tuple checking. The backend emits module-qualified imports;
+  native and installed WASM roundtrips cover the expanded subset.
+
 - Python extension release bundles include frontend language and backend target
   metadata. CI builds and uploads the bundle and verifies offline installation,
   compilation and generation. The `extension/python/v0.1.0` release tag publishes

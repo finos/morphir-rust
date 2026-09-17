@@ -4,12 +4,16 @@ use morphir_extension_sdk::{
     CompileRequest, Diagnostic, SourceLocation, SourcePosition, SourceRange,
 };
 use ruff_python_ast::{Expr, Operator, Stmt, StmtClassDef};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::TextRange;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod functions;
+mod imports;
+mod project;
 
-pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, String)> {
+type TypeScope = BTreeMap<String, FQName>;
+
+pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, Vec<String>)> {
     if request.language_id != "python"
         || !matches!(request.options.ir_version.as_str(), "4" | "4.0.0")
         || !request.dependencies.is_empty()
@@ -42,69 +46,7 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, S
             "Python parse-stage output is not implemented",
         ));
     }
-    let [document] = request.documents.as_slice() else {
-        return Err(error(
-            "PY001",
-            "This version compiles exactly one Python module per request",
-        ));
-    };
-    if document.language_id != "python" {
-        return Err(error("PY001", "Source document language must be python"));
-    }
-    let filename = document.uri.rsplit(['/', '\\']).next().unwrap_or("");
-    let stem = filename
-        .strip_suffix(".py")
-        .ok_or_else(|| error("PY001", "Source URI must end in .py"))?;
-    let module_identifier = names::identifier(stem)?;
-    names::module_file_stem(&module_identifier)?;
-    let module_name = module_identifier.to_canonical_string();
-    if !request.package.exposed_modules.is_empty()
-        && request.package.exposed_modules != [module_name.clone()]
-        && request.package.exposed_modules != [Name::from(stem).to_pascal_case()]
-    {
-        return Err(error(
-            "PY001",
-            "exposedModules must be empty or name the single source module",
-        ));
-    }
-    let package =
-        PackageName::from_canonical_string(&request.package.name).map_err(|e| error("PY001", e))?;
-    if package.is_empty() {
-        return Err(error("PY001", "Package name must not be empty"));
-    }
-    let parsed = ruff_python_parser::parse_module(&document.text).map_err(|e| {
-        at(
-            error("PY002", e.to_string()),
-            &document.uri,
-            &document.text,
-            e.range(),
-        )
-    })?;
-    let module = lower(parsed.suite(), &package, &module_name)
-        .map_err(|e| at(e, &document.uri, &document.text, parsed.syntax().range()))?;
-    if request.options.types_only && !module.values.is_empty() {
-        return Err(error(
-            "PY004",
-            "typesOnly is not supported for Python functions; compile with typesOnly false",
-        ));
-    }
-    let ir = IRFile {
-        format_version: FormatVersion::Integer(4),
-        distribution: Distribution::Library(LibraryContent {
-            package_name: package,
-            dependencies: Default::default(),
-            def: PackageDefinition {
-                modules: [(module_name.clone(), public(module))]
-                    .into_iter()
-                    .collect(),
-            },
-        }),
-    };
-    Ok((
-        with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(ir))
-            .map_err(|e| error("PY005", e.to_string()))?,
-        module_name,
-    ))
+    project::compile(request)
 }
 
 pub(crate) fn parse_stage_requested(request: &CompileRequest) -> bool {
@@ -116,37 +58,28 @@ pub(crate) fn parse_stage_requested(request: &CompileRequest) -> bool {
         == Some(true)
 }
 
-fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<ModuleDefinition> {
+fn lower(
+    statements: &[Stmt],
+    types: &TypeScope,
+    aliases: Option<&crate::values::TupleAliases>,
+) -> Outcome<ModuleDefinition> {
     let mut classes = BTreeMap::new();
     let mut sums = BTreeMap::new();
     let mut tuple_aliases = BTreeMap::new();
     let mut declared = BTreeSet::new();
     let mut functions = BTreeMap::new();
     let mut dataclass_imported = false;
-    for (index, statement) in statements.iter().enumerate() {
+    for statement in statements {
         match statement {
-            Stmt::ImportFrom(import)
+            Stmt::ImportFrom(import) => {
+                // The package resolver validates all imports and their binding names.
                 if import.level == 0
-                    && !import.is_lazy
-                    && import.names.len() == 1
-                    && import.names[0].asname.is_none() =>
-            {
-                match (
-                    import.module.as_ref().map(|s| s.as_str()),
-                    import.names[0].name.as_str(),
-                ) {
-                    (Some("dataclasses"), "dataclass") => dataclass_imported = true,
-                    (Some("__future__"), "annotations") if statements[..index].iter().all(|s| {
-                        matches!(s, Stmt::ImportFrom(i) if i.module.as_ref().map(|m| m.as_str()) == Some("__future__"))
-                    }) => {}
-                    _ => {
-                        return Err(error(
-                            "PY004",
-                            "Only dataclasses.dataclass and __future__.annotations imports are supported",
-                        ));
-                    }
+                    && import.module.as_ref().map(|m| m.as_str()) == Some("dataclasses")
+                {
+                    dataclass_imported = true;
                 }
             }
+            Stmt::Import(_) => {}
             Stmt::ClassDef(class) => {
                 if !dataclass_imported {
                     return Err(error(
@@ -198,22 +131,11 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
             }
         }
     }
-    let type_names: BTreeSet<&str> = classes
-        .keys()
-        .map(String::as_str)
-        .filter(|n| !owned_variants.contains(n))
-        .chain(sums.keys().map(String::as_str))
-        .chain(tuple_aliases.keys().map(String::as_str))
-        .collect();
     let mut definitions = BTreeMap::new();
-    let mut resolved_aliases = crate::values::TupleAliases::new();
+
     for (name, expression) in &tuple_aliases {
         let canonical = names::identifier(name)?.to_canonical_string();
-        let type_expr = annotation(expression, package, module, &type_names)?;
-        resolved_aliases.insert(
-            format!("{}:{module}#{canonical}", package.to_canonical_string()),
-            type_expr.clone(),
-        );
+        let type_expr = annotation(expression, types)?;
         definitions.insert(
             canonical,
             TypeDefinition::TypeAliasDefinition {
@@ -222,19 +144,13 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
             },
         );
     }
-    for alias in resolved_aliases.values() {
-        crate::values::resolve_aliases(alias, &resolved_aliases)?;
-    }
     for (name, class) in &classes {
         if !owned_variants.contains(name.as_str()) {
             definitions.insert(
                 names::identifier(name)?.to_canonical_string(),
                 TypeDefinition::TypeAliasDefinition {
                     type_params: vec![],
-                    type_expr: Type::Record(
-                        Default::default(),
-                        fields(class, package, module, &type_names)?,
-                    ),
+                    type_expr: Type::Record(Default::default(), fields(class, types)?),
                 },
             );
         }
@@ -245,7 +161,7 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
             .map(|variant| {
                 Ok(ConstructorDefinition {
                     name: names::identifier(variant)?,
-                    args: fields(classes[*variant], package, module, &type_names)?
+                    args: fields(classes[*variant], types)?
                         .into_iter()
                         .map(|field| ConstructorArg {
                             name: field.name,
@@ -270,18 +186,13 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
             .collect(),
         values: functions
             .into_iter()
-            .map(|(name, function)| {
+            .filter_map(|(name, function)| aliases.map(|aliases| (name, function, aliases)))
+            .map(|(name, function, aliases)| {
                 Ok((
                     names::identifier(&name)?.to_canonical_string(),
                     public(Documented::new(
                         None,
-                        functions::lower(
-                            function,
-                            package,
-                            module,
-                            &type_names,
-                            &resolved_aliases,
-                        )?,
+                        functions::lower(function, types, aliases)?,
                     )),
                 ))
             })
@@ -321,12 +232,7 @@ fn validate_class(class: &StmtClassDef) -> Outcome<()> {
     Ok(())
 }
 
-fn fields(
-    class: &StmtClassDef,
-    package: &PackageName,
-    module: &str,
-    types: &BTreeSet<&str>,
-) -> Outcome<Vec<Field>> {
+fn fields(class: &StmtClassDef, types: &TypeScope) -> Outcome<Vec<Field>> {
     let mut seen = BTreeSet::new();
     class
         .body
@@ -346,32 +252,22 @@ fn fields(
             declare(&mut seen, name)?;
             let name = names::identifier(name)?;
             names::field_name(&name)?;
-            Ok(Field::new(
-                name,
-                annotation(&field.annotation, package, module, types)?,
-            ))
+            Ok(Field::new(name, annotation(&field.annotation, types)?))
         })
         .collect()
 }
 
-fn annotation(
-    expr: &Expr,
-    package: &PackageName,
-    module: &str,
-    types: &BTreeSet<&str>,
-) -> Outcome<Type> {
+fn annotation(expr: &Expr, types: &TypeScope) -> Outcome<Type> {
     match expr {
         Expr::Name(name) => {
+            if let Some(fq) = types.get(name.id.as_str()) {
+                return Ok(Type::Reference(Default::default(), fq.clone(), vec![]));
+            }
             let fq = match name.id.as_str() {
-                "int" => "morphir/SDK:basics#int".into(),
-                "float" => "morphir/SDK:basics#float".into(),
-                "bool" => "morphir/SDK:basics#bool".into(),
-                "str" => "morphir/SDK:string#string".into(),
-                local if types.contains(local) => format!(
-                    "{}:{module}#{}",
-                    package.to_canonical_string(),
-                    names::identifier(local)?.to_canonical_string()
-                ),
+                "int" => "morphir/SDK:basics#int",
+                "float" => "morphir/SDK:basics#float",
+                "bool" => "morphir/SDK:basics#bool",
+                "str" => "morphir/SDK:string#string",
                 other => {
                     return Err(error(
                         "PY004",
@@ -381,9 +277,16 @@ fn annotation(
             };
             Ok(Type::Reference(
                 Default::default(),
-                FQName::from_canonical_string(&fq).map_err(|e| error("PY003", e))?,
+                FQName::from_canonical_string(fq).map_err(|e| error("PY003", e))?,
                 vec![],
             ))
+        }
+        Expr::Attribute(_) => {
+            let name = imports::qualified_name(expr)?;
+            let fq = types
+                .get(&name)
+                .ok_or_else(|| error("PY004", format!("Unknown imported type: {name}")))?;
+            Ok(Type::Reference(Default::default(), fq.clone(), vec![]))
         }
         Expr::Subscript(subscript) if expr_name(&subscript.value)? == "tuple" => {
             let elements: Vec<&Expr> = match subscript.slice.as_ref() {
@@ -397,7 +300,7 @@ fn annotation(
                 Default::default(),
                 elements
                     .into_iter()
-                    .map(|e| annotation(e, package, module, types))
+                    .map(|e| annotation(e, types))
                     .collect::<Outcome<_>>()?,
             ))
         }

@@ -4,8 +4,9 @@ use morphir_extension_sdk::{Artifact, GenerateRequest};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod functions;
+mod imports;
 
-pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
+pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Vec<Artifact>> {
     if request.target != "python" || !request.options.is_empty() {
         return Err(error(
             "PY001",
@@ -17,22 +18,41 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
     let Distribution::Library(library) = ir.distribution else {
         return Err(error("PY004", "Only Library distributions are supported"));
     };
-    if !library.dependencies.is_empty() || library.def.modules.len() != 1 {
+    if !library.dependencies.is_empty() || library.def.modules.is_empty() {
         return Err(error(
             "PY004",
-            "Expected exactly one module with no dependencies",
+            "Expected at least one module with no dependencies",
         ));
     }
-    let (module_name, module) = library
+    crate::modules::validate_paths(library.def.modules.keys().map(String::as_str))?;
+    let identities = library
+        .def
+        .modules
+        .keys()
+        .map(|name| {
+            Ok((
+                name.clone(),
+                crate::modules::ModuleIdentity::from_canonical(name)?,
+            ))
+        })
+        .collect::<Outcome<BTreeMap<_, _>>>()?;
+    let aliases = crate::modules::tuple_aliases(&library.package_name, library.def.modules.iter())?;
+    library
         .def
         .modules
         .iter()
-        .next()
-        .expect("one module checked above");
+        .map(|(name, module)| render_module(&library, name, module, &identities, &aliases))
+        .collect()
+}
+
+fn render_module(
+    library: &LibraryContent,
+    module_name: &str,
+    module: &AccessControlled<ModuleDefinition>,
+    identities: &BTreeMap<String, crate::modules::ModuleIdentity>,
+    tuple_aliases: &crate::values::TupleAliases,
+) -> Outcome<Artifact> {
     require_public(module.access)?;
-    let module_identifier =
-        Name::from_canonical_string(module_name).map_err(|e| error("PY003", e))?;
-    let filename = names::module_file_stem(&module_identifier)?;
     if module.value.doc.is_some() {
         return Err(error(
             "PY004",
@@ -49,8 +69,10 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
     }
     let mut source =
         String::from("from __future__ import annotations\nfrom dataclasses import dataclass\n\n");
+    let imported = imports::prepare(library, module_name, identities, &mut type_names)?;
+    source.push_str(&imported);
     let mut aliases = vec![];
-    let mut tuple_aliases = crate::values::TupleAliases::new();
+
     for (name, definition) in &module.value.types {
         require_public(definition.access)?;
         if definition.value.doc.is_some() {
@@ -66,13 +88,6 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
                     "type {python} = {}\n",
                     annotation(tpe, &library.package_name, module_name, &type_names)?
                 ));
-                tuple_aliases.insert(
-                    format!(
-                        "{}:{module_name}#{name}",
-                        library.package_name.to_canonical_string()
-                    ),
-                    tpe.clone(),
-                );
             }
             TypeDefinition::TypeAliasDefinition {
                 type_params,
@@ -124,9 +139,6 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
         }
     }
     source.push_str(&aliases.join("\n"));
-    for alias in tuple_aliases.values() {
-        crate::values::resolve_aliases(alias, &tuple_aliases)?;
-    }
     for (name, definition) in &module.value.values {
         require_public(definition.access)?;
         if definition.value.doc.is_some() {
@@ -144,7 +156,7 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
             &library.package_name,
             module_name,
             &type_names,
-            &tuple_aliases,
+            tuple_aliases,
         )?);
     }
     // Ruff validates the constructed declarations and owns AST-to-source rendering.
@@ -152,7 +164,7 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
     let content = ruff_python_codegen::round_trip(&source)
         .map_err(|e| error("PY005", format!("Generated Python is invalid: {e}")))?;
     Ok(Artifact {
-        path: format!("{filename}.py"),
+        path: identities[module_name].filename(),
         content: format!("{}\n", content.trim_end()),
         binary: false,
     })
@@ -223,6 +235,9 @@ fn reference(
     };
     if let Some(scalar) = scalar {
         return Ok(scalar.into());
+    }
+    if let Some(imported) = types.get(&canonical) {
+        return Ok(imported.clone());
     }
     let prefix = format!("{}:{module}#", package.to_canonical_string());
     canonical

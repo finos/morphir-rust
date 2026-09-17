@@ -7,7 +7,9 @@
 //! ```
 //! Set MORPHIR_RUST_GUEST to test a release or externally built guest instead.
 
-#![cfg(not(target_arch = "wasm32"))]
+// Gate the test body instead of the Cargo target so `--test '*'` works without
+// the optional host dependency; the dedicated WASM job enables this feature.
+#![cfg(all(feature = "wasm-host-tests", not(target_arch = "wasm32")))]
 
 use extism::Plugin;
 use morphir_extension_sdk::{

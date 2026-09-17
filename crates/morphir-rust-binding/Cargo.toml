@@ -35,7 +35,3 @@ extism = { version = "1", optional = true }
 [[test]]
 name = "acceptance"
 harness = false
-
-[[test]]
-name = "wasm"
-required-features = ["wasm-host-tests"]

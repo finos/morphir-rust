@@ -54,7 +54,7 @@ pub(crate) fn validate_function(
     let parameters = definition
         .input_types
         .iter()
-        .map(|(name, entry)| Ok((name.clone(), resolve_aliases(&entry.input_type, aliases)?)))
+        .map(|(name, entry)| Ok((name.clone(), resolve_aliases(entry, aliases)?)))
         .collect::<Outcome<_>>()?;
     require_type(
         &infer(body, &parameters)?,

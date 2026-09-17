@@ -4,6 +4,7 @@ use crate::{
     values::{self, Comparison, unsupported},
 };
 use morphir_core::ir::v4::*;
+use num_bigint::BigInt;
 use ruff_python_ast::{CmpOp, Expr, Number, Stmt, StmtFunctionDef, UnaryOp};
 use std::collections::BTreeSet;
 
@@ -49,13 +50,7 @@ pub(super) fn lower(
                 module,
                 types,
             )?;
-            Ok((
-                name.to_canonical_string(),
-                InputTypeEntry {
-                    type_attributes: None,
-                    input_type: tpe,
-                },
-            ))
+            Ok((name.to_canonical_string(), tpe))
         })
         .collect::<Outcome<_>>()?;
     let output_type = annotation(
@@ -204,17 +199,21 @@ fn expression(expr: &Expr, parameters: &BTreeSet<&str>) -> Outcome<Value> {
 fn number(value: &Number, negative: bool) -> Outcome<Literal> {
     match value {
         Number::Int(value) => {
-            let magnitude = value.as_u64().ok_or_else(|| {
-                unsupported("Integer literals must fit a signed 64-bit Morphir integer")
-            })?;
-            let signed = if negative {
-                -i128::from(magnitude)
-            } else {
-                i128::from(magnitude)
+            // Ruff retains the original token for integers larger than u64.
+            let token = value.to_string().replace('_', "").to_ascii_lowercase();
+            let (digits, radix) = match token.get(..2) {
+                Some("0x") => (&token[2..], 16),
+                Some("0o") => (&token[2..], 8),
+                Some("0b") => (&token[2..], 2),
+                _ => (token.as_str(), 10),
             };
-            Ok(Literal::Integer(i64::try_from(signed).map_err(|_| {
-                unsupported("Integer literals must fit a signed 64-bit Morphir integer")
-            })?))
+            let magnitude = BigInt::parse_bytes(digits.as_bytes(), radix)
+                .ok_or_else(|| unsupported("Invalid integer literal"))?;
+            Ok(Literal::Integer(if negative {
+                -magnitude
+            } else {
+                magnitude
+            }))
         }
         Number::Float(value) if value.is_finite() => {
             Ok(Literal::Float(FloatLiteral::from_f64(if negative {

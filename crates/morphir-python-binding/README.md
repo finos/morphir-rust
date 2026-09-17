@@ -140,8 +140,9 @@ return as its fallback, for example `if flag: return first` followed by
 returning `if`/`else` blocks, preserving which branch is evaluated. It may use a
 conditional expression inside a condition or comparison operand.
 
-Function and parameter names generate as snake_case. Integer literals must fit
-a signed 64-bit integer; float literals must be finite. Python's implicit
+Function and parameter names generate as snake_case. Integer literals preserve
+arbitrary precision, including decimal, hexadecimal, octal and binary source
+literals. The backend emits decimal integers. Float literals must be finite. Python's implicit
 truthiness and numeric coercions are not part of this subset. These restrictions
 are checked during compilation and generation.
 
@@ -236,7 +237,7 @@ through that codec. There is no v1-v3 migration in this extension.
 | Type expressions | The four SDK scalar references, local type references, fixed tuples; a record at a record-alias body |
 | Value definitions | `ExpressionBody` with annotated inputs and a required output type |
 | Value expressions | Parameter `Variable`, scalar `Literal`, fixed `Tuple`, `IfThenElse`, and fully applied two-argument SDK scalar comparisons |
-| Literal kinds | `BoolLiteral`, signed 64-bit `IntegerLiteral`, finite `FloatLiteral`, `StringLiteral` |
+| Literal kinds | `BoolLiteral`, arbitrary-precision `IntegerLiteral`, finite `FloatLiteral`, `StringLiteral` |
 | Metadata | Default/empty node attributes; documentation and non-empty retained type/value attributes are rejected |
 
 Unsupported IR includes `Specs` and `Application` distributions, dependencies,

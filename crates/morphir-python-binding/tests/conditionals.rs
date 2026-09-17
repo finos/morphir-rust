@@ -166,6 +166,33 @@ fn comparisons_and_literal_boundaries_roundtrip() {
 }
 
 #[test]
+fn arbitrary_precision_integers_preserve_exact_values() {
+    for (literal, decimal) in [
+        ("9223372036854775808", "9223372036854775808"),
+        ("18_446_744_073_709_551_616", "18446744073709551616"),
+        ("0x1_0000_0000_0000_0000", "18446744073709551616"),
+        ("0O2000000000000000000000", "18446744073709551616"),
+        (
+            "0B10000000000000000000000000000000000000000000000000000000000000000",
+            "18446744073709551616",
+        ),
+        (
+            "1234567890123456789012345678901234567890",
+            "1234567890123456789012345678901234567890",
+        ),
+    ] {
+        for sign in ["", "-"] {
+            let ir = roundtrip(&format!(
+                "def number() -> int:\n    return {sign}{literal}\n"
+            ));
+            let value = &ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"]
+                ["number"]["Public"]["ExpressionBody"]["body"]["Literal"]["IntegerLiteral"];
+            assert_eq!(value.to_string(), format!("{sign}{decimal}"));
+        }
+    }
+}
+
+#[test]
 fn invalid_functions_fail_without_partial_ir() {
     for source in [
         "def f(flag: bool) -> int:\n    if flag:\n        return 1\n",
@@ -184,7 +211,6 @@ fn invalid_functions_fail_without_partial_ir() {
         "def f(Class: bool) -> int:\n    return 1\n",
         "def f(flag: bool) -> int:\n    return\n",
         "def f(flag: bool) -> int:\n    return 1\n    return 2\n",
-        "def f(flag: bool) -> int:\n    return 9223372036854775808\n",
         "def f(flag: bool) -> float:\n    return 1e400\n",
         "def f(flag: bool) -> int:\n    return 1 if flag < True else 2\n",
         "def f(a: int, b: str) -> int:\n    return 1 if a == b else 2\n",

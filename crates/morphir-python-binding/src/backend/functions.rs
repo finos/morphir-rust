@@ -29,22 +29,13 @@ pub(super) fn render(
         .input_types
         .iter()
         .map(|(name, entry)| {
-            if entry
-                .type_attributes
-                .as_ref()
-                .is_some_and(|attrs| *attrs != ValueAttributes::default())
-            {
-                return Err(unsupported(
-                    "Parameter attributes cannot yet be preserved in Python",
-                ));
-            }
             let parameter_name =
                 Name::from_canonical_string(name).map_err(|e| error("PY003", e))?;
             let python = names::field_name(&parameter_name)?;
             reserve(&mut seen, &python)?;
             Ok(format!(
                 "{python}: {}",
-                annotation(&entry.input_type, package, module, types)?
+                annotation(entry, package, module, types)?
             ))
         })
         .collect::<Outcome<Vec<_>>>()?;

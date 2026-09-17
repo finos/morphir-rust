@@ -12,6 +12,7 @@ description = "Python ADT, tuple and conditional function frontend and backend f
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+num-bigint.workspace = true
 morphir-core = { path = "../morphir-core" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 ruff_python_parser.workspace = true

@@ -43,6 +43,7 @@ keywords = ["morphir", "functional", "domain-modeling", "ir"]
 categories = ["development-tools", "parsers"]
 
 [workspace.dependencies]
+num-bigint = "0.4"
 # Ruff component crates evolve together; update this group as one unit.
 ruff_python_parser = "=0.0.14"
 ruff_python_ast = "=0.0.14"

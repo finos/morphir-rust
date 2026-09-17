@@ -270,3 +270,32 @@ fn types_only_applies_to_every_module() {
     input.options.types_only = true;
     assert!(!PythonExtension.compile(input).unwrap().success);
 }
+
+#[test]
+fn rejects_module_paths_that_collide_on_case_insensitive_filesystems() {
+    for sources in [
+        vec![("API.py", ""), ("api.py", "")],
+        vec![("API.py", ""), ("api/models.py", "")],
+        vec![("domain/API.py", ""), ("domain/api.py", "")],
+    ] {
+        assert!(
+            !PythonExtension.compile(request(&sources)).unwrap().success,
+            "accepted {sources:?}"
+        );
+    }
+    let ir = json!({"formatVersion": 4, "distribution": {"Library": {
+        "packageName": "acme/example", "dependencies": {}, "def": {"modules": {
+            "API": {"Public": {"types": {}, "values": {}}},
+            "api": {"Public": {"types": {}, "values": {}}}
+        }}
+    }}});
+    let result = PythonExtension
+        .generate(GenerateRequest {
+            ir,
+            target: "python".into(),
+            options: Default::default(),
+        })
+        .unwrap();
+    assert!(!result.success);
+    assert!(result.artifacts.is_empty());
+}

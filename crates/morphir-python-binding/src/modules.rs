@@ -71,19 +71,19 @@ impl ModuleIdentity {
     }
 }
 
-/// Reject module/package conflicts such as models.py alongside models/item.py.
+/// Reject output collisions and module/package conflicts on every supported OS.
 pub(crate) fn validate_paths<'a>(modules: impl Iterator<Item = &'a str>) -> Outcome<()> {
     let mut seen = std::collections::BTreeSet::new();
     for module in modules {
-        if !seen.insert(module) {
+        if !seen.insert(module.to_ascii_lowercase()) {
             return Err(error(
                 "PY003",
-                format!("Duplicate module after normalization: {module}"),
+                format!("Module paths collide after normalization or case folding: {module}"),
             ));
         }
     }
     for module in &seen {
-        let mut parent = *module;
+        let mut parent = module.as_str();
         while let Some((prefix, _)) = parent.rsplit_once('/') {
             if seen.contains(prefix) {
                 return Err(error(

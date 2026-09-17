@@ -147,8 +147,8 @@ supported. A sum's variant classes must stay in the same module as its alias.
 
 Relative document paths are relative to the source root. For multiple absolute
 paths or file URIs, set the MEP option `sourceRootUri`; the CLI does this when
-compiling a directory. Absolute documents outside that root, duplicate module
-names after normalization, and a file that is also a package directory such as
+compiling a directory. Absolute documents outside that root, module paths that
+collide after normalization or case folding, and a file that is also a package directory such as
 `models.py` alongside `models/item.py` are errors. A single absolute document
 without a root retains the original filename-based behavior.
 

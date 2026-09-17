@@ -8,6 +8,7 @@
 //! exist.
 
 pub mod package;
+pub mod package_resolution;
 pub mod protocol;
 pub mod runtime;
 pub mod testee;

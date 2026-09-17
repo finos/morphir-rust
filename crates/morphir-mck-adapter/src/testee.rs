@@ -21,10 +21,8 @@
 //! `decode` does not migrate: the driver holds the answer against the case's own canonical
 //! fence, and a case pinned to version 3 spells its canonical in version 3.
 
-use std::collections::{BTreeMap, HashSet};
-use std::fmt;
+use std::collections::BTreeMap;
 
-use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -32,36 +30,31 @@ use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::{
     AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
-    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution, Documented,
-    Field, FormatVersion, IRFile, Incompleteness, LetBinding, LibraryContent, Literal,
-    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageSpecification, Pattern,
+    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution,
+    DistributionManifestFile, Documented, Field, FormatVersion, IRFile, Incompleteness, LetBinding,
+    LibraryContent, Literal, ModuleDefinition, ModuleEntries, ModuleManifestFile,
+    ModuleSpecification, NodeFileBody, PackageDefinition, PackageSpecification, Pattern,
     PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
-    TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
-    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
+    TypeDefinition, TypeDefinitionFile, TypeEncoding, TypeSpecification, Value, ValueAttributes,
+    ValueBody, ValueDefinition, ValueDefinitionFile, ValueSpecification, with_spelling_mode,
+    with_type_encoding,
 };
-use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
+use morphir_core::ir::{Diagnostic, DiagnosticCode, Warning};
 use morphir_core::naming::{FQName, Name, Path};
 
 use crate::protocol::{
     DecodeRequest, DecodeResponse, NodeKind, PathMode, Profile, ProtocolDiagnostic,
+    ReadTreeRequest, TreeFile, WriteTreeRequest, WriteTreeResponse,
 };
-
-/// How many nested containers a document may carry, matching the reference reader's own ceiling
-/// (`MAX_DEPTH` in `packages/ir/src/codec/json/value.ts`).
-///
-/// A reader that follows arbitrary nesting turns a small input into a deep recursion, so the
-/// profile puts a ceiling on it and reports `nesting_too_deep` rather than failing some other
-/// way at some other depth.
-const MAX_DEPTH: usize = 1000;
 
 /// The stack every decode runs on.
 ///
-/// [`MAX_DEPTH`] is a promise: a document nesting that many containers is conforming, and the
-/// answer to one nesting a container more is `nesting_too_deep`, not a crashed process. Both the
-/// syntax probe and the readers recurse once per level, and 1000 levels of an unoptimized build's
-/// frames do not fit in the stack a thread is given by default — on Windows the main thread's
-/// stack is whatever the linker reserved, which is 1 MiB unless someone says otherwise. So the
-/// work runs on a thread with a stack this crate states rather than inherits.
+/// morphir-core's readers state their own nesting ceiling (`morphir_core::ir::json::MAX_DEPTH`,
+/// `morphir_core::ir::yaml::MAX_DEPTH`) and recurse once per level, and their own document-tree
+/// deserializers do too; 1000 levels of an unoptimized build's frames do not fit in the stack a
+/// thread is given by default — on Windows the main thread's stack is whatever the linker
+/// reserved, which is 1 MiB unless someone says otherwise. So the work runs on a thread with a
+/// stack this crate states rather than inherits.
 ///
 /// This is what one request reserves, not what a kit run reserves. [`decode`] spawns one scoped
 /// thread per request and joins it before returning, so the stack is gone before the answer is
@@ -126,6 +119,127 @@ fn decode_here(req: &DecodeRequest) -> DecodeResponse {
     }
 }
 
+/// Reads a document tree and answers with the canonical spelling of the `IRFile` it assembles to,
+/// or the diagnostic that refused it.
+///
+/// Runs on the same stack [`decode`] does (see [`DECODE_STACK_BYTES`]): a document tree's node
+/// files go through the same nesting-sensitive readers a single document does, one file at a time.
+pub fn read_tree(req: &ReadTreeRequest) -> DecodeResponse {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DECODE_STACK_BYTES)
+            .spawn_scoped(scope, || read_tree_here(req))
+            .expect("a read_tree thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn read_tree_here(req: &ReadTreeRequest) -> DecodeResponse {
+    // Not a statement about the document: this binding's document trees are a version 4 layout
+    // only, so an off-capabilities version answers `protocol_error` the way an off-capabilities
+    // decode request does.
+    if req.version != 4 {
+        return DecodeResponse::Refused {
+            diagnostic: ProtocolDiagnostic::new(format!(
+                "this binding reads document trees at IR version 4 only, not {}",
+                req.version
+            )),
+        };
+    }
+
+    let profile = layout_profile(req.profile);
+    let files: morphir_core::ir::layout::Tree = req
+        .files
+        .iter()
+        .map(|file| (file.path.clone(), file.content.clone()))
+        .collect();
+
+    match morphir_core::ir::layout::read_tree(&files, profile) {
+        Ok((file, warnings)) => {
+            let node = Node::IRFile(file);
+            // `req.node` is ignored: a document tree always assembles to one `IRFile`, the way the
+            // reference adapter's `readTreeWith` does (reference map §6.3).
+            let kind = node.kind().to_string();
+            let node = if req.strip { node.stripped() } else { node };
+            match node.write(req.profile) {
+                Ok(text) => DecodeResponse::Ok {
+                    kind,
+                    canonical: BTreeMap::from([(profile_key(req.profile).to_string(), text)]),
+                    warnings,
+                },
+                Err(diagnostic) => DecodeResponse::Err { diagnostic },
+            }
+        }
+        Err(diagnostic) => DecodeResponse::Err { diagnostic },
+    }
+}
+
+/// Writes a whole distribution back out as a document tree, or answers with the diagnostic that
+/// refused it.
+///
+/// A read failure of `req.input` is reported as the write's own failure (reference map §6.3); any
+/// warnings that read produced are dropped, since a `writeTree` answer carries no `warnings`
+/// member (`protocol.schema.json`'s `WriteTreeSuccess`).
+pub fn write_tree(req: &WriteTreeRequest) -> WriteTreeResponse {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DECODE_STACK_BYTES)
+            .spawn_scoped(scope, || write_tree_here(req))
+            .expect("a write_tree thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn write_tree_here(req: &WriteTreeRequest) -> WriteTreeResponse {
+    if req.version != 4 {
+        return WriteTreeResponse::Refused {
+            diagnostic: ProtocolDiagnostic::new(format!(
+                "this binding writes document trees at IR version 4 only, not {}",
+                req.version
+            )),
+        };
+    }
+
+    let file = match read_whole_ir_file(req.policy.profile, &req.input) {
+        Ok((file, _warnings)) => file,
+        Err(diagnostic) => return WriteTreeResponse::Err { diagnostic },
+    };
+
+    let policy = morphir_core::ir::layout::TreePolicy {
+        profile: layout_profile(req.policy.profile),
+        path_budget: req.policy.path_budget,
+    };
+
+    match morphir_core::ir::layout::write_tree(&file, &policy) {
+        Ok(files) => WriteTreeResponse::Ok {
+            files: files
+                .into_iter()
+                .map(|(path, content)| TreeFile { path, content })
+                .collect(),
+        },
+        Err(diagnostic) => WriteTreeResponse::Err { diagnostic },
+    }
+}
+
+/// Reads a whole document (not a tree file) as an `IRFile` in the given profile, the way
+/// `writeTree`'s `input` carries one.
+fn read_whole_ir_file(profile: Profile, text: &str) -> Result<(IRFile, Vec<Warning>), Diagnostic> {
+    match profile {
+        Profile::Json => morphir_core::ir::json::read_ir_file(text).map_err(|error| error.0),
+        Profile::Yaml => morphir_core::ir::yaml::read_ir_file(text).map_err(|error| error.0),
+    }
+}
+
+/// The wire [`Profile`] as `morphir_core::ir::layout::Profile`.
+fn layout_profile(profile: Profile) -> morphir_core::ir::layout::Profile {
+    match profile {
+        Profile::Json => morphir_core::ir::layout::Profile::Json,
+        Profile::Yaml => morphir_core::ir::layout::Profile::Yaml,
+    }
+}
+
 /// The key a canonical answer is filed under: the profile the request asked for.
 fn profile_key(profile: Profile) -> &'static str {
     match profile {
@@ -136,19 +250,15 @@ fn profile_key(profile: Profile) -> &'static str {
 
 fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
     let value = match req.profile {
+        // morphir-core's reader settles the repeated-member and nesting-ceiling rules before the
+        // text becomes a value: `serde_json::Value` folds a repeated member onto the last one
+        // written and would hide it.
         Profile::Json => {
-            // A repeated member and a document nested past the ceiling are properties of the
-            // text, not of any node, so they are settled before the text becomes a value:
-            // `serde_json::Value` folds a repeated member onto the last one written and would
-            // hide it.
-            if let Some(diagnostic) = probe_syntax(&req.input) {
-                return Err(diagnostic);
-            }
-
+            let value = morphir_core::ir::json::read(&req.input)?;
             if req.version == 3 {
                 return read_v3(req).map(|node| (node, Vec::new()));
             }
-            parse_json(&req.input)?
+            value
         }
         // The YAML reader walks the document itself, so the repeated member and the nesting
         // ceiling are already its answers, in the kit's codes and with the kit's cursors; there
@@ -205,6 +315,12 @@ fn read_v4_node(kind: NodeKind, value: Json) -> Result<Node, Diagnostic> {
         // The kit names the whole document `Distribution` as well as `IRFile`; both spell the
         // same node, a format version beside the distribution it applies to.
         NodeKind::IRFile | NodeKind::Distribution => of(value, Node::IRFile),
+        // A tree file read on its own, with no tree around it: a module manifest therefore reads
+        // an inline listing as definitions, which is what the reference's own node reader does.
+        NodeKind::DistributionManifestFile => of(value, Node::DistributionManifestFile),
+        NodeKind::ModuleManifestFile => of(value, Node::ModuleManifestFile),
+        NodeKind::TypeDefinitionFile => of(value, Node::TypeDefinitionFile),
+        NodeKind::ValueDefinitionFile => of(value, Node::ValueDefinitionFile),
     }
 }
 
@@ -217,337 +333,6 @@ fn recover(error: &serde_json::Error) -> Diagnostic {
     Diagnostic::from_serde_error(error).unwrap_or_else(|| {
         Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
     })
-}
-
-/// Parses the input as JSON, with the ceiling this reader states rather than serde_json's own.
-///
-/// `disable_recursion_limit` needs the `unbounded_depth` feature; without it serde_json stops at
-/// its own default of 128, which would report `invalid_json` for a document the profile admits.
-/// The depth that matters is [`MAX_DEPTH`], and [`check_duplicates`] has already enforced it.
-fn parse_json(text: &str) -> Result<Json, Diagnostic> {
-    let mut deserializer = serde_json::Deserializer::from_str(text);
-    deserializer.disable_recursion_limit();
-    let value = Json::deserialize(&mut deserializer).map_err(invalid_json)?;
-    deserializer.end().map_err(invalid_json)?;
-    Ok(value)
-}
-
-fn invalid_json(error: serde_json::Error) -> Diagnostic {
-    let mut diagnostic = Diagnostic::syntax(DiagnosticCode::InvalidJson, "/", error.to_string());
-    diagnostic.line = u32::try_from(error.line()).ok();
-    diagnostic.column = u32::try_from(error.column()).ok();
-    diagnostic
-}
-
-// =============================================================================
-// Duplicate members and nesting
-// =============================================================================
-
-/// The two syntactic rules a `serde_json::Value` cannot carry: no repeated object member, and no
-/// more than [`MAX_DEPTH`] nested containers.
-///
-/// `Value` keeps one entry per key, so the second `"a"` in `{"a":1,"a":2}` is gone by the time a
-/// value exists, and serde_json's own recursion limit fails before this reader's ceiling is
-/// reached. The probe below walks the token stream instead, carrying the JSON pointer of where
-/// it is, and stops at the first thing it finds: `duplicate_member` at the second occurrence, or
-/// `nesting_too_deep` at the container that crossed the ceiling.
-pub fn probe_syntax(text: &str) -> Option<Diagnostic> {
-    let mut deserializer = serde_json::Deserializer::from_str(text);
-    deserializer.disable_recursion_limit();
-    match (Probe {
-        cursor: String::new(),
-        depth: 0,
-    })
-    .deserialize(&mut deserializer)
-    {
-        Ok(()) => None,
-        // A syntax error is not this probe's to report: `parse_json` reports it with the line
-        // and column serde_json gives, as `invalid_json`.
-        Err(error) => Diagnostic::from_serde_error(&error),
-    }
-}
-
-/// One position in the token stream: the JSON pointer of the value about to be read and how
-/// many containers are already open around it.
-///
-/// The cursor is built the way the reference reader builds it: empty at the root, then
-/// `<parent>/<member or index>` with the member name written out as it appears. A diagnostic at
-/// the root reports `/` (see [`cursor_or_root`]).
-///
-/// This is a [`DeserializeSeed`] rather than a [`Deserialize`] because the cursor and the depth
-/// have to travel *into* each member, and a `Deserialize` impl is handed nothing but the
-/// deserializer.
-struct Probe {
-    cursor: String,
-    depth: usize,
-}
-
-/// serde_json's `arbitrary_precision` feature carries a number through `deserialize_any` as a
-/// one-member map under this reserved key, so the probe would otherwise count every number as a
-/// container and read its lexeme as a member name.
-///
-/// The key alone does not make a map the token: a document literal is free to spell a member this
-/// way. The whole shape does — exactly this one member, holding a string — and [`Probe::visit_map`]
-/// checks the shape before it takes a map for a number. A map that is only shaped like the token
-/// is indistinguishable from one at this layer, because it is exactly what serde_json emits for a
-/// number, but anything else is walked like the ordinary object it is.
-const NUMBER_TOKEN: &str = "$serde_json::private::Number";
-
-impl<'de> DeserializeSeed<'de> for Probe {
-    type Value = ();
-
-    fn deserialize<D>(self, deserializer: D) -> Result<(), D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(self)
-    }
-}
-
-impl<'de> Visitor<'de> for Probe {
-    type Value = ();
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<(), A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        // The reserved-number check comes before the depth guard, not inside the loop: a number
-        // is a scalar the profile counts at no depth at all, and charging it a nesting level
-        // would make the ceiling depend on whether the innermost value happened to be a number.
-        let Some(first) = map.next_key::<String>()? else {
-            return self.enter::<A::Error>().map(|_| ());
-        };
-
-        let mut seen: HashSet<String> = HashSet::new();
-        let depth;
-        let mut key;
-
-        if first == NUMBER_TOKEN {
-            // Only the token's whole shape is the token. The value decides the first half of it,
-            // and reading it also walks it when it turns out to belong to a user object, so the
-            // level that object owes is charged there rather than here.
-            match map.next_value_seed(NumberTokenValue { outer: &self })? {
-                TokenValue::Lexeme => match map.next_key::<String>()? {
-                    // Exactly one member, holding a string: serde_json's number token.
-                    None => return Ok(()),
-                    // A user object whose first member is spelled like the token and holds a
-                    // string. The string carried nothing to walk, so only the level is still
-                    // owed, and the rest of the members are read like any other object's.
-                    Some(next) => {
-                        depth = self.enter::<A::Error>()?;
-                        seen.insert(first);
-                        key = next;
-                    }
-                },
-                TokenValue::Walked(walked) => {
-                    depth = walked;
-                    seen.insert(first);
-                    match map.next_key::<String>()? {
-                        Some(next) => key = next,
-                        None => return Ok(()),
-                    }
-                }
-            }
-        } else {
-            depth = self.enter::<A::Error>()?;
-            key = first;
-        }
-
-        loop {
-            // The member name goes in raw, not JSON-Pointer-escaped: the reference reader
-            // (`packages/ir/src/codec/json/value.ts`) builds the cursor this way and the kit
-            // README makes that reader the convention a binding mirrors.
-            let cursor = format!("{}/{}", self.cursor, key);
-            if !seen.insert(key.clone()) {
-                return Err(carry(Diagnostic::syntax(
-                    DiagnosticCode::DuplicateMember,
-                    cursor,
-                    format!("duplicate member \"{key}\""),
-                )));
-            }
-            map.next_value_seed(Probe { cursor, depth })?;
-            match map.next_key::<String>()? {
-                Some(next) => key = next,
-                None => return Ok(()),
-            }
-        }
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let depth = self.enter::<A::Error>()?;
-        let mut index = 0usize;
-        while seq
-            .next_element_seed(Probe {
-                cursor: format!("{}/{index}", self.cursor),
-                depth,
-            })?
-            .is_some()
-        {
-            index += 1;
-        }
-        Ok(())
-    }
-
-    fn visit_bool<E: serde::de::Error>(self, _value: bool) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_i64<E: serde::de::Error>(self, _value: i64) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_u64<E: serde::de::Error>(self, _value: u64) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_f64<E: serde::de::Error>(self, _value: f64) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_str<E: serde::de::Error>(self, _value: &str) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_none<E: serde::de::Error>(self) -> Result<(), E> {
-        Ok(())
-    }
-}
-
-/// What the value under a [`NUMBER_TOKEN`] key turned out to be.
-enum TokenValue {
-    /// A string, which is what serde_json puts a number's lexeme in.
-    Lexeme,
-    /// Anything else, so the map holding it is a user object. The value has already been walked,
-    /// and the level that object owes has already been charged; this is the depth it was charged.
-    Walked(usize),
-}
-
-/// Reads the value under a [`NUMBER_TOKEN`] key and says which of the two it was.
-///
-/// It cannot just look, because a value read is a value consumed: whatever this finds has to be
-/// walked here or not at all. So the two answers are "a string, nothing to walk" and "walked it,
-/// here is the depth I charged the object for".
-struct NumberTokenValue<'probe> {
-    /// The map the key was read from, at its own position — not yet entered.
-    outer: &'probe Probe,
-}
-
-impl<'probe> NumberTokenValue<'probe> {
-    /// The probe for the value, with the level the object owes charged.
-    fn walker<E: serde::de::Error>(&self) -> Result<Probe, E> {
-        Ok(Probe {
-            cursor: format!("{}/{NUMBER_TOKEN}", self.outer.cursor),
-            depth: self.outer.enter::<E>()?,
-        })
-    }
-}
-
-impl<'de, 'probe> DeserializeSeed<'de> for NumberTokenValue<'probe> {
-    type Value = TokenValue;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<TokenValue, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(self)
-    }
-}
-
-impl<'de, 'probe> Visitor<'de> for NumberTokenValue<'probe> {
-    type Value = TokenValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value")
-    }
-
-    fn visit_str<E: serde::de::Error>(self, _value: &str) -> Result<TokenValue, E> {
-        Ok(TokenValue::Lexeme)
-    }
-
-    fn visit_map<A>(self, map: A) -> Result<TokenValue, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let walker = self.walker::<A::Error>()?;
-        let depth = walker.depth;
-        walker.visit_map(map)?;
-        Ok(TokenValue::Walked(depth))
-    }
-
-    fn visit_seq<A>(self, seq: A) -> Result<TokenValue, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let walker = self.walker::<A::Error>()?;
-        let depth = walker.depth;
-        walker.visit_seq(seq)?;
-        Ok(TokenValue::Walked(depth))
-    }
-
-    fn visit_bool<E: serde::de::Error>(self, _value: bool) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_i64<E: serde::de::Error>(self, _value: i64) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_u64<E: serde::de::Error>(self, _value: u64) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_f64<E: serde::de::Error>(self, _value: f64) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_unit<E: serde::de::Error>(self) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_none<E: serde::de::Error>(self) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-}
-
-impl Probe {
-    /// Opens the container at this position, refusing the one that crosses the ceiling.
-    fn enter<E: serde::de::Error>(&self) -> Result<usize, E> {
-        let depth = self.depth + 1;
-        if depth > MAX_DEPTH {
-            return Err(carry(Diagnostic::syntax(
-                DiagnosticCode::NestingTooDeep,
-                cursor_or_root(&self.cursor),
-                format!("nesting deeper than {MAX_DEPTH} is not accepted"),
-            )));
-        }
-        Ok(depth)
-    }
-}
-
-/// A cursor as a diagnostic reports it: the root is the whole document, spelled `/`.
-fn cursor_or_root(cursor: &str) -> &str {
-    if cursor.is_empty() { "/" } else { cursor }
-}
-
-fn carry<E: serde::de::Error>(diagnostic: Diagnostic) -> E {
-    E::custom(DiagnosticError(diagnostic))
 }
 
 // =============================================================================
@@ -599,7 +384,12 @@ fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
         | NodeKind::ModuleDefinition
         | NodeKind::ModuleSpecification
         | NodeKind::IRFile
-        | NodeKind::Distribution => Err(Diagnostic::normalization(
+        | NodeKind::Distribution
+        // A document tree is a version 4 layout; version 3 has no file of any of these kinds.
+        | NodeKind::DistributionManifestFile
+        | NodeKind::ModuleManifestFile
+        | NodeKind::TypeDefinitionFile
+        | NodeKind::ValueDefinitionFile => Err(Diagnostic::normalization(
             DiagnosticCode::UnknownNode,
             "/",
             format!(
@@ -842,6 +632,12 @@ enum Node {
     ModuleDefinition(ModuleDefinition),
     ModuleSpecification(ModuleSpecification),
     IRFile(IRFile),
+    // The four files a document tree is made of. Each is a node in its own right, so it is read,
+    // stripped and written here the way every other node is.
+    DistributionManifestFile(DistributionManifestFile),
+    ModuleManifestFile(ModuleManifestFile),
+    TypeDefinitionFile(TypeDefinitionFile),
+    ValueDefinitionFile(ValueDefinitionFile),
     // Version 3 stays in the classic model: it is read, stripped and written there, so a case
     // pinned to version 3 is answered in the spelling its own canonical fence uses.
     ClassicName(classic::Name),
@@ -877,6 +673,21 @@ impl Node {
             Node::ModuleDefinition(_) => "ModuleDefinition",
             Node::ModuleSpecification(_) => "ModuleSpecification",
             Node::IRFile(node) => distribution_kind(&node.distribution),
+            // A manifest has no variants: it is the file kind itself.
+            Node::DistributionManifestFile(_) => "DistributionManifestFile",
+            Node::ModuleManifestFile(_) => "ModuleManifestFile",
+            // A node file answers with what is inside it, the way a bare definition or
+            // specification node does.
+            Node::TypeDefinitionFile(node) => match &node.body {
+                NodeFileBody::Def(definition) => type_definition_kind(&definition.value.value),
+                NodeFileBody::Spec(specification) => type_specification_kind(&specification.value),
+            },
+            // A value specification has no variants, so a spec file answers with the name of what
+            // it holds, the way a bare ValueSpecification node does.
+            Node::ValueDefinitionFile(node) => match &node.body {
+                NodeFileBody::Def(definition) => value_definition_kind(&definition.value.value),
+                NodeFileBody::Spec(_) => "ValueSpecification",
+            },
             Node::ClassicName(_) => "Name",
             Node::ClassicPath(_) => "Path",
             Node::ClassicFQName(_) => "FQName",
@@ -920,6 +731,45 @@ impl Node {
             Node::IRFile(node) => Node::IRFile(IRFile {
                 format_version: node.format_version,
                 distribution: strip_distribution(node.distribution),
+            }),
+            // A distribution manifest is names, a kind and a budget: nothing it holds carries
+            // attributes, so it is returned as it came (the `other` arm below would do the same,
+            // but saying so here keeps the four file kinds together).
+            Node::DistributionManifestFile(node) => Node::DistributionManifestFile(node),
+            Node::ModuleManifestFile(node) => Node::ModuleManifestFile(ModuleManifestFile {
+                types: strip_module_entries(node.types, strip_access_controlled_type_definition, {
+                    |specification| strip_documented(specification, strip_type_specification)
+                }),
+                values: strip_module_entries(
+                    node.values,
+                    strip_access_controlled_value_definition,
+                    |specification| strip_documented(specification, strip_value_specification),
+                ),
+                ..node
+            }),
+            Node::TypeDefinitionFile(node) => Node::TypeDefinitionFile(TypeDefinitionFile {
+                body: match node.body {
+                    NodeFileBody::Def(definition) => {
+                        NodeFileBody::Def(strip_access_controlled_type_definition(definition))
+                    }
+                    NodeFileBody::Spec(specification) => NodeFileBody::Spec(strip_documented(
+                        specification,
+                        strip_type_specification,
+                    )),
+                },
+                ..node
+            }),
+            Node::ValueDefinitionFile(node) => Node::ValueDefinitionFile(ValueDefinitionFile {
+                body: match node.body {
+                    NodeFileBody::Def(definition) => {
+                        NodeFileBody::Def(strip_access_controlled_value_definition(definition))
+                    }
+                    NodeFileBody::Spec(specification) => NodeFileBody::Spec(strip_documented(
+                        specification,
+                        strip_value_specification,
+                    )),
+                },
+                ..node
             }),
             Node::ClassicPattern(node) => Node::ClassicPattern(strip_classic_pattern(node)),
             Node::ClassicValue(node) => Node::ClassicValue(strip_classic_value(node)),
@@ -976,6 +826,10 @@ impl Node {
             Node::ModuleSpecification(node) => text(node),
             // `formatVersion` first, then `distribution`: the root member order of the file.
             Node::IRFile(node) => text(node),
+            Node::DistributionManifestFile(node) => text(node),
+            Node::ModuleManifestFile(node) => text(node),
+            Node::TypeDefinitionFile(node) => text(node),
+            Node::ValueDefinitionFile(node) => text(node),
             Node::ClassicName(node) => text(node),
             Node::ClassicPath(node) => text(node),
             Node::ClassicFQName(node) => text(node),
@@ -1423,6 +1277,48 @@ fn strip_access_controlled<T>(
         access: node.access,
         value: strip(node.value),
     }
+}
+
+/// A module manifest's `types` or `values` with every attribute inside it cleared.
+///
+/// A names-style listing holds nothing but names, so it has nothing to strip; the bodies it names
+/// live in the node files beside the manifest and are stripped when those are read.
+fn strip_module_entries<D, S>(
+    entries: ModuleEntries<D, S>,
+    strip_definition: impl Fn(D) -> D,
+    strip_specification: impl Fn(S) -> S,
+) -> ModuleEntries<D, S> {
+    match entries {
+        ModuleEntries::Names(names) => ModuleEntries::Names(names),
+        ModuleEntries::Definitions(items) => ModuleEntries::Definitions(
+            items
+                .into_iter()
+                .map(|(name, definition)| (name, strip_definition(definition)))
+                .collect(),
+        ),
+        ModuleEntries::Specifications(items) => ModuleEntries::Specifications(
+            items
+                .into_iter()
+                .map(|(name, specification)| (name, strip_specification(specification)))
+                .collect(),
+        ),
+    }
+}
+
+fn strip_access_controlled_type_definition(
+    node: AccessControlled<Documented<TypeDefinition>>,
+) -> AccessControlled<Documented<TypeDefinition>> {
+    strip_access_controlled(node, |documented| {
+        strip_documented(documented, strip_type_definition)
+    })
+}
+
+fn strip_access_controlled_value_definition(
+    node: AccessControlled<Documented<ValueDefinition>>,
+) -> AccessControlled<Documented<ValueDefinition>> {
+    strip_access_controlled(node, |documented| {
+        strip_documented(documented, strip_value_definition)
+    })
 }
 
 fn strip_documented<T>(node: Documented<T>, strip: impl FnOnce(T) -> T) -> Documented<T> {

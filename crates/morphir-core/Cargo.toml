@@ -22,13 +22,23 @@ thiserror = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 # `preserve_order` keeps a record's field order, which the IR treats as declaration order.
 # `arbitrary_precision` keeps a number's lexeme, which a DocumentLiteral carries verbatim.
-serde_json = { version = "1.0", features = ["preserve_order", "arbitrary_precision"] }
+# `unbounded_depth` lets the JSON reader turn off serde_json's own 128-level recursion limit so
+# the nesting ceiling it reports is the profile's, not the parser's.
+serde_json = { version = "1.0", features = [
+    "preserve_order",
+    "arbitrary_precision",
+    "unbounded_depth",
+] }
 schemars = { version = "1.0", features = ["derive", "indexmap2"] }
 indexmap = { version = "2", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serde"] }
 # The YAML profile reader walks this parser's event stream directly; the pin and its features are
 # the workspace's, so nothing else in the tree can link a second copy.
 granit-parser = { workspace = true }
+# The JSON reader's duplicate-member/nesting probe and its parse both recurse once per nesting
+# level; `stacker::maybe_grow` lets `json::read` grow a large stack on demand instead of assuming
+# its caller's, the way morphir-common's own IR transport already does.
+stacker = { workspace = true }
 sha2 = "0.11"
 # A DecimalLiteral is a genuine decimal; the lexeme is carried beside it because the wire keeps the
 # spelling. Both build on num-bigint, which IntegerLiteral uses directly.

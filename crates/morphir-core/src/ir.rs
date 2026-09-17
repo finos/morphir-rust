@@ -24,6 +24,9 @@ pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticError, DiagnosticStag
 // V4 is the primary format
 pub mod v4;
 
+// Document-tree layout: the storage profile, path grammar and file stems.
+pub mod layout;
+
 // The JSON storage profile's canonical writer
 pub mod json;
 
@@ -48,9 +51,14 @@ pub use v4::{
     DefinitionDependencies,
     Dependencies,
     Distribution,
+    // The four files a document tree is made of
+    DistributionKind,
+    DistributionManifestFile,
     EntryPoint,
     EntryPointKind,
     EntryPoints,
+    ExpectedEntries,
+    FILE_STEM_PATTERN,
     // Core expression types
     Field,
     // Top-level types
@@ -64,11 +72,15 @@ pub use v4::{
     LetBinding,
     LibraryContent,
     Literal,
+    MIN_PATH_BUDGET,
     // Module types
     ModuleDefinition,
+    ModuleEntries,
+    ModuleManifestFile,
     ModuleSpecification,
     NativeHint,
     NativeInfo,
+    NodeFileBody,
     // Package types
     PackageDefinition,
     PackageSpecification,
@@ -80,12 +92,14 @@ pub use v4::{
     Type,
     TypeAttributes,
     TypeDefinition,
+    TypeDefinitionFile,
     TypeExpr,
     TypeSpecification,
     Value,
     ValueAttributes,
     ValueBody as ValueDefBody,
     ValueDefinition,
+    ValueDefinitionFile,
     ValueExpr,
     ValueExprBody as ValueBody,
     ValueExprDefinition,

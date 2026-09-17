@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use morphir_core::ir::{Diagnostic as CoreDiagnostic, DiagnosticCode, DiagnosticStage};
 use morphir_core::migration::MigrationDiagnostic;
 use morphir_core::traversal::IrCursor;
 
@@ -149,6 +150,59 @@ impl From<MigrationDiagnostic> for TransportDiagnostic {
             guidance: value.help,
             source_span: None,
         }))
+    }
+}
+
+// =============================================================================
+// The kit's diagnostics, as a transport diagnostic spells them
+// =============================================================================
+
+/// The transport stage one of the kit's stages answers at.
+///
+/// The kit knows three; the transport knows seven. `Semantic` has no transport stage of its own —
+/// a semantic fault is still something read out of a document — so it answers where a
+/// normalization fault does.
+pub(crate) fn core_stage(stage: DiagnosticStage) -> Stage {
+    match stage {
+        DiagnosticStage::Syntax => Stage::Syntax,
+        DiagnosticStage::Normalization | DiagnosticStage::Semantic => Stage::Normalization,
+    }
+}
+
+/// The kit's own spelling of a diagnostic code, which is its serde name.
+pub(crate) fn core_code_name(code: DiagnosticCode) -> String {
+    match serde_json::to_value(code) {
+        Ok(serde_json::Value::String(name)) => name,
+        // `DiagnosticCode` is a unit-only enum with `rename_all = "snake_case"`, so this is
+        // unreachable; answering with the debug spelling keeps the caller total either way.
+        _ => format!("{code:?}"),
+    }
+}
+
+/// One of the kit's messages with its cursor kept in it.
+///
+/// A [`TransportDiagnostic`]'s cursor is a semantic [`IrCursor`] and the kit's is a JSON pointer
+/// into a document — or, for a document tree, a logical path and a pointer — which has no semantic
+/// spelling before the document is understood. The pointer therefore travels in the message and
+/// the cursor stays at the root, as every physical-syntax diagnostic in this crate does.
+pub(crate) fn core_message(diagnostic: &CoreDiagnostic) -> String {
+    if diagnostic.cursor.is_empty() || diagnostic.cursor == "/" {
+        diagnostic.message.clone()
+    } else {
+        format!("{} (at {})", diagnostic.message, diagnostic.cursor)
+    }
+}
+
+/// The physical source location one of the kit's diagnostics carries, when it carries one.
+pub(crate) fn core_source_span(diagnostic: &CoreDiagnostic) -> Option<SourceSpan> {
+    match (diagnostic.line, diagnostic.column) {
+        (Some(line), Some(column)) => Some(SourceSpan {
+            offset: 0,
+            length: 0,
+            line: line as usize,
+            column: column as usize,
+        }),
+        _ => None,
     }
 }
 

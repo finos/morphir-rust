@@ -502,3 +502,23 @@ fn a_v3_record_field_is_written_as_an_object() {
         o => panic!("{o:?}"),
     }
 }
+
+/// A version 3 request still reads through morphir-core's JSON reader before the classic model
+/// ever sees the text, so text that is not JSON at all is `invalid_json`, the same code a version
+/// 4 request gets for the same input.
+#[test]
+fn a_v3_request_with_invalid_json_answers_invalid_json() {
+    let r = DecodeRequest {
+        version: 3,
+        ..req(NodeKind::Value, "{ nope", PathMode::Current)
+    };
+    match decode(&r) {
+        DecodeResponse::Err { diagnostic } => {
+            assert_eq!(
+                diagnostic.code,
+                morphir_core::ir::DiagnosticCode::InvalidJson
+            );
+        }
+        o => panic!("{o:?}"),
+    }
+}

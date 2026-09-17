@@ -257,7 +257,20 @@ pub(super) fn wrapper_members<'a>(
     let payload = payload
         .as_object()
         .ok_or_else(|| invalid_type(cursor, format!("the {node} payload must be an object")))?;
+    wrapper_members_of(node, payload, cursor, canonical_members)
+}
 
+/// [`wrapper_members`] for a caller that already holds the payload's members.
+///
+/// A document-tree file's root is read as a map so the reserved `$meta` can be taken off it before
+/// anything else looks at it; handing that map straight in is what keeps the stripped root from
+/// having to be wrapped back into a [`JsonValue`] and unwrapped again.
+pub(super) fn wrapper_members_of<'a>(
+    node: &str,
+    payload: &'a serde_json::Map<String, JsonValue>,
+    cursor: &str,
+    canonical_members: &[&'static str],
+) -> Result<Members<'a>, Diagnostic> {
     let mut accepted = IndexMap::new();
     for (seen, member) in payload {
         let member_cursor = format!("{cursor}/{seen}");

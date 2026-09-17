@@ -18,7 +18,7 @@ fn compile(source: &str, version: &str, types_only: bool) -> CompileResult {
             }],
             package: CompilePackage {
                 name: "acme/example".into(),
-                exposed_modules: vec!["Models".into()],
+                exposed_modules: Some(vec!["Models".into()]),
             },
             options: CompileOptions {
                 types_only,

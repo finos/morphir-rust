@@ -9,6 +9,7 @@ fn selection_uses_member_name_or_declared_path_before_merging_overrides() {
     for name in ["first", "second"] {
         let member = root.join("packages").join(name);
         fs::create_dir_all(&member).unwrap();
+        fs::create_dir(member.join(".morphir")).unwrap();
         fs::write(
             member.join("morphir.toml"),
             format!(
@@ -30,6 +31,7 @@ fn selection_uses_member_name_or_declared_path_before_merging_overrides() {
             let context = load_config_context_with(&config, &options).unwrap();
             assert_eq!(context.current_project.unwrap().name, "acme/second");
             assert_eq!(context.project_root.unwrap(), root.join("packages/second"));
+            assert_eq!(context.morphir_dir, root.join("packages/second/.morphir"));
             assert_eq!(
                 context.config.frontend.unwrap().language.as_deref(),
                 Some("python")

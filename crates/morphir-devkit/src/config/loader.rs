@@ -786,13 +786,9 @@ pub fn load_config_context_with(
     };
 
     // Find or create .morphir/ directory
-    let morphir_dir = discover_morphir_dir(config_dir).unwrap_or_else(|| {
-        // Use project root if available, otherwise config dir
-        project_root
-            .as_ref()
-            .map_or(config_dir, |v| v.as_path())
-            .join(".morphir")
-    });
+    let selected_root = project_root.as_deref().unwrap_or(config_dir);
+    let morphir_dir =
+        discover_morphir_dir(selected_root).unwrap_or_else(|| selected_root.join(".morphir"));
 
     Ok(ConfigContext {
         current_project: config.project.clone(),

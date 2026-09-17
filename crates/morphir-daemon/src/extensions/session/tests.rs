@@ -247,7 +247,7 @@ impl Frontend for RecordingExtension {
                 "distribution": ["Library", [], [], {"modules": []}]
             })),
             diagnostics: vec![],
-            modules: request.package.exposed_modules,
+            modules: request.package.exposed_modules.unwrap_or_default(),
         })
     }
 
@@ -365,7 +365,7 @@ fn successful_recording_compile_result(request: CompileRequest) -> CompileResult
             "distribution": ["Library", [], [], {"modules": []}]
         })),
         diagnostics: vec![],
-        modules: request.package.exposed_modules,
+        modules: request.package.exposed_modules.unwrap_or_default(),
     }
 }
 
@@ -380,7 +380,7 @@ fn recording_compile_request() -> CompileRequest {
         }],
         package: CompilePackage {
             name: "local/example".into(),
-            exposed_modules: vec!["Example".into()],
+            exposed_modules: Some(vec!["Example".into()]),
         },
         dependencies: vec![],
         options: CompileOptions {

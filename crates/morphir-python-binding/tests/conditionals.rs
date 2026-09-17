@@ -17,7 +17,7 @@ fn request(source: &str) -> CompileRequest {
         }],
         package: CompilePackage {
             name: "acme/example".into(),
-            exposed_modules: vec![],
+            exposed_modules: None,
         },
         dependencies: vec![],
         options: CompileOptions {

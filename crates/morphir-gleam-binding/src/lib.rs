@@ -131,7 +131,7 @@ impl Frontend for GleamExtension {
             Err(diagnostics) => return Ok(failed_compile(diagnostics)),
         };
         let exposed_modules = match validate_exposed_modules(
-            &request.package.exposed_modules,
+            request.package.exposed_modules.as_deref(),
             prepared.iter().map(|document| document.module_key.as_str()),
         ) {
             Ok(exposed) => exposed,
@@ -639,10 +639,13 @@ fn canonicalize_gleam_module_segments(
 }
 
 fn validate_exposed_modules<'a>(
-    exposed: &[String],
+    exposed: Option<&[String]>,
     compiled: impl Iterator<Item = &'a str>,
 ) -> std::result::Result<HashSet<String>, Vec<Diagnostic>> {
     let compiled = compiled.collect::<HashSet<_>>();
+    let Some(exposed) = exposed else {
+        return Ok(compiled.into_iter().map(str::to_owned).collect());
+    };
     let mut validated = HashSet::new();
     let mut diagnostics = Vec::new();
     for module in exposed {
@@ -741,7 +744,7 @@ mod tests {
                 }],
                 package: CompilePackage {
                     name: "example/package".into(),
-                    exposed_modules: vec![],
+                    exposed_modules: None,
                 },
                 dependencies: vec![],
                 options: CompileOptions {
@@ -1698,7 +1701,7 @@ mod tests {
         request
             .documents
             .push(document("file:///workspace/src/private.gleam", ""));
-        request.package.exposed_modules = vec!["public".into()];
+        request.package.exposed_modules = Some(vec!["public".into()]);
 
         let result = GleamExtension.compile(request).expect("compile exposures");
         let distribution = library(&result);
@@ -1714,7 +1717,7 @@ mod tests {
 
         let (mut missing, output_dir) =
             compile_request("file:///workspace/src/main.gleam", "", IR_VERSION);
-        missing.package.exposed_modules = vec!["missing".into()];
+        missing.package.exposed_modules = Some(vec!["missing".into()]);
         let result = GleamExtension
             .compile(missing)
             .expect("reject missing exposure");
@@ -1729,7 +1732,7 @@ mod tests {
             "",
             IR_VERSION,
         );
-        request.package.exposed_modules = vec!["order_processing/customer_records".into()];
+        request.package.exposed_modules = Some(vec!["order_processing/customer_records".into()]);
 
         let result = GleamExtension
             .compile(request)

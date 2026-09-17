@@ -32,7 +32,7 @@ fn an_elm_request(uri: &str, text: &str) -> CompileRequest {
         }],
         package: CompilePackage {
             name: "local/example".into(),
-            exposed_modules: vec!["Example".into()],
+            exposed_modules: Some(vec!["Example".into()]),
         },
         dependencies: Vec::new(),
         options: CompileOptions {

@@ -13,7 +13,7 @@ use super::members::{
 use super::provenance::{ConfigOrigin, ProvenanceState};
 use super::sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
-    EnvSelection, SourceSelection,
+    EnvSelection, ProjectSelection, SourceSelection,
 };
 use anyhow::{Context, Result};
 #[cfg(test)]
@@ -50,6 +50,16 @@ pub struct ConfigContext {
     pub current_project: Option<ProjectSection>,
     /// Human-readable warnings about removed or renamed keys.
     pub warnings: Vec<String>,
+}
+
+impl ConfigContext {
+    /// Explicit module exposure, preserving the distinction between omission and `[]`.
+    pub fn exposed_modules(&self) -> Option<&[String]> {
+        self.effective.pointer("/project/exposed_modules")?;
+        self.current_project
+            .as_ref()
+            .map(|project| project.exposed_modules.as_slice())
+    }
 }
 
 fn resolve_file_source(
@@ -386,6 +396,63 @@ fn merge_workspace_member(
     }
 }
 
+/// Resolve declared paths before names, without decoding unrelated members for a path selection.
+fn explicit_project(
+    root: &Path,
+    config: &MorphirConfig,
+    selector: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Option<WorkspaceMemberConfig>> {
+    if selector == "." && config.project.is_some() {
+        return Ok(None);
+    }
+    let members = config
+        .workspace
+        .as_ref()
+        .map(|workspace| expand_members(root, &workspace.members, &workspace.exclude, warnings))
+        .unwrap_or_default();
+    if let Some(member) = members.iter().find(|member| {
+        member.strip_prefix(root).is_ok_and(|relative| {
+            relative.to_string_lossy().replace('\\', "/") == selector.replace('\\', "/")
+        })
+    }) {
+        let config_path = discover_config_at(member)?.ok_or_else(|| {
+            anyhow::anyhow!("Selected member has no configuration: {}", member.display())
+        })?;
+        return Ok(Some(WorkspaceMemberConfig {
+            root: member.clone(),
+            config_path,
+        }));
+    }
+    let mut matches = Vec::new();
+    if config
+        .project
+        .as_ref()
+        .is_some_and(|project| project.name == selector)
+    {
+        matches.push(None);
+    }
+    for member in members {
+        let Some(path) = discover_config_at(&member)? else {
+            continue;
+        };
+        let value = load_config_value(&path)?;
+        if value.pointer("/project/name").and_then(Value::as_str) == Some(selector) {
+            matches.push(Some(WorkspaceMemberConfig {
+                root: member,
+                config_path: path,
+            }));
+        }
+    }
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => anyhow::bail!(
+            "Unknown project '{selector}'; select a declared member path or exact project name"
+        ),
+        _ => anyhow::bail!("Ambiguous project '{selector}'; use a declared member path"),
+    }
+}
+
 /// Merge user overrides adjacent to the project primary path, then the member primary path.
 fn merge_user_overrides(
     state: &mut ProvenanceState,
@@ -517,34 +584,62 @@ pub fn load_effective_config(
     sources.push(project);
 
     let root_config = decode_config(state.value(), "project")?;
-    let (workspace_root, member_config) = match (enclosing, selected_root.clone(), project_config) {
-        (Some(workspace), Some(member_root), Some(member_path)) => {
-            let source =
-                ConfigSource::loaded(ConfigSourceKind::WorkspaceMember, member_path.to_path_buf());
+    let (workspace_root, member_config) = if let ProjectSelection::Explicit(selector) =
+        &options.project
+    {
+        let root = project_layer
+            .as_deref()
+            .and_then(config_root)
+            .ok_or_else(|| anyhow::anyhow!("Project selection requires a project configuration"))?;
+        let member = explicit_project(root, &root_config, selector, &mut warnings)?;
+        if let Some(member) = &member {
+            let source = ConfigSource::loaded(
+                ConfigSourceKind::WorkspaceMember,
+                member.config_path.clone(),
+            );
             merge_scoped_source(&mut state, &source, LayerScope::Member, &mut notes)?;
             sources.push(source);
-            (
-                Some(workspace.root),
-                Some(WorkspaceMemberConfig {
-                    root: member_root,
-                    config_path: member_path.to_path_buf(),
-                }),
-            )
         }
-        _ => {
-            let workspace_root = root_config
-                .is_workspace()
-                .then(|| selected_root.clone())
-                .flatten();
-            let member = merge_workspace_member(
-                &mut state,
-                &mut sources,
-                workspace_root.as_deref(),
-                &root_config,
-                &mut warnings,
-                &mut notes,
-            )?;
-            (workspace_root, member)
+        (
+            root_config.is_workspace().then(|| root.to_path_buf()),
+            member,
+        )
+    } else {
+        match (enclosing, selected_root.clone(), project_config) {
+            (Some(workspace), Some(member_root), Some(member_path)) => {
+                let source = ConfigSource::loaded(
+                    ConfigSourceKind::WorkspaceMember,
+                    member_path.to_path_buf(),
+                );
+                merge_scoped_source(&mut state, &source, LayerScope::Member, &mut notes)?;
+                sources.push(source);
+                (
+                    Some(workspace.root),
+                    Some(WorkspaceMemberConfig {
+                        root: member_root,
+                        config_path: member_path.to_path_buf(),
+                    }),
+                )
+            }
+            _ => {
+                let workspace_root = root_config
+                    .is_workspace()
+                    .then(|| selected_root.clone())
+                    .flatten();
+                let member = if options.project == ProjectSelection::Current {
+                    None
+                } else {
+                    merge_workspace_member(
+                        &mut state,
+                        &mut sources,
+                        workspace_root.as_deref(),
+                        &root_config,
+                        &mut warnings,
+                        &mut notes,
+                    )?
+                };
+                (workspace_root, member)
+            }
         }
     };
 
@@ -674,7 +769,18 @@ pub fn load_config_context_with(
     // Inside a workspace the project root is the selected member, if any;
     // otherwise the configuration directory is the project root.
     let project_root = if workspace_root.is_some() {
-        member_root
+        member_root.or_else(|| {
+            let root_only = config.workspace.as_ref().is_some_and(|workspace| {
+                workspace.members.is_empty() && workspace.default_member.is_none()
+            });
+            if (options.project != ProjectSelection::Automatic || root_only)
+                && config.project.is_some()
+            {
+                workspace_root.clone()
+            } else {
+                None
+            }
+        })
     } else {
         Some(config_dir.to_path_buf())
     };
@@ -867,6 +973,7 @@ mod tests {
                 ("HOME", "/home/alice"),
             ]),
             env_prefix: DEFAULT_ENV_PREFIX.to_string(),
+            project: ProjectSelection::Automatic,
         };
         let context = load_config_context_with(&project, &options).unwrap();
 
@@ -927,6 +1034,7 @@ mod tests {
             user_override: SourceSelection::Discover,
             env: env(&[]),
             env_prefix: DEFAULT_ENV_PREFIX.to_string(),
+            project: ProjectSelection::Automatic,
         };
         let context = load_config_context_with(&project, &options).unwrap();
 
@@ -1029,6 +1137,7 @@ mod tests {
             user_override: SourceSelection::Discover,
             env: env(&[("MORPHIR_UI__COLOR", "false")]),
             env_prefix: DEFAULT_ENV_PREFIX.to_string(),
+            project: ProjectSelection::Automatic,
         };
         let effective = load_effective_config(None, &options).unwrap();
 

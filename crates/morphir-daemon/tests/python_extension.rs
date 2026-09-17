@@ -87,7 +87,7 @@ async fn packaged_python_installs_and_roundtrips_offline() {
         documents,
         package: CompilePackage {
             name: "acme/example".into(),
-            exposed_modules: vec![],
+            exposed_modules: None,
         },
         dependencies: vec![],
         options: CompileOptions {
@@ -181,7 +181,7 @@ impl PythonExtensionDriver {
                     }],
                     package: CompilePackage {
                         name: "acme/example".into(),
-                        exposed_modules: vec![],
+                        exposed_modules: None,
                     },
                     dependencies: vec![],
                     options: CompileOptions {

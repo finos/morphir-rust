@@ -1050,6 +1050,25 @@ The resulting IR contains `domain/models` and `domain/rules`; generation returns
 packages, without `__init__.py` files. Keep all referenced modules in the source
 set. Cross-package dependencies and imported function calls remain unsupported.
 
+With a CLI and development bundle containing project-context support, the
+configured source directory is sufficient:
+
+```console
+morphir compile --project packages/orders
+morphir generate --project packages/orders --target python --output generated
+```
+
+The project selector accepts a declared workspace-relative path or exact
+project name. Compilation uses that member's source directory and package name;
+generation reads its recorded compile artifact. An explicit `--input` replaces
+the configured input and resolves from the invocation directory.
+
+Set `project.exposed_modules = ["domain.rules"]` to expose only that module.
+`domain.models` remains in the IR as a private module and is still available to
+sibling imports. Generation emits both files. Preserve the exposure configuration
+when recompiling generated source: Python itself does not enforce Morphir module
+privacy. Omitting exposure makes all modules public; `[]` makes all private.
+
 ---
 
 # For Contributors

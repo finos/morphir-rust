@@ -26,7 +26,7 @@ impl TestDriver {
                     }],
                     package: CompilePackage {
                         name: "acme/example".into(),
-                        exposed_modules: vec!["Models".into()],
+                        exposed_modules: Some(vec!["Models".into()]),
                     },
                     dependencies: vec![],
                     options: CompileOptions {

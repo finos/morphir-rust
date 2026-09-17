@@ -53,7 +53,7 @@
 //!             ir_version: Some(request.options.ir_version),
 //!             ir: Some(serde_json::json!({})),
 //!             diagnostics: vec![],
-//!             modules: request.package.exposed_modules,
+//!             modules: request.package.exposed_modules.unwrap_or_default(),
 //!         })
 //!     }
 //!
@@ -76,7 +76,7 @@
 //!     }],
 //!     package: CompilePackage {
 //!         name: "local/example".into(),
-//!         exposed_modules: vec!["Example".into()],
+//!         exposed_modules: Some(vec!["Example".into()]),
 //!     },
 //!     dependencies: vec![],
 //!     options: CompileOptions {
@@ -97,12 +97,14 @@ pub mod host;
 pub mod native;
 pub mod prelude;
 pub mod protocol;
+pub mod source;
 pub mod traits;
 pub mod types;
 
 // Re-exports
 pub use error::{ExtensionError, Result};
 pub use native::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol};
+pub use source::{SourceContextError, SourcePath, SourceRoot};
 pub use traits::{Backend, Extension, Frontend, Transform, Validator, Workspace};
 pub use types::*;
 

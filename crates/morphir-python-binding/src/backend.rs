@@ -52,7 +52,6 @@ fn render_module(
     identities: &BTreeMap<String, crate::modules::ModuleIdentity>,
     tuple_aliases: &crate::values::TupleAliases,
 ) -> Outcome<Artifact> {
-    require_public(module.access)?;
     if module.value.doc.is_some() {
         return Err(error(
             "PY004",

@@ -86,8 +86,13 @@ pub(super) fn validate(request: &CompileRequest) -> Outcome<Settings> {
         .package
         .exposed_modules
         .iter()
+        .flatten()
         .any(|name| name != &module_name)
-        || request.package.exposed_modules.len() > 1
+        || request
+            .package
+            .exposed_modules
+            .as_ref()
+            .is_some_and(|modules| modules.len() > 1)
     {
         return Err(error(
             "RS_EXPOSED_MODULES",
@@ -138,7 +143,12 @@ pub(super) fn validate(request: &CompileRequest) -> Outcome<Settings> {
         package,
         module,
         module_name,
-        access: if request.package.exposed_modules.is_empty() {
+        access: if request
+            .package
+            .exposed_modules
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+        {
             Access::Private
         } else {
             Access::Public

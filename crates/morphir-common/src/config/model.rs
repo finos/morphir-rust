@@ -82,6 +82,7 @@ pub struct ProjectSection {
     /// Package name (org/name format)
     pub name: String,
     /// Semantic version
+    #[serde(default = "default_project_version")]
     pub version: String,
     /// Description
     pub description: Option<String>,
@@ -102,6 +103,10 @@ pub struct ProjectSection {
 
 pub(crate) fn default_source_dir() -> String {
     "src".to_string()
+}
+
+fn default_project_version() -> String {
+    "0.1.0".into()
 }
 
 /// [workspace] section

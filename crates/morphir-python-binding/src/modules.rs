@@ -3,8 +3,6 @@
 use crate::{Outcome, error, names, values::TupleAliases};
 use morphir_core::ir::v4::*;
 
-mod source_path;
-
 /// A Python dotted import path and its validated Morphir module name.
 pub(crate) struct ModuleIdentity {
     pub python: String,
@@ -12,21 +10,7 @@ pub(crate) struct ModuleIdentity {
 }
 
 impl ModuleIdentity {
-    pub fn from_source(uri: &str, root: Option<&str>) -> Outcome<Self> {
-        let uri = source_path::normalize(uri)?;
-        let relative = if uri.starts_with('/') || uri.contains(':') {
-            match root {
-                Some(root) => {
-                    let root = source_path::normalize(root)?;
-                    uri.strip_prefix(&format!("{}/", root.trim_end_matches('/')))
-                        .ok_or_else(|| error("PY001", "Source document is outside sourceRootUri"))?
-                }
-                // Preserve the original single-file API when no root is supplied.
-                None => uri.rsplit('/').next().unwrap_or(""),
-            }
-        } else {
-            uri.as_str()
-        };
+    pub fn from_relative_path(relative: &str) -> Outcome<Self> {
         let stem = relative
             .strip_suffix(".py")
             .ok_or_else(|| error("PY001", "Source URI must end in .py"))?;
@@ -58,7 +42,7 @@ impl ModuleIdentity {
             .iter()
             .map(names::module_file_stem)
             .collect::<Outcome<Vec<_>>>()?;
-        let identity = Self::from_source(&format!("{}.py", parts.join("/")), None)?;
+        let identity = Self::from_relative_path(&format!("{}.py", parts.join("/")))?;
         if identity.canonical != canonical {
             return Err(error(
                 "PY003",

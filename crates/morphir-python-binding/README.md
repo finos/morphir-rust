@@ -94,10 +94,12 @@ declarations; Python itself does not enforce annotation types at runtime.
 Each request contains one or more `.py` source documents. A source-relative path
 determines its module name: `models.py` becomes `models`, and
 `domain/order_items.py` becomes `domain/order-items`. The package name must be a
-canonical Morphir package path such as `acme/example`. An empty `exposedModules`
-exposes every module; otherwise the list must name every module, using canonical
-paths or dotted names such as `Domain.OrderItems`. All emitted
-types, constructors and functions are public. Declaration names use Morphir's
+canonical Morphir package path such as `acme/example`. Omitted `exposedModules`
+exposes every module. An explicit empty list makes every module private; a
+nonempty list selects the public modules, using canonical paths or dotted names
+such as `Domain.OrderItems`. Other modules remain private and usable by siblings.
+Unknown exposure names are errors. All emitted types, constructors and functions
+within those modules are public. Declaration names use Morphir's
 existing name codec, including uppercase initialism segments. Collisions after
 normalization are errors. Names must be ASCII identifiers without a leading
 underscore; Python keywords and the builtins used by this subset are reserved.
@@ -114,6 +116,28 @@ a type and its single constructor share a name therefore needs distinct names
 for this first Python subset.
 
 ## Multiple modules and imports
+
+Module privacy is package metadata, not Python source syntax. Both the frontend
+and backend support public and private modules. For a project with
+`src/domain/models.py` and `src/domain/rules.py`, this configuration exposes only
+the rules module:
+
+```toml
+[project]
+name = "acme/example"
+version = "0.1.0"
+source_directory = "src"
+exposed_modules = ["domain.rules"]
+
+[frontend]
+language = "python"
+```
+
+`rules.py` may import types from the private `models.py`. The backend generates
+both files. Keep the exposure configuration when recompiling generated files to
+preserve their Morphir visibility; ordinary Python imports do not enforce that
+visibility at runtime. Private types, constructors, and functions are still
+outside the supported subset.
 
 Compile all source files together in one request. For example, save the complete
 model above as `models.py` and this function as `rules.py`:
@@ -287,7 +311,7 @@ through that codec. There is no v1-v3 migration in this extension.
 
 | IR area | Frontend emits / backend accepts |
 | --- | --- |
-| Distribution | `Library`, one or more modules, empty dependency map, public definitions |
+| Distribution | `Library`, one or more public or private modules, empty dependency map; definitions within modules are public |
 | Type definitions | Non-generic record aliases, fixed tuple aliases, custom types with public constructors |
 | Type expressions | The four SDK scalar references, same-package type references across modules, fixed tuples; a record at a record-alias body |
 | Value definitions | `ExpressionBody` with annotated inputs and a required output type |
@@ -296,7 +320,7 @@ through that codec. There is no v1-v3 migration in this extension.
 | Metadata | Default/empty node attributes; documentation and non-empty retained type/value attributes are rejected |
 
 Unsupported IR includes `Specs` and `Application` distributions, dependencies,
-private definitions, generic types, opaque types, empty custom types, extensible
+private types, constructors and values, generic types, opaque types, empty custom types, extensible
 records, unit and function types, free type variables, and other SDK types such
 as List, Maybe and Decimal. Arbitrary aliases such as an alias directly to `int`
 are not supported. Type references must resolve within the supplied package.
@@ -344,7 +368,7 @@ containers, optional fields, quoted annotations and cross-package dependencies
 are rejected. Function calls, constructor calls, assignments, loops, bare returns,
 decorated or async functions, parameter defaults, variadic parameters,
 positional-only or keyword-only parameters, chained comparisons, and boolean
-operators are not supported yet. The backend also rejects private definitions, documentation,
+operators are not supported yet. The backend also rejects private types, constructors and values, documentation,
 attributes, dependencies and IR type forms outside this subset. Failures return
 diagnostics with no partial IR or artifacts.
 

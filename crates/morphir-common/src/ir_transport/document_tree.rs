@@ -390,9 +390,7 @@ fn read_directory(
                 DiagnosticCode::InvalidDistributionShape,
                 morphir_core::ir::DiagnosticStage::Semantic,
                 logical,
-                format!(
-                    "both {previous} and {child} map to the same tree file; keep only one"
-                ),
+                format!("both {previous} and {child} map to the same tree file; keep only one"),
             )));
         }
         files.insert(logical, read_text(&entry)?);

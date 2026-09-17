@@ -19,7 +19,7 @@
 //! logical path; everything else is `<logical path>#<json pointer>`, whether the diagnostic is
 //! about the shape of the tree or is a file reader's own, re-cursored onto the file it came from.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -76,6 +76,7 @@ pub fn read_tree(files: &Tree, profile: Profile) -> Result<(IRFile, Vec<Warning>
             profile,
             consumed: HashSet::new(),
             warnings: Vec::new(),
+            module_dirs_by_owner: HashMap::new(),
         }
         .read()
     })
@@ -91,6 +92,9 @@ struct Reader<'a> {
     /// Each warning with the path it came from, so the collected list can be sorted by path and
     /// not depend on the order the tree was walked in.
     warnings: Vec<(String, Warning)>,
+    /// Every module directory, grouped by owning package, computed once the manifest names the
+    /// packages — see [`Packages::module_dirs_by_owner`].
+    module_dirs_by_owner: HashMap<(Root, String), Vec<String>>,
 }
 
 /// One module directory: which root it is under, the directory itself, and where its manifest is.
@@ -121,6 +125,9 @@ struct PackageRoot {
     /// The prefix every one of the package's module directories starts with: the package path
     /// under `pkg/`, and the package path plus the bare version slot under `deps/`.
     prefix: String,
+    /// [`Self::prefix`] with the trailing separator, computed once here rather than reallocated on
+    /// every directory it is compared against.
+    prefix_slash: String,
 }
 
 /// The packages a tree holds: the manifest's own, then its dependencies in the manifest's order.
@@ -134,21 +141,28 @@ struct Packages {
 impl Packages {
     fn of(manifest: &DistributionManifestFile) -> Self {
         let own_path = naming::escaped_path(manifest.package.as_path());
+        let own_prefix_slash = format!("{own_path}/");
         Self {
             own: PackageRoot {
                 root: Root::Pkg,
                 name: manifest.package.clone(),
                 pkg_path: own_path.clone(),
                 prefix: own_path,
+                prefix_slash: own_prefix_slash,
             },
             deps: manifest
                 .dependencies
                 .iter()
-                .map(|name| PackageRoot {
-                    root: Root::Deps,
-                    pkg_path: naming::escaped_path(name.as_path()),
-                    prefix: super::paths::package_dir(Root::Deps, name),
-                    name: name.clone(),
+                .map(|name| {
+                    let prefix = super::paths::package_dir(Root::Deps, name);
+                    let prefix_slash = format!("{prefix}/");
+                    PackageRoot {
+                        root: Root::Deps,
+                        pkg_path: naming::escaped_path(name.as_path()),
+                        prefix,
+                        prefix_slash,
+                        name: name.clone(),
+                    }
                 })
                 .collect(),
         }
@@ -167,7 +181,29 @@ impl Packages {
     /// matches, so taking the first is taking the only one.
     fn owner(&self, root: Root, dir: &str) -> Option<&PackageRoot> {
         self.all()
-            .find(|p| p.root == root && dir.starts_with(&format!("{}/", p.prefix)))
+            .find(|p| p.root == root && dir.starts_with(&p.prefix_slash))
+    }
+
+    /// Every module directory the tree holds, grouped by the package that owns it — one pass over
+    /// the tree's keys rather than one rescan per package, since a directory's owner never changes
+    /// between packages asking.
+    fn module_dirs_by_owner(&self, files: &Tree) -> HashMap<(Root, String), Vec<String>> {
+        let mut groups: HashMap<(Root, String), Vec<String>> = HashMap::new();
+        for path in files.keys() {
+            let PathKind::Module { root, dir } = classify(path) else {
+                continue;
+            };
+            if let Some(owner) = self.owner(root, &dir) {
+                groups
+                    .entry((owner.root, owner.pkg_path.clone()))
+                    .or_default()
+                    .push(dir);
+            }
+        }
+        for dirs in groups.values_mut() {
+            dirs.sort();
+        }
+        groups
     }
 }
 
@@ -194,6 +230,7 @@ impl Reader<'_> {
         let manifest =
             self.read_file(MANIFEST, serde_document::decode_distribution_manifest_file)?;
         let packages = Packages::of(&manifest);
+        self.module_dirs_by_owner = packages.module_dirs_by_owner(self.files);
         let distribution = self.assemble(&manifest, &packages)?;
 
         // Everything under `pkg/` or `deps/` belongs to a module; a file no module manifest
@@ -234,7 +271,7 @@ impl Reader<'_> {
         let package_name = manifest.package.clone();
         match manifest.distribution {
             DistributionKind::Specs => {
-                let spec = self.specification_package(packages, &packages.own)?;
+                let spec = self.specification_package(&packages.own)?;
                 let dependencies = self.dependency_specifications(packages)?;
                 Ok(Distribution::Specs(SpecsContent {
                     package_name,
@@ -243,7 +280,7 @@ impl Reader<'_> {
                 }))
             }
             DistributionKind::Library => {
-                let def = self.definition_package(packages, &packages.own)?;
+                let def = self.definition_package(&packages.own)?;
                 let dependencies = self.dependency_specifications(packages)?;
                 Ok(Distribution::Library(LibraryContent {
                     package_name,
@@ -252,7 +289,7 @@ impl Reader<'_> {
                 }))
             }
             DistributionKind::Application => {
-                let def = self.definition_package(packages, &packages.own)?;
+                let def = self.definition_package(&packages.own)?;
                 let dependencies = self.dependency_definitions(packages)?;
                 Ok(Distribution::Application(ApplicationContent {
                     package_name,
@@ -270,7 +307,7 @@ impl Reader<'_> {
     ) -> Result<Dependencies, Diagnostic> {
         let mut out = Dependencies::new();
         for package in &packages.deps {
-            let specification = self.specification_package(packages, package)?;
+            let specification = self.specification_package(package)?;
             out.insert(package.name.to_canonical_string(), specification);
         }
         Ok(out)
@@ -282,7 +319,7 @@ impl Reader<'_> {
     ) -> Result<DefinitionDependencies, Diagnostic> {
         let mut out = DefinitionDependencies::new();
         for package in &packages.deps {
-            let definition = self.definition_package(packages, package)?;
+            let definition = self.definition_package(package)?;
             out.insert(package.name.to_canonical_string(), definition);
         }
         Ok(out)
@@ -294,11 +331,10 @@ impl Reader<'_> {
 
     fn definition_package(
         &mut self,
-        packages: &Packages,
         package: &PackageRoot,
     ) -> Result<PackageDefinition, Diagnostic> {
         let mut modules = IndexMap::new();
-        for dir in self.module_dirs(packages, package) {
+        for dir in self.module_dirs(package) {
             let at = Where::new(package.root, dir);
             let ModuleManifestFile {
                 path,
@@ -334,11 +370,10 @@ impl Reader<'_> {
 
     fn specification_package(
         &mut self,
-        packages: &Packages,
         package: &PackageRoot,
     ) -> Result<PackageSpecification, Diagnostic> {
         let mut modules = IndexMap::new();
-        for dir in self.module_dirs(packages, package) {
+        for dir in self.module_dirs(package) {
             let at = Where::new(package.root, dir);
             let ModuleManifestFile {
                 path,
@@ -379,19 +414,11 @@ impl Reader<'_> {
     ///
     /// A directory is a module exactly when it holds a `module` file; a directory of node files
     /// without one is left unclaimed and reported as such by the stray check.
-    fn module_dirs(&self, packages: &Packages, package: &PackageRoot) -> Vec<String> {
-        let mut dirs: Vec<String> = self
-            .files
-            .keys()
-            .filter_map(|path| {
-                let PathKind::Module { root, dir } = classify(path) else {
-                    return None;
-                };
-                (packages.owner(root, &dir) == Some(package)).then_some(dir)
-            })
-            .collect();
-        dirs.sort();
-        dirs
+    fn module_dirs(&self, package: &PackageRoot) -> Vec<String> {
+        self.module_dirs_by_owner
+            .get(&(package.root, package.pkg_path.clone()))
+            .cloned()
+            .unwrap_or_default()
     }
 
     // =========================================================================

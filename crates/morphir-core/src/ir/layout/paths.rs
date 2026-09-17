@@ -22,7 +22,7 @@ pub const MANIFEST: &str = "manifest";
 pub const VERSION_SLOT: &str = "@";
 
 /// Which of the tree's two roots a path or directory sits under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Root {
     /// The tree's own package.
     Pkg,

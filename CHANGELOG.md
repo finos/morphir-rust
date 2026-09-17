@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exposes it with `--suite package --contract 0.1.0-draft.2` while preserving the
   draft-1 package protocol.
 
+### Changed
+
+- **The IR model sweep.** The v4 model now matches the semantic model, the v4 schema and the reference binding where it did not: `DecimalLiteral` is a genuine decimal (`BigDecimal` value beside its lexeme, decimal lexeme grammar), `IntegerLiteral` has arbitrary precision (`BigInt`), type, value and module specifications carry `annotations`, `Hole` incompleteness and `IncompleteBody` keep a `partialBody`, a hole's reason is one of three (`Draft` is an incompleteness), an input type is a bare type, `Documentation` is one string, attribute `constraints` and `extensions` are objects with known members, `$meta` is refused at a single document's root, `priv` is not an access spelling, `inputs` is omitted when empty, and an `Application`'s dependencies are package definitions. The classic (v3) mirror matches morphir-elm: `DecimalLiteral` is a decimal, `DerivedTypeSpecification` exists, record fields are written as `{ "name", "tpe" }` objects, `VariablePattern` is gone, and `Definition` and `ValueDefinition` are one type. The stale second v4 type model (`type_def`), the unused converter and the unused traversal transforms are removed. MCK cases patterns-and-literals-0016 to 0020, types-0012, definitions-0020 to 0031, distributions-0009 and 0010, versions-0006 to 0008.
+
+### Removed
+
+- `morphir_core::ir::v4::{InputTypeEntry, HoleReason::Draft, LegacyTypeSpecification, LegacyTypeDefinition, AccessControlledTypeDefinition, AccessControlledConstructors, TypeDefConstructorArg, TypeDefConstructorDefinition}`; `morphir_core::ir::classic::{Definition, Pattern::Variable}`.
+
 ### Fixed
 
 - **`morphir-common` YAML encoding.** A `DocumentLiteral` number is written with the lexeme it

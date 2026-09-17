@@ -13,12 +13,10 @@ mod project;
 
 type TypeScope = BTreeMap<String, FQName>;
 
-pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, Vec<String>)> {
-    if request.language_id != "python"
-        || !matches!(request.options.ir_version.as_str(), "4" | "4.0.0")
-        || !request.dependencies.is_empty()
-    {
-        return Err(error("PY001", "Expected Python, IR 4, and no dependencies"));
+pub(crate) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)> {
+    crate::ir::Version::parse(&request.options.ir_version)?;
+    if request.language_id != "python" || !request.dependencies.is_empty() {
+        return Err(error("PY001", "Expected Python and no dependencies"));
     }
     for (key, value) in &request.options.extra {
         let valid = match key.as_str() {

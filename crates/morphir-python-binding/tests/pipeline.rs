@@ -101,10 +101,10 @@ fn rejects_unsupported_or_ambiguous_source_without_partial_ir() {
 #[test]
 fn advertises_and_enforces_the_initial_contract() {
     let capabilities = PythonExtension::capabilities();
-    assert_eq!(capabilities.frontend.unwrap().ir_versions, ["4"]);
+    assert_eq!(capabilities.frontend.unwrap().ir_versions, ["3", "4"]);
     assert_eq!(capabilities.backend.unwrap().targets, ["python"]);
     let mut request = a_request("");
-    request.options.ir_version = "3".into();
+    request.options.ir_version = "2".into();
     assert!(!PythonExtension.compile(request).unwrap().success);
     assert!(
         !PythonExtension

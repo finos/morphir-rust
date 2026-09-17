@@ -912,11 +912,11 @@ Source: https://finos.github.io/morphir-rust/tutorials/python-extension
 The `morphir-python-binding` crate provides the `morphir-python` frontend and
 backend. Start with its [modeling example and supported subset](../../crates/morphir-python-binding/README.md).
 The extension compiles frozen dataclasses, named unions, fixed tuples and annotated conditional
-functions to Morphir IR v4, and generates Python 3.12 or later code from those definitions.
+functions to Morphir IR v3 or v4, and generates Python 3.12 or later code from those definitions.
 
-This checkout also supports multiple source modules and imports between them.
+This checkout also supports IR v3, private modules, and multiple source modules with imports.
 That addition requires a development bundle built from this checkout; the
-published Python `0.1.0` bundle supports one module per request.
+published Python `0.1.0` bundle supports one public module per request and IR v4 only.
 
 Functions support returning `if`/`elif`/`else` branches and Python conditional
 expressions. For example:
@@ -931,7 +931,7 @@ def choose(flag: bool, first: int, second: int) -> int:
 
 This body maps to Morphir's `IfThenElse` value. Each path must return the declared
 type, and the condition must be boolean. Compile functions with `typesOnly=false`
-through MEP, or omit the CLI's `--types-only` flag. The crate README lists the
+through MEP. Project compilation through the CLI includes function bodies. The crate README lists the
 supported expressions and remaining limits.
 
 ## Build and test
@@ -1068,6 +1068,36 @@ Set `project.exposed_modules = ["domain.rules"]` to expose only that module.
 sibling imports. Generation emits both files. Preserve the exposure configuration
 when recompiling generated source: Python itself does not enforce Morphir module
 privacy. Omitting exposure makes all modules public; `[]` makes all private.
+
+## Select the IR version
+
+Use a CLI and development bundle containing IR v3 support. The CLI defaults to v4;
+select v3 in the project configuration:
+
+```toml
+[ir]
+format_version = 3
+layout = "single-file"
+format = "json"
+```
+
+`format = "yaml"` also works for v3. Document-tree storage requires v4.
+The CLI override applies to this invocation, without editing the project:
+
+```console
+morphir compile --ir-version 3 --output compiled-v3
+morphir generate --target python --input compiled-v3/morphir-ir.json --output generated-v3
+morphir compile --ir-version 4 --output compiled-v4
+```
+
+The backend detects the version from the input document. Through MEP, set
+`options.irVersion` to `3` or `3.0.0`, or to `4` or `4.0.0`. Both capabilities
+advertise versions `3` and `4`. The supported ADTs, tuples, conditional functions,
+imports and private modules work with both versions. V3 functions carry typed
+value annotations, which the backend checks before generating Python. The current
+v3 codec limits whole-number literals to signed 64-bit integers; v4 retains
+arbitrary precision. Neither version enables general Python execution or full
+Morphir IR conformance. See the README for the complete boundaries.
 
 ---
 

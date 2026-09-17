@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Python frontend and backend support IR v3 alongside v4, including private modules, imports, ADTs, fixed tuples and conditional functions. V3 output uses the shared classic model with inferred value types; incoming types are checked before generation. The v3 codec's signed 64-bit integer limit is diagnosed; v4 retains arbitrary precision. Native and installed WASM tests cover both versions, and release descriptors advertise both.
 - Python frontend and backend support private modules. The shared SDK validates source-root and document identity through `CompileRequest::source_paths()`. The project loader supports explicit workspace member selection by declared path or exact name.
 - **SDK API change:** `CompilePackage.exposed_modules` is now optional: `None` exposes all modules, `Some(vec![])` exposes none, and a nonempty list selects public modules. Unknown exposure names are rejected. Project versions omitted from configuration default to `0.1.0`, matching legacy normalization.
 

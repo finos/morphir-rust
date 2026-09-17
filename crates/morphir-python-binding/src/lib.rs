@@ -25,6 +25,7 @@
 
 mod backend;
 mod frontend;
+mod ir;
 mod modules;
 mod names;
 mod values;
@@ -57,13 +58,13 @@ impl Extension for PythonExtension {
                     id: "python".into(),
                     file_extensions: vec![".py".into()],
                 }],
-                ir_versions: vec!["4".into()],
+                ir_versions: vec!["3".into(), "4".into()],
                 compile: true,
                 ..Default::default()
             }),
             backend: Some(BackendCapability {
                 targets: vec!["python".into()],
-                ir_versions: vec!["4".into()],
+                ir_versions: vec!["3".into(), "4".into()],
                 generate: true,
             }),
             ..Default::default()
@@ -84,10 +85,14 @@ impl Frontend for PythonExtension {
         } else {
             vec![]
         };
-        Ok(match frontend::compile(&request) {
-            Ok((ir, modules)) => CompileResult {
+        let compiled = frontend::compile(&request).and_then(|(model, modules)| {
+            let version = ir::Version::parse(&request.options.ir_version)?;
+            Ok((version.encode(model)?, modules, version))
+        });
+        Ok(match compiled {
+            Ok((ir, modules, version)) => CompileResult {
                 success: true,
-                ir_version: Some("4".into()),
+                ir_version: Some(version.major().into()),
                 ir: Some(ir),
                 modules,
                 diagnostics,

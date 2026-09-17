@@ -24,6 +24,10 @@ pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticError, DiagnosticStag
 // V4 is the primary format
 pub mod v4;
 
+// Document-tree layout: the storage profile, path grammar and file stems (tasks 5 and 6 build the
+// reader and writer on top of this).
+pub mod layout;
+
 // The JSON storage profile's canonical writer
 pub mod json;
 

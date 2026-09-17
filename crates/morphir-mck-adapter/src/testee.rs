@@ -44,6 +44,7 @@ use morphir_core::naming::{FQName, Name, Path};
 
 use crate::protocol::{
     DecodeRequest, DecodeResponse, NodeKind, PathMode, Profile, ProtocolDiagnostic,
+    ReadTreeRequest, TreeFile, WriteTreeRequest, WriteTreeResponse,
 };
 
 /// The stack every decode runs on.
@@ -115,6 +116,127 @@ fn decode_here(req: &DecodeRequest) -> DecodeResponse {
             }
         }
         Err(diagnostic) => DecodeResponse::Err { diagnostic },
+    }
+}
+
+/// Reads a document tree and answers with the canonical spelling of the `IRFile` it assembles to,
+/// or the diagnostic that refused it.
+///
+/// Runs on the same stack [`decode`] does (see [`DECODE_STACK_BYTES`]): a document tree's node
+/// files go through the same nesting-sensitive readers a single document does, one file at a time.
+pub fn read_tree(req: &ReadTreeRequest) -> DecodeResponse {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DECODE_STACK_BYTES)
+            .spawn_scoped(scope, || read_tree_here(req))
+            .expect("a read_tree thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn read_tree_here(req: &ReadTreeRequest) -> DecodeResponse {
+    // Not a statement about the document: this binding's document trees are a version 4 layout
+    // only, so an off-capabilities version answers `protocol_error` the way an off-capabilities
+    // decode request does.
+    if req.version != 4 {
+        return DecodeResponse::Refused {
+            diagnostic: ProtocolDiagnostic::new(format!(
+                "this binding reads document trees at IR version 4 only, not {}",
+                req.version
+            )),
+        };
+    }
+
+    let profile = layout_profile(req.profile);
+    let files: morphir_core::ir::layout::Tree = req
+        .files
+        .iter()
+        .map(|file| (file.path.clone(), file.content.clone()))
+        .collect();
+
+    match morphir_core::ir::layout::read_tree(&files, profile) {
+        Ok((file, warnings)) => {
+            let node = Node::IRFile(file);
+            // `req.node` is ignored: a document tree always assembles to one `IRFile`, the way the
+            // reference adapter's `readTreeWith` does (reference map §6.3).
+            let kind = node.kind().to_string();
+            let node = if req.strip { node.stripped() } else { node };
+            match node.write(req.profile) {
+                Ok(text) => DecodeResponse::Ok {
+                    kind,
+                    canonical: BTreeMap::from([(profile_key(req.profile).to_string(), text)]),
+                    warnings,
+                },
+                Err(diagnostic) => DecodeResponse::Err { diagnostic },
+            }
+        }
+        Err(diagnostic) => DecodeResponse::Err { diagnostic },
+    }
+}
+
+/// Writes a whole distribution back out as a document tree, or answers with the diagnostic that
+/// refused it.
+///
+/// A read failure of `req.input` is reported as the write's own failure (reference map §6.3); any
+/// warnings that read produced are dropped, since a `writeTree` answer carries no `warnings`
+/// member (`protocol.schema.json`'s `WriteTreeSuccess`).
+pub fn write_tree(req: &WriteTreeRequest) -> WriteTreeResponse {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DECODE_STACK_BYTES)
+            .spawn_scoped(scope, || write_tree_here(req))
+            .expect("a write_tree thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn write_tree_here(req: &WriteTreeRequest) -> WriteTreeResponse {
+    if req.version != 4 {
+        return WriteTreeResponse::Refused {
+            diagnostic: ProtocolDiagnostic::new(format!(
+                "this binding writes document trees at IR version 4 only, not {}",
+                req.version
+            )),
+        };
+    }
+
+    let file = match read_whole_ir_file(req.policy.profile, &req.input) {
+        Ok((file, _warnings)) => file,
+        Err(diagnostic) => return WriteTreeResponse::Err { diagnostic },
+    };
+
+    let policy = morphir_core::ir::layout::TreePolicy {
+        profile: layout_profile(req.policy.profile),
+        path_budget: req.policy.path_budget,
+    };
+
+    match morphir_core::ir::layout::write_tree(&file, &policy) {
+        Ok(files) => WriteTreeResponse::Ok {
+            files: files
+                .into_iter()
+                .map(|(path, content)| TreeFile { path, content })
+                .collect(),
+        },
+        Err(diagnostic) => WriteTreeResponse::Err { diagnostic },
+    }
+}
+
+/// Reads a whole document (not a tree file) as an `IRFile` in the given profile, the way
+/// `writeTree`'s `input` carries one.
+fn read_whole_ir_file(profile: Profile, text: &str) -> Result<(IRFile, Vec<Warning>), Diagnostic> {
+    match profile {
+        Profile::Json => morphir_core::ir::json::read_ir_file(text).map_err(|error| error.0),
+        Profile::Yaml => morphir_core::ir::yaml::read_ir_file(text).map_err(|error| error.0),
+    }
+}
+
+/// The wire [`Profile`] as `morphir_core::ir::layout::Profile`.
+fn layout_profile(profile: Profile) -> morphir_core::ir::layout::Profile {
+    match profile {
+        Profile::Json => morphir_core::ir::layout::Profile::Json,
+        Profile::Yaml => morphir_core::ir::layout::Profile::Yaml,
     }
 }
 

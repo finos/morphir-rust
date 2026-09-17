@@ -22,7 +22,7 @@ fn conditional_functions_execute_through_both_ir_versions_and_native_mep() {
             }],
             package: CompilePackage {
                 name: "acme/example".into(),
-                exposed_modules: vec!["Models".into()],
+                exposed_modules: Some(vec!["Models".into()]),
             },
             options: CompileOptions {
                 types_only: false,

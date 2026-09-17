@@ -3351,7 +3351,6 @@ dependencies = [
  "same-file",
  "secrecy",
  "serde",
- "serde-saphyr",
  "serde_json",
  "stacker",
  "tar",

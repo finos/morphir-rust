@@ -18,7 +18,25 @@ const V4_JSON: &str = r#"{
     "Library": {
       "packageName": "example",
       "dependencies": {},
-      "def": {"modules": {}}
+      "def": {
+        "modules": {
+          "domain": {
+            "access": "Public",
+            "value": {
+              "types": {
+                "user-id": {
+                  "access": "Public",
+                  "TypeAliasDefinition": {
+                    "typeParams": [],
+                    "typeExp": "morphir/SDK:string#string"
+                  }
+                }
+              },
+              "values": {}
+            }
+          }
+        }
+      }
     }
   }
 }"#;
@@ -26,6 +44,7 @@ const V4_JSON: &str = r#"{
 const V3_YAML: &str = include_str!("fixtures/yaml/v3-explicit.yaml");
 const V4_EXPLICIT_YAML: &str = include_str!("fixtures/yaml/v4-explicit.yaml");
 const V4_READABLE_YAML: &str = include_str!("fixtures/yaml/v4-readable.yaml");
+const TIMESTAMP_YAML: &str = include_str!("fixtures/yaml/accepted/timestamp-is-a-string.yaml");
 
 #[derive(Default)]
 struct CollectingSink(Vec<SemanticEvent>);
@@ -249,37 +268,32 @@ fn rejected_yaml_has_stable_located_diagnostics() {
         (
             "fixtures/yaml/rejected/alias-expansion.yaml",
             include_str!("fixtures/yaml/rejected/alias-expansion.yaml"),
-            "morphir::ir::yaml::alias_not_allowed",
+            "morphir::ir::yaml::unsupported_yaml_feature",
         ),
         (
             "fixtures/yaml/rejected/custom-tag.yaml",
             include_str!("fixtures/yaml/rejected/custom-tag.yaml"),
-            "morphir::ir::yaml::unsupported_tag",
+            "morphir::ir::yaml::unsupported_yaml_feature",
         ),
         (
             "fixtures/yaml/rejected/cyclic-alias.yaml",
             include_str!("fixtures/yaml/rejected/cyclic-alias.yaml"),
-            "morphir::ir::yaml::alias_not_allowed",
+            "morphir::ir::yaml::unsupported_yaml_feature",
         ),
         (
             "fixtures/yaml/rejected/duplicate-key.yaml",
             include_str!("fixtures/yaml/rejected/duplicate-key.yaml"),
-            "duplicate_format_version",
+            "morphir::ir::yaml::duplicate_member",
         ),
         (
             "fixtures/yaml/rejected/multiple-documents.yaml",
             include_str!("fixtures/yaml/rejected/multiple-documents.yaml"),
-            "morphir::ir::yaml::multiple_documents",
+            "morphir::ir::yaml::invalid_yaml",
         ),
         (
             "fixtures/yaml/rejected/non-finite-number.yaml",
             include_str!("fixtures/yaml/rejected/non-finite-number.yaml"),
-            "morphir::ir::yaml::non_finite_number",
-        ),
-        (
-            "fixtures/yaml/rejected/timestamp-coercion.yaml",
-            include_str!("fixtures/yaml/rejected/timestamp-coercion.yaml"),
-            "morphir::ir::yaml::ambiguous_scalar",
+            "morphir::ir::yaml::invalid_literal",
         ),
     ];
     let codec = YamlCodec::new();
@@ -304,4 +318,54 @@ fn rejected_yaml_has_stable_located_diagnostics() {
         assert!(source_span.column > 0, "{fixture}");
         assert!(diagnostic.guidance().is_some(), "{fixture}");
     }
+}
+
+/// A date-looking plain scalar is a string, not a timestamp: the profile's scalar resolution has
+/// booleans, null, integers, floats and nothing else, so `2026-08-28` is text. This fixture used
+/// to be `rejected/timestamp-coercion.yaml`, refused as an ambiguous scalar.
+#[test]
+fn a_date_looking_scalar_decodes_as_a_string() {
+    decode(
+        &YamlCodec::new(),
+        TIMESTAMP_YAML,
+        &options(IrVersion::V4, FormatId::yaml()),
+    )
+    .expect("the timestamp fixture decodes");
+
+    let value = morphir_core::ir::yaml::read(TIMESTAMP_YAML).expect("the fixture reads");
+    assert_eq!(
+        value
+            .pointer("/distribution/Library/def/modules/notes/value/doc")
+            .expect("the module doc"),
+        &serde_json::Value::String("2026-08-28".to_owned())
+    );
+}
+
+/// YAML output is the profile's canonical spelling, byte for byte with the kit's writer.
+#[test]
+fn yaml_output_is_canonical() {
+    let input =
+        include_str!("../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json");
+    let version = IrVersion::V4;
+    let events = decode(
+        &JsonCodec::new(),
+        input,
+        &options(version, FormatId::json()),
+    )
+    .unwrap();
+    let yaml = encode(
+        &YamlCodec::new(),
+        events,
+        &options(version, FormatId::yaml()),
+    )
+    .unwrap();
+
+    let file: morphir_core::ir::v4::IRFile = serde_json::from_str(input).unwrap();
+    let expected = morphir_core::ir::yaml::write_canonical(&serde_json::to_value(&file).unwrap());
+    assert_eq!(yaml, expected);
+
+    // Flow sequences for scalar-only sequences, and exactly one trailing newline.
+    assert!(yaml.contains("typeParams: []"), "{yaml}");
+    assert!(yaml.ends_with('\n') && !yaml.ends_with("\n\n"), "{yaml}");
+    assert!(!yaml.contains('\r'), "{yaml}");
 }

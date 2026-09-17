@@ -1,13 +1,25 @@
-//! Strict native YAML codec for concrete Morphir IR.
+//! The IR YAML profile codec.
+//!
+//! Both directions go through the kit's own reader and canonical writer in
+//! `morphir_core::ir::yaml`, so the CLI answers a YAML document exactly as the MCK adapter does:
+//! one value tree, one set of diagnostic codes, one canonical spelling. What used to live here —
+//! a lexical pre-scan, a `serde-saphyr` round trip, `PlainValue`'s number rewrite and two
+//! hand-written streaming encoders — is gone; see `docs/spec/ir/schemas/v4/yaml-profile.md`.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 
-use morphir_core::format_version::SupportTable;
-use morphir_core::ir::{classic, v4 as ir_v4};
-use morphir_core::traversal::IrCursor;
-use serde_saphyr::budget::BudgetBreach;
-use serde_saphyr::options::{DuplicateKeyPolicy, MergeKeyPolicy};
-use serde_saphyr::{Error, alias_limits, budget, options, ser_options};
+use morphir_core::format_version::{
+    FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable,
+};
+use morphir_core::ir::yaml as profile;
+use morphir_core::ir::{
+    Diagnostic as CoreDiagnostic, DiagnosticCode, DiagnosticStage, classic, v4 as ir_v4,
+};
+use morphir_core::traversal::{IrCursor, SemanticEvent};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value as Json;
 
 use super::semantic::{self, SemanticFile};
 use super::{
@@ -15,18 +27,7 @@ use super::{
     SourceSpan, Stage, TransportDiagnostic,
 };
 
-mod plain;
-mod profile;
-mod v3;
-mod v4;
-
-use super::root_probe::probe_yaml_slice;
-use profile::to_yaml_text;
-pub(crate) use profile::{decode_document, encode_document, validate_yaml_profile};
-use v3::V3YamlEventEncoder;
-use v4::V4YamlEventEncoder;
-
-pub(crate) const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
+const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
 
 /// Built-in native YAML IR codec.
 pub struct YamlCodec {
@@ -38,44 +39,6 @@ impl YamlCodec {
     pub fn new() -> Self {
         Self {
             format: FormatId::yaml(),
-        }
-    }
-
-    pub(super) fn parse_options() -> serde_saphyr::Options {
-        options! {
-            budget: budget! {
-                max_reader_input_bytes: Some(MAX_INPUT_BYTES),
-                max_events: 50_000_000,
-                max_aliases: 0,
-                max_anchors: 0,
-                max_depth: 512,
-                max_documents: 1,
-                max_nodes: 20_000_000,
-                max_total_scalar_bytes: MAX_INPUT_BYTES,
-                max_merge_keys: 0,
-            },
-            duplicate_keys: DuplicateKeyPolicy::Error,
-            merge_keys: MergeKeyPolicy::Error,
-            alias_limits: alias_limits! {
-                max_total_replayed_events: 0,
-                max_replay_stack_depth: 0,
-                max_alias_expansions_per_anchor: 0,
-            },
-            emit_comments: false,
-            strict_booleans: true,
-            legacy_octal_numbers: false,
-            reject_non_finite_typeless_float: true,
-            with_snippet: false,
-        }
-    }
-
-    pub(super) fn serializer_options() -> serde_saphyr::SerializerOptions {
-        ser_options! {
-            indent_step: 2,
-            compact_list_indent: false,
-            empty_as_braces: true,
-            tagged_enums: false,
-            quote_all: false,
         }
     }
 
@@ -107,89 +70,6 @@ impl YamlCodec {
         Ok(input)
     }
 
-    pub(super) fn decode_error(error: Error) -> TransportDiagnostic {
-        let source_span = error.location().map(|location| {
-            let span = location.span();
-            SourceSpan {
-                offset: span.byte_offset().unwrap_or(span.offset()) as usize,
-                length: span.byte_len().unwrap_or(span.len()) as usize,
-                line: location.line() as usize,
-                column: location.column() as usize,
-            }
-        });
-        let (code, stage, guidance) = match error.without_snippet() {
-            Error::DuplicateMappingKey { .. } => (
-                "morphir::ir::yaml::duplicate_key",
-                Stage::Syntax,
-                "remove the repeated mapping key",
-            ),
-            Error::MultipleDocuments { .. }
-            | Error::Budget {
-                breach: BudgetBreach::Documents { .. },
-                ..
-            } => (
-                "morphir::ir::yaml::multiple_documents",
-                Stage::Syntax,
-                "store exactly one IR document in each YAML artifact",
-            ),
-            Error::MergeKeyNotAllowed { .. } => (
-                "morphir::ir::yaml::merge_key_not_allowed",
-                Stage::Syntax,
-                "expand the merge explicitly as ordinary mapping entries",
-            ),
-            Error::NonFiniteFloat { .. } => (
-                "morphir::ir::yaml::non_finite_number",
-                Stage::Normalization,
-                "use a finite number representable by the concrete IR literal",
-            ),
-            Error::AliasReplayCounterOverflow { .. }
-            | Error::AliasReplayLimitExceeded { .. }
-            | Error::AliasExpansionLimitExceeded { .. }
-            | Error::AliasReplayStackDepthExceeded { .. }
-            | Error::AliasError { .. }
-            | Error::Budget {
-                breach: BudgetBreach::Aliases { .. } | BudgetBreach::Anchors { .. },
-                ..
-            } => (
-                "morphir::ir::yaml::alias_not_allowed",
-                Stage::Syntax,
-                "expand anchors and aliases into explicit YAML nodes",
-            ),
-            Error::TaggedScalarCannotDeserializeIntoString { .. }
-            | Error::TaggedEnumMismatch { .. } => (
-                "morphir::ir::yaml::unsupported_tag",
-                Stage::Syntax,
-                "replace YAML semantic tags with the explicit structural vocabulary",
-            ),
-            Error::QuotingRequired { .. } | Error::InvalidBooleanStrict { .. } => (
-                "morphir::ir::yaml::ambiguous_scalar",
-                Stage::Normalization,
-                "quote the scalar or use the explicit structural vocabulary",
-            ),
-            Error::Budget { .. } | Error::IOError { .. } => (
-                "morphir::ir::yaml::budget_exceeded",
-                Stage::Syntax,
-                "simplify the YAML artifact or use a document-tree layout",
-            ),
-            _ => (
-                "morphir::ir::yaml::invalid_ir",
-                Stage::Normalization,
-                "correct the YAML structure for the selected concrete IR version",
-            ),
-        };
-        let diagnostic = TransportDiagnostic::error(
-            code,
-            stage,
-            IrCursor::root(),
-            error.without_snippet().to_string(),
-        )
-        .with_guidance(guidance);
-        match source_span {
-            Some(span) => diagnostic.with_source_span(span),
-            None => diagnostic,
-        }
-    }
-
     pub(super) fn encode_error(error: impl std::fmt::Display) -> TransportDiagnostic {
         TransportDiagnostic::error(
             "morphir::ir::yaml::encode_failed",
@@ -199,20 +79,188 @@ impl YamlCodec {
         )
         .with_guidance("verify that the semantic event stream contains representable IR nodes")
     }
-
-    fn write_yaml(
-        writer: &mut dyn Write,
-        value: &impl serde::Serialize,
-    ) -> Result<(), TransportDiagnostic> {
-        let rendered = encode_document(value)?;
-        writer.write_all(&rendered).map_err(Self::encode_error)
-    }
 }
 
 impl Default for YamlCodec {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Reads `input` as one profile-conforming YAML document.
+pub(crate) fn read_value(input: &[u8]) -> Result<Json, TransportDiagnostic> {
+    let text = std::str::from_utf8(input).map_err(|error| {
+        TransportDiagnostic::error(
+            "morphir::ir::yaml::invalid_utf8",
+            Stage::Syntax,
+            IrCursor::root(),
+            error.to_string(),
+        )
+        .with_guidance("encode the YAML artifact as UTF-8")
+    })?;
+    stacker::grow(IR_RECURSION_STACK_BYTES, || {
+        profile::read(text).map_err(transport_diagnostic)
+    })
+}
+
+/// Wraps one of the kit's diagnostics as a transport diagnostic.
+///
+/// The code is the kit's own, under `morphir::ir::yaml::`, so the CLI and the adapter name the
+/// same fault the same way. A [`TransportDiagnostic`]'s cursor is a semantic [`IrCursor`] and the
+/// kit's is a JSON pointer into the document, which has no semantic spelling before the document
+/// is understood; the pointer therefore travels in the message and the cursor stays at the root,
+/// as every other physical-syntax diagnostic in this crate does.
+pub(crate) fn transport_diagnostic(diagnostic: CoreDiagnostic) -> TransportDiagnostic {
+    let guidance = guidance_for(diagnostic.code);
+    let stage = match diagnostic.stage {
+        DiagnosticStage::Syntax => Stage::Syntax,
+        DiagnosticStage::Normalization => Stage::Normalization,
+        DiagnosticStage::Semantic => Stage::Normalization,
+    };
+    let message = if diagnostic.cursor.is_empty() || diagnostic.cursor == "/" {
+        diagnostic.message.clone()
+    } else {
+        format!("{} (at {})", diagnostic.message, diagnostic.cursor)
+    };
+    let transport = TransportDiagnostic::error(
+        format!("morphir::ir::yaml::{}", code_name(diagnostic.code)),
+        stage,
+        IrCursor::root(),
+        message,
+    )
+    .with_guidance(guidance);
+    match (diagnostic.line, diagnostic.column) {
+        (Some(line), Some(column)) => transport.with_source_span(SourceSpan {
+            offset: 0,
+            length: 0,
+            line: line as usize,
+            column: column as usize,
+        }),
+        _ => transport,
+    }
+}
+
+/// The kit's own spelling of a diagnostic code, which is its serde name.
+fn code_name(code: DiagnosticCode) -> String {
+    match serde_json::to_value(code) {
+        Ok(Json::String(name)) => name,
+        // `DiagnosticCode` is a unit-only enum with `rename_all = "snake_case"`, so this is
+        // unreachable; answering with the debug spelling keeps the codec total either way.
+        _ => format!("{code:?}"),
+    }
+}
+
+fn guidance_for(code: DiagnosticCode) -> &'static str {
+    match code {
+        DiagnosticCode::InvalidYaml => "write exactly one YAML 1.2 document",
+        DiagnosticCode::UnsupportedYamlFeature => {
+            "remove anchors, aliases, tags, directives and merge keys; the profile forbids them"
+        }
+        DiagnosticCode::DuplicateMember => "each member appears once",
+        DiagnosticCode::InvalidType => "mapping keys must be strings",
+        DiagnosticCode::InvalidLiteral => {
+            "write decimal numbers without leading zeros; non-finite values are not representable"
+        }
+        DiagnosticCode::NestingTooDeep => "the document nests deeper than 1000 levels",
+        _ => "correct the document for the selected concrete IR version",
+    }
+}
+
+/// The diagnostic a serde failure carried, or an `invalid_type` naming what serde said.
+///
+/// Every v4 decoder in morphir-core smuggles one of the kit's diagnostics through the serde
+/// error; the fallback is for the models still read by a derived impl (classic v3, and the
+/// document-tree manifests).
+fn recover(error: &serde_json::Error) -> TransportDiagnostic {
+    match CoreDiagnostic::from_serde_error(error) {
+        Some(diagnostic) => transport_diagnostic(diagnostic),
+        None => TransportDiagnostic::error(
+            "morphir::ir::yaml::invalid_type",
+            Stage::Normalization,
+            IrCursor::root(),
+            error.to_string(),
+        )
+        .with_guidance("correct the document for the selected concrete IR version"),
+    }
+}
+
+fn format_version_error(error: FormatVersionDiagnostic) -> TransportDiagnostic {
+    // The same bare codes the JSON codec answers through the root probe, so a caller comparing
+    // format-version outcomes does not have to know which profile the document was written in.
+    TransportDiagnostic::error(
+        error.code(),
+        Stage::Detection,
+        IrCursor::root(),
+        error.message(),
+    )
+}
+
+/// The `formatVersion` member of a root mapping, normalized and checked for support.
+fn format_version_of(
+    value: &Json,
+    support: &SupportTable,
+) -> Result<NormalizedFormatVersion, TransportDiagnostic> {
+    let written = value
+        .as_object()
+        .and_then(|members| members.get("formatVersion"))
+        .ok_or_else(|| format_version_error(FormatVersionDiagnostic::missing_format_version()))?;
+    let scalar = ScalarValue::from_json(written).map_err(format_version_error)?;
+    let normalized =
+        NormalizedFormatVersion::from_scalar(&scalar, support).map_err(format_version_error)?;
+    if !normalized.is_supported() {
+        return Err(format_version_error(
+            support
+                .unsupported_diagnostic(&normalized.release, normalized.compatibility)
+                .expect("unsupported releases produce diagnostics"),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn version_mismatch(expected: u32, found: &impl std::fmt::Display) -> TransportDiagnostic {
+    TransportDiagnostic::error(
+        "morphir::ir::yaml::version_mismatch",
+        Stage::Detection,
+        IrCursor::root(),
+        format!("the v{expected} YAML codec requires formatVersion {expected}, found {found}"),
+    )
+}
+
+/// Reads one profile-conforming YAML document as `T`.
+pub(crate) fn decode_document<T: DeserializeOwned>(input: &[u8]) -> Result<T, TransportDiagnostic> {
+    let value = read_value(input)?;
+    stacker::grow(IR_RECURSION_STACK_BYTES, || {
+        serde_json::from_value(value).map_err(|error| recover(&error))
+    })
+}
+
+/// Writes `value` as one canonical YAML document, with one trailing newline and `\n` breaks.
+pub(crate) fn encode_document<T: Serialize + ?Sized>(
+    value: &T,
+) -> Result<Vec<u8>, TransportDiagnostic> {
+    Ok(encode_text(value)?.into_bytes())
+}
+
+fn encode_text<T: Serialize + ?Sized>(value: &T) -> Result<String, TransportDiagnostic> {
+    stacker::grow(IR_RECURSION_STACK_BYTES, || {
+        let tree = serde_json::to_value(value).map_err(YamlCodec::encode_error)?;
+        // `write_canonical` ends its output with exactly one `\n` and never writes a CR.
+        Ok(profile::write_canonical(&tree))
+    })
+}
+
+fn write_semantic_file(
+    file: SemanticFile,
+    writer: &mut dyn Write,
+) -> Result<(), TransportDiagnostic> {
+    let rendered = match file {
+        SemanticFile::ClassicV3(file) => encode_text(&file)?,
+        SemanticFile::V4(file) => encode_text(&file)?,
+    };
+    writer
+        .write_all(rendered.as_bytes())
+        .map_err(YamlCodec::encode_error)?;
+    writer.flush().map_err(YamlCodec::encode_error)
 }
 
 impl IrCodec for YamlCodec {
@@ -227,41 +275,23 @@ impl IrCodec for YamlCodec {
         sink: &mut dyn EventSink,
     ) -> Result<(), TransportDiagnostic> {
         let input = Self::read_input(reader)?;
-        validate_yaml_profile(&input)?;
-        let probe = probe_yaml_slice(&input, &SupportTable::reference())?;
+        let value = read_value(&input)?;
+        let normalized = format_version_of(&value, &SupportTable::reference())?;
         stacker::grow(IR_RECURSION_STACK_BYTES, || match options.version() {
             IrVersion::V3 => {
-                if probe.normalized.release.major() != 3 {
-                    return Err(TransportDiagnostic::error(
-                        "morphir::ir::yaml::version_mismatch",
-                        Stage::Detection,
-                        IrCursor::root(),
-                        format!(
-                            "the v3 YAML codec requires formatVersion 3, found {}",
-                            probe.normalized.release
-                        ),
-                    ));
+                if normalized.release.major() != 3 {
+                    return Err(version_mismatch(3, &normalized.release));
                 }
                 let file: classic::Distribution =
-                    serde_saphyr::from_slice_with_options(&input, Self::parse_options())
-                        .map_err(Self::decode_error)?;
+                    serde_json::from_value(value).map_err(|error| recover(&error))?;
                 semantic::emit_classic_v3(file, sink)
             }
             IrVersion::V4 => {
-                if probe.normalized.release.major() != 4 {
-                    return Err(TransportDiagnostic::error(
-                        "morphir::ir::yaml::version_mismatch",
-                        Stage::Detection,
-                        IrCursor::root(),
-                        format!(
-                            "the v4 YAML codec requires formatVersion 4, found {}",
-                            probe.normalized.release
-                        ),
-                    ));
+                if normalized.release.major() != 4 {
+                    return Err(version_mismatch(4, &normalized.release));
                 }
                 let file: ir_v4::IRFile =
-                    serde_saphyr::from_slice_with_options(&input, Self::parse_options())
-                        .map_err(Self::decode_error)?;
+                    serde_json::from_value(value).map_err(|error| recover(&error))?;
                 semantic::emit_v4(file, sink)
             }
         })
@@ -272,10 +302,7 @@ impl IrCodec for YamlCodec {
         writer: &'writer mut dyn Write,
         options: &CodecOptions,
     ) -> Result<Box<dyn EventSink + 'writer>, TransportDiagnostic> {
-        match options.version() {
-            IrVersion::V3 => Ok(Box::new(V3YamlEventEncoder::new(writer))),
-            IrVersion::V4 => Ok(Box::new(V4YamlEventEncoder::new(writer))),
-        }
+        Ok(Box::new(YamlEventEncoder::new(writer, options.version())))
     }
 
     fn encode(
@@ -284,23 +311,66 @@ impl IrCodec for YamlCodec {
         writer: &mut dyn Write,
         options: &CodecOptions,
     ) -> Result<(), TransportDiagnostic> {
-        match semantic::collect(source, options.version())? {
-            SemanticFile::ClassicV3(file) => Self::write_yaml(writer, &file),
-            SemanticFile::V4(file) => Self::write_yaml(writer, &file),
+        write_semantic_file(semantic::collect(source, options.version())?, writer)
+    }
+}
+
+/// The push-side view of [`YamlCodec::encode`].
+///
+/// The canonical writer needs the whole value tree at once — it decides a sequence's style from
+/// what is nested inside it — so the events are held until `finish`, which replays them through
+/// the same collector `encode` uses. Buffering is what the canonical spelling costs; the JSON
+/// canonical writer in the adapter pays it too. Event-order faults are therefore the collector's
+/// (`morphir::ir::codec::missing_begin` and its neighbours), not a second set of rules here.
+struct YamlEventEncoder<'writer> {
+    writer: &'writer mut dyn Write,
+    version: IrVersion,
+    events: VecDeque<SemanticEvent>,
+    finished: bool,
+}
+
+impl<'writer> YamlEventEncoder<'writer> {
+    fn new(writer: &'writer mut dyn Write, version: IrVersion) -> Self {
+        Self {
+            writer,
+            version,
+            events: VecDeque::new(),
+            finished: false,
         }
     }
 }
 
-fn stream_event_error(
-    suffix: &'static str,
-    cursor: &IrCursor,
-    message: &'static str,
-) -> TransportDiagnostic {
-    TransportDiagnostic::error(
-        format!("morphir::ir::yaml::{suffix}"),
-        Stage::Encoding,
-        cursor.clone(),
-        message,
-    )
-    .with_guidance("verify the semantic event order and selected concrete IR version")
+/// Replays a buffered event stream for [`semantic::collect`].
+struct BufferedSource(VecDeque<SemanticEvent>);
+
+impl EventSource for BufferedSource {
+    fn next_event(&mut self) -> Result<Option<SemanticEvent>, TransportDiagnostic> {
+        Ok(self.0.pop_front())
+    }
+}
+
+impl EventSink for YamlEventEncoder<'_> {
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
+        if self.finished {
+            return Err(TransportDiagnostic::error(
+                "morphir::ir::codec::event_after_end",
+                Stage::Encoding,
+                event.cursor().clone(),
+                "an event appeared after the YAML document was written",
+            )
+            .with_guidance("create a new encoder for each codec operation"));
+        }
+        self.events.push_back(event);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), TransportDiagnostic> {
+        if self.finished {
+            return Ok(());
+        }
+        self.finished = true;
+        let mut source = BufferedSource(std::mem::take(&mut self.events));
+        let file = semantic::collect(&mut source, self.version)?;
+        write_semantic_file(file, self.writer)
+    }
 }

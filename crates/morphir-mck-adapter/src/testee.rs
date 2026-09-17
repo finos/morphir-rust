@@ -21,10 +21,8 @@
 //! `decode` does not migrate: the driver holds the answer against the case's own canonical
 //! fence, and a case pinned to version 3 spells its canonical in version 3.
 
-use std::collections::{BTreeMap, HashSet};
-use std::fmt;
+use std::collections::BTreeMap;
 
-use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -39,29 +37,21 @@ use morphir_core::ir::v4::{
     TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
     ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
 };
-use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
+use morphir_core::ir::{Diagnostic, DiagnosticCode, Warning};
 use morphir_core::naming::{FQName, Name, Path};
 
 use crate::protocol::{
     DecodeRequest, DecodeResponse, NodeKind, PathMode, Profile, ProtocolDiagnostic,
 };
 
-/// How many nested containers a document may carry, matching the reference reader's own ceiling
-/// (`MAX_DEPTH` in `packages/ir/src/codec/json/value.ts`).
-///
-/// A reader that follows arbitrary nesting turns a small input into a deep recursion, so the
-/// profile puts a ceiling on it and reports `nesting_too_deep` rather than failing some other
-/// way at some other depth.
-const MAX_DEPTH: usize = 1000;
-
 /// The stack every decode runs on.
 ///
-/// [`MAX_DEPTH`] is a promise: a document nesting that many containers is conforming, and the
-/// answer to one nesting a container more is `nesting_too_deep`, not a crashed process. Both the
-/// syntax probe and the readers recurse once per level, and 1000 levels of an unoptimized build's
-/// frames do not fit in the stack a thread is given by default — on Windows the main thread's
-/// stack is whatever the linker reserved, which is 1 MiB unless someone says otherwise. So the
-/// work runs on a thread with a stack this crate states rather than inherits.
+/// morphir-core's readers state their own nesting ceiling (`morphir_core::ir::json::MAX_DEPTH`,
+/// `morphir_core::ir::yaml::MAX_DEPTH`) and recurse once per level, and their own document-tree
+/// deserializers do too; 1000 levels of an unoptimized build's frames do not fit in the stack a
+/// thread is given by default — on Windows the main thread's stack is whatever the linker
+/// reserved, which is 1 MiB unless someone says otherwise. So the work runs on a thread with a
+/// stack this crate states rather than inherits.
 ///
 /// This is what one request reserves, not what a kit run reserves. [`decode`] spawns one scoped
 /// thread per request and joins it before returning, so the stack is gone before the answer is
@@ -136,19 +126,15 @@ fn profile_key(profile: Profile) -> &'static str {
 
 fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
     let value = match req.profile {
+        // morphir-core's reader settles the repeated-member and nesting-ceiling rules before the
+        // text becomes a value: `serde_json::Value` folds a repeated member onto the last one
+        // written and would hide it.
         Profile::Json => {
-            // A repeated member and a document nested past the ceiling are properties of the
-            // text, not of any node, so they are settled before the text becomes a value:
-            // `serde_json::Value` folds a repeated member onto the last one written and would
-            // hide it.
-            if let Some(diagnostic) = probe_syntax(&req.input) {
-                return Err(diagnostic);
-            }
-
+            let value = morphir_core::ir::json::read(&req.input)?;
             if req.version == 3 {
                 return read_v3(req).map(|node| (node, Vec::new()));
             }
-            parse_json(&req.input)?
+            value
         }
         // The YAML reader walks the document itself, so the repeated member and the nesting
         // ceiling are already its answers, in the kit's codes and with the kit's cursors; there
@@ -217,337 +203,6 @@ fn recover(error: &serde_json::Error) -> Diagnostic {
     Diagnostic::from_serde_error(error).unwrap_or_else(|| {
         Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
     })
-}
-
-/// Parses the input as JSON, with the ceiling this reader states rather than serde_json's own.
-///
-/// `disable_recursion_limit` needs the `unbounded_depth` feature; without it serde_json stops at
-/// its own default of 128, which would report `invalid_json` for a document the profile admits.
-/// The depth that matters is [`MAX_DEPTH`], and [`check_duplicates`] has already enforced it.
-fn parse_json(text: &str) -> Result<Json, Diagnostic> {
-    let mut deserializer = serde_json::Deserializer::from_str(text);
-    deserializer.disable_recursion_limit();
-    let value = Json::deserialize(&mut deserializer).map_err(invalid_json)?;
-    deserializer.end().map_err(invalid_json)?;
-    Ok(value)
-}
-
-fn invalid_json(error: serde_json::Error) -> Diagnostic {
-    let mut diagnostic = Diagnostic::syntax(DiagnosticCode::InvalidJson, "/", error.to_string());
-    diagnostic.line = u32::try_from(error.line()).ok();
-    diagnostic.column = u32::try_from(error.column()).ok();
-    diagnostic
-}
-
-// =============================================================================
-// Duplicate members and nesting
-// =============================================================================
-
-/// The two syntactic rules a `serde_json::Value` cannot carry: no repeated object member, and no
-/// more than [`MAX_DEPTH`] nested containers.
-///
-/// `Value` keeps one entry per key, so the second `"a"` in `{"a":1,"a":2}` is gone by the time a
-/// value exists, and serde_json's own recursion limit fails before this reader's ceiling is
-/// reached. The probe below walks the token stream instead, carrying the JSON pointer of where
-/// it is, and stops at the first thing it finds: `duplicate_member` at the second occurrence, or
-/// `nesting_too_deep` at the container that crossed the ceiling.
-pub fn probe_syntax(text: &str) -> Option<Diagnostic> {
-    let mut deserializer = serde_json::Deserializer::from_str(text);
-    deserializer.disable_recursion_limit();
-    match (Probe {
-        cursor: String::new(),
-        depth: 0,
-    })
-    .deserialize(&mut deserializer)
-    {
-        Ok(()) => None,
-        // A syntax error is not this probe's to report: `parse_json` reports it with the line
-        // and column serde_json gives, as `invalid_json`.
-        Err(error) => Diagnostic::from_serde_error(&error),
-    }
-}
-
-/// One position in the token stream: the JSON pointer of the value about to be read and how
-/// many containers are already open around it.
-///
-/// The cursor is built the way the reference reader builds it: empty at the root, then
-/// `<parent>/<member or index>` with the member name written out as it appears. A diagnostic at
-/// the root reports `/` (see [`cursor_or_root`]).
-///
-/// This is a [`DeserializeSeed`] rather than a [`Deserialize`] because the cursor and the depth
-/// have to travel *into* each member, and a `Deserialize` impl is handed nothing but the
-/// deserializer.
-struct Probe {
-    cursor: String,
-    depth: usize,
-}
-
-/// serde_json's `arbitrary_precision` feature carries a number through `deserialize_any` as a
-/// one-member map under this reserved key, so the probe would otherwise count every number as a
-/// container and read its lexeme as a member name.
-///
-/// The key alone does not make a map the token: a document literal is free to spell a member this
-/// way. The whole shape does — exactly this one member, holding a string — and [`Probe::visit_map`]
-/// checks the shape before it takes a map for a number. A map that is only shaped like the token
-/// is indistinguishable from one at this layer, because it is exactly what serde_json emits for a
-/// number, but anything else is walked like the ordinary object it is.
-const NUMBER_TOKEN: &str = "$serde_json::private::Number";
-
-impl<'de> DeserializeSeed<'de> for Probe {
-    type Value = ();
-
-    fn deserialize<D>(self, deserializer: D) -> Result<(), D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(self)
-    }
-}
-
-impl<'de> Visitor<'de> for Probe {
-    type Value = ();
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<(), A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        // The reserved-number check comes before the depth guard, not inside the loop: a number
-        // is a scalar the profile counts at no depth at all, and charging it a nesting level
-        // would make the ceiling depend on whether the innermost value happened to be a number.
-        let Some(first) = map.next_key::<String>()? else {
-            return self.enter::<A::Error>().map(|_| ());
-        };
-
-        let mut seen: HashSet<String> = HashSet::new();
-        let depth;
-        let mut key;
-
-        if first == NUMBER_TOKEN {
-            // Only the token's whole shape is the token. The value decides the first half of it,
-            // and reading it also walks it when it turns out to belong to a user object, so the
-            // level that object owes is charged there rather than here.
-            match map.next_value_seed(NumberTokenValue { outer: &self })? {
-                TokenValue::Lexeme => match map.next_key::<String>()? {
-                    // Exactly one member, holding a string: serde_json's number token.
-                    None => return Ok(()),
-                    // A user object whose first member is spelled like the token and holds a
-                    // string. The string carried nothing to walk, so only the level is still
-                    // owed, and the rest of the members are read like any other object's.
-                    Some(next) => {
-                        depth = self.enter::<A::Error>()?;
-                        seen.insert(first);
-                        key = next;
-                    }
-                },
-                TokenValue::Walked(walked) => {
-                    depth = walked;
-                    seen.insert(first);
-                    match map.next_key::<String>()? {
-                        Some(next) => key = next,
-                        None => return Ok(()),
-                    }
-                }
-            }
-        } else {
-            depth = self.enter::<A::Error>()?;
-            key = first;
-        }
-
-        loop {
-            // The member name goes in raw, not JSON-Pointer-escaped: the reference reader
-            // (`packages/ir/src/codec/json/value.ts`) builds the cursor this way and the kit
-            // README makes that reader the convention a binding mirrors.
-            let cursor = format!("{}/{}", self.cursor, key);
-            if !seen.insert(key.clone()) {
-                return Err(carry(Diagnostic::syntax(
-                    DiagnosticCode::DuplicateMember,
-                    cursor,
-                    format!("duplicate member \"{key}\""),
-                )));
-            }
-            map.next_value_seed(Probe { cursor, depth })?;
-            match map.next_key::<String>()? {
-                Some(next) => key = next,
-                None => return Ok(()),
-            }
-        }
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let depth = self.enter::<A::Error>()?;
-        let mut index = 0usize;
-        while seq
-            .next_element_seed(Probe {
-                cursor: format!("{}/{index}", self.cursor),
-                depth,
-            })?
-            .is_some()
-        {
-            index += 1;
-        }
-        Ok(())
-    }
-
-    fn visit_bool<E: serde::de::Error>(self, _value: bool) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_i64<E: serde::de::Error>(self, _value: i64) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_u64<E: serde::de::Error>(self, _value: u64) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_f64<E: serde::de::Error>(self, _value: f64) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_str<E: serde::de::Error>(self, _value: &str) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
-        Ok(())
-    }
-
-    fn visit_none<E: serde::de::Error>(self) -> Result<(), E> {
-        Ok(())
-    }
-}
-
-/// What the value under a [`NUMBER_TOKEN`] key turned out to be.
-enum TokenValue {
-    /// A string, which is what serde_json puts a number's lexeme in.
-    Lexeme,
-    /// Anything else, so the map holding it is a user object. The value has already been walked,
-    /// and the level that object owes has already been charged; this is the depth it was charged.
-    Walked(usize),
-}
-
-/// Reads the value under a [`NUMBER_TOKEN`] key and says which of the two it was.
-///
-/// It cannot just look, because a value read is a value consumed: whatever this finds has to be
-/// walked here or not at all. So the two answers are "a string, nothing to walk" and "walked it,
-/// here is the depth I charged the object for".
-struct NumberTokenValue<'probe> {
-    /// The map the key was read from, at its own position — not yet entered.
-    outer: &'probe Probe,
-}
-
-impl<'probe> NumberTokenValue<'probe> {
-    /// The probe for the value, with the level the object owes charged.
-    fn walker<E: serde::de::Error>(&self) -> Result<Probe, E> {
-        Ok(Probe {
-            cursor: format!("{}/{NUMBER_TOKEN}", self.outer.cursor),
-            depth: self.outer.enter::<E>()?,
-        })
-    }
-}
-
-impl<'de, 'probe> DeserializeSeed<'de> for NumberTokenValue<'probe> {
-    type Value = TokenValue;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<TokenValue, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(self)
-    }
-}
-
-impl<'de, 'probe> Visitor<'de> for NumberTokenValue<'probe> {
-    type Value = TokenValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value")
-    }
-
-    fn visit_str<E: serde::de::Error>(self, _value: &str) -> Result<TokenValue, E> {
-        Ok(TokenValue::Lexeme)
-    }
-
-    fn visit_map<A>(self, map: A) -> Result<TokenValue, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let walker = self.walker::<A::Error>()?;
-        let depth = walker.depth;
-        walker.visit_map(map)?;
-        Ok(TokenValue::Walked(depth))
-    }
-
-    fn visit_seq<A>(self, seq: A) -> Result<TokenValue, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let walker = self.walker::<A::Error>()?;
-        let depth = walker.depth;
-        walker.visit_seq(seq)?;
-        Ok(TokenValue::Walked(depth))
-    }
-
-    fn visit_bool<E: serde::de::Error>(self, _value: bool) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_i64<E: serde::de::Error>(self, _value: i64) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_u64<E: serde::de::Error>(self, _value: u64) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_f64<E: serde::de::Error>(self, _value: f64) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_unit<E: serde::de::Error>(self) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-
-    fn visit_none<E: serde::de::Error>(self) -> Result<TokenValue, E> {
-        self.walker::<E>()
-            .map(|walker| TokenValue::Walked(walker.depth))
-    }
-}
-
-impl Probe {
-    /// Opens the container at this position, refusing the one that crosses the ceiling.
-    fn enter<E: serde::de::Error>(&self) -> Result<usize, E> {
-        let depth = self.depth + 1;
-        if depth > MAX_DEPTH {
-            return Err(carry(Diagnostic::syntax(
-                DiagnosticCode::NestingTooDeep,
-                cursor_or_root(&self.cursor),
-                format!("nesting deeper than {MAX_DEPTH} is not accepted"),
-            )));
-        }
-        Ok(depth)
-    }
-}
-
-/// A cursor as a diagnostic reports it: the root is the whole document, spelled `/`.
-fn cursor_or_root(cursor: &str) -> &str {
-    if cursor.is_empty() { "/" } else { cursor }
-}
-
-fn carry<E: serde::de::Error>(diagnostic: Diagnostic) -> E {
-    E::custom(DiagnosticError(diagnostic))
 }
 
 // =============================================================================

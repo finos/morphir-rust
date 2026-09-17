@@ -22,7 +22,13 @@ thiserror = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 # `preserve_order` keeps a record's field order, which the IR treats as declaration order.
 # `arbitrary_precision` keeps a number's lexeme, which a DocumentLiteral carries verbatim.
-serde_json = { version = "1.0", features = ["preserve_order", "arbitrary_precision"] }
+# `unbounded_depth` lets the JSON reader turn off serde_json's own 128-level recursion limit so
+# the nesting ceiling it reports is the profile's, not the parser's.
+serde_json = { version = "1.0", features = [
+    "preserve_order",
+    "arbitrary_precision",
+    "unbounded_depth",
+] }
 schemars = { version = "1.0", features = ["derive", "indexmap2"] }
 indexmap = { version = "2", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serde"] }

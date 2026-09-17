@@ -3,6 +3,8 @@
 use crate::{Outcome, error, names, values::TupleAliases};
 use morphir_core::ir::v4::*;
 
+mod source_path;
+
 /// A Python dotted import path and its validated Morphir module name.
 pub(crate) struct ModuleIdentity {
     pub python: String,
@@ -11,11 +13,11 @@ pub(crate) struct ModuleIdentity {
 
 impl ModuleIdentity {
     pub fn from_source(uri: &str, root: Option<&str>) -> Outcome<Self> {
-        let uri = uri.replace('\\', "/");
+        let uri = source_path::normalize(uri)?;
         let relative = if uri.starts_with('/') || uri.contains(':') {
             match root {
                 Some(root) => {
-                    let root = root.replace('\\', "/");
+                    let root = source_path::normalize(root)?;
                     uri.strip_prefix(&format!("{}/", root.trim_end_matches('/')))
                         .ok_or_else(|| error("PY001", "Source document is outside sourceRootUri"))?
                 }

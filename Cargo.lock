@@ -3781,12 +3781,14 @@ dependencies = [
  "morphir-core",
  "morphir-extension-sdk",
  "num-bigint",
+ "percent-encoding",
  "ruff_python_ast",
  "ruff_python_codegen",
  "ruff_python_parser",
  "ruff_text_size",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]

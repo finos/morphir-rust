@@ -299,3 +299,39 @@ fn rejects_module_paths_that_collide_on_case_insensitive_filesystems() {
     assert!(!result.success);
     assert!(result.artifacts.is_empty());
 }
+
+#[test]
+fn document_uri_metadata_and_percent_encoding_do_not_change_module_identity() {
+    let mut input = request(&[
+        (
+            "file:///my%20project/src/domain/%6dodels.py?rev=1#selection",
+            TYPES,
+        ),
+        (
+            "file:///my%20project/src/domain/rules.py?rev=2",
+            "from .models import Pair\ndef origin() -> Pair:\n    return (0, '')\n",
+        ),
+    ]);
+    input
+        .options
+        .extra
+        .insert("sourceRootUri".into(), json!("file:///my%20project/src/"));
+    roundtrip(input);
+    for uri in [
+        "file://other/project/src/models.py",
+        "file:///project/src/../models.py",
+        "file:///project/src/%2e%2e/models.py",
+        "file:///project/src/domain%2Fmodels.py",
+        "file:///project/src/domain%5Cmodels.py",
+    ] {
+        let mut input = request(&[(uri, TYPES)]);
+        input
+            .options
+            .extra
+            .insert("sourceRootUri".into(), json!("file:///project/src"));
+        assert!(
+            !PythonExtension.compile(input).unwrap().success,
+            "accepted {uri}"
+        );
+    }
+}

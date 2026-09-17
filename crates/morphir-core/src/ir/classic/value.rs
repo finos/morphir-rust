@@ -32,8 +32,12 @@ pub enum Value<TA, VA> {
         Box<Value<TA, VA>>,
     ),
     Lambda(VA, Pattern<VA>, Box<Value<TA, VA>>),
-    LetDefinition(VA, Name, Box<Definition<TA, VA>>, Box<Value<TA, VA>>),
-    LetRecursion(VA, Vec<(Name, Box<Definition<TA, VA>>)>, Box<Value<TA, VA>>),
+    LetDefinition(VA, Name, Box<ValueDefinition<TA, VA>>, Box<Value<TA, VA>>),
+    LetRecursion(
+        VA,
+        Vec<(Name, Box<ValueDefinition<TA, VA>>)>,
+        Box<Value<TA, VA>>,
+    ),
     List(VA, Vec<Value<TA, VA>>),
     Literal(VA, Literal),
     PatternMatch(VA, Box<Value<TA, VA>>, Vec<(Pattern<VA>, Value<TA, VA>)>),
@@ -624,15 +628,6 @@ pub struct ValueDefinition<TA, VA> {
     pub body: Value<TA, VA>,
 }
 
-/// Definition used in Let bindings
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Definition<TA, VA> {
-    pub input_types: Vec<ValueArgument<TA, VA>>,
-    pub output_type: Type<TA>,
-    pub body: Box<Value<TA, VA>>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,13 +671,13 @@ mod tests {
     fn test_serialize_value_lambda() {
         let v: Value<(), ()> = Value::Lambda(
             (),
-            Pattern::Variable((), Name::from_str("x")),
+            Pattern::As((), Box::new(Pattern::Wildcard(())), Name::from_str("x")),
             Box::new(Value::Variable((), Name::from_str("x"))),
         );
         let json = serde_json::to_string(&v).unwrap();
         assert_eq!(
             json,
-            r#"["Lambda",null,["VariablePattern",null,["x"]],["Variable",null,["x"]]]"#
+            r#"["Lambda",null,["AsPattern",null,["WildcardPattern",null],["x"]],["Variable",null,["x"]]]"#
         );
         let deserialized: Value<(), ()> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, v);
@@ -690,10 +685,10 @@ mod tests {
 
     #[test]
     fn test_serialize_value_let_definition() {
-        let def = Definition {
+        let def = ValueDefinition {
             input_types: vec![],
             output_type: Type::Unit(()),
-            body: Box::new(Value::Unit(())),
+            body: Value::Unit(()),
         };
         let v: Value<(), ()> = Value::LetDefinition(
             (),

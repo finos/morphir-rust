@@ -564,7 +564,6 @@ type ClassicAnnotation = classic::Attrs<classic::Type<classic::Attrs>>;
 /// A classic value expression as this adapter reads one.
 type ClassicValue = classic::Value<classic::Attrs, ClassicAnnotation>;
 type ClassicPattern = classic::Pattern<ClassicAnnotation>;
-type ClassicDefinition = classic::value::Definition<classic::Attrs, ClassicAnnotation>;
 type ClassicValueDefinition = classic::ValueDefinition<classic::Attrs, ClassicAnnotation>;
 type ClassicArgument = classic::value::ValueArgument<classic::Attrs, ClassicAnnotation>;
 
@@ -588,11 +587,11 @@ fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
         NodeKind::Pattern => of(text, Node::ClassicPattern),
         NodeKind::Value => of(text, Node::ClassicValue),
         NodeKind::ValueDefinition => of(text, Node::ClassicValueDefinition),
+        NodeKind::TypeSpecification => of(text, Node::ClassicTypeSpecification),
         // The rest are nodes a classic document only ever carries inside a whole distribution,
         // whose value attribute is the inferred type itself rather than something a reader can
         // clear — so there is no version 3 answer this adapter can give for them on their own.
         NodeKind::FormatVersion
-        | NodeKind::TypeSpecification
         | NodeKind::TypeDefinition
         | NodeKind::ValueSpecification
         | NodeKind::AccessControlledTypeDefinition
@@ -651,14 +650,16 @@ fn strip_classic_value(node: ClassicValue) -> ClassicValue {
         classic::Value::LetDefinition(_, name, definition, body) => classic::Value::LetDefinition(
             attributes,
             name,
-            Box::new(strip_classic_definition(*definition)),
+            Box::new(strip_classic_value_definition(*definition)),
             Box::new(strip_classic_value(*body)),
         ),
         classic::Value::LetRecursion(_, bindings, body) => classic::Value::LetRecursion(
             attributes,
             bindings
                 .into_iter()
-                .map(|(name, definition)| (name, Box::new(strip_classic_definition(*definition))))
+                .map(|(name, definition)| {
+                    (name, Box::new(strip_classic_value_definition(*definition)))
+                })
                 .collect(),
             Box::new(strip_classic_value(*body)),
         ),
@@ -724,7 +725,6 @@ fn strip_classic_pattern(node: ClassicPattern) -> ClassicPattern {
         ),
         classic::Pattern::Literal(_, literal) => classic::Pattern::Literal(attributes, literal),
         classic::Pattern::Unit(_) => classic::Pattern::Unit(attributes),
-        classic::Pattern::Variable(_, name) => classic::Pattern::Variable(attributes, name),
     }
 }
 
@@ -733,18 +733,6 @@ fn strip_classic_argument(argument: ClassicArgument) -> ClassicArgument {
         name: argument.name,
         annotation: classic::Attrs::None,
         ty: argument.ty,
-    }
-}
-
-fn strip_classic_definition(definition: ClassicDefinition) -> ClassicDefinition {
-    classic::value::Definition {
-        input_types: definition
-            .input_types
-            .into_iter()
-            .map(strip_classic_argument)
-            .collect(),
-        output_type: definition.output_type,
-        body: Box::new(strip_classic_value(*definition.body)),
     }
 }
 
@@ -783,6 +771,17 @@ fn classic_type_kind(node: &classic::Type<classic::Attrs>) -> &'static str {
     }
 }
 
+fn classic_type_specification_kind(
+    node: &classic::TypeSpecification<classic::Attrs>,
+) -> &'static str {
+    match node {
+        classic::TypeSpecification::Alias(..) => "TypeAliasSpecification",
+        classic::TypeSpecification::Opaque(_) => "OpaqueTypeSpecification",
+        classic::TypeSpecification::Custom(..) => "CustomTypeSpecification",
+        classic::TypeSpecification::Derived(..) => "DerivedTypeSpecification",
+    }
+}
+
 fn classic_pattern_kind(node: &ClassicPattern) -> &'static str {
     match node {
         classic::Pattern::Wildcard(_) => "WildcardPattern",
@@ -793,7 +792,6 @@ fn classic_pattern_kind(node: &ClassicPattern) -> &'static str {
         classic::Pattern::HeadTail(..) => "HeadTailPattern",
         classic::Pattern::Literal(..) => "LiteralPattern",
         classic::Pattern::Unit(_) => "UnitPattern",
-        classic::Pattern::Variable(..) => "VariablePattern",
     }
 }
 
@@ -851,6 +849,7 @@ enum Node {
     ClassicFQName(classic::FQName),
     ClassicLiteral(classic::Literal),
     ClassicType(classic::Type<classic::Attrs>),
+    ClassicTypeSpecification(classic::TypeSpecification<classic::Attrs>),
     ClassicPattern(ClassicPattern),
     ClassicValue(ClassicValue),
     ClassicValueDefinition(ClassicValueDefinition),
@@ -883,6 +882,7 @@ impl Node {
             Node::ClassicFQName(_) => "FQName",
             Node::ClassicLiteral(node) => classic_literal_kind(node),
             Node::ClassicType(node) => classic_type_kind(node),
+            Node::ClassicTypeSpecification(node) => classic_type_specification_kind(node),
             Node::ClassicPattern(node) => classic_pattern_kind(node),
             Node::ClassicValue(node) => classic_value_kind(node),
             Node::ClassicValueDefinition(_) => "ValueDefinition",
@@ -926,8 +926,9 @@ impl Node {
             Node::ClassicValueDefinition(node) => {
                 Node::ClassicValueDefinition(strip_classic_value_definition(node))
             }
-            // Names, paths, literals, the format version and a classic type carry no attributes
-            // a reader can clear.
+            // Names, paths, literals, the format version, a classic type and a classic type
+            // specification — which carries nothing but types — have no attributes a reader can
+            // clear.
             other => other,
         }
     }
@@ -980,6 +981,7 @@ impl Node {
             Node::ClassicFQName(node) => text(node),
             Node::ClassicLiteral(node) => text(node),
             Node::ClassicType(node) => text(node),
+            Node::ClassicTypeSpecification(node) => text(node),
             Node::ClassicPattern(node) => text(node),
             Node::ClassicValue(node) => text(node),
             Node::ClassicValueDefinition(node) => text(node),

@@ -16,7 +16,11 @@ pub trait ClassicVisitor<TA, VA> {
         walk_value(self, cursor, value);
     }
 
-    fn visit_definition(&mut self, cursor: &mut IrCursor, value: &classic::Definition<TA, VA>) {
+    fn visit_definition(
+        &mut self,
+        cursor: &mut IrCursor,
+        value: &classic::ValueDefinition<TA, VA>,
+    ) {
         walk_definition(self, cursor, value);
     }
 }
@@ -76,15 +80,14 @@ where
         classic::Pattern::Wildcard(_)
         | classic::Pattern::EmptyList(_)
         | classic::Pattern::Literal(_, _)
-        | classic::Pattern::Unit(_)
-        | classic::Pattern::Variable(_, _) => {}
+        | classic::Pattern::Unit(_) => {}
     }
 }
 
 pub fn walk_definition<TA, VA, V>(
     visitor: &mut V,
     cursor: &mut IrCursor,
-    value: &classic::Definition<TA, VA>,
+    value: &classic::ValueDefinition<TA, VA>,
 ) where
     V: ClassicVisitor<TA, VA> + ?Sized,
 {

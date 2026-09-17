@@ -4,7 +4,7 @@
 
 use super::naming::{FQName, Name};
 use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
-use serde::ser::{SerializeTuple, Serializer};
+use serde::ser::{SerializeStruct, SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::fmt;
@@ -244,7 +244,11 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Type<A> {
 // Field
 // ----------------------------------------------------------------------------
 
-/// Record field definition - serialized as [name, type]
+/// Record field definition.
+///
+/// morphir-elm's `encodeField` writes an object, `{ "name": …, "tpe": … }`, and that is the
+/// only spelling this mirror writes. The reader also accepts the `[name, type]` pair, which
+/// older Rust-written documents carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field<A> {
     pub name: Name,
@@ -256,10 +260,10 @@ impl<A: Serialize> Serialize for Field<A> {
     where
         S: Serializer,
     {
-        let mut tuple = serializer.serialize_tuple(2)?;
-        tuple.serialize_element(&self.name)?;
-        tuple.serialize_element(&self.ty)?;
-        tuple.end()
+        let mut field = serializer.serialize_struct("Field", 2)?;
+        field.serialize_field("name", &self.name)?;
+        field.serialize_field("tpe", &self.ty)?;
+        field.end()
     }
 }
 
@@ -330,12 +334,25 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Field<A> {
 // TypeSpecification
 // ----------------------------------------------------------------------------
 
-/// Type specification (opaque, alias, or custom)
+/// The configuration a derived type carries: the type it is derived from and the two
+/// conversions between them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedTypeConfig<A> {
+    pub base_type: Type<A>,
+    pub from_base_type: FQName,
+    pub to_base_type: FQName,
+}
+
+/// Type specification (alias, opaque, custom, or derived)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeSpecification<A> {
     Alias(Vec<Name>, Type<A>),
     Opaque(Vec<Name>),
     Custom(Vec<Name>, Vec<Constructor<A>>),
+    /// morphir-elm's fourth specification: a nominal type over a base type, with the two
+    /// conversions named rather than written as expressions.
+    Derived(Vec<Name>, DerivedTypeConfig<A>),
 }
 
 impl<A: Serialize> Serialize for TypeSpecification<A> {
@@ -362,6 +379,13 @@ impl<A: Serialize> Serialize for TypeSpecification<A> {
                 tuple.serialize_element("CustomTypeSpecification")?;
                 tuple.serialize_element(params)?;
                 tuple.serialize_element(ctors)?;
+                tuple.end()
+            }
+            TypeSpecification::Derived(params, config) => {
+                let mut tuple = serializer.serialize_tuple(3)?;
+                tuple.serialize_element("DerivedTypeSpecification")?;
+                tuple.serialize_element(params)?;
+                tuple.serialize_element(config)?;
                 tuple.end()
             }
         }
@@ -432,12 +456,29 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for TypeSpecification<A> {
 
                         Ok(TypeSpecification::Custom(params, ctors))
                     }
+                    "DerivedTypeSpecification" | "derived_type_specification" => {
+                        let params = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let config = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+
+                        if seq.next_element::<IgnoredAny>()?.is_some() {
+                            return Err(de::Error::custom(
+                                "Expected end of DerivedTypeSpecification array",
+                            ));
+                        }
+
+                        Ok(TypeSpecification::Derived(params, config))
+                    }
                     _ => Err(de::Error::unknown_variant(
                         &tag,
                         &[
                             "TypeAliasSpecification",
                             "OpaqueTypeSpecification",
                             "CustomTypeSpecification",
+                            "DerivedTypeSpecification",
                         ],
                     )),
                 }
@@ -651,7 +692,10 @@ mod tests {
             }],
         );
         let json = serde_json::to_string(&t).unwrap();
-        assert_eq!(json, r#"["Record",null,[[["x"],["Unit",null]]]]"#);
+        assert_eq!(
+            json,
+            r#"["Record",null,[{"name":["x"],"tpe":["Unit",null]}]]"#
+        );
         let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, t);
     }
@@ -686,7 +730,7 @@ mod tests {
         let json = serde_json::to_string(&t).unwrap();
         assert_eq!(
             json,
-            r#"["ExtensibleRecord",null,["r"],[[["x"],["Unit",null]]]]"#
+            r#"["ExtensibleRecord",null,["r"],[{"name":["x"],"tpe":["Unit",null]}]]"#
         );
         let deserialized: Type<()> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, t);

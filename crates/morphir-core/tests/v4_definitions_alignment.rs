@@ -282,6 +282,16 @@ fn a_hole_keeps_the_partial_type_expression_the_author_had() {
     } });
     assert!(normalizes_to::<TypeDefinition>(canonical.clone(), &canonical).is_empty());
 
+    // A `Value` comparison is order-insensitive, so the text is what pins `partialBody` after
+    // `reason`.
+    assert_eq!(
+        serde_json::to_string(&encode(
+            &decode::<TypeDefinition>(canonical.clone()).unwrap()
+        ))
+        .unwrap(),
+        r#"{"IncompleteTypeDefinition":{"typeParams":[],"incompleteness":{"Hole":{"reason":{"UnresolvedReference":{"target":"acme/shop:pricing#rounding-rule"}},"partialBody":"acme/shop:pricing#quantity"}}}}"#
+    );
+
     let TypeDefinition::IncompleteTypeDefinition { incompleteness, .. } =
         decode::<TypeDefinition>(canonical).unwrap()
     else {
@@ -463,6 +473,16 @@ fn an_incomplete_body_keeps_the_partial_value_the_author_had() {
         "partialBody": { "Literal": { "IntegerLiteral": 1 } }
     } });
     assert!(normalizes_to::<ValueDefinition>(canonical.clone(), &canonical).is_empty());
+
+    // A `Value` comparison is order-insensitive, so the text is what pins `partialBody` last.
+    assert_eq!(
+        serde_json::to_string(&encode(
+            &decode::<ValueDefinition>(canonical.clone()).unwrap()
+        ))
+        .unwrap(),
+        r#"{"IncompleteBody":{"inputTypes":{},"outputType":"acme/shop:pricing#money","incompleteness":{"Draft":{}},"partialBody":{"Literal":{"IntegerLiteral":1}}}}"#
+    );
+
     assert!(matches!(
         decode::<ValueDefinition>(canonical).unwrap().body,
         ValueBody::Incomplete {

@@ -4,6 +4,15 @@
 //! https://morphir.finos.org/docs/spec/ir/schemas/v4/whats-new/
 
 use morphir_core::ir::v4::NativeHint;
+use morphir_core::ir::{Diagnostic, DiagnosticCode};
+
+/// The diagnostic a refused hint carries. A hint decoded on its own is entered at the root, so
+/// the cursors below are relative to the hint itself.
+fn refusal(json: &str) -> Diagnostic {
+    let error =
+        serde_json::from_str::<NativeHint>(json).expect_err("this spelling is not a native hint");
+    Diagnostic::from_serde_error(&error).expect("a v4 refusal carries a diagnostic")
+}
 
 #[test]
 fn test_native_hint_arithmetic_serialize() {
@@ -97,11 +106,16 @@ fn test_native_hint_platform_specific_round_trip() {
 // (definitions-0009, 0030).
 #[test]
 fn test_native_hint_bare_tag_is_not_a_hint() {
-    assert!(serde_json::from_str::<NativeHint>(r#""Arithmetic""#).is_err());
-    assert!(serde_json::from_str::<NativeHint>(r#""PlatformSpecific""#).is_err());
+    for bare in [r#""Arithmetic""#, r#""PlatformSpecific""#] {
+        let refused = refusal(bare);
+        assert_eq!(refused.code, DiagnosticCode::InvalidType);
+        assert_eq!(refused.cursor, "");
+    }
 }
 
 #[test]
 fn test_native_hint_platform_specific_requires_a_platform() {
-    assert!(serde_json::from_str::<NativeHint>(r#"{"PlatformSpecific": {}}"#).is_err());
+    let refused = refusal(r#"{"PlatformSpecific": {}}"#);
+    assert_eq!(refused.code, DiagnosticCode::MissingMember);
+    assert_eq!(refused.cursor, "/PlatformSpecific");
 }

@@ -198,7 +198,7 @@ pub enum NativeHint {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NativeInfo {
     pub hint: NativeHint,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 

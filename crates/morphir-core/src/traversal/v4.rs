@@ -96,15 +96,23 @@ pub fn walk_definition<V: V4Visitor + ?Sized>(
     }
     match &definition.body {
         v4::ValueBody::Expression(value) => visitor.visit_value(cursor, value),
-        // An external definition's fallback body is an ordinary expression, so it is walked.
+        // An external definition's fallback body and an incomplete definition's partial body are
+        // ordinary expressions, so they are walked.
         v4::ValueBody::External {
             fallback: Some(value),
             ..
+        }
+        | v4::ValueBody::Incomplete {
+            partial_body: Some(value),
+            ..
         } => visitor.visit_value(cursor, value),
-        // An incomplete body's `outputType` is the definition's own, already walked above.
+        // A native body has no expression at all, and an incomplete body's `outputType` is the
+        // definition's own, already walked above.
         v4::ValueBody::Native { .. }
         | v4::ValueBody::External { fallback: None, .. }
-        | v4::ValueBody::Incomplete { .. } => {}
+        | v4::ValueBody::Incomplete {
+            partial_body: None, ..
+        } => {}
     }
 }
 
@@ -186,5 +194,75 @@ pub fn walk_value<V: V4Visitor + ?Sized>(
         | v4::Value::Variable(_, _)
         | v4::Value::Reference(_, _)
         | v4::Value::Hole(_, _, _) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::v4::{
+        Incompleteness, Type, TypeAttributes, Value, ValueAttributes, ValueBody, ValueDefinition,
+    };
+    use crate::naming::FQName;
+
+    /// Collects every reference a walk reaches, which is how a caller learns what a definition
+    /// depends on.
+    #[derive(Default)]
+    struct References(Vec<String>);
+
+    impl V4Visitor for References {
+        fn visit_value(&mut self, cursor: &mut IrCursor, value: &Value) {
+            if let Value::Reference(_, target) = value {
+                self.0.push(target.to_canonical_string());
+            }
+            walk_value(self, cursor, value);
+        }
+    }
+
+    fn references_of(definition: &ValueDefinition) -> Vec<String> {
+        let mut visitor = References::default();
+        visitor.visit_definition(&mut IrCursor::root(), definition);
+        visitor.0
+    }
+
+    fn reference(target: &str) -> Value {
+        Value::Reference(
+            ValueAttributes::default(),
+            FQName::from_canonical_string(target).unwrap(),
+        )
+    }
+
+    fn incomplete(partial_body: Option<Value>) -> ValueDefinition {
+        ValueDefinition {
+            input_types: Default::default(),
+            output_type: Some(Type::unit(TypeAttributes::default())),
+            body: ValueBody::Incomplete {
+                incompleteness: Incompleteness::Draft,
+                partial_body: partial_body.map(Box::new),
+            },
+        }
+    }
+
+    #[test]
+    fn a_walk_reaches_a_reference_inside_an_incomplete_bodys_partial_value() {
+        // The partial value is an ordinary expression, so a visitor collecting dependencies has
+        // to see what it refers to; skipping it would silently drop the reference.
+        let definition = incomplete(Some(Value::Apply(
+            ValueAttributes::default(),
+            Box::new(reference("acme/shop:pricing#round")),
+            Box::new(reference("acme/shop:pricing#subtotal")),
+        )));
+        assert_eq!(
+            references_of(&definition),
+            vec![
+                "acme/shop:pricing#round".to_string(),
+                "acme/shop:pricing#subtotal".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_incomplete_body_that_kept_nothing_has_nothing_to_walk() {
+        assert!(references_of(&incomplete(None)).is_empty());
     }
 }

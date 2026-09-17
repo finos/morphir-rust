@@ -382,6 +382,8 @@ impl<'de> Deserialize<'de> for Incompleteness {
 /// Type definition - uses wrapper object format
 ///
 /// V4 adds IncompleteTypeDefinition for incremental compilation and error recovery.
+// `large_enum_variant`: the incomplete definition is the big variant only because it carries an
+// `Incompleteness`, whose own fields are inline for the reason given on that enum.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 pub enum TypeDefinition {

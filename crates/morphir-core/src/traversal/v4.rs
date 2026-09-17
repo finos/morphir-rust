@@ -101,53 +101,32 @@ pub fn walk_definition<V: V4Visitor + ?Sized>(
         v4::ValueBody::External {
             fallback: Some(value),
             ..
-        }
-        | v4::ValueBody::Incomplete {
-            partial_body: Some(value),
-            incompleteness: v4::Incompleteness::Draft,
         } => visitor.visit_value(cursor, value),
-        // A hole's own `partialBody` is a type, not a value, but it is still author-written
-        // content a caller needs to see (e.g. a reference inside it).
+        // An incomplete body has two independent, optional parts that a caller needs to see: the
+        // author's own partial value (`partial_body`) and, when the incompleteness is a hole, the
+        // type the author had written before the value became one (the hole's own
+        // `partial_body`). Neither implies the other, so each is walked whenever present rather
+        // than matched as one combination.
         v4::ValueBody::Incomplete {
-            partial_body: Some(value),
-            incompleteness:
-                v4::Incompleteness::Hole {
-                    partial_body: Some(hole_type),
-                    ..
-                },
+            partial_body,
+            incompleteness,
         } => {
-            visitor.visit_value(cursor, value);
-            cursor.with_segment(CursorSegment::Branch("hole"), |cursor| {
-                visitor.visit_type(cursor, hole_type);
-            });
-        }
-        v4::ValueBody::Incomplete {
-            partial_body: None,
-            incompleteness:
-                v4::Incompleteness::Hole {
-                    partial_body: Some(hole_type),
-                    ..
-                },
-        } => {
-            cursor.with_segment(CursorSegment::Branch("hole"), |cursor| {
-                visitor.visit_type(cursor, hole_type);
-            });
+            if let Some(value) = partial_body {
+                visitor.visit_value(cursor, value);
+            }
+            if let v4::Incompleteness::Hole {
+                partial_body: Some(hole_type),
+                ..
+            } = incompleteness
+            {
+                cursor.with_segment(CursorSegment::Branch("hole"), |cursor| {
+                    visitor.visit_type(cursor, hole_type);
+                });
+            }
         }
         // A native body has no expression at all, and an incomplete body's `outputType` is the
         // definition's own, already walked above.
-        v4::ValueBody::Native { .. }
-        | v4::ValueBody::External { fallback: None, .. }
-        | v4::ValueBody::Incomplete {
-            partial_body: None,
-            incompleteness: v4::Incompleteness::Draft,
-        }
-        | v4::ValueBody::Incomplete {
-            incompleteness:
-                v4::Incompleteness::Hole {
-                    partial_body: None, ..
-                },
-            ..
-        } => {}
+        v4::ValueBody::Native { .. } | v4::ValueBody::External { fallback: None, .. } => {}
     }
 }
 
@@ -327,6 +306,30 @@ mod tests {
         assert_eq!(
             type_references_of(&definition),
             vec!["acme/shop:pricing#money".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_walk_reaches_a_reference_inside_a_hole_bodys_partial_value_even_without_a_hole_type() {
+        // A hole with a reason but no kept type expression may still carry an authored partial
+        // value; the two `partialBody`s are independent, so the value-side one is walked even
+        // when the hole-side one is absent, not treated as part of the same match arm.
+        let definition = ValueDefinition {
+            input_types: Default::default(),
+            output_type: Some(Type::unit(TypeAttributes::default())),
+            body: ValueBody::Incomplete {
+                incompleteness: Incompleteness::Hole {
+                    reason: HoleReason::DeletedDuringRefactor {
+                        tx_id: "tx-1".to_string(),
+                    },
+                    partial_body: None,
+                },
+                partial_body: Some(Box::new(reference("acme/shop:pricing#round"))),
+            },
+        };
+        assert_eq!(
+            references_of(&definition),
+            vec!["acme/shop:pricing#round".to_string()]
         );
     }
 

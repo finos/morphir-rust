@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a dependency whose type definition is incomplete: `PackageDefinition::to_specification`
   renders an `IncompleteTypeDefinition` as an ordinary `OpaqueTypeSpecification`, the same shape a
   custom type with private constructors produces, so the loader sees a publishable type rather
-  than a distribution it cannot reconcile. MCK distributions-0010.
+  than a distribution it cannot reconcile. The diagnostic is gone because that conversion is now
+  infallible.
 
 ### Removed
 

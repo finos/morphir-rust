@@ -135,11 +135,13 @@ pub use memory::MemoryVfs;
 pub use os::OsVfs;
 
 mod backend;
+mod contained;
 pub use ::vfs::{FileSystem, MemoryFS, PhysicalFS, VfsError, VfsPath, VfsResult};
 pub use backend::{
     ManifestLastPublisher, PhysicalPublisher, PublicationCapabilities, Publisher, memory_root,
     physical_root,
 };
+pub use contained::ContainedPhysicalFS;
 
 mod memory;
 mod os;

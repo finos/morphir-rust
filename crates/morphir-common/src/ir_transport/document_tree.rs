@@ -311,34 +311,45 @@ pub fn discover_document_tree_format(root: &VfsPath) -> Result<FormatId, Transpo
 /// recognize is not a tree file at all and is ignored, as the reference's directory adapter
 /// ignores it.
 ///
-/// **Symlinks are followed, not skipped.** The `vfs` abstraction this transport is written against
-/// answers `File` or `Directory` and has no symlink predicate at all, so a symlinked entry is
-/// indistinguishable here from the thing it points at. To keep a symlink cycle from walking
-/// forever, a directory whose relative path is already longer than the options' path budget is
-/// refused: no file this transport wrote can have a longer path, because the budget is measured on
-/// exactly that path.
+/// Links are skipped too, on a root that can tell: [`morphir_common::vfs::physical_root`][pr]
+/// builds a `ContainedPhysicalFS`, whose `read_dir` never yields a symlink or a junction, so a
+/// linked file and a linked directory are both simply absent from the walk and nothing outside the
+/// OS root can be read through one. On any other backend the walk sees whatever that backend
+/// reports; `MemoryFS`, the only other one used here, has no links to report.
+///
+/// [`MAX_TREE_DEPTH`] is a backstop, not a rule about trees: no backend in this crate can present a
+/// cycle, but a walk driven by someone else's `FileSystem` should end rather than recurse forever.
+/// It is a fixed depth rather than anything derived from the caller's path budget, which would
+/// refuse a legitimate deep tree read back under a smaller budget than it was written with.
+///
+/// [pr]: crate::vfs::physical_root
 fn read_tree_files(root: &VfsPath, policy: &TreePolicy) -> Result<Tree, TransportDiagnostic> {
     let mut files = Tree::new();
-    read_directory(root, "", policy, &mut files)?;
+    read_directory(root, "", 0, policy, &mut files)?;
     Ok(files)
 }
+
+/// The deepest a tree walk descends. A logical path is `deps/<package segments>/@/<module
+/// segments>/<leaf>`, so a real tree is a handful of levels; this is orders of magnitude clear of
+/// anything a distribution can spell.
+const MAX_TREE_DEPTH: usize = 256;
 
 fn read_directory(
     directory: &VfsPath,
     relative: &str,
+    depth: usize,
     policy: &TreePolicy,
     files: &mut Tree,
 ) -> Result<(), TransportDiagnostic> {
-    if relative.chars().count() > policy.path_budget as usize {
+    if depth > MAX_TREE_DEPTH {
         return Err(tree_error(
             "morphir::ir::document_tree::invalid_path",
             Stage::Detection,
             format!(
-                "the directory '{relative}' is longer than the {}-character path budget; a \
-                 document tree cannot nest this deep, and a symlink cycle can",
-                policy.path_budget
+                "the directory '{relative}' nests deeper than {MAX_TREE_DEPTH} levels; no document \
+                 tree does, and a filesystem cycle does"
             ),
-            "remove the symlink cycle under the tree root, or raise the path budget",
+            "remove the directory cycle under the tree root",
         ));
     }
     let entries = directory
@@ -358,7 +369,7 @@ fn read_directory(
             .is_dir()
             .map_err(|error| io_error("inspect", &entry, Stage::Detection, error))?
         {
-            read_directory(&entry, &child, policy, files)?;
+            read_directory(&entry, &child, depth + 1, policy, files)?;
             continue;
         }
         let Some(logical) = from_physical(&child) else {
@@ -441,6 +452,16 @@ impl DocumentTreeSink {
     /// manifest spelling is there. A module that is no longer in the distribution, and a
     /// dependency that is no longer listed, both disappear this way — there is no other staleness
     /// story, because a streaming writer never sees the whole tree it is replacing.
+    ///
+    /// The removal never follows a link. `VfsPath::remove_dir_all` is plain recursion over
+    /// `read_dir` and `metadata`, so on a backend that resolves links it would delete a link's
+    /// target rather than the link; [`morphir_common::vfs::physical_root`][pr] therefore builds a
+    /// `ContainedPhysicalFS`, which hides linked children from `read_dir` and removes a link *as a
+    /// link* when one stands in the way. A symlink or junction at `pkg/`, at `deps/`, or anywhere
+    /// beneath them is unlinked; nothing outside the OS root is touched. On a backend with no links
+    /// to begin with — `MemoryFS` — there is nothing to contain.
+    ///
+    /// [pr]: crate::vfs::physical_root
     fn prune(&self) -> Result<(), TransportDiagnostic> {
         for root in [Root::Pkg, Root::Deps] {
             let path = self.root.join(root.as_str()).map_err(|error| {

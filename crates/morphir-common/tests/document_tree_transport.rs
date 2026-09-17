@@ -405,6 +405,30 @@ fn a_yml_manifest_is_discovered_and_read() {
 }
 
 #[test]
+fn a_yml_node_file_is_read_in_a_yaml_tree() {
+    let root = memory_root();
+    let expected = granular_fixture();
+    let options = options(FormatId::yaml());
+    write_document_tree_with_options(&root, &expected, &options).unwrap();
+
+    let logical = module_manifest_path(Root::Pkg, &own_module_dir(&expected, 0));
+    let yaml = at(&root, &logical, Profile::Yaml);
+    let text = yaml.read_to_string().unwrap();
+    yaml.remove_file().unwrap();
+    root.join(format!("{logical}.yml"))
+        .unwrap()
+        .create_file()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+
+    assert_eq!(
+        read_document_tree_with_options(&root, &options).unwrap(),
+        expected
+    );
+}
+
+#[test]
 fn discovery_rejects_ambiguous_tree_manifests() {
     let root = memory_root();
     root.create_dir_all().unwrap();
@@ -422,6 +446,101 @@ fn discovery_rejects_ambiguous_tree_manifests() {
 }
 
 // =============================================================================
+// Containment: a link is never followed
+// =============================================================================
+
+/// Creates a directory link, however the platform spells one.
+#[cfg(unix)]
+fn link_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn link_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
+/// A temp directory holding a tree, and a second one outside it holding a sentinel file, with a
+/// directory link from `<root>/pkg/linked-away` to the second.
+///
+/// `None` when the platform refused to create the link — creating one on Windows needs Developer
+/// Mode or the symlink privilege — with the reason printed, so a run without the privilege reports
+/// a skipped guarantee rather than a passing one.
+struct LinkFixture {
+    root_dir: tempfile::TempDir,
+    outside: tempfile::TempDir,
+    root: VfsPath,
+}
+
+impl LinkFixture {
+    fn build(format: FormatId, outside_file: &str) -> Option<Self> {
+        let root_dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join(outside_file), b"{}").unwrap();
+
+        let root = physical_root(root_dir.path());
+        write_document_tree_with_options(&root, &granular_fixture(), &options(format)).unwrap();
+
+        let link = root_dir.path().join("pkg").join("linked-away");
+        if let Err(error) = link_dir(outside.path(), &link) {
+            println!(
+                "SKIPPED: this platform would not create a directory link ({error}); the \
+                 containment guarantee was not exercised"
+            );
+            return None;
+        }
+        Some(Self {
+            root_dir,
+            outside,
+            root,
+        })
+    }
+
+    fn sentinel(&self, name: &str) -> std::path::PathBuf {
+        self.outside.path().join(name)
+    }
+
+    fn link(&self) -> std::path::PathBuf {
+        self.root_dir.path().join("pkg").join("linked-away")
+    }
+}
+
+#[test]
+fn rewriting_a_tree_unlinks_a_link_under_pkg_instead_of_emptying_its_target() {
+    let Some(fixture) = LinkFixture::build(FormatId::json(), "sentinel.txt") else {
+        return;
+    };
+
+    // The second write prunes `pkg/`. If the prune followed the link, this would delete the
+    // sentinel in a directory the caller never named.
+    write_document_tree(&fixture.root, &granular_fixture()).unwrap();
+
+    assert!(
+        fixture.sentinel("sentinel.txt").exists(),
+        "a file outside the tree root was deleted by a rewrite"
+    );
+    assert!(
+        !fixture.link().exists(),
+        "the link itself should have been removed with the package root"
+    );
+}
+
+#[test]
+fn reading_a_tree_does_not_see_files_through_a_link() {
+    // A stray `.json` under `pkg/` that belongs to no module is refused by the tree reader, so a
+    // successful read is proof the linked directory's contents were never reached.
+    let Some(fixture) = LinkFixture::build(FormatId::json(), "stray.json") else {
+        return;
+    };
+
+    assert_eq!(
+        read_document_tree(&fixture.root).unwrap(),
+        granular_fixture()
+    );
+    assert!(fixture.sentinel("stray.json").exists());
+}
+
+// =============================================================================
 // Refusals
 // =============================================================================
 
@@ -431,7 +550,7 @@ fn a_json_node_file_in_a_yaml_tree_is_refused() {
     let options = options(FormatId::yaml());
     write_document_tree_with_options(&root, &granular_fixture(), &options).unwrap();
 
-    let stray = "pkg/regulation/_us/stray/module.json";
+    let stray = "pkg/not-a-package/not-a-module/module.json";
     let path = root.join(stray).unwrap();
     path.parent().create_dir_all().unwrap();
     path.create_file().unwrap().write_all(b"{}").unwrap();

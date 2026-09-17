@@ -7,6 +7,8 @@ use ruff_python_ast::{Expr, Operator, Stmt, StmtClassDef};
 use ruff_text_size::{Ranged, TextRange};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod functions;
+
 pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, String)> {
     if request.language_id != "python"
         || !matches!(request.options.ir_version.as_str(), "4" | "4.0.0")
@@ -80,6 +82,12 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, S
     })?;
     let module = lower(parsed.suite(), &package, &module_name)
         .map_err(|e| at(e, &document.uri, &document.text, parsed.syntax().range()))?;
+    if request.options.types_only && !module.values.is_empty() {
+        return Err(error(
+            "PY004",
+            "typesOnly is not supported for Python functions; compile with typesOnly false",
+        ));
+    }
     let ir = IRFile {
         format_version: FormatVersion::Integer(4),
         distribution: Distribution::Library(LibraryContent {
@@ -112,6 +120,7 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
     let mut classes = BTreeMap::new();
     let mut sums = BTreeMap::new();
     let mut declared = BTreeSet::new();
+    let mut functions = BTreeMap::new();
     let mut dataclass_imported = false;
     for (index, statement) in statements.iter().enumerate() {
         match statement {
@@ -157,10 +166,15 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
                 union_members(&alias.value, &mut variants)?;
                 sums.insert(name.to_owned(), variants);
             }
+            Stmt::FunctionDef(function) => {
+                declare(&mut declared, function.name.as_str())?;
+                names::field_name(&names::identifier(function.name.as_str())?)?;
+                functions.insert(function.name.to_string(), function);
+            }
             _ => {
                 return Err(error(
                     "PY004",
-                    "Only frozen dataclasses and non-generic type aliases of dataclass variants are supported",
+                    "Only frozen dataclasses, non-generic sum aliases and annotated pure functions are supported",
                 ));
             }
         }
@@ -228,7 +242,18 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
             .into_iter()
             .map(|(name, definition)| (name, public(Documented::new(None, definition))))
             .collect(),
-        values: Default::default(),
+        values: functions
+            .into_iter()
+            .map(|(name, function)| {
+                Ok((
+                    names::identifier(&name)?.to_canonical_string(),
+                    public(Documented::new(
+                        None,
+                        functions::lower(function, package, module, &type_names)?,
+                    )),
+                ))
+            })
+            .collect::<Outcome<_>>()?,
         doc: None,
     })
 }

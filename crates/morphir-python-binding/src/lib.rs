@@ -1,4 +1,4 @@
-//! Python ADT extension for Morphir.
+//! Python ADT and conditional function extension for Morphir.
 //!
 //! Source is parsed statically, never imported or executed.
 //! See the crate README for the supported Python subset.
@@ -9,14 +9,28 @@
 //! let extension = NativeExtension::frontend_backend(PythonExtension).unwrap();
 //! assert_eq!(PythonExtension::info().id, "morphir-python");
 //! ```
+//!
+//! Annotated function bodies can return through conditional branches:
+//!
+//! ```python
+//! def choose(flag: bool, first: int, second: int) -> int:
+//!     if flag:
+//!         return first
+//!     else:
+//!         return second
+//! ```
+//!
+//! Both branches become a Morphir `IfThenElse` expression. Compile with
+//! `types_only: false`; every path must return the declared result type.
 
 mod backend;
 mod frontend;
 mod names;
+mod values;
 
 use morphir_extension_sdk::prelude::*;
 
-/// Stateless Python ADT frontend and backend, usable natively or as a WASM guest.
+/// Stateless Python frontend and backend, usable natively or as a WASM guest.
 #[derive(Default)]
 pub struct PythonExtension;
 
@@ -27,7 +41,7 @@ impl Extension for PythonExtension {
             name: "Morphir Python".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             types: vec![ExtensionType::Frontend, ExtensionType::Backend],
-            description: Some("Python algebraic data types".into()),
+            description: Some("Python algebraic data types and conditional functions".into()),
             license: Some("Apache-2.0".into()),
             ..Default::default()
         }

@@ -5,6 +5,11 @@ Feature: Python algebraic data types
     Then compiling the generated Python preserves the model
 
   Scenario: Unsupported behavior is diagnosed
-    Given a Python model containing a function
+    Given a Python model containing an unannotated function
     When I compile the model
     Then compilation fails without partial IR
+
+  Scenario: Conditional function bodies survive a Python and Morphir roundtrip
+    Given annotated Python functions with conditional bodies
+    When I compile the model and generate Python
+    Then compiling the generated Python preserves the model

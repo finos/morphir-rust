@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Python extension supports annotated pure function bodies with returning
+  `if`/`elif`/`else` branches, conditional expressions and scalar comparisons.
+  Both compilation and generation validate boolean conditions, branch types
+  and return types, with native and WASM roundtrip coverage.
+
 - `morphir-python-binding` provides a Ruff-based Python ADT frontend and backend
   as one native or WASM MEP extension. Frozen dataclasses and named unions map
   to IR v4 records and custom types, with roundtrip tests and explicit diagnostics

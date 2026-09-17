@@ -897,8 +897,24 @@ Source: https://finos.github.io/morphir-rust/tutorials/python-extension
 
 The `morphir-python-binding` crate provides the `morphir-python` frontend and
 backend. Start with its [modeling example and supported subset](../../crates/morphir-python-binding/README.md).
-The extension compiles frozen dataclasses and named unions to Morphir IR v4,
-and generates Python 3.12 or later declarations from those definitions.
+The extension compiles frozen dataclasses, named unions and annotated conditional
+functions to Morphir IR v4, and generates Python 3.12 or later code from those definitions.
+
+Functions support returning `if`/`elif`/`else` branches and Python conditional
+expressions. For example:
+
+```python
+def choose(flag: bool, first: int, second: int) -> int:
+    if flag:
+        return first
+    else:
+        return second
+```
+
+This body maps to Morphir's `IfThenElse` value. Each path must return the declared
+type, and the condition must be boolean. Compile functions with `typesOnly=false`
+through MEP, or omit the CLI's `--types-only` flag. The crate README lists the
+supported expressions and remaining limits.
 
 ## Build and test
 

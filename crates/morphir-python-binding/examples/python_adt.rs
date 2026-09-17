@@ -10,7 +10,11 @@ fn main() -> Result<()> {
             uri: "models.py".into(),
             language_id: "python".into(),
             version: 1,
-            text: include_str!("../tests/fixtures/models.py").into(),
+            text: format!(
+                "{}\n{}",
+                include_str!("../tests/fixtures/models.py"),
+                include_str!("../tests/fixtures/conditionals.py")
+            ),
         }],
         package: CompilePackage {
             name: "acme/example".into(),
@@ -18,7 +22,7 @@ fn main() -> Result<()> {
         },
         dependencies: vec![],
         options: CompileOptions {
-            types_only: true,
+            types_only: false,
             ir_version: "4".into(),
             ..Default::default()
         },

@@ -3,6 +3,8 @@ use morphir_core::{ir::v4::*, naming::FQName};
 use morphir_extension_sdk::{Artifact, GenerateRequest};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod functions;
+
 pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
     if request.target != "python" || !request.options.is_empty() {
         return Err(error(
@@ -31,10 +33,10 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
     let module_identifier =
         Name::from_canonical_string(module_name).map_err(|e| error("PY003", e))?;
     let filename = names::module_file_stem(&module_identifier)?;
-    if !module.value.values.is_empty() || module.value.doc.is_some() {
+    if module.value.doc.is_some() {
         return Err(error(
             "PY004",
-            "Values and module documentation are not supported by the Python ADT backend",
+            "Module documentation is not supported by the Python backend",
         ));
     }
     let mut symbols = BTreeSet::new();
@@ -105,6 +107,25 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
         }
     }
     source.push_str(&aliases.join("\n"));
+    for (name, definition) in &module.value.values {
+        require_public(definition.access)?;
+        if definition.value.doc.is_some() {
+            return Err(error(
+                "PY004",
+                "Function documentation is not supported yet",
+            ));
+        }
+        let name =
+            names::field_name(&Name::from_canonical_string(name).map_err(|e| error("PY003", e))?)?;
+        reserve(&mut symbols, &name)?;
+        source.push_str(&functions::render(
+            &name,
+            &definition.value.value,
+            &library.package_name,
+            module_name,
+            &type_names,
+        )?);
+    }
     // Ruff validates the constructed declarations and owns AST-to-source rendering.
     // No Python interpreter or user imports run during generation.
     let content = ruff_python_codegen::round_trip(&source)
@@ -196,7 +217,7 @@ fn reference(
 }
 
 fn reserve(seen: &mut BTreeSet<String>, name: &str) -> Outcome<()> {
-    if !seen.insert(name.into()) {
+    if !seen.insert(names::identifier(name)?.to_canonical_string()) {
         return Err(error("PY003", format!("Python name collision: {name}")));
     }
     Ok(())

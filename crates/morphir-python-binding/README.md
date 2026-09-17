@@ -1,4 +1,4 @@
-# Python algebraic data types
+# Python models and conditional functions
 
 `morphir-python-binding` implements the `morphir-python` extension in Rust.
 It provides MEP `frontend/compile` and `backend/generate` through the Morphir
@@ -7,7 +7,7 @@ is parsed with Ruff and never imported or executed. The backend builds
 declarations, parses them into Ruff's AST, and uses Ruff's generator to write
 Python. All four direct Ruff component dependencies are pinned together.
 
-This is an initial ADT subset for Python 3.12 and later. It reads and writes
+This is a subset of Python 3.12 and later for ADTs and pure conditional functions. It reads and writes
 Morphir IR v4 Library distributions. It has no dependency on `finos/morphir-python`.
 
 ```python
@@ -41,6 +41,8 @@ class Application:
 | `int`, `float`, `bool`, `str` | SDK `basics#int`, `basics#float`, `basics#bool`, `string#string` |
 | `tuple[A, B]` | Tuple type |
 | Local type annotation | Fully qualified reference in the current package and module |
+| Annotated function | Value definition with typed parameters and an expression body |
+| Returning `if`/`elif`/`else`, or `a if condition else b` | `IfThenElse` with `condition`, `then`, and `else` members |
 
 A variant belongs to exactly one sum. It is not also emitted as a record alias,
 and its class name cannot be used as a field type. Refer to its enclosing sum
@@ -52,7 +54,7 @@ Each request contains exactly one `.py` source document. Its filename determines
 the module name, so `models.py` becomes `models`. The package name must be a
 canonical Morphir package path such as `acme/example`. An empty `exposedModules`
 exposes this module; otherwise the list must name this module alone. All emitted
-types and constructors are public. Declaration names use Morphir's existing
+types, constructors and functions are public. Declaration names use Morphir's existing
 name codec, including uppercase initialism segments. Collisions after
 normalization are errors. Names must be ASCII identifiers without a leading
 underscore; Python keywords and the builtins used by this subset are reserved.
@@ -63,20 +65,57 @@ roundtrip through this spelling, including collisions between a type and a
 constructor. The common Morphir pattern where a type and its single constructor
 share a name therefore needs distinct names for this first Python subset.
 
+## Conditional function bodies
+
+```python
+def classify(value: int) -> str:
+    if value < 0:
+        return "negative"
+    elif value == 0:
+        return "zero"
+    else:
+        return "positive"
+
+def choose(flag: bool, first: Decision, second: Decision) -> Decision:
+    return first if flag else second
+```
+
+Functions need parameter and return type annotations. They may return parameters,
+`bool`, `int`, `float` or `str` literals, comparisons, and conditional expressions.
+Parameters can also carry local ADTs or fixed tuples. Conditions must have type
+`bool`; both branches must have the same type and match the declared return type.
+Scalar comparisons `==`, `!=`, `<`, `<=`, `>` and `>=` map to SDK Basics functions.
+Operands must have matching scalar types; booleans support equality only.
+
+Nested branches and `elif` chains work. An early-return branch can use a following
+return as its fallback, for example `if flag: return first` followed by
+`return second`. Every path must return a value. The backend generates explicit
+returning `if`/`else` blocks, preserving which branch is evaluated. It may use a
+conditional expression inside a condition or comparison operand.
+
+Function and parameter names generate as snake_case. Integer literals must fit
+a signed 64-bit integer; float literals must be finite. Python's implicit
+truthiness and numeric coercions are not part of this subset. These restrictions
+are checked during compilation and generation.
+
 ## Current boundary
 
 Supported fields are scalars, local references and fixed tuples of at least two
-elements. The two imports shown above, frozen dataclasses, and non-generic
-`type` aliases of dataclass variants are the only accepted module statements.
-Comments and whitespace are not preserved. Functions, methods, field defaults,
+elements. The two imports shown above, frozen dataclasses, non-generic
+`type` aliases of dataclass variants, and annotated pure functions are the accepted module statements.
+Comments and whitespace are not preserved. Methods, field defaults,
 inheritance, arbitrary decorators or imports, docstrings, generic parameters,
 containers, optional fields, quoted annotations and multi-module compilation
-are rejected. The backend also rejects private definitions, values, documentation,
+are rejected. Function calls, constructor calls, assignments, loops, bare returns,
+decorated or async functions, parameter defaults, variadic parameters,
+positional-only or keyword-only parameters, chained comparisons, and boolean
+operators are not supported yet. The backend also rejects private definitions, documentation,
 attributes, dependencies and IR type forms outside this subset. Failures return
 diagnostics with no partial IR or artifacts.
 
-`typesOnly` does not enable skipping functions. This version only accepts types
-regardless of that flag. `irVersion` accepts `4` or `4.0.0`. The CLI's
+Compile functions with `typesOnly=false`. A request containing functions with
+`typesOnly=true` returns a diagnostic; bodies are never silently dropped. ADT-only
+sources accept either value. `irVersion` accepts `4` or `4.0.0`. The CLI's
 `outputDir` and `sourceRootUri` string options are accepted as context, without
 filesystem access. `emitParseStage=true` produces warning `PY006`; combining it
 with `emitParseStageFatal=true` fails. Other options are rejected.

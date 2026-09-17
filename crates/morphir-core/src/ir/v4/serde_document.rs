@@ -23,8 +23,8 @@ use serde_json::Value as JsonValue;
 use super::access::{Access, AccessControlled};
 use super::annotation::{Annotation, AnnotationArgument};
 use super::distribution::{
-    ApplicationContent, Dependencies, Distribution, EntryPoint, EntryPointKind, EntryPoints,
-    LibraryContent, SpecsContent,
+    ApplicationContent, Distribution, EntryPoint, EntryPointKind, EntryPoints, LibraryContent,
+    SpecsContent,
 };
 use super::legacy::accept_legacy_form;
 use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
@@ -1075,7 +1075,7 @@ pub(super) fn decode_distribution(
                 wrapper_members(tag, payload, &at, &["packageName", "dependencies", "def"])?;
             Ok(Distribution::Library(LibraryContent {
                 package_name: decode_package_name(&members, &at)?,
-                dependencies: decode_dependencies(&members, &at)?,
+                dependencies: decode_dependencies(&members, &at, decode_package_specification)?,
                 def: decode_optional_definition(&members, "def", &at)?,
             }))
         }
@@ -1084,7 +1084,7 @@ pub(super) fn decode_distribution(
                 wrapper_members(tag, payload, &at, &["packageName", "dependencies", "spec"])?;
             Ok(Distribution::Specs(SpecsContent {
                 package_name: decode_package_name(&members, &at)?,
-                dependencies: decode_dependencies(&members, &at)?,
+                dependencies: decode_dependencies(&members, &at, decode_package_specification)?,
                 spec: match members.get("spec") {
                     None => PackageSpecification {
                         modules: IndexMap::new(),
@@ -1105,7 +1105,7 @@ pub(super) fn decode_distribution(
             )?;
             Ok(Distribution::Application(ApplicationContent {
                 package_name: decode_package_name(&members, &at)?,
-                dependencies: decode_dependencies(&members, &at)?,
+                dependencies: decode_dependencies(&members, &at, decode_package_definition)?,
                 def: decode_optional_definition(&members, "def", &at)?,
                 entry_points: decode_entry_points(
                     required(&members, "entryPoints", &at)?,
@@ -1148,9 +1148,17 @@ fn parse_package_name(text: &str, cursor: &str) -> Result<PackageName, Diagnosti
 }
 
 /// Decodes the dependency map, checking every key is a canonical package name (decision 0011).
-fn decode_dependencies(members: &Members<'_>, cursor: &str) -> Result<Dependencies, Diagnostic> {
+///
+/// What an entry holds depends on the distribution: a `Library` or `Specs` depends on a package's
+/// public face, an `Application` on its definitions (distributions-0010), so the caller passes the
+/// decoder for the entries its kind carries.
+fn decode_dependencies<T>(
+    members: &Members<'_>,
+    cursor: &str,
+    decode_entry: fn(&JsonValue, &str) -> Result<T, Diagnostic>,
+) -> Result<IndexMap<String, T>, Diagnostic> {
     let Some(member) = members.get("dependencies") else {
-        return Ok(Dependencies::new());
+        return Ok(IndexMap::new());
     };
     let at = member_cursor(members, "dependencies", cursor);
     let entries = members_of(member.value, &at, "dependencies")?;
@@ -1159,7 +1167,7 @@ fn decode_dependencies(members: &Members<'_>, cursor: &str) -> Result<Dependenci
         .map(|(name, written)| {
             let at = format!("{at}/{name}");
             parse_package_name(name, &at)?;
-            Ok((name.clone(), decode_package_specification(written, &at)?))
+            Ok((name.clone(), decode_entry(written, &at)?))
         })
         .collect()
 }

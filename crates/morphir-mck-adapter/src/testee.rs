@@ -1526,7 +1526,7 @@ fn strip_distribution(node: Distribution) -> Distribution {
         }),
         Distribution::Application(content) => Distribution::Application(ApplicationContent {
             package_name: content.package_name,
-            dependencies: strip_dependencies(content.dependencies),
+            dependencies: strip_definition_dependencies(content.dependencies),
             def: strip_package_definition(content.def),
             entry_points: content.entry_points,
         }),
@@ -1539,5 +1539,14 @@ fn strip_dependencies(
     dependencies
         .into_iter()
         .map(|(name, specification)| (name, strip_package_specification(specification)))
+        .collect()
+}
+
+fn strip_definition_dependencies(
+    dependencies: morphir_core::ir::v4::DefinitionDependencies,
+) -> morphir_core::ir::v4::DefinitionDependencies {
+    dependencies
+        .into_iter()
+        .map(|(name, definition)| (name, strip_package_definition(definition)))
         .collect()
 }

@@ -772,16 +772,28 @@ impl DocumentTreeSink {
                 "a dependency appeared after the first module",
             ));
         }
-        let DependencyEvent::V4 {
-            package,
-            specification,
-        } = dependency
-        else {
-            return Err(event_error(
-                "version_mismatch",
-                cursor,
-                "the v4 document-tree sink received a Classic v3 dependency",
-            ));
+        let (package, specification) = match dependency {
+            DependencyEvent::V4 {
+                package,
+                specification,
+            } => (package, specification),
+            // This layout keeps dependencies in its distribution manifest, which holds public
+            // faces. An application's statically linked definitions do not fit there, and the
+            // tree layout that will hold them is written later (distributions-0010).
+            DependencyEvent::V4Definition { .. } => {
+                return Err(event_error(
+                    "unsupported_dependencies",
+                    cursor,
+                    "an application's definition dependencies have no place in this layout",
+                ));
+            }
+            DependencyEvent::ClassicV3 { .. } => {
+                return Err(event_error(
+                    "version_mismatch",
+                    cursor,
+                    "the v4 document-tree sink received a Classic v3 dependency",
+                ));
+            }
         };
         let manifest = self.manifest.as_mut().ok_or_else(|| {
             event_error(
@@ -960,6 +972,17 @@ impl DocumentTreeSource {
         }
         let manifest_path = LogicalDocument::Manifest.path(&root, &profile)?;
         let mut manifest: DistributionManifest = profile.read(&manifest_path)?;
+        // An application's dependencies are the definitions it links statically
+        // (distributions-0010), which this layout's manifest cannot hold. Only an empty map reads.
+        if matches!(manifest.distribution, DistributionKind::Application)
+            && !manifest.dependencies.is_empty()
+        {
+            return Err(event_error(
+                "unsupported_dependencies",
+                &IrCursor::root().child(CursorSegment::Distribution),
+                "an application's definition dependencies have no place in this layout",
+            ));
+        }
         let dependencies = std::mem::take(&mut manifest.dependencies)
             .into_iter()
             .collect::<VecDeque<_>>();

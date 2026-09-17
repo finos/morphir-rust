@@ -3,9 +3,7 @@
 use indexmap::IndexMap;
 use morphir_core::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
 use morphir_core::ir::v4::{
-    Access, ConstructorArgSpec, ConstructorSpecification, Distribution, Documented, FormatVersion,
-    IRFile, ModuleDefinition, ModuleSpecification, PackageDefinition, PackageName,
-    PackageSpecification, TypeDefinition, TypeSpecification, ValueDefinition, ValueSpecification,
+    Distribution, FormatVersion, IRFile, PackageName, PackageSpecification,
 };
 use morphir_extension_sdk::CompileDependency;
 
@@ -69,19 +67,17 @@ pub(crate) fn package_specifications(
                     ),
                 }]);
             }
+            // A dependency is used through its public face, which a `Specs` states outright and a
+            // `Library` or `Application` carries inside its definitions.
             let (distribution_package_name, specification) = match parsed.distribution {
-                Distribution::Specs(content) => Ok((content.package_name, content.spec)),
-                Distribution::Library(content) => definition_to_specification(content.def)
-                    .map(|specification| (content.package_name, specification)),
-                Distribution::Application(content) => definition_to_specification(content.def)
-                    .map(|specification| (content.package_name, specification)),
-            }
-            .map_err(|message| {
-                vec![DependencyError {
-                    code: "INCOMPATIBLE_DEPENDENCY_DISTRIBUTION",
-                    message: format!("Dependency '{}': {message}", dependency.package_name),
-                }]
-            })?;
+                Distribution::Specs(content) => (content.package_name, content.spec),
+                Distribution::Library(content) => {
+                    (content.package_name, content.def.to_specification())
+                }
+                Distribution::Application(content) => {
+                    (content.package_name, content.def.to_specification())
+                }
+            };
             if distribution_package_name.to_string() != dependency.package_name {
                 return Err(vec![DependencyError {
                     code: "DEPENDENCY_PACKAGE_MISMATCH",
@@ -204,126 +200,5 @@ fn display_format_version(version: &FormatVersion) -> String {
     match version {
         FormatVersion::String(version) => format!("'{version}'"),
         FormatVersion::Integer(version) => version.to_string(),
-    }
-}
-
-fn definition_to_specification(
-    definition: PackageDefinition,
-) -> Result<PackageSpecification, String> {
-    definition
-        .modules
-        .into_iter()
-        .try_fold(IndexMap::new(), |mut modules, (name, controlled)| {
-            if controlled.access == Access::Public {
-                modules.insert(
-                    name.clone(),
-                    module_to_specification(controlled.value, &name)?,
-                );
-            }
-            Ok(modules)
-        })
-        .map(|modules| PackageSpecification { modules })
-}
-
-fn module_to_specification(
-    definition: ModuleDefinition,
-    module_name: &str,
-) -> Result<ModuleSpecification, String> {
-    let types = definition.types.into_iter().try_fold(
-        IndexMap::new(),
-        |mut types, (name, controlled)| {
-            if controlled.access == Access::Public {
-                let Documented { doc, value } = controlled.value;
-                types.insert(
-                    name.clone(),
-                    Documented::new(
-                        doc,
-                        type_to_specification(value).map_err(|message| {
-                            format!("module '{module_name}', type '{name}': {message}")
-                        })?,
-                    ),
-                );
-            }
-            Ok::<_, String>(types)
-        },
-    )?;
-    let values = definition.values.into_iter().try_fold(
-        IndexMap::new(),
-        |mut values, (name, controlled)| {
-            if controlled.access == Access::Public {
-                let Documented { doc, value } = controlled.value;
-                values.insert(
-                    name.clone(),
-                    Documented::new(
-                        doc,
-                        value_to_specification(value).map_err(|message| {
-                            format!("module '{module_name}', value '{name}': {message}")
-                        })?,
-                    ),
-                );
-            }
-            Ok::<_, String>(values)
-        },
-    )?;
-    Ok(ModuleSpecification {
-        // A definition carries no annotations, so the specification derived from one has none.
-        annotations: Vec::new(),
-        types,
-        values,
-        doc: definition.doc,
-    })
-}
-
-fn value_to_specification(definition: ValueDefinition) -> Result<ValueSpecification, String> {
-    Ok(ValueSpecification {
-        annotations: Vec::new(),
-        inputs: definition.input_types,
-        output: definition
-            .output_type
-            .ok_or_else(|| "value definition is missing its output type".to_owned())?,
-    })
-}
-
-fn type_to_specification(definition: TypeDefinition) -> Result<TypeSpecification, String> {
-    match definition {
-        TypeDefinition::TypeAliasDefinition {
-            type_params,
-            type_expr,
-        } => Ok(TypeSpecification::TypeAliasSpecification {
-            annotations: Vec::new(),
-            type_params,
-            type_expr,
-        }),
-        TypeDefinition::CustomTypeDefinition {
-            type_params,
-            constructors,
-        } => Ok(match constructors.access {
-            Access::Public => TypeSpecification::CustomTypeSpecification {
-                annotations: Vec::new(),
-                type_params,
-                constructors: constructors
-                    .value
-                    .into_iter()
-                    .map(|constructor| ConstructorSpecification {
-                        name: constructor.name,
-                        args: constructor
-                            .args
-                            .into_iter()
-                            .map(|argument| ConstructorArgSpec {
-                                name: argument.name,
-                                arg_type: argument.arg_type,
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            },
-            Access::Private => TypeSpecification::OpaqueTypeSpecification {
-                annotations: Vec::new(),
-                type_params,
-            },
-        }),
-        TypeDefinition::IncompleteTypeDefinition { .. } => {
-            Err("incomplete type definitions cannot be dependency specifications".into())
-        }
     }
 }

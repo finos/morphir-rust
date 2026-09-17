@@ -59,8 +59,8 @@ pub use value::{
 
 // Re-export distribution types
 pub use distribution::{
-    ApplicationContent, Dependencies, Distribution, EntryPoint, EntryPointKind, EntryPoints,
-    LibraryContent, SpecsContent,
+    ApplicationContent, DefinitionDependencies, Dependencies, Distribution, EntryPoint,
+    EntryPointKind, EntryPoints, LibraryContent, SpecsContent,
 };
 
 // Re-export module types

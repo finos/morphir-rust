@@ -41,7 +41,15 @@ pub(super) fn normalize(ir: v4::IRFile) -> Result<ProjectionPackage, NormalizeEr
                 &content.def,
                 content.entry_points,
             )?;
-            let dependencies = normalize_dependencies(content.dependencies);
+            // A projection states what a dependency offers, so an application's statically
+            // linked definitions are read through their public faces (distributions-0010).
+            let dependencies = normalize_dependencies(
+                content
+                    .dependencies
+                    .iter()
+                    .map(|(name, definition)| (name.clone(), definition.to_specification()))
+                    .collect(),
+            );
             Ok(normalize_definition_package(
                 DistributionKind::Application,
                 content.package_name.to_string(),

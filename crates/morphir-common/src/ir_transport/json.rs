@@ -436,18 +436,42 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 "a dependency appeared after the first module",
             ));
         }
-        let DependencyEvent::V4 {
-            package,
-            specification,
-        } = dependency
-        else {
-            return Err(json_stream_error(
-                "version_mismatch",
-                cursor,
-                "the v4 JSON encoder received a Classic v3 dependency",
-            ));
-        };
-        if !self.dependency_names.insert(package.clone()) {
+        match dependency {
+            DependencyEvent::V4 {
+                package,
+                specification,
+            } => {
+                self.start_dependency(&package, cursor)?;
+                self.write_json(&specification)?;
+            }
+            // An application links its dependencies statically, so it writes their definitions
+            // (distributions-0010).
+            DependencyEvent::V4Definition {
+                package,
+                definition,
+            } => {
+                self.start_dependency(&package, cursor)?;
+                self.write_json(&definition)?;
+            }
+            DependencyEvent::ClassicV3 { .. } => {
+                return Err(json_stream_error(
+                    "version_mismatch",
+                    cursor,
+                    "the v4 JSON encoder received a Classic v3 dependency",
+                ));
+            }
+        }
+        self.first_dependency = false;
+        Ok(())
+    }
+
+    /// Writes everything up to a dependency's value: the member it opens and its name.
+    fn start_dependency(
+        &mut self,
+        package: &str,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if !self.dependency_names.insert(package.to_owned()) {
             return Err(json_stream_error(
                 "duplicate_dependency",
                 cursor,
@@ -462,10 +486,7 @@ impl<'writer> V4JsonEventEncoder<'writer> {
             self.write(b",")?;
         }
         self.write_json(&package)?;
-        self.write(b":")?;
-        self.write_json(&specification)?;
-        self.first_dependency = false;
-        Ok(())
+        self.write(b":")
     }
 
     fn start_modules(&mut self) -> Result<(), TransportDiagnostic> {

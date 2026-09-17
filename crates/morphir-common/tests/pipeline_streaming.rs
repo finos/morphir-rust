@@ -11,9 +11,9 @@ use morphir_common::ir_transport::{
     TransportDiagnostic, YamlCodec,
 };
 use morphir_common::vfs::memory_root;
-use morphir_core::ir::classic;
+use morphir_core::ir::{classic, v4};
 use morphir_core::migration::{MigrationOptions, migrate_distribution};
-use morphir_core::traversal::{IrCursor, SemanticEvent, SemanticEventKind};
+use morphir_core::traversal::{DependencyEvent, IrCursor, SemanticEvent, SemanticEventKind};
 
 struct QueueSource(VecDeque<SemanticEvent>);
 
@@ -369,6 +369,59 @@ fn real_lcr_v3_migrates_to_a_streamed_yaml_document_tree() {
         }
     }
     assert!(module_count > 0);
+}
+
+/// The canonical document of MCK distributions-0010, whose dependency is a package definition.
+const APPLICATION_WITH_DEFINITION_DEPENDENCY: &str = r#"{"formatVersion":4,"distribution":{"Application":{"packageName":"example","dependencies":{"my-org/shared":{"modules":{"util":{"Public":{"types":{},"values":{"identity":{"Public":{"ExpressionBody":{"inputTypes":{"x":"morphir/SDK:basics#int"},"outputType":"morphir/SDK:basics#int","body":{"Variable":"x"}}}}}}}}}},"def":{"modules":{"main":{"Public":{"types":{},"values":{"run":{"Public":{"ExpressionBody":{"inputTypes":{},"outputType":"morphir/SDK:basics#unit","body":{"Unit":{}}}}}}}}}},"entryPoints":{"start":{"target":"example:main#run","kind":"main"}}}}}"#;
+
+#[test]
+fn an_applications_definition_dependencies_survive_the_semantic_round_trip() {
+    let options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
+    let events = decode_json(APPLICATION_WITH_DEFINITION_DEPENDENCY, IrVersion::V4);
+    let dependencies = events
+        .iter()
+        .filter_map(|event| match event.kind() {
+            SemanticEventKind::Dependency(DependencyEvent::V4Definition {
+                package,
+                definition,
+            }) => Some((package.clone(), definition.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(dependencies[0].0, "my-org/shared");
+    assert!(dependencies[0].1.modules.contains_key("util"));
+
+    // The transport writes type expressions in their long spelling, so the documents are compared
+    // as documents rather than as bytes.
+    let expected: v4::IRFile =
+        serde_json::from_str(APPLICATION_WITH_DEFINITION_DEPENDENCY).unwrap();
+
+    let json = JsonCodec::new();
+    let mut whole = Vec::new();
+    json.encode(
+        &mut QueueSource(events.clone().into()),
+        &mut whole,
+        &options,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<v4::IRFile>(&whole).unwrap(),
+        expected
+    );
+
+    let mut streamed = Vec::new();
+    {
+        let mut encoder = json.encoder(&mut streamed, &options).unwrap();
+        for event in events {
+            encoder.accept(event).unwrap();
+        }
+        encoder.finish().unwrap();
+    }
+    assert_eq!(
+        serde_json::from_slice::<v4::IRFile>(&streamed).unwrap(),
+        expected
+    );
 }
 
 #[test]

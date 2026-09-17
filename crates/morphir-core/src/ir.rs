@@ -45,6 +45,7 @@ pub use v4::{
     ConstructorArgSpec,
     ConstructorDefinition,
     ConstructorSpecification,
+    DefinitionDependencies,
     Dependencies,
     Distribution,
     EntryPoint,

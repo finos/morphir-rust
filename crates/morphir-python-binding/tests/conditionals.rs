@@ -51,7 +51,6 @@ fn roundtrip(source: &str) -> Value {
     let ir = compiled.ir.unwrap();
     let generated = generate(ir.clone());
     assert!(generated.success, "{:?}", generated.diagnostics);
-    assert!(generated.artifacts[0].content.contains("if "));
     let again = compile(&generated.artifacts[0].content);
     assert!(again.success, "{:?}", again.diagnostics);
     assert_eq!(again.ir.as_ref(), Some(&ir));
@@ -80,6 +79,75 @@ fn branches_can_select_adt_and_tuple_parameters() {
         "{}\ndef select(flag: bool, first: Decision, second: Decision) -> Decision:\n    return first if flag else second\n\ndef pair(flag: bool, first: tuple[int, str], second: tuple[int, str]) -> tuple[int, str]:\n    return first if flag else second\n",
         include_str!("fixtures/models.py")
     ));
+}
+
+#[test]
+fn tuple_types_and_values_have_distinct_ir_encodings() {
+    let ir = roundtrip(
+        "def pair(amount: int, label: str) -> tuple[int, str]:\n    return amount, label\n",
+    );
+    let definition = &ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"]
+        ["pair"]["Public"]["ExpressionBody"];
+    assert_eq!(
+        definition["outputType"],
+        json!({"Tuple": ["morphir/SDK:basics#int", "morphir/SDK:string#string"]})
+    );
+    assert_eq!(
+        definition["body"],
+        json!({"Tuple": [{"Variable": "amount"}, {"Variable": "label"}]})
+    );
+}
+
+#[test]
+fn named_and_nested_tuple_aliases_roundtrip() {
+    roundtrip(include_str!("fixtures/tuples.py"));
+    roundtrip(
+        "type Pair = tuple[int, str]\ndef select(flag: bool, pair: Pair) -> tuple[int, str]:\n    return pair if flag else (0, 'none')\n",
+    );
+    roundtrip(
+        "type Pair = tuple[int, str]\ntype Nested = tuple[Pair, bool]\ndef make_nested(value: int) -> Nested:\n    return ((value, 'value'), True)\n",
+    );
+}
+
+#[test]
+fn invalid_tuple_types_and_values_are_rejected() {
+    for source in [
+        "def f() -> tuple[int, str]:\n    return (1, 2)\n",
+        "def f() -> tuple[int, str]:\n    return (1, 'a', True)\n",
+        "def f(flag: bool) -> tuple[int, str]:\n    return (1, 'a') if flag else (2, False)\n",
+        "def f() -> tuple[int]:\n    return (1,)\n",
+        "def f() -> tuple[()]:\n    return ()\n",
+        "type Pair = tuple[int, ...]\n",
+        "type Pair = tuple[int, Pair]\n",
+        "type A = tuple[int, B]\ntype B = tuple[str, A]\n",
+        "type Pair = tuple[int, str]\ndef f() -> Pair:\n    return [1, 'a']\n",
+        "def f(pair: tuple[int, str]) -> tuple[int, str]:\n    return (*pair,)\n",
+    ] {
+        let result = compile(source);
+        assert!(!result.success, "accepted {source}");
+        assert!(result.ir.is_none());
+    }
+}
+
+#[test]
+fn backend_accepts_independent_tuple_value_and_rejects_wrong_elements() {
+    let mut ir = independent_ir(
+        json!({"Tuple": [{"Literal": {"IntegerLiteral": 1}}, {"Literal": {"StringLiteral": "one"}}]}),
+    );
+    ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"]["select"]["Public"]
+        ["ExpressionBody"]["outputType"] =
+        json!({"Tuple": ["morphir/SDK:basics#int", "morphir/SDK:string#string"]});
+    let generated = generate(ir.clone());
+    assert!(generated.success, "{:?}", generated.diagnostics);
+    assert_eq!(
+        compile(&generated.artifacts[0].content).ir,
+        Some(ir.clone())
+    );
+    ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"]["select"]["Public"]
+        ["ExpressionBody"]["body"]["Tuple"][1] = json!({"Literal": {"BoolLiteral": true}});
+    let invalid = generate(ir);
+    assert!(!invalid.success);
+    assert!(invalid.artifacts.is_empty());
 }
 
 #[test]

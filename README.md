@@ -38,7 +38,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-openapi-extension` | OpenAPI and JSON Schema backend that projects Morphir v3/v4 specifications to OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents. |
 | `morphir-package` | Experimental model-package normalization, digests, offline schema validation, and closed Library-set verification. |
 | `morphir-projection` | Shared Morphir IR normalization that backend extensions project from. |
-| `morphir-python-binding` | Ruff-based Python ADT frontend and backend for Morphir IR v4, available natively and as a WebAssembly extension. |
+| `morphir-python-binding` | Ruff-based frontend and backend for a Morphir IR v4 subset of Python ADTs, tuples and conditional functions, available natively and as a WebAssembly extension. |
 | `morphir-runtime` | Reserved runtime crate; currently a minimal scaffold. |
 | `morphir-tests` | Shared acceptance and Cucumber test harness. |
 | `morphir-wasm-binding` | Backend extension that generates WebAssembly and WAT from Morphir IR. |

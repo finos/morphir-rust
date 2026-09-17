@@ -50,6 +50,7 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
     let mut source =
         String::from("from __future__ import annotations\nfrom dataclasses import dataclass\n\n");
     let mut aliases = vec![];
+    let mut tuple_aliases = crate::values::TupleAliases::new();
     for (name, definition) in &module.value.types {
         require_public(definition.access)?;
         if definition.value.doc.is_some() {
@@ -57,6 +58,22 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
         }
         let python = &type_names[name];
         match &definition.value.value {
+            TypeDefinition::TypeAliasDefinition {
+                type_params,
+                type_expr: tpe @ Type::Tuple(..),
+            } if type_params.is_empty() => {
+                aliases.push(format!(
+                    "type {python} = {}\n",
+                    annotation(tpe, &library.package_name, module_name, &type_names)?
+                ));
+                tuple_aliases.insert(
+                    format!(
+                        "{}:{module_name}#{name}",
+                        library.package_name.to_canonical_string()
+                    ),
+                    tpe.clone(),
+                );
+            }
             TypeDefinition::TypeAliasDefinition {
                 type_params,
                 type_expr: Type::Record(attrs, fields),
@@ -101,12 +118,15 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
             _ => {
                 return Err(error(
                     "PY004",
-                    "Only non-generic record aliases and custom types with public constructors are supported",
+                    "Only non-generic record or tuple aliases and custom types with public constructors are supported",
                 ));
             }
         }
     }
     source.push_str(&aliases.join("\n"));
+    for alias in tuple_aliases.values() {
+        crate::values::resolve_aliases(alias, &tuple_aliases)?;
+    }
     for (name, definition) in &module.value.values {
         require_public(definition.access)?;
         if definition.value.doc.is_some() {
@@ -124,6 +144,7 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Artifact> {
             &library.package_name,
             module_name,
             &type_names,
+            &tuple_aliases,
         )?);
     }
     // Ruff validates the constructed declarations and owns AST-to-source rendering.

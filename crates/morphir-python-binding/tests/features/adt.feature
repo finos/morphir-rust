@@ -13,3 +13,8 @@ Feature: Python algebraic data types
     Given annotated Python functions with conditional bodies
     When I compile the model and generate Python
     Then compiling the generated Python preserves the model
+
+  Scenario: Tuple types and values survive a Python and Morphir roundtrip
+    Given Python tuple aliases and tuple-valued functions
+    When I compile the model and generate Python
+    Then compiling the generated Python preserves the model

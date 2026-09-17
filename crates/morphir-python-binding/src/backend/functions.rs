@@ -12,6 +12,7 @@ pub(super) fn render(
     package: &PackageName,
     module: &str,
     types: &BTreeMap<String, String>,
+    aliases: &values::TupleAliases,
 ) -> Outcome<String> {
     let ValueBody::Expression(body) = &definition.body else {
         return Err(unsupported(
@@ -24,7 +25,6 @@ pub(super) fn render(
         .ok_or_else(|| unsupported("Function return type is required"))?;
     let output = annotation(output_type, package, module, types)?;
     let mut seen = BTreeSet::new();
-    let mut parameters = BTreeMap::new();
     let inputs = definition
         .input_types
         .iter()
@@ -42,14 +42,13 @@ pub(super) fn render(
                 Name::from_canonical_string(name).map_err(|e| error("PY003", e))?;
             let python = names::field_name(&parameter_name)?;
             reserve(&mut seen, &python)?;
-            parameters.insert(name.clone(), entry.input_type.clone());
             Ok(format!(
                 "{python}: {}",
                 annotation(&entry.input_type, package, module, types)?
             ))
         })
         .collect::<Outcome<Vec<_>>>()?;
-    values::require_type(&values::infer(body, &parameters)?, output_type)?;
+    values::validate_function(definition, aliases)?;
     let mut source = format!("\ndef {name}({}) -> {output}:\n", inputs.join(", "));
     render_body(&mut source, body, 1)?;
     Ok(source)
@@ -72,6 +71,14 @@ fn render_body(source: &mut String, body: &Value, depth: usize) -> Outcome<()> {
 fn expression(value: &Value) -> Outcome<String> {
     match value {
         Value::Variable(_, name) => names::field_name(name),
+        Value::Tuple(_, elements) => Ok(format!(
+            "({})",
+            elements
+                .iter()
+                .map(expression)
+                .collect::<Outcome<Vec<_>>>()?
+                .join(", ")
+        )),
         Value::Literal(_, Literal::Bool(value)) => Ok(if *value { "True" } else { "False" }.into()),
         Value::Literal(_, Literal::Integer(value)) => Ok(value.to_string()),
         Value::Literal(_, Literal::Float(value)) => Ok(format!("{:?}", value.value())),

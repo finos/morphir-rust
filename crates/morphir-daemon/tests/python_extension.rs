@@ -85,9 +85,10 @@ async fn python_adt_and_conditional_roundtrip_through_the_real_wasm_extension() 
     assert!(initialized.capabilities.backend.unwrap().generate);
     let compiled = driver
         .compile(format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             include_str!("../../morphir-python-binding/tests/fixtures/models.py"),
-            include_str!("../../morphir-python-binding/tests/fixtures/conditionals.py")
+            include_str!("../../morphir-python-binding/tests/fixtures/conditionals.py"),
+            include_str!("../../morphir-python-binding/tests/fixtures/tuples.py")
         ))
         .await;
     assert!(compiled.success, "{:?}", compiled.diagnostics);

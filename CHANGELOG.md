@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Python fixed tuple aliases and tuple-valued expressions now compile and generate,
+  including nested tuples and type-checked conditional returns. The binding README
+  documents its supported IR nodes, runnable examples and conformance boundaries.
+
 - The Python extension supports annotated pure function bodies with returning
   `if`/`elif`/`else` branches, conditional expressions and scalar comparisons.
   Both compilation and generation validate boolean conditions, branch types

@@ -92,6 +92,11 @@ fn conditionals(world: &mut PythonWorld) {
     world.driver.source = include_str!("fixtures/conditionals.py").into();
 }
 
+#[given("Python tuple aliases and tuple-valued functions")]
+fn tuples(world: &mut PythonWorld) {
+    world.driver.source = include_str!("fixtures/tuples.py").into();
+}
+
 #[when("I compile the model and generate Python")]
 fn roundtrip(world: &mut PythonWorld) {
     world.driver.compile_and_generate();

@@ -9,7 +9,7 @@ parent: Tutorials
 
 The `morphir-python-binding` crate provides the `morphir-python` frontend and
 backend. Start with its [modeling example and supported subset](../../crates/morphir-python-binding/README.md).
-The extension compiles frozen dataclasses, named unions and annotated conditional
+The extension compiles frozen dataclasses, named unions, fixed tuples and annotated conditional
 functions to Morphir IR v4, and generates Python 3.12 or later code from those definitions.
 
 Functions support returning `if`/`elif`/`else` branches and Python conditional
@@ -123,4 +123,6 @@ Compilation installs `morphir-ir.json` under the `compiled` directory. The
 backend returns `models.py` as an artifact. The host writes it to the output
 location according to the CLI's install/output settings. The extension itself
 has no filesystem access. It fails with diagnostics if the request contains
-more than one module, runtime behavior, or types outside the documented subset.
+more than one module, unsupported function behavior, or types outside the
+documented subset. The [binding README](../../crates/morphir-python-binding/README.md)
+lists the supported IR nodes, tuple forms, and the scope of its conformance evidence.

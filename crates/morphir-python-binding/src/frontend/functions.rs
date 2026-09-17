@@ -5,13 +5,14 @@ use crate::{
 };
 use morphir_core::ir::v4::*;
 use ruff_python_ast::{CmpOp, Expr, Number, Stmt, StmtFunctionDef, UnaryOp};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 pub(super) fn lower(
     function: &StmtFunctionDef,
     package: &PackageName,
     module: &str,
     types: &BTreeSet<&str>,
+    aliases: &values::TupleAliases,
 ) -> Outcome<ValueDefinition> {
     let parameters = &function.parameters;
     if function.is_async
@@ -69,15 +70,10 @@ pub(super) fn lower(
     let body = block(&function.body, None, &source_names)?;
     let definition = ValueDefinition {
         input_types,
-        output_type: Some(output_type.clone()),
-        body: ValueBody::Expression(body.clone()),
+        output_type: Some(output_type),
+        body: ValueBody::Expression(body),
     };
-    let environment: BTreeMap<_, _> = definition
-        .input_types
-        .iter()
-        .map(|(name, entry)| (name.clone(), entry.input_type.clone()))
-        .collect();
-    values::require_type(&values::infer(&body, &environment)?, &output_type)?;
+    values::validate_function(&definition, aliases)?;
     Ok(definition)
 }
 
@@ -143,6 +139,16 @@ fn conditional(condition: Value, then_branch: Value, else_branch: Value) -> Valu
 
 fn expression(expr: &Expr, parameters: &BTreeSet<&str>) -> Outcome<Value> {
     let literal = match expr {
+        Expr::Tuple(tuple) if tuple.elts.len() >= 2 => {
+            return Ok(Value::Tuple(
+                Default::default(),
+                tuple
+                    .elts
+                    .iter()
+                    .map(|element| expression(element, parameters))
+                    .collect::<Outcome<_>>()?,
+            ));
+        }
         Expr::Name(name) if parameters.contains(name.id.as_str()) => {
             return Ok(Value::Variable(
                 Default::default(),
@@ -188,7 +194,7 @@ fn expression(expr: &Expr, parameters: &BTreeSet<&str>) -> Outcome<Value> {
         }
         _ => {
             return Err(unsupported(
-                "Expected a parameter, scalar literal, comparison or conditional expression",
+                "Expected a parameter, scalar literal, fixed tuple, comparison or conditional expression",
             ));
         }
     };

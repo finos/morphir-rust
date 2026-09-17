@@ -2,9 +2,11 @@
 //! `Literal` and `Pattern` cases spell them (decisions 0005, 0006 and 0013).
 
 use morphir_core::ir::v4::{
-    Literal, Pattern, SourceLocation, SpellingMode, ValueAttributes, with_spelling_mode,
+    DecimalLiteral, Literal, Pattern, SourceLocation, SpellingMode, ValueAttributes,
+    with_spelling_mode,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode};
+use num_bigint::BigInt;
 use serde_json::json;
 
 fn lit(value: serde_json::Value) -> Result<Literal, Diagnostic> {
@@ -43,11 +45,14 @@ fn a_literal_carries_its_payload_directly_under_its_tag() {
             json!({ "StringLiteral": "hi" }),
             Literal::String("hi".into()),
         ),
-        (json!({ "IntegerLiteral": -7 }), Literal::Integer(-7)),
+        (
+            json!({ "IntegerLiteral": -7 }),
+            Literal::Integer((-7).into()),
+        ),
         (json!({ "FloatLiteral": 2.5 }), Literal::float(2.5)),
         (
             json!({ "DecimalLiteral": "0.010" }),
-            Literal::Decimal("0.010".into()),
+            Literal::Decimal(DecimalLiteral::parse("0.010").unwrap()),
         ),
     ] {
         assert_eq!(lit(spelling.clone()).unwrap(), expected, "{spelling}");
@@ -114,11 +119,11 @@ fn whole_number_literal_is_an_accepted_spelling_of_integer_literal() {
     ] {
         let (decoded, warnings) =
             with_spelling_mode(SpellingMode::Current, || lit(spelling.clone()));
-        assert_eq!(decoded.unwrap(), Literal::Integer(7), "{spelling}");
+        assert_eq!(decoded.unwrap(), Literal::Integer(7.into()), "{spelling}");
         assert!(warnings.is_empty(), "{spelling} warned: {warnings:?}");
     }
     assert_eq!(
-        written(&Literal::Integer(7)),
+        written(&Literal::Integer(7.into())),
         json!({ "IntegerLiteral": 7 })
     );
 }
@@ -146,11 +151,13 @@ fn a_character_is_one_code_point_written_as_a_string() {
 }
 
 #[test]
-fn an_integer_literal_outside_the_model_is_an_invalid_literal() {
+fn an_integer_literal_has_no_upper_bound() {
+    // IntegerLiteral has arbitrary precision (MCK patterns-and-literals-0019, 0020), so a
+    // lexeme beyond a u64 still decodes, unlike the fractional lexeme below.
     let beyond = json!({ "IntegerLiteral": 18446744073709551615u64 });
     assert_eq!(
-        lit(beyond).unwrap_err().code,
-        DiagnosticCode::InvalidLiteral
+        lit(beyond).unwrap(),
+        Literal::Integer(BigInt::parse_bytes(b"18446744073709551615", 10).unwrap())
     );
     assert_eq!(
         lit(json!({ "IntegerLiteral": 1.5 })).unwrap_err().code,
@@ -159,9 +166,40 @@ fn an_integer_literal_outside_the_model_is_an_invalid_literal() {
 }
 
 #[test]
+fn an_integer_literal_has_arbitrary_precision() {
+    // MCK patterns-and-literals-0019, 0020.
+    for lexeme in [
+        "18446744073709551616",
+        "-9223372036854775809",
+        "0",
+        "-0",
+        "42",
+    ] {
+        let written = format!(r#"{{ "IntegerLiteral": {lexeme} }}"#);
+        let decoded: Literal = serde_json::from_str(&written).unwrap();
+        let expected = if lexeme == "-0" { "0" } else { lexeme };
+        assert_eq!(
+            serde_json::to_string(&decoded).unwrap(),
+            format!(r#"{{"IntegerLiteral":{expected}}}"#)
+        );
+    }
+}
+
+#[test]
+fn a_bare_big_number_without_point_or_exponent_is_an_integer() {
+    let decoded: Literal = serde_json::from_str("18446744073709551616").unwrap();
+    assert!(matches!(decoded, Literal::Integer(_)));
+    let decoded: Literal = serde_json::from_str("1e3").unwrap();
+    assert!(matches!(decoded, Literal::Float(_)));
+}
+
+#[test]
 fn a_decimal_literal_keeps_its_text_rather_than_becoming_a_float() {
     let decimal = lit(json!({ "DecimalLiteral": "20.70" })).unwrap();
-    assert_eq!(decimal, Literal::Decimal("20.70".into()));
+    assert_eq!(
+        decimal,
+        Literal::Decimal(DecimalLiteral::parse("20.70").unwrap())
+    );
     assert_eq!(
         serde_json::to_string(&decimal).unwrap(),
         r#"{"DecimalLiteral":"20.70"}"#
@@ -170,6 +208,39 @@ fn a_decimal_literal_keeps_its_text_rather_than_becoming_a_float() {
         lit(json!({ "DecimalLiteral": 20.70 })).unwrap_err().code,
         DiagnosticCode::InvalidLiteral
     );
+}
+
+#[test]
+fn a_decimal_that_is_not_a_decimal_lexeme_is_invalid_literal() {
+    for payload in [
+        json!("ten"),
+        json!(""),
+        json!("1_000"),
+        json!("NaN"),
+        json!(10.5),
+    ] {
+        let error =
+            serde_json::from_value::<Literal>(json!({ "DecimalLiteral": payload })).unwrap_err();
+        let diagnostic =
+            morphir_core::ir::Diagnostic::from_serde_error(&error).expect("a kit diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::InvalidLiteral,
+            "{payload}"
+        );
+        assert_eq!(diagnostic.cursor, "/DecimalLiteral");
+    }
+}
+
+#[test]
+fn a_decimal_lexeme_survives_as_written() {
+    for lexeme in ["-0.00", "1e-7", ".5", "+12."] {
+        let decoded: Literal = serde_json::from_value(json!({ "DecimalLiteral": lexeme })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            json!({ "DecimalLiteral": lexeme })
+        );
+    }
 }
 
 #[test]
@@ -209,8 +280,8 @@ fn a_tag_that_names_no_literal_is_an_unknown_node() {
 #[test]
 fn a_bare_literal_at_pattern_position_is_a_literal_pattern() {
     for (spelling, expected) in [
-        (json!({ "IntegerLiteral": 1 }), Literal::Integer(1)),
-        (json!(5), Literal::Integer(5)),
+        (json!({ "IntegerLiteral": 1 }), Literal::Integer(1.into())),
+        (json!(5), Literal::Integer(5.into())),
         (json!("txt"), Literal::String("txt".into())),
         (json!(true), Literal::Bool(true)),
     ] {

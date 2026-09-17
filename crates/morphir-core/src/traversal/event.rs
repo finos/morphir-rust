@@ -44,6 +44,12 @@ pub enum DependencyEvent {
         package: String,
         specification: v4::PackageSpecification,
     },
+    /// A dependency an application links statically, carried as a package definition
+    /// (distributions-0010).
+    V4Definition {
+        package: String,
+        definition: v4::PackageDefinition,
+    },
 }
 
 /// One module in a versioned distribution.

@@ -68,3 +68,41 @@ fn test_value_constructor() {
         _ => panic!("Expected Constructor"),
     }
 }
+
+// --- The classic mirror follows morphir-elm's Pattern and Value codecs -----
+
+#[test]
+fn a_variable_pattern_is_not_a_v3_pattern() {
+    // morphir-elm has no VariablePattern; a variable binding is `AsPattern` over a wildcard.
+    assert!(
+        serde_json::from_str::<morphir_core::ir::classic::Pattern<morphir_core::ir::classic::Attrs>>(
+            r#"["VariablePattern",{},["x"]]"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_let_definition_holds_the_one_value_definition() {
+    use morphir_core::ir::classic::types::Type;
+    use morphir_core::ir::classic::value::ValueDefinition;
+
+    let value: Value<(), ()> = Value::LetDefinition(
+        (),
+        Name::from_str("x"),
+        Box::new(ValueDefinition {
+            input_types: vec![],
+            output_type: Type::Unit(()),
+            body: Value::Unit(()),
+        }),
+        Box::new(Value::Variable((), Name::from_str("x"))),
+    );
+
+    let json = serde_json::to_string(&value).unwrap();
+    assert_eq!(
+        json,
+        r#"["LetDefinition",null,["x"],{"inputTypes":[],"outputType":["Unit",null],"body":["Unit",null]},["Variable",null,["x"]]]"#
+    );
+    let decoded: Value<(), ()> = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, value);
+}

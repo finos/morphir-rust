@@ -210,6 +210,14 @@ fn normalize_type_specification(
                 doc: Some(doc),
             }
         }
+        // A derived type is nominal: the projection names it and its parameters, and the base
+        // type it converts to and from is not part of the projected surface.
+        classic::TypeSpecification::Derived(type_params, _) => TypeDeclaration::Opaque {
+            source_name,
+            name,
+            type_params: type_params.iter().map(canonical_name).collect(),
+            doc: Some(doc),
+        },
     }
 }
 

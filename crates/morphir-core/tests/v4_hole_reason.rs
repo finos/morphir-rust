@@ -95,25 +95,6 @@ fn test_hole_reason_type_mismatch_deserialize() {
 }
 
 #[test]
-fn test_hole_reason_draft_serialize() {
-    let reason = HoleReason::Draft;
-
-    let json = serde_json::to_string(&reason).unwrap();
-
-    assert!(json.contains("\"Draft\""));
-    assert!(json.contains("{}"));
-}
-
-#[test]
-fn test_hole_reason_draft_deserialize() {
-    let json = r#"{"Draft": {}}"#;
-
-    let reason: HoleReason = serde_json::from_str(json).unwrap();
-
-    assert!(matches!(reason, HoleReason::Draft));
-}
-
-#[test]
 fn test_hole_reason_type_mismatch_round_trip() {
     let original = HoleReason::TypeMismatch {
         expected: "Int".to_string(),

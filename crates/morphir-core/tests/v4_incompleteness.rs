@@ -28,7 +28,10 @@ fn test_incompleteness_draft_deserialize() {
 #[test]
 fn test_incompleteness_hole_with_unresolved_reference_serialize() {
     let target = FQName::from_canonical_string("acme/finance:ledger#calculate-balance").unwrap();
-    let incomp = Incompleteness::Hole(HoleReason::UnresolvedReference { target });
+    let incomp = Incompleteness::Hole {
+        reason: HoleReason::UnresolvedReference { target },
+        partial_body: None,
+    };
 
     let json = serde_json::to_string(&incomp).unwrap();
 
@@ -44,7 +47,7 @@ fn test_incompleteness_hole_with_unresolved_reference_deserialize() {
     let incomp: Incompleteness = serde_json::from_str(json).unwrap();
 
     match incomp {
-        Incompleteness::Hole(reason) => match reason {
+        Incompleteness::Hole { reason, .. } => match reason {
             HoleReason::UnresolvedReference { target } => {
                 assert_eq!(target.to_canonical_string(), "acme/finance:ledger#calc");
             }
@@ -56,10 +59,13 @@ fn test_incompleteness_hole_with_unresolved_reference_deserialize() {
 
 #[test]
 fn test_incompleteness_hole_with_type_mismatch() {
-    let incomp = Incompleteness::Hole(HoleReason::TypeMismatch {
-        expected: "Int".to_string(),
-        found: "String".to_string(),
-    });
+    let incomp = Incompleteness::Hole {
+        reason: HoleReason::TypeMismatch {
+            expected: "Int".to_string(),
+            found: "String".to_string(),
+        },
+        partial_body: None,
+    };
 
     let json = serde_json::to_string(&incomp).unwrap();
     let parsed: Incompleteness = serde_json::from_str(&json).unwrap();

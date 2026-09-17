@@ -27,6 +27,10 @@ pub fn v4_customer_application() -> Value {
 pub fn v4_customer_application_with_entry_points(entry_points: Value) -> Value {
     let mut content = v4_library_content();
     content["entryPoints"] = entry_points;
+    // An application links its dependencies statically, so each one is a package definition
+    // rather than a specification (distributions-0010). Its public face is the same API the
+    // library's dependency specification states.
+    content["dependencies"] = v4_dependency_definitions();
     content["def"]["modules"]["domain"]["value"]["values"]["unfinished"] = json!({
         "access": "Public",
         "value": documented(
@@ -46,7 +50,7 @@ pub fn v4_customer_application_with_entry_points(entry_points: Value) -> Value {
     content["def"]["modules"]["domain"]["value"]["values"]["validate-customer"] = v4_value(
         "Validate a customer, returning an error message or the customer.",
         "Public",
-        json!({ "id": { "type": STRING } }),
+        json!({ "id": STRING }),
         json!({ "Reference": { "fqname": RESULT, "args": [STRING, CUSTOMER] } }),
     );
     checked_v4(v4_file("Application", content))
@@ -123,7 +127,7 @@ pub fn v4_customer_specs() -> Value {
                                 json!({ "inputs": {}, "output": CUSTOMER })
                             )
                         },
-                        "doc": ["Customer", "specifications."]
+                        "doc": "Customer\nspecifications."
                     }
                 }
             }
@@ -283,7 +287,7 @@ fn v4_library_content() -> Value {
                             "find-customer": v4_value(
                                 "Find a customer.",
                                 "Public",
-                                json!({ "id": { "type": STRING } }),
+                                json!({ "id": STRING }),
                                 json!(CUSTOMER)
                             )
                         },
@@ -298,6 +302,48 @@ fn v4_dependencies() -> Value {
     json!({
         "shared/z": v4_dependency_spec("z-id", "Z dependency."),
         "shared/a": v4_dependency_spec("a-id", "A dependency.")
+    })
+}
+
+fn v4_dependency_definitions() -> Value {
+    json!({
+        "shared/z": v4_dependency_definition("z-id", "Z dependency."),
+        "shared/a": v4_dependency_definition("a-id", "A dependency.")
+    })
+}
+
+fn v4_dependency_definition(local: &str, doc: &str) -> Value {
+    json!({
+        "modules": {
+            "api": {
+                "access": "Public",
+                "value": {
+                    "types": {
+                        local: {
+                            "access": "Public",
+                            "value": documented(
+                                doc,
+                                json!({
+                                    "TypeAliasDefinition": {
+                                        "typeParams": [],
+                                        "typeExp": STRING
+                                    }
+                                })
+                            )
+                        }
+                    },
+                    "values": {
+                        "lookup": v4_value(
+                            "Lookup by identifier.",
+                            "Public",
+                            json!({ "id": STRING }),
+                            json!(BOOL)
+                        )
+                    },
+                    "doc": "Dependency API."
+                }
+            }
+        }
     })
 }
 

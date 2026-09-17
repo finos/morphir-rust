@@ -31,13 +31,13 @@ use serde_json::Value as Json;
 use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::{
-    AccessControlled, ApplicationContent, ConstructorArg, ConstructorArgSpec,
-    ConstructorDefinition, ConstructorSpecification, Distribution, Documented, Field,
-    FormatVersion, IRFile, InputTypeEntry, LetBinding, LibraryContent, Literal, ModuleDefinition,
-    ModuleSpecification, PackageDefinition, PackageSpecification, Pattern, PatternCase,
-    RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes, TypeDefinition,
-    TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody, ValueDefinition,
-    ValueSpecification, with_spelling_mode, with_type_encoding,
+    AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
+    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution, Documented,
+    Field, FormatVersion, IRFile, Incompleteness, LetBinding, LibraryContent, Literal,
+    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageSpecification, Pattern,
+    PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
+    TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
+    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
 use morphir_core::naming::{FQName, Name, Path};
@@ -564,7 +564,6 @@ type ClassicAnnotation = classic::Attrs<classic::Type<classic::Attrs>>;
 /// A classic value expression as this adapter reads one.
 type ClassicValue = classic::Value<classic::Attrs, ClassicAnnotation>;
 type ClassicPattern = classic::Pattern<ClassicAnnotation>;
-type ClassicDefinition = classic::value::Definition<classic::Attrs, ClassicAnnotation>;
 type ClassicValueDefinition = classic::ValueDefinition<classic::Attrs, ClassicAnnotation>;
 type ClassicArgument = classic::value::ValueArgument<classic::Attrs, ClassicAnnotation>;
 
@@ -588,11 +587,11 @@ fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
         NodeKind::Pattern => of(text, Node::ClassicPattern),
         NodeKind::Value => of(text, Node::ClassicValue),
         NodeKind::ValueDefinition => of(text, Node::ClassicValueDefinition),
+        NodeKind::TypeSpecification => of(text, Node::ClassicTypeSpecification),
         // The rest are nodes a classic document only ever carries inside a whole distribution,
         // whose value attribute is the inferred type itself rather than something a reader can
         // clear — so there is no version 3 answer this adapter can give for them on their own.
         NodeKind::FormatVersion
-        | NodeKind::TypeSpecification
         | NodeKind::TypeDefinition
         | NodeKind::ValueSpecification
         | NodeKind::AccessControlledTypeDefinition
@@ -651,14 +650,16 @@ fn strip_classic_value(node: ClassicValue) -> ClassicValue {
         classic::Value::LetDefinition(_, name, definition, body) => classic::Value::LetDefinition(
             attributes,
             name,
-            Box::new(strip_classic_definition(*definition)),
+            Box::new(strip_classic_value_definition(*definition)),
             Box::new(strip_classic_value(*body)),
         ),
         classic::Value::LetRecursion(_, bindings, body) => classic::Value::LetRecursion(
             attributes,
             bindings
                 .into_iter()
-                .map(|(name, definition)| (name, Box::new(strip_classic_definition(*definition))))
+                .map(|(name, definition)| {
+                    (name, Box::new(strip_classic_value_definition(*definition)))
+                })
                 .collect(),
             Box::new(strip_classic_value(*body)),
         ),
@@ -724,7 +725,6 @@ fn strip_classic_pattern(node: ClassicPattern) -> ClassicPattern {
         ),
         classic::Pattern::Literal(_, literal) => classic::Pattern::Literal(attributes, literal),
         classic::Pattern::Unit(_) => classic::Pattern::Unit(attributes),
-        classic::Pattern::Variable(_, name) => classic::Pattern::Variable(attributes, name),
     }
 }
 
@@ -733,18 +733,6 @@ fn strip_classic_argument(argument: ClassicArgument) -> ClassicArgument {
         name: argument.name,
         annotation: classic::Attrs::None,
         ty: argument.ty,
-    }
-}
-
-fn strip_classic_definition(definition: ClassicDefinition) -> ClassicDefinition {
-    classic::value::Definition {
-        input_types: definition
-            .input_types
-            .into_iter()
-            .map(strip_classic_argument)
-            .collect(),
-        output_type: definition.output_type,
-        body: Box::new(strip_classic_value(*definition.body)),
     }
 }
 
@@ -767,6 +755,7 @@ fn classic_literal_kind(literal: &classic::Literal) -> &'static str {
         classic::Literal::String(_) => "StringLiteral",
         classic::Literal::WholeNumber(_) => "WholeNumberLiteral",
         classic::Literal::Float(_) => "FloatLiteral",
+        classic::Literal::Decimal(_) => "DecimalLiteral",
     }
 }
 
@@ -782,6 +771,17 @@ fn classic_type_kind(node: &classic::Type<classic::Attrs>) -> &'static str {
     }
 }
 
+fn classic_type_specification_kind(
+    node: &classic::TypeSpecification<classic::Attrs>,
+) -> &'static str {
+    match node {
+        classic::TypeSpecification::Alias(..) => "TypeAliasSpecification",
+        classic::TypeSpecification::Opaque(_) => "OpaqueTypeSpecification",
+        classic::TypeSpecification::Custom(..) => "CustomTypeSpecification",
+        classic::TypeSpecification::Derived(..) => "DerivedTypeSpecification",
+    }
+}
+
 fn classic_pattern_kind(node: &ClassicPattern) -> &'static str {
     match node {
         classic::Pattern::Wildcard(_) => "WildcardPattern",
@@ -792,7 +792,6 @@ fn classic_pattern_kind(node: &ClassicPattern) -> &'static str {
         classic::Pattern::HeadTail(..) => "HeadTailPattern",
         classic::Pattern::Literal(..) => "LiteralPattern",
         classic::Pattern::Unit(_) => "UnitPattern",
-        classic::Pattern::Variable(..) => "VariablePattern",
     }
 }
 
@@ -850,6 +849,7 @@ enum Node {
     ClassicFQName(classic::FQName),
     ClassicLiteral(classic::Literal),
     ClassicType(classic::Type<classic::Attrs>),
+    ClassicTypeSpecification(classic::TypeSpecification<classic::Attrs>),
     ClassicPattern(ClassicPattern),
     ClassicValue(ClassicValue),
     ClassicValueDefinition(ClassicValueDefinition),
@@ -882,6 +882,7 @@ impl Node {
             Node::ClassicFQName(_) => "FQName",
             Node::ClassicLiteral(node) => classic_literal_kind(node),
             Node::ClassicType(node) => classic_type_kind(node),
+            Node::ClassicTypeSpecification(node) => classic_type_specification_kind(node),
             Node::ClassicPattern(node) => classic_pattern_kind(node),
             Node::ClassicValue(node) => classic_value_kind(node),
             Node::ClassicValueDefinition(_) => "ValueDefinition",
@@ -925,8 +926,9 @@ impl Node {
             Node::ClassicValueDefinition(node) => {
                 Node::ClassicValueDefinition(strip_classic_value_definition(node))
             }
-            // Names, paths, literals, the format version and a classic type carry no attributes
-            // a reader can clear.
+            // Names, paths, literals, the format version, a classic type and a classic type
+            // specification — which carries nothing but types — have no attributes a reader can
+            // clear.
             other => other,
         }
     }
@@ -979,6 +981,7 @@ impl Node {
             Node::ClassicFQName(node) => text(node),
             Node::ClassicLiteral(node) => text(node),
             Node::ClassicType(node) => text(node),
+            Node::ClassicTypeSpecification(node) => text(node),
             Node::ClassicPattern(node) => text(node),
             Node::ClassicValue(node) => text(node),
             Node::ClassicValueDefinition(node) => text(node),
@@ -1231,22 +1234,56 @@ fn strip_record_field(field: RecordFieldEntry) -> RecordFieldEntry {
     RecordFieldEntry(field.0, strip_value(field.1))
 }
 
+/// Strips the attributes off the value expressions an annotation's arguments carry; the names and
+/// the free text of an annotation carry none.
+fn strip_annotations(annotations: Vec<Annotation>) -> Vec<Annotation> {
+    annotations
+        .into_iter()
+        .map(|annotation| match annotation {
+            Annotation::Compact { name, text } => Annotation::Compact { name, text },
+            Annotation::Structured { name, args } => Annotation::Structured {
+                name,
+                args: args
+                    .into_iter()
+                    .map(|argument| match argument {
+                        AnnotationArgument::Positional(value) => {
+                            AnnotationArgument::Positional(strip_value(value))
+                        }
+                        AnnotationArgument::Named { name, value } => AnnotationArgument::Named {
+                            name,
+                            value: strip_value(value),
+                        },
+                    })
+                    .collect(),
+            },
+        })
+        .collect()
+}
+
 fn strip_type_specification(node: TypeSpecification) -> TypeSpecification {
     match node {
         TypeSpecification::TypeAliasSpecification {
+            annotations,
             type_params,
             type_expr,
         } => TypeSpecification::TypeAliasSpecification {
+            annotations: strip_annotations(annotations),
             type_params,
             type_expr: strip_type(type_expr),
         },
-        TypeSpecification::OpaqueTypeSpecification { type_params } => {
-            TypeSpecification::OpaqueTypeSpecification { type_params }
-        }
+        TypeSpecification::OpaqueTypeSpecification {
+            annotations,
+            type_params,
+        } => TypeSpecification::OpaqueTypeSpecification {
+            annotations: strip_annotations(annotations),
+            type_params,
+        },
         TypeSpecification::CustomTypeSpecification {
+            annotations,
             type_params,
             constructors,
         } => TypeSpecification::CustomTypeSpecification {
+            annotations: strip_annotations(annotations),
             type_params,
             constructors: constructors
                 .into_iter()
@@ -1264,11 +1301,13 @@ fn strip_type_specification(node: TypeSpecification) -> TypeSpecification {
                 .collect(),
         },
         TypeSpecification::DerivedTypeSpecification {
+            annotations,
             type_params,
             base_type,
             from_base_type,
             to_base_type,
         } => TypeSpecification::DerivedTypeSpecification {
+            annotations: strip_annotations(annotations),
             type_params,
             base_type: strip_type(base_type),
             from_base_type,
@@ -1314,14 +1353,30 @@ fn strip_type_definition(node: TypeDefinition) -> TypeDefinition {
             partial_type_expr,
         } => TypeDefinition::IncompleteTypeDefinition {
             type_params,
-            incompleteness,
+            incompleteness: strip_incompleteness(incompleteness),
             partial_type_expr: partial_type_expr.map(strip_type),
+        },
+    }
+}
+
+/// A hole's `partialBody` is a type expression, so it carries attributes the testee strips like
+/// any other.
+fn strip_incompleteness(node: Incompleteness) -> Incompleteness {
+    match node {
+        Incompleteness::Draft => Incompleteness::Draft,
+        Incompleteness::Hole {
+            reason,
+            partial_body,
+        } => Incompleteness::Hole {
+            reason,
+            partial_body: partial_body.map(strip_type),
         },
     }
 }
 
 fn strip_value_specification(node: ValueSpecification) -> ValueSpecification {
     ValueSpecification {
+        annotations: strip_annotations(node.annotations),
         inputs: node
             .inputs
             .into_iter()
@@ -1336,15 +1391,7 @@ fn strip_value_definition(node: ValueDefinition) -> ValueDefinition {
         input_types: node
             .input_types
             .into_iter()
-            .map(|(name, entry)| {
-                (
-                    name,
-                    InputTypeEntry {
-                        type_attributes: None,
-                        input_type: strip_type(entry.input_type),
-                    },
-                )
-            })
+            .map(|(name, tpe)| (name, strip_type(tpe)))
             .collect(),
         output_type: node.output_type.map(strip_type),
         body: match node.body {
@@ -1357,7 +1404,13 @@ fn strip_value_definition(node: ValueDefinition) -> ValueDefinition {
                 externals,
                 fallback: fallback.map(|value| Box::new(strip_value(*value))),
             },
-            ValueBody::Incomplete { incompleteness } => ValueBody::Incomplete { incompleteness },
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => ValueBody::Incomplete {
+                incompleteness: strip_incompleteness(incompleteness),
+                partial_body: partial_body.map(|value| Box::new(strip_value(*value))),
+            },
         },
     }
 }
@@ -1411,6 +1464,7 @@ fn strip_module_definition(node: ModuleDefinition) -> ModuleDefinition {
 
 fn strip_module_specification(node: ModuleSpecification) -> ModuleSpecification {
     ModuleSpecification {
+        annotations: strip_annotations(node.annotations),
         types: node
             .types
             .into_iter()
@@ -1474,7 +1528,7 @@ fn strip_distribution(node: Distribution) -> Distribution {
         }),
         Distribution::Application(content) => Distribution::Application(ApplicationContent {
             package_name: content.package_name,
-            dependencies: strip_dependencies(content.dependencies),
+            dependencies: strip_definition_dependencies(content.dependencies),
             def: strip_package_definition(content.def),
             entry_points: content.entry_points,
         }),
@@ -1487,5 +1541,14 @@ fn strip_dependencies(
     dependencies
         .into_iter()
         .map(|(name, specification)| (name, strip_package_specification(specification)))
+        .collect()
+}
+
+fn strip_definition_dependencies(
+    dependencies: morphir_core::ir::v4::DefinitionDependencies,
+) -> morphir_core::ir::v4::DefinitionDependencies {
+    dependencies
+        .into_iter()
+        .map(|(name, definition)| (name, strip_package_definition(definition)))
         .collect()
 }

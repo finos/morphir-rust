@@ -41,7 +41,15 @@ pub(super) fn normalize(ir: v4::IRFile) -> Result<ProjectionPackage, NormalizeEr
                 &content.def,
                 content.entry_points,
             )?;
-            let dependencies = normalize_dependencies(content.dependencies);
+            // A projection states what a dependency offers, so an application's statically
+            // linked definitions are read through their public faces (distributions-0010).
+            let dependencies = normalize_dependencies(
+                content
+                    .dependencies
+                    .iter()
+                    .map(|(name, definition)| (name.clone(), definition.to_specification()))
+                    .collect(),
+            );
             Ok(normalize_definition_package(
                 DistributionKind::Application,
                 content.package_name.to_string(),
@@ -111,7 +119,7 @@ fn normalize_definition_module(
                 .into_iter()
                 .map(|(name, input)| NamedType {
                     name,
-                    tpe: normalize_type(input.input_type),
+                    tpe: normalize_type(input),
                 })
                 .collect();
             normalize_value(
@@ -256,5 +264,5 @@ fn canonical_path(path: &str) -> Vec<String> {
 }
 
 fn documentation(doc: Option<&v4::Documentation>) -> Option<String> {
-    doc.map(|doc| doc.lines().join("\n"))
+    doc.map(|doc| doc.text().to_owned())
 }

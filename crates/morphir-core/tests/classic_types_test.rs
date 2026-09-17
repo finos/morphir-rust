@@ -1,3 +1,4 @@
+use morphir_core::ir::classic;
 use morphir_core::ir::classic::naming::Name;
 use morphir_core::ir::classic::types::Type;
 
@@ -109,4 +110,32 @@ fn test_type_unit() {
         Type::Unit(_) => (),
         _ => panic!("Expected Unit"),
     }
+}
+
+// --- The classic mirror follows morphir-elm's Type codec -------------------
+
+#[test]
+fn a_v3_derived_type_specification_round_trips() {
+    // MCK versions-0007: morphir-elm's fourth specification.
+    let text = r#"["DerivedTypeSpecification",[],{"baseType":["Reference",{},[[["morphir"],["s","d","k"]],[["string"]],["string"]],[]],"fromBaseType":[[["my"],["org"]],[["module"]],["from","string"]],"toBaseType":[[["my"],["org"]],[["module"]],["to","string"]]}]"#;
+    let decoded: classic::TypeSpecification<classic::Attrs> = serde_json::from_str(text).unwrap();
+    assert!(matches!(decoded, classic::TypeSpecification::Derived(..)));
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), text);
+}
+
+#[test]
+fn a_v3_record_field_is_written_as_an_object() {
+    // MCK versions-0008: morphir-elm's encodeField writes { "name", "tpe" }.
+    let text = r#"["Record",{},[{"name":["first"],"tpe":["Reference",{},[[["morphir"],["s","d","k"]],[["string"]],["string"]],[]]}]]"#;
+    let decoded: classic::Type<classic::Attrs> = serde_json::from_str(text).unwrap();
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), text);
+
+    // The pair spelling still decodes — it is only never written back.
+    let pair: classic::Type<classic::Attrs> =
+        serde_json::from_str(r#"["Record",{},[[["first"],["Unit",{}]]]]"#).unwrap();
+    assert!(
+        serde_json::to_string(&pair)
+            .unwrap()
+            .contains(r#"{"name":["first"],"tpe":"#)
+    );
 }

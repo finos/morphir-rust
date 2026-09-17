@@ -12,7 +12,10 @@
 
 use std::str::FromStr;
 
+use num_bigint::BigInt;
 use serde::{Serialize, Serializer};
+
+use crate::ir::decimal::DecimalLiteral;
 
 use super::serde_v4;
 
@@ -137,8 +140,9 @@ pub enum Literal {
     /// String literal (UTF-8 text): `{ "StringLiteral": "s" }`
     String(String),
 
-    /// Integer literal: `{ "IntegerLiteral": 42 }`
-    Integer(i64),
+    /// Integer literal of arbitrary precision: `{ "IntegerLiteral": 42 }`; the payload is a JSON
+    /// number lexeme with no point and no exponent.
+    Integer(BigInt),
 
     /// Floating-point literal: `{ "FloatLiteral": 1.5 }`
     ///
@@ -146,9 +150,9 @@ pub enum Literal {
     /// reproduces its input — the YAML profile — spells `1.0e2` the way it was read.
     Float(FloatLiteral),
 
-    /// Decimal literal, carried as text so no binding coerces it to a float:
-    /// `{ "DecimalLiteral": "10.50" }`
-    Decimal(String),
+    /// A genuine decimal; the payload is its lexeme: `{ "DecimalLiteral": "10.50" }`. See
+    /// `ir::decimal`.
+    Decimal(DecimalLiteral),
 
     /// Document literal: a schema-less JSON-like tree carried verbatim, typed as
     /// `morphir/SDK:document#document`. Its payload is the document itself, so
@@ -186,8 +190,8 @@ impl Literal {
     }
 
     /// Create a new integer literal
-    pub fn integer(value: i64) -> Self {
-        Literal::Integer(value)
+    pub fn integer(value: impl Into<BigInt>) -> Self {
+        Literal::Integer(value.into())
     }
 
     /// Create a new float literal
@@ -195,9 +199,9 @@ impl Literal {
         Literal::Float(FloatLiteral::from_f64(value))
     }
 
-    /// Create a new decimal literal from a string representation
-    pub fn decimal(value: impl Into<String>) -> Self {
-        Literal::Decimal(value.into())
+    /// Create a decimal literal from its lexeme.
+    pub fn decimal(lexeme: &str) -> Result<Self, crate::ir::decimal::InvalidDecimalLexeme> {
+        DecimalLiteral::parse(lexeme).map(Literal::Decimal)
     }
 
     /// Create a new document literal from a JSON-like tree
@@ -218,14 +222,14 @@ mod tests {
             Literal::string("hello"),
             Literal::String("hello".to_string())
         );
-        assert_eq!(Literal::integer(42), Literal::Integer(42));
+        assert_eq!(Literal::integer(42), Literal::Integer(BigInt::from(42)));
         assert_eq!(
             Literal::float(2.5),
             Literal::Float(FloatLiteral::from_f64(2.5))
         );
         assert_eq!(
-            Literal::decimal("123.456"),
-            Literal::Decimal("123.456".to_string())
+            Literal::decimal("123.456").unwrap(),
+            Literal::Decimal(DecimalLiteral::parse("123.456").unwrap())
         );
         assert_eq!(
             Literal::document(serde_json::json!({ "a": 1 })),

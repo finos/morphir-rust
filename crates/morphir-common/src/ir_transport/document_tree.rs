@@ -111,12 +111,57 @@ struct ModuleManifest {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     access: Option<Access>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "manifest_doc"
+    )]
     doc: Option<Documentation>,
     #[serde(default)]
     types: Vec<String>,
     #[serde(default)]
     values: Vec<String>,
+}
+
+/// A module manifest file's `doc` accepts an array of lines, joined with `\n`, as well as the one
+/// string every other node requires (definitions-0028); a writer only ever emits the string.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ManifestDoc {
+    Text(String),
+    Lines(Vec<String>),
+}
+
+impl From<ManifestDoc> for Documentation {
+    fn from(doc: ManifestDoc) -> Self {
+        match doc {
+            ManifestDoc::Text(text) => Documentation::new(text),
+            ManifestDoc::Lines(lines) => Documentation::new(lines.join("\n")),
+        }
+    }
+}
+
+mod manifest_doc {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{Documentation, ManifestDoc};
+
+    pub(super) fn serialize<S>(
+        doc: &Option<Documentation>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        doc.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Option<Documentation>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<ManifestDoc>::deserialize(deserializer).map(|doc| doc.map(Documentation::from))
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -508,6 +553,9 @@ fn read_specification_module(
     Ok((
         manifest.path,
         ModuleSpecification {
+            // This layout gives a module's own annotations no file of their own; the tree layout
+            // stage does.
+            annotations: Vec::new(),
             types,
             values,
             doc: manifest.doc,
@@ -724,16 +772,44 @@ impl DocumentTreeSink {
                 "a dependency appeared after the first module",
             ));
         }
-        let DependencyEvent::V4 {
-            package,
-            specification,
-        } = dependency
-        else {
-            return Err(event_error(
-                "version_mismatch",
-                cursor,
-                "the v4 document-tree sink received a Classic v3 dependency",
-            ));
+        let (package, specification) = match dependency {
+            DependencyEvent::V4 {
+                package,
+                specification,
+            } => {
+                // An application's dependencies are statically linked definitions
+                // (DependencyEvent::V4Definition below); DocumentTreeSource::open refuses every
+                // non-empty Application dependency map, so a specification dependency must be
+                // rejected here rather than written into a manifest the source cannot reopen.
+                if matches!(
+                    self.manifest.as_ref().map(|manifest| manifest.distribution),
+                    Some(DistributionKind::Application)
+                ) {
+                    return Err(event_error(
+                        "unsupported_dependencies",
+                        cursor,
+                        "an application's definition dependencies have no place in this layout",
+                    ));
+                }
+                (package, specification)
+            }
+            // This layout keeps dependencies in its distribution manifest, which holds public
+            // faces. An application's statically linked definitions do not fit there, and the
+            // tree layout that will hold them is written later (distributions-0010).
+            DependencyEvent::V4Definition { .. } => {
+                return Err(event_error(
+                    "unsupported_dependencies",
+                    cursor,
+                    "an application's definition dependencies have no place in this layout",
+                ));
+            }
+            DependencyEvent::ClassicV3 { .. } => {
+                return Err(event_error(
+                    "version_mismatch",
+                    cursor,
+                    "the v4 document-tree sink received a Classic v3 dependency",
+                ));
+            }
         };
         let manifest = self.manifest.as_mut().ok_or_else(|| {
             event_error(
@@ -796,6 +872,13 @@ impl DocumentTreeSink {
                 ModuleEvent::V4Definition { path, module },
             ) => write_definition_module(&self.root, &self.profile, &package, &path, &module),
             (DistributionKind::Specs, ModuleEvent::V4Specification { path, module }) => {
+                if !module.annotations.is_empty() {
+                    return Err(event_error(
+                        "annotations_unsupported",
+                        cursor,
+                        "a module specification's annotations have no file in this layout",
+                    ));
+                }
                 write_specification_module(&self.root, &self.profile, &package, &path, &module)
             }
             _ => Err(event_error(
@@ -905,6 +988,17 @@ impl DocumentTreeSource {
         }
         let manifest_path = LogicalDocument::Manifest.path(&root, &profile)?;
         let mut manifest: DistributionManifest = profile.read(&manifest_path)?;
+        // An application's dependencies are the definitions it links statically
+        // (distributions-0010), which this layout's manifest cannot hold. Only an empty map reads.
+        if matches!(manifest.distribution, DistributionKind::Application)
+            && !manifest.dependencies.is_empty()
+        {
+            return Err(event_error(
+                "unsupported_dependencies",
+                &IrCursor::root().child(CursorSegment::Distribution),
+                "an application's definition dependencies have no place in this layout",
+            ));
+        }
         let dependencies = std::mem::take(&mut manifest.dependencies)
             .into_iter()
             .collect::<VecDeque<_>>();

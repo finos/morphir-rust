@@ -4,6 +4,7 @@
 //! https://morphir.finos.org/docs/spec/ir/schemas/v4/whats-new/
 
 use morphir_core::ir::Literal;
+use num_bigint::BigInt;
 
 #[test]
 fn test_integer_literal_serialize() {
@@ -23,7 +24,7 @@ fn test_integer_literal_deserialize_v4_format() {
     let lit: Literal = serde_json::from_str(json).unwrap();
 
     match lit {
-        Literal::Integer(n) => assert_eq!(n, 42),
+        Literal::Integer(n) => assert_eq!(n, BigInt::from(42)),
         _ => panic!("Expected Integer variant"),
     }
 }
@@ -36,7 +37,7 @@ fn test_integer_literal_deserialize_legacy_whole_number() {
     let lit: Literal = serde_json::from_str(json).unwrap();
 
     match lit {
-        Literal::Integer(n) => assert_eq!(n, 99),
+        Literal::Integer(n) => assert_eq!(n, BigInt::from(99)),
         _ => panic!("Expected Integer variant"),
     }
 }
@@ -50,7 +51,7 @@ fn test_negative_integer_literal() {
     let parsed: Literal = serde_json::from_str(&json).unwrap();
 
     match parsed {
-        Literal::Integer(n) => assert_eq!(n, -100),
+        Literal::Integer(n) => assert_eq!(n, BigInt::from(-100)),
         _ => panic!("Expected Integer variant"),
     }
 }
@@ -63,7 +64,7 @@ fn test_large_integer_literal() {
     let parsed: Literal = serde_json::from_str(&json).unwrap();
 
     match parsed {
-        Literal::Integer(n) => assert_eq!(n, i64::MAX),
+        Literal::Integer(n) => assert_eq!(n, BigInt::from(i64::MAX)),
         _ => panic!("Expected Integer variant"),
     }
 }
@@ -76,7 +77,7 @@ fn test_zero_integer_literal() {
     let parsed: Literal = serde_json::from_str(&json).unwrap();
 
     match parsed {
-        Literal::Integer(n) => assert_eq!(n, 0),
+        Literal::Integer(n) => assert_eq!(n, BigInt::from(0)),
         _ => panic!("Expected Integer variant"),
     }
 }
@@ -113,7 +114,7 @@ fn test_float_literal_round_trip() {
 
 #[test]
 fn test_decimal_literal_round_trip() {
-    let lit = Literal::decimal("123456789.987654321");
+    let lit = Literal::decimal("123456789.987654321").unwrap();
 
     let json = serde_json::to_string(&lit).unwrap();
     let parsed: Literal = serde_json::from_str(&json).unwrap();

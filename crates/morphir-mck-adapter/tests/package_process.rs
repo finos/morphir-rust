@@ -10,12 +10,15 @@ fn exchange(text: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(text.as_bytes())
-        .unwrap();
+    // A test that sends a selector the adapter refuses (e.g. an unsupported suite or contract)
+    // expects the adapter to exit before it ever reads stdin, so the write below can race a
+    // child that has already closed its stdin and exited; a broken pipe there is expected, not a
+    // failure, and the process's actual outcome is still checked through `wait_with_output`.
+    match child.stdin.take().unwrap().write_all(text.as_bytes()) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("failed to write request: {error}"),
+    }
     child.wait_with_output().unwrap()
 }
 

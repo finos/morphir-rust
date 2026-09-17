@@ -33,19 +33,19 @@ pub struct SourceLocation {
 /// - Type constraints for validation
 /// - Tool-specific extensions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TypeAttributes {
     /// Source location where this type was defined
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceLocation>,
 
     /// Type constraints (e.g., for constrained type variables)
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub constraints: serde_json::Value,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub constraints: serde_json::Map<String, serde_json::Value>,
 
     /// Tool-specific extensions (IDE hints, optimization notes, etc.)
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub extensions: serde_json::Value,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 
 /// V4 attributes for value expressions.
@@ -56,7 +56,7 @@ pub struct TypeAttributes {
 /// - Tool-specific extensions
 ///
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValueAttributes {
     /// Source location where this value was defined
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,8 +67,8 @@ pub struct ValueAttributes {
     pub inferred_type: Option<Box<Type>>,
 
     /// Tool-specific extensions (IDE hints, optimization notes, etc.)
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub extensions: serde_json::Value,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 
 // =============================================================================
@@ -108,8 +108,8 @@ impl TypeAttributes {
     pub fn with_source(source: SourceLocation) -> Self {
         TypeAttributes {
             source: Some(source),
-            constraints: serde_json::Value::Null,
-            extensions: serde_json::Value::Null,
+            constraints: serde_json::Map::new(),
+            extensions: serde_json::Map::new(),
         }
     }
 }
@@ -125,7 +125,7 @@ impl ValueAttributes {
         ValueAttributes {
             source: Some(source),
             inferred_type: None,
-            extensions: serde_json::Value::Null,
+            extensions: serde_json::Map::new(),
         }
     }
 
@@ -134,7 +134,7 @@ impl ValueAttributes {
         ValueAttributes {
             source: None,
             inferred_type: Some(Box::new(inferred_type)),
-            extensions: serde_json::Value::Null,
+            extensions: serde_json::Map::new(),
         }
     }
 }
@@ -170,8 +170,8 @@ mod tests {
     fn test_type_attributes_default() {
         let attrs = TypeAttributes::default();
         assert!(attrs.source.is_none());
-        assert!(attrs.constraints.is_null());
-        assert!(attrs.extensions.is_null());
+        assert!(attrs.constraints.is_empty());
+        assert!(attrs.extensions.is_empty());
     }
 
     #[test]

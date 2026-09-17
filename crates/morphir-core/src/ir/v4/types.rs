@@ -16,6 +16,7 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
 use super::access::AccessControlled;
+use super::annotation::Annotation;
 use super::attributes::TypeAttributes;
 use super::value::HoleReason;
 use crate::naming::{FQName, Name};
@@ -169,13 +170,18 @@ impl Field {
 pub enum TypeSpecification {
     /// Type alias specification
     TypeAliasSpecification {
+        annotations: Vec<Annotation>,
         type_params: Vec<Name>,
         type_expr: Type,
     },
     /// Opaque type (constructors hidden)
-    OpaqueTypeSpecification { type_params: Vec<Name> },
+    OpaqueTypeSpecification {
+        annotations: Vec<Annotation>,
+        type_params: Vec<Name>,
+    },
     /// Custom type with public constructors
     CustomTypeSpecification {
+        annotations: Vec<Annotation>,
         type_params: Vec<Name>,
         constructors: Vec<ConstructorSpecification>,
     },
@@ -185,6 +191,7 @@ pub enum TypeSpecification {
     /// "toBaseType": … } }`. All four members are required, and the two conversions are FQNames
     /// rather than expressions.
     DerivedTypeSpecification {
+        annotations: Vec<Annotation>,
         type_params: Vec<Name>,
         base_type: Type,
         from_base_type: FQName,
@@ -197,27 +204,37 @@ impl Serialize for TypeSpecification {
     where
         S: Serializer,
     {
+        // `annotations` is the first member of every specification and is written only when the
+        // specification has some (definitions-0020 to 0022).
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Alias<'a> {
+            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
+            annotations: &'a [Annotation],
             type_params: &'a [Name],
             type_exp: &'a Type,
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Opaque<'a> {
+            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
+            annotations: &'a [Annotation],
             #[serde(skip_serializing_if = "<[Name]>::is_empty")]
             type_params: &'a [Name],
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Custom<'a> {
+            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
+            annotations: &'a [Annotation],
             type_params: &'a [Name],
             constructors: indexmap::IndexMap<String, Vec<(&'a Name, &'a Type)>>,
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Derived<'a> {
+            #[serde(skip_serializing_if = "<[Annotation]>::is_empty")]
+            annotations: &'a [Annotation],
             type_params: &'a [Name],
             base_type: &'a Type,
             from_base_type: String,
@@ -227,24 +244,35 @@ impl Serialize for TypeSpecification {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             Self::TypeAliasSpecification {
+                annotations,
                 type_params,
                 type_expr,
             } => map.serialize_entry(
                 "TypeAliasSpecification",
                 &Alias {
+                    annotations,
                     type_params,
                     type_exp: type_expr,
                 },
             )?,
-            Self::OpaqueTypeSpecification { type_params } => {
-                map.serialize_entry("OpaqueTypeSpecification", &Opaque { type_params })?
-            }
+            Self::OpaqueTypeSpecification {
+                annotations,
+                type_params,
+            } => map.serialize_entry(
+                "OpaqueTypeSpecification",
+                &Opaque {
+                    annotations,
+                    type_params,
+                },
+            )?,
             Self::CustomTypeSpecification {
+                annotations,
                 type_params,
                 constructors,
             } => map.serialize_entry(
                 "CustomTypeSpecification",
                 &Custom {
+                    annotations,
                     type_params,
                     constructors: constructors
                         .iter()
@@ -262,6 +290,7 @@ impl Serialize for TypeSpecification {
                 },
             )?,
             Self::DerivedTypeSpecification {
+                annotations,
                 type_params,
                 base_type,
                 from_base_type,
@@ -269,6 +298,7 @@ impl Serialize for TypeSpecification {
             } => map.serialize_entry(
                 "DerivedTypeSpecification",
                 &Derived {
+                    annotations,
                     type_params,
                     base_type,
                     from_base_type: from_base_type.to_canonical_string(),
@@ -317,13 +347,22 @@ pub struct ConstructorArgSpec {
 ///
 /// Used when a type cannot be fully resolved due to errors or work in progress.
 ///
-/// A hole says why it is one: `{ "Hole": { "reason": { "Draft": {} } } }`. A draft is
+/// A hole says why it is one: `{ "Hole": { "reason": { "TypeMismatch": { … } } } }`, and may keep
+/// the type expression the author had written as `partialBody` (definitions-0024). A draft is
 /// deliberately unfinished rather than broken, so it has no reason at all and takes an empty
 /// payload: `{ "Draft": {} }`.
+// A hole's kept type expression is a `Type` like any other member of this model, and boxing it
+// to even out the two variants would make the node model read differently from the wire.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Incompleteness {
     /// Type has unresolved dependencies or errors
-    Hole(HoleReason),
+    Hole {
+        reason: HoleReason,
+        /// What the author had written when the definition stopped being complete; written only
+        /// when present.
+        partial_body: Option<Type>,
+    },
     /// Type is work in progress
     Draft,
 }
@@ -336,12 +375,23 @@ impl Serialize for Incompleteness {
         #[derive(Serialize)]
         struct HoleContent<'a> {
             reason: &'a HoleReason,
+            #[serde(rename = "partialBody", skip_serializing_if = "Option::is_none")]
+            partial_body: Option<&'a Type>,
         }
 
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             Incompleteness::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
-            Incompleteness::Hole(reason) => map.serialize_entry("Hole", &HoleContent { reason })?,
+            Incompleteness::Hole {
+                reason,
+                partial_body,
+            } => map.serialize_entry(
+                "Hole",
+                &HoleContent {
+                    reason,
+                    partial_body: partial_body.as_ref(),
+                },
+            )?,
         }
         map.end()
     }
@@ -362,8 +412,10 @@ impl<'de> Deserialize<'de> for Incompleteness {
 /// Type definition - uses wrapper object format
 ///
 /// V4 adds IncompleteTypeDefinition for incremental compilation and error recovery.
+// `large_enum_variant`: the incomplete definition is the big variant only because it carries an
+// `Incompleteness`, whose own fields are inline for the reason given on that enum.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 pub enum TypeDefinition {
     /// Type alias definition
     ///
@@ -548,6 +600,7 @@ mod tests {
     #[test]
     fn test_constructor_spec_name_roundtrips_through_canonical_map_key() {
         let spec = TypeSpecification::CustomTypeSpecification {
+            annotations: vec![],
             type_params: vec![],
             constructors: vec![ConstructorSpecification {
                 name: Name::from("GC"),

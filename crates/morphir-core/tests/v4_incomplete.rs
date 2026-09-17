@@ -17,21 +17,28 @@ fn incomplete_type_preserves_partial_expression() {
 }
 
 #[test]
-fn documentation_accepts_lines_and_normalizes_crlf() {
-    let doc: Documentation = serde_json::from_str(r#"["line one\r","line two"]"#).unwrap();
+fn documentation_is_one_string_with_crlf_normalized() {
+    assert_eq!(Documentation::from("a\r\nb").text(), "a\nb");
 
-    assert_eq!(doc.lines(), &["line one", "line two"]);
+    let doc: Documentation = serde_json::from_str(r#""line one\r\nline two""#).unwrap();
+    assert_eq!(doc.text(), "line one\nline two");
     assert_eq!(
         serde_json::to_string(&doc).unwrap(),
-        r#"["line one","line two"]"#
+        r#""line one\nline two""#
     );
+}
+
+#[test]
+fn documentation_refuses_an_array() {
+    let error = serde_json::from_str::<Documentation>(r#"["line one","line two"]"#).unwrap_err();
+    assert!(error.is_data(), "unexpected error kind: {error}");
 }
 
 #[test]
 fn documentation_keeps_single_line_string_form() {
     let doc: Documentation = serde_json::from_str(r#""one line""#).unwrap();
 
-    assert_eq!(doc.lines(), &["one line"]);
+    assert_eq!(doc.text(), "one line");
     assert_eq!(serde_json::to_string(&doc).unwrap(), r#""one line""#);
 }
 

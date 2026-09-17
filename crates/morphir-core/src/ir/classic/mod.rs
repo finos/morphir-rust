@@ -30,5 +30,5 @@ pub use module::{ModuleDefinition, ModuleEntry, ModuleSpecification};
 pub use naming::{FQName, Name, Path};
 pub use package::{PackageDefinition, PackageSpecification};
 pub use pattern::Pattern;
-pub use types::{Constructor, Field, Type, TypeDefinition, TypeSpecification};
-pub use value::{Definition, Value, ValueDefinition, ValueSpecification};
+pub use types::{Constructor, DerivedTypeConfig, Field, Type, TypeDefinition, TypeSpecification};
+pub use value::{Value, ValueDefinition, ValueSpecification};

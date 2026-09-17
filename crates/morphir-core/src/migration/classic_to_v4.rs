@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use num_bigint::BigInt;
 
 use crate::ir::{classic, v4};
 use crate::migration::{MigrationDiagnostic, MigrationOptions, MigrationReport};
@@ -121,7 +122,7 @@ impl ValueAnnotation for classic::Type<classic::Attrs> {
         Ok(v4::ValueAttributes {
             source: None,
             inferred_type: Some(Box::new(migrate_type(self, context)?)),
-            extensions: serde_json::Value::Null,
+            extensions: serde_json::Map::new(),
         })
     }
 }
@@ -154,10 +155,11 @@ pub fn migrate_literal(value: &classic::Literal) -> v4::Literal {
         classic::Literal::Bool(value) => v4::Literal::Bool(*value),
         classic::Literal::Char(value) => v4::Literal::Char(*value),
         classic::Literal::String(value) => v4::Literal::String(value.clone()),
-        classic::Literal::WholeNumber(value) => v4::Literal::Integer(*value),
+        classic::Literal::WholeNumber(value) => v4::Literal::Integer(BigInt::from(*value)),
         // Classic holds a float as a machine number with no lexeme, so the migrated literal is
         // spelled the shortest way that reads back as the same number.
         classic::Literal::Float(value) => v4::Literal::Float(v4::FloatLiteral::from_f64(*value)),
+        classic::Literal::Decimal(value) => v4::Literal::Decimal(value.clone()),
     }
 }
 
@@ -268,26 +270,7 @@ pub fn migrate_pattern<VA: ValueAnnotation>(
         classic::Pattern::Unit(attributes) => Ok(v4::Pattern::UnitPattern(
             attributes.to_value_attributes(context)?,
         )),
-        classic::Pattern::Variable(attributes, name) => Ok(v4::Pattern::AsPattern(
-            attributes.to_value_attributes(context)?,
-            Box::new(v4::Pattern::WildcardPattern(
-                attributes.to_value_attributes(context)?,
-            )),
-            migrate_name(name, &context.cursor)?,
-        )),
     }
-}
-
-pub fn migrate_definition<VA: ValueAnnotation>(
-    definition: &classic::Definition<classic::Attrs, VA>,
-    context: &mut MigrationContext,
-) -> Result<v4::ValueDefinition, MigrationDiagnostic> {
-    migrate_value_definition_parts(
-        &definition.input_types,
-        &definition.output_type,
-        &definition.body,
-        context,
-    )
 }
 
 pub fn migrate_value_definition<VA: ValueAnnotation>(
@@ -310,12 +293,11 @@ fn migrate_value_definition_parts<VA: ValueAnnotation>(
 ) -> Result<v4::ValueDefinition, MigrationDiagnostic> {
     let mut inputs = IndexMap::with_capacity(input_types.len());
     for input in input_types {
+        // The contract gives an input parameter a bare type; the v3 parameter attributes have no
+        // v4 home.
         inputs.insert(
             migrate_name(&input.name, &context.cursor)?.to_canonical_string(),
-            v4::InputTypeEntry {
-                type_attributes: Some(input.annotation.to_value_attributes(context)?),
-                input_type: migrate_type(&input.ty, context)?,
-            },
+            migrate_type(&input.ty, context)?,
         );
     }
     Ok(v4::ValueDefinition {
@@ -390,7 +372,7 @@ pub fn migrate_value<VA: ValueAnnotation>(
         classic::Value::LetDefinition(_, name, definition, body) => v4::Value::LetDefinition(
             attributes,
             migrate_name(name, &context.cursor)?,
-            Box::new(migrate_definition(definition, context)?),
+            Box::new(migrate_value_definition(definition, context)?),
             Box::new(migrate_value(body, context)?),
         ),
         classic::Value::LetRecursion(_, definitions, body) => v4::Value::LetRecursion(
@@ -400,7 +382,7 @@ pub fn migrate_value<VA: ValueAnnotation>(
                 .map(|(name, definition)| {
                     Ok(v4::LetBinding::new(
                         migrate_name(name, &context.cursor)?,
-                        migrate_definition(definition, context)?,
+                        migrate_value_definition(definition, context)?,
                     ))
                 })
                 .collect::<Result<_, MigrationDiagnostic>>()?,
@@ -479,7 +461,7 @@ pub fn migrate_access(access: &classic::Access) -> v4::Access {
 }
 
 fn documentation(value: &str) -> v4::Documentation {
-    v4::Documentation::new(value.lines().map(str::to_owned))
+    v4::Documentation::new(value)
 }
 
 fn migrate_type_definition(
@@ -527,13 +509,15 @@ fn migrate_type_definition(
     })
 }
 
-fn migrate_type_specification(
+pub fn migrate_type_specification(
     specification: &classic::TypeSpecification<classic::Attrs>,
     context: &mut MigrationContext,
 ) -> Result<v4::TypeSpecification, MigrationDiagnostic> {
     Ok(match specification {
         classic::TypeSpecification::Alias(parameters, body) => {
             v4::TypeSpecification::TypeAliasSpecification {
+                // Classic has no annotation vocabulary, so a migrated specification has none.
+                annotations: Vec::new(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -543,6 +527,7 @@ fn migrate_type_specification(
         }
         classic::TypeSpecification::Opaque(parameters) => {
             v4::TypeSpecification::OpaqueTypeSpecification {
+                annotations: Vec::new(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -551,6 +536,7 @@ fn migrate_type_specification(
         }
         classic::TypeSpecification::Custom(parameters, constructors) => {
             v4::TypeSpecification::CustomTypeSpecification {
+                annotations: Vec::new(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -575,6 +561,18 @@ fn migrate_type_specification(
                     .collect::<Result<_, MigrationDiagnostic>>()?,
             }
         }
+        classic::TypeSpecification::Derived(parameters, config) => {
+            v4::TypeSpecification::DerivedTypeSpecification {
+                annotations: Vec::new(),
+                type_params: parameters
+                    .iter()
+                    .map(|parameter| migrate_name(parameter, &context.cursor))
+                    .collect::<Result<_, _>>()?,
+                base_type: migrate_type(&config.base_type, context)?,
+                from_base_type: migrate_fqname(&config.from_base_type, &context.cursor)?,
+                to_base_type: migrate_fqname(&config.to_base_type, &context.cursor)?,
+            }
+        }
     })
 }
 
@@ -583,6 +581,7 @@ fn migrate_value_specification(
     context: &mut MigrationContext,
 ) -> Result<v4::ValueSpecification, MigrationDiagnostic> {
     Ok(v4::ValueSpecification {
+        annotations: Vec::new(),
         inputs: specification
             .inputs
             .iter()
@@ -628,6 +627,7 @@ fn migrate_module_specification(
         })
         .collect::<Result<_, MigrationDiagnostic>>()?;
     Ok(v4::ModuleSpecification {
+        annotations: Vec::new(),
         types,
         values,
         doc: specification.doc.as_deref().map(documentation),

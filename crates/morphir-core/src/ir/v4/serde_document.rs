@@ -21,10 +21,10 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use super::access::{Access, AccessControlled};
-use super::attributes::ValueAttributes;
+use super::annotation::{Annotation, AnnotationArgument};
 use super::distribution::{
-    ApplicationContent, Dependencies, Distribution, EntryPoint, EntryPointKind, EntryPoints,
-    LibraryContent, SpecsContent,
+    ApplicationContent, Distribution, EntryPoint, EntryPointKind, EntryPoints, LibraryContent,
+    SpecsContent,
 };
 use super::legacy::accept_legacy_form;
 use super::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
@@ -38,7 +38,7 @@ use super::types::{
     Incompleteness, Type, TypeDefinition, TypeSpecification,
 };
 use super::value::{
-    ExternalBinding, HoleReason, InputTypeEntry, NativeInfo, ValueBody, ValueDefinition,
+    ExternalBinding, HoleReason, NativeHint, NativeInfo, ValueBody, ValueDefinition,
     ValueSpecification,
 };
 use super::{FormatVersion, IRFile};
@@ -112,30 +112,15 @@ fn single_member<'a>(
 // Documentation and access control
 // =============================================================================
 
-/// Decodes documentation: one line as a string, or several as an array of strings.
+/// Decodes documentation: one string (definitions-0028; decision 0010). An array of lines is
+/// tolerated only inside a module manifest file of a document tree, never here.
 pub(super) fn decode_documentation(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<Documentation, Diagnostic> {
     match value {
-        JsonValue::String(line) => Ok(Documentation::new([line.clone()])),
-        JsonValue::Array(lines) => lines
-            .iter()
-            .enumerate()
-            .map(|(index, line)| {
-                line.as_str().map(str::to_owned).ok_or_else(|| {
-                    invalid_type(
-                        &format!("{cursor}/{index}"),
-                        "a documentation line is a string",
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Documentation::new),
-        _ => Err(invalid_type(
-            cursor,
-            "documentation is a string or an array of strings",
-        )),
+        JsonValue::String(text) => Ok(Documentation::new(text.clone())),
+        _ => Err(invalid_type(cursor, "documentation is a string")),
     }
 }
 
@@ -143,7 +128,7 @@ pub(super) fn decode_documentation(
 ///
 /// Canonical is the access level as the variant tag: `{ "Public": <node> }`. Accepted beside it,
 /// silently: the access level flattened next to the node's own members
-/// (`{ "access": "Public", … }`), the same with the node under `value`, and the `pub`/`priv`
+/// (`{ "access": "Public", … }`), the same with the node under `value`, and the `pub`/`private`
 /// shorthands (definitions-0001, 0017, 0018, 0019).
 pub(super) fn decode_access_controlled<T>(
     value: &JsonValue,
@@ -243,6 +228,91 @@ fn decode_type_params(members: &Members<'_>, cursor: &str) -> Result<Vec<Name>, 
         .enumerate()
         .map(|(index, item)| decode_name(item, &format!("{at}/{index}")))
         .collect()
+}
+
+/// Decodes a specification's `annotations` member; absent means none.
+pub(super) fn decode_annotations(
+    members: &Members<'_>,
+    cursor: &str,
+) -> Result<Vec<Annotation>, Diagnostic> {
+    let Some(member) = members.get("annotations") else {
+        return Ok(Vec::new());
+    };
+    let at = member_cursor(members, "annotations", cursor);
+    let items = member
+        .value
+        .as_array()
+        .ok_or_else(|| invalid_type(&at, "annotations is an array"))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| decode_annotation(item, &format!("{at}/{index}")))
+        .collect()
+}
+
+fn decode_annotation(value: &JsonValue, cursor: &str) -> Result<Annotation, Diagnostic> {
+    match value {
+        JsonValue::String(text) => {
+            // The separator is the first colon after the local-name hash; the FQName's own
+            // colon comes before the hash.
+            let split = text
+                .find('#')
+                .and_then(|hash| text[hash + 1..].find(':').map(|colon| hash + 1 + colon));
+            let (name_text, free_text) = match split {
+                Some(at) => (&text[..at], Some(text[at + 1..].to_owned())),
+                None => (text.as_str(), None),
+            };
+            let name = decode_fqname(&JsonValue::String(name_text.to_owned()), cursor)?;
+            Ok(Annotation::Compact {
+                name,
+                text: free_text,
+            })
+        }
+        JsonValue::Object(_) => {
+            let members = wrapper_members("Annotation", value, cursor, &["name", "arguments"])?;
+            let name = decode_member_fqname(&members, "name", cursor)?;
+            let args = match members.get("arguments") {
+                None => Vec::new(),
+                Some(member) => {
+                    let at = member_cursor(&members, "arguments", cursor);
+                    member
+                        .value
+                        .as_array()
+                        .ok_or_else(|| invalid_type(&at, "arguments is an array"))?
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            decode_annotation_argument(item, &format!("{at}/{index}"))
+                        })
+                        .collect::<Result<_, _>>()?
+                }
+            };
+            Ok(Annotation::Structured { name, args })
+        }
+        _ => Err(invalid_type(
+            cursor,
+            "an annotation is a string or an object",
+        )),
+    }
+}
+
+fn decode_annotation_argument(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<AnnotationArgument, Diagnostic> {
+    // A named argument is exactly { name, value }; no value wrapper has that member set, so the
+    // shape alone decides.
+    if let JsonValue::Object(members) = value
+        && members.len() == 2
+        && members.contains_key("name")
+        && members.contains_key("value")
+    {
+        return Ok(AnnotationArgument::Named {
+            name: decode_name(&members["name"], &format!("{cursor}/name"))?,
+            value: decode_value(&members["value"], &format!("{cursor}/value"))?,
+        });
+    }
+    Ok(AnnotationArgument::Positional(decode_value(value, cursor)?))
 }
 
 fn optional_type(
@@ -388,6 +458,7 @@ pub(super) fn decode_type_specification(
         && tag == "OpaqueTypeSpecification"
     {
         return Ok(TypeSpecification::OpaqueTypeSpecification {
+            annotations: Vec::new(),
             type_params: Vec::new(),
         });
     }
@@ -396,20 +467,29 @@ pub(super) fn decode_type_specification(
     let at = format!("{cursor}/{tag}");
     match tag.as_str() {
         "OpaqueTypeSpecification" => {
-            let members = wrapper_members(tag, payload, &at, &["typeParams"])?;
+            let members = wrapper_members(tag, payload, &at, &["annotations", "typeParams"])?;
             Ok(TypeSpecification::OpaqueTypeSpecification {
+                annotations: decode_annotations(&members, &at)?,
                 type_params: decode_type_params(&members, &at)?,
             })
         }
         "TypeAliasSpecification" => {
-            let members = wrapper_members(tag, payload, &at, &["typeParams", "typeExp"])?;
+            let members =
+                wrapper_members(tag, payload, &at, &["annotations", "typeParams", "typeExp"])?;
             Ok(TypeSpecification::TypeAliasSpecification {
+                annotations: decode_annotations(&members, &at)?,
                 type_params: decode_type_params(&members, &at)?,
                 type_expr: decode_member_type(&members, "typeExp", &at)?,
             })
         }
         "CustomTypeSpecification" => {
-            let members = wrapper_members(tag, payload, &at, &["typeParams", "constructors"])?;
+            let members = wrapper_members(
+                tag,
+                payload,
+                &at,
+                &["annotations", "typeParams", "constructors"],
+            )?;
+            let annotations = decode_annotations(&members, &at)?;
             let type_params = decode_type_params(&members, &at)?;
             let constructors = decode_constructor_map(
                 required(&members, "constructors", &at)?,
@@ -423,6 +503,7 @@ pub(super) fn decode_type_specification(
                 },
             )?;
             Ok(TypeSpecification::CustomTypeSpecification {
+                annotations,
                 type_params,
                 constructors,
             })
@@ -432,9 +513,16 @@ pub(super) fn decode_type_specification(
                 tag,
                 payload,
                 &at,
-                &["typeParams", "baseType", "fromBaseType", "toBaseType"],
+                &[
+                    "annotations",
+                    "typeParams",
+                    "baseType",
+                    "fromBaseType",
+                    "toBaseType",
+                ],
             )?;
             Ok(TypeSpecification::DerivedTypeSpecification {
+                annotations: decode_annotations(&members, &at)?,
                 type_params: decode_type_params(&members, &at)?,
                 base_type: decode_member_type(&members, "baseType", &at)?,
                 from_base_type: decode_member_fqname(&members, "fromBaseType", &at)?,
@@ -448,10 +536,10 @@ pub(super) fn decode_type_specification(
     }
 }
 
-/// Decodes an incompleteness (definitions-0014, 0015, 0016).
+/// Decodes an incompleteness (definitions-0014, 0015, 0016, 0024).
 ///
-/// A hole says why it is one under `reason`; a draft is deliberately unfinished and takes an
-/// empty payload.
+/// A hole says why it is one under `reason` and may keep the type expression the author had as
+/// `partialBody`; a draft is deliberately unfinished and takes an empty payload.
 pub(super) fn decode_incompleteness(
     value: &JsonValue,
     cursor: &str,
@@ -461,11 +549,14 @@ pub(super) fn decode_incompleteness(
     match tag.as_str() {
         "Draft" => Ok(Incompleteness::Draft),
         "Hole" => {
-            let members = wrapper_members(tag, payload, &at, &["reason"])?;
-            Ok(Incompleteness::Hole(decode_hole_reason(
-                required(&members, "reason", &at)?,
-                &member_cursor(&members, "reason", &at),
-            )?))
+            let members = wrapper_members(tag, payload, &at, &["reason", "partialBody"])?;
+            Ok(Incompleteness::Hole {
+                reason: decode_hole_reason(
+                    required(&members, "reason", &at)?,
+                    &member_cursor(&members, "reason", &at),
+                )?,
+                partial_body: optional_type(&members, "partialBody", &at)?,
+            })
         }
         other => Err(unknown_node_at(
             cursor,
@@ -474,11 +565,89 @@ pub(super) fn decode_incompleteness(
     }
 }
 
-fn decode_hole_reason(value: &JsonValue, cursor: &str) -> Result<HoleReason, Diagnostic> {
-    serde_json::from_value::<HoleReason>(value.clone()).map_err(|error| {
-        Diagnostic::from_serde_error(&error)
-            .unwrap_or_else(|| unknown_node_at(cursor, error.to_string()))
-    })
+/// Decodes a hole's reason (definitions-0014, 0016, 0026). `Draft` is an incompleteness kind, not
+/// a reason, so it is an unknown node here.
+pub(super) fn decode_hole_reason(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<HoleReason, Diagnostic> {
+    let (tag, payload) = single_member(value, cursor, "a hole reason")?;
+    let at = format!("{cursor}/{tag}");
+    match tag.as_str() {
+        "UnresolvedReference" => {
+            let members = wrapper_members(tag, payload, &at, &["target"])?;
+            Ok(HoleReason::UnresolvedReference {
+                target: decode_member_fqname(&members, "target", &at)?,
+            })
+        }
+        "DeletedDuringRefactor" => {
+            let members = wrapper_members(tag, payload, &at, &["tx-id"])?;
+            Ok(HoleReason::DeletedDuringRefactor {
+                tx_id: decode_text(&members, "tx-id", &at)?,
+            })
+        }
+        "TypeMismatch" => {
+            let members = wrapper_members(tag, payload, &at, &["expected", "found"])?;
+            Ok(HoleReason::TypeMismatch {
+                expected: decode_text(&members, "expected", &at)?,
+                found: decode_text(&members, "found", &at)?,
+            })
+        }
+        other => Err(unknown_node_at(
+            cursor,
+            format!("{other} is not a hole reason"),
+        )),
+    }
+}
+
+/// Decodes a native definition's info (definitions-0009, 0030).
+pub(super) fn decode_native_info(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<NativeInfo, Diagnostic> {
+    let members = wrapper_members("NativeInfo", value, cursor, &["hint", "description"])?;
+    let hint = decode_native_hint(
+        required(&members, "hint", cursor)?,
+        &member_cursor(&members, "hint", cursor),
+    )?;
+    let description = match members.get("description") {
+        None => None,
+        Some(member) => Some(text_of(
+            member.value,
+            &member_cursor(&members, "description", cursor),
+        )?),
+    };
+    Ok(NativeInfo { hint, description })
+}
+
+/// Decodes a native operation's category hint (definitions-0009, 0030).
+pub(super) fn decode_native_hint(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<NativeHint, Diagnostic> {
+    let (tag, payload) = single_member(value, cursor, "a native hint")?;
+    let at = format!("{cursor}/{tag}");
+    let hint = match tag.as_str() {
+        "Arithmetic" => NativeHint::Arithmetic,
+        "Comparison" => NativeHint::Comparison,
+        "StringOp" => NativeHint::StringOp,
+        "CollectionOp" => NativeHint::CollectionOp,
+        "PlatformSpecific" => {
+            let members = wrapper_members(tag, payload, &at, &["platform"])?;
+            return Ok(NativeHint::PlatformSpecific {
+                platform: decode_text(&members, "platform", &at)?,
+            });
+        }
+        other => {
+            return Err(unknown_node_at(
+                cursor,
+                format!("{other} is not a native hint"),
+            ));
+        }
+    };
+    // The four nullary hints take an empty payload; anything inside it is unknown.
+    wrapper_members(tag, payload, &at, &[])?;
+    Ok(hint)
 }
 
 // =============================================================================
@@ -494,7 +663,13 @@ pub(super) fn decode_value_specification(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<ValueSpecification, Diagnostic> {
-    let members = wrapper_members("ValueSpecification", value, cursor, &["inputs", "output"])?;
+    let members = wrapper_members(
+        "ValueSpecification",
+        value,
+        cursor,
+        &["annotations", "inputs", "output"],
+    )?;
+    let annotations = decode_annotations(&members, cursor)?;
     let inputs = match members.get("inputs") {
         None => IndexMap::new(),
         Some(member) => decode_input_map(
@@ -504,6 +679,7 @@ pub(super) fn decode_value_specification(
         )?,
     };
     Ok(ValueSpecification {
+        annotations,
         inputs,
         output: decode_member_type(&members, "output", cursor)?,
     })
@@ -547,31 +723,6 @@ fn decode_input_map<T>(
     }
 }
 
-/// One entry of a definition's `inputTypes`: a bare type, or the expanded spelling carrying the
-/// parameter's own attributes beside it.
-fn decode_input_type_entry(value: &JsonValue, cursor: &str) -> Result<InputTypeEntry, Diagnostic> {
-    if let JsonValue::Object(members) = value
-        && members.contains_key("type")
-    {
-        let type_attributes = match members.get("typeAttributes") {
-            None => None,
-            Some(written) => Some(
-                serde_json::from_value::<ValueAttributes>(written.clone()).map_err(|error| {
-                    invalid_type(&format!("{cursor}/typeAttributes"), error.to_string())
-                })?,
-            ),
-        };
-        return Ok(InputTypeEntry {
-            type_attributes,
-            input_type: decode_type(&members["type"], &format!("{cursor}/type"))?,
-        });
-    }
-    Ok(InputTypeEntry {
-        type_attributes: None,
-        input_type: decode_type(value, cursor)?,
-    })
-}
-
 /// The four value definition bodies (definitions-0005, 0007, 0008, 0009, 0016).
 const BODY_TAGS: &[&str] = &[
     "ExpressionBody",
@@ -598,7 +749,7 @@ pub(super) fn decode_value_body(value: &JsonValue, cursor: &str) -> Result<Value
     Ok(decode_definition_parts(value, cursor, false)?.2)
 }
 
-type DefinitionParts = (IndexMap<String, InputTypeEntry>, Option<Type>, ValueBody);
+type DefinitionParts = (IndexMap<String, Type>, Option<Type>, ValueBody);
 
 fn decode_definition_parts(
     value: &JsonValue,
@@ -627,7 +778,7 @@ fn decode_definition_parts(
             "externalName",
             "targetPlatform",
         ],
-        _ => &["inputTypes", "outputType", "incompleteness"],
+        _ => &["inputTypes", "outputType", "incompleteness", "partialBody"],
     };
     let members = wrapper_members(tag, payload, &at, canonical)?;
 
@@ -636,7 +787,7 @@ fn decode_definition_parts(
         Some(member) => decode_input_map(
             member.value,
             &member_cursor(&members, "inputTypes", &at),
-            decode_input_type_entry,
+            decode_type,
         )?,
     };
     let output_type = optional_type(&members, "outputType", &at)?;
@@ -651,18 +802,12 @@ fn decode_definition_parts(
             required(&members, "body", &at)?,
             &member_cursor(&members, "body", &at),
         )?),
-        "NativeBody" => {
-            let member_at = member_cursor(&members, "nativeInfo", &at);
-            let written = required(&members, "nativeInfo", &at)?;
-            ValueBody::Native {
-                native_info: serde_json::from_value::<NativeInfo>(written.clone()).map_err(
-                    |error| {
-                        Diagnostic::from_serde_error(&error)
-                            .unwrap_or_else(|| invalid_type(&member_at, error.to_string()))
-                    },
-                )?,
-            }
-        }
+        "NativeBody" => ValueBody::Native {
+            native_info: decode_native_info(
+                required(&members, "nativeInfo", &at)?,
+                &member_cursor(&members, "nativeInfo", &at),
+            )?,
+        },
         "ExternalBody" => ValueBody::External {
             externals: decode_externals(&members, &at)?,
             fallback: match members.get("body") {
@@ -678,6 +823,13 @@ fn decode_definition_parts(
                 required(&members, "incompleteness", &at)?,
                 &member_cursor(&members, "incompleteness", &at),
             )?,
+            partial_body: match members.get("partialBody") {
+                None => None,
+                Some(member) => Some(Box::new(decode_value(
+                    member.value,
+                    &member_cursor(&members, "partialBody", &at),
+                )?)),
+            },
         },
     };
 
@@ -778,9 +930,10 @@ pub(super) fn decode_module_specification(
         "ModuleSpecification",
         value,
         cursor,
-        &["types", "values", "doc"],
+        &["annotations", "types", "values", "doc"],
     )?;
     Ok(ModuleSpecification {
+        annotations: decode_annotations(&members, cursor)?,
         types: decode_keyed(&members, "types", cursor, |value, cursor| {
             decode_documented(value, cursor, decode_type_specification)
         })?,
@@ -922,7 +1075,7 @@ pub(super) fn decode_distribution(
                 wrapper_members(tag, payload, &at, &["packageName", "dependencies", "def"])?;
             Ok(Distribution::Library(LibraryContent {
                 package_name: decode_package_name(&members, &at)?,
-                dependencies: decode_dependencies(&members, &at)?,
+                dependencies: decode_dependencies(&members, &at, decode_package_specification)?,
                 def: decode_optional_definition(&members, "def", &at)?,
             }))
         }
@@ -931,7 +1084,7 @@ pub(super) fn decode_distribution(
                 wrapper_members(tag, payload, &at, &["packageName", "dependencies", "spec"])?;
             Ok(Distribution::Specs(SpecsContent {
                 package_name: decode_package_name(&members, &at)?,
-                dependencies: decode_dependencies(&members, &at)?,
+                dependencies: decode_dependencies(&members, &at, decode_package_specification)?,
                 spec: match members.get("spec") {
                     None => PackageSpecification {
                         modules: IndexMap::new(),
@@ -952,7 +1105,7 @@ pub(super) fn decode_distribution(
             )?;
             Ok(Distribution::Application(ApplicationContent {
                 package_name: decode_package_name(&members, &at)?,
-                dependencies: decode_dependencies(&members, &at)?,
+                dependencies: decode_dependencies(&members, &at, decode_package_definition)?,
                 def: decode_optional_definition(&members, "def", &at)?,
                 entry_points: decode_entry_points(
                     required(&members, "entryPoints", &at)?,
@@ -995,9 +1148,17 @@ fn parse_package_name(text: &str, cursor: &str) -> Result<PackageName, Diagnosti
 }
 
 /// Decodes the dependency map, checking every key is a canonical package name (decision 0011).
-fn decode_dependencies(members: &Members<'_>, cursor: &str) -> Result<Dependencies, Diagnostic> {
+///
+/// What an entry holds depends on the distribution: a `Library` or `Specs` depends on a package's
+/// public face, an `Application` on its definitions (distributions-0010), so the caller passes the
+/// decoder for the entries its kind carries.
+fn decode_dependencies<T>(
+    members: &Members<'_>,
+    cursor: &str,
+    decode_entry: fn(&JsonValue, &str) -> Result<T, Diagnostic>,
+) -> Result<IndexMap<String, T>, Diagnostic> {
     let Some(member) = members.get("dependencies") else {
-        return Ok(Dependencies::new());
+        return Ok(IndexMap::new());
     };
     let at = member_cursor(members, "dependencies", cursor);
     let entries = members_of(member.value, &at, "dependencies")?;
@@ -1006,7 +1167,7 @@ fn decode_dependencies(members: &Members<'_>, cursor: &str) -> Result<Dependenci
         .map(|(name, written)| {
             let at = format!("{at}/{name}");
             parse_package_name(name, &at)?;
-            Ok((name.clone(), decode_package_specification(written, &at)?))
+            Ok((name.clone(), decode_entry(written, &at)?))
         })
         .collect()
 }
@@ -1044,12 +1205,12 @@ fn decode_entry_points(value: &JsonValue, cursor: &str) -> Result<EntryPoints, D
 /// Decodes a whole version 4 document.
 ///
 /// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. A top-level `$meta` member is reserved for a tool's own
-/// bookkeeping and is ignored rather than refused.
+/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
+/// a single document, so it is unknown here (distributions-0009).
 pub(super) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
     let members = members_of(value, cursor, "a version 4 document")?;
     for member in members.keys() {
-        if !matches!(member.as_str(), "formatVersion" | "distribution" | "$meta") {
+        if !matches!(member.as_str(), "formatVersion" | "distribution") {
             return Err(unknown_member(&format!("{cursor}/{member}"), member));
         }
     }

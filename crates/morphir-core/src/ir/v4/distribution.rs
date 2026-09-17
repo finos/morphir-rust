@@ -93,7 +93,7 @@ pub struct SpecsContent {
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationContent {
     pub package_name: PackageName,
-    pub dependencies: Dependencies,
+    pub dependencies: DefinitionDependencies,
     pub def: PackageDefinition,
     pub entry_points: EntryPoints,
 }
@@ -104,6 +104,13 @@ pub struct ApplicationContent {
 /// a reader checks: `morphir/sdk` is a valid name for some other package, so it is read as one
 /// rather than refused.
 pub type Dependencies = IndexMap<String, PackageSpecification>;
+
+/// An application's dependencies, each a package definition (distributions-0010).
+///
+/// An `Application` links its dependencies statically, so it carries their definitions —
+/// access-controlled modules — where a `Library` or `Specs` carries their public faces. The key
+/// is read the same way: it is the dependency's canonical package name.
+pub type DefinitionDependencies = IndexMap<String, PackageDefinition>;
 
 /// Entry points for Application distribution
 pub type EntryPoints = IndexMap<String, EntryPoint>;

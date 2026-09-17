@@ -22,10 +22,11 @@
 //! ```
 
 use indexmap::IndexMap;
-use serde::de::{self, Deserializer};
+use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
+use super::annotation::Annotation;
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
@@ -147,7 +148,8 @@ pub enum Value {
     /// Used for incremental compilation and error recovery.
     ///
     /// Decision 0008 keeps the hole a value expression, with an optional expected type:
-    /// `{ "Hole": { "reason": { "Draft": {} }, "expectedType": "morphir/SDK:basics#int" } }`.
+    /// `{ "Hole": { "reason": { "UnresolvedReference": { "target": "my/pkg:mod#gone" } },
+    /// "expectedType": "morphir/SDK:basics#int" } }`.
     /// It is the only V4-only value expression: a native operation and an external binding are
     /// properties of a *definition*, so they live in [`ValueBody`] and a reader refuses
     /// `{ "Native": … }` or `{ "External": … }` where a value expression belongs.
@@ -155,6 +157,10 @@ pub enum Value {
 }
 
 /// Reason why a value is incomplete/broken (V4 only)
+///
+/// The three reasons are the ones definitions-0014, 0016 and 0026 pin. `Draft` is the other
+/// [`Incompleteness`] kind rather than a reason: a draft is deliberately unfinished and names no
+/// reason at all, so a reader refuses `{ "Draft": {} }` where a reason belongs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HoleReason {
     /// Reference couldn't be resolved
@@ -171,8 +177,6 @@ pub enum HoleReason {
         /// Actual type found
         found: String,
     },
-    /// Work in progress, not yet implemented
-    Draft,
 }
 
 /// Category hint for native operations (V4 only)
@@ -192,18 +196,31 @@ pub enum NativeHint {
 ///
 /// `{ "hint": { "Arithmetic": {} } }`. A description is optional and is written only when the
 /// definition has one.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NativeInfo {
     pub hint: NativeHint,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
-/// Input parameter tuple struct: (name, attributes, type)
+impl<'de> Deserialize<'de> for NativeInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_native_info,
+        )
+    }
+}
+
+/// Input parameter tuple struct: (name, type)
 ///
-/// More ergonomic than `(Name, ValueAttributes, Type)` - provides named fields via pattern matching.
+/// The contract gives each parameter a bare type; there is no v4 home for a parameter's own
+/// attributes.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InputType(pub Name, pub ValueAttributes, pub Type);
+pub struct InputType(pub Name, pub Type);
 
 /// Record field entry tuple struct: (name, value)
 ///
@@ -255,8 +272,12 @@ pub enum ValueBody {
     ///
     /// The output type lives on the [`ValueDefinition`], where every body's does; it is optional
     /// there because an incomplete definition may not have one yet, and required on the wire for
-    /// the three complete bodies.
-    Incomplete { incompleteness: Incompleteness },
+    /// the three complete bodies. `partial_body` is what the author had written when the
+    /// definition stopped being complete (definitions-0025); it is written only when present.
+    Incomplete {
+        incompleteness: Incompleteness,
+        partial_body: Option<Box<Value>>,
+    },
 }
 
 impl Value {
@@ -349,8 +370,8 @@ impl Value {
 // Convenience constructors for tuple structs
 impl InputType {
     /// Create a new input type
-    pub fn new(name: Name, attrs: ValueAttributes, tpe: Type) -> Self {
-        InputType(name, attrs, tpe)
+    pub fn new(name: Name, tpe: Type) -> Self {
+        InputType(name, tpe)
     }
 
     /// Get the name
@@ -358,14 +379,9 @@ impl InputType {
         &self.0
     }
 
-    /// Get the attributes
-    pub fn attrs(&self) -> &ValueAttributes {
-        &self.1
-    }
-
     /// Get the type
     pub fn tpe(&self) -> &Type {
-        &self.2
+        &self.1
     }
 }
 
@@ -437,11 +453,31 @@ impl NativeInfo {
 /// inputs are an object keyed by parameter name, whose order is the parameter order; an array of
 /// `[name, type]` pairs is accepted beside it. `inputTypes` and `outputType` belong to a value
 /// *definition*'s bodies, not here.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValueSpecification {
+    /// The annotations on the value's public face, written first and only when non-empty
+    /// (definitions-0021).
+    pub annotations: Vec<Annotation>,
     pub inputs: IndexMap<String, Type>,
     pub output: Type,
+}
+
+impl Serialize for ValueSpecification {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+        if !self.annotations.is_empty() {
+            map.serialize_entry("annotations", &self.annotations)?;
+        }
+        // definitions-0029: `inputs` is omitted when empty and accepted when written empty.
+        if !self.inputs.is_empty() {
+            map.serialize_entry("inputs", &self.inputs)?;
+        }
+        map.serialize_entry("output", &self.output)?;
+        map.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for ValueSpecification {
@@ -465,30 +501,15 @@ impl<'de> Deserialize<'de> for ValueSpecification {
 /// V4 format supports multiple body types (Expression, Native, External, Incomplete).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueDefinition {
-    pub input_types: IndexMap<String, InputTypeEntry>,
+    pub input_types: IndexMap<String, Type>,
     pub output_type: Option<Type>,
     pub body: ValueBody,
-}
-
-fn serialize_input_types<S>(
-    input_types: &IndexMap<String, InputTypeEntry>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    input_types
-        .iter()
-        .map(|(name, entry)| (name, &entry.input_type))
-        .collect::<IndexMap<_, _>>()
-        .serialize(serializer)
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExpressionDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     output_type: &'a Type,
     body: &'a Value,
 }
@@ -496,8 +517,7 @@ struct ExpressionDefinitionContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     output_type: &'a Type,
     native_info: &'a NativeInfo,
 }
@@ -505,8 +525,7 @@ struct NativeDefinitionContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExternalDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     output_type: &'a Type,
     externals: &'a [ExternalBinding],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -516,11 +535,12 @@ struct ExternalDefinitionContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_type: Option<&'a Type>,
     incompleteness: &'a Incompleteness,
+    #[serde(rename = "partialBody", skip_serializing_if = "Option::is_none")]
+    partial_body: Option<&'a Value>,
 }
 
 impl Serialize for ValueDefinition {
@@ -564,12 +584,16 @@ impl Serialize for ValueDefinition {
                     body: fallback.as_deref(),
                 },
             )?,
-            ValueBody::Incomplete { incompleteness } => map.serialize_entry(
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => map.serialize_entry(
                 "IncompleteBody",
                 &IncompleteDefinitionContent {
                     input_types: &self.input_types,
                     output_type: self.output_type.as_ref(),
                     incompleteness,
+                    partial_body: partial_body.as_deref(),
                 },
             )?,
         }
@@ -588,28 +612,12 @@ impl<'de> Deserialize<'de> for ValueDefinition {
         )
     }
 }
-/// Input type entry
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InputTypeEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub type_attributes: Option<ValueAttributes>,
-    #[serde(rename = "type")]
-    pub input_type: Type,
-}
-
 impl ValueDefinition {
     /// Create a new value definition with an expression body
     pub fn new(input_types: Vec<InputType>, output_type: Type, body: Value) -> Self {
         let inputs = input_types
             .into_iter()
-            .map(|InputType(name, attrs, tpe)| {
-                let entry = InputTypeEntry {
-                    type_attributes: Some(attrs),
-                    input_type: tpe,
-                };
-                (name.to_string(), entry)
-            })
+            .map(|InputType(name, tpe)| (name.to_string(), tpe))
             .collect();
 
         ValueDefinition {
@@ -623,13 +631,7 @@ impl ValueDefinition {
     pub fn native(input_types: Vec<InputType>, output_type: Type, info: NativeInfo) -> Self {
         let inputs = input_types
             .into_iter()
-            .map(|InputType(name, attrs, tpe)| {
-                let entry = InputTypeEntry {
-                    type_attributes: Some(attrs),
-                    input_type: tpe,
-                };
-                (name.to_string(), entry)
-            })
+            .map(|InputType(name, tpe)| (name.to_string(), tpe))
             .collect();
 
         ValueDefinition {
@@ -669,10 +671,16 @@ impl Serialize for ValueBody {
                     },
                 )?;
             }
-            ValueBody::Incomplete { incompleteness } => {
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => {
                 map.serialize_entry(
                     "IncompleteBody",
-                    &IncompleteBodySerContent { incompleteness },
+                    &IncompleteBodySerContent {
+                        incompleteness,
+                        partial_body: partial_body.as_deref(),
+                    },
                 )?;
             }
         }
@@ -704,6 +712,8 @@ struct ExternalBodySerContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct IncompleteBodySerContent<'a> {
     incompleteness: &'a Incompleteness,
+    #[serde(rename = "partialBody", skip_serializing_if = "Option::is_none")]
+    partial_body: Option<&'a Value>,
 }
 
 impl<'de> Deserialize<'de> for ValueBody {
@@ -748,62 +758,10 @@ impl<'de> Deserialize<'de> for NativeHint {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match &value {
-            serde_json::Value::Object(map) => {
-                if let Some((key, content)) = map.iter().next() {
-                    match key.as_str() {
-                        "Arithmetic" => Ok(NativeHint::Arithmetic),
-                        "Comparison" => Ok(NativeHint::Comparison),
-                        "StringOp" => Ok(NativeHint::StringOp),
-                        "CollectionOp" => Ok(NativeHint::CollectionOp),
-                        "PlatformSpecific" => {
-                            let platform = content
-                                .get("platform")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            Ok(NativeHint::PlatformSpecific { platform })
-                        }
-                        _ => Err(de::Error::unknown_variant(
-                            key,
-                            &[
-                                "Arithmetic",
-                                "Comparison",
-                                "StringOp",
-                                "CollectionOp",
-                                "PlatformSpecific",
-                            ],
-                        )),
-                    }
-                } else {
-                    Err(de::Error::custom("empty object for NativeHint"))
-                }
-            }
-            // Also accept string format for backward compatibility
-            serde_json::Value::String(s) => match s.as_str() {
-                "Arithmetic" => Ok(NativeHint::Arithmetic),
-                "Comparison" => Ok(NativeHint::Comparison),
-                "StringOp" => Ok(NativeHint::StringOp),
-                "CollectionOp" => Ok(NativeHint::CollectionOp),
-                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific {
-                    platform: "unknown".to_string(),
-                }),
-                _ => Err(de::Error::unknown_variant(
-                    s,
-                    &[
-                        "Arithmetic",
-                        "Comparison",
-                        "StringOp",
-                        "CollectionOp",
-                        "PlatformSpecific",
-                    ],
-                )),
-            },
-            _ => Err(de::Error::custom(
-                "expected object or string for NativeHint",
-            )),
-        }
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_native_hint,
+        )
     }
 }
 
@@ -818,7 +776,6 @@ impl Serialize for HoleReason {
     {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
-            HoleReason::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
             HoleReason::TypeMismatch { expected, found } => map.serialize_entry(
                 "TypeMismatch",
                 &serde_json::json!({ "expected": expected, "found": found }),
@@ -841,67 +798,10 @@ impl<'de> Deserialize<'de> for HoleReason {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match &value {
-            serde_json::Value::Object(map) => {
-                if let Some((key, content)) = map.iter().next() {
-                    match key.as_str() {
-                        "Draft" => Ok(HoleReason::Draft),
-                        "TypeMismatch" => {
-                            let expected = content
-                                .get("expected")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| de::Error::missing_field("expected"))?
-                                .to_string();
-                            let found = content
-                                .get("found")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| de::Error::missing_field("found"))?
-                                .to_string();
-                            Ok(HoleReason::TypeMismatch { expected, found })
-                        }
-                        "DeletedDuringRefactor" => {
-                            let tx_id = content
-                                .get("tx-id")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| de::Error::missing_field("tx-id"))?
-                                .to_string();
-                            Ok(HoleReason::DeletedDuringRefactor { tx_id })
-                        }
-                        "UnresolvedReference" => {
-                            let target = content
-                                .get("target")
-                                .and_then(|t| t.as_str())
-                                .ok_or_else(|| de::Error::missing_field("target"))?
-                                .to_string();
-                            Ok(HoleReason::UnresolvedReference {
-                                target: FQName::from_canonical_string(&target)
-                                    .map_err(de::Error::custom)?,
-                            })
-                        }
-                        _ => Err(de::Error::unknown_variant(
-                            key,
-                            &[
-                                "Draft",
-                                "TypeMismatch",
-                                "DeletedDuringRefactor",
-                                "UnresolvedReference",
-                            ],
-                        )),
-                    }
-                } else {
-                    Err(de::Error::custom("empty object for HoleReason"))
-                }
-            }
-            // Also accept string format for backward compatibility (Draft only)
-            serde_json::Value::String(s) => match s.as_str() {
-                "Draft" => Ok(HoleReason::Draft),
-                _ => Err(de::Error::unknown_variant(s, &["Draft"])),
-            },
-            _ => Err(de::Error::custom(
-                "expected object or string for HoleReason",
-            )),
-        }
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_hole_reason,
+        )
     }
 }
 
@@ -917,8 +817,11 @@ mod tests {
     // Tests from value_expr.rs
     #[test]
     fn test_literal_value() {
-        let val: Value = Value::literal(ValueAttributes::default(), Literal::Integer(42));
-        assert!(matches!(val, Value::Literal(_, Literal::Integer(42))));
+        let val: Value = Value::literal(ValueAttributes::default(), Literal::Integer(42.into()));
+        assert!(matches!(
+            val,
+            Value::Literal(_, Literal::Integer(n)) if n == num_bigint::BigInt::from(42)
+        ));
     }
 
     #[test]
@@ -997,14 +900,6 @@ mod tests {
         let hint = NativeHint::Arithmetic;
         let json = serde_json::to_string(&hint).unwrap();
         assert!(json.contains("\"Arithmetic\""));
-        assert!(json.contains("{}"));
-    }
-
-    #[test]
-    fn test_hole_reason_wrapper_format() {
-        let reason = HoleReason::Draft;
-        let json = serde_json::to_string(&reason).unwrap();
-        assert!(json.contains("\"Draft\""));
         assert!(json.contains("{}"));
     }
 

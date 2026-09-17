@@ -6,32 +6,43 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::access::AccessControlled;
+use super::annotation::Annotation;
 use super::types::{TypeDefinition, TypeSpecification};
 use super::value::{ValueDefinition, ValueSpecification};
 
-/// Documentation stored as normalized lines.
+/// Documentation: one string, with `\r\n` normalised to `\n` (definitions-0028; decision 0010).
+///
+/// An array of lines is tolerated only inside a module manifest file of a document tree, where it
+/// is joined with `\n` on the way in; everywhere else `doc` is a single string.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Documentation(Vec<String>);
+pub struct Documentation(String);
 
 impl Documentation {
-    /// Construct documentation from an iterator of lines.
-    pub fn new(lines: impl IntoIterator<Item = String>) -> Self {
-        Self(lines.into_iter().map(normalize_line).collect())
+    /// Construct documentation from a string, normalizing `\r\n` to `\n`.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(text.into().replace("\r\n", "\n"))
     }
 
-    /// Return the normalized documentation lines.
-    pub fn lines(&self) -> &[String] {
+    /// Return the normalized documentation text.
+    pub fn text(&self) -> &str {
         &self.0
     }
-}
 
-fn normalize_line(line: String) -> String {
-    line.strip_suffix('\r').unwrap_or(&line).to_owned()
+    /// Return the normalized documentation as an iterator of lines.
+    pub fn lines(&self) -> std::str::Lines<'_> {
+        self.0.lines()
+    }
 }
 
 impl From<String> for Documentation {
     fn from(value: String) -> Self {
-        Self::new([value])
+        Self::new(value)
+    }
+}
+
+impl From<&str> for Documentation {
+    fn from(value: &str) -> Self {
+        Self::new(value)
     }
 }
 
@@ -40,10 +51,7 @@ impl Serialize for Documentation {
     where
         S: serde::Serializer,
     {
-        match self.0.as_slice() {
-            [line] => serializer.serialize_str(line),
-            lines => lines.serialize(serializer),
-        }
+        serializer.serialize_str(&self.0)
     }
 }
 
@@ -52,17 +60,7 @@ impl<'de> Deserialize<'de> for Documentation {
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Line(String),
-            Lines(Vec<String>),
-        }
-
-        match Repr::deserialize(deserializer)? {
-            Repr::Line(line) => Ok(Self::new([line])),
-            Repr::Lines(lines) => Ok(Self::new(lines)),
-        }
+        String::deserialize(deserializer).map(Self::new)
     }
 }
 
@@ -133,6 +131,10 @@ where
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleSpecification {
+    /// The annotations on the module's public face, written first and only when non-empty
+    /// (definitions-0022).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
     pub types: IndexMap<String, Documented<TypeSpecification>>,
     pub values: IndexMap<String, Documented<ValueSpecification>>,
     #[serde(skip_serializing_if = "Option::is_none")]

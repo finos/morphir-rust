@@ -37,6 +37,7 @@ chumsky = "0.13"
 morphir-core = { path = "../morphir-core" }
 morphir-common = { path = "../morphir-common" } # For Vfs and pipeline
 indexmap = "2.0"                                # Required for V4 IndexMap structures
+num-bigint = "0.4"                              # IntegerLiteral is arbitrary precision
 anyhow = "1.0"
 url = { workspace = true }
 percent-encoding = { workspace = true }

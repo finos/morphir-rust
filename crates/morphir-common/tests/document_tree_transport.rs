@@ -1,7 +1,8 @@
 use std::io::Write;
 
 use morphir_common::ir_transport::{
-    CodecOptions, FormatId, IrVersion, Layout, discover_document_tree_format, read_document_tree,
+    CodecOptions, DocumentTreeSink, EventSink, FormatId, IrCodec, IrVersion, JsonCodec, Layout,
+    TransportDiagnostic, discover_document_tree_format, read_document_tree,
     read_document_tree_with_options, write_document_tree, write_document_tree_with_options,
 };
 use morphir_common::vfs::{memory_root, physical_root};
@@ -9,6 +10,7 @@ use morphir_core::ir::classic;
 use morphir_core::ir::v4::Distribution;
 use morphir_core::migration::{MigrationOptions, migrate_distribution};
 use morphir_core::naming::PackageName;
+use morphir_core::traversal::{DependencyEvent, SemanticEvent, SemanticEventKind};
 
 fn fixture() -> morphir_core::ir::v4::IRFile {
     #[derive(serde::Serialize)]
@@ -166,6 +168,98 @@ fn yaml_tree_uses_only_yaml_physical_names() {
     assert_eq!(
         read_document_tree_with_options(&root, &options).unwrap(),
         expected
+    );
+}
+
+#[test]
+fn a_module_manifest_accepts_an_array_of_lines_for_doc_and_writes_one_string() {
+    let root = memory_root();
+    write_document_tree(&root, &fixture()).unwrap();
+
+    let module_manifest = root
+        .walk_dir()
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|path| path.filename() == "module.json")
+        .unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_reader(module_manifest.open_file().unwrap()).unwrap();
+    let module_path = raw["path"].as_str().unwrap().to_owned();
+    raw["doc"] = serde_json::json!(["line one", "line two"]);
+    let mut writer = module_manifest.create_file().unwrap();
+    writer
+        .write_all(serde_json::to_vec(&raw).unwrap().as_slice())
+        .unwrap();
+    drop(writer);
+
+    let read = read_document_tree(&root).unwrap();
+    let Distribution::Library(content) = &read.distribution else {
+        panic!("test fixture must be a library");
+    };
+    let module = content.def.modules.get(&module_path).unwrap();
+    assert_eq!(
+        module.value.doc.as_ref().unwrap().text(),
+        "line one\nline two"
+    );
+
+    write_document_tree(&root, &read).unwrap();
+    let rewritten: serde_json::Value =
+        serde_json::from_reader(module_manifest.open_file().unwrap()).unwrap();
+    assert_eq!(rewritten["doc"], serde_json::json!("line one\nline two"));
+}
+
+#[derive(Default)]
+struct CollectingSink {
+    events: Vec<SemanticEvent>,
+}
+
+impl EventSink for CollectingSink {
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
+        self.events.push(event);
+        Ok(())
+    }
+}
+
+fn decode_json(input: &str) -> Vec<SemanticEvent> {
+    let codec = JsonCodec::new();
+    let options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
+    let mut reader = std::io::Cursor::new(input.as_bytes());
+    let mut sink = CollectingSink::default();
+    codec.decode(&mut reader, &options, &mut sink).unwrap();
+    sink.events
+}
+
+/// An application header with no dependencies of its own; used to isolate the header event.
+const APPLICATION_HEADER_ONLY: &str = r#"{"formatVersion":4,"distribution":{"Application":{"packageName":"example","dependencies":{},"def":{"modules":{}},"entryPoints":{}}}}"#;
+
+/// A library distribution whose dependency is a package specification, as libraries require.
+const LIBRARY_WITH_SPECIFICATION_DEPENDENCY: &str = r#"{"formatVersion":4,"distribution":{"Library":{"packageName":"example","dependencies":{"my-org/shared":{"modules":{}}},"def":{"modules":{}}}}}"#;
+
+#[test]
+fn document_tree_sink_refuses_a_specification_dependency_under_an_application_header() {
+    let application_begin = decode_json(APPLICATION_HEADER_ONLY)
+        .into_iter()
+        .find(|event| matches!(event.kind(), SemanticEventKind::Begin(_)))
+        .unwrap();
+    let specification_dependency = decode_json(LIBRARY_WITH_SPECIFICATION_DEPENDENCY)
+        .into_iter()
+        .find(|event| {
+            matches!(
+                event.kind(),
+                SemanticEventKind::Dependency(DependencyEvent::V4 { .. })
+            )
+        })
+        .unwrap();
+
+    let root = memory_root();
+    let options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::json());
+    let mut sink = DocumentTreeSink::new(root, options).unwrap();
+    sink.accept(application_begin).unwrap();
+    let diagnostic = sink.accept(specification_dependency).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::unsupported_dependencies"
     );
 }
 

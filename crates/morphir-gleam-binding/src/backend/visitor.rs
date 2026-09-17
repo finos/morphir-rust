@@ -492,7 +492,7 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(&f.value().to_string());
             }
             MorphirLiteral::Decimal(d) => {
-                output.push_str(d);
+                output.push_str(d.lexeme());
             }
             MorphirLiteral::String(s) => {
                 output.push('"');
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(output, "True");
 
         output.clear();
-        let lit = MorphirLiteral::Integer(42);
+        let lit = MorphirLiteral::Integer(42.into());
         visitor.generate_literal(&mut output, &lit).unwrap();
         assert_eq!(output, "42");
 

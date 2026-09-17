@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 use std::cell::Cell;
+use std::str::FromStr;
 
 use super::attributes::{TypeAttributes, ValueAttributes};
 use super::literal::Literal;
@@ -330,13 +331,19 @@ where
         Literal::Bool(v) => map.serialize_entry("BoolLiteral", v)?,
         Literal::Char(v) => map.serialize_entry("CharLiteral", &v.to_string())?,
         Literal::String(v) => map.serialize_entry("StringLiteral", v)?,
-        Literal::Integer(v) => map.serialize_entry("IntegerLiteral", v)?,
+        // The integer is written as its decimal lexeme; with `arbitrary_precision` a `Number`
+        // built from text serializes as that text, so no width is imposed on the way out either.
+        Literal::Integer(v) => {
+            let number =
+                serde_json::Number::from_str(&v.to_string()).map_err(serde::ser::Error::custom)?;
+            map.serialize_entry("IntegerLiteral", &number)?
+        }
         // A float is written from the number it was read as, so the spelling survives the round
         // trip: `1.0e2` comes back out as `1.0e2`, and a float written `4` comes back out as `4`.
         // The tag is what says it is a float, so an integral spelling loses nothing. With
         // `arbitrary_precision`, a `Number` built from text serializes as that text.
         Literal::Float(v) => map.serialize_entry("FloatLiteral", v.number())?,
-        Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v)?,
+        Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v.lexeme())?,
         Literal::Document(v) => map.serialize_entry("DocumentLiteral", v)?,
     }
     map.end()

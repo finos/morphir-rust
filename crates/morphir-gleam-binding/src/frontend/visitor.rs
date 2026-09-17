@@ -10,11 +10,12 @@ use indexmap::IndexMap;
 use morphir_common::vfs::Vfs;
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlled, ConstructorDefinition, Documentation, Documented,
-    InputTypeEntry, Literal as MorphirLiteral, ModuleDefinition, Pattern as MorphirPattern,
-    TypeDefinition, ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
+    Literal as MorphirLiteral, ModuleDefinition, Pattern as MorphirPattern, TypeDefinition,
+    ValueBody as V4ValueBody, ValueDefinition as V4ValueDefinition,
 };
 use morphir_core::ir::{Field, Type, TypeAttributes, Value, ValueAttributes};
 use morphir_core::naming::{FQName, ModuleName, Name, PackageName};
+use num_bigint::BigInt;
 use serde_json;
 use std::io::Result;
 use std::path::{Path, PathBuf};
@@ -305,13 +306,13 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         };
 
         // Convert input types (from type annotation if present)
-        // V4 uses IndexMap<String, InputTypeEntry>
-        let input_types: IndexMap<String, InputTypeEntry> =
-            if let Some(type_ann) = &value_def.type_annotation {
-                self.extract_input_types_v4(type_ann)
-            } else {
-                IndexMap::new()
-            };
+        // V4 uses IndexMap<String, Type> - the contract gives each parameter a bare type
+        let input_types: IndexMap<String, Type> = if let Some(type_ann) = &value_def.type_annotation
+        {
+            self.extract_input_types_v4(type_ann)
+        } else {
+            IndexMap::new()
+        };
 
         // Convert output type
         let output_type = if let Some(type_ann) = &value_def.type_annotation {
@@ -337,7 +338,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Extract input types from function type annotation (returns V4 IndexMap format)
-    fn extract_input_types_v4(&self, type_expr: &TypeExpr) -> IndexMap<String, InputTypeEntry> {
+    fn extract_input_types_v4(&self, type_expr: &TypeExpr) -> IndexMap<String, Type> {
         let mut inputs = IndexMap::new();
 
         // Extract function argument types
@@ -349,13 +350,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         {
             for (i, param) in parameters.iter().enumerate() {
                 let morphir_type = self.convert_type_expr(param);
-                inputs.insert(
-                    format!("arg{}", i + 1),
-                    InputTypeEntry {
-                        type_attributes: None,
-                        input_type: morphir_type,
-                    },
-                );
+                inputs.insert(format!("arg{}", i + 1), morphir_type);
             }
         }
 
@@ -754,7 +749,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     fn convert_literal(&self, literal: &Literal) -> MorphirLiteral {
         match literal {
             Literal::Bool { value } => MorphirLiteral::Bool(*value),
-            Literal::Int { value } => MorphirLiteral::Integer(*value),
+            Literal::Int { value } => MorphirLiteral::Integer(BigInt::from(*value)),
             Literal::Float { value } => MorphirLiteral::float(*value),
             Literal::String { value } => MorphirLiteral::String(value.clone()),
             Literal::Char { value } => MorphirLiteral::Char(*value),

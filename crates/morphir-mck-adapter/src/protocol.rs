@@ -104,6 +104,12 @@ pub enum NodeKind {
     ModuleSpecification,
     IRFile,
     Distribution,
+    // The four files a document tree is made of. They are node kinds in their own right, so a kit
+    // case can pin one on its own without a tree around it.
+    DistributionManifestFile,
+    ModuleManifestFile,
+    TypeDefinitionFile,
+    ValueDefinitionFile,
 }
 
 /// The stage-one capabilities this binding reports, without the envelope
@@ -185,6 +191,52 @@ impl Serialize for DecodeResponse {
     }
 }
 
+/// The answer to `writeTree`: a `WriteTreeSuccess` (`{ ok: true, files: [{ path, content }] }`) or
+/// the shared `ErrorResponse` shape, exactly like [`DecodeResponse`].
+#[derive(Debug, Clone)]
+pub enum WriteTreeResponse {
+    Ok {
+        files: Vec<TreeFile>,
+    },
+    Err {
+        diagnostic: Diagnostic,
+    },
+    /// The request asked for an IR version this binding does not write trees for. See
+    /// [`DecodeResponse::Refused`].
+    Refused {
+        diagnostic: ProtocolDiagnostic,
+    },
+}
+
+impl Serialize for WriteTreeResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            WriteTreeResponse::Ok { files } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("ok", &true)?;
+                map.serialize_entry("files", files)?;
+                map.end()
+            }
+            WriteTreeResponse::Err { diagnostic } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("ok", &false)?;
+                map.serialize_entry("diagnostic", &WireDiagnostic(diagnostic))?;
+                map.end()
+            }
+            WriteTreeResponse::Refused { diagnostic } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("ok", &false)?;
+                map.serialize_entry("diagnostic", diagnostic)?;
+                map.end()
+            }
+        }
+    }
+}
+
 /// A [`Diagnostic`] as the protocol carries one: `code`, `stage`, `cursor` and `message`, and
 /// nothing else.
 ///
@@ -235,7 +287,7 @@ pub fn capabilities() -> Capabilities {
         format_versions: SupportTable::reference().canonical(),
         versions: vec![3, 4],
         profiles: vec![Profile::Json, Profile::Yaml],
-        layouts: vec!["single".to_string()],
+        layouts: vec!["single".to_string(), "tree".to_string()],
         paths: vec![PathMode::Current, PathMode::Pinned],
         nodes: vec![
             NodeKind::Name,
@@ -256,6 +308,10 @@ pub fn capabilities() -> Capabilities {
             NodeKind::ModuleSpecification,
             NodeKind::IRFile,
             NodeKind::Distribution,
+            NodeKind::DistributionManifestFile,
+            NodeKind::ModuleManifestFile,
+            NodeKind::TypeDefinitionFile,
+            NodeKind::ValueDefinitionFile,
         ],
     }
 }

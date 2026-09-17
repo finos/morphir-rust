@@ -76,7 +76,7 @@ Output: .morphir/out/Finance.Library/compile/gleam/
 Inspect the IR:
 
 ```bash
-cat .morphir/out/Finance.Library/compile/gleam/format.json
+cat .morphir/out/Finance.Library/compile/gleam/manifest.json
 ```
 
 ## Step 4: Verify IR Structure
@@ -85,21 +85,24 @@ The IR is stored as a document tree:
 
 ```
 .morphir/out/Finance.Library/compile/gleam/
-├── format.json
-└── modules/
+├── manifest.json
+└── pkg/
     └── Finance.Library/
         ├── calculations/
         │   ├── module.json
-        │   └── values/
-        │       ├── calculate_interest.json
-        │       └── calculate_payment.json
+        │   ├── calculate_interest.value.json
+        │   └── calculate_payment.value.json
         └── types/
             ├── module.json
-            ├── types/
-            │   └── Account.json
-            └── values/
-                └── get_balance.json
+            ├── account.type.json
+            └── get_balance.value.json
 ```
+
+`manifest.json` at the root names the distribution kind and its dependencies. Each module gets its
+own directory under `pkg/<package path>/<module path>/`, with a `module.json` listing the module's
+types and values and one `<stem>.type.json` or `<stem>.value.json` file per type or value. A
+dependency's own modules land the same way, under `deps/<package path>/@/<module path>/...` instead
+of `pkg/`.
 
 ## Step 5: Generate Code (Roundtrip)
 

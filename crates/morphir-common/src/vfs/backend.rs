@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use ::vfs::{MemoryFS, PhysicalFS, VfsPath};
+use ::vfs::{MemoryFS, VfsPath};
+
+use super::contained::ContainedPhysicalFS;
 
 /// Guarantees available when publishing a completed migration result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +48,10 @@ pub fn memory_root() -> VfsPath {
 }
 
 /// Create a physical VFS rooted below the supplied OS directory.
+///
+/// The root is a [`ContainedPhysicalFS`], so walking it and emptying it stay inside the OS
+/// directory: a symlink or junction under the root is never followed, and one that is in the way of
+/// a recursive removal is removed as a link. See that type for the exact rule.
 pub fn physical_root(path: impl AsRef<Path>) -> VfsPath {
-    VfsPath::new(PhysicalFS::new(path))
+    VfsPath::new(ContainedPhysicalFS::new(path))
 }

@@ -136,6 +136,12 @@ pub enum NormalizationPolicy {
     Strict,
 }
 
+/// The path budget a document tree is laid out under when a caller names none.
+///
+/// The figure the Morphir Compatibility Kit's tree cases are written at, and the one the
+/// reference's own writer defaults to.
+pub const DEFAULT_PATH_BUDGET: u32 = 4000;
+
 /// Independent choices that configure an IR codec operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -145,10 +151,12 @@ pub struct CodecOptions {
     format: FormatId,
     vocabulary: VocabularyId,
     normalization: NormalizationPolicy,
+    path_budget: u32,
 }
 
 impl CodecOptions {
-    /// Create options with the readable vocabulary and strict normalization.
+    /// Create options with the readable vocabulary, strict normalization, and the default path
+    /// budget.
     pub fn new(version: IrVersion, layout: Layout, format: FormatId) -> Self {
         Self {
             version,
@@ -156,6 +164,7 @@ impl CodecOptions {
             format,
             vocabulary: VocabularyId::readable(),
             normalization: NormalizationPolicy::Strict,
+            path_budget: DEFAULT_PATH_BUDGET,
         }
     }
 
@@ -163,6 +172,21 @@ impl CodecOptions {
     pub fn with_vocabulary(mut self, vocabulary: VocabularyId) -> Self {
         self.vocabulary = vocabulary;
         self
+    }
+
+    /// Select the longest physical path a document-tree layout may write.
+    ///
+    /// The budget is a count of characters of the path from the tree root, the profile's extension
+    /// included; it is the tree writer's only length constraint and the figure the distribution
+    /// manifest records. Layouts other than [`Layout::DocumentTree`] ignore it.
+    pub fn with_path_budget(mut self, path_budget: u32) -> Self {
+        self.path_budget = path_budget;
+        self
+    }
+
+    /// Return the selected document-tree path budget.
+    pub fn path_budget(&self) -> u32 {
+        self.path_budget
     }
 
     /// Return the selected IR version.

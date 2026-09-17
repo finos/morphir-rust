@@ -87,16 +87,22 @@ The compiled IR is stored in a document tree structure:
     └── my-package/
         └── compile/
             └── gleam/
-                ├── format.json
-                └── modules/
+                ├── manifest.json
+                └── pkg/
                     └── my-package/
                         └── main/
                             ├── module.json
-                            ├── types/
-                            └── values/
+                            ├── main.type.json
+                            └── main.value.json
 ```
 
-You can view the `format.json` file to see the IR structure.
+`manifest.json` at the root names the distribution kind and its dependencies. Each module gets its
+own directory under `pkg/<package path>/<module path>/`, holding a `module.json` that lists the
+module's types and values, plus one `<stem>.type.json` or `<stem>.value.json` file per type or
+value. A dependency's own modules land the same way, under
+`deps/<package path>/@/<module path>/...` instead of `pkg/`.
+
+You can view the `manifest.json` file to see the IR structure.
 
 ## Step 6: Generate Code (Optional)
 

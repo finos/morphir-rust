@@ -27,9 +27,25 @@ fn capabilities_match_the_stage_one_contract() {
     assert_eq!(caps["formatVersions"], "[3.0.0,3.1.0),[4.0.0,4.1.0)");
     assert_eq!(caps["versions"], serde_json::json!([3, 4]));
     assert_eq!(caps["profiles"], serde_json::json!(["json", "yaml"]));
-    assert_eq!(caps["layouts"], serde_json::json!(["single"]));
+    assert_eq!(caps["layouts"], serde_json::json!(["single", "tree"]));
     assert_eq!(caps["paths"], serde_json::json!(["current", "pinned"]));
-    assert_eq!(caps["nodes"].as_array().unwrap().len(), 18);
+    // The eighteen nodes of a single document, plus the four files a document tree is made of.
+    assert_eq!(caps["nodes"].as_array().unwrap().len(), 22);
+    for file in [
+        "DistributionManifestFile",
+        "ModuleManifestFile",
+        "TypeDefinitionFile",
+        "ValueDefinitionFile",
+    ] {
+        assert!(
+            caps["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|node| node == file),
+            "{file}"
+        );
+    }
 }
 
 /// `protocol.schema.json` requires `formatVersions` in the capabilities reply,
@@ -198,4 +214,94 @@ fn diagnostic_members(response: &serde_json::Value) -> Vec<&String> {
         .expect("a diagnostic object")
         .keys()
         .collect()
+}
+
+// =============================================================================
+// readTree / writeTree — kit `document-tree-0003`'s `escape` set
+// =============================================================================
+
+const ESCAPE_MANIFEST: &str =
+    "formatVersion: 4\ndistribution: Library\npackage: my-org/my-project\npathBudget: 4000\n";
+const ESCAPE_MODULE: &str = "formatVersion: 4\npath: domain\ntypes: [user-ID]\nvalues: []\n";
+const ESCAPE_NODE: &str = "formatVersion: 4\nname: user-ID\ndef:\n  Public:\n    doc: The user's identifier\n    TypeAliasDefinition:\n      typeParams: []\n      typeExp: morphir/SDK:string#string\n";
+const ESCAPE_CANONICAL: &str = "formatVersion: 4\ndistribution:\n  Library:\n    packageName: my-org/my-project\n    dependencies: {}\n    def:\n      modules:\n        domain:\n          Public:\n            types:\n              user-ID:\n                Public:\n                  doc: The user's identifier\n                  TypeAliasDefinition:\n                    typeParams: []\n                    typeExp: morphir/SDK:string#string\n            values: {}\n";
+
+/// `readTree` on kit `document-tree-0003`'s `escape` set answers `ok: true` with the case's own
+/// `canonical.yaml` fence — the whole point of declaring the `tree` layout.
+#[test]
+fn a_read_tree_request_for_the_escape_set_answers_ok_with_canonical_yaml() {
+    let line = serde_json::json!({
+        "id": 1,
+        "op": "readTree",
+        "version": 4,
+        "profile": "yaml",
+        "path": "current",
+        "strip": false,
+        "node": "Distribution",
+        "files": [
+            {"path": "manifest", "content": ESCAPE_MANIFEST},
+            {"path": "pkg/my-org/my-project/domain/module", "content": ESCAPE_MODULE},
+            {"path": "pkg/my-org/my-project/domain/user-_id.type", "content": ESCAPE_NODE},
+        ],
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["kind"], "Library");
+    assert_eq!(response["canonical"]["yaml"], ESCAPE_CANONICAL);
+    assert_eq!(response["warnings"], serde_json::json!([]));
+}
+
+/// `writeTree` on the same set answers `files` with the three logical paths in emission order:
+/// the manifest, then the module's own manifest, then its type file.
+#[test]
+fn a_write_tree_request_for_the_escape_set_answers_files_in_emission_order() {
+    let line = serde_json::json!({
+        "id": 2,
+        "op": "writeTree",
+        "version": 4,
+        "path": "current",
+        "policy": {"profile": "yaml", "pathBudget": 4000},
+        "input": ESCAPE_CANONICAL,
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 2);
+    assert_eq!(response["ok"], true);
+    let files = response["files"].as_array().expect("a files array");
+    let paths: Vec<&str> = files
+        .iter()
+        .map(|file| file["path"].as_str().expect("a path"))
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "manifest",
+            "pkg/my-org/my-project/domain/module",
+            "pkg/my-org/my-project/domain/user-_id.type",
+        ]
+    );
+    assert_eq!(files[0]["content"], ESCAPE_MANIFEST);
+    assert_eq!(files[1]["content"], ESCAPE_MODULE);
+    assert_eq!(files[2]["content"], ESCAPE_NODE);
+}
+
+/// A `writeTree` whose `input` is not a document at all answers `ok: false` with the same
+/// four-member diagnostic shape every other refusal in this protocol carries.
+#[test]
+fn a_write_tree_request_whose_input_is_not_a_document_answers_ok_false() {
+    let line = serde_json::json!({
+        "id": 3,
+        "op": "writeTree",
+        "version": 4,
+        "path": "current",
+        "policy": {"profile": "yaml", "pathBudget": 4000},
+        "input": "42\n",
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 3);
+    assert_eq!(response["ok"], false);
+    assert_eq!(
+        diagnostic_members(&response),
+        ["code", "stage", "cursor", "message"]
+    );
 }

@@ -14,6 +14,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-module tuple checking. The backend emits module-qualified imports;
   native and installed WASM roundtrips cover the expanded subset.
 
+- **The document-tree layout through the kit.** `morphir_core::ir::layout` holds the reference
+  binding's tree shape: `Profile`, `Tree`, `paths`, `stem_for`, `TreePolicy`, `read_tree`,
+  `write_tree` and the per-module writers; the four tree-file models (distribution manifest,
+  module manifest, type definition file, value definition file) live in
+  `morphir_core::ir::v4::tree_files`. `morphir_core::ir::json` gains
+  `read`, `read_ir_file` and `write_ir_file` alongside the existing YAML pair, and `read` grows its
+  own stack on demand (`stacker::maybe_grow`) instead of spawning a thread per call.
+  `morphir_common::ir_transport::CodecOptions::with_path_budget` sets the longest physical path a
+  document-tree layout may write, the figure the distribution manifest records. The MCK
+  adapter declares `layouts: ["single", "tree"]` and the four file node kinds, and answers
+  `readTree` and `writeTree`. MCK cases document-tree-0001 to 0009, decisions 0012 and 0015.
+- `morphir_common::vfs::ContainedPhysicalFS`, built by `physical_root`: the document-tree transport
+  never follows a symlink or junction, so pruning and reading both stay inside the tree root. This
+  fixes a defect where rewriting a tree could delete through a link placed under `pkg/`.
+- `morphir::ir::detection::linked_manifest`, refused when a tree's manifest file is itself a link.
+- A `.yml` manifest is read as a YAML tree, alongside `.yaml` (it is never written back as `.yml`).
+- `morphir_common::ir_transport::DEFAULT_PATH_BUDGET` (4000) is the document-tree transport's
+  default longest physical path a tree may write, used whenever `CodecOptions::with_path_budget` is
+  not called. The transport walk itself refuses three shapes: a directory nested past 256 levels
+  (`morphir::ir::document_tree::invalid_path`), a node file whose extension disagrees with the
+  tree's profile (`morphir::ir::document_tree::invalid_distribution_shape`), and a logical path that
+  both a `.yaml` and a `.yml` physical file map to, named by both physical spellings
+  (`morphir::ir::document_tree::invalid_distribution_shape`).
 - Python extension release bundles include frontend language and backend target
   metadata. CI builds and uploads the bundle and verifies offline installation,
   compilation and generation. The `extension/python/v0.1.0` release tag publishes
@@ -65,6 +88,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (document-tree transport): the canonical layout.** `morphir-common`'s document-tree
+  transport is now an adapter over `morphir_core::ir::layout`: it writes `deps/<package>/@/<module>/`
+  rather than `pkg/<package>/`, escapes stems the way the reference binding does, honors
+  `pathBudget` and `fileNames`, lists a `Library` or `Specs` distribution's dependencies by name in
+  the manifest, and keeps `doc` and `access` inside each `def`/`spec` file. A tree written by an
+  earlier version of this transport is refused with `morphir::ir::document_tree::missing_member`
+  and guidance to regenerate it with `morphir migrate`. An `Application`'s dependencies are
+  package definitions with a home in the tree now, so `unsupported_dependencies` no longer refuses
+  an `Application` for carrying them; the refusal remains for a dependency whose kind does not
+  match the distribution's kind (an `Application` dependency under a `Library`/`Specs`
+  distribution, or vice versa). A module specification carrying `annotations` still has nowhere to
+  go in a tree and is still refused, now by `morphir_core`'s own `InvalidDistributionShape`
+  diagnostic rather than a transport-local one. A module listing's keys in a single-document read
+  are now validated as names (`invalid_name`) instead of accepted verbatim. MCK cases
+  document-tree-0001 to 0009, decisions 0012 and 0015.
 - **The IR model sweep.** The v4 model now matches the semantic model, the v4 schema and the reference binding where it did not: `DecimalLiteral` is a genuine decimal (`BigDecimal` value beside its lexeme, decimal lexeme grammar), `IntegerLiteral` has arbitrary precision (`BigInt`), type, value and module specifications carry `annotations`, `Hole` incompleteness and `IncompleteBody` keep a `partialBody`, a hole's reason is one of three (`Draft` is an incompleteness), an input type is a bare type, `Documentation` is one string, attribute `constraints` and `extensions` are objects with known members, `$meta` is refused at a single document's root, `priv` is not an access spelling, `inputs` is omitted when empty, and an `Application`'s dependencies are package definitions. The classic (v3) mirror matches morphir-elm: `DecimalLiteral` is a decimal, `DerivedTypeSpecification` exists, record fields are written as `{ "name", "tpe" }` objects, `VariablePattern` is gone, and `Definition` and `ValueDefinition` are one type. The stale second v4 type model (`type_def`), the unused converter and the unused traversal transforms are removed. MCK cases patterns-and-literals-0016 to 0020, types-0012, definitions-0020 to 0031, distributions-0009 and 0010, versions-0006 to 0008.
 - **Breaking (`morphir-core` Rust API), from the IR model sweep above.** `Literal::decimal` now
   returns `Result<Literal, InvalidDecimalLexeme>` instead of an infallible `Literal`, and
@@ -84,6 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `LogicalDocument`, and the document-tree transport's own
+  `morphir::ir::document_tree::{name_mismatch, module_path_mismatch}` codes, replaced by the kit's
+  own diagnostics above.
 - `morphir_core::ir::v4::{InputTypeEntry, HoleReason::Draft, LegacyTypeSpecification, LegacyTypeDefinition, AccessControlledTypeDefinition, AccessControlledConstructors, TypeDefConstructorArg, TypeDefConstructorDefinition}`; `morphir_core::ir::classic::{Definition, Pattern::Variable}`.
 - Input spellings a reader used to accept alongside the canonical ones, as part of the IR model
   sweep above: the bare-string native hint (`"Arithmetic"`, and `"PlatformSpecific"`, which used to

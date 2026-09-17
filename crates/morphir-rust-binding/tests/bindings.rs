@@ -306,7 +306,7 @@ fn annotated_values_are_v4_only_but_validated_and_omitted_in_types_only_mode() {
         }
     }
     for version in ["3", "4"] {
-        reject("pub fn ordinary() {}", version, false);
+        assert!(compile("pub fn ordinary() {}", version, false).success);
         assert!(compile("pub fn ordinary() {}", version, true).success);
     }
 }

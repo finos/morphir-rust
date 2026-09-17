@@ -9,9 +9,15 @@ use std::collections::BTreeMap;
 
 pub(super) struct Package {
     pub declarations: Vec<Declaration>,
+    pub functions: Vec<Function>,
     pub dependencies: BTreeMap<String, usize>,
     pub modules: BTreeMap<String, Access>,
     pub omitted_values: usize,
+}
+
+pub(super) struct Function {
+    pub owner: Declaration,
+    pub definition: ValueDefinition,
 }
 
 pub(super) struct Declaration {
@@ -49,24 +55,11 @@ pub(super) fn decode(value: &serde_json::Value) -> Outcome<Package> {
     let mut value = value.clone();
     value["formatVersion"] = version.release.major().into();
     let ir: IRFile = if version.release.major() == 3 {
-        let mut classic: classic::Distribution =
+        let classic: classic::Distribution =
             serde_json::from_value(value).map_err(|e| error("RS_IR", e.to_string()))?;
-        // Values are decoded for validity but do not need semantic migration in a type backend.
-        let classic::DistributionBody::Library(_, _, package) = &mut classic.distribution;
-        let count: usize = package
-            .modules
-            .iter()
-            .map(|m| m.definition.value.values.len())
-            .sum();
-        for module in &mut package.modules {
-            module.definition.value.values.clear();
-        }
-        let migrated = migrate_distribution(&classic, MigrationOptions::default())
+        migrate_distribution(&classic, MigrationOptions::default())
             .map_err(|e| error("RS_IR", format!("{e:?}")))?
-            .value;
-        let mut result = package_from_ir(migrated)?;
-        result.omitted_values += count;
-        return Ok(result);
+            .value
     } else {
         serde_json::from_value(value).map_err(|e| error("RS_IR", e.to_string()))?
     };
@@ -76,6 +69,7 @@ pub(super) fn decode(value: &serde_json::Value) -> Outcome<Package> {
 fn package_from_ir(ir: IRFile) -> Outcome<Package> {
     let mut result = Package {
         declarations: vec![],
+        functions: vec![],
         dependencies: BTreeMap::new(),
         modules: BTreeMap::new(),
         omitted_values: 0,
@@ -133,7 +127,37 @@ fn package_from_ir(ir: IRFile) -> Outcome<Package> {
 fn definitions(result: &mut Package, package: &str, definitions: PackageDefinition) -> Outcome<()> {
     for (module_name, module) in definitions.modules {
         result.modules.insert(module_name.clone(), module.access);
-        result.omitted_values += module.value.values.len();
+        for (name, controlled) in module.value.values {
+            let definition = controlled.value.value;
+            if !matches!(definition.body, ValueBody::Expression(_)) {
+                result.omitted_values += 1;
+                continue;
+            }
+            let mut variables = std::collections::BTreeSet::new();
+            for tpe in definition
+                .input_types
+                .values()
+                .chain(definition.output_type.iter())
+            {
+                super::types::variables(tpe, &mut variables);
+            }
+            result.functions.push(Function {
+                owner: Declaration {
+                    fqname: format!("{package}:{module_name}#{name}"),
+                    module: module_name.clone(),
+                    name: Name::from_canonical_string(&name).map_err(|e| error("RS_NAME", e))?,
+                    params: variables
+                        .iter()
+                        .map(|v| Name::from_canonical_string(v).map_err(|e| error("RS_NAME", e)))
+                        .collect::<Outcome<_>>()?,
+                    access: controlled.access,
+                    doc: controlled.value.doc.map(|d| d.text().to_owned()),
+                    body: Body::Opaque,
+                },
+                definition,
+            });
+        }
+
         for (name, controlled) in module.value.types {
             let (params, body) = match controlled.value.value {
                 TypeDefinition::TypeAliasDefinition {

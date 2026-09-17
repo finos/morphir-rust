@@ -109,13 +109,15 @@ fn local_names_shadow_builtins_and_private_constructors_remain_private() {
     assert_eq!(types[3][1]["access"], "Private");
 }
 #[test]
-fn types_only_skips_functions_with_warning_otherwise_rejects() {
+fn types_only_skips_functions_with_warning_otherwise_compiles() {
     let mut req = request("pub struct X; pub fn f() {}", "3");
     let result = RustExtension.compile(req.clone()).unwrap();
     assert!(result.success);
     assert_eq!(result.diagnostics.len(), 1);
     req.options.types_only = false;
-    assert!(!RustExtension.compile(req).unwrap().success);
+    let result = RustExtension.compile(req).unwrap();
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert!(result.diagnostics.is_empty());
 }
 #[test]
 fn validates_request_and_cli_context() {

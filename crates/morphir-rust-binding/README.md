@@ -1,4 +1,4 @@
-# Rust frontend and type backend
+# Rust types and conditional functions
 
 `morphir-rust-binding` implements the `morphir-rust` extension. It provides MEP
 `frontend/compile` and `backend/generate` natively and as an Extism WASM guest.
@@ -6,10 +6,10 @@ Both capabilities advertise IR versions `3` and `4`, language/target `rust` and
 source suffix `.rs`. Syn parses source without running rustc, macros or build
 scripts. The shared `morphir-core` codecs and typed migration handle the IR.
 
-The frontend translates types and explicitly annotated native/external function
-declarations for IR v4. It does not compile function bodies or
-implement Morphir value semantics. It does not claim complete Rust language
-support or extension-level MCK conformance.
+The frontend and backend translate types and a small subset of pure conditional
+functions in both IR versions. The frontend also extracts explicitly annotated
+native/external declarations for IR v4. It does not claim complete Rust language
+support, all Morphir value semantics, or extension-level MCK conformance.
 
 ## Source subset
 
@@ -68,7 +68,8 @@ that rustc has checked the original source. Use `cargo check` on source projects
 when compiler validation is needed.
 
 With `typesOnly: true`, standalone function items are omitted with a warning.
-With `typesOnly: false`, unannotated functions fail; annotated bindings require IR v4. Constants, statics and
+With `typesOnly: false`, ordinary functions compile within the subset below;
+annotated bindings require IR v4. Constants, statics and
 implementation blocks are unsupported. Failure returns diagnostics without
 partial IR. Source diagnostics carry URI and zero-based UTF-16 positions.
 
@@ -78,6 +79,53 @@ Unsupported major/minor versions fail. CLI context options `outputDir`,
 `sourceRootUri`, `sourceRoot`, `emitParseStage`, `emitParseStageFatal` are validated.
 Parse-stage output is unavailable: a request warns or fails when marked fatal.
 Unknown options fail.
+
+## Conditional functions in IR v3 and v4
+
+Set `typesOnly: false` to compile ordinary Rust functions:
+
+```rust
+pub fn select(a: i64, b: i64) -> i64 {
+    let larger = if a > b { a } else { b };
+    if larger > 10 && !(a == b) { larger }
+    else if a == b { 0 }
+    else { -1 }
+}
+```
+
+The backend generates callable Rust functions from this subset in either IR
+version. Supported expressions are parameters and local variables, `i64`, finite
+`f64`, Boolean and character literals, tuples, `()`, immutable named `let`
+bindings, scalar comparisons, `!`, `&&`, `||`, and nested `if/else`. Blocks end in
+a value expression, or yield Unit when empty. A missing `else` is valid only for
+a Unit result. Boolean operators preserve short-circuit evaluation.
+
+Conditions must be Boolean. Both branches and the declared return type must
+agree. Integer literals must fit `i64`; only `i64` and `f64` numeric suffixes are
+accepted. Comparisons support integers, floats and characters; Boolean operands
+support `==` and `!=`. Borrowed string literals do not become owned `String`
+values. Local shadowing is preserved with distinct IR names.
+
+Functions can select and return existing values, including generic parameters and
+domain types. Each generic parameter must occur in the signature; unused generic
+parameters are rejected because IR cannot retain them. Non-Copy values have conservative move checks; returning one value
+from each alternative branch is supported. Type aliases remain nominal during
+expression checking, so alias-specific arithmetic, comparisons and literal
+coercion are not supported. Built-in `Box` is rejected in executable signatures
+and local annotations because its type-only erasure would lose Rust ownership
+information.
+
+The backend supports scalar, tuple, generic and named domain types in function
+signatures. Anonymous structural records and higher-order function signatures
+are rejected in this increment; their standalone type declarations remain
+supported.
+
+Calls, arithmetic operators, `match`, loops, mutation, destructuring, closures,
+early `return`, and macro invocations are outside this increment. Ordinary
+functions must be safe, synchronous and non-const, without an ABI, lifetimes or
+trait bounds. Unsupported expressions and invalid types return diagnostics
+without partial IR or generated artifacts. `typesOnly: true` continues to omit
+ordinary functions with a warning without validating their bodies.
 
 ## IR v4 native and external declarations
 
@@ -118,14 +166,15 @@ bindings or module constructors.
 
 IR v3 rejects these declarations with `RS_BINDING_VERSION`. With `typesOnly: true`,
 both versions validate binding annotations and signatures, then omit them with
-`RS_VALUES_UNSUPPORTED` warnings. The backend still omits all values with a
-warning; it does not generate native or external implementations.
+`RS_VALUES_UNSUPPORTED` warnings. The backend omits native and external
+declarations with a warning; it does not generate their implementations.
 
 ## Generated Rust
 
 The backend accepts v3 Library distributions and v4 Library, Specs and
 Application distributions. It returns a single relative `lib.rs` artifact with
-nested modules. Values are omitted with a warning; incomplete v4 definitions
+nested modules. Supported expression values become functions. Native, external,
+incomplete and specification-only values are omitted with a warning; incomplete v4 type definitions
 fail. Private definitions are retained for internal references. No files are
 written by the extension.
 
@@ -150,7 +199,7 @@ aliased Rust type. Rust source aliases with unused parameters are rejected by
 the frontend because they are invalid Rust.
 
 Records become nominal Rust structs; structural equality and row-polymorphic
-operations are not implemented in this type-only increment. Row payloads do not
+operations are not implemented in this increment. Row payloads do not
 enforce disjoint field sets. Function values are single-threaded `Rc` callables;
 code generation does not insert `Send` or `Sync` requirements. Conversion bodies
 for derived types are deferred with value support.
@@ -214,5 +263,7 @@ guest directly through the extension protocol.
 Round-trip tests compare supported module declarations, not source formatting,
 derive implementations, Rust ownership, or ignored values. Generated crate
 module wrappers and backend-only helper types exceed the frontend's one-module
-subset. Value compilation, imports and whole-crate name resolution are follow-on
-work.
+subset. Additional expressions, imports and whole-crate name resolution are
+follow-on work. Conditional-function tests compile and execute source and
+generated Rust against fixed expected results for both IR versions, including
+the native and WASM extension protocols.

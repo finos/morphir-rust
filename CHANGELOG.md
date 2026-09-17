@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python frontend and backend support private modules. The shared SDK validates source-root and document identity through `CompileRequest::source_paths()`. The project loader supports explicit workspace member selection by declared path or exact name.
 - **SDK API change:** `CompilePackage.exposed_modules` is now optional: `None` exposes all modules, `Some(vec![])` exposes none, and a nonempty list selects public modules. Unknown exposure names are rejected. Project versions omitted from configuration default to `0.1.0`, matching legacy normalization.
 
+- Rust frontend and backend support conditional functions in IR v3 and v4,
+  including immutable locals, tuples, scalar comparisons and short-circuit
+  Boolean operators. Native MEP, executable Rust consumers and WASM tests cover
+  both versions; unsupported expressions return diagnostics.
+
 - Rust frontend extracts explicitly annotated native and external function
   declarations into IR v4, preserving signatures, visibility and documentation.
   IR v3 reports a version diagnostic; type-only requests validate and omit bindings.

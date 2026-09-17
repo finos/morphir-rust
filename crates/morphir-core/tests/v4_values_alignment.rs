@@ -472,7 +472,10 @@ fn hole_keeps_its_reason_and_an_optional_expected_type() {
     );
 
     let with_type = json!({ "Hole": {
-        "reason": { "Draft": {} },
+        "reason": { "TypeMismatch": {
+            "expected": "acme/shop:money#amount",
+            "found": "morphir/SDK:string#string"
+        } },
         "expectedType": "acme/shop:money#amount"
     } });
     all_normalize_to(std::slice::from_ref(&with_type), with_type.clone());

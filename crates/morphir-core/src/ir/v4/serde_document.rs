@@ -38,8 +38,8 @@ use super::types::{
     Incompleteness, Type, TypeDefinition, TypeSpecification,
 };
 use super::value::{
-    ExternalBinding, HoleReason, InputTypeEntry, NativeInfo, ValueBody, ValueDefinition,
-    ValueSpecification,
+    ExternalBinding, HoleReason, InputTypeEntry, NativeHint, NativeInfo, ValueBody,
+    ValueDefinition, ValueSpecification,
 };
 use super::{FormatVersion, IRFile};
 use crate::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
@@ -448,10 +448,10 @@ pub(super) fn decode_type_specification(
     }
 }
 
-/// Decodes an incompleteness (definitions-0014, 0015, 0016).
+/// Decodes an incompleteness (definitions-0014, 0015, 0016, 0024).
 ///
-/// A hole says why it is one under `reason`; a draft is deliberately unfinished and takes an
-/// empty payload.
+/// A hole says why it is one under `reason` and may keep the type expression the author had as
+/// `partialBody`; a draft is deliberately unfinished and takes an empty payload.
 pub(super) fn decode_incompleteness(
     value: &JsonValue,
     cursor: &str,
@@ -461,11 +461,14 @@ pub(super) fn decode_incompleteness(
     match tag.as_str() {
         "Draft" => Ok(Incompleteness::Draft),
         "Hole" => {
-            let members = wrapper_members(tag, payload, &at, &["reason"])?;
-            Ok(Incompleteness::Hole(decode_hole_reason(
-                required(&members, "reason", &at)?,
-                &member_cursor(&members, "reason", &at),
-            )?))
+            let members = wrapper_members(tag, payload, &at, &["reason", "partialBody"])?;
+            Ok(Incompleteness::Hole {
+                reason: decode_hole_reason(
+                    required(&members, "reason", &at)?,
+                    &member_cursor(&members, "reason", &at),
+                )?,
+                partial_body: optional_type(&members, "partialBody", &at)?,
+            })
         }
         other => Err(unknown_node_at(
             cursor,
@@ -474,11 +477,89 @@ pub(super) fn decode_incompleteness(
     }
 }
 
-fn decode_hole_reason(value: &JsonValue, cursor: &str) -> Result<HoleReason, Diagnostic> {
-    serde_json::from_value::<HoleReason>(value.clone()).map_err(|error| {
-        Diagnostic::from_serde_error(&error)
-            .unwrap_or_else(|| unknown_node_at(cursor, error.to_string()))
-    })
+/// Decodes a hole's reason (definitions-0014, 0016, 0026). `Draft` is an incompleteness kind, not
+/// a reason, so it is an unknown node here.
+pub(super) fn decode_hole_reason(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<HoleReason, Diagnostic> {
+    let (tag, payload) = single_member(value, cursor, "a hole reason")?;
+    let at = format!("{cursor}/{tag}");
+    match tag.as_str() {
+        "UnresolvedReference" => {
+            let members = wrapper_members(tag, payload, &at, &["target"])?;
+            Ok(HoleReason::UnresolvedReference {
+                target: decode_member_fqname(&members, "target", &at)?,
+            })
+        }
+        "DeletedDuringRefactor" => {
+            let members = wrapper_members(tag, payload, &at, &["tx-id"])?;
+            Ok(HoleReason::DeletedDuringRefactor {
+                tx_id: decode_text(&members, "tx-id", &at)?,
+            })
+        }
+        "TypeMismatch" => {
+            let members = wrapper_members(tag, payload, &at, &["expected", "found"])?;
+            Ok(HoleReason::TypeMismatch {
+                expected: decode_text(&members, "expected", &at)?,
+                found: decode_text(&members, "found", &at)?,
+            })
+        }
+        other => Err(unknown_node_at(
+            cursor,
+            format!("{other} is not a hole reason"),
+        )),
+    }
+}
+
+/// Decodes a native definition's info (definitions-0009, 0030).
+pub(super) fn decode_native_info(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<NativeInfo, Diagnostic> {
+    let members = wrapper_members("NativeInfo", value, cursor, &["hint", "description"])?;
+    let hint = decode_native_hint(
+        required(&members, "hint", cursor)?,
+        &member_cursor(&members, "hint", cursor),
+    )?;
+    let description = match members.get("description") {
+        None => None,
+        Some(member) => Some(text_of(
+            member.value,
+            &member_cursor(&members, "description", cursor),
+        )?),
+    };
+    Ok(NativeInfo { hint, description })
+}
+
+/// Decodes a native operation's category hint (definitions-0009, 0030).
+pub(super) fn decode_native_hint(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<NativeHint, Diagnostic> {
+    let (tag, payload) = single_member(value, cursor, "a native hint")?;
+    let at = format!("{cursor}/{tag}");
+    let hint = match tag.as_str() {
+        "Arithmetic" => NativeHint::Arithmetic,
+        "Comparison" => NativeHint::Comparison,
+        "StringOp" => NativeHint::StringOp,
+        "CollectionOp" => NativeHint::CollectionOp,
+        "PlatformSpecific" => {
+            let members = wrapper_members(tag, payload, &at, &["platform"])?;
+            return Ok(NativeHint::PlatformSpecific {
+                platform: decode_text(&members, "platform", &at)?,
+            });
+        }
+        other => {
+            return Err(unknown_node_at(
+                cursor,
+                format!("{other} is not a native hint"),
+            ));
+        }
+    };
+    // The four nullary hints take an empty payload; anything inside it is unknown.
+    wrapper_members(tag, payload, &at, &[])?;
+    Ok(hint)
 }
 
 // =============================================================================
@@ -627,7 +708,7 @@ fn decode_definition_parts(
             "externalName",
             "targetPlatform",
         ],
-        _ => &["inputTypes", "outputType", "incompleteness"],
+        _ => &["inputTypes", "outputType", "incompleteness", "partialBody"],
     };
     let members = wrapper_members(tag, payload, &at, canonical)?;
 
@@ -651,18 +732,12 @@ fn decode_definition_parts(
             required(&members, "body", &at)?,
             &member_cursor(&members, "body", &at),
         )?),
-        "NativeBody" => {
-            let member_at = member_cursor(&members, "nativeInfo", &at);
-            let written = required(&members, "nativeInfo", &at)?;
-            ValueBody::Native {
-                native_info: serde_json::from_value::<NativeInfo>(written.clone()).map_err(
-                    |error| {
-                        Diagnostic::from_serde_error(&error)
-                            .unwrap_or_else(|| invalid_type(&member_at, error.to_string()))
-                    },
-                )?,
-            }
-        }
+        "NativeBody" => ValueBody::Native {
+            native_info: decode_native_info(
+                required(&members, "nativeInfo", &at)?,
+                &member_cursor(&members, "nativeInfo", &at),
+            )?,
+        },
         "ExternalBody" => ValueBody::External {
             externals: decode_externals(&members, &at)?,
             fallback: match members.get("body") {
@@ -678,6 +753,13 @@ fn decode_definition_parts(
                 required(&members, "incompleteness", &at)?,
                 &member_cursor(&members, "incompleteness", &at),
             )?,
+            partial_body: match members.get("partialBody") {
+                None => None,
+                Some(member) => Some(Box::new(decode_value(
+                    member.value,
+                    &member_cursor(&members, "partialBody", &at),
+                )?)),
+            },
         },
     };
 

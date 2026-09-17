@@ -22,7 +22,7 @@
 //! ```
 
 use indexmap::IndexMap;
-use serde::de::{self, Deserializer};
+use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
@@ -147,7 +147,8 @@ pub enum Value {
     /// Used for incremental compilation and error recovery.
     ///
     /// Decision 0008 keeps the hole a value expression, with an optional expected type:
-    /// `{ "Hole": { "reason": { "Draft": {} }, "expectedType": "morphir/SDK:basics#int" } }`.
+    /// `{ "Hole": { "reason": { "UnresolvedReference": { "target": "my/pkg:mod#gone" } },
+    /// "expectedType": "morphir/SDK:basics#int" } }`.
     /// It is the only V4-only value expression: a native operation and an external binding are
     /// properties of a *definition*, so they live in [`ValueBody`] and a reader refuses
     /// `{ "Native": … }` or `{ "External": … }` where a value expression belongs.
@@ -155,6 +156,10 @@ pub enum Value {
 }
 
 /// Reason why a value is incomplete/broken (V4 only)
+///
+/// The three reasons are the ones definitions-0014, 0016 and 0026 pin. `Draft` is the other
+/// [`Incompleteness`] kind rather than a reason: a draft is deliberately unfinished and names no
+/// reason at all, so a reader refuses `{ "Draft": {} }` where a reason belongs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HoleReason {
     /// Reference couldn't be resolved
@@ -171,8 +176,6 @@ pub enum HoleReason {
         /// Actual type found
         found: String,
     },
-    /// Work in progress, not yet implemented
-    Draft,
 }
 
 /// Category hint for native operations (V4 only)
@@ -192,11 +195,23 @@ pub enum NativeHint {
 ///
 /// `{ "hint": { "Arithmetic": {} } }`. A description is optional and is written only when the
 /// definition has one.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NativeInfo {
     pub hint: NativeHint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for NativeInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_native_info,
+        )
+    }
 }
 
 /// Input parameter tuple struct: (name, attributes, type)
@@ -255,8 +270,12 @@ pub enum ValueBody {
     ///
     /// The output type lives on the [`ValueDefinition`], where every body's does; it is optional
     /// there because an incomplete definition may not have one yet, and required on the wire for
-    /// the three complete bodies.
-    Incomplete { incompleteness: Incompleteness },
+    /// the three complete bodies. `partial_body` is what the author had written when the
+    /// definition stopped being complete (definitions-0025); it is written only when present.
+    Incomplete {
+        incompleteness: Incompleteness,
+        partial_body: Option<Box<Value>>,
+    },
 }
 
 impl Value {
@@ -521,6 +540,8 @@ struct IncompleteDefinitionContent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     output_type: Option<&'a Type>,
     incompleteness: &'a Incompleteness,
+    #[serde(rename = "partialBody", skip_serializing_if = "Option::is_none")]
+    partial_body: Option<&'a Value>,
 }
 
 impl Serialize for ValueDefinition {
@@ -564,12 +585,16 @@ impl Serialize for ValueDefinition {
                     body: fallback.as_deref(),
                 },
             )?,
-            ValueBody::Incomplete { incompleteness } => map.serialize_entry(
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => map.serialize_entry(
                 "IncompleteBody",
                 &IncompleteDefinitionContent {
                     input_types: &self.input_types,
                     output_type: self.output_type.as_ref(),
                     incompleteness,
+                    partial_body: partial_body.as_deref(),
                 },
             )?,
         }
@@ -669,10 +694,16 @@ impl Serialize for ValueBody {
                     },
                 )?;
             }
-            ValueBody::Incomplete { incompleteness } => {
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => {
                 map.serialize_entry(
                     "IncompleteBody",
-                    &IncompleteBodySerContent { incompleteness },
+                    &IncompleteBodySerContent {
+                        incompleteness,
+                        partial_body: partial_body.as_deref(),
+                    },
                 )?;
             }
         }
@@ -704,6 +735,8 @@ struct ExternalBodySerContent<'a> {
 #[serde(rename_all = "camelCase")]
 struct IncompleteBodySerContent<'a> {
     incompleteness: &'a Incompleteness,
+    #[serde(rename = "partialBody", skip_serializing_if = "Option::is_none")]
+    partial_body: Option<&'a Value>,
 }
 
 impl<'de> Deserialize<'de> for ValueBody {
@@ -748,62 +781,10 @@ impl<'de> Deserialize<'de> for NativeHint {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match &value {
-            serde_json::Value::Object(map) => {
-                if let Some((key, content)) = map.iter().next() {
-                    match key.as_str() {
-                        "Arithmetic" => Ok(NativeHint::Arithmetic),
-                        "Comparison" => Ok(NativeHint::Comparison),
-                        "StringOp" => Ok(NativeHint::StringOp),
-                        "CollectionOp" => Ok(NativeHint::CollectionOp),
-                        "PlatformSpecific" => {
-                            let platform = content
-                                .get("platform")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            Ok(NativeHint::PlatformSpecific { platform })
-                        }
-                        _ => Err(de::Error::unknown_variant(
-                            key,
-                            &[
-                                "Arithmetic",
-                                "Comparison",
-                                "StringOp",
-                                "CollectionOp",
-                                "PlatformSpecific",
-                            ],
-                        )),
-                    }
-                } else {
-                    Err(de::Error::custom("empty object for NativeHint"))
-                }
-            }
-            // Also accept string format for backward compatibility
-            serde_json::Value::String(s) => match s.as_str() {
-                "Arithmetic" => Ok(NativeHint::Arithmetic),
-                "Comparison" => Ok(NativeHint::Comparison),
-                "StringOp" => Ok(NativeHint::StringOp),
-                "CollectionOp" => Ok(NativeHint::CollectionOp),
-                "PlatformSpecific" => Ok(NativeHint::PlatformSpecific {
-                    platform: "unknown".to_string(),
-                }),
-                _ => Err(de::Error::unknown_variant(
-                    s,
-                    &[
-                        "Arithmetic",
-                        "Comparison",
-                        "StringOp",
-                        "CollectionOp",
-                        "PlatformSpecific",
-                    ],
-                )),
-            },
-            _ => Err(de::Error::custom(
-                "expected object or string for NativeHint",
-            )),
-        }
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_native_hint,
+        )
     }
 }
 
@@ -818,7 +799,6 @@ impl Serialize for HoleReason {
     {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
-            HoleReason::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
             HoleReason::TypeMismatch { expected, found } => map.serialize_entry(
                 "TypeMismatch",
                 &serde_json::json!({ "expected": expected, "found": found }),
@@ -841,67 +821,10 @@ impl<'de> Deserialize<'de> for HoleReason {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match &value {
-            serde_json::Value::Object(map) => {
-                if let Some((key, content)) = map.iter().next() {
-                    match key.as_str() {
-                        "Draft" => Ok(HoleReason::Draft),
-                        "TypeMismatch" => {
-                            let expected = content
-                                .get("expected")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| de::Error::missing_field("expected"))?
-                                .to_string();
-                            let found = content
-                                .get("found")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| de::Error::missing_field("found"))?
-                                .to_string();
-                            Ok(HoleReason::TypeMismatch { expected, found })
-                        }
-                        "DeletedDuringRefactor" => {
-                            let tx_id = content
-                                .get("tx-id")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| de::Error::missing_field("tx-id"))?
-                                .to_string();
-                            Ok(HoleReason::DeletedDuringRefactor { tx_id })
-                        }
-                        "UnresolvedReference" => {
-                            let target = content
-                                .get("target")
-                                .and_then(|t| t.as_str())
-                                .ok_or_else(|| de::Error::missing_field("target"))?
-                                .to_string();
-                            Ok(HoleReason::UnresolvedReference {
-                                target: FQName::from_canonical_string(&target)
-                                    .map_err(de::Error::custom)?,
-                            })
-                        }
-                        _ => Err(de::Error::unknown_variant(
-                            key,
-                            &[
-                                "Draft",
-                                "TypeMismatch",
-                                "DeletedDuringRefactor",
-                                "UnresolvedReference",
-                            ],
-                        )),
-                    }
-                } else {
-                    Err(de::Error::custom("empty object for HoleReason"))
-                }
-            }
-            // Also accept string format for backward compatibility (Draft only)
-            serde_json::Value::String(s) => match s.as_str() {
-                "Draft" => Ok(HoleReason::Draft),
-                _ => Err(de::Error::unknown_variant(s, &["Draft"])),
-            },
-            _ => Err(de::Error::custom(
-                "expected object or string for HoleReason",
-            )),
-        }
+        super::serde_document::deserialize_with(
+            deserializer,
+            super::serde_document::decode_hole_reason,
+        )
     }
 }
 
@@ -1000,14 +923,6 @@ mod tests {
         let hint = NativeHint::Arithmetic;
         let json = serde_json::to_string(&hint).unwrap();
         assert!(json.contains("\"Arithmetic\""));
-        assert!(json.contains("{}"));
-    }
-
-    #[test]
-    fn test_hole_reason_wrapper_format() {
-        let reason = HoleReason::Draft;
-        let json = serde_json::to_string(&reason).unwrap();
-        assert!(json.contains("\"Draft\""));
         assert!(json.contains("{}"));
     }
 

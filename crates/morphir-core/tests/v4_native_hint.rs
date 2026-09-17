@@ -92,27 +92,16 @@ fn test_native_hint_platform_specific_round_trip() {
     assert_eq!(original, parsed);
 }
 
-// Backward compatibility - accept legacy string format
+// A hint is the wrapper object and nothing else: the bare tag `"Arithmetic"` is not one, and
+// `PlatformSpecific` names its platform rather than having one invented for it
+// (definitions-0009, 0030).
 #[test]
-fn test_native_hint_legacy_string_arithmetic() {
-    let json = r#""Arithmetic""#;
-
-    let hint: NativeHint = serde_json::from_str(json).unwrap();
-
-    assert!(matches!(hint, NativeHint::Arithmetic));
+fn test_native_hint_bare_tag_is_not_a_hint() {
+    assert!(serde_json::from_str::<NativeHint>(r#""Arithmetic""#).is_err());
+    assert!(serde_json::from_str::<NativeHint>(r#""PlatformSpecific""#).is_err());
 }
 
 #[test]
-fn test_native_hint_legacy_string_platform_specific() {
-    // Legacy string format should provide default platform
-    let json = r#""PlatformSpecific""#;
-
-    let hint: NativeHint = serde_json::from_str(json).unwrap();
-
-    match hint {
-        NativeHint::PlatformSpecific { platform } => {
-            assert_eq!(platform, "unknown");
-        }
-        _ => panic!("Expected PlatformSpecific variant"),
-    }
+fn test_native_hint_platform_specific_requires_a_platform() {
+    assert!(serde_json::from_str::<NativeHint>(r#"{"PlatformSpecific": {}}"#).is_err());
 }

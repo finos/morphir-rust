@@ -208,6 +208,6 @@ fn normalize_names(names: Vec<v4::Name>) -> Vec<String> {
 fn normalize_incompleteness(incompleteness: v4::Incompleteness) -> IncompletenessKind {
     match incompleteness {
         v4::Incompleteness::Draft => IncompletenessKind::Draft,
-        v4::Incompleteness::Hole(_) => IncompletenessKind::Hole,
+        v4::Incompleteness::Hole { .. } => IncompletenessKind::Hole,
     }
 }

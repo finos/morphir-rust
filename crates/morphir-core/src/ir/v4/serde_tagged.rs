@@ -1685,9 +1685,10 @@ fn decode_value_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<
                 wrapper_members(tag, payload, &at, &["attributes", "reason", "expectedType"])?;
             let attributes = decode_value_attributes(&members, &at)?;
             let reason_cursor = member_cursor(&members, "reason", &at);
-            let reason: HoleReason =
-                serde_json::from_value(required(&members, "reason", &at)?.clone())
-                    .map_err(|error| unknown_node_at(&reason_cursor, error.to_string()))?;
+            let reason: HoleReason = super::serde_document::decode_hole_reason(
+                required(&members, "reason", &at)?,
+                &reason_cursor,
+            )?;
             let expected = match members.get("expectedType") {
                 None => None,
                 Some(member) => Some(Box::new(decode_type(

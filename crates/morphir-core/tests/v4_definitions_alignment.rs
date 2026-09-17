@@ -11,8 +11,8 @@
 use morphir_core::ir::v4::{
     Access, AccessControlled, Distribution, Documented, FormatVersion, IRFile, Incompleteness,
     ModuleDefinition, ModuleSpecification, SpellingMode, TypeDefinition, TypeEncoding,
-    TypeSpecification, ValueBody, ValueDefinition, ValueSpecification, with_spelling_mode,
-    with_type_encoding,
+    TypeSpecification, Value as ValueExpr, ValueBody, ValueDefinition, ValueSpecification,
+    with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, Warning};
 use serde::Serialize;
@@ -244,6 +244,13 @@ fn an_incomplete_type_definition_says_why_under_reason() {
         } } } }
     } });
     assert!(normalizes_to::<TypeDefinition>(hole.clone(), &hole).is_empty());
+    // A hole with nothing kept writes no `partialBody`.
+    assert!(
+        encode(&decode::<TypeDefinition>(hole.clone()).unwrap())["IncompleteTypeDefinition"]
+            ["incompleteness"]["Hole"]
+            .get("partialBody")
+            .is_none()
+    );
 
     // A draft is deliberately unfinished rather than broken, so it has no reason at all and
     // keeps whatever type expression the author had written.
@@ -262,6 +269,75 @@ fn a_hole_without_a_reason_is_a_missing_member() {
             .unwrap_err();
     assert_eq!(refused.code, DiagnosticCode::UnknownMember);
     assert_eq!(refused.cursor, "/Hole/UnresolvedReference");
+}
+
+#[test]
+fn a_hole_keeps_the_partial_type_expression_the_author_had() {
+    let canonical = json!({ "IncompleteTypeDefinition": {
+        "typeParams": [],
+        "incompleteness": { "Hole": {
+            "reason": { "UnresolvedReference": { "target": "acme/shop:pricing#rounding-rule" } },
+            "partialBody": QUANTITY
+        } }
+    } });
+    assert!(normalizes_to::<TypeDefinition>(canonical.clone(), &canonical).is_empty());
+
+    let TypeDefinition::IncompleteTypeDefinition { incompleteness, .. } =
+        decode::<TypeDefinition>(canonical).unwrap()
+    else {
+        panic!("an incomplete type definition decodes as one");
+    };
+    assert!(matches!(
+        incompleteness,
+        Incompleteness::Hole {
+            partial_body: Some(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn draft_is_an_incompleteness_and_names_no_hole_reason() {
+    let refused = decode::<TypeDefinition>(json!({ "IncompleteTypeDefinition": {
+        "typeParams": [],
+        "incompleteness": { "Hole": { "reason": { "Draft": {} } } }
+    } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::UnknownNode);
+    assert_eq!(
+        refused.cursor,
+        "/IncompleteTypeDefinition/incompleteness/Hole/reason"
+    );
+
+    // A reason is a wrapper object, so the bare tag is not one either.
+    let refused = decode::<TypeDefinition>(json!({ "IncompleteTypeDefinition": {
+        "typeParams": [],
+        "incompleteness": { "Hole": { "reason": "Draft" } }
+    } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::InvalidType);
+    assert_eq!(
+        refused.cursor,
+        "/IncompleteTypeDefinition/incompleteness/Hole/reason"
+    );
+}
+
+#[test]
+fn a_hole_reason_this_reader_does_not_know_is_refused_at_the_reason() {
+    let refused =
+        decode::<ValueExpr>(json!({ "Hole": { "reason": { "Sorcery": {} } } })).unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::UnknownNode);
+    assert_eq!(refused.cursor, "/Hole/reason");
+}
+
+#[test]
+fn a_deleted_reason_spells_its_transaction_identifier_tx_id() {
+    let refused = decode::<ValueExpr>(json!({ "Hole": { "reason": {
+        "DeletedDuringRefactor": { "txId": "shop-2026-03-04" }
+    } } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::UnknownMember);
+    assert_eq!(refused.cursor, "/Hole/reason/DeletedDuringRefactor/txId");
 }
 
 #[test]
@@ -376,6 +452,54 @@ fn the_four_definition_bodies_keep_their_members() {
     ] {
         assert!(normalizes_to::<ValueDefinition>(canonical.clone(), &canonical).is_empty());
     }
+}
+
+#[test]
+fn an_incomplete_body_keeps_the_partial_value_the_author_had() {
+    let canonical = json!({ "IncompleteBody": {
+        "inputTypes": {},
+        "outputType": MONEY,
+        "incompleteness": { "Draft": {} },
+        "partialBody": { "Literal": { "IntegerLiteral": 1 } }
+    } });
+    assert!(normalizes_to::<ValueDefinition>(canonical.clone(), &canonical).is_empty());
+    assert!(matches!(
+        decode::<ValueDefinition>(canonical).unwrap().body,
+        ValueBody::Incomplete {
+            partial_body: Some(_),
+            ..
+        }
+    ));
+
+    // An incomplete body that kept nothing writes no `partialBody`.
+    let without = json!({ "IncompleteBody": {
+        "inputTypes": { "quantity": QUANTITY },
+        "outputType": MONEY,
+        "incompleteness": { "Hole": { "reason": { "DeletedDuringRefactor": {
+            "tx-id": "shop-2026-03-04"
+        } } } }
+    } });
+    assert!(normalizes_to::<ValueDefinition>(without.clone(), &without).is_empty());
+    assert!(
+        encode(&decode::<ValueDefinition>(without).unwrap())["IncompleteBody"]
+            .get("partialBody")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_platform_specific_native_hint_names_its_platform() {
+    let refused = decode::<ValueDefinition>(json!({ "NativeBody": {
+        "inputTypes": {},
+        "outputType": MONEY,
+        "nativeInfo": { "hint": { "PlatformSpecific": {} } }
+    } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::MissingMember);
+    assert_eq!(
+        refused.cursor,
+        "/NativeBody/nativeInfo/hint/PlatformSpecific"
+    );
 }
 
 #[test]

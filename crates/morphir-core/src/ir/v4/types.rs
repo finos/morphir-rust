@@ -317,13 +317,22 @@ pub struct ConstructorArgSpec {
 ///
 /// Used when a type cannot be fully resolved due to errors or work in progress.
 ///
-/// A hole says why it is one: `{ "Hole": { "reason": { "Draft": {} } } }`. A draft is
+/// A hole says why it is one: `{ "Hole": { "reason": { "TypeMismatch": { … } } } }`, and may keep
+/// the type expression the author had written as `partialBody` (definitions-0024). A draft is
 /// deliberately unfinished rather than broken, so it has no reason at all and takes an empty
 /// payload: `{ "Draft": {} }`.
+// A hole's kept type expression is a `Type` like any other member of this model, and boxing it
+// to even out the two variants would make the node model read differently from the wire.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Incompleteness {
     /// Type has unresolved dependencies or errors
-    Hole(HoleReason),
+    Hole {
+        reason: HoleReason,
+        /// What the author had written when the definition stopped being complete; written only
+        /// when present.
+        partial_body: Option<Type>,
+    },
     /// Type is work in progress
     Draft,
 }
@@ -336,12 +345,23 @@ impl Serialize for Incompleteness {
         #[derive(Serialize)]
         struct HoleContent<'a> {
             reason: &'a HoleReason,
+            #[serde(rename = "partialBody", skip_serializing_if = "Option::is_none")]
+            partial_body: Option<&'a Type>,
         }
 
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             Incompleteness::Draft => map.serialize_entry("Draft", &serde_json::json!({}))?,
-            Incompleteness::Hole(reason) => map.serialize_entry("Hole", &HoleContent { reason })?,
+            Incompleteness::Hole {
+                reason,
+                partial_body,
+            } => map.serialize_entry(
+                "Hole",
+                &HoleContent {
+                    reason,
+                    partial_body: partial_body.as_ref(),
+                },
+            )?,
         }
         map.end()
     }
@@ -363,7 +383,7 @@ impl<'de> Deserialize<'de> for Incompleteness {
 ///
 /// V4 adds IncompleteTypeDefinition for incremental compilation and error recovery.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 pub enum TypeDefinition {
     /// Type alias definition
     ///

@@ -33,11 +33,11 @@ use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::{
     AccessControlled, ApplicationContent, ConstructorArg, ConstructorArgSpec,
     ConstructorDefinition, ConstructorSpecification, Distribution, Documented, Field,
-    FormatVersion, IRFile, InputTypeEntry, LetBinding, LibraryContent, Literal, ModuleDefinition,
-    ModuleSpecification, PackageDefinition, PackageSpecification, Pattern, PatternCase,
-    RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes, TypeDefinition,
-    TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody, ValueDefinition,
-    ValueSpecification, with_spelling_mode, with_type_encoding,
+    FormatVersion, IRFile, Incompleteness, InputTypeEntry, LetBinding, LibraryContent, Literal,
+    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageSpecification, Pattern,
+    PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
+    TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
+    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
 use morphir_core::naming::{FQName, Name, Path};
@@ -1315,8 +1315,23 @@ fn strip_type_definition(node: TypeDefinition) -> TypeDefinition {
             partial_type_expr,
         } => TypeDefinition::IncompleteTypeDefinition {
             type_params,
-            incompleteness,
+            incompleteness: strip_incompleteness(incompleteness),
             partial_type_expr: partial_type_expr.map(strip_type),
+        },
+    }
+}
+
+/// A hole's `partialBody` is a type expression, so it carries attributes the testee strips like
+/// any other.
+fn strip_incompleteness(node: Incompleteness) -> Incompleteness {
+    match node {
+        Incompleteness::Draft => Incompleteness::Draft,
+        Incompleteness::Hole {
+            reason,
+            partial_body,
+        } => Incompleteness::Hole {
+            reason,
+            partial_body: partial_body.map(strip_type),
         },
     }
 }
@@ -1358,7 +1373,13 @@ fn strip_value_definition(node: ValueDefinition) -> ValueDefinition {
                 externals,
                 fallback: fallback.map(|value| Box::new(strip_value(*value))),
             },
-            ValueBody::Incomplete { incompleteness } => ValueBody::Incomplete { incompleteness },
+            ValueBody::Incomplete {
+                incompleteness,
+                partial_body,
+            } => ValueBody::Incomplete {
+                incompleteness: strip_incompleteness(incompleteness),
+                partial_body: partial_body.map(|value| Box::new(strip_value(*value))),
+            },
         },
     }
 }

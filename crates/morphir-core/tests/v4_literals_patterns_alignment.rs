@@ -2,7 +2,8 @@
 //! `Literal` and `Pattern` cases spell them (decisions 0005, 0006 and 0013).
 
 use morphir_core::ir::v4::{
-    Literal, Pattern, SourceLocation, SpellingMode, ValueAttributes, with_spelling_mode,
+    DecimalLiteral, Literal, Pattern, SourceLocation, SpellingMode, ValueAttributes,
+    with_spelling_mode,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode};
 use serde_json::json;
@@ -47,7 +48,7 @@ fn a_literal_carries_its_payload_directly_under_its_tag() {
         (json!({ "FloatLiteral": 2.5 }), Literal::float(2.5)),
         (
             json!({ "DecimalLiteral": "0.010" }),
-            Literal::Decimal("0.010".into()),
+            Literal::Decimal(DecimalLiteral::parse("0.010").unwrap()),
         ),
     ] {
         assert_eq!(lit(spelling.clone()).unwrap(), expected, "{spelling}");
@@ -161,7 +162,10 @@ fn an_integer_literal_outside_the_model_is_an_invalid_literal() {
 #[test]
 fn a_decimal_literal_keeps_its_text_rather_than_becoming_a_float() {
     let decimal = lit(json!({ "DecimalLiteral": "20.70" })).unwrap();
-    assert_eq!(decimal, Literal::Decimal("20.70".into()));
+    assert_eq!(
+        decimal,
+        Literal::Decimal(DecimalLiteral::parse("20.70").unwrap())
+    );
     assert_eq!(
         serde_json::to_string(&decimal).unwrap(),
         r#"{"DecimalLiteral":"20.70"}"#
@@ -170,6 +174,39 @@ fn a_decimal_literal_keeps_its_text_rather_than_becoming_a_float() {
         lit(json!({ "DecimalLiteral": 20.70 })).unwrap_err().code,
         DiagnosticCode::InvalidLiteral
     );
+}
+
+#[test]
+fn a_decimal_that_is_not_a_decimal_lexeme_is_invalid_literal() {
+    for payload in [
+        json!("ten"),
+        json!(""),
+        json!("1_000"),
+        json!("NaN"),
+        json!(10.5),
+    ] {
+        let error =
+            serde_json::from_value::<Literal>(json!({ "DecimalLiteral": payload })).unwrap_err();
+        let diagnostic =
+            morphir_core::ir::Diagnostic::from_serde_error(&error).expect("a kit diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            morphir_core::ir::DiagnosticCode::InvalidLiteral,
+            "{payload}"
+        );
+        assert_eq!(diagnostic.cursor, "/DecimalLiteral");
+    }
+}
+
+#[test]
+fn a_decimal_lexeme_survives_as_written() {
+    for lexeme in ["-0.00", "1e-7", ".5", "+12."] {
+        let decoded: Literal = serde_json::from_value(json!({ "DecimalLiteral": lexeme })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            json!({ "DecimalLiteral": lexeme })
+        );
+    }
 }
 
 #[test]

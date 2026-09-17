@@ -3384,9 +3384,11 @@ name = "morphir-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "bigdecimal",
  "granit-parser",
  "indexmap",
  "lasso",
+ "num-bigint",
  "rstest",
  "schemars",
  "serde",

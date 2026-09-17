@@ -14,6 +14,8 @@ use std::str::FromStr;
 
 use serde::{Serialize, Serializer};
 
+use crate::ir::decimal::DecimalLiteral;
+
 use super::serde_v4;
 
 /// A lexeme that is not the spelling of a finite JSON number, and so is not a float literal.
@@ -146,9 +148,9 @@ pub enum Literal {
     /// reproduces its input — the YAML profile — spells `1.0e2` the way it was read.
     Float(FloatLiteral),
 
-    /// Decimal literal, carried as text so no binding coerces it to a float:
-    /// `{ "DecimalLiteral": "10.50" }`
-    Decimal(String),
+    /// A genuine decimal; the payload is its lexeme: `{ "DecimalLiteral": "10.50" }`. See
+    /// `ir::decimal`.
+    Decimal(DecimalLiteral),
 
     /// Document literal: a schema-less JSON-like tree carried verbatim, typed as
     /// `morphir/SDK:document#document`. Its payload is the document itself, so
@@ -195,9 +197,9 @@ impl Literal {
         Literal::Float(FloatLiteral::from_f64(value))
     }
 
-    /// Create a new decimal literal from a string representation
-    pub fn decimal(value: impl Into<String>) -> Self {
-        Literal::Decimal(value.into())
+    /// Create a decimal literal from its lexeme.
+    pub fn decimal(lexeme: &str) -> Result<Self, crate::ir::decimal::InvalidDecimalLexeme> {
+        DecimalLiteral::parse(lexeme).map(Literal::Decimal)
     }
 
     /// Create a new document literal from a JSON-like tree
@@ -224,8 +226,8 @@ mod tests {
             Literal::Float(FloatLiteral::from_f64(2.5))
         );
         assert_eq!(
-            Literal::decimal("123.456"),
-            Literal::Decimal("123.456".to_string())
+            Literal::decimal("123.456").unwrap(),
+            Literal::Decimal(DecimalLiteral::parse("123.456").unwrap())
         );
         assert_eq!(
             Literal::document(serde_json::json!({ "a": 1 })),

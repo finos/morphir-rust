@@ -40,6 +40,7 @@ pub use crate::naming::Path;
 pub use access::{Access, AccessControlled};
 
 // Re-export core expression types
+pub use crate::ir::decimal::{DecimalLiteral, InvalidDecimalLexeme};
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
 pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};

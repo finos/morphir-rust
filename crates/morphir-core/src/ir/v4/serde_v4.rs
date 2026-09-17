@@ -336,7 +336,7 @@ where
         // The tag is what says it is a float, so an integral spelling loses nothing. With
         // `arbitrary_precision`, a `Number` built from text serializes as that text.
         Literal::Float(v) => map.serialize_entry("FloatLiteral", v.number())?,
-        Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v)?,
+        Literal::Decimal(v) => map.serialize_entry("DecimalLiteral", v.lexeme())?,
         Literal::Document(v) => map.serialize_entry("DocumentLiteral", v)?,
     }
     map.end()

@@ -28,6 +28,7 @@ use super::types::{Field, Type};
 use super::value::{
     HoleReason, InputType, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition,
 };
+use crate::ir::decimal::DecimalLiteral;
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
 use crate::naming::{FQName, Name};
 
@@ -766,11 +767,18 @@ fn decode_literal_wrapper(
         "FloatLiteral" => float_from_json(payload)
             .map(Literal::Float)
             .ok_or_else(|| invalid_literal(&at, "a FloatLiteral carries a number")),
-        // A decimal is carried as a string so that no binding coerces it to a float.
-        "DecimalLiteral" => payload
-            .as_str()
-            .map(|text| Literal::Decimal(text.to_owned()))
-            .ok_or_else(|| invalid_literal(&at, "a DecimalLiteral carries its text as a string")),
+        // A decimal is a genuine decimal carried as its lexeme (v4 schema page, "Literals").
+        "DecimalLiteral" => {
+            let text = payload.as_str().ok_or_else(|| {
+                invalid_literal(&at, "a DecimalLiteral carries its lexeme as a string")
+            })?;
+            DecimalLiteral::parse(text).map(Literal::Decimal).map_err(|_| {
+                invalid_literal(
+                    &at,
+                    format!("{text:?} is not a decimal lexeme: [+-]?(digits(.digits?)?|.digits)([eE][+-]?digits)?"),
+                )
+            })
+        }
         _ => Err(unknown_node_at(cursor, format!("{tag} is not a literal"))),
     }
 }

@@ -30,6 +30,10 @@ lasso = { version = "0.7", features = ["multi-threaded", "serde"] }
 # the workspace's, so nothing else in the tree can link a second copy.
 granit-parser = { workspace = true }
 sha2 = "0.11"
+# A DecimalLiteral is a genuine decimal; the lexeme is carried beside it because the wire keeps the
+# spelling. Both build on num-bigint, which IntegerLiteral uses directly.
+bigdecimal = "0.4"
+num-bigint = "0.4"
 
 [dev-dependencies]
 rstest = "0.26"

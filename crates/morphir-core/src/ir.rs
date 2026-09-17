@@ -13,6 +13,10 @@
 // Legacy support
 pub mod classic;
 
+// A genuine decimal, shared by the v4 model and (task 5) the classic model
+pub mod decimal;
+pub use decimal::{DecimalLiteral, InvalidDecimalLexeme};
+
 // Diagnostics shared by every IR codec
 pub mod diagnostic;
 pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticError, DiagnosticStage, Warning};

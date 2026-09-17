@@ -113,7 +113,7 @@ fn test_float_literal_round_trip() {
 
 #[test]
 fn test_decimal_literal_round_trip() {
-    let lit = Literal::decimal("123456789.987654321");
+    let lit = Literal::decimal("123456789.987654321").unwrap();
 
     let json = serde_json::to_string(&lit).unwrap();
     let parsed: Literal = serde_json::from_str(&json).unwrap();

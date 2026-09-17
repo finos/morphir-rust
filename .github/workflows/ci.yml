@@ -213,11 +213,16 @@ jobs:
       - name: Test real Extism extension through MEP
         run: mise run test:extism
 
-      - name: Build Python ADT extension
-        run: cargo build --locked --release -p morphir-python-binding --target wasm32-unknown-unknown
+      - name: Build and test Python extension release bundle
+        run: mise run extension:artifact:python
 
-      - name: Test Python ADTs through the WASM extension
-        run: cargo test --locked -p morphir-daemon --test python_extension -- --ignored
+      - name: Upload Python extension release bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: morphir-python-extension-bundle
+          path: .morphir/build/extensions/python/*
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@v7

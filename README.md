@@ -54,6 +54,7 @@ This table lists independently releasable extensions. Registrations come from
 | --- | --- | --- | --- |
 | `morphir-avro` | `morphir-avro-extension` | `0.1.1` | Generates Avro JSON schemas or protocols and Avro IDL from Morphir specifications. |
 | `morphir-openapi` | `morphir-openapi-extension` | `0.1.0` | Generates OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents from Morphir specifications. |
+| `morphir-python` | `morphir-python-binding` | `0.1.0` | Compiles and generates Python ADTs, fixed tuples and conditional function bodies using IR v4. |
 
 ## Prerequisites
 

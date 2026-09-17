@@ -930,61 +930,61 @@ rustup target add wasm32-unknown-unknown
 cargo test --locked -p morphir-python-binding
 cargo run --locked -p morphir-python-binding --example python_adt
 cargo build --locked --release -p morphir-python-binding --target wasm32-unknown-unknown
-cargo test --locked -p morphir-daemon --test python_extension -- --ignored
+cargo test --locked -p morphir-daemon --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
 ```
 
 The example returns JSON containing IR and generated Python. The WASM test
 performs capability negotiation, compilation, generation and recompilation
 through the daemon's actual extension container. CI runs it with a release guest.
 
-## Install a local development build
+## Install a release bundle
 
-This extension is not yet published. The existing release-bundle packager is
-backend-specific, so use a controlled local index that declares both capabilities.
-The following PowerShell creates that index from the build above. Run it from
-`morphir-rust`. If `CARGO_TARGET_DIR` is set, adjust the artifact path accordingly.
+The Python extension is released independently as `extension/python/v0.1.0` in
+[finos/morphir-rust releases](https://github.com/finos/morphir-rust/releases).
+It contains a WASM guest, SHA-256 checksum and release descriptor. It is a Morphir
+extension, not a PyPI package or a CPython import module.
+
+Use the Rust Morphir CLI with frontend-bundle publication support; CLI
+`0.4.0-alpha.6` and earlier cannot publish this descriptor. The npm `morphir-elm`
+executable does not provide these installation commands.
+
+Download and install with PowerShell:
 
 ```powershell
+gh release download extension/python/v0.1.0 --repo finos/morphir-rust --dir python-bundle
+Rename-Item -LiteralPath python-bundle/morphir-python-binding-0.1.0.release.json -NewName release.json
 $pythonIndex = Join-Path (Get-Location) '.morphir/python-index'
-New-Item -ItemType Directory -Force "$pythonIndex/artifacts", "$pythonIndex/extensions" | Out-Null
-$pythonGuest = 'target/wasm32-unknown-unknown/release/morphir_python_binding.wasm'
-Copy-Item -LiteralPath $pythonGuest -Destination "$pythonIndex/artifacts/morphir_python_binding.wasm"
-$pythonDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $pythonGuest).Hash.ToLowerInvariant()
-$pythonMetadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-$pythonVersion = ($pythonMetadata.packages | Where-Object name -eq 'morphir-python-binding').version
-$pythonRelease = @{
-    schemaVersion = '1.0'
-    id = 'morphir-python'
-    name = 'Morphir Python'
-    version = $pythonVersion
-    channels = @('stable')
-    mepVersions = @('0.1')
-    capabilities = @('frontend', 'backend')
-    frontend = @{
-        languages = @(@{ id = 'python'; fileExtensions = @('.py') })
-        irVersions = @('4')
-    }
-    backend = @{ targets = @('python'); irVersions = @('4') }
-    artifacts = @(@{
-        runtime = 'wasm'
-        source = @{ kind = 'local-file'; path = 'artifacts/morphir_python_binding.wasm' }
-        sha256 = $pythonDigest
-        filename = 'morphir_python_binding.wasm'
-    })
-}
-[IO.File]::WriteAllText("$pythonIndex/extensions/morphir-python.jsonl",
-    ($pythonRelease | ConvertTo-Json -Depth 10 -Compress) + "`n")
 $env:MORPHIR_HOME = Join-Path (Get-Location) '.morphir/python-home'
 morphir extension repository init $pythonIndex
 morphir extension repository add python-local --directory $pythonIndex
+morphir extension repository publish python-local --bundle python-bundle
 morphir extension repository verify python-local
 morphir extension install --repository python-local morphir-python
 ```
 
-Here `morphir` must be the Rust CLI from `finos/morphir`, not the npm
-`morphir-elm` executable. Keep the same `MORPHIR_HOME` for compilation and
-generation. Installation checks the artifact digest and records both frontend
-and backend capabilities.
+Keep the same `MORPHIR_HOME` for compilation and generation. Installation verifies
+the artifact digest and records both capabilities. Once installed, compilation
+and generation work offline without access to the original repository.
+
+## Build a development bundle
+
+From `morphir-rust`, run `mise run extension:artifact:python`. This builds and
+validates the guest, packages it, and tests installation and offline roundtripping.
+Use `.morphir/build/extensions/python` as the `--bundle` directory in the
+publication command above; its descriptor is already named `release.json`.
+CI also uploads this directory as the `morphir-python-extension-bundle` artifact.
+
+For a Windows build using the native toolchain, after the build commands above:
+
+```powershell
+python -B scripts/package_extension.py --short-id python --wasm target/wasm32-unknown-unknown/release/morphir_python_binding.wasm --output .morphir/build/extensions/python
+$env:MORPHIR_PYTHON_BUNDLE = (Resolve-Path .morphir/build/extensions/python).Path
+cargo test --locked -p morphir-daemon --test python_extension -- --ignored
+```
+
+The release pipeline builds from a committed snapshot and verifies that the
+bundle's `gitCommit` matches the release tag. Development bundles from modified
+working trees omit that provenance claim.
 
 ## Compile and generate
 

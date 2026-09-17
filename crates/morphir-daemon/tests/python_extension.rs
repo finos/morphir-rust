@@ -1,5 +1,6 @@
 //! Build the Python WASM guest, then run this test with `--ignored`.
 //! Set MORPHIR_PYTHON_WASM to override the release artifact path.
+//! The packaged lifecycle test also requires MORPHIR_PYTHON_BUNDLE.
 
 mod support;
 
@@ -14,6 +15,118 @@ use morphir_extension_sdk::{
 
 struct PythonExtensionDriver {
     container: ExtensionContainer,
+}
+
+#[tokio::test]
+#[ignore = "requires MORPHIR_PYTHON_BUNDLE from extension:artifact:python"]
+async fn packaged_python_installs_and_roundtrips_offline() {
+    use morphir_common::home::MorphirHome;
+    use morphir_daemon::extensions::{InvokeOutcome, activate_transport};
+    use morphir_distribution::{
+        Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex, Platform,
+        Selection, activate_installed,
+    };
+    let bundle =
+        std::env::var_os("MORPHIR_PYTHON_BUNDLE").expect("build the Python release bundle first");
+    let root = tempfile::tempdir().unwrap();
+    let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+    let publication = repository.publish(bundle).unwrap();
+    assert!(publication.release().frontend().is_some());
+    assert!(publication.release().backend().is_some());
+    let id = ExtensionId::parse("morphir-python").unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let selected = LocalIndex::open(repository.root())
+        .unwrap()
+        .resolve(
+            &id,
+            Selection::Channel(Channel::Stable),
+            &Platform::current(),
+        )
+        .unwrap();
+    ExtensionInstaller::new(&home).install(selected).unwrap();
+    // Removing this fixture's repository proves activation uses the installed copy.
+    std::fs::remove_dir_all(repository.root()).unwrap();
+    let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())
+        .await
+        .unwrap();
+    let ready = loaded
+        .initialize(InitializeParams {
+            protocol_versions: vec!["0.1".into()],
+            host: PeerInfo {
+                name: "python-release-test".into(),
+                version: "1.0.0".into(),
+            },
+        })
+        .await
+        .unwrap_or_else(|failure| panic!("negotiation failed: {}", failure.error()));
+    let capabilities = ready.negotiated().capabilities();
+    assert_eq!(
+        capabilities.frontend.as_ref().unwrap().languages[0].id,
+        "python"
+    );
+    assert_eq!(capabilities.backend.as_ref().unwrap().targets, ["python"]);
+
+    macro_rules! invoke {
+        ($ready:expr, $result:ty, $method:expr, $request:expr) => {
+            match $ready.invoke::<$result>($method, $request).await {
+                InvokeOutcome::Success(ready, result) => (ready, result),
+                InvokeOutcome::Rejected(_, error) => panic!("request rejected: {error}"),
+                InvokeOutcome::Failed(failure) => panic!("MEP failed: {}", failure.error()),
+            }
+        };
+    }
+    let source = concat!(
+        include_str!("../../morphir-python-binding/tests/fixtures/models.py"),
+        "\n",
+        include_str!("../../morphir-python-binding/tests/fixtures/conditionals.py"),
+        "\n",
+        include_str!("../../morphir-python-binding/tests/fixtures/tuples.py"),
+    );
+    let request = |text: String| CompileRequest {
+        language_id: "python".into(),
+        documents: vec![SourceDocument {
+            uri: "models.py".into(),
+            language_id: "python".into(),
+            version: 1,
+            text,
+        }],
+        package: CompilePackage {
+            name: "acme/example".into(),
+            exposed_modules: vec![],
+        },
+        dependencies: vec![],
+        options: CompileOptions {
+            ir_version: "4".into(),
+            ..Default::default()
+        },
+    };
+    let (ready, compiled) = invoke!(
+        ready,
+        CompileResult,
+        methods::COMPILE,
+        request(source.into())
+    );
+    assert!(compiled.success, "{:?}", compiled.diagnostics);
+    let ir = compiled.ir.unwrap();
+    let (ready, generated) = invoke!(
+        ready,
+        GenerateResult,
+        methods::GENERATE,
+        GenerateRequest {
+            ir: ir.clone(),
+            target: "python".into(),
+            options: Default::default(),
+        }
+    );
+    assert!(generated.success, "{:?}", generated.diagnostics);
+    let (_, again) = invoke!(
+        ready,
+        CompileResult,
+        methods::COMPILE,
+        request(generated.artifacts[0].content.clone())
+    );
+    assert!(again.success, "{:?}", again.diagnostics);
+    assert_eq!(again.ir, Some(ir));
 }
 
 impl PythonExtensionDriver {

@@ -95,11 +95,16 @@ def expected_descriptor(
         "version": version,
         "mepVersions": extension.get("mep_versions"),
         "runtime": "wasm",
-        "targets": extension.get("targets"),
+        "targets": extension.get("targets", []),
         "irVersions": extension.get("ir_versions"),
         "artifact": artifact_name,
         "sha256": digest,
     }
+    if "languages" in extension:
+        expected["languages"] = [
+            {"id": language["id"], "fileExtensions": language["file_extensions"]}
+            for language in extension["languages"]
+        ]
     if "name" in extension:
         expected["name"] = extension.get("name")
     expected["gitCommit"] = expected_commit

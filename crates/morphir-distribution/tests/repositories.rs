@@ -343,6 +343,69 @@ fn local_repository_init_is_idempotent_and_creates_authoring_directories() {
 }
 
 #[test]
+fn publishing_frontend_bundles_preserves_declared_capabilities() {
+    for targets in [serde_json::json!(["python"]), serde_json::json!([])] {
+        let root = tempfile::tempdir().unwrap();
+        let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+        let bundle = release_bundle(root.path(), "morphir-python", "0.1.0", b"python wasm");
+        let path = bundle.join("release.json");
+        let mut descriptor: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        descriptor["languages"] =
+            serde_json::json!([{ "id": "python", "fileExtensions": [".py"] }]);
+        descriptor["targets"] = targets.clone();
+        descriptor["irVersions"] = serde_json::json!(["4"]);
+        fs::write(&path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+
+        let published = repository.publish(&bundle).unwrap();
+        let frontend = published.release().frontend().unwrap();
+        assert_eq!(frontend.languages()[0].id(), "python");
+        assert_eq!(frontend.languages()[0].file_extensions(), &[".py"]);
+        assert_eq!(frontend.ir_versions(), &["4"]);
+        assert!(frontend.compile());
+        assert_eq!(
+            published.release().backend().is_some(),
+            !targets.as_array().unwrap().is_empty()
+        );
+        assert_eq!(
+            repository.publish(&bundle).unwrap().status(),
+            PublicationStatus::AlreadyPresent
+        );
+    }
+}
+
+#[test]
+fn publishing_rejects_invalid_frontend_languages_without_partial_metadata() {
+    for languages in [
+        serde_json::json!([]),
+        serde_json::json!([{ "id": "python", "fileExtensions": ["py"] }]),
+        serde_json::json!([{ "id": "python", "fileExtensions": [".py"] }, { "id": "python", "fileExtensions": [".pyw"] }]),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+        let bundle = release_bundle(root.path(), "morphir-python", "0.1.0", b"python wasm");
+        let path = bundle.join("release.json");
+        let mut descriptor: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        descriptor["languages"] = languages;
+        fs::write(&path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+        assert!(repository.publish(&bundle).is_err());
+        assert_eq!(
+            fs::read_dir(repository.root().join("extensions"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            fs::read_dir(repository.root().join("artifacts"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
 fn publishing_a_verified_bundle_is_repeatable_and_writes_valid_metadata() {
     let root = tempfile::tempdir().unwrap();
     let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();

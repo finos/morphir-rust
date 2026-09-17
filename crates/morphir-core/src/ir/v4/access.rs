@@ -21,12 +21,13 @@ impl Access {
 
     /// The access level a wrapper tag names, if it names one.
     ///
-    /// `Public` and `Private` are the canonical tags; `pub`, `public`, `priv` and `private` are
-    /// the shorthands a reader accepts silently beside them.
+    /// `Public` and `Private` are the canonical tags; `pub`, `public` and `private` are the
+    /// shorthands a reader accepts silently beside them. `priv` is not an access spelling
+    /// (definitions-0031).
     pub fn from_tag(tag: &str) -> Option<Access> {
         match tag {
             "Public" | "pub" | "public" => Some(Access::Public),
-            "Private" | "priv" | "private" => Some(Access::Private),
+            "Private" | "private" => Some(Access::Private),
             _ => None,
         }
     }
@@ -37,7 +38,7 @@ impl Access {
 /// The canonical spelling is the access level as the variant tag with the controlled value as
 /// its payload: `{ "Public": { "TypeAliasDefinition": { … } } }`. A reader also accepts the
 /// access level as a flattened member beside the value (`{ "access": "Public", … }`), the same
-/// with the value nested under `value`, and the `pub`/`priv` shorthands — all silently.
+/// with the value nested under `value`, and the `pub`/`private` shorthands — all silently.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessControlled<T> {
     pub access: Access,

@@ -104,12 +104,23 @@ fn a_private_definition_takes_the_same_spellings() {
     assert_eq!(decoded.access, Access::Private);
     assert_eq!(encode(&decoded), canonical);
 
-    for accepted in [
-        json!({ "access": "Private", "TypeAliasDefinition": { "typeParams": [], "typeExp": QUANTITY } }),
-        json!({ "priv": definition }),
-    ] {
-        assert_eq!(decode::<TypeEntry>(accepted).unwrap(), decoded);
-    }
+    let accepted = json!({ "access": "Private", "TypeAliasDefinition": { "typeParams": [], "typeExp": QUANTITY } });
+    assert_eq!(decode::<TypeEntry>(accepted).unwrap(), decoded);
+}
+
+#[test]
+fn priv_is_not_an_access_spelling() {
+    let definition = json!({ "TypeAliasDefinition": { "typeParams": [], "typeExp": QUANTITY } });
+
+    let refused = decode::<TypeEntry>(json!({ "priv": definition.clone() })).unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::InvalidAccess);
+
+    let refused = decode::<TypeEntry>(json!({
+        "access": "priv",
+        "TypeAliasDefinition": { "typeParams": [], "typeExp": QUANTITY }
+    }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::InvalidAccess);
 }
 
 #[test]
@@ -1052,7 +1063,7 @@ fn a_v3_tagged_array_is_not_a_v4_document() {
 }
 
 #[test]
-fn the_root_members_may_be_written_in_either_order_and_meta_is_ignored() {
+fn the_root_members_may_be_written_in_either_order() {
     let canonical = json!({
         "formatVersion": 4,
         "distribution": { "Library": {
@@ -1077,9 +1088,13 @@ fn the_root_members_may_be_written_in_either_order_and_meta_is_ignored() {
         )
         .is_empty()
     );
+}
 
-    // `$meta` is reserved for a tool's own bookkeeping: a reader passes over it.
-    let with_meta: IRFile = decode(json!({
+/// `$meta` is reserved for the files of a document tree, not for a single document
+/// (distributions-0009), so a single document's root refuses it like any other unknown member.
+#[test]
+fn a_root_meta_member_is_unknown_here() {
+    let refused = decode::<IRFile>(json!({
         "formatVersion": 4,
         "$meta": { "writtenBy": "the shop's build" },
         "distribution": { "Library": {
@@ -1088,12 +1103,9 @@ fn the_root_members_may_be_written_in_either_order_and_meta_is_ignored() {
             "def": { "modules": {} }
         } }
     }))
-    .unwrap();
-    assert_eq!(
-        with_meta.distribution.package_name().to_string(),
-        "acme/shop"
-    );
-    assert_eq!(encode(&with_meta), canonical);
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::UnknownMember);
+    assert_eq!(refused.cursor, "/$meta");
 }
 
 #[test]

@@ -128,7 +128,7 @@ pub(super) fn decode_documentation(
 ///
 /// Canonical is the access level as the variant tag: `{ "Public": <node> }`. Accepted beside it,
 /// silently: the access level flattened next to the node's own members
-/// (`{ "access": "Public", … }`), the same with the node under `value`, and the `pub`/`priv`
+/// (`{ "access": "Public", … }`), the same with the node under `value`, and the `pub`/`private`
 /// shorthands (definitions-0001, 0017, 0018, 0019).
 pub(super) fn decode_access_controlled<T>(
     value: &JsonValue,
@@ -1197,12 +1197,12 @@ fn decode_entry_points(value: &JsonValue, cursor: &str) -> Result<EntryPoints, D
 /// Decodes a whole version 4 document.
 ///
 /// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. A top-level `$meta` member is reserved for a tool's own
-/// bookkeeping and is ignored rather than refused.
+/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
+/// a single document, so it is unknown here (distributions-0009).
 pub(super) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
     let members = members_of(value, cursor, "a version 4 document")?;
     for member in members.keys() {
-        if !matches!(member.as_str(), "formatVersion" | "distribution" | "$meta") {
+        if !matches!(member.as_str(), "formatVersion" | "distribution") {
             return Err(unknown_member(&format!("{cursor}/{member}"), member));
         }
     }

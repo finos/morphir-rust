@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::fmt;
 
-use super::attributes::{TypeAttributes, ValueAttributes};
+use super::attributes::{SourceLocation, TypeAttributes, ValueAttributes};
 use super::legacy::{accept_member, record_legacy_form_warning};
 use super::literal::{FloatLiteral, Literal};
 use super::pattern::Pattern;
@@ -311,10 +311,50 @@ pub(super) fn member_cursor(members: &Members<'_>, name: &str, cursor: &str) -> 
 }
 
 fn decode_attributes(members: &Members<'_>, cursor: &str) -> Result<TypeAttributes, Diagnostic> {
-    match members.get("attributes") {
-        None => Ok(TypeAttributes::default()),
-        Some(member) => serde_json::from_value(member.value.clone())
-            .map_err(|error| invalid_type(&format!("{cursor}/{}", member.seen), error.to_string())),
+    let Some(member) = members.get("attributes") else {
+        return Ok(TypeAttributes::default());
+    };
+    let at = format!("{cursor}/{}", member.seen);
+    let written = wrapper_members(
+        "TypeAttributes",
+        member.value,
+        &at,
+        &["source", "constraints", "extensions"],
+    )?;
+    Ok(TypeAttributes {
+        source: decode_source(&written, &at)?,
+        constraints: decode_object_member(&written, "constraints", &at)?,
+        extensions: decode_object_member(&written, "extensions", &at)?,
+    })
+}
+
+fn decode_source(
+    members: &Members<'_>,
+    cursor: &str,
+) -> Result<Option<SourceLocation>, Diagnostic> {
+    match members.get("source") {
+        None => Ok(None),
+        Some(member) => serde_json::from_value::<SourceLocation>(member.value.clone())
+            .map(Some)
+            .map_err(|error| {
+                invalid_type(&member_cursor(members, "source", cursor), error.to_string())
+            }),
+    }
+}
+
+fn decode_object_member(
+    members: &Members<'_>,
+    name: &str,
+    cursor: &str,
+) -> Result<serde_json::Map<String, JsonValue>, Diagnostic> {
+    match members.get(name) {
+        None => Ok(serde_json::Map::new()),
+        Some(member) => member.value.as_object().cloned().ok_or_else(|| {
+            invalid_type(
+                &member_cursor(members, name, cursor),
+                format!("{name} is an object"),
+            )
+        }),
     }
 }
 
@@ -1037,11 +1077,28 @@ fn decode_value_attributes(
     members: &Members<'_>,
     cursor: &str,
 ) -> Result<ValueAttributes, Diagnostic> {
-    match members.get("attributes") {
-        None => Ok(ValueAttributes::default()),
-        Some(member) => serde_json::from_value(member.value.clone())
-            .map_err(|error| invalid_type(&format!("{cursor}/{}", member.seen), error.to_string())),
-    }
+    let Some(member) = members.get("attributes") else {
+        return Ok(ValueAttributes::default());
+    };
+    let at = format!("{cursor}/{}", member.seen);
+    let written = wrapper_members(
+        "ValueAttributes",
+        member.value,
+        &at,
+        &["source", "inferredType", "extensions"],
+    )?;
+    let inferred_type = match written.get("inferredType") {
+        None => None,
+        Some(inferred) => Some(Box::new(decode_type(
+            inferred.value,
+            &member_cursor(&written, "inferredType", &at),
+        )?)),
+    };
+    Ok(ValueAttributes {
+        source: decode_source(&written, &at)?,
+        inferred_type,
+        extensions: decode_object_member(&written, "extensions", &at)?,
+    })
 }
 
 fn decode_pattern_list(value: &JsonValue, cursor: &str) -> Result<Vec<Pattern>, Diagnostic> {

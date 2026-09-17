@@ -90,8 +90,8 @@ pub use type_def::{
 /// Top-level IR file structure.
 ///
 /// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. A top-level `$meta` member is reserved for a tool's own
-/// bookkeeping: a reader ignores it rather than refusing it.
+/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
+/// a single document, so it is unknown here (distributions-0009).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IRFile {

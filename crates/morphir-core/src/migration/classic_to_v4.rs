@@ -122,7 +122,7 @@ impl ValueAnnotation for classic::Type<classic::Attrs> {
         Ok(v4::ValueAttributes {
             source: None,
             inferred_type: Some(Box::new(migrate_type(self, context)?)),
-            extensions: serde_json::Value::Null,
+            extensions: serde_json::Map::new(),
         })
     }
 }

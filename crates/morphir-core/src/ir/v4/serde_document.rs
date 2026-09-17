@@ -21,7 +21,6 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use super::access::{Access, AccessControlled};
-use super::attributes::ValueAttributes;
 use super::distribution::{
     ApplicationContent, Dependencies, Distribution, EntryPoint, EntryPointKind, EntryPoints,
     LibraryContent, SpecsContent,
@@ -38,8 +37,8 @@ use super::types::{
     Incompleteness, Type, TypeDefinition, TypeSpecification,
 };
 use super::value::{
-    ExternalBinding, HoleReason, InputTypeEntry, NativeHint, NativeInfo, ValueBody,
-    ValueDefinition, ValueSpecification,
+    ExternalBinding, HoleReason, NativeHint, NativeInfo, ValueBody, ValueDefinition,
+    ValueSpecification,
 };
 use super::{FormatVersion, IRFile};
 use crate::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
@@ -628,31 +627,6 @@ fn decode_input_map<T>(
     }
 }
 
-/// One entry of a definition's `inputTypes`: a bare type, or the expanded spelling carrying the
-/// parameter's own attributes beside it.
-fn decode_input_type_entry(value: &JsonValue, cursor: &str) -> Result<InputTypeEntry, Diagnostic> {
-    if let JsonValue::Object(members) = value
-        && members.contains_key("type")
-    {
-        let type_attributes = match members.get("typeAttributes") {
-            None => None,
-            Some(written) => Some(
-                serde_json::from_value::<ValueAttributes>(written.clone()).map_err(|error| {
-                    invalid_type(&format!("{cursor}/typeAttributes"), error.to_string())
-                })?,
-            ),
-        };
-        return Ok(InputTypeEntry {
-            type_attributes,
-            input_type: decode_type(&members["type"], &format!("{cursor}/type"))?,
-        });
-    }
-    Ok(InputTypeEntry {
-        type_attributes: None,
-        input_type: decode_type(value, cursor)?,
-    })
-}
-
 /// The four value definition bodies (definitions-0005, 0007, 0008, 0009, 0016).
 const BODY_TAGS: &[&str] = &[
     "ExpressionBody",
@@ -679,7 +653,7 @@ pub(super) fn decode_value_body(value: &JsonValue, cursor: &str) -> Result<Value
     Ok(decode_definition_parts(value, cursor, false)?.2)
 }
 
-type DefinitionParts = (IndexMap<String, InputTypeEntry>, Option<Type>, ValueBody);
+type DefinitionParts = (IndexMap<String, Type>, Option<Type>, ValueBody);
 
 fn decode_definition_parts(
     value: &JsonValue,
@@ -717,7 +691,7 @@ fn decode_definition_parts(
         Some(member) => decode_input_map(
             member.value,
             &member_cursor(&members, "inputTypes", &at),
-            decode_input_type_entry,
+            decode_type,
         )?,
     };
     let output_type = optional_type(&members, "outputType", &at)?;

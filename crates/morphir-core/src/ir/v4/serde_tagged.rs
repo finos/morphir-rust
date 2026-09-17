@@ -26,9 +26,7 @@ use super::pattern::Pattern;
 use super::serde_v4;
 use super::type_def::ConstructorArg;
 use super::types::{Field, Type};
-use super::value::{
-    HoleReason, InputType, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition,
-};
+use super::value::{HoleReason, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition};
 use crate::ir::decimal::DecimalLiteral;
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
 use crate::naming::{FQName, Name};
@@ -1091,57 +1089,8 @@ impl Serialize for Value {
 // Note: HoleReason, NativeHint, and NativeInfo serde impls are in value.rs
 
 // =============================================================================
-// Tuple Struct Serialization (InputType, RecordFieldEntry, PatternCase, LetBinding, ConstructorArg)
+// Tuple Struct Serialization (RecordFieldEntry, PatternCase, LetBinding, ConstructorArg)
 // =============================================================================
-
-// InputType(Name, ValueAttributes, Type) - serialize as [name, attrs, type]
-impl Serialize for InputType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(3))?;
-        seq.serialize_element(&self.0)?;
-        seq.serialize_element(&self.1)?;
-        seq.serialize_element(&self.2)?;
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for InputType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct InputTypeVisitor;
-
-        impl<'de> Visitor<'de> for InputTypeVisitor {
-            type Value = InputType;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a tuple [name, attrs, type]")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<InputType, V::Error>
-            where
-                V: SeqAccess<'de>,
-            {
-                let name = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let attrs = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let tpe = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Ok(InputType(name, attrs, tpe))
-            }
-        }
-
-        deserializer.deserialize_seq(InputTypeVisitor)
-    }
-}
 
 // RecordFieldEntry(Name, Value) - serialize as [name, value]
 impl Serialize for RecordFieldEntry {

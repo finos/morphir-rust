@@ -111,7 +111,7 @@ fn normalize_definition_module(
                 .into_iter()
                 .map(|(name, input)| NamedType {
                     name,
-                    tpe: normalize_type(input.input_type),
+                    tpe: normalize_type(input),
                 })
                 .collect();
             normalize_value(

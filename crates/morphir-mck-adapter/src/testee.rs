@@ -33,11 +33,11 @@ use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::{
     AccessControlled, ApplicationContent, ConstructorArg, ConstructorArgSpec,
     ConstructorDefinition, ConstructorSpecification, Distribution, Documented, Field,
-    FormatVersion, IRFile, Incompleteness, InputTypeEntry, LetBinding, LibraryContent, Literal,
-    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageSpecification, Pattern,
-    PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
-    TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
-    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
+    FormatVersion, IRFile, Incompleteness, LetBinding, LibraryContent, Literal, ModuleDefinition,
+    ModuleSpecification, PackageDefinition, PackageSpecification, Pattern, PatternCase,
+    RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes, TypeDefinition,
+    TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody, ValueDefinition,
+    ValueSpecification, with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
 use morphir_core::naming::{FQName, Name, Path};
@@ -1352,15 +1352,7 @@ fn strip_value_definition(node: ValueDefinition) -> ValueDefinition {
         input_types: node
             .input_types
             .into_iter()
-            .map(|(name, entry)| {
-                (
-                    name,
-                    InputTypeEntry {
-                        type_attributes: None,
-                        input_type: strip_type(entry.input_type),
-                    },
-                )
-            })
+            .map(|(name, tpe)| (name, strip_type(tpe)))
             .collect(),
         output_type: node.output_type.map(strip_type),
         body: match node.body {

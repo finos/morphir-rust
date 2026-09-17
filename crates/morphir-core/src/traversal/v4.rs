@@ -86,7 +86,7 @@ pub fn walk_definition<V: V4Visitor + ?Sized>(
 ) {
     for (index, input) in definition.input_types.values().enumerate() {
         cursor.with_segment(CursorSegment::Argument(index), |cursor| {
-            visitor.visit_type(cursor, &input.input_type);
+            visitor.visit_type(cursor, input);
         });
     }
     if let Some(output) = &definition.output_type {

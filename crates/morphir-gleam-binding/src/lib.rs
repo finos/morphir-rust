@@ -709,9 +709,9 @@ mod tests {
     use super::*;
     use morphir_core::ir::v4::{
         Access as MorphirAccess, AccessControlled, Distribution, Documented, ExternalBinding,
-        FormatVersion, IRFile, Incompleteness, InputTypeEntry, LibraryContent, ModuleDefinition,
-        PackageDefinition, PackageSpecification, SpecsContent, Type, TypeAttributes,
-        TypeDefinition, TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
+        FormatVersion, IRFile, Incompleteness, LibraryContent, ModuleDefinition, PackageDefinition,
+        PackageSpecification, SpecsContent, Type, TypeAttributes, TypeDefinition,
+        TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
     };
     use std::collections::HashMap;
 
@@ -922,10 +922,7 @@ mod tests {
                         ValueDefinition {
                             input_types: IndexMap::from([(
                                 "argument".into(),
-                                InputTypeEntry {
-                                    type_attributes: None,
-                                    input_type: Type::unit(TypeAttributes::default()),
-                                },
+                                Type::unit(TypeAttributes::default()),
                             )]),
                             output_type: Some(Type::unit(TypeAttributes::default())),
                             body: ValueBody::External {

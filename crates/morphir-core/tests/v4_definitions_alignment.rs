@@ -508,6 +508,21 @@ fn an_incomplete_body_keeps_the_partial_value_the_author_had() {
 }
 
 #[test]
+fn an_input_type_is_a_bare_type_and_the_expanded_spelling_is_refused() {
+    // The contract gives each parameter a bare type; the Rust-only expanded spelling with a
+    // separate `typeAttributes` member has no v4 home and is refused as any other two-member
+    // object where a type belongs.
+    let refused = decode::<ValueDefinition>(json!({ "ExpressionBody": {
+        "inputTypes": { "x": { "typeAttributes": {}, "type": QUANTITY } },
+        "outputType": MONEY,
+        "body": { "Variable": "x" }
+    } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::UnknownNode);
+    assert_eq!(refused.cursor, "/ExpressionBody/inputTypes/x");
+}
+
+#[test]
 fn a_platform_specific_native_hint_names_its_platform() {
     let refused = decode::<ValueDefinition>(json!({ "NativeBody": {
         "inputTypes": {},

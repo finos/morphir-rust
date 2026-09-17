@@ -60,7 +60,6 @@ pub use v4::{
     Incompleteness,
     // Value expression types (from value module)
     InputType,
-    InputTypeEntry,
     LetBinding,
     LibraryContent,
     Literal,

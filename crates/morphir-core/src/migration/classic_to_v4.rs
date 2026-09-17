@@ -312,12 +312,11 @@ fn migrate_value_definition_parts<VA: ValueAnnotation>(
 ) -> Result<v4::ValueDefinition, MigrationDiagnostic> {
     let mut inputs = IndexMap::with_capacity(input_types.len());
     for input in input_types {
+        // The contract gives an input parameter a bare type; the v3 parameter attributes have no
+        // v4 home.
         inputs.insert(
             migrate_name(&input.name, &context.cursor)?.to_canonical_string(),
-            v4::InputTypeEntry {
-                type_attributes: Some(input.annotation.to_value_attributes(context)?),
-                input_type: migrate_type(&input.ty, context)?,
-            },
+            migrate_type(&input.ty, context)?,
         );
     }
     Ok(v4::ValueDefinition {

@@ -274,11 +274,7 @@ fn module_to_specification(
 
 fn value_to_specification(definition: ValueDefinition) -> Result<ValueSpecification, String> {
     Ok(ValueSpecification {
-        inputs: definition
-            .input_types
-            .into_iter()
-            .map(|(name, input)| (name, input.input_type))
-            .collect(),
+        inputs: definition.input_types,
         output: definition
             .output_type
             .ok_or_else(|| "value definition is missing its output type".to_owned())?,

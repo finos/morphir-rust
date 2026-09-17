@@ -214,11 +214,12 @@ impl<'de> Deserialize<'de> for NativeInfo {
     }
 }
 
-/// Input parameter tuple struct: (name, attributes, type)
+/// Input parameter tuple struct: (name, type)
 ///
-/// More ergonomic than `(Name, ValueAttributes, Type)` - provides named fields via pattern matching.
+/// The contract gives each parameter a bare type; there is no v4 home for a parameter's own
+/// attributes.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InputType(pub Name, pub ValueAttributes, pub Type);
+pub struct InputType(pub Name, pub Type);
 
 /// Record field entry tuple struct: (name, value)
 ///
@@ -368,8 +369,8 @@ impl Value {
 // Convenience constructors for tuple structs
 impl InputType {
     /// Create a new input type
-    pub fn new(name: Name, attrs: ValueAttributes, tpe: Type) -> Self {
-        InputType(name, attrs, tpe)
+    pub fn new(name: Name, tpe: Type) -> Self {
+        InputType(name, tpe)
     }
 
     /// Get the name
@@ -377,14 +378,9 @@ impl InputType {
         &self.0
     }
 
-    /// Get the attributes
-    pub fn attrs(&self) -> &ValueAttributes {
-        &self.1
-    }
-
     /// Get the type
     pub fn tpe(&self) -> &Type {
-        &self.2
+        &self.1
     }
 }
 
@@ -484,30 +480,15 @@ impl<'de> Deserialize<'de> for ValueSpecification {
 /// V4 format supports multiple body types (Expression, Native, External, Incomplete).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueDefinition {
-    pub input_types: IndexMap<String, InputTypeEntry>,
+    pub input_types: IndexMap<String, Type>,
     pub output_type: Option<Type>,
     pub body: ValueBody,
-}
-
-fn serialize_input_types<S>(
-    input_types: &IndexMap<String, InputTypeEntry>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    input_types
-        .iter()
-        .map(|(name, entry)| (name, &entry.input_type))
-        .collect::<IndexMap<_, _>>()
-        .serialize(serializer)
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExpressionDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     output_type: &'a Type,
     body: &'a Value,
 }
@@ -515,8 +496,7 @@ struct ExpressionDefinitionContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     output_type: &'a Type,
     native_info: &'a NativeInfo,
 }
@@ -524,8 +504,7 @@ struct NativeDefinitionContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExternalDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     output_type: &'a Type,
     externals: &'a [ExternalBinding],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -535,8 +514,7 @@ struct ExternalDefinitionContent<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncompleteDefinitionContent<'a> {
-    #[serde(serialize_with = "serialize_input_types")]
-    input_types: &'a IndexMap<String, InputTypeEntry>,
+    input_types: &'a IndexMap<String, Type>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_type: Option<&'a Type>,
     incompleteness: &'a Incompleteness,
@@ -613,28 +591,12 @@ impl<'de> Deserialize<'de> for ValueDefinition {
         )
     }
 }
-/// Input type entry
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InputTypeEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub type_attributes: Option<ValueAttributes>,
-    #[serde(rename = "type")]
-    pub input_type: Type,
-}
-
 impl ValueDefinition {
     /// Create a new value definition with an expression body
     pub fn new(input_types: Vec<InputType>, output_type: Type, body: Value) -> Self {
         let inputs = input_types
             .into_iter()
-            .map(|InputType(name, attrs, tpe)| {
-                let entry = InputTypeEntry {
-                    type_attributes: Some(attrs),
-                    input_type: tpe,
-                };
-                (name.to_string(), entry)
-            })
+            .map(|InputType(name, tpe)| (name.to_string(), tpe))
             .collect();
 
         ValueDefinition {
@@ -648,13 +610,7 @@ impl ValueDefinition {
     pub fn native(input_types: Vec<InputType>, output_type: Type, info: NativeInfo) -> Self {
         let inputs = input_types
             .into_iter()
-            .map(|InputType(name, attrs, tpe)| {
-                let entry = InputTypeEntry {
-                    type_attributes: Some(attrs),
-                    input_type: tpe,
-                };
-                (name.to_string(), entry)
-            })
+            .map(|InputType(name, tpe)| (name.to_string(), tpe))
             .collect();
 
         ValueDefinition {

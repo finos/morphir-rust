@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use super::access::{Access, AccessControlled};
+use super::annotation::{Annotation, AnnotationArgument};
 use super::distribution::{
     ApplicationContent, Dependencies, Distribution, EntryPoint, EntryPointKind, EntryPoints,
     LibraryContent, SpecsContent,
@@ -244,6 +245,91 @@ fn decode_type_params(members: &Members<'_>, cursor: &str) -> Result<Vec<Name>, 
         .collect()
 }
 
+/// Decodes a specification's `annotations` member; absent means none.
+pub(super) fn decode_annotations(
+    members: &Members<'_>,
+    cursor: &str,
+) -> Result<Vec<Annotation>, Diagnostic> {
+    let Some(member) = members.get("annotations") else {
+        return Ok(Vec::new());
+    };
+    let at = member_cursor(members, "annotations", cursor);
+    let items = member
+        .value
+        .as_array()
+        .ok_or_else(|| invalid_type(&at, "annotations is an array"))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| decode_annotation(item, &format!("{at}/{index}")))
+        .collect()
+}
+
+fn decode_annotation(value: &JsonValue, cursor: &str) -> Result<Annotation, Diagnostic> {
+    match value {
+        JsonValue::String(text) => {
+            // The separator is the first colon after the local-name hash; the FQName's own
+            // colon comes before the hash.
+            let split = text
+                .find('#')
+                .and_then(|hash| text[hash + 1..].find(':').map(|colon| hash + 1 + colon));
+            let (name_text, free_text) = match split {
+                Some(at) => (&text[..at], Some(text[at + 1..].to_owned())),
+                None => (text.as_str(), None),
+            };
+            let name = decode_fqname(&JsonValue::String(name_text.to_owned()), cursor)?;
+            Ok(Annotation::Compact {
+                name,
+                text: free_text,
+            })
+        }
+        JsonValue::Object(_) => {
+            let members = wrapper_members("Annotation", value, cursor, &["name", "arguments"])?;
+            let name = decode_member_fqname(&members, "name", cursor)?;
+            let args = match members.get("arguments") {
+                None => Vec::new(),
+                Some(member) => {
+                    let at = member_cursor(&members, "arguments", cursor);
+                    member
+                        .value
+                        .as_array()
+                        .ok_or_else(|| invalid_type(&at, "arguments is an array"))?
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            decode_annotation_argument(item, &format!("{at}/{index}"))
+                        })
+                        .collect::<Result<_, _>>()?
+                }
+            };
+            Ok(Annotation::Structured { name, args })
+        }
+        _ => Err(invalid_type(
+            cursor,
+            "an annotation is a string or an object",
+        )),
+    }
+}
+
+fn decode_annotation_argument(
+    value: &JsonValue,
+    cursor: &str,
+) -> Result<AnnotationArgument, Diagnostic> {
+    // A named argument is exactly { name, value }; no value wrapper has that member set, so the
+    // shape alone decides.
+    if let JsonValue::Object(members) = value
+        && members.len() == 2
+        && members.contains_key("name")
+        && members.contains_key("value")
+    {
+        return Ok(AnnotationArgument::Named {
+            name: decode_name(&members["name"], &format!("{cursor}/name"))?,
+            value: decode_value(&members["value"], &format!("{cursor}/value"))?,
+        });
+    }
+    Ok(AnnotationArgument::Positional(decode_value(value, cursor)?))
+}
+
 fn optional_type(
     members: &Members<'_>,
     name: &str,
@@ -387,6 +473,7 @@ pub(super) fn decode_type_specification(
         && tag == "OpaqueTypeSpecification"
     {
         return Ok(TypeSpecification::OpaqueTypeSpecification {
+            annotations: Vec::new(),
             type_params: Vec::new(),
         });
     }
@@ -395,20 +482,29 @@ pub(super) fn decode_type_specification(
     let at = format!("{cursor}/{tag}");
     match tag.as_str() {
         "OpaqueTypeSpecification" => {
-            let members = wrapper_members(tag, payload, &at, &["typeParams"])?;
+            let members = wrapper_members(tag, payload, &at, &["annotations", "typeParams"])?;
             Ok(TypeSpecification::OpaqueTypeSpecification {
+                annotations: decode_annotations(&members, &at)?,
                 type_params: decode_type_params(&members, &at)?,
             })
         }
         "TypeAliasSpecification" => {
-            let members = wrapper_members(tag, payload, &at, &["typeParams", "typeExp"])?;
+            let members =
+                wrapper_members(tag, payload, &at, &["annotations", "typeParams", "typeExp"])?;
             Ok(TypeSpecification::TypeAliasSpecification {
+                annotations: decode_annotations(&members, &at)?,
                 type_params: decode_type_params(&members, &at)?,
                 type_expr: decode_member_type(&members, "typeExp", &at)?,
             })
         }
         "CustomTypeSpecification" => {
-            let members = wrapper_members(tag, payload, &at, &["typeParams", "constructors"])?;
+            let members = wrapper_members(
+                tag,
+                payload,
+                &at,
+                &["annotations", "typeParams", "constructors"],
+            )?;
+            let annotations = decode_annotations(&members, &at)?;
             let type_params = decode_type_params(&members, &at)?;
             let constructors = decode_constructor_map(
                 required(&members, "constructors", &at)?,
@@ -422,6 +518,7 @@ pub(super) fn decode_type_specification(
                 },
             )?;
             Ok(TypeSpecification::CustomTypeSpecification {
+                annotations,
                 type_params,
                 constructors,
             })
@@ -431,9 +528,16 @@ pub(super) fn decode_type_specification(
                 tag,
                 payload,
                 &at,
-                &["typeParams", "baseType", "fromBaseType", "toBaseType"],
+                &[
+                    "annotations",
+                    "typeParams",
+                    "baseType",
+                    "fromBaseType",
+                    "toBaseType",
+                ],
             )?;
             Ok(TypeSpecification::DerivedTypeSpecification {
+                annotations: decode_annotations(&members, &at)?,
                 type_params: decode_type_params(&members, &at)?,
                 base_type: decode_member_type(&members, "baseType", &at)?,
                 from_base_type: decode_member_fqname(&members, "fromBaseType", &at)?,
@@ -574,7 +678,13 @@ pub(super) fn decode_value_specification(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<ValueSpecification, Diagnostic> {
-    let members = wrapper_members("ValueSpecification", value, cursor, &["inputs", "output"])?;
+    let members = wrapper_members(
+        "ValueSpecification",
+        value,
+        cursor,
+        &["annotations", "inputs", "output"],
+    )?;
+    let annotations = decode_annotations(&members, cursor)?;
     let inputs = match members.get("inputs") {
         None => IndexMap::new(),
         Some(member) => decode_input_map(
@@ -584,6 +694,7 @@ pub(super) fn decode_value_specification(
         )?,
     };
     Ok(ValueSpecification {
+        annotations,
         inputs,
         output: decode_member_type(&members, "output", cursor)?,
     })
@@ -834,9 +945,10 @@ pub(super) fn decode_module_specification(
         "ModuleSpecification",
         value,
         cursor,
-        &["types", "values", "doc"],
+        &["annotations", "types", "values", "doc"],
     )?;
     Ok(ModuleSpecification {
+        annotations: decode_annotations(&members, cursor)?,
         types: decode_keyed(&members, "types", cursor, |value, cursor| {
             decode_documented(value, cursor, decode_type_specification)
         })?,

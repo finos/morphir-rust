@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::access::AccessControlled;
+use super::annotation::Annotation;
 use super::types::{TypeDefinition, TypeSpecification};
 use super::value::{ValueDefinition, ValueSpecification};
 
@@ -133,6 +134,10 @@ where
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleSpecification {
+    /// The annotations on the module's public face, written first and only when non-empty
+    /// (definitions-0022).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
     pub types: IndexMap<String, Documented<TypeSpecification>>,
     pub values: IndexMap<String, Documented<ValueSpecification>>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -508,6 +508,9 @@ fn read_specification_module(
     Ok((
         manifest.path,
         ModuleSpecification {
+            // This layout gives a module's own annotations no file of their own; the tree layout
+            // stage does.
+            annotations: Vec::new(),
             types,
             values,
             doc: manifest.doc,
@@ -796,6 +799,13 @@ impl DocumentTreeSink {
                 ModuleEvent::V4Definition { path, module },
             ) => write_definition_module(&self.root, &self.profile, &package, &path, &module),
             (DistributionKind::Specs, ModuleEvent::V4Specification { path, module }) => {
+                if !module.annotations.is_empty() {
+                    return Err(event_error(
+                        "annotations_unsupported",
+                        cursor,
+                        "a module specification's annotations have no file in this layout",
+                    ));
+                }
                 write_specification_module(&self.root, &self.profile, &package, &path, &module)
             }
             _ => Err(event_error(

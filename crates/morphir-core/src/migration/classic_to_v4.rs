@@ -535,6 +535,8 @@ fn migrate_type_specification(
     Ok(match specification {
         classic::TypeSpecification::Alias(parameters, body) => {
             v4::TypeSpecification::TypeAliasSpecification {
+                // Classic has no annotation vocabulary, so a migrated specification has none.
+                annotations: Vec::new(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -544,6 +546,7 @@ fn migrate_type_specification(
         }
         classic::TypeSpecification::Opaque(parameters) => {
             v4::TypeSpecification::OpaqueTypeSpecification {
+                annotations: Vec::new(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -552,6 +555,7 @@ fn migrate_type_specification(
         }
         classic::TypeSpecification::Custom(parameters, constructors) => {
             v4::TypeSpecification::CustomTypeSpecification {
+                annotations: Vec::new(),
                 type_params: parameters
                     .iter()
                     .map(|parameter| migrate_name(parameter, &context.cursor))
@@ -584,6 +588,7 @@ fn migrate_value_specification(
     context: &mut MigrationContext,
 ) -> Result<v4::ValueSpecification, MigrationDiagnostic> {
     Ok(v4::ValueSpecification {
+        annotations: Vec::new(),
         inputs: specification
             .inputs
             .iter()
@@ -629,6 +634,7 @@ fn migrate_module_specification(
         })
         .collect::<Result<_, MigrationDiagnostic>>()?;
     Ok(v4::ModuleSpecification {
+        annotations: Vec::new(),
         types,
         values,
         doc: specification.doc.as_deref().map(documentation),

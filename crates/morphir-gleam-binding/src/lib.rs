@@ -984,6 +984,7 @@ mod tests {
             Documented::new(
                 None,
                 TypeSpecification::OpaqueTypeSpecification {
+                    annotations: vec![],
                     type_params: vec![Name::from("parameter")],
                 }
             )
@@ -993,6 +994,7 @@ mod tests {
             Documented::new(
                 None,
                 ValueSpecification {
+                    annotations: vec![],
                     inputs: IndexMap::from([(
                         "argument".into(),
                         Type::unit(TypeAttributes::default())

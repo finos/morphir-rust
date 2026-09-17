@@ -31,13 +31,13 @@ use serde_json::Value as Json;
 use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
 use morphir_core::ir::v4::{
-    AccessControlled, ApplicationContent, ConstructorArg, ConstructorArgSpec,
-    ConstructorDefinition, ConstructorSpecification, Distribution, Documented, Field,
-    FormatVersion, IRFile, Incompleteness, LetBinding, LibraryContent, Literal, ModuleDefinition,
-    ModuleSpecification, PackageDefinition, PackageSpecification, Pattern, PatternCase,
-    RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes, TypeDefinition,
-    TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody, ValueDefinition,
-    ValueSpecification, with_spelling_mode, with_type_encoding,
+    AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
+    ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution, Documented,
+    Field, FormatVersion, IRFile, Incompleteness, LetBinding, LibraryContent, Literal,
+    ModuleDefinition, ModuleSpecification, PackageDefinition, PackageSpecification, Pattern,
+    PatternCase, RecordFieldEntry, SpecsContent, SpellingMode, Type, TypeAttributes,
+    TypeDefinition, TypeEncoding, TypeSpecification, Value, ValueAttributes, ValueBody,
+    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, DiagnosticError, Warning};
 use morphir_core::naming::{FQName, Name, Path};
@@ -1232,22 +1232,56 @@ fn strip_record_field(field: RecordFieldEntry) -> RecordFieldEntry {
     RecordFieldEntry(field.0, strip_value(field.1))
 }
 
+/// Strips the attributes off the value expressions an annotation's arguments carry; the names and
+/// the free text of an annotation carry none.
+fn strip_annotations(annotations: Vec<Annotation>) -> Vec<Annotation> {
+    annotations
+        .into_iter()
+        .map(|annotation| match annotation {
+            Annotation::Compact { name, text } => Annotation::Compact { name, text },
+            Annotation::Structured { name, args } => Annotation::Structured {
+                name,
+                args: args
+                    .into_iter()
+                    .map(|argument| match argument {
+                        AnnotationArgument::Positional(value) => {
+                            AnnotationArgument::Positional(strip_value(value))
+                        }
+                        AnnotationArgument::Named { name, value } => AnnotationArgument::Named {
+                            name,
+                            value: strip_value(value),
+                        },
+                    })
+                    .collect(),
+            },
+        })
+        .collect()
+}
+
 fn strip_type_specification(node: TypeSpecification) -> TypeSpecification {
     match node {
         TypeSpecification::TypeAliasSpecification {
+            annotations,
             type_params,
             type_expr,
         } => TypeSpecification::TypeAliasSpecification {
+            annotations: strip_annotations(annotations),
             type_params,
             type_expr: strip_type(type_expr),
         },
-        TypeSpecification::OpaqueTypeSpecification { type_params } => {
-            TypeSpecification::OpaqueTypeSpecification { type_params }
-        }
+        TypeSpecification::OpaqueTypeSpecification {
+            annotations,
+            type_params,
+        } => TypeSpecification::OpaqueTypeSpecification {
+            annotations: strip_annotations(annotations),
+            type_params,
+        },
         TypeSpecification::CustomTypeSpecification {
+            annotations,
             type_params,
             constructors,
         } => TypeSpecification::CustomTypeSpecification {
+            annotations: strip_annotations(annotations),
             type_params,
             constructors: constructors
                 .into_iter()
@@ -1265,11 +1299,13 @@ fn strip_type_specification(node: TypeSpecification) -> TypeSpecification {
                 .collect(),
         },
         TypeSpecification::DerivedTypeSpecification {
+            annotations,
             type_params,
             base_type,
             from_base_type,
             to_base_type,
         } => TypeSpecification::DerivedTypeSpecification {
+            annotations: strip_annotations(annotations),
             type_params,
             base_type: strip_type(base_type),
             from_base_type,
@@ -1338,6 +1374,7 @@ fn strip_incompleteness(node: Incompleteness) -> Incompleteness {
 
 fn strip_value_specification(node: ValueSpecification) -> ValueSpecification {
     ValueSpecification {
+        annotations: strip_annotations(node.annotations),
         inputs: node
             .inputs
             .into_iter()
@@ -1425,6 +1462,7 @@ fn strip_module_definition(node: ModuleDefinition) -> ModuleDefinition {
 
 fn strip_module_specification(node: ModuleSpecification) -> ModuleSpecification {
     ModuleSpecification {
+        annotations: strip_annotations(node.annotations),
         types: node
             .types
             .into_iter()

@@ -266,6 +266,8 @@ fn module_to_specification(
         },
     )?;
     Ok(ModuleSpecification {
+        // A definition carries no annotations, so the specification derived from one has none.
+        annotations: Vec::new(),
         types,
         values,
         doc: definition.doc,
@@ -274,6 +276,7 @@ fn module_to_specification(
 
 fn value_to_specification(definition: ValueDefinition) -> Result<ValueSpecification, String> {
     Ok(ValueSpecification {
+        annotations: Vec::new(),
         inputs: definition.input_types,
         output: definition
             .output_type
@@ -287,6 +290,7 @@ fn type_to_specification(definition: TypeDefinition) -> Result<TypeSpecification
             type_params,
             type_expr,
         } => Ok(TypeSpecification::TypeAliasSpecification {
+            annotations: Vec::new(),
             type_params,
             type_expr,
         }),
@@ -295,6 +299,7 @@ fn type_to_specification(definition: TypeDefinition) -> Result<TypeSpecification
             constructors,
         } => Ok(match constructors.access {
             Access::Public => TypeSpecification::CustomTypeSpecification {
+                annotations: Vec::new(),
                 type_params,
                 constructors: constructors
                     .value
@@ -312,7 +317,10 @@ fn type_to_specification(definition: TypeDefinition) -> Result<TypeSpecification
                     })
                     .collect(),
             },
-            Access::Private => TypeSpecification::OpaqueTypeSpecification { type_params },
+            Access::Private => TypeSpecification::OpaqueTypeSpecification {
+                annotations: Vec::new(),
+                type_params,
+            },
         }),
         TypeDefinition::IncompleteTypeDefinition { .. } => {
             Err("incomplete type definitions cannot be dependency specifications".into())

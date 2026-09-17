@@ -46,7 +46,7 @@ pub fn v4_customer_application_with_entry_points(entry_points: Value) -> Value {
     content["def"]["modules"]["domain"]["value"]["values"]["validate-customer"] = v4_value(
         "Validate a customer, returning an error message or the customer.",
         "Public",
-        json!({ "id": { "type": STRING } }),
+        json!({ "id": STRING }),
         json!({ "Reference": { "fqname": RESULT, "args": [STRING, CUSTOMER] } }),
     );
     checked_v4(v4_file("Application", content))
@@ -283,7 +283,7 @@ fn v4_library_content() -> Value {
                             "find-customer": v4_value(
                                 "Find a customer.",
                                 "Public",
-                                json!({ "id": { "type": STRING } }),
+                                json!({ "id": STRING }),
                                 json!(CUSTOMER)
                             )
                         },

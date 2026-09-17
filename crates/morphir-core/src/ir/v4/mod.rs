@@ -16,6 +16,7 @@ use crate::format_version::{
 
 // Submodules - Core IR types
 pub mod access;
+pub mod annotation;
 pub mod attributes;
 pub mod distribution;
 pub mod legacy;
@@ -38,6 +39,9 @@ pub use crate::naming::Path;
 
 // Re-export access control
 pub use access::{Access, AccessControlled};
+
+// Re-export annotations, which specifications carry and definitions do not
+pub use annotation::{Annotation, AnnotationArgument};
 
 // Re-export core expression types
 pub use crate::ir::decimal::{DecimalLiteral, InvalidDecimalLexeme};

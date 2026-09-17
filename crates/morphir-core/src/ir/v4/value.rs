@@ -26,6 +26,7 @@ use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
+use super::annotation::Annotation;
 use super::attributes::ValueAttributes;
 use super::literal::Literal;
 use super::pattern::Pattern;
@@ -452,11 +453,31 @@ impl NativeInfo {
 /// inputs are an object keyed by parameter name, whose order is the parameter order; an array of
 /// `[name, type]` pairs is accepted beside it. `inputTypes` and `outputType` belong to a value
 /// *definition*'s bodies, not here.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValueSpecification {
+    /// The annotations on the value's public face, written first and only when non-empty
+    /// (definitions-0021).
+    pub annotations: Vec<Annotation>,
     pub inputs: IndexMap<String, Type>,
     pub output: Type,
+}
+
+impl Serialize for ValueSpecification {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+        if !self.annotations.is_empty() {
+            map.serialize_entry("annotations", &self.annotations)?;
+        }
+        // definitions-0029: `inputs` is omitted when empty and accepted when written empty.
+        if !self.inputs.is_empty() {
+            map.serialize_entry("inputs", &self.inputs)?;
+        }
+        map.serialize_entry("output", &self.output)?;
+        map.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for ValueSpecification {

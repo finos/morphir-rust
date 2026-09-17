@@ -9,12 +9,13 @@
 //! be written.
 
 use morphir_core::ir::v4::{
-    Access, AccessControlled, Distribution, Documented, FormatVersion, IRFile, Incompleteness,
-    ModuleDefinition, ModuleSpecification, SpellingMode, TypeDefinition, TypeEncoding,
-    TypeSpecification, Value as ValueExpr, ValueBody, ValueDefinition, ValueSpecification,
-    with_spelling_mode, with_type_encoding,
+    Access, AccessControlled, Annotation, AnnotationArgument, Distribution, Documented,
+    FormatVersion, IRFile, Incompleteness, Literal, ModuleDefinition, ModuleSpecification, Name,
+    SpellingMode, TypeDefinition, TypeEncoding, TypeSpecification, Value as ValueExpr, ValueBody,
+    ValueDefinition, ValueSpecification, with_spelling_mode, with_type_encoding,
 };
 use morphir_core::ir::{Diagnostic, DiagnosticCode, Warning};
+use morphir_core::naming::FQName;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -395,8 +396,242 @@ fn a_specification_has_no_access_level() {
 }
 
 // =============================================================================
+// Annotations on specifications
+// =============================================================================
+
+/// A compact annotation carrying free text after the first colon following the hash.
+const DEPRECATED: &str = "acme/shop:annotations#deprecated:superseded by pricing-v2";
+/// A compact annotation carrying nothing but its name.
+const INTERNAL: &str = "acme/shop:annotations#internal";
+const SINCE: &str = "acme/shop:annotations#since";
+
+/// The three annotation spellings a specification case carries: the compact string with free
+/// text, the structured annotation with a positional and a named argument, and the structured
+/// one with no arguments at all.
+fn annotations() -> Value {
+    json!([
+        DEPRECATED,
+        { "name": SINCE, "arguments": [
+            { "Literal": { "StringLiteral": "1.2.0" } },
+            { "name": "reason", "value": { "Literal": { "StringLiteral": "renamed" } } }
+        ] },
+        { "name": INTERNAL }
+    ])
+}
+
+/// The annotations of [`annotations`] as this reader models them.
+fn annotation_nodes() -> Vec<Annotation> {
+    vec![
+        Annotation::Compact {
+            name: FQName::from_canonical_string("acme/shop:annotations#deprecated").unwrap(),
+            text: Some("superseded by pricing-v2".to_owned()),
+        },
+        Annotation::Structured {
+            name: FQName::from_canonical_string(SINCE).unwrap(),
+            args: vec![
+                AnnotationArgument::Positional(ValueExpr::Literal(
+                    Default::default(),
+                    Literal::String("1.2.0".to_owned()),
+                )),
+                AnnotationArgument::Named {
+                    name: Name::from("reason"),
+                    value: ValueExpr::Literal(
+                        Default::default(),
+                        Literal::String("renamed".to_owned()),
+                    ),
+                },
+            ],
+        },
+        // Written as an object, an annotation is structured even with no arguments at all; the
+        // compact spelling is the string.
+        Annotation::Structured {
+            name: FQName::from_canonical_string(INTERNAL).unwrap(),
+            args: Vec::new(),
+        },
+    ]
+}
+
+const WRITTEN_ANNOTATIONS: &str = r#""annotations":["acme/shop:annotations#deprecated:superseded by pricing-v2",{"name":"acme/shop:annotations#since","arguments":[{"Literal":{"StringLiteral":"1.2.0"}},{"name":"reason","value":{"Literal":{"StringLiteral":"renamed"}}}]},{"name":"acme/shop:annotations#internal"}]"#;
+
+#[test]
+fn a_type_specification_writes_its_annotations_first() {
+    let canonical = json!({ "TypeAliasSpecification": {
+        "annotations": annotations(),
+        "typeParams": [],
+        "typeExp": TEXT
+    } });
+    assert!(normalizes_to::<TypeSpecification>(canonical.clone(), &canonical).is_empty());
+
+    let decoded = decode::<TypeSpecification>(canonical.clone()).unwrap();
+    let TypeSpecification::TypeAliasSpecification {
+        ref annotations, ..
+    } = decoded
+    else {
+        panic!("an alias specification decodes as one");
+    };
+    assert_eq!(annotations, &annotation_nodes());
+
+    // A `Value` comparison is order-insensitive, so the text is what pins `annotations` first.
+    assert_eq!(
+        serde_json::to_string(&encode(&decoded)).unwrap(),
+        format!(
+            r#"{{"TypeAliasSpecification":{{{WRITTEN_ANNOTATIONS},"typeParams":[],"typeExp":"{TEXT}"}}}}"#
+        )
+    );
+}
+
+#[test]
+fn a_structured_annotation_writes_its_arguments_only_when_it_has_some() {
+    let canonical = json!({ "OpaqueTypeSpecification": { "annotations": [{ "name": INTERNAL }] } });
+    assert!(
+        normalizes_to::<TypeSpecification>(
+            json!({ "OpaqueTypeSpecification": {
+                "annotations": [{ "name": INTERNAL, "arguments": [] }]
+            } }),
+            &canonical
+        )
+        .is_empty()
+    );
+
+    // A specification without annotations writes none.
+    let bare = json!({ "OpaqueTypeSpecification": {} });
+    assert!(normalizes_to::<TypeSpecification>(bare.clone(), &bare).is_empty());
+}
+
+#[test]
+fn a_compact_annotation_splits_at_the_first_colon_after_the_hash() {
+    let decoded = decode::<TypeSpecification>(json!({ "OpaqueTypeSpecification": {
+        "annotations": [DEPRECATED, INTERNAL]
+    } }))
+    .unwrap();
+    let TypeSpecification::OpaqueTypeSpecification { annotations, .. } = decoded else {
+        panic!("an opaque specification decodes as one");
+    };
+    assert_eq!(
+        annotations,
+        vec![
+            Annotation::Compact {
+                name: FQName::from_canonical_string("acme/shop:annotations#deprecated").unwrap(),
+                text: Some("superseded by pricing-v2".to_owned()),
+            },
+            Annotation::Compact {
+                name: FQName::from_canonical_string(INTERNAL).unwrap(),
+                text: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_named_argument_is_the_name_and_value_pair_and_nothing_else() {
+    let refused = decode::<TypeSpecification>(json!({ "OpaqueTypeSpecification": {
+        "annotations": [{ "name": SINCE, "arguments": [{ "name": "reason" }] }]
+    } }))
+    .unwrap_err();
+    // `{ "name": … }` alone is not the named shape, so it is read as a value expression, and no
+    // value wrapper is spelled `name`.
+    assert_eq!(refused.code, DiagnosticCode::UnknownNode);
+    assert_eq!(
+        refused.cursor,
+        "/OpaqueTypeSpecification/annotations/0/arguments/0"
+    );
+}
+
+#[test]
+fn a_value_specification_writes_its_annotations_before_its_inputs() {
+    let canonical = json!({
+        "annotations": annotations(),
+        "inputs": { "quantity": QUANTITY },
+        "output": MONEY
+    });
+    assert!(normalizes_to::<ValueSpecification>(canonical.clone(), &canonical).is_empty());
+    assert_eq!(
+        serde_json::to_string(&encode(&decode::<ValueSpecification>(canonical).unwrap())).unwrap(),
+        format!(
+            r#"{{{WRITTEN_ANNOTATIONS},"inputs":{{"quantity":"{QUANTITY}"}},"output":"{MONEY}"}}"#
+        )
+    );
+}
+
+#[test]
+fn a_module_specification_writes_its_annotations_first_and_its_doc_last() {
+    let canonical = json!({
+        "annotations": [INTERNAL],
+        "types": {},
+        "values": {},
+        "doc": "How an order is priced."
+    });
+    assert!(normalizes_to::<ModuleSpecification>(canonical.clone(), &canonical).is_empty());
+    assert_eq!(
+        serde_json::to_string(&encode(&decode::<ModuleSpecification>(canonical).unwrap())).unwrap(),
+        format!(
+            r#"{{"annotations":["{INTERNAL}"],"types":{{}},"values":{{}},"doc":"How an order is priced."}}"#
+        )
+    );
+}
+
+#[test]
+fn a_definition_carries_no_annotations() {
+    let refused = decode::<TypeDefinition>(json!({ "TypeAliasDefinition": {
+        "annotations": [],
+        "typeParams": [],
+        "typeExp": TEXT
+    } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::UnknownMember);
+    assert_eq!(refused.cursor, "/TypeAliasDefinition/annotations");
+}
+
+#[test]
+fn an_annotated_specification_writes_the_canonical_yaml() {
+    let decoded = decode::<TypeSpecification>(json!({ "TypeAliasSpecification": {
+        "annotations": annotations(),
+        "typeParams": [],
+        "typeExp": TEXT
+    } }))
+    .unwrap();
+    // A sequence holding a mapping is a block sequence; one holding only scalars stays flow.
+    assert_eq!(
+        morphir_core::ir::yaml::write_canonical(&encode(&decoded)),
+        concat!(
+            "TypeAliasSpecification:\n",
+            "  annotations:\n",
+            "    - acme/shop:annotations#deprecated:superseded by pricing-v2\n",
+            "    - name: acme/shop:annotations#since\n",
+            "      arguments:\n",
+            "        - Literal:\n",
+            "            StringLiteral: 1.2.0\n",
+            "        - name: reason\n",
+            "          value:\n",
+            "            Literal:\n",
+            "              StringLiteral: renamed\n",
+            "    - name: acme/shop:annotations#internal\n",
+            "  typeParams: []\n",
+            "  typeExp: morphir/SDK:string#string\n",
+        )
+    );
+}
+
+// =============================================================================
 // Value specifications and definition bodies
 // =============================================================================
+
+#[test]
+fn a_value_specification_without_inputs_writes_none() {
+    let canonical = json!({ "output": MONEY });
+    assert!(normalizes_to::<ValueSpecification>(canonical.clone(), &canonical).is_empty());
+    assert!(
+        normalizes_to::<ValueSpecification>(json!({ "inputs": {}, "output": MONEY }), &canonical)
+            .is_empty()
+    );
+    assert_eq!(
+        serde_json::to_string(&encode(
+            &decode::<ValueSpecification>(json!({ "inputs": {}, "output": MONEY })).unwrap()
+        ))
+        .unwrap(),
+        format!(r#"{{"output":"{MONEY}"}}"#)
+    );
+}
 
 #[test]
 fn a_value_specification_spells_inputs_and_output() {
@@ -708,7 +943,7 @@ fn a_library_a_specs_and_an_application_name_their_own_members() {
             "dependencies": {},
             "spec": { "modules": { "pricing": {
                 "types": {},
-                "values": { "money": { "inputs": {}, "output": TEXT } }
+                "values": { "money": { "output": TEXT } }
             } } }
         } }),
         json!({ "Application": {

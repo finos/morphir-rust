@@ -111,12 +111,57 @@ struct ModuleManifest {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     access: Option<Access>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "manifest_doc"
+    )]
     doc: Option<Documentation>,
     #[serde(default)]
     types: Vec<String>,
     #[serde(default)]
     values: Vec<String>,
+}
+
+/// A module manifest file's `doc` accepts an array of lines, joined with `\n`, as well as the one
+/// string every other node requires (definitions-0028); a writer only ever emits the string.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ManifestDoc {
+    Text(String),
+    Lines(Vec<String>),
+}
+
+impl From<ManifestDoc> for Documentation {
+    fn from(doc: ManifestDoc) -> Self {
+        match doc {
+            ManifestDoc::Text(text) => Documentation::new(text),
+            ManifestDoc::Lines(lines) => Documentation::new(lines.join("\n")),
+        }
+    }
+}
+
+mod manifest_doc {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{Documentation, ManifestDoc};
+
+    pub(super) fn serialize<S>(
+        doc: &Option<Documentation>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        doc.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Option<Documentation>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<ManifestDoc>::deserialize(deserializer).map(|doc| doc.map(Documentation::from))
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

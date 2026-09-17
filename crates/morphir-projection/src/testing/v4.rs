@@ -123,7 +123,7 @@ pub fn v4_customer_specs() -> Value {
                                 json!({ "inputs": {}, "output": CUSTOMER })
                             )
                         },
-                        "doc": ["Customer", "specifications."]
+                        "doc": "Customer\nspecifications."
                     }
                 }
             }

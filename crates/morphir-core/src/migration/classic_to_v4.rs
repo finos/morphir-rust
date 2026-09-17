@@ -480,7 +480,7 @@ pub fn migrate_access(access: &classic::Access) -> v4::Access {
 }
 
 fn documentation(value: &str) -> v4::Documentation {
-    v4::Documentation::new(value.lines().map(str::to_owned))
+    v4::Documentation::new(value)
 }
 
 fn migrate_type_definition(

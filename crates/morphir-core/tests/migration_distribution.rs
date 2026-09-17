@@ -18,8 +18,10 @@ fn migrates_real_morphir_elm_v3_distribution() {
 
     let api = library.def.modules.get("api").unwrap();
     assert_eq!(
-        api.value.doc.as_ref().unwrap().lines()[0],
-        " API module demonstrating request/response patterns."
+        api.value.doc.as_ref().unwrap().text(),
+        "\u{20}API module demonstrating request/response patterns.\n\nThis module provides types \
+         and functions for a simple API layer,\ndemonstrating how Morphir handles common API \
+         patterns.\n"
     );
     assert!(!api.value.types.is_empty());
     assert!(!api.value.values.is_empty());

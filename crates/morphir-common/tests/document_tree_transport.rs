@@ -170,6 +170,43 @@ fn yaml_tree_uses_only_yaml_physical_names() {
 }
 
 #[test]
+fn a_module_manifest_accepts_an_array_of_lines_for_doc_and_writes_one_string() {
+    let root = memory_root();
+    write_document_tree(&root, &fixture()).unwrap();
+
+    let module_manifest = root
+        .walk_dir()
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|path| path.filename() == "module.json")
+        .unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_reader(module_manifest.open_file().unwrap()).unwrap();
+    let module_path = raw["path"].as_str().unwrap().to_owned();
+    raw["doc"] = serde_json::json!(["line one", "line two"]);
+    let mut writer = module_manifest.create_file().unwrap();
+    writer
+        .write_all(serde_json::to_vec(&raw).unwrap().as_slice())
+        .unwrap();
+    drop(writer);
+
+    let read = read_document_tree(&root).unwrap();
+    let Distribution::Library(content) = &read.distribution else {
+        panic!("test fixture must be a library");
+    };
+    let module = content.def.modules.get(&module_path).unwrap();
+    assert_eq!(
+        module.value.doc.as_ref().unwrap().text(),
+        "line one\nline two"
+    );
+
+    write_document_tree(&root, &read).unwrap();
+    let rewritten: serde_json::Value =
+        serde_json::from_reader(module_manifest.open_file().unwrap()).unwrap();
+    assert_eq!(rewritten["doc"], serde_json::json!("line one\nline two"));
+}
+
+#[test]
 fn discovery_rejects_ambiguous_tree_manifests() {
     let root = memory_root();
     root.create_dir_all().unwrap();

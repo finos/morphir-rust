@@ -112,30 +112,15 @@ fn single_member<'a>(
 // Documentation and access control
 // =============================================================================
 
-/// Decodes documentation: one line as a string, or several as an array of strings.
+/// Decodes documentation: one string (definitions-0028; decision 0010). An array of lines is
+/// tolerated only inside a module manifest file of a document tree, never here.
 pub(super) fn decode_documentation(
     value: &JsonValue,
     cursor: &str,
 ) -> Result<Documentation, Diagnostic> {
     match value {
-        JsonValue::String(line) => Ok(Documentation::new([line.clone()])),
-        JsonValue::Array(lines) => lines
-            .iter()
-            .enumerate()
-            .map(|(index, line)| {
-                line.as_str().map(str::to_owned).ok_or_else(|| {
-                    invalid_type(
-                        &format!("{cursor}/{index}"),
-                        "a documentation line is a string",
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Documentation::new),
-        _ => Err(invalid_type(
-            cursor,
-            "documentation is a string or an array of strings",
-        )),
+        JsonValue::String(text) => Ok(Documentation::new(text.clone())),
+        _ => Err(invalid_type(cursor, "documentation is a string")),
     }
 }
 

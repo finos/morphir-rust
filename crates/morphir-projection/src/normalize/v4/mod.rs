@@ -256,5 +256,5 @@ fn canonical_path(path: &str) -> Vec<String> {
 }
 
 fn documentation(doc: Option<&v4::Documentation>) -> Option<String> {
-    doc.map(|doc| doc.lines().join("\n"))
+    doc.map(|doc| doc.text().to_owned())
 }

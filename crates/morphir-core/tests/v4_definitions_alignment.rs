@@ -158,6 +158,36 @@ fn documentation_is_flattened_first_and_the_nested_wrapper_warns_at_its_member()
 }
 
 #[test]
+fn documentation_is_one_string_and_an_array_of_lines_is_refused() {
+    // definitions-0028: `doc` is a string wherever a node carries it (decision 0010); an array of
+    // lines is tolerated only inside a module manifest file of a document tree, never here.
+    let refused = decode::<TypeEntry>(json!({ "Public": {
+        "doc": ["line one", "line two"],
+        "TypeAliasDefinition": { "typeParams": [], "typeExp": TEXT }
+    } }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::InvalidType);
+    // Relative to the documented node, as with the other `AccessControlled<T>` fences in this
+    // file: a `TypeEntry` read on its own starts its own cursor again (see
+    // `a_module_reports_the_window_spelling_at_its_whole_path`, where the same fence read inside
+    // a module reports the whole path, `/Public/doc`).
+    assert_eq!(refused.cursor, "/doc");
+
+    // Read inside a module, the whole path is reported, matching the kit's own fence
+    // (definitions-0028).
+    let refused = decode::<ModuleDefinition>(json!({
+        "types": { "money": { "Public": {
+            "doc": ["line one", "line two"],
+            "TypeAliasDefinition": { "typeParams": [], "typeExp": TEXT }
+        } } },
+        "values": {}
+    }))
+    .unwrap_err();
+    assert_eq!(refused.code, DiagnosticCode::InvalidType);
+    assert_eq!(refused.cursor, "/types/money/Public/doc");
+}
+
+#[test]
 fn a_module_reports_the_window_spelling_at_its_whole_path() {
     let canonical = json!({
         "types": { "money": { "Public": {

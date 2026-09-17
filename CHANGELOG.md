@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The document-tree layout through the kit.** `morphir_core::ir::layout` holds the reference
   binding's tree shape: `Profile`, `Tree`, `paths`, `stem_for`, `TreePolicy`, `read_tree`,
-  `write_tree` and the per-module writers, plus the four tree-file models (distribution manifest,
-  module manifest, type definition file, value definition file). `morphir_core::ir::json` gains
+  `write_tree` and the per-module writers; the four tree-file models (distribution manifest,
+  module manifest, type definition file, value definition file) live in
+  `morphir_core::ir::v4::tree_files`. `morphir_core::ir::json` gains
   `read`, `read_ir_file` and `write_ir_file` alongside the existing YAML pair, and `read` grows its
   own stack on demand (`stacker::maybe_grow`) instead of spawning a thread per call.
   `morphir_common::ir_transport::CodecOptions::with_path_budget` sets the longest physical path a
@@ -24,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixes a defect where rewriting a tree could delete through a link placed under `pkg/`.
 - `morphir::ir::detection::linked_manifest`, refused when a tree's manifest file is itself a link.
 - A `.yml` manifest is read as a YAML tree, alongside `.yaml` (it is never written back as `.yml`).
+- `morphir_common::ir_transport::DEFAULT_PATH_BUDGET` (4000) is the document-tree transport's
+  default longest physical path a tree may write, used whenever `CodecOptions::with_path_budget` is
+  not called. The transport walk itself refuses three shapes: a directory nested past 256 levels
+  (`morphir::ir::document_tree::invalid_path`), a node file whose extension disagrees with the
+  tree's profile (`morphir::ir::document_tree::invalid_distribution_shape`), and a logical path that
+  both a `.yaml` and a `.yml` physical file map to, named by both physical spellings
+  (`morphir::ir::document_tree::invalid_distribution_shape`).
 - Python extension release bundles include frontend language and backend target
   metadata. CI builds and uploads the bundle and verifies offline installation,
   compilation and generation. The `extension/python/v0.1.0` release tag publishes

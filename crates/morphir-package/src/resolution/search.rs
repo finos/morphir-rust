@@ -1,12 +1,11 @@
 use super::execution::{
-    Budget, release_id_clone_weight, release_record_clone_weight, requirement_clone_weight,
+    Budget, enforce_selected_release_limit, release_id_clone_weight, release_record_clone_weight,
+    requirement_clone_weight,
 };
 use super::model::*;
 use super::order;
 use super::validate::OuterInput;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-const MAX_SELECTED_RELEASES: usize = 512;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct SearchPolicy {
@@ -118,11 +117,7 @@ fn visit(
     budget: &mut Budget,
 ) -> Result<(), ResolutionExecutionError> {
     budget.charge(1, "resolution search")?;
-    if state.selected.len() > MAX_SELECTED_RELEASES {
-        return Err(ResolutionExecutionError::new(format!(
-            "resolution graph exceeds the {MAX_SELECTED_RELEASES}-release execution budget"
-        )));
-    }
+    enforce_selected_release_limit(state.selected.len())?;
     let pending = loop {
         let Some(pending) = state.pending.pop() else {
             if policy

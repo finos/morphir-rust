@@ -419,6 +419,36 @@ fn dense_acyclic_replay_topology_remains_valid() {
 }
 
 #[test]
+fn replay_accepts_exactly_512_selected_releases() {
+    let result =
+        resolve_library(&resolution_mothers::replay_with_selected_release_count(512)).unwrap();
+    let ResolutionResult::Resolved(graph) = result else {
+        panic!("expected replayed graph")
+    };
+    assert_eq!(graph.nodes().len(), 512);
+}
+
+#[test]
+fn replay_rejects_513_selected_releases_as_an_execution_error() {
+    let error = resolve_library(&resolution_mothers::replay_with_selected_release_count(513))
+        .expect_err("an oversized replay must exhaust the selected-release budget");
+    assert_eq!(
+        error.message(),
+        "resolution graph exceeds the 512-release execution budget"
+    );
+}
+
+#[test]
+fn update_rejects_an_oversized_baseline_before_searching_for_a_small_graph() {
+    let error = resolve_library(&resolution_mothers::update_with_oversized_baseline())
+        .expect_err("an oversized update baseline must exhaust the selected-release budget");
+    assert_eq!(
+        error.message(),
+        "resolution graph exceeds the 512-release execution budget"
+    );
+}
+
+#[test]
 fn selected_metadata_phase_precedes_lock_metadata() {
     let result = resolve_library(&resolution_mothers::replay_missing_selected_metadata()).unwrap();
     let value = serde_json::to_value(result).unwrap();

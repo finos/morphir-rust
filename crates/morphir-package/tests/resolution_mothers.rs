@@ -282,6 +282,128 @@ pub fn dense_replay_topology() -> String {
     .to_string()
 }
 
+pub fn replay_with_selected_release_count(selected_releases: usize) -> String {
+    assert!(selected_releases > 0);
+    let leaves: Vec<_> = (0..selected_releases - 1)
+        .map(|index| {
+            release(
+                &format!("example.com/pkg/p{index}"),
+                "1.0.0",
+                &format!("example/p{index}"),
+                vec![],
+            )
+        })
+        .collect();
+    let root = release(
+        "example.com/app/root",
+        "1.0.0",
+        "example/app",
+        leaves
+            .iter()
+            .map(|record| {
+                requirement(
+                    record["irPackageName"].as_str().unwrap(),
+                    record["release"]["packagePath"].as_str().unwrap(),
+                    "1.0.0",
+                    "2.0.0",
+                )
+            })
+            .collect(),
+    );
+    let root_bindings = leaves
+        .iter()
+        .map(|record| {
+            json!({
+                "irPackageName": record["irPackageName"],
+                "target": record["release"]
+            })
+        })
+        .collect();
+    let mut nodes = vec![node(&root, root_bindings)];
+    nodes.extend(leaves.iter().map(|record| node(record, vec![])));
+    json!({
+        "formatVersion": "0.1.0-draft.2",
+        "capability": "flat-library",
+        "mode": "replay",
+        "root": root,
+        "releases": leaves,
+        "lock": { "root": root["release"], "nodes": nodes }
+    })
+    .to_string()
+}
+
+pub fn update_with_oversized_baseline() -> String {
+    const LEAVES: usize = 511;
+    let leaves: Vec<_> = (0..LEAVES)
+        .map(|index| {
+            release(
+                &format!("example.com/pkg/p{index}"),
+                "1.0.0",
+                &format!("example/p{index}"),
+                vec![],
+            )
+        })
+        .collect();
+    let hub_v1 = release(
+        "example.com/pkg/hub",
+        "1.0.0",
+        "example/hub",
+        leaves
+            .iter()
+            .map(|record| {
+                requirement(
+                    record["irPackageName"].as_str().unwrap(),
+                    record["release"]["packagePath"].as_str().unwrap(),
+                    "1.0.0",
+                    "2.0.0",
+                )
+            })
+            .collect(),
+    );
+    let hub_v2 = release("example.com/pkg/hub", "2.0.0", "example/hub", vec![]);
+    let root = release(
+        "example.com/app/root",
+        "1.0.0",
+        "example/app",
+        vec![requirement(
+            "example/hub",
+            "example.com/pkg/hub",
+            "1.0.0",
+            "3.0.0",
+        )],
+    );
+    let hub_bindings = leaves
+        .iter()
+        .map(|record| {
+            json!({
+                "irPackageName": record["irPackageName"],
+                "target": record["release"]
+            })
+        })
+        .collect();
+    let mut selected = vec![(hub_v1.clone(), vec![])];
+    selected.extend(leaves.iter().cloned().map(|record| (record, vec![])));
+    let mut baseline = graph(&root, selected);
+    baseline["nodes"][1]["bindings"] = serde_json::Value::Array(hub_bindings);
+    let mut catalogs = vec![catalog("example.com/pkg/hub", vec![hub_v1, hub_v2])];
+    catalogs.extend(leaves.iter().map(|record| {
+        catalog(
+            record["release"]["packagePath"].as_str().unwrap(),
+            vec![record.clone()],
+        )
+    }));
+    update(
+        root,
+        catalogs,
+        baseline,
+        vec![json!({
+            "kind": "exact",
+            "packagePath": "example.com/pkg/hub",
+            "version": "2.0.0"
+        })],
+    )
+}
+
 pub fn replay_node_with_independent_shape_faults() -> String {
     let mut value: serde_json::Value = serde_json::from_str(&replay_with_newer_release()).unwrap();
     value["lock"]["nodes"] = json!([{

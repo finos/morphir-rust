@@ -2,6 +2,18 @@ use super::model::{ReleaseId, ReleaseRecord, Requirement, ResolutionExecutionErr
 
 /// Aggregate allocations and traversal performed by one resolution request.
 pub(super) const DEFAULT_WORK_LIMIT: usize = 100_000;
+pub(super) const MAX_SELECTED_RELEASES: usize = 512;
+
+pub(super) fn enforce_selected_release_limit(
+    selected_releases: usize,
+) -> Result<(), ResolutionExecutionError> {
+    if selected_releases > MAX_SELECTED_RELEASES {
+        return Err(ResolutionExecutionError::new(format!(
+            "resolution graph exceeds the {MAX_SELECTED_RELEASES}-release execution budget"
+        )));
+    }
+    Ok(())
+}
 
 pub(super) struct Budget {
     limit: usize,

@@ -3,9 +3,11 @@ mod metadata;
 mod shape;
 mod topology;
 
+use super::execution::enforce_selected_release_limit;
 use super::model::*;
 use super::order;
 use super::validate::{OuterInput, normalize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,19 @@ pub(super) struct LocatedNode {
 pub(super) struct LocatedLock {
     pub(super) value: LockedGraph,
     pub(super) nodes: Vec<LocatedNode>,
+}
+
+pub(super) fn enforce_lock_size(input: &OuterInput) -> Result<(), ResolutionExecutionError> {
+    let Some(nodes) = input
+        .raw_lock
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|lock| lock.get("nodes"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    enforce_selected_release_limit(nodes.len())
 }
 
 pub(super) fn validate_lock(input: &OuterInput) -> Result<LockedGraph, Box<ResolutionDiagnostic>> {

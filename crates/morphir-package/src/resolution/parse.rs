@@ -48,6 +48,9 @@ pub(super) fn resolve(input: &str) -> Result<ResolutionResult, ResolutionExecuti
         ));
     }
     let mut budget = Budget::default();
+    if matches!(input.mode, Mode::Replay | Mode::Update) {
+        super::replay::enforce_lock_size(&input)?;
+    }
     if input.mode == Mode::Replay {
         return Ok(match validate_lock(&input) {
             Ok(graph) => ResolutionResult::Resolved(graph),

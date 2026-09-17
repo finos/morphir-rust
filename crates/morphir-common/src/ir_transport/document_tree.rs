@@ -776,7 +776,23 @@ impl DocumentTreeSink {
             DependencyEvent::V4 {
                 package,
                 specification,
-            } => (package, specification),
+            } => {
+                // An application's dependencies are statically linked definitions
+                // (DependencyEvent::V4Definition below); DocumentTreeSource::open refuses every
+                // non-empty Application dependency map, so a specification dependency must be
+                // rejected here rather than written into a manifest the source cannot reopen.
+                if matches!(
+                    self.manifest.as_ref().map(|manifest| manifest.distribution),
+                    Some(DistributionKind::Application)
+                ) {
+                    return Err(event_error(
+                        "unsupported_dependencies",
+                        cursor,
+                        "an application's definition dependencies have no place in this layout",
+                    ));
+                }
+                (package, specification)
+            }
             // This layout keeps dependencies in its distribution manifest, which holds public
             // faces. An application's statically linked definitions do not fit there, and the
             // tree layout that will hold them is written later (distributions-0010).

@@ -424,6 +424,66 @@ fn an_applications_definition_dependencies_survive_the_semantic_round_trip() {
     );
 }
 
+/// A library distribution whose dependency is a package specification, as libraries require.
+const LIBRARY_WITH_SPECIFICATION_DEPENDENCY: &str = r#"{"formatVersion":4,"distribution":{"Library":{"packageName":"example","dependencies":{"my-org/shared":{"modules":{}}},"def":{"modules":{}}}}}"#;
+
+#[test]
+fn streaming_json_encoder_rejects_a_specification_dependency_under_an_application_header() {
+    let options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
+    let application_begin = decode_json(APPLICATION_WITH_DEFINITION_DEPENDENCY, IrVersion::V4)
+        .into_iter()
+        .find(|event| matches!(event.kind(), SemanticEventKind::Begin(_)))
+        .unwrap();
+    let specification_dependency =
+        decode_json(LIBRARY_WITH_SPECIFICATION_DEPENDENCY, IrVersion::V4)
+            .into_iter()
+            .find(|event| {
+                matches!(
+                    event.kind(),
+                    SemanticEventKind::Dependency(DependencyEvent::V4 { .. })
+                )
+            })
+            .unwrap();
+
+    let json = JsonCodec::new();
+    let mut output = Vec::new();
+    let mut encoder = json.encoder(&mut output, &options).unwrap();
+    encoder.accept(application_begin).unwrap();
+    let diagnostic = encoder.accept(specification_dependency).unwrap_err();
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::json::dependency_kind_mismatch"
+    );
+}
+
+#[test]
+fn streaming_json_encoder_rejects_a_definition_dependency_under_a_library_header() {
+    let options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
+    let library_begin = decode_json(LIBRARY_WITH_SPECIFICATION_DEPENDENCY, IrVersion::V4)
+        .into_iter()
+        .find(|event| matches!(event.kind(), SemanticEventKind::Begin(_)))
+        .unwrap();
+    let definition_dependency = decode_json(APPLICATION_WITH_DEFINITION_DEPENDENCY, IrVersion::V4)
+        .into_iter()
+        .find(|event| {
+            matches!(
+                event.kind(),
+                SemanticEventKind::Dependency(DependencyEvent::V4Definition { .. })
+            )
+        })
+        .unwrap();
+
+    let json = JsonCodec::new();
+    let mut output = Vec::new();
+    let mut encoder = json.encoder(&mut output, &options).unwrap();
+    encoder.accept(library_begin).unwrap();
+    let diagnostic = encoder.accept(definition_dependency).unwrap_err();
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::json::dependency_kind_mismatch"
+    );
+}
+
 #[test]
 fn streaming_json_encoder_produces_a_complete_v4_document() {
     let input = large_classic_v3_source(3, 128);

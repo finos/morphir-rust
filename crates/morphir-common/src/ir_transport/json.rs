@@ -441,6 +441,13 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 package,
                 specification,
             } => {
+                if matches!(self.distribution, Some(V4JsonDistribution::Application(_))) {
+                    return Err(json_stream_error(
+                        "dependency_kind_mismatch",
+                        cursor,
+                        "the dependency event does not match the v4 distribution kind",
+                    ));
+                }
                 self.start_dependency(&package, cursor)?;
                 self.write_json(&specification)?;
             }
@@ -450,6 +457,13 @@ impl<'writer> V4JsonEventEncoder<'writer> {
                 package,
                 definition,
             } => {
+                if !matches!(self.distribution, Some(V4JsonDistribution::Application(_))) {
+                    return Err(json_stream_error(
+                        "dependency_kind_mismatch",
+                        cursor,
+                        "the dependency event does not match the v4 distribution kind",
+                    ));
+                }
                 self.start_dependency(&package, cursor)?;
                 self.write_json(&definition)?;
             }

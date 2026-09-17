@@ -71,9 +71,11 @@ pub(super) fn normalize_type_specification(
 ) -> TypeDeclaration {
     let source_name = super::super::canonical_fq_name(package_name, module_path, &name);
     match specification {
+        // A projection reads the shape of a declaration, not the annotations on its public face.
         v4::TypeSpecification::TypeAliasSpecification {
             type_params,
             type_expr,
+            ..
         } => TypeDeclaration::Alias {
             source_name,
             name,
@@ -81,15 +83,18 @@ pub(super) fn normalize_type_specification(
             value: normalize_type(type_expr),
             doc,
         },
-        v4::TypeSpecification::OpaqueTypeSpecification { type_params } => TypeDeclaration::Opaque {
-            source_name,
-            name,
-            type_params: normalize_names(type_params),
-            doc,
-        },
+        v4::TypeSpecification::OpaqueTypeSpecification { type_params, .. } => {
+            TypeDeclaration::Opaque {
+                source_name,
+                name,
+                type_params: normalize_names(type_params),
+                doc,
+            }
+        }
         v4::TypeSpecification::CustomTypeSpecification {
             type_params,
             constructors,
+            ..
         } => {
             let mut constructors = constructors
                 .into_iter()
@@ -208,6 +213,6 @@ fn normalize_names(names: Vec<v4::Name>) -> Vec<String> {
 fn normalize_incompleteness(incompleteness: v4::Incompleteness) -> IncompletenessKind {
     match incompleteness {
         v4::Incompleteness::Draft => IncompletenessKind::Draft,
-        v4::Incompleteness::Hole(_) => IncompletenessKind::Hole,
+        v4::Incompleteness::Hole { .. } => IncompletenessKind::Hole,
     }
 }

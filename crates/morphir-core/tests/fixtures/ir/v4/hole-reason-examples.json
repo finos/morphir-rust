@@ -16,9 +16,6 @@
         "expected": "morphir/SDK:basics#int",
         "found": "morphir/SDK:string#string"
       }
-    },
-    "draft": {
-      "Draft": {}
     }
   }
 }

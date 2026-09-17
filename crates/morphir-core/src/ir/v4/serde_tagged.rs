@@ -12,22 +12,21 @@
 //! document `["Variable", {}, ["a"]]` is an unknown node.
 
 use indexmap::IndexMap;
+use num_bigint::BigInt;
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::fmt;
 
-use super::attributes::{TypeAttributes, ValueAttributes};
+use super::attributes::{SourceLocation, TypeAttributes, ValueAttributes};
 use super::legacy::{accept_member, record_legacy_form_warning};
 use super::literal::{FloatLiteral, Literal};
 use super::pattern::Pattern;
 use super::serde_v4;
-use super::type_def::ConstructorArg;
 use super::types::{Field, Type};
-use super::value::{
-    HoleReason, InputType, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition,
-};
+use super::value::{HoleReason, LetBinding, PatternCase, RecordFieldEntry, Value, ValueDefinition};
+use crate::ir::decimal::DecimalLiteral;
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticError};
 use crate::naming::{FQName, Name};
 
@@ -311,10 +310,50 @@ pub(super) fn member_cursor(members: &Members<'_>, name: &str, cursor: &str) -> 
 }
 
 fn decode_attributes(members: &Members<'_>, cursor: &str) -> Result<TypeAttributes, Diagnostic> {
-    match members.get("attributes") {
-        None => Ok(TypeAttributes::default()),
-        Some(member) => serde_json::from_value(member.value.clone())
-            .map_err(|error| invalid_type(&format!("{cursor}/{}", member.seen), error.to_string())),
+    let Some(member) = members.get("attributes") else {
+        return Ok(TypeAttributes::default());
+    };
+    let at = format!("{cursor}/{}", member.seen);
+    let written = wrapper_members(
+        "TypeAttributes",
+        member.value,
+        &at,
+        &["source", "constraints", "extensions"],
+    )?;
+    Ok(TypeAttributes {
+        source: decode_source(&written, &at)?,
+        constraints: decode_object_member(&written, "constraints", &at)?,
+        extensions: decode_object_member(&written, "extensions", &at)?,
+    })
+}
+
+fn decode_source(
+    members: &Members<'_>,
+    cursor: &str,
+) -> Result<Option<SourceLocation>, Diagnostic> {
+    match members.get("source") {
+        None => Ok(None),
+        Some(member) => serde_json::from_value::<SourceLocation>(member.value.clone())
+            .map(Some)
+            .map_err(|error| {
+                invalid_type(&member_cursor(members, "source", cursor), error.to_string())
+            }),
+    }
+}
+
+fn decode_object_member(
+    members: &Members<'_>,
+    name: &str,
+    cursor: &str,
+) -> Result<serde_json::Map<String, JsonValue>, Diagnostic> {
+    match members.get(name) {
+        None => Ok(serde_json::Map::new()),
+        Some(member) => member.value.as_object().cloned().ok_or_else(|| {
+            invalid_type(
+                &member_cursor(members, name, cursor),
+                format!("{name} is an object"),
+            )
+        }),
     }
 }
 
@@ -755,22 +794,29 @@ fn decode_literal_wrapper(
             .as_str()
             .map(|text| Literal::String(text.to_owned()))
             .ok_or_else(|| invalid_literal(&at, "a StringLiteral carries a string")),
-        "IntegerLiteral" | "WholeNumberLiteral" => {
-            payload.as_i64().map(Literal::Integer).ok_or_else(|| {
+        "IntegerLiteral" | "WholeNumberLiteral" => integer_from_json(payload)
+            .map(Literal::Integer)
+            .ok_or_else(|| {
                 invalid_literal(
                     &at,
-                    "an IntegerLiteral carries a whole number this reader can hold",
+                    "an IntegerLiteral carries a whole-number lexeme with no point and no exponent",
                 )
-            })
-        }
+            }),
         "FloatLiteral" => float_from_json(payload)
             .map(Literal::Float)
             .ok_or_else(|| invalid_literal(&at, "a FloatLiteral carries a number")),
-        // A decimal is carried as a string so that no binding coerces it to a float.
-        "DecimalLiteral" => payload
-            .as_str()
-            .map(|text| Literal::Decimal(text.to_owned()))
-            .ok_or_else(|| invalid_literal(&at, "a DecimalLiteral carries its text as a string")),
+        // A decimal is a genuine decimal carried as its lexeme (v4 schema page, "Literals").
+        "DecimalLiteral" => {
+            let text = payload.as_str().ok_or_else(|| {
+                invalid_literal(&at, "a DecimalLiteral carries its lexeme as a string")
+            })?;
+            DecimalLiteral::parse(text).map(Literal::Decimal).map_err(|_| {
+                invalid_literal(
+                    &at,
+                    format!("{text:?} is not a decimal lexeme: [+-]?(digits(.digits?)?|.digits)([eE][+-]?digits)?"),
+                )
+            })
+        }
         _ => Err(unknown_node_at(cursor, format!("{tag} is not a literal"))),
     }
 }
@@ -802,12 +848,22 @@ fn decode_char_literal(payload: &JsonValue, cursor: &str) -> Result<Literal, Dia
 /// A bare number is an integer literal when it is a whole number this reader can hold, and a
 /// float otherwise.
 fn decode_number_literal(value: &JsonValue, cursor: &str) -> Result<Literal, Diagnostic> {
-    if let Some(whole) = value.as_i64() {
+    if let Some(whole) = integer_from_json(value) {
         return Ok(Literal::Integer(whole));
     }
     float_from_json(value)
         .map(Literal::Float)
         .ok_or_else(|| invalid_literal(cursor, "this number is outside the reader's range"))
+}
+
+/// Reads a JSON number as an integer literal when its lexeme has no point and no exponent
+/// (decision 0009), at any size.
+fn integer_from_json(value: &JsonValue) -> Option<BigInt> {
+    let lexeme = value.as_number()?.to_string();
+    if lexeme.contains(['.', 'e', 'E']) {
+        return None;
+    }
+    BigInt::parse_bytes(lexeme.as_bytes(), 10)
 }
 
 /// Reads a JSON number as a float literal, keeping the lexeme it was written with.
@@ -1020,11 +1076,28 @@ fn decode_value_attributes(
     members: &Members<'_>,
     cursor: &str,
 ) -> Result<ValueAttributes, Diagnostic> {
-    match members.get("attributes") {
-        None => Ok(ValueAttributes::default()),
-        Some(member) => serde_json::from_value(member.value.clone())
-            .map_err(|error| invalid_type(&format!("{cursor}/{}", member.seen), error.to_string())),
-    }
+    let Some(member) = members.get("attributes") else {
+        return Ok(ValueAttributes::default());
+    };
+    let at = format!("{cursor}/{}", member.seen);
+    let written = wrapper_members(
+        "ValueAttributes",
+        member.value,
+        &at,
+        &["source", "inferredType", "extensions"],
+    )?;
+    let inferred_type = match written.get("inferredType") {
+        None => None,
+        Some(inferred) => Some(Box::new(decode_type(
+            inferred.value,
+            &member_cursor(&written, "inferredType", &at),
+        )?)),
+    };
+    Ok(ValueAttributes {
+        source: decode_source(&written, &at)?,
+        inferred_type,
+        extensions: decode_object_member(&written, "extensions", &at)?,
+    })
 }
 
 fn decode_pattern_list(value: &JsonValue, cursor: &str) -> Result<Vec<Pattern>, Diagnostic> {
@@ -1072,57 +1145,8 @@ impl Serialize for Value {
 // Note: HoleReason, NativeHint, and NativeInfo serde impls are in value.rs
 
 // =============================================================================
-// Tuple Struct Serialization (InputType, RecordFieldEntry, PatternCase, LetBinding, ConstructorArg)
+// Tuple Struct Serialization (RecordFieldEntry, PatternCase, LetBinding, ConstructorArg)
 // =============================================================================
-
-// InputType(Name, ValueAttributes, Type) - serialize as [name, attrs, type]
-impl Serialize for InputType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(3))?;
-        seq.serialize_element(&self.0)?;
-        seq.serialize_element(&self.1)?;
-        seq.serialize_element(&self.2)?;
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for InputType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct InputTypeVisitor;
-
-        impl<'de> Visitor<'de> for InputTypeVisitor {
-            type Value = InputType;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a tuple [name, attrs, type]")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<InputType, V::Error>
-            where
-                V: SeqAccess<'de>,
-            {
-                let name = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let attrs = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let tpe = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                Ok(InputType(name, attrs, tpe))
-            }
-        }
-
-        deserializer.deserialize_seq(InputTypeVisitor)
-    }
-}
 
 // RecordFieldEntry(Name, Value) - serialize as [name, value]
 impl Serialize for RecordFieldEntry {
@@ -1256,51 +1280,6 @@ impl<'de> Deserialize<'de> for LetBinding {
         }
 
         deserializer.deserialize_seq(LetBindingVisitor)
-    }
-}
-
-// ConstructorArg(Name, Type) - serialize as [name, type]
-impl Serialize for ConstructorArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(2))?;
-        seq.serialize_element(&self.0)?;
-        seq.serialize_element(&self.1)?;
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for ConstructorArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct ConstructorArgVisitor;
-
-        impl<'de> Visitor<'de> for ConstructorArgVisitor {
-            type Value = ConstructorArg;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a tuple [name, type]")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<ConstructorArg, V::Error>
-            where
-                V: SeqAccess<'de>,
-            {
-                let name = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let tpe = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(ConstructorArg(name, tpe))
-            }
-        }
-
-        deserializer.deserialize_seq(ConstructorArgVisitor)
     }
 }
 
@@ -1666,9 +1645,10 @@ fn decode_value_wrapper(tag: &str, payload: &JsonValue, cursor: &str) -> Result<
                 wrapper_members(tag, payload, &at, &["attributes", "reason", "expectedType"])?;
             let attributes = decode_value_attributes(&members, &at)?;
             let reason_cursor = member_cursor(&members, "reason", &at);
-            let reason: HoleReason =
-                serde_json::from_value(required(&members, "reason", &at)?.clone())
-                    .map_err(|error| unknown_node_at(&reason_cursor, error.to_string()))?;
+            let reason: HoleReason = super::serde_document::decode_hole_reason(
+                required(&members, "reason", &at)?,
+                &reason_cursor,
+            )?;
             let expected = match members.get("expectedType") {
                 None => None,
                 Some(member) => Some(Box::new(decode_type(
@@ -1822,20 +1802,20 @@ mod tests {
     #[test]
     fn test_pattern_literal_roundtrip() {
         let pattern: Pattern =
-            Pattern::LiteralPattern(ValueAttributes::default(), Literal::Integer(42));
+            Pattern::LiteralPattern(ValueAttributes::default(), Literal::Integer(42.into()));
         let json = serde_json::to_string(&pattern).unwrap();
         assert!(json.contains("LiteralPattern"));
 
         let parsed: Pattern = serde_json::from_str(&json).unwrap();
         assert!(matches!(
             parsed,
-            Pattern::LiteralPattern(_, Literal::Integer(42))
+            Pattern::LiteralPattern(_, Literal::Integer(n)) if n == BigInt::from(42)
         ));
     }
 
     #[test]
     fn test_value_literal_serialization() {
-        let val: Value = Value::Literal(ValueAttributes::default(), Literal::Integer(42));
+        let val: Value = Value::Literal(ValueAttributes::default(), Literal::Integer(42.into()));
         let json = serde_json::to_string(&val).unwrap();
         assert!(json.contains("Literal"));
         assert!(json.contains("IntegerLiteral"));

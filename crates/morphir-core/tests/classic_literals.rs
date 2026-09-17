@@ -1,3 +1,4 @@
+use morphir_core::ir::DecimalLiteral;
 use morphir_core::ir::classic::literal::Literal;
 
 #[test]
@@ -36,12 +37,20 @@ fn test_literal_float() {
 }
 
 #[test]
-fn test_literal_decimal() {
-    let json = r#"["DecimalLiteral", "1.23"]"#;
-    let lit: Literal = serde_json::from_str(json).unwrap();
-    if let Literal::Float(f) = lit {
-        assert!((f - 1.23).abs() < 1e-6);
-    } else {
-        panic!("Expected Float for DecimalLiteral");
-    }
+fn a_v3_decimal_literal_keeps_its_text() {
+    // MCK versions-0006: morphir-elm encodes DecimalLiteral as Decimal.toString.
+    let decoded: Literal = serde_json::from_str(r#"["DecimalLiteral", "10.50"]"#).unwrap();
+    assert_eq!(
+        decoded,
+        Literal::Decimal(DecimalLiteral::parse("10.50").unwrap())
+    );
+    assert_eq!(
+        serde_json::to_string(&decoded).unwrap(),
+        r#"["DecimalLiteral","10.50"]"#
+    );
+}
+
+#[test]
+fn a_v3_decimal_that_is_not_a_decimal_lexeme_is_refused() {
+    assert!(serde_json::from_str::<Literal>(r#"["DecimalLiteral", "ten"]"#).is_err());
 }

@@ -2,6 +2,7 @@
 //!
 //! Literal values for the Classic Morphir IR format.
 
+use crate::ir::decimal::DecimalLiteral;
 use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::{SerializeTuple, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -16,6 +17,7 @@ pub enum Literal {
     String(String),
     WholeNumber(i64),
     Float(f64),
+    Decimal(DecimalLiteral),
 }
 
 impl Serialize for Literal {
@@ -52,6 +54,12 @@ impl Serialize for Literal {
                 let mut tuple = serializer.serialize_tuple(2)?;
                 tuple.serialize_element("FloatLiteral")?;
                 tuple.serialize_element(v)?;
+                tuple.end()
+            }
+            Literal::Decimal(v) => {
+                let mut tuple = serializer.serialize_tuple(2)?;
+                tuple.serialize_element("DecimalLiteral")?;
+                tuple.serialize_element(v.lexeme())?;
                 tuple.end()
             }
         }
@@ -140,15 +148,14 @@ impl<'de> Deserialize<'de> for Literal {
                         Ok(Literal::Float(v))
                     }
                     "DecimalLiteral" | "decimal_literal" => {
-                        // Decimal is represented as a string in JSON, store as Float for now
-                        let v: String = seq
+                        let text: String = seq
                             .next_element()?
                             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let f = v.parse::<f64>().map_err(de::Error::custom)?;
+                        let decimal = DecimalLiteral::parse(&text).map_err(de::Error::custom)?;
                         if seq.next_element::<IgnoredAny>()?.is_some() {
                             return Err(de::Error::custom("Expected end of DecimalLiteral array"));
                         }
-                        Ok(Literal::Float(f))
+                        Ok(Literal::Decimal(decimal))
                     }
                     _ => Err(de::Error::unknown_variant(
                         tag.as_ref(),
@@ -221,9 +228,9 @@ mod tests {
     fn test_deserialize_literal_decimal() {
         let json = r#"["DecimalLiteral","1.23"]"#;
         let deserialized: Literal = serde_json::from_str(json).unwrap();
-        match deserialized {
-            Literal::Float(f) => assert!((f - 1.23).abs() < f64::EPSILON),
-            _ => panic!("Expected Float from DecimalLiteral"),
-        }
+        assert_eq!(
+            deserialized,
+            Literal::Decimal(DecimalLiteral::parse("1.23").unwrap())
+        );
     }
 }

@@ -709,9 +709,9 @@ mod tests {
     use super::*;
     use morphir_core::ir::v4::{
         Access as MorphirAccess, AccessControlled, Distribution, Documented, ExternalBinding,
-        FormatVersion, IRFile, Incompleteness, InputTypeEntry, LibraryContent, ModuleDefinition,
-        PackageDefinition, PackageSpecification, SpecsContent, Type, TypeAttributes,
-        TypeDefinition, TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
+        FormatVersion, IRFile, Incompleteness, LibraryContent, ModuleDefinition, PackageDefinition,
+        PackageSpecification, SpecsContent, Type, TypeAttributes, TypeDefinition,
+        TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
     };
     use std::collections::HashMap;
 
@@ -922,10 +922,7 @@ mod tests {
                         ValueDefinition {
                             input_types: IndexMap::from([(
                                 "argument".into(),
-                                InputTypeEntry {
-                                    type_attributes: None,
-                                    input_type: Type::unit(TypeAttributes::default()),
-                                },
+                                Type::unit(TypeAttributes::default()),
                             )]),
                             output_type: Some(Type::unit(TypeAttributes::default())),
                             body: ValueBody::External {
@@ -987,6 +984,7 @@ mod tests {
             Documented::new(
                 None,
                 TypeSpecification::OpaqueTypeSpecification {
+                    annotations: vec![],
                     type_params: vec![Name::from("parameter")],
                 }
             )
@@ -996,6 +994,7 @@ mod tests {
             Documented::new(
                 None,
                 ValueSpecification {
+                    annotations: vec![],
                     inputs: IndexMap::from([(
                         "argument".into(),
                         Type::unit(TypeAttributes::default())
@@ -1129,13 +1128,8 @@ mod tests {
     }
 
     #[test]
-    fn compile_rejects_an_incomplete_dependency_type_that_has_no_specification() {
-        let (mut request, output_dir) = compile_request(
-            "file:///workspace/src/main.gleam",
-            "pub fn hello() { \"world\" }",
-            IR_VERSION,
-        );
-        request.dependencies.push(CompileDependency {
+    fn an_incomplete_dependency_type_is_an_opaque_specification() {
+        let dependency = CompileDependency {
             package_name: "example/dependency".into(),
             ir_version: IR_VERSION.into(),
             distribution: serde_json::to_value(Distribution::Library(LibraryContent {
@@ -1169,18 +1163,19 @@ mod tests {
                 },
             }))
             .expect("serialize incomplete dependency"),
-        });
+        };
 
-        let result = GleamExtension
-            .compile(request)
-            .expect("return a typed dependency failure");
-
-        assert_typed_failure(&result);
-        assert_eq!(
-            result.diagnostics[0].code.as_deref(),
-            Some("INCOMPATIBLE_DEPENDENCY_DISTRIBUTION")
-        );
-        assert_directory_empty(&output_dir);
+        // A type still being written publishes no shape, so its specification is opaque rather
+        // than a refusal.
+        let specifications =
+            frontend::dependencies::package_specifications(&[dependency], IR_VERSION)
+                .expect("an incomplete dependency type resolves");
+        let specification = &specifications["example/dependency"];
+        let module = &specification.modules["public-module"];
+        assert!(matches!(
+            module.types["incomplete"].value,
+            TypeSpecification::OpaqueTypeSpecification { .. }
+        ));
     }
 
     #[test]

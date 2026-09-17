@@ -211,7 +211,7 @@ pub(crate) fn emit_v4(
                     entry_points: content.entry_points,
                 }),
             ))?;
-            emit_v4_dependencies(content.dependencies, &distribution_cursor, sink)?;
+            emit_v4_definition_dependencies(content.dependencies, &distribution_cursor, sink)?;
             for (path, module) in content.def.modules {
                 sink.accept(SemanticEvent::new(
                     distribution_cursor
@@ -229,6 +229,7 @@ pub(crate) fn emit_v4(
     sink.finish()
 }
 
+/// Emits the dependencies of a library or specification distribution: their public faces.
 fn emit_v4_dependencies(
     dependencies: v4::Dependencies,
     parent: &IrCursor,
@@ -242,6 +243,27 @@ fn emit_v4_dependencies(
             SemanticEventKind::Dependency(DependencyEvent::V4 {
                 package,
                 specification,
+            }),
+        ))?;
+    }
+    Ok(())
+}
+
+/// Emits an application's dependencies: the definitions it links statically
+/// (distributions-0010).
+fn emit_v4_definition_dependencies(
+    dependencies: v4::DefinitionDependencies,
+    parent: &IrCursor,
+    sink: &mut dyn EventSink,
+) -> Result<(), TransportDiagnostic> {
+    for (package, definition) in dependencies {
+        sink.accept(SemanticEvent::new(
+            parent
+                .clone()
+                .child(CursorSegment::Dependency(package.clone())),
+            SemanticEventKind::Dependency(DependencyEvent::V4Definition {
+                package,
+                definition,
             }),
         ))?;
     }
@@ -331,6 +353,7 @@ fn collect_v4(
     header: DistributionHeader,
 ) -> Result<SemanticFile, TransportDiagnostic> {
     let mut dependencies = IndexMap::new();
+    let mut definition_dependencies = IndexMap::new();
     let mut definitions = IndexMap::new();
     let mut specifications = IndexMap::new();
     while let Some(event) = source.next_event()? {
@@ -341,6 +364,12 @@ fn collect_v4(
                 specification,
             }) => {
                 dependencies.insert(package, specification);
+            }
+            SemanticEventKind::Dependency(DependencyEvent::V4Definition {
+                package,
+                definition,
+            }) => {
+                definition_dependencies.insert(package, definition);
             }
             SemanticEventKind::Module(ModuleEvent::V4Definition { path, module }) => {
                 definitions.insert(path, module);
@@ -354,7 +383,7 @@ fn collect_v4(
                     DistributionHeader::V4Library {
                         format_version,
                         package,
-                    } if specifications.is_empty() => (
+                    } if specifications.is_empty() && definition_dependencies.is_empty() => (
                         format_version,
                         v4::Distribution::Library(v4::LibraryContent {
                             package_name: package,
@@ -367,7 +396,7 @@ fn collect_v4(
                     DistributionHeader::V4Specs {
                         format_version,
                         package,
-                    } if definitions.is_empty() => (
+                    } if definitions.is_empty() && definition_dependencies.is_empty() => (
                         format_version,
                         v4::Distribution::Specs(v4::SpecsContent {
                             package_name: package,
@@ -381,11 +410,11 @@ fn collect_v4(
                         format_version,
                         package,
                         entry_points,
-                    } if specifications.is_empty() => (
+                    } if specifications.is_empty() && dependencies.is_empty() => (
                         format_version,
                         v4::Distribution::Application(v4::ApplicationContent {
                             package_name: package,
-                            dependencies,
+                            dependencies: definition_dependencies,
                             def: v4::PackageDefinition {
                                 modules: definitions,
                             },
@@ -397,7 +426,7 @@ fn collect_v4(
                             "morphir::ir::codec::invalid_event",
                             Stage::Encoding,
                             IrCursor::root(),
-                            "v4 module events do not match the distribution kind",
+                            "v4 dependency or module events do not match the distribution kind",
                         ));
                     }
                 };

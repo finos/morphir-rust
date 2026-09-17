@@ -73,7 +73,7 @@ fn a_bare_array_is_a_list_and_a_bare_scalar_is_a_literal() {
     ));
     assert!(matches!(
         val(json!(-8)).unwrap(),
-        Value::Literal(_, Literal::Integer(-8))
+        Value::Literal(_, Literal::Integer(n)) if n == num_bigint::BigInt::from(-8)
     ));
     // The lexeme's point is what makes a bare number a float rather than an integer.
     assert_eq!(
@@ -472,7 +472,10 @@ fn hole_keeps_its_reason_and_an_optional_expected_type() {
     );
 
     let with_type = json!({ "Hole": {
-        "reason": { "Draft": {} },
+        "reason": { "TypeMismatch": {
+            "expected": "acme/shop:money#amount",
+            "found": "morphir/SDK:string#string"
+        } },
         "expectedType": "acme/shop:money#amount"
     } });
     all_normalize_to(std::slice::from_ref(&with_type), with_type.clone());

@@ -16,6 +16,7 @@ use crate::format_version::{
 
 // Submodules - Core IR types
 pub mod access;
+pub mod annotation;
 pub mod attributes;
 pub mod distribution;
 pub mod legacy;
@@ -26,7 +27,6 @@ pub mod pattern;
 pub mod serde_document;
 pub mod serde_tagged;
 pub mod serde_v4;
-pub mod type_def;
 pub mod types;
 pub mod value;
 
@@ -39,7 +39,11 @@ pub use crate::naming::Path;
 // Re-export access control
 pub use access::{Access, AccessControlled};
 
+// Re-export annotations, which specifications carry and definitions do not
+pub use annotation::{Annotation, AnnotationArgument};
+
 // Re-export core expression types
+pub use crate::ir::decimal::{DecimalLiteral, InvalidDecimalLexeme};
 pub use attributes::{SourceLocation, TypeAttributes, TypeExpr, ValueAttributes, ValueExpr};
 pub use legacy::{SpellingMode, accept_member, take_warnings, with_spelling_mode};
 pub use literal::{FloatLiteral, InvalidFloatLexeme, Literal};
@@ -54,8 +58,8 @@ pub use value::{
 
 // Re-export distribution types
 pub use distribution::{
-    ApplicationContent, Dependencies, Distribution, EntryPoint, EntryPointKind, EntryPoints,
-    LibraryContent, SpecsContent,
+    ApplicationContent, DefinitionDependencies, Dependencies, Distribution, EntryPoint,
+    EntryPointKind, EntryPoints, LibraryContent, SpecsContent,
 };
 
 // Re-export module types
@@ -72,22 +76,14 @@ pub use types::{
 
 // Re-export value definition types
 pub use value::{
-    ExternalBinding, HoleReason, InputTypeEntry, NativeHint, ValueBody, ValueDefinition,
-    ValueSpecification,
-};
-
-// Re-export legacy type_def types for backward compatibility
-pub use type_def::{
-    AccessControlledConstructors, AccessControlledTypeDefinition,
-    ConstructorArg as TypeDefConstructorArg, ConstructorDefinition as TypeDefConstructorDefinition,
-    TypeDefinition as LegacyTypeDefinition, TypeSpecification as LegacyTypeSpecification,
+    ExternalBinding, HoleReason, NativeHint, ValueBody, ValueDefinition, ValueSpecification,
 };
 
 /// Top-level IR file structure.
 ///
 /// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. A top-level `$meta` member is reserved for a tool's own
-/// bookkeeping: a reader ignores it rather than refusing it.
+/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
+/// a single document, so it is unknown here (distributions-0009).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IRFile {

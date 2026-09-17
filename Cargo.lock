@@ -3539,9 +3539,11 @@ name = "morphir-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "bigdecimal",
  "granit-parser",
  "indexmap",
  "lasso",
+ "num-bigint",
  "rstest",
  "schemars",
  "serde",
@@ -3681,6 +3683,7 @@ dependencies = [
  "morphir-common",
  "morphir-core",
  "morphir-extension-sdk",
+ "num-bigint",
  "percent-encoding",
  "pretty",
  "serde",

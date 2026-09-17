@@ -463,3 +463,42 @@ fn a_node_classic_cannot_express_is_an_unknown_node_at_version_3() {
         o => panic!("{o:?}"),
     }
 }
+
+/// MCK versions-0007: the classic mirror answers a `TypeSpecification` at version 3, and
+/// morphir-elm's fourth specification round-trips byte for byte.
+#[test]
+fn a_v3_derived_type_specification_round_trips() {
+    let fence = r#"["DerivedTypeSpecification", [], { "baseType": ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["string"]], ["string"]], []], "fromBaseType": [[["my"], ["org"]], [["module"]], ["from", "string"]], "toBaseType": [[["my"], ["org"]], [["module"]], ["to", "string"]] }]"#;
+    let r = DecodeRequest {
+        version: 3,
+        ..req(NodeKind::TypeSpecification, fence, PathMode::Current)
+    };
+    match decode(&r) {
+        DecodeResponse::Ok {
+            canonical, kind, ..
+        } => {
+            assert_eq!(canonical["json"], format!("{fence}\n"));
+            assert_eq!(kind, "DerivedTypeSpecification");
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+/// MCK versions-0008: morphir-elm writes a record field as `{ "name", "tpe" }`, never as a pair.
+#[test]
+fn a_v3_record_field_is_written_as_an_object() {
+    let fence = r#"["Record", {}, [{ "name": ["first"], "tpe": ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["string"]], ["string"]], []] }]]"#;
+    let r = DecodeRequest {
+        version: 3,
+        ..req(NodeKind::Type, fence, PathMode::Current)
+    };
+    match decode(&r) {
+        DecodeResponse::Ok {
+            canonical, kind, ..
+        } => {
+            assert_eq!(canonical["json"], format!("{fence}\n"));
+            assert_eq!(kind, "Record");
+        }
+        o => panic!("{o:?}"),
+    }
+}

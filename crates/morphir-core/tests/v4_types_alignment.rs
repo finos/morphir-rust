@@ -271,6 +271,24 @@ fn a_non_empty_attributes_member_makes_the_expanded_spelling_canonical() {
     assert_eq!(canonical(&t), source);
 }
 
+/// `constraints` and `extensions` are objects and nothing else is an attribute (types-0012).
+#[test]
+fn attribute_members_are_objects_and_nothing_else_is_an_attribute() {
+    let bad_type = decode(json!({
+        "Variable": { "attributes": { "constraints": 5 }, "name": "a" }
+    }))
+    .unwrap_err();
+    assert_eq!(bad_type.code, DiagnosticCode::InvalidType);
+    assert_eq!(bad_type.cursor, "/Variable/attributes/constraints");
+
+    let unknown = decode(json!({
+        "Variable": { "attributes": { "colour": "red" }, "name": "a" }
+    }))
+    .unwrap_err();
+    assert_eq!(unknown.code, DiagnosticCode::UnknownMember);
+    assert_eq!(unknown.cursor, "/Variable/attributes/colour");
+}
+
 #[test]
 fn a_classic_array_and_a_hole_are_unknown_nodes_at_type_position() {
     assert_eq!(

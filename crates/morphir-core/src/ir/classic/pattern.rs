@@ -11,7 +11,10 @@ use std::fmt;
 
 use super::literal::Literal;
 
-/// Pattern for pattern matching
+/// Pattern for pattern matching.
+///
+/// These are morphir-elm's eight patterns and no more: a variable binding is an `As` over a
+/// wildcard, so there is no `VariablePattern` to read or write.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern<A> {
     Wildcard(A),
@@ -22,7 +25,6 @@ pub enum Pattern<A> {
     HeadTail(A, Box<Pattern<A>>, Box<Pattern<A>>),
     Literal(A, Literal),
     Unit(A),
-    Variable(A, Name),
 }
 
 impl<A: Serialize> Serialize for Pattern<A> {
@@ -85,13 +87,6 @@ impl<A: Serialize> Serialize for Pattern<A> {
                 let mut tuple = serializer.serialize_tuple(2)?;
                 tuple.serialize_element("UnitPattern")?;
                 tuple.serialize_element(a)?;
-                tuple.end()
-            }
-            Pattern::Variable(a, name) => {
-                let mut tuple = serializer.serialize_tuple(3)?;
-                tuple.serialize_element("VariablePattern")?;
-                tuple.serialize_element(a)?;
-                tuple.serialize_element(name)?;
                 tuple.end()
             }
         }
@@ -237,20 +232,6 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
 
                         Ok(Pattern::Unit(a))
                     }
-                    "VariablePattern" | "variable_pattern" => {
-                        let a = seq
-                            .next_element()?
-                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                        let name = seq
-                            .next_element()?
-                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-
-                        if seq.next_element::<IgnoredAny>()?.is_some() {
-                            return Err(de::Error::custom("Expected end of VariablePattern array"));
-                        }
-
-                        Ok(Pattern::Variable(a, name))
-                    }
                     _ => Err(de::Error::unknown_variant(
                         tag.as_ref(),
                         &[
@@ -262,7 +243,6 @@ impl<'de, A: Deserialize<'de>> Deserialize<'de> for Pattern<A> {
                             "HeadTailPattern",
                             "LiteralPattern",
                             "UnitPattern",
-                            "VariablePattern",
                         ],
                     )),
                 }
@@ -286,12 +266,9 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_pattern_variable() {
-        let p: Pattern<()> = Pattern::Variable((), Name::from_str("x"));
-        let json = serde_json::to_string(&p).unwrap();
-        assert_eq!(json, r#"["VariablePattern",null,["x"]]"#);
-        let deserialized: Pattern<()> = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, p);
+    fn a_variable_pattern_is_refused() {
+        // morphir-elm never writes one; a variable binding is an As over a wildcard.
+        assert!(serde_json::from_str::<Pattern<()>>(r#"["VariablePattern",null,["x"]]"#).is_err());
     }
 
     #[test]

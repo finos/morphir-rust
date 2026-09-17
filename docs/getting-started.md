@@ -72,6 +72,11 @@ morphir schema
 morphir schema --output ./morphir-ir-schema.json
 ```
 
+The canonical, published V4 schema lives at
+[morphir.finos.org/schemas/morphir-ir-v4.json](https://morphir.finos.org/schemas/morphir-ir-v4.json)
+(source: [`website/static/schemas/morphir-ir-v4.json`](https://github.com/finos/morphir/blob/main/website/static/schemas/morphir-ir-v4.json)
+in finos/morphir).
+
 ### Getting Help
 
 ```bash

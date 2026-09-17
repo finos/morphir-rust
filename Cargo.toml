@@ -23,6 +23,7 @@ default-members = [
     "crates/morphir-openapi-extension",
     "crates/morphir-package",
     "crates/morphir-projection",
+    "crates/morphir-python-binding",
     "crates/morphir-runtime",
     "crates/morphir-wasm-binding",
     "crates/morphir-workspace",
@@ -42,6 +43,11 @@ keywords = ["morphir", "functional", "domain-modeling", "ir"]
 categories = ["development-tools", "parsers"]
 
 [workspace.dependencies]
+# Ruff component crates evolve together; update this group as one unit.
+ruff_python_parser = "=0.0.14"
+ruff_python_ast = "=0.0.14"
+ruff_python_codegen = "=0.0.14"
+ruff_text_size = "=0.0.14"
 # CLI framework
 starbase = "0.13"
 clap = { version = "4.5", features = ["derive"] }

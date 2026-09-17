@@ -11,6 +11,10 @@ This tutorial follows the current Extism and MEP JSON-RPC extension model. The
 feature is implemented for contributor testing but has not produced a public
 release.
 
+For an extension implementing both compilation and generation, see the
+[Python ADT extension](python-extension.md). It uses the same SDK and MEP
+transport for both capabilities.
+
 ## 1. Start from the reference backend
 
 Use `crates/morphir-avro-extension` as the working example. It separates the

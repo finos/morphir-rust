@@ -8,6 +8,17 @@ targets = ["avro"]
 ir_versions = ["3", "4"]
 release_with_workspace = true
 
+[extensions.python]
+package = "morphir-python-binding"
+artifact = "morphir-python-binding"
+extension_id = "morphir-python"
+name = "Morphir Python"
+mep_versions = ["0.1"]
+targets = ["python"]
+languages = [{ id = "python", file_extensions = [".py"] }]
+ir_versions = ["4"]
+release_with_workspace = true
+
 [extensions.openapi]
 package = "morphir-openapi-extension"
 artifact = "morphir-openapi-extension"

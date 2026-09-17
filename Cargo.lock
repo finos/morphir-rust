@@ -3795,6 +3795,24 @@ name = "morphir-runtime"
 version = "0.2.0"
 
 [[package]]
+name = "morphir-rust-binding"
+version = "0.1.0"
+dependencies = [
+ "cucumber",
+ "extism",
+ "indexmap",
+ "morphir-core",
+ "morphir-extension-sdk",
+ "prettyplease 0.2.37",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "morphir-tests"
 version = "0.2.0"
 dependencies = [

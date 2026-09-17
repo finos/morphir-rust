@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixes a defect where rewriting a tree could delete through a link placed under `pkg/`.
 - `morphir::ir::detection::linked_manifest`, refused when a tree's manifest file is itself a link.
 - A `.yml` manifest is read as a YAML tree, alongside `.yaml` (it is never written back as `.yml`).
+- Python extension release bundles include frontend language and backend target
+  metadata. CI builds and uploads the bundle and verifies offline installation,
+  compilation and generation. The `extension/python/v0.1.0` release tag publishes
+  the WASM guest, checksum and descriptor through the extension release pipeline.
+- Local extension repositories accept frontend-only and combined frontend/backend
+  bundles while retaining support for existing backend-only descriptors.
+- `morphir-rust-binding` adds a Syn-based Rust type frontend and Rust code generator
+  for Morphir IR v3 and v4 through the native and WASM extension protocol. The
+  frontend accepts a documented subset of structs, enums, tuples and aliases.
+  The backend covers all seven type expression forms, generic and recursive
+  declarations, private constructors, and explicitly bound opaque dependencies.
+  Generated Rust is checked with rustc; values remain a later increment.
 
 - Python integer literals preserve arbitrary precision through compilation and
   generation, including hexadecimal, octal and binary source literals.

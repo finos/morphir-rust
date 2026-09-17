@@ -5,7 +5,7 @@ use crate::local::ensure_contained;
 use crate::state_io::{StateGuard, atomic_write_bytes, create_dir_all_durable};
 use crate::{
     ArtifactFilename, ArtifactRuntime, CURRENT_RELEASE_SCHEMA_VERSION, DistributionError,
-    ExtensionHistory, ExtensionId, ReleaseRecord, Result, Sha256Digest,
+    ExtensionHistory, ExtensionId, FrontendLanguageRecord, ReleaseRecord, Result, Sha256Digest,
 };
 use semver::Version;
 use serde::Deserialize;
@@ -187,7 +187,10 @@ struct ReleaseBundleDescriptor {
     version: Version,
     mep_versions: Vec<String>,
     runtime: ArtifactRuntime,
+    #[serde(default)]
     targets: Vec<String>,
+    #[serde(default)]
+    languages: Option<Vec<FrontendLanguageRecord>>,
     ir_versions: Vec<String>,
     artifact: ArtifactFilename,
     sha256: Sha256Digest,
@@ -286,7 +289,6 @@ impl ReleaseBundleDescriptor {
         }
         for (kind, values) in [
             ("MEP versions", &self.mep_versions),
-            ("backend targets", &self.targets),
             ("Morphir IR versions", &self.ir_versions),
         ] {
             if values.is_empty()
@@ -300,6 +302,12 @@ impl ReleaseBundleDescriptor {
                     format!("release bundle {kind} must be non-empty and unique"),
                 ));
             }
+        }
+        if self.targets.is_empty() && self.languages.is_none() {
+            return Err(invalid_bundle(
+                root.join("release.json"),
+                "release bundle must declare frontend languages or backend targets",
+            ));
         }
         if self
             .git_commit
@@ -331,7 +339,7 @@ impl ReleaseBundleDescriptor {
         } else {
             "preview"
         };
-        serde_json::from_value(serde_json::json!({
+        let mut record = serde_json::json!({
             "schemaVersion": CURRENT_RELEASE_SCHEMA_VERSION,
             "id": self.extension_id,
             "name": self
@@ -341,20 +349,33 @@ impl ReleaseBundleDescriptor {
             "version": self.version,
             "channels": [channel],
             "mepVersions": self.mep_versions,
-            "capabilities": ["backend"],
-            "backend": {
-                "targets": self.targets,
-                "irVersions": self.ir_versions,
-                "generate": true
-            },
             "artifacts": [{
                 "runtime": "wasm",
                 "source": { "kind": "local-file", "path": artifact_path },
                 "sha256": self.sha256,
                 "filename": self.artifact
             }]
-        }))
-        .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))
+        });
+        let mut capabilities = Vec::new();
+        if let Some(languages) = &self.languages {
+            capabilities.push("frontend");
+            record["frontend"] = serde_json::json!({
+                "languages": languages,
+                "irVersions": self.ir_versions,
+                "compile": true
+            });
+        }
+        if !self.targets.is_empty() {
+            capabilities.push("backend");
+            record["backend"] = serde_json::json!({
+                "targets": self.targets,
+                "irVersions": self.ir_versions,
+                "generate": true
+            });
+        }
+        record["capabilities"] = serde_json::json!(capabilities);
+        serde_json::from_value(record)
+            .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))
     }
 }
 

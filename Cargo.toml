@@ -25,6 +25,7 @@ default-members = [
     "crates/morphir-projection",
     "crates/morphir-python-binding",
     "crates/morphir-runtime",
+    "crates/morphir-rust-binding",
     "crates/morphir-wasm-binding",
     "crates/morphir-workspace",
     "crates/morphir-workspace-wasm",
@@ -43,6 +44,10 @@ keywords = ["morphir", "functional", "domain-modeling", "ir"]
 categories = ["development-tools", "parsers"]
 
 [workspace.dependencies]
+syn = { version = "2.0.119", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "extra-traits"] }
+quote = { version = "1", default-features = false }
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+prettyplease = "0.2.37"
 num-bigint = "0.4"
 # Ruff component crates evolve together; update this group as one unit.
 ruff_python_parser = "=0.0.14"

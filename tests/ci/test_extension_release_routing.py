@@ -31,13 +31,14 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         package_versions = {
             "morphir-avro-extension": "0.1.0",
             "morphir-openapi-extension": "0.1.0",
+            "morphir-python-binding": "0.1.0",
         }
 
         release = extension_release.resolve_release(
             "v0.2.0", registry, "0.2.0", package_versions
         )
 
-        self.assertEqual(["avro", "openapi"], release.short_ids)
+        self.assertEqual(["avro", "openapi", "python"], release.short_ids)
 
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:
         release = extension_release.resolve_release(

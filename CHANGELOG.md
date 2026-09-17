@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `morphir_common::ir_transport::CodecOptions::with_path_budget` sets the longest physical path a
   document-tree layout may write, the figure the distribution manifest records. The MCK
   adapter declares `layouts: ["single", "tree"]` and the four file node kinds, and answers
-  `readTree` and `writeTree`. MCK cases document-tree-0001 to 0009, decisions 0012, 0014, 0015.
+  `readTree` and `writeTree`. MCK cases document-tree-0001 to 0009, decisions 0012 and 0015.
 - `morphir_common::vfs::ContainedPhysicalFS`, built by `physical_root`: the document-tree transport
   never follows a symlink or junction, so pruning and reading both stay inside the tree root. This
   fixes a defect where rewriting a tree could delete through a link placed under `pkg/`.
@@ -97,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go in a tree and is still refused, now by `morphir_core`'s own `InvalidDistributionShape`
   diagnostic rather than a transport-local one. A module listing's keys in a single-document read
   are now validated as names (`invalid_name`) instead of accepted verbatim. MCK cases
-  document-tree-0001 to 0009, decisions 0012, 0014, 0015.
+  document-tree-0001 to 0009, decisions 0012 and 0015.
 - **The IR model sweep.** The v4 model now matches the semantic model, the v4 schema and the reference binding where it did not: `DecimalLiteral` is a genuine decimal (`BigDecimal` value beside its lexeme, decimal lexeme grammar), `IntegerLiteral` has arbitrary precision (`BigInt`), type, value and module specifications carry `annotations`, `Hole` incompleteness and `IncompleteBody` keep a `partialBody`, a hole's reason is one of three (`Draft` is an incompleteness), an input type is a bare type, `Documentation` is one string, attribute `constraints` and `extensions` are objects with known members, `$meta` is refused at a single document's root, `priv` is not an access spelling, `inputs` is omitted when empty, and an `Application`'s dependencies are package definitions. The classic (v3) mirror matches morphir-elm: `DecimalLiteral` is a decimal, `DerivedTypeSpecification` exists, record fields are written as `{ "name", "tpe" }` objects, `VariablePattern` is gone, and `Definition` and `ValueDefinition` are one type. The stale second v4 type model (`type_def`), the unused converter and the unused traversal transforms are removed. MCK cases patterns-and-literals-0016 to 0020, types-0012, definitions-0020 to 0031, distributions-0009 and 0010, versions-0006 to 0008.
 - **Breaking (`morphir-core` Rust API), from the IR model sweep above.** `Literal::decimal` now
   returns `Result<Literal, InvalidDecimalLexeme>` instead of an infallible `Literal`, and

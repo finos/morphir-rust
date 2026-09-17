@@ -325,7 +325,8 @@ pub fn discover_document_tree_format(root: &VfsPath) -> Result<FormatId, Transpo
 /// [pr]: crate::vfs::physical_root
 fn read_tree_files(root: &VfsPath, policy: &TreePolicy) -> Result<Tree, TransportDiagnostic> {
     let mut files = Tree::new();
-    read_directory(root, "", 0, policy, &mut files)?;
+    let mut physical = std::collections::HashMap::new();
+    read_directory(root, "", 0, policy, &mut files, &mut physical)?;
     Ok(files)
 }
 
@@ -340,6 +341,7 @@ fn read_directory(
     depth: usize,
     policy: &TreePolicy,
     files: &mut Tree,
+    physical: &mut std::collections::HashMap<String, String>,
 ) -> Result<(), TransportDiagnostic> {
     if depth > MAX_TREE_DEPTH {
         return Err(tree_error(
@@ -369,7 +371,7 @@ fn read_directory(
             .is_dir()
             .map_err(|error| io_error("inspect", &entry, Stage::Detection, error))?
         {
-            read_directory(&entry, &child, depth + 1, policy, files)?;
+            read_directory(&entry, &child, depth + 1, policy, files, physical)?;
             continue;
         }
         let Some(logical) = from_physical(&child) else {
@@ -379,8 +381,18 @@ fn read_directory(
             return Err(core_error(CoreDiagnostic::new(
                 DiagnosticCode::InvalidDistributionShape,
                 morphir_core::ir::DiagnosticStage::Semantic,
-                logical,
+                logical.clone(),
                 format!("{child} is not a {} file", policy.profile.name()),
+            )));
+        }
+        if let Some(previous) = physical.insert(logical.clone(), child.clone()) {
+            return Err(core_error(CoreDiagnostic::new(
+                DiagnosticCode::InvalidDistributionShape,
+                morphir_core::ir::DiagnosticStage::Semantic,
+                logical,
+                format!(
+                    "both {previous} and {child} map to the same tree file; keep only one"
+                ),
             )));
         }
         files.insert(logical, read_text(&entry)?);

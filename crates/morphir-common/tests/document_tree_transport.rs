@@ -630,6 +630,43 @@ fn a_json_node_file_in_a_yaml_tree_is_refused() {
 }
 
 #[test]
+fn a_yaml_tree_holding_one_file_under_both_spellings_is_refused() {
+    let root = memory_root();
+    let expected = granular_fixture();
+    let options = options(FormatId::yaml());
+    write_document_tree_with_options(&root, &expected, &options).unwrap();
+
+    let logical = module_manifest_path(Root::Pkg, &own_module_dir(&expected, 0));
+    let yaml = at(&root, &logical, Profile::Yaml);
+    let text = yaml.read_to_string().unwrap();
+    let yaml_physical = format!("{logical}.yaml");
+    let yml_physical = format!("{logical}.yml");
+    root.join(&yml_physical)
+        .unwrap()
+        .create_file()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+
+    let diagnostic = read_document_tree_with_options(&root, &options).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::invalid_distribution_shape"
+    );
+    assert!(
+        diagnostic.message().contains(&yaml_physical),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
+    assert!(
+        diagnostic.message().contains(&yml_physical),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
+}
+
+#[test]
 fn a_tree_whose_manifest_has_no_path_budget_is_refused_with_migration_guidance() {
     let root = memory_root();
     write_document_tree(&root, &fixture()).unwrap();

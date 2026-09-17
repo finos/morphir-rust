@@ -7,7 +7,9 @@
 //! what the writer emits for a file is the canonical spelling of that file's value tree.
 
 use morphir_core::ir::DiagnosticCode;
-use morphir_core::ir::v4::{IRFile, decode_ir_file_with_warnings};
+use morphir_core::ir::v4::{
+    IRFile, TypeEncoding, decode_ir_file_with_warnings, with_type_encoding,
+};
 use morphir_core::ir::yaml::{read_ir_file, write_canonical, write_ir_file};
 use serde_json::{Value, json};
 
@@ -99,9 +101,34 @@ fn decode_ir_file_with_warnings_reports_a_legacy_spelling() {
 fn write_ir_file_is_the_canonical_spelling_of_the_files_value_tree() {
     let file: IRFile = serde_json::from_value(library_fixture()).expect("the fixture is a v4 file");
 
-    let expected = write_canonical(&serde_json::to_value(&file).expect("an IRFile serialises"));
+    let expected = write_canonical(
+        &with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(&file))
+            .expect("an IRFile serialises"),
+    );
 
     assert_eq!(write_ir_file(&file), expected);
+}
+
+/// A type expression carrying no attributes is written in the canonical compact spelling, which
+/// is what a reader sees as `morphir/SDK:basics#int`. The encoding is a thread-local defaulting
+/// to `Expanded`, so a writer that does not select it emits the long wrapper for every type in
+/// the file.
+#[test]
+fn write_ir_file_writes_type_expressions_compactly() {
+    let file: IRFile = serde_json::from_value(library_fixture()).expect("the fixture is a v4 file");
+
+    let document = write_ir_file(&file);
+
+    assert!(
+        document.contains("typeExp: morphir/SDK:string#string"),
+        "expected the compact spelling:\n{document}"
+    );
+    assert!(
+        document.contains("outputType: morphir/SDK:string#string"),
+        "expected the compact spelling:\n{document}"
+    );
+    // `fqname` is the expanded `Reference` wrapper's member, and nothing else writes it.
+    assert!(!document.contains("fqname:"), "{document}");
 }
 
 #[test]

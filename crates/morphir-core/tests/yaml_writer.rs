@@ -68,6 +68,54 @@ fn quoting() {
     );
 }
 
+/// YAML's printable set (`c-printable`) is narrower than "not a C0 control": the C1 controls
+/// other than `NEL` and the two non-characters `#xFFFE`/`#xFFFF` cannot appear in source text
+/// either. A writer that printed them would emit YAML its own reader refuses.
+#[test]
+fn unprintable_code_points_are_escaped() {
+    let escaped = [
+        ("\u{80}", "\"\\u0080\""),
+        ("\u{9f}", "\"\\u009f\""),
+        ("\u{7f}", "\"\\u007f\""),
+        ("\u{fffe}", "\"\\ufffe\""),
+        ("\u{ffff}", "\"\\uffff\""),
+        ("a\u{1}b", "\"a\\u0001b\""),
+    ];
+    for (input, expected) in escaped {
+        assert_eq!(
+            w(json!({ "k": input })),
+            format!("k: {expected}\n"),
+            "{input:?}"
+        );
+    }
+
+    // `NEL` is printable in YAML 1.2, and so are the astral planes and the rest of the Latin-1
+    // supplement: they are written as themselves.
+    for text in ["a\u{85}b", "caf\u{e9}", "\u{1f600}", "\u{fffd}", "\u{e000}"] {
+        assert_eq!(w(json!({ "k": text })), format!("k: {text}\n"), "{text:?}");
+    }
+}
+
+/// What the writer writes, the reader reads back as the same string — the escapes included.
+#[test]
+fn unprintable_code_points_round_trip() {
+    for text in [
+        "\u{80}",
+        "\u{9f}",
+        "\u{7f}",
+        "\u{fffe}",
+        "\u{ffff}",
+        "a\u{1}b",
+        "a\u{85}b",
+        "caf\u{e9}",
+        "\u{1f600}",
+        "\u{fffd}",
+    ] {
+        let document = json!({ "k": text });
+        assert_eq!(read(&w(document.clone())).unwrap(), document, "{text:?}");
+    }
+}
+
 #[test]
 fn scalars_from_lexeme() {
     // `1e3` and `-0` are the two lexemes the reader hands on in serde_json's spelling rather

@@ -45,10 +45,32 @@ fn is_flowable(value: &Value) -> bool {
     }
 }
 
-/// A code point YAML would have to escape rather than print.
-fn is_control(c: char) -> bool {
+/// A code point YAML cannot carry in source text, and so has to be escaped rather than printed.
+///
+/// YAML 1.2's printable set is
+/// `#x9 | #xA | #xD | [#x20-#x7E] | #x85 | [#xA0-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`
+/// (`c-printable`), so the escapable code points are the C0 controls, `DEL`, the C1 controls
+/// other than `NEL` (`#x85`), and the two non-characters `#xFFFE` and `#xFFFF`. The surrogate
+/// range never appears: a `char` is never a surrogate, and the astral range is printable, so an
+/// escape here is always a single `\uXXXX`.
+fn is_unprintable(c: char) -> bool {
     let code = c as u32;
-    code < 0x20 || code == 0x7f
+    match code {
+        0x9 | 0xa | 0xd | 0x85 => false,
+        0x0..=0x1f => true,
+        0x20..=0x7e => false,
+        0x7f..=0x9f => true,
+        0xa0..=0xd7ff => false,
+        0xfffe | 0xffff => true,
+        _ => false,
+    }
+}
+
+/// A code point this writer never prints as itself: an unprintable one, and the three whitespace
+/// characters YAML would otherwise read as structure — a tab, and the two line breaks, which this
+/// writer escapes rather than opening a block scalar for.
+fn needs_escape(c: char) -> bool {
+    is_unprintable(c) || matches!(c, '\n' | '\r' | '\t')
 }
 
 fn needs_quotes(text: &str, in_flow: bool) -> bool {
@@ -68,7 +90,7 @@ fn needs_quotes(text: &str, in_flow: bool) -> bool {
     if text.contains(": ") || text.contains(" #") {
         return true;
     }
-    if text.chars().any(is_control) {
+    if text.chars().any(needs_escape) {
         return true;
     }
     in_flow && text.chars().any(|c| "[]{},:#".contains(c))
@@ -84,7 +106,7 @@ fn quote(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if is_control(c) => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if is_unprintable(c) => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
     }

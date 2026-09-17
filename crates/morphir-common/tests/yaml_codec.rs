@@ -198,6 +198,30 @@ fn v4_library_distribution_round_trips_through_yaml() {
     );
 }
 
+/// A type expression with no attributes is written compactly — `morphir/SDK:string#string`, not
+/// an expanded `Reference` wrapper. The encoding is a thread-local that defaults to `Expanded`,
+/// so the codec has to select the canonical one; without that, every type in a YAML artifact
+/// came out in the long spelling.
+#[test]
+fn v4_yaml_writes_type_expressions_in_the_canonical_compact_spelling() {
+    let yaml_options = options(IrVersion::V4, FormatId::yaml());
+    let events = decode(
+        &JsonCodec::new(),
+        V4_JSON,
+        &options(IrVersion::V4, FormatId::json()),
+    )
+    .expect("the v4 document decodes");
+
+    let yaml = encode(&YamlCodec::new(), events, &yaml_options).expect("the file encodes");
+
+    assert!(
+        yaml.contains("typeExp: morphir/SDK:string#string"),
+        "expected the compact spelling:\n{yaml}"
+    );
+    // `fqname` is the expanded `Reference` wrapper's member, and nothing else writes it.
+    assert!(!yaml.contains("fqname:"), "{yaml}");
+}
+
 #[test]
 fn quoted_and_block_scalars_are_not_treated_as_yaml_syntax() {
     let source = r#"
@@ -360,9 +384,16 @@ fn yaml_output_is_canonical() {
     )
     .unwrap();
 
+    // `write_ir_file` is the same writer over the same file, and it is what fixes the canonical
+    // type encoding: comparing against a tree serialized outside that scope would pin the
+    // expanded spelling instead.
     let file: morphir_core::ir::v4::IRFile = serde_json::from_str(input).unwrap();
-    let expected = morphir_core::ir::yaml::write_canonical(&serde_json::to_value(&file).unwrap());
+    let expected = morphir_core::ir::yaml::write_ir_file(&file);
     assert_eq!(yaml, expected);
+    assert!(
+        expected.contains("typeExp: morphir/SDK:string#string"),
+        "{expected}"
+    );
 
     // Flow sequences for scalar-only sequences, and exactly one trailing newline.
     assert!(yaml.contains("typeParams: []"), "{yaml}");

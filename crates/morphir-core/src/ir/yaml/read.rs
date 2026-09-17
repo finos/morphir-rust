@@ -57,6 +57,10 @@ fn at(span: &Span) -> Option<&Marker> {
 /// The parser reports a `%YAML` version on its `DocumentStart` event but resolves `%TAG` silently,
 /// so the profile's blanket refusal of directives is decided on the source text.
 fn has_directive(text: &str) -> bool {
+    // A stream may open with a byte order mark, which is not part of the first line's content: a
+    // `%TAG` after it is still a directive, and the parser resolves one silently, so a document
+    // whose declared handle is never used would otherwise slip past this refusal.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for line in text.lines() {
         // A directive is only ever unindented, so the `%` has to be the line's first byte. An
         // indented `%` opens a plain scalar, which the profile has no quarrel with.

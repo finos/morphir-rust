@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use morphir_core::format_version::{
     FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable,
 };
+use morphir_core::ir::v4::{TypeEncoding, with_type_encoding};
 use morphir_core::ir::yaml as profile;
 use morphir_core::ir::{
     Diagnostic as CoreDiagnostic, DiagnosticCode, DiagnosticStage, classic, v4 as ir_v4,
@@ -276,7 +277,12 @@ pub(crate) fn encode_document<T: Serialize + ?Sized>(
 
 fn encode_text<T: Serialize + ?Sized>(value: &T) -> Result<String, TransportDiagnostic> {
     stacker::grow(IR_RECURSION_STACK_BYTES, || {
-        let tree = serde_json::to_value(value).map_err(YamlCodec::encode_error)?;
+        // `TypeEncoding::Compact` is the canonical spelling of a v4 type expression: a reference
+        // with no arguments and no attributes is `morphir/SDK:basics#int` rather than an expanded
+        // wrapper. The thread-local defaults to `Expanded`, so the canonical writer selects it,
+        // as the MCK adapter's canonical path does. A classic v3 file consults it nowhere.
+        let tree = with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(value))
+            .map_err(YamlCodec::encode_error)?;
         // `write_canonical` ends its output with exactly one `\n` and never writes a CR.
         Ok(profile::write_canonical(&tree))
     })

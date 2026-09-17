@@ -31,6 +31,12 @@ fn documents() {
     );
     // A directive is only ever unindented: an indented `%` opens a plain scalar and is no
     // directive, so refusing the document would be refusing conforming YAML.
+    // A byte order mark is not content: the directive after it is still a directive, and the
+    // parser resolves a `%TAG` silently, so nothing later in the stream would reveal it.
+    assert_eq!(
+        code("\u{feff}%TAG ! tag:x,2026:\n---\na: 1\n").0,
+        "unsupported_yaml_feature"
+    );
     // A directive is only ever unindented, so an indented `%` is not one. The line is still not
     // YAML — `%` is a reserved indicator wherever a plain scalar starts — but that is the
     // parser's `invalid_yaml`, not the profile refusing a directive that is not there.

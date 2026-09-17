@@ -824,6 +824,18 @@ impl DocumentTreeSource {
             ));
         }
         let files = read_tree_files(&root, &policy)?;
+        // Discovery answers `is_file`, which resolves a link; the walk skips links. When the two
+        // disagree the manifest is a link, and the kit's reader would otherwise report a tree with
+        // no manifest at all — true, but not the reason.
+        if !files.contains_key(layout::MANIFEST) {
+            return Err(tree_error(
+                "morphir::ir::detection::linked_manifest",
+                Stage::Detection,
+                "the tree manifest was found but not read, which is what a symlink or junction in \
+                 its place does: a document tree is read through real files",
+                "replace the link with the manifest file, or open the directory the link resolves to",
+            ));
+        }
         let (file, _warnings) = layout::read_tree(&files, policy.profile).map_err(core_error)?;
         let mut queue = QueueSink::default();
         semantic::emit_v4(file, &mut queue)?;

@@ -13,8 +13,15 @@
 //!   link, so no walk and no recursive delete can reach through one.
 //! - `metadata` reports a link as a zero-length `File`, because `VfsFileType` has no third case and
 //!   a link is not a directory anything here may descend.
-//! - `remove_dir` removes a link as a link; on a real directory it first removes the linked children
-//!   `read_dir` hid, so `remove_dir_all` can still finish.
+//! - `remove_dir` removes a link as a link. On a real directory it first sweeps away the linked
+//!   children `read_dir` hid, and only then delegates — which is what lets `remove_dir_all` finish,
+//!   and which means a *direct* `remove_dir` on a directory holding links plus real entries removes
+//!   those links and then still fails with "directory not empty".
+//!
+//! **The root itself is exempt.** The root is the boundary, not something inside it: a caller who
+//! hands over a linked directory — a project checked out under a symlinked path — named that
+//! directory deliberately, and resolving it is not an escape. So the root is read, walked and
+//! written like any other directory, and `remove_dir("")` will not unlink it.
 //!
 //! Everything else delegates to [`PhysicalFS`]. The guarantee is about *traversal*: reading and
 //! removing stay inside the root. Writing through a path a caller names explicitly is still the
@@ -55,7 +62,14 @@ impl ContainedPhysicalFS {
     /// question covers symlinks, directory symlinks and junctions alike. A path that cannot be
     /// inspected at all — it is gone, or unreadable — is not a link to skip; whatever the caller
     /// does next will report the real error.
+    ///
+    /// The root is never a link to skip, however it is spelled on the way in: see the module
+    /// documentation. Both spellings of the root are checked, because `VfsPath` uses `""` and a
+    /// caller reaching the filesystem directly may use `"/"`.
     fn is_link(&self, path: &str) -> bool {
+        if is_root(path) {
+            return false;
+        }
         std::fs::symlink_metadata(self.os_path(path))
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
@@ -70,20 +84,47 @@ impl ContainedPhysicalFS {
             .collect())
     }
 
-    /// Removes a link, whichever of the two ways the platform spells it: a symlink to a file, and
-    /// every symlink on Unix, goes through `remove_file`; a directory symlink or junction on
-    /// Windows goes through `remove_dir`. Neither follows the link.
+    /// Removes a link, by the kind of link it is: a Windows directory symlink or junction goes
+    /// through `remove_dir`, everything else — every symlink on Unix, and a Windows file symlink —
+    /// through `remove_file`. The kind is read from the link's own `lstat`, so exactly one removal
+    /// is attempted and the error a caller sees is the one that actually happened. Neither call
+    /// follows the link.
     fn remove_link(&self, path: &str) -> VfsResult<()> {
         let os_path = self.os_path(path);
-        match std::fs::remove_file(&os_path) {
-            Ok(()) => Ok(()),
-            Err(_) => Ok(std::fs::remove_dir(&os_path)?),
+        if is_directory_link(&os_path) {
+            std::fs::remove_dir(&os_path)?;
+        } else {
+            std::fs::remove_file(&os_path)?;
         }
+        Ok(())
     }
+}
+
+/// Whether a VFS path is the root, in either spelling.
+fn is_root(path: &str) -> bool {
+    path.is_empty() || path == "/"
 }
 
 fn child_path(path: &str, name: &str) -> String {
     format!("{path}/{name}")
+}
+
+/// Whether a link is one the platform removes with `remove_dir`.
+///
+/// On Windows that is a directory symlink or a junction, both of which `is_symlink_dir` reports. On
+/// Unix every symlink is unlinked with `remove_file`, whatever it points at.
+#[cfg(windows)]
+fn is_directory_link(os_path: &Path) -> bool {
+    use std::os::windows::fs::FileTypeExt;
+
+    std::fs::symlink_metadata(os_path)
+        .map(|metadata| metadata.file_type().is_symlink_dir())
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn is_directory_link(_os_path: &Path) -> bool {
+    false
 }
 
 impl FileSystem for ContainedPhysicalFS {

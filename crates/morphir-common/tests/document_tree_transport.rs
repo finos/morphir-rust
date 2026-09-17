@@ -460,6 +460,17 @@ fn link_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result
     std::os::windows::fs::symlink_dir(target, link)
 }
 
+/// Creates a file link, however the platform spells one.
+#[cfg(unix)]
+fn link_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn link_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
 /// A temp directory holding a tree, and a second one outside it holding a sentinel file, with a
 /// directory link from `<root>/pkg/linked-away` to the second.
 ///
@@ -523,6 +534,54 @@ fn rewriting_a_tree_unlinks_a_link_under_pkg_instead_of_emptying_its_target() {
         !fixture.link().exists(),
         "the link itself should have been removed with the package root"
     );
+}
+
+#[test]
+fn a_tree_under_a_linked_root_round_trips() {
+    // The root is the boundary, not something inside it: a caller who hands over a linked directory
+    // named it deliberately. A project checked out under a symlinked path must still read and write.
+    let real = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let linked = parent.path().join("linked-root");
+    if let Err(error) = link_dir(real.path(), &linked) {
+        println!(
+            "SKIPPED: this platform would not create a directory link ({error}); the linked-root \
+             guarantee was not exercised"
+        );
+        return;
+    }
+
+    let root = physical_root(&linked);
+    let expected = granular_fixture();
+    write_document_tree(&root, &expected).unwrap();
+
+    assert!(root.join("manifest.json").unwrap().is_file().unwrap());
+    assert_eq!(read_document_tree(&root).unwrap(), expected);
+}
+
+#[test]
+fn a_linked_manifest_is_refused_rather_than_read_as_a_tree_without_one() {
+    let real = tempfile::tempdir().unwrap();
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = physical_root(root_dir.path());
+    write_document_tree(&root, &granular_fixture()).unwrap();
+
+    // Move the manifest out of the tree and leave a link where it was. Discovery resolves the link
+    // and finds a manifest; the walk skips it.
+    let manifest = root_dir.path().join("manifest.json");
+    let moved = real.path().join("manifest.json");
+    std::fs::rename(&manifest, &moved).unwrap();
+    if let Err(error) = link_file(&moved, &manifest) {
+        println!(
+            "SKIPPED: this platform would not create a file link ({error}); the linked-manifest \
+             refusal was not exercised"
+        );
+        return;
+    }
+
+    let diagnostic = read_document_tree(&root).unwrap_err();
+
+    assert_eq!(diagnostic.code(), "morphir::ir::detection::linked_manifest");
 }
 
 #[test]

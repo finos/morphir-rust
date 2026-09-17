@@ -2,6 +2,9 @@ use cucumber::{World, given, then, when};
 use morphir_extension_sdk::prelude::*;
 use morphir_rust_binding::RustExtension;
 
+#[path = "support/conditional.rs"]
+mod conditional;
+
 #[derive(Debug, Default)]
 struct TestDriver {
     source: String,
@@ -154,11 +157,40 @@ fn main() {
                 .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         );
     }
+
+    fn assert_conditional_results(&self) {
+        let generated = self.generated.as_ref().expect("generate Rust first");
+        assert!(
+            generated.diagnostics.is_empty(),
+            "{:?}",
+            generated.diagnostics
+        );
+        conditional::assert_executable(&generated.artifacts[0].content);
+    }
 }
 
 #[derive(Debug, Default, World)]
 struct RustWorld {
     driver: TestDriver,
+}
+
+#[given("Rust functions using let bindings and nested conditionals")]
+fn conditional_model(world: &mut RustWorld) {
+    world.driver.source = conditional::SOURCE.into();
+}
+
+#[when(expr = "I compile the functions to Morphir IR version {string}")]
+fn compile_functions(world: &mut RustWorld, version: String) {
+    world.driver.compile_with_options(CompileOptions {
+        types_only: false,
+        ir_version: version,
+        ..Default::default()
+    });
+}
+
+#[then("the generated functions return the expected branch results")]
+fn conditional_results(world: &mut RustWorld) {
+    world.driver.assert_conditional_results();
 }
 
 #[given("a Rust model with a product and a sum with payloads")]

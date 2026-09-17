@@ -23,6 +23,49 @@ use morphir_rust_binding::RustExtension;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+#[path = "support/conditional.rs"]
+mod conditional;
+
+#[test]
+#[ignore = "requires a built Rust WASM guest"]
+fn wasm_compiles_and_generates_conditional_functions_in_both_versions() {
+    let mut plugin = guest();
+    initialize(&mut plugin);
+    for version in ["3", "4"] {
+        let mut request = a_type_model(version);
+        request.options.types_only = false;
+        request.documents[0].text = conditional::SOURCE.into();
+        let native = RustExtension.compile(request.clone()).unwrap();
+        assert!(native.success, "{:?}", native.diagnostics);
+        let compiled: CompileResult = serde_json::from_value(result(
+            &mut plugin,
+            ExtensionRequest::new(methods::COMPILE, request, 2).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&compiled).unwrap(),
+            serde_json::to_value(native).unwrap()
+        );
+        let request = GenerateRequest {
+            ir: compiled.ir.unwrap(),
+            target: "rust".into(),
+            options: Default::default(),
+        };
+        let native = RustExtension.generate(request.clone()).unwrap();
+        assert!(native.success, "{:?}", native.diagnostics);
+        let generated: GenerateResult = serde_json::from_value(result(
+            &mut plugin,
+            ExtensionRequest::new(methods::GENERATE, request, 3).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&generated).unwrap(),
+            serde_json::to_value(native).unwrap()
+        );
+        conditional::assert_executable(&generated.artifacts[0].content);
+    }
+}
+
 fn guest() -> Plugin {
     let path = std::env::var_os("MORPHIR_RUST_GUEST")
         .map(PathBuf::from)

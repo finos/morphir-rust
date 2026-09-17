@@ -323,7 +323,7 @@ mod tests {
                 ir_version: Some(request.options.ir_version),
                 ir: Some(serde_json::json!({ "typed": request.documents[0].text })),
                 diagnostics: vec![],
-                modules: request.package.exposed_modules,
+                modules: request.package.exposed_modules.unwrap_or_default(),
             })
         }
 
@@ -380,7 +380,7 @@ mod tests {
                 ir_version: None,
                 ir: None,
                 diagnostics: vec![],
-                modules: request.package.exposed_modules,
+                modules: request.package.exposed_modules.unwrap_or_default(),
             })
         }
 
@@ -549,7 +549,7 @@ mod tests {
                 ir_version: Some(request.options.ir_version),
                 ir: Some(serde_json::json!({ "call": *compile_calls })),
                 diagnostics: vec![],
-                modules: request.package.exposed_modules,
+                modules: request.package.exposed_modules.unwrap_or_default(),
             })
         }
 
@@ -758,7 +758,7 @@ mod tests {
             }],
             package: CompilePackage {
                 name: "local/example".into(),
-                exposed_modules: vec!["Example".into()],
+                exposed_modules: Some(vec!["Example".into()]),
             },
             dependencies: vec![],
             options: CompileOptions {

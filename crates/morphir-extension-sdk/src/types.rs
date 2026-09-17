@@ -239,8 +239,9 @@ pub struct SourceDocument {
 pub struct CompilePackage {
     /// Morphir package name.
     pub name: String,
-    /// Modules exposed by the package.
-    pub exposed_modules: Vec<String>,
+    /// Exact public module list. Omission exposes all modules; an empty list exposes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposed_modules: Option<Vec<String>>,
 }
 
 /// A package distribution available to a frontend compilation.
@@ -548,7 +549,7 @@ mod tests {
             }],
             package: CompilePackage {
                 name: "local/example".into(),
-                exposed_modules: vec!["Example".into()],
+                exposed_modules: Some(vec!["Example".into()]),
             },
             dependencies: vec![],
             options: CompileOptions {
@@ -588,7 +589,7 @@ mod tests {
             documents: vec![],
             package: CompilePackage {
                 name: "local/example".into(),
-                exposed_modules: vec![],
+                exposed_modules: Some(vec![]),
             },
             dependencies: vec![CompileDependency {
                 package_name: "morphir/sdk".into(),

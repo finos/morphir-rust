@@ -166,9 +166,23 @@ pub enum EnvSelection {
     Skip,
 }
 
+/// Which project contributes the member configuration layer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ProjectSelection {
+    /// Use the discovered member, configured default, or sole member.
+    #[default]
+    Automatic,
+    /// Use the supplied project configuration itself, without selecting a default member.
+    Current,
+    /// Select by declared workspace-relative path or exact project name (`.` selects the root).
+    Explicit(String),
+}
+
 /// Options controlling which configuration sources are merged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigLoadOptions {
+    /// Project selection, applied before merging the member layer.
+    pub project: ProjectSelection,
     /// System configuration selection.
     pub system: SourceSelection,
     /// Global user configuration selection.
@@ -185,6 +199,7 @@ pub struct ConfigLoadOptions {
 impl Default for ConfigLoadOptions {
     fn default() -> Self {
         Self {
+            project: ProjectSelection::Automatic,
             system: SourceSelection::Discover,
             global: SourceSelection::Discover,
             user_override: SourceSelection::Discover,

@@ -3663,9 +3663,11 @@ version = "0.2.0"
 dependencies = [
  "extism-pdk",
  "morphir-workspace",
+ "percent-encoding",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]
@@ -3782,14 +3784,12 @@ dependencies = [
  "morphir-core",
  "morphir-extension-sdk",
  "num-bigint",
- "percent-encoding",
  "ruff_python_ast",
  "ruff_python_codegen",
  "ruff_python_parser",
  "ruff_text_size",
  "serde_json",
  "tokio",
- "url",
 ]
 
 [[package]]

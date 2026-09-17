@@ -16,7 +16,7 @@ fn request(sources: &[(&str, &str)]) -> CompileRequest {
             .collect(),
         package: CompilePackage {
             name: "acme/example".into(),
-            exposed_modules: vec![],
+            exposed_modules: None,
         },
         dependencies: vec![],
         options: CompileOptions {
@@ -62,6 +62,50 @@ fn roundtrip(request: CompileRequest) -> (Value, Vec<Artifact>) {
 const TYPES: &str = "from dataclasses import dataclass\n@dataclass(frozen=True)\nclass Address:\n    zip_code: int\ntype Pair = tuple[int, str]\n";
 
 #[test]
+fn private_modules_are_available_inside_the_package_and_survive_generation() {
+    let mut input = request(&[
+        ("internal/models.py", TYPES),
+        (
+            "api.py",
+            "from internal.models import Pair\ndef origin() -> Pair:\n    return (1, 'one')\n",
+        ),
+    ]);
+    input.package.exposed_modules = Some(vec!["api".into()]);
+    let ir = compile(input.clone());
+    assert!(
+        ir["distribution"]["Library"]["def"]["modules"]["internal/models"]["Private"].is_object()
+    );
+    assert!(ir["distribution"]["Library"]["def"]["modules"]["api"]["Public"].is_object());
+    let generated = PythonExtension
+        .generate(GenerateRequest {
+            ir: ir.clone(),
+            target: "python".into(),
+            options: Default::default(),
+        })
+        .unwrap();
+    assert!(generated.success, "{:?}", generated.diagnostics);
+    input.documents = generated
+        .artifacts
+        .iter()
+        .map(|artifact| SourceDocument {
+            uri: artifact.path.clone(),
+            text: artifact.content.clone(),
+            language_id: "python".into(),
+            version: 1,
+        })
+        .collect();
+    assert_eq!(ir, compile(input));
+}
+
+#[test]
+fn explicitly_empty_exposure_makes_every_module_private() {
+    let mut input = request(&[("models.py", TYPES)]);
+    input.package.exposed_modules = Some(vec![]);
+    let ir = compile(input);
+    assert!(ir["distribution"]["Library"]["def"]["modules"]["models"]["Private"].is_object());
+}
+
+#[test]
 fn imported_types_and_tuple_aliases_roundtrip_across_modules() {
     let (ir, artifacts) = roundtrip(request(&[
         ("models.py", TYPES),
@@ -101,8 +145,11 @@ fn nested_modules_resolve_absolute_relative_and_qualified_imports() {
         .options
         .extra
         .insert("sourceRootUri".into(), json!("file:///project/src"));
-    input.package.exposed_modules =
-        vec!["App".into(), "Domain.Models".into(), "Domain.Rules".into()];
+    input.package.exposed_modules = Some(vec![
+        "App".into(),
+        "Domain.Models".into(),
+        "Domain.Rules".into(),
+    ]);
     let (_, artifacts) = roundtrip(input);
     assert_eq!(
         artifacts
@@ -187,7 +234,7 @@ fn rejects_sources_outside_root_and_unknown_exposed_modules() {
         .insert("sourceRootUri".into(), json!("file:///project"));
     assert!(!PythonExtension.compile(input).unwrap().success);
     let mut input = request(&[("models.py", TYPES), ("rules.py", "")]);
-    input.package.exposed_modules = vec!["Missing".into()];
+    input.package.exposed_modules = Some(vec!["Missing".into()]);
     assert!(!PythonExtension.compile(input).unwrap().success);
 }
 

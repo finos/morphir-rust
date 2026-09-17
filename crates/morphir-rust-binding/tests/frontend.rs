@@ -15,7 +15,7 @@ fn request(source: &str, version: &str) -> CompileRequest {
         }],
         package: CompilePackage {
             name: "acme/example".into(),
-            exposed_modules: vec!["Models".into()],
+            exposed_modules: Some(vec!["Models".into()]),
         },
         options: CompileOptions {
             types_only: true,
@@ -188,13 +188,13 @@ fn request_rejects_languages_dependencies_invalid_packages_and_exposed_modules()
         );
     }
     let mut req = request("pub struct X;", "3");
-    req.package.exposed_modules = vec!["Unknown".into()];
+    req.package.exposed_modules = Some(vec!["Unknown".into()]);
     assert!(!RustExtension.compile(req).unwrap().success);
 }
 #[test]
 fn unexposed_modules_and_requested_parse_output_are_explicit() {
     let mut req = request("pub struct X;", "3");
-    req.package.exposed_modules.clear();
+    req.package.exposed_modules = Some(vec![]);
     let result = RustExtension.compile(req).unwrap();
     assert!(result.success);
     assert_eq!(
@@ -242,7 +242,7 @@ fn module_file_names_must_have_a_representable_morphir_name() {
     for stem in ["__", "模型"] {
         let mut req = request("pub struct X;", "3");
         req.documents[0].uri = format!("file:///src/{stem}.rs");
-        req.package.exposed_modules.clear();
+        req.package.exposed_modules = Some(vec![]);
         assert!(!RustExtension.compile(req).unwrap().success);
     }
 }

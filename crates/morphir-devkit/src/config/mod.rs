@@ -38,7 +38,7 @@ pub use secret::{
 };
 pub use sources::{
     ConfigLoadOptions, ConfigSource, ConfigSourceKind, ConfigSourceStatus, EffectiveConfig,
-    EnvSelection, SourceSelection,
+    EnvSelection, ProjectSelection, SourceSelection,
 };
 pub use workspace_discovery::{
     NativeWorkspaceDiscovery, NativeWorkspaceDiscoveryError, build_workspace_discovery_request,

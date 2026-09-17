@@ -1,6 +1,6 @@
 //! Compile a closed set of source modules in declaration and value passes.
 
-use super::{at, imports, lower, public};
+use super::{at, imports, lower};
 use crate::{
     Outcome, error,
     modules::{self, ModuleIdentity},
@@ -19,31 +19,18 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, V
     if package.is_empty() {
         return Err(error("PY001", "Package name must not be empty"));
     }
-    let root = request
-        .options
-        .extra
-        .get("sourceRootUri")
-        .and_then(serde_json::Value::as_str);
-    if root.is_none()
-        && request.documents.len() > 1
-        && request
-            .documents
-            .iter()
-            .any(|d| d.uri.contains(':') || d.uri.starts_with(['/', '\\']))
-    {
-        return Err(error(
-            "PY001",
-            "Absolute source URIs require sourceRootUri for multiple modules",
-        ));
-    }
+    let paths = request
+        .source_paths()
+        .map_err(|e| error("PY001", e.to_string()))?;
     let parsed = request
         .documents
         .iter()
-        .map(|document| {
+        .zip(&paths)
+        .map(|(document, path)| {
             if document.language_id != "python" {
                 return Err(error("PY001", "Source document language must be python"));
             }
-            let identity = ModuleIdentity::from_source(&document.uri, root)?;
+            let identity = ModuleIdentity::from_relative_path(path.as_str())?;
             let syntax = ruff_python_parser::parse_module(&document.text).map_err(|e| {
                 at(
                     error("PY002", e.to_string()),
@@ -64,13 +51,13 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, V
         .package
         .exposed_modules
         .iter()
+        .flatten()
         .map(|name| ModuleName::parse(&name.replace('.', "/")).to_canonical_string())
         .collect::<BTreeSet<_>>();
-    // Private module generation is outside the supported subset. Require all modules.
-    if !exposed.is_empty() && exposed != names {
+    if !exposed.is_subset(&names) {
         return Err(error(
             "PY001",
-            "exposedModules must be empty or name every source module",
+            "exposedModules names an unknown source module",
         ));
     }
     let exports = parsed
@@ -94,7 +81,21 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, V
             .zip(&scopes)
             .map(|((document, id, syntax), scope)| {
                 lower(syntax.suite(), scope, aliases)
-                    .map(|module| (id.canonical.clone(), public(module)))
+                    .map(|module| {
+                        (
+                            id.canonical.clone(),
+                            AccessControlled {
+                                access: if request.package.exposed_modules.is_none()
+                                    || exposed.contains(&id.canonical)
+                                {
+                                    Access::Public
+                                } else {
+                                    Access::Private
+                                },
+                                value: module,
+                            },
+                        )
+                    })
                     .map_err(|e| at(e, &document.uri, &document.text, syntax.syntax().range()))
             })
             .collect()

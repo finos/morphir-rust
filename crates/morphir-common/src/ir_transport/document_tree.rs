@@ -13,7 +13,7 @@
 //! [`layout::read_tree`], and replays the events the equivalent single document would have
 //! produced.
 //!
-//! The tree this writes is not the tree releases before 0.4.0-alpha.7 wrote. There is no
+//! The tree this writes is not the tree releases up to 0.4.0-alpha.7 wrote. There is no
 //! compatibility shim: an older tree is refused, with the guidance that says so.
 
 use std::collections::{HashSet, VecDeque};
@@ -43,7 +43,7 @@ use super::{
 /// `pathBudget` is the one required manifest member no older tree has, so its absence is the
 /// reliable signal that a tree predates the change rather than being merely malformed.
 const MIGRATE_GUIDANCE: &str =
-    "this tree predates 0.4.0-alpha.7; regenerate it with morphir migrate";
+    "this tree predates 0.4.0-alpha.8; regenerate it with morphir migrate";
 
 /// The manifest file names a tree root may carry, and the profile each selects.
 ///

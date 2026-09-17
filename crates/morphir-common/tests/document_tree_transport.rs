@@ -688,7 +688,7 @@ fn a_tree_whose_manifest_has_no_path_budget_is_refused_with_migration_guidance()
     );
     assert_eq!(
         diagnostic.guidance(),
-        Some("this tree predates 0.4.0-alpha.7; regenerate it with morphir migrate")
+        Some("this tree predates 0.4.0-alpha.8; regenerate it with morphir migrate")
     );
 }
 

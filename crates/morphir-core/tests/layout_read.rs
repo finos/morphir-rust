@@ -732,19 +732,55 @@ fn modules_come_back_sorted_by_logical_path() {
     );
 }
 
+/// One type alias whose `typeExp` spells `Function`'s parameter type with the legacy `arg`, so
+/// reading the file records one `legacy_spelling` warning.
+fn warning_type_file(name: &str) -> String {
+    format!(
+        "formatVersion: 4\nname: {name}\ndef:\n  Public:\n    TypeAliasDefinition:\n      typeParams: []\n      typeExp:\n        Function:\n          arg: morphir/SDK:string#string\n          returnType: morphir/SDK:string#string\n"
+    )
+}
+
 #[test]
-fn two_insertion_orders_of_one_tree_read_to_the_same_document() {
-    let mut forwards = Tree::new();
-    for (path, text) in OUT_OF_ORDER {
-        forwards.insert((*path).to_owned(), (*text).to_owned());
-    }
-    let mut backwards = Tree::new();
-    for (path, text) in OUT_OF_ORDER.iter().rev() {
-        backwards.insert((*path).to_owned(), (*text).to_owned());
-    }
+fn warnings_come_back_ordered_by_logical_path_not_by_listing_order() {
+    // The module lists `zeta` before `alpha`, so the files are read in that order; the warnings
+    // still come back in the order a caller can rely on, which is the tree's own.
+    let mut files = common::tree(&[
+        (
+            "manifest",
+            "formatVersion: 4\ndistribution: Library\npackage: example\npathBudget: 4000\n",
+        ),
+        (
+            "pkg/example/main/module",
+            "formatVersion: 4\npath: main\ntypes: [zeta, alpha]\nvalues: []\n",
+        ),
+    ]);
+    set(
+        &mut files,
+        "pkg/example/main/alpha.type",
+        &warning_type_file("alpha"),
+    );
+    set(
+        &mut files,
+        "pkg/example/main/zeta.type",
+        &warning_type_file("zeta"),
+    );
+
+    let (_, warnings) = read_yaml(&files);
+    assert_eq!(warnings.len(), 2, "one warning per file");
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.code == DiagnosticCode::LegacySpelling)
+    );
     assert_eq!(
-        canonical(&read_yaml(&forwards).0),
-        canonical(&read_yaml(&backwards).0)
+        warnings
+            .iter()
+            .map(|warning| warning.cursor.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "pkg/example/main/alpha.type#/def/Public/TypeAliasDefinition/typeExp/Function/arg",
+            "pkg/example/main/zeta.type#/def/Public/TypeAliasDefinition/typeExp/Function/arg",
+        ],
     );
 }
 

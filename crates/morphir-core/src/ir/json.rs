@@ -34,7 +34,7 @@ pub const MAX_DEPTH: usize = 1000;
 /// the size of the stack [`stacker::maybe_grow`] allocates when [`RED_ZONE`] says the caller's own
 /// stack is too shallow to recurse that far, matching `morphir-common`'s own
 /// `IR_RECURSION_STACK_BYTES` and the mck adapter's own decode-thread stack.
-const READ_STACK_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const READ_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 /// How much headroom `read` demands before it recurses, below which [`stacker::maybe_grow`] grows
 /// a fresh [`READ_STACK_BYTES`] stack rather than running the probe and the parse on what the
@@ -48,7 +48,7 @@ const READ_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// be small enough that a caller already running on a stack [`READ_STACK_BYTES`] or larger — the
 /// mck adapter's own decode thread, or a document-tree read that already grew once for the whole
 /// tree — is not made to grow again for every file.
-const RED_ZONE: usize = 16 * 1024 * 1024;
+pub(crate) const RED_ZONE: usize = 16 * 1024 * 1024;
 
 /// Reads a JSON document under the storage profile: no repeated object member, no more than
 /// [`MAX_DEPTH`] nested containers, and otherwise whatever `serde_json` accepts.

@@ -28,6 +28,12 @@ use super::paths::{
     MANIFEST, NodeFileKind, PathKind, Root, VERSION_SLOT, classify, node_file_path,
 };
 use super::{Profile, Tree};
+// The stack a whole tree read grows onto, and the headroom below which it grows one, are the JSON
+// reader's own figures — borrowed rather than copied. A tree is read on one stack: the growth
+// happens once, around the whole read, rather than once per file, and every file's parse then finds
+// a stack deeper than `RED_ZONE` and grows no further. That only holds while the two agree, so
+// there is one pair of constants rather than two.
+use crate::ir::json::{READ_STACK_BYTES, RED_ZONE};
 use crate::ir::v4::access::AccessControlled;
 use crate::ir::v4::distribution::{
     ApplicationContent, DefinitionDependencies, Dependencies, Distribution, LibraryContent,
@@ -44,19 +50,6 @@ use crate::ir::v4::value::{ValueDefinition, ValueSpecification};
 use crate::ir::v4::{IRFile, SpellingMode, serde_document, with_spelling_mode};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage, Warning};
 use crate::naming::{self, Name, PackageName};
-
-/// The stack a whole tree read grows onto when the caller's own is too shallow, matching
-/// [`crate::ir::json`]'s own figures.
-///
-/// A tree is read on one stack: the growth happens once, around the whole read, rather than once
-/// per file. Every file's parse then finds a stack deeper than its own red zone and grows no
-/// further, so a tree of hundreds of files pays for one allocation rather than hundreds of checks
-/// that each want a new one.
-const READ_STACK_BYTES: usize = 64 * 1024 * 1024;
-
-/// How much headroom a tree read demands before it starts, below which it grows
-/// [`READ_STACK_BYTES`] of its own.
-const RED_ZONE: usize = 16 * 1024 * 1024;
 
 /// A type entry of a package definition, as the model holds it.
 type TypeDef = AccessControlled<Documented<TypeDefinition>>;
@@ -180,9 +173,12 @@ impl Packages {
 
 /// A listing of one module's types or values: the names whose files have to be read, or the
 /// entries the manifest wrote out inline.
-enum Listing<'a, T> {
-    Names(&'a [Name]),
-    Inline(&'a IndexMap<String, T>),
+///
+/// Owned, because the entries are the model's: an inline listing moves into the module rather than
+/// being copied out of the manifest.
+enum Listing<T> {
+    Names(Vec<Name>),
+    Inline(IndexMap<String, T>),
 }
 
 impl Reader<'_> {
@@ -304,28 +300,32 @@ impl Reader<'_> {
         let mut modules = IndexMap::new();
         for dir in self.module_dirs(packages, package) {
             let at = Where::new(package.root, dir);
-            let manifest = self.read_module_manifest(&at, package, ExpectedEntries::Definitions)?;
+            let ModuleManifestFile {
+                path,
+                access,
+                doc,
+                types,
+                values,
+                file_names,
+                ..
+            } = self.read_module_manifest(&at, package, ExpectedEntries::Definitions)?;
             let types = self.resolve(
                 &at,
-                &manifest,
-                definition_listing(&manifest.types),
+                &file_names,
+                definition_listing(types, &at, "types")?,
                 load_type_definition,
             )?;
             let values = self.resolve(
                 &at,
-                &manifest,
-                definition_listing(&manifest.values),
+                &file_names,
+                definition_listing(values, &at, "values")?,
                 load_value_definition,
             )?;
             modules.insert(
-                manifest.path.to_canonical_string(),
+                path.to_canonical_string(),
                 AccessControlled {
-                    access: manifest.access,
-                    value: ModuleDefinition {
-                        types,
-                        values,
-                        doc: manifest.doc.clone(),
-                    },
+                    access,
+                    value: ModuleDefinition { types, values, doc },
                 },
             );
         }
@@ -340,29 +340,35 @@ impl Reader<'_> {
         let mut modules = IndexMap::new();
         for dir in self.module_dirs(packages, package) {
             let at = Where::new(package.root, dir);
-            let manifest =
-                self.read_module_manifest(&at, package, ExpectedEntries::Specifications)?;
+            let ModuleManifestFile {
+                path,
+                doc,
+                types,
+                values,
+                file_names,
+                ..
+            } = self.read_module_manifest(&at, package, ExpectedEntries::Specifications)?;
             let types = self.resolve(
                 &at,
-                &manifest,
-                specification_listing(&manifest.types),
+                &file_names,
+                specification_listing(types, &at, "types")?,
                 load_type_specification,
             )?;
             let values = self.resolve(
                 &at,
-                &manifest,
-                specification_listing(&manifest.values),
+                &file_names,
+                specification_listing(values, &at, "values")?,
                 load_value_specification,
             )?;
             modules.insert(
-                manifest.path.to_canonical_string(),
+                path.to_canonical_string(),
                 ModuleSpecification {
                     // A tree has nowhere to keep module annotations, so a module read out of one
                     // has none; the writer refuses one that has any.
                     annotations: Vec::new(),
                     types,
                     values,
-                    doc: manifest.doc.clone(),
+                    doc,
                 },
             );
         }
@@ -425,19 +431,19 @@ impl Reader<'_> {
     /// A names-style listing reads one file per name, in the order the manifest listed them; an
     /// inline listing is already the entries themselves. The model keys entries by their canonical
     /// name, so a listing that names one name twice reads its file twice and keeps one entry.
-    fn resolve<T: Clone>(
+    fn resolve<T>(
         &mut self,
         at: &Where,
-        manifest: &ModuleManifestFile,
-        listing: Listing<'_, T>,
+        file_names: &[(Name, String)],
+        listing: Listing<T>,
         load: impl Fn(&mut Self, &Where, &Name, &str) -> Result<T, Diagnostic>,
     ) -> Result<IndexMap<String, T>, Diagnostic> {
         match listing {
-            Listing::Inline(items) => Ok(items.clone()),
+            Listing::Inline(items) => Ok(items),
             Listing::Names(names) => {
                 let mut out = IndexMap::with_capacity(names.len());
                 for name in names {
-                    let value = load(self, at, name, &stem_of(manifest, name))?;
+                    let value = load(self, at, &name, &stem_of(file_names, &name))?;
                     out.insert(name.to_canonical_string(), value);
                 }
                 Ok(out)
@@ -527,11 +533,13 @@ impl Reader<'_> {
     }
 
     /// The first file under `pkg/` or `deps/` that no module claimed, in sorted order.
+    ///
+    /// A [`Tree`] iterates its keys in sorted order, so the first unclaimed one found is the first
+    /// in sorted order — which is the one and only stray the reference reports.
     fn stray(&self) -> Option<String> {
         self.files
             .keys()
-            .filter(|path| !self.consumed.contains(*path) && is_under_package_root(path))
-            .min()
+            .find(|path| !self.consumed.contains(*path) && is_under_package_root(path))
             .cloned()
     }
 }
@@ -632,22 +640,39 @@ fn specification_body<D, S>(path: &str, body: NodeFileBody<D, S>) -> Result<S, D
 ///
 /// A manifest decoded with [`ExpectedEntries::Definitions`] never comes back in the specification
 /// style — which of the two an inline object is read as is decided by that argument, never guessed
-/// from the shape — so the third arm is unreachable, and an empty listing is the answer that keeps
-/// this total without a panic.
-fn definition_listing<D, S>(entries: &ModuleEntries<D, S>) -> Listing<'_, D> {
+/// from the shape — so the third arm cannot happen. It is still a refusal rather than an empty
+/// listing: silently dropping a module's entries would turn a defect in this reader into a
+/// distribution missing half of itself.
+fn definition_listing<D, S>(
+    entries: ModuleEntries<D, S>,
+    at: &Where,
+    member: &str,
+) -> Result<Listing<D>, Diagnostic> {
     match entries {
-        ModuleEntries::Names(names) => Listing::Names(names),
-        ModuleEntries::Definitions(items) => Listing::Inline(items),
-        ModuleEntries::Specifications(_) => Listing::Names(&[]),
+        ModuleEntries::Names(names) => Ok(Listing::Names(names)),
+        ModuleEntries::Definitions(items) => Ok(Listing::Inline(items)),
+        ModuleEntries::Specifications(_) => Err(shape(
+            &at.manifest_path,
+            &format!("/{member}"),
+            format!("expected definitions in {member}, found specifications"),
+        )),
     }
 }
 
 /// A listing read where specifications were expected, the other half of [`definition_listing`].
-fn specification_listing<D, S>(entries: &ModuleEntries<D, S>) -> Listing<'_, S> {
+fn specification_listing<D, S>(
+    entries: ModuleEntries<D, S>,
+    at: &Where,
+    member: &str,
+) -> Result<Listing<S>, Diagnostic> {
     match entries {
-        ModuleEntries::Names(names) => Listing::Names(names),
-        ModuleEntries::Specifications(items) => Listing::Inline(items),
-        ModuleEntries::Definitions(_) => Listing::Names(&[]),
+        ModuleEntries::Names(names) => Ok(Listing::Names(names)),
+        ModuleEntries::Specifications(items) => Ok(Listing::Inline(items)),
+        ModuleEntries::Definitions(_) => Err(shape(
+            &at.manifest_path,
+            &format!("/{member}"),
+            format!("expected specifications in {member}, found definitions"),
+        )),
     }
 }
 
@@ -657,10 +682,9 @@ fn specification_listing<D, S>(entries: &ModuleEntries<D, S>) -> Listing<'_, S> 
 /// A reader trusts `fileNames`. It never recomputes the truncation and never checks that the
 /// recorded stem is the one the budget would have produced — the manifest is what says where a
 /// file is.
-fn stem_of(manifest: &ModuleManifestFile, name: &Name) -> String {
+fn stem_of(file_names: &[(Name, String)], name: &Name) -> String {
     let canonical = name.to_canonical_string();
-    manifest
-        .file_names
+    file_names
         .iter()
         .find(|(listed, _)| listed.to_canonical_string() == canonical)
         .map(|(_, stem)| stem.clone())

@@ -1,19 +1,23 @@
 //! The document-tree layout: the storage-profile boundary, the logical path grammar, and file
 //! stems.
 //!
-//! Mirrors `IR/src/layout/{index,paths,stems}.ts` in `ecosystem/morphir-typescript`; see
-//! `.dev/docs/superpowers/maps/2026-09-17-reference-tree-layout-map.md`. This module supplies
-//! the paths and stems a tree reader and a tree writer are both built on (tasks 5 and 6); it does
-//! not itself read or write a tree.
+//! Mirrors `IR/src/layout/{index,paths,stems,write-tree}.ts` in `ecosystem/morphir-typescript`;
+//! see `.dev/docs/superpowers/maps/2026-09-17-reference-tree-layout-map.md`. [`paths`] and
+//! [`stems`] supply what a tree reader and a tree writer are both built on; [`write`] lays a
+//! distribution out as a tree.
 
 pub mod paths;
 pub mod stems;
+pub mod write;
 
 pub use paths::{
     MANIFEST, NodeFileKind, PathKind, Root, VERSION_SLOT, classify, from_physical, module_dir,
     module_dir_prefix, module_manifest_path, node_file_path, package_dir, to_physical,
 };
 pub use stems::{StemResult, stem_for};
+pub use write::{
+    TreePolicy, write_definition_module, write_manifest, write_specification_module, write_tree,
+};
 
 use crate::ir::Diagnostic;
 

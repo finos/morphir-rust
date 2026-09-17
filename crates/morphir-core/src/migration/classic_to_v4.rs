@@ -158,6 +158,7 @@ pub fn migrate_literal(value: &classic::Literal) -> v4::Literal {
         // Classic holds a float as a machine number with no lexeme, so the migrated literal is
         // spelled the shortest way that reads back as the same number.
         classic::Literal::Float(value) => v4::Literal::Float(v4::FloatLiteral::from_f64(*value)),
+        classic::Literal::Decimal(value) => v4::Literal::Decimal(value.clone()),
     }
 }
 

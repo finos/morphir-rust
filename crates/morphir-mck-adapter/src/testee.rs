@@ -767,6 +767,7 @@ fn classic_literal_kind(literal: &classic::Literal) -> &'static str {
         classic::Literal::String(_) => "StringLiteral",
         classic::Literal::WholeNumber(_) => "WholeNumberLiteral",
         classic::Literal::Float(_) => "FloatLiteral",
+        classic::Literal::Decimal(_) => "DecimalLiteral",
     }
 }
 

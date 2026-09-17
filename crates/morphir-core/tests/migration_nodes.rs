@@ -101,3 +101,17 @@ fn value_attributes_become_a_concrete_inferred_type() {
     ));
     assert!(migrated.attributes().inferred_type.is_some());
 }
+
+#[test]
+fn a_classic_decimal_literal_migrates_keeping_its_lexeme() {
+    let classic: classic::Value<classic::Attrs, classic::Attrs> =
+        serde_json::from_str(r#"["Literal",{},["DecimalLiteral","10.50"]]"#).unwrap();
+    let mut context = MigrationContext::default();
+
+    let migrated = migrate_value(&classic, &mut context).unwrap();
+
+    match migrated {
+        v4::Value::Literal(_, v4::Literal::Decimal(d)) => assert_eq!(d.lexeme(), "10.50"),
+        other => panic!("expected a v4 decimal literal, got {other:?}"),
+    }
+}

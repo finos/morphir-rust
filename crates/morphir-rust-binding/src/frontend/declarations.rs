@@ -42,6 +42,14 @@ pub(super) fn symbols(
     source.unique(names)?;
     let constructors = items.iter().flat_map(|item| match item {
         syn::Item::Struct(s) => vec![s.ident.clone()],
+        syn::Item::Fn(function)
+            if function
+                .attrs
+                .iter()
+                .any(super::binding_attributes::is_binding_attribute) =>
+        {
+            vec![function.sig.ident.clone()]
+        }
         syn::Item::Enum(e) => e.variants.iter().map(|v| v.ident.clone()).collect(),
         _ => vec![],
     });

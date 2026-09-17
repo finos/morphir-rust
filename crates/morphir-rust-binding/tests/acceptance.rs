@@ -11,6 +11,15 @@ struct TestDriver {
 
 impl TestDriver {
     fn compile(&mut self, version: &str) {
+        self.compile_with_options(CompileOptions {
+            types_only: true,
+            ir_version: version.into(),
+            ..Default::default()
+        });
+    }
+
+    fn compile_with_options(&mut self, options: CompileOptions) {
+        let version = options.ir_version.clone();
         let extension = NativeExtension::frontend_backend(RustExtension).unwrap();
         self.compiled = Some(
             extension
@@ -29,17 +38,13 @@ impl TestDriver {
                         exposed_modules: vec!["Models".into()],
                     },
                     dependencies: vec![],
-                    options: CompileOptions {
-                        types_only: true,
-                        ir_version: version.into(),
-                        ..Default::default()
-                    },
+                    options,
                 })
                 .unwrap(),
         );
         let compiled = self.compiled.as_ref().unwrap();
         if compiled.success {
-            assert_eq!(compiled.ir_version.as_deref(), Some(version));
+            assert_eq!(compiled.ir_version.as_deref(), Some(version.as_str()));
             assert_eq!(
                 compiled.ir.as_ref().unwrap()["formatVersion"],
                 version.parse::<u64>().unwrap()
@@ -110,6 +115,33 @@ fn main() {
         );
     }
 
+    fn assert_bindings_preserved(&self) {
+        let compiled = self.compiled.as_ref().unwrap();
+        assert!(compiled.success, "{:?}", compiled.diagnostics);
+        let ir = compiled.ir.as_ref().unwrap();
+        let _: morphir_core::ir::v4::IRFile = serde_json::from_value(ir.clone()).unwrap();
+        let values = &ir["distribution"]["Library"]["def"]["modules"]["models"]["Public"]["values"];
+        assert_eq!(
+            values["add"]["Public"]["NativeBody"]["nativeInfo"]["hint"],
+            serde_json::json!({"Arithmetic": {}})
+        );
+        assert_eq!(
+            values["add"]["Public"]["NativeBody"]["inputTypes"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            values["identity"]["Public"]["ExternalBody"]["externals"][0]["externalName"],
+            "vendor::identity"
+        );
+        assert_eq!(
+            values["identity"]["Public"]["ExternalBody"]["outputType"],
+            serde_json::json!({"Variable": {"name": "t"}})
+        );
+    }
+
     fn assert_rejected(&self) {
         let compiled = self.compiled.as_ref().expect("compile the model first");
         assert!(!compiled.success);
@@ -141,6 +173,31 @@ fn borrowed_field(world: &mut RustWorld) {
     world.driver.source = "pub struct Person { pub age: i64 }\n\
         pub struct Borrowed { pub name: &'static str }"
         .into();
+}
+
+#[given("Rust functions annotated as native and external bindings")]
+fn bindings(world: &mut RustWorld) {
+    world.driver.source = r#"
+        #[morphir::native(hint = "arithmetic")]
+        pub fn add(a: i64, b: i64) -> i64 { panic!("not executed") }
+        #[morphir::external(target = "rust", name = "vendor::identity")]
+        pub fn identity<T>(value: T) -> T { value }
+    "#
+    .into();
+}
+
+#[when("I compile the bindings to Morphir IR version 4")]
+fn compile_bindings(world: &mut RustWorld) {
+    world.driver.compile_with_options(CompileOptions {
+        types_only: false,
+        ir_version: "4".into(),
+        ..Default::default()
+    });
+}
+
+#[then("the IR preserves both binding kinds and their signatures")]
+fn preserved_bindings(world: &mut RustWorld) {
+    world.driver.assert_bindings_preserved();
 }
 
 #[when(expr = "I compile the model to Morphir IR version {string}")]

@@ -1,4 +1,5 @@
 //! Rust type frontend and backend for Morphir IR v3 and v4.
+//! Explicit native and external function bindings are extracted into v4 value definitions.
 //!
 //! ```
 //! use morphir_extension_sdk::{Extension, NativeExtension};
@@ -23,7 +24,9 @@ impl Extension for RustExtension {
             name: "Morphir Rust".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             types: vec![ExtensionType::Frontend, ExtensionType::Backend],
-            description: Some("Rust types for Morphir IR v3 and v4".into()),
+            description: Some(
+                "Rust types for Morphir IR v3/v4 and explicit v4 native/external bindings".into(),
+            ),
             license: Some("Apache-2.0".into()),
             ..Default::default()
         }

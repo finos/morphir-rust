@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust frontend extracts explicitly annotated native and external function
+  declarations into IR v4, preserving signatures, visibility and documentation.
+  IR v3 reports a version diagnostic; type-only requests validate and omit bindings.
+
 - Python compilation and generation support multiple modules in one package,
   including nested paths, absolute and relative type imports, aliases and
   cross-module tuple checking. The backend emits module-qualified imports;

@@ -115,6 +115,47 @@ fn a_type_model(version: &str) -> CompileRequest {
 }
 
 #[test]
+#[ignore = "requires a built Rust WASM guest"]
+fn wasm_compiles_v4_binding_declarations_like_native() {
+    let mut plugin = guest();
+    initialize(&mut plugin);
+    let mut request = a_type_model("4");
+    request.options.types_only = false;
+    request.documents[0].text = r#"
+        pub struct Id(pub i64);
+        #[morphir::native(hint = "comparison")]
+        pub fn same(a: Id, b: Id) -> bool { panic!("not executed") }
+        #[morphir::external(target = "rust", name = "vendor::lookup")]
+        #[morphir::external(target = "javascript", name = "store.lookup")]
+        pub fn lookup(id: Id) -> Option<String> { unimplemented!() }
+    "#
+    .into();
+    let native = RustExtension.compile(request.clone()).unwrap();
+    assert!(native.success, "{:?}", native.diagnostics);
+    let compiled: CompileResult = serde_json::from_value(result(
+        &mut plugin,
+        ExtensionRequest::new(methods::COMPILE, request.clone(), 2).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(compiled).unwrap(),
+        serde_json::to_value(native).unwrap()
+    );
+    request.options.ir_version = "3".into();
+    let rejected: CompileResult = serde_json::from_value(result(
+        &mut plugin,
+        ExtensionRequest::new(methods::COMPILE, request, 3).unwrap(),
+    ))
+    .unwrap();
+    assert!(!rejected.success);
+    assert!(rejected.ir.is_none());
+    assert_eq!(
+        rejected.diagnostics[0].code.as_deref(),
+        Some("RS_BINDING_VERSION")
+    );
+}
+
+#[test]
 #[ignore = "requires a built Rust WASM guest; see this file's module documentation"]
 fn wasm_exports_compile_and_generate_both_ir_versions_like_native() {
     let mut plugin = guest();

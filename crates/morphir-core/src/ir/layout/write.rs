@@ -74,22 +74,57 @@ struct Stem<'a, T> {
     truncated: bool,
 }
 
-/// The distribution manifest: the tree's root file, and the only one that names the whole.
+/// Everything the distribution manifest says, held apart from the distribution it describes.
+///
+/// A distribution manifest names only its package, its kind, its dependencies and its entry
+/// points — never a module — so a caller streaming a tree one module at a time can accumulate this
+/// as the modules go past and write the manifest at the end without ever holding the whole
+/// [`IRFile`]. [`write_manifest`] builds one from a complete distribution; a streaming writer
+/// builds one from the header it was handed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManifestHeader {
+    pub format_version: FormatVersion,
+    pub distribution: DistributionKind,
+    pub package: PackageName,
+    /// The dependency packages, in the order the distribution lists them.
+    pub dependencies: Vec<PackageName>,
+    /// An application's entry points; empty on the other two kinds.
+    pub entry_points: EntryPoints,
+}
+
+/// The distribution manifest a header spells: the tree's root file, and the only one that names
+/// the whole.
 ///
 /// Total, because a manifest carries only names, a kind, a number and its entry points, none of
 /// which can fail to serialize; the fallback below is unreachable rather than a case to handle.
-pub fn write_manifest(file: &IRFile, policy: &TreePolicy) -> (String, String) {
+pub fn write_manifest_header(header: &ManifestHeader, policy: &TreePolicy) -> (String, String) {
     let manifest = DistributionManifestFile {
-        format_version: file.format_version.clone(),
-        distribution: kind_of(&file.distribution),
-        package: file.distribution.package_name().clone(),
+        format_version: header.format_version.clone(),
+        distribution: header.distribution,
+        package: header.package.clone(),
         path_budget: policy.path_budget,
-        dependencies: dependency_names(&file.distribution),
-        entry_points: entry_points_of(&file.distribution),
+        dependencies: header.dependencies.clone(),
+        entry_points: header.entry_points.clone(),
     };
     let value = with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(&manifest))
         .unwrap_or(serde_json::Value::Null);
     (MANIFEST.to_owned(), policy.profile.write(&value))
+}
+
+/// The distribution manifest of a whole distribution.
+pub fn write_manifest(file: &IRFile, policy: &TreePolicy) -> (String, String) {
+    write_manifest_header(&manifest_header(file), policy)
+}
+
+/// The header a complete distribution carries.
+fn manifest_header(file: &IRFile) -> ManifestHeader {
+    ManifestHeader {
+        format_version: file.format_version.clone(),
+        distribution: kind_of(&file.distribution),
+        package: file.distribution.package_name().clone(),
+        dependencies: dependency_names(&file.distribution),
+        entry_points: entry_points_of(&file.distribution),
+    }
 }
 
 /// Lays one module definition out as its manifest and one file per type and value.

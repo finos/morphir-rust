@@ -14,18 +14,16 @@ use morphir_core::format_version::{
 };
 use morphir_core::ir::v4::{TypeEncoding, with_type_encoding};
 use morphir_core::ir::yaml as profile;
-use morphir_core::ir::{
-    Diagnostic as CoreDiagnostic, DiagnosticCode, DiagnosticStage, classic, v4 as ir_v4,
-};
+use morphir_core::ir::{Diagnostic as CoreDiagnostic, DiagnosticCode, classic, v4 as ir_v4};
 use morphir_core::traversal::{IrCursor, SemanticEvent};
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value as Json;
 
+use super::diagnostic::{core_code_name, core_message, core_source_span, core_stage};
 use super::semantic::{self, SemanticFile};
 use super::{
     CodecOptions, EventSink, EventSource, FormatId, HeaderObservation, IR_RECURSION_STACK_BYTES,
-    IrCodec, IrVersion, SourceSpan, Stage, TransportDiagnostic,
+    IrCodec, IrVersion, Stage, TransportDiagnostic,
 };
 
 const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
@@ -145,42 +143,16 @@ pub fn probe_yaml_header(input: &[u8]) -> Result<Vec<HeaderObservation>, Transpo
 /// is understood; the pointer therefore travels in the message and the cursor stays at the root,
 /// as every other physical-syntax diagnostic in this crate does.
 pub(crate) fn transport_diagnostic(diagnostic: CoreDiagnostic) -> TransportDiagnostic {
-    let guidance = guidance_for(diagnostic.code);
-    let stage = match diagnostic.stage {
-        DiagnosticStage::Syntax => Stage::Syntax,
-        DiagnosticStage::Normalization => Stage::Normalization,
-        DiagnosticStage::Semantic => Stage::Normalization,
-    };
-    let message = if diagnostic.cursor.is_empty() || diagnostic.cursor == "/" {
-        diagnostic.message.clone()
-    } else {
-        format!("{} (at {})", diagnostic.message, diagnostic.cursor)
-    };
     let transport = TransportDiagnostic::error(
-        format!("morphir::ir::yaml::{}", code_name(diagnostic.code)),
-        stage,
+        format!("morphir::ir::yaml::{}", core_code_name(diagnostic.code)),
+        core_stage(diagnostic.stage),
         IrCursor::root(),
-        message,
+        core_message(&diagnostic),
     )
-    .with_guidance(guidance);
-    match (diagnostic.line, diagnostic.column) {
-        (Some(line), Some(column)) => transport.with_source_span(SourceSpan {
-            offset: 0,
-            length: 0,
-            line: line as usize,
-            column: column as usize,
-        }),
-        _ => transport,
-    }
-}
-
-/// The kit's own spelling of a diagnostic code, which is its serde name.
-fn code_name(code: DiagnosticCode) -> String {
-    match serde_json::to_value(code) {
-        Ok(Json::String(name)) => name,
-        // `DiagnosticCode` is a unit-only enum with `rename_all = "snake_case"`, so this is
-        // unreachable; answering with the debug spelling keeps the codec total either way.
-        _ => format!("{code:?}"),
+    .with_guidance(guidance_for(diagnostic.code));
+    match core_source_span(&diagnostic) {
+        Some(span) => transport.with_source_span(span),
+        None => transport,
     }
 }
 
@@ -258,21 +230,6 @@ fn version_mismatch(expected: u32, found: &impl std::fmt::Display) -> TransportD
         IrCursor::root(),
         format!("the v{expected} YAML codec requires formatVersion {expected}, found {found}"),
     )
-}
-
-/// Reads one profile-conforming YAML document as `T`.
-pub(crate) fn decode_document<T: DeserializeOwned>(input: &[u8]) -> Result<T, TransportDiagnostic> {
-    let value = read_value(input)?;
-    stacker::grow(IR_RECURSION_STACK_BYTES, || {
-        serde_json::from_value(value).map_err(|error| recover(&error))
-    })
-}
-
-/// Writes `value` as one canonical YAML document, with one trailing newline and `\n` breaks.
-pub(crate) fn encode_document<T: Serialize + ?Sized>(
-    value: &T,
-) -> Result<Vec<u8>, TransportDiagnostic> {
-    Ok(encode_text(value)?.into_bytes())
 }
 
 fn encode_text<T: Serialize + ?Sized>(value: &T) -> Result<String, TransportDiagnostic> {

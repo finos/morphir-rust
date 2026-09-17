@@ -12,10 +12,12 @@
 
 use indexmap::IndexMap;
 use morphir_core::ir::layout::{
-    Profile, Root, TreePolicy, write_definition_module, write_manifest, write_specification_module,
-    write_tree,
+    ManifestHeader, Profile, Root, TreePolicy, write_definition_module, write_manifest,
+    write_manifest_header, write_specification_module, write_tree,
 };
+use morphir_core::ir::v4::distribution::EntryPoints;
 use morphir_core::ir::v4::module::{Documented, ModuleDefinition};
+use morphir_core::ir::v4::tree_files::DistributionKind;
 use morphir_core::ir::v4::types::TypeDefinition;
 use morphir_core::ir::{
     Access, AccessControlled, Diagnostic, DiagnosticCode, DiagnosticStage, FormatVersion, IRFile,
@@ -525,6 +527,24 @@ fn a_specification_module_writes_no_access_and_one_module_at_a_time() {
 fn write_manifest_answers_the_manifest_path_and_its_bytes() {
     let file = yaml_document(DOCUMENT_0008);
     let (path, text) = write_manifest(&file, &policy(Profile::Yaml, 4000));
+    assert_eq!(path, TREE_0008[0].0);
+    assert_eq!(text, TREE_0008[0].1);
+}
+
+#[test]
+fn write_manifest_header_writes_the_manifest_without_the_distribution() {
+    // What a writer streaming one module at a time has when it reaches the end of the stream: the
+    // header's own members and the dependency names it saw go past, and no package body at all.
+    let header = ManifestHeader {
+        format_version: FormatVersion::Integer(4),
+        distribution: DistributionKind::Library,
+        package: PackageName::parse("my-org/my-project"),
+        dependencies: vec![PackageName::parse("morphir/SDK")],
+        entry_points: EntryPoints::new(),
+    };
+
+    let (path, text) = write_manifest_header(&header, &policy(Profile::Yaml, 4000));
+
     assert_eq!(path, TREE_0008[0].0);
     assert_eq!(text, TREE_0008[0].1);
 }

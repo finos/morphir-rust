@@ -18,7 +18,8 @@ pub use paths::{
 pub use read::read_tree;
 pub use stems::{StemResult, stem_for};
 pub use write::{
-    TreePolicy, write_definition_module, write_manifest, write_specification_module, write_tree,
+    ManifestHeader, TreePolicy, write_definition_module, write_manifest, write_manifest_header,
+    write_specification_module, write_tree,
 };
 
 use crate::ir::Diagnostic;

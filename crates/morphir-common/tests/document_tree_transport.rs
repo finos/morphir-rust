@@ -1,3 +1,11 @@
+//! The document-tree transport as a filesystem adapter over `morphir_core::ir::layout`.
+//!
+//! The layout itself is pinned in the kit, against the Morphir Compatibility Kit's own tree cases;
+//! what is pinned here is what the adapter adds — where a logical path lands on a filesystem, how a
+//! tree root is discovered, what a rewrite removes, and which trees are refused. Every expected
+//! path is computed through `layout::paths` rather than spelled out, so a test asserts that the
+//! adapter uses the kit's grammar rather than re-stating a guess at what the grammar says.
+
 use std::io::Write;
 
 use morphir_common::ir_transport::{
@@ -7,12 +15,21 @@ use morphir_common::ir_transport::{
 };
 use morphir_common::vfs::{memory_root, physical_root};
 use morphir_core::ir::classic;
-use morphir_core::ir::v4::Distribution;
+use morphir_core::ir::layout::{
+    NodeFileKind, Profile, Root, module_dir, module_manifest_path, node_file_path, to_physical,
+};
+use morphir_core::ir::v4::{Distribution, IRFile};
 use morphir_core::migration::{MigrationOptions, migrate_distribution};
-use morphir_core::naming::PackageName;
+use morphir_core::naming::{ModuleName, Name, PackageName};
 use morphir_core::traversal::{DependencyEvent, SemanticEvent, SemanticEventKind};
+use vfs::VfsPath;
 
-fn fixture() -> morphir_core::ir::v4::IRFile {
+// =============================================================================
+// Fixtures and helpers
+// =============================================================================
+
+/// A two-module library with no dependencies, built from a classic v3 document and migrated.
+fn fixture() -> IRFile {
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
     struct ClassicFile {
@@ -54,28 +71,257 @@ fn fixture() -> morphir_core::ir::v4::IRFile {
     serde_json::from_value(serde_json::to_value(migrated).unwrap()).unwrap()
 }
 
-fn granular_fixture() -> morphir_core::ir::v4::IRFile {
+/// The kit's complete v4 example: package `regulation`, one module with types and values, and a
+/// `morphir/SDK` specification dependency.
+fn granular_fixture() -> IRFile {
     serde_json::from_str(include_str!(
         "../../morphir-core/tests/fixtures/ir/v4/complete-example.json"
     ))
     .unwrap()
 }
 
-fn assert_round_trip(root: vfs::VfsPath) {
-    let expected = fixture();
+/// The canonical document of MCK distributions-0010: an application whose dependency is a package
+/// definition, which a tree writes under `deps/` as definitions.
+const APPLICATION_WITH_DEFINITION_DEPENDENCY: &str = r#"{"formatVersion":4,"distribution":{"Application":{"packageName":"example","dependencies":{"my-org/shared":{"modules":{"util":{"Public":{"types":{},"values":{"identity":{"Public":{"ExpressionBody":{"inputTypes":{"x":"morphir/SDK:basics#int"},"outputType":"morphir/SDK:basics#int","body":{"Variable":"x"}}}}}}}}}},"def":{"modules":{"main":{"Public":{"types":{},"values":{"run":{"Public":{"ExpressionBody":{"inputTypes":{},"outputType":"morphir/SDK:basics#unit","body":{"Unit":{}}}}}}}}}},"entryPoints":{"start":{"target":"example:main#run","kind":"main"}}}}}"#;
+
+fn options(format: FormatId) -> CodecOptions {
+    CodecOptions::new(IrVersion::V4, Layout::DocumentTree, format)
+}
+
+fn profile_of(format: &FormatId) -> Profile {
+    if *format == FormatId::json() {
+        Profile::Json
+    } else {
+        Profile::Yaml
+    }
+}
+
+/// The physical file a logical path lands on under `root`.
+fn at(root: &VfsPath, logical: &str, profile: Profile) -> VfsPath {
+    root.join(to_physical(logical, profile)).unwrap()
+}
+
+fn assert_file(root: &VfsPath, logical: &str, profile: Profile) {
+    let path = at(root, logical, profile);
+    assert!(
+        path.is_file().unwrap(),
+        "expected {} to exist",
+        path.as_str()
+    );
+}
+
+fn manifest_value(root: &VfsPath, profile: Profile) -> serde_json::Value {
+    let path = at(root, "manifest", profile);
+    let text = path.read_to_string().unwrap();
+    match profile {
+        Profile::Json => serde_json::from_str(&text).unwrap(),
+        Profile::Yaml => morphir_core::ir::yaml::read(&text).unwrap(),
+    }
+}
+
+fn package(name: &str) -> PackageName {
+    PackageName::from_canonical_string(name).unwrap()
+}
+
+fn module(name: &str) -> ModuleName {
+    ModuleName::from_canonical_string(name).unwrap()
+}
+
+/// The package a distribution belongs to, and the modules its own package holds, as the model
+/// keys them. The fixtures are read for their own names rather than having them spelled out: what
+/// is under test is where the adapter puts a module, not what the fixture calls it.
+fn own_package(ir: &IRFile) -> PackageName {
+    ir.distribution.package_name().clone()
+}
+
+fn own_modules(ir: &IRFile) -> Vec<String> {
+    match &ir.distribution {
+        Distribution::Library(content) => content.def.modules.keys().cloned().collect(),
+        Distribution::Application(content) => content.def.modules.keys().cloned().collect(),
+        Distribution::Specs(content) => content.spec.modules.keys().cloned().collect(),
+    }
+}
+
+/// Where one of a distribution's own modules lands.
+fn own_module_dir(ir: &IRFile, index: usize) -> String {
+    let modules = own_modules(ir);
+    let name = modules.get(index).expect("the fixture has this module");
+    module_dir(Root::Pkg, &own_package(ir), module(name).as_path())
+}
+
+fn every_physical_path(root: &VfsPath) -> Vec<String> {
+    root.walk_dir()
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|path| path.as_str().to_owned())
+        .collect()
+}
+
+// =============================================================================
+// Round trips
+// =============================================================================
+
+fn assert_round_trip(root: VfsPath, format: FormatId) {
+    let profile = profile_of(&format);
+    let expected = granular_fixture();
+    let options = options(format);
+
+    write_document_tree_with_options(&root, &expected, &options).unwrap();
+
+    assert_file(&root, "manifest", profile);
+    assert_eq!(
+        read_document_tree_with_options(&root, &options).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn a_json_tree_round_trips_on_a_memory_vfs() {
+    assert_round_trip(memory_root(), FormatId::json());
+}
+
+#[test]
+fn a_json_tree_round_trips_on_a_physical_vfs() {
+    let temp = tempfile::tempdir().unwrap();
+    assert_round_trip(physical_root(temp.path()), FormatId::json());
+}
+
+#[test]
+fn a_yaml_tree_round_trips_on_a_memory_vfs() {
+    assert_round_trip(memory_root(), FormatId::yaml());
+}
+
+#[test]
+fn a_yaml_tree_round_trips_on_a_physical_vfs() {
+    let temp = tempfile::tempdir().unwrap();
+    assert_round_trip(physical_root(temp.path()), FormatId::yaml());
+}
+
+#[test]
+fn an_application_with_a_definition_dependency_round_trips_through_a_tree() {
+    let root = memory_root();
+    let expected: IRFile = serde_json::from_str(APPLICATION_WITH_DEFINITION_DEPENDENCY).unwrap();
+
     write_document_tree(&root, &expected).unwrap();
 
-    assert!(root.join("manifest.json").unwrap().is_file().unwrap());
-    assert!(
-        root.walk_dir()
-            .unwrap()
-            .filter_map(Result::ok)
-            .any(|path| path.filename() == "module.json")
+    // The dependency's modules are definitions under `deps/`, not a specification in the manifest.
+    let dir = module_dir(
+        Root::Deps,
+        &package("my-org/shared"),
+        module("util").as_path(),
+    );
+    assert_file(
+        &root,
+        &module_manifest_path(Root::Deps, &dir),
+        Profile::Json,
     );
     assert_eq!(read_document_tree(&root).unwrap(), expected);
 }
 
-fn retain_first_module(ir: &mut morphir_core::ir::v4::IRFile) {
+// =============================================================================
+// Where the files land
+// =============================================================================
+
+#[test]
+fn the_complete_example_writes_escaped_stems_and_a_dependency_under_the_version_slot() {
+    let root = memory_root();
+    let options = options(FormatId::yaml());
+
+    write_document_tree_with_options(&root, &granular_fixture(), &options).unwrap();
+
+    let fixture = granular_fixture();
+    let own = own_module_dir(&fixture, 0);
+    assert_file(&root, &module_manifest_path(Root::Pkg, &own), Profile::Yaml);
+    assert_file(
+        &root,
+        &node_file_path(
+            Root::Pkg,
+            &own,
+            &morphir_core::naming::file_stem(&Name::from_canonical_string("data-tables").unwrap()),
+            NodeFileKind::Type,
+        ),
+        Profile::Yaml,
+    );
+
+    // `SDK` is an initialism, so its stem is `_sdk`, and a dependency's package path ends in the
+    // bare version slot the v4 model has nothing to put a version in.
+    let dependency = module_dir(
+        Root::Deps,
+        &package("morphir/SDK"),
+        module("basics").as_path(),
+    );
+    assert_eq!(dependency, "morphir/_sdk/@/basics");
+    assert_file(
+        &root,
+        &module_manifest_path(Root::Deps, &dependency),
+        Profile::Yaml,
+    );
+
+    // A YAML tree is spelled in YAML throughout.
+    assert!(
+        every_physical_path(&root)
+            .iter()
+            .all(|path| !path.ends_with(".json"))
+    );
+}
+
+#[test]
+fn the_written_manifest_carries_the_path_budget_and_its_dependencies_by_name() {
+    let root = memory_root();
+
+    write_document_tree(&root, &granular_fixture()).unwrap();
+
+    let manifest = manifest_value(&root, Profile::Json);
+    assert_eq!(manifest["pathBudget"], serde_json::json!(4000));
+    assert_eq!(
+        manifest["dependencies"],
+        serde_json::json!(["morphir/SDK"]),
+        "a dependency is a name in the manifest; its body lives under deps/"
+    );
+}
+
+#[test]
+fn a_small_path_budget_truncates_a_stem_and_records_it_in_file_names() {
+    let root = memory_root();
+    let expected = granular_fixture();
+    let options = options(FormatId::json()).with_path_budget(64);
+
+    write_document_tree_with_options(&root, &expected, &options).unwrap();
+
+    assert_eq!(
+        manifest_value(&root, Profile::Json)["pathBudget"],
+        serde_json::json!(64)
+    );
+    let own = own_module_dir(&expected, 0);
+    let module_manifest: serde_json::Value = serde_json::from_str(
+        &at(&root, &module_manifest_path(Root::Pkg, &own), Profile::Json)
+            .read_to_string()
+            .unwrap(),
+    )
+    .unwrap();
+    let file_names = module_manifest["fileNames"]
+        .as_object()
+        .expect("a budget this small cuts at least one stem");
+    assert!(!file_names.is_empty());
+    for (name, stem) in file_names {
+        assert_ne!(
+            stem.as_str().unwrap(),
+            name,
+            "a recorded file name is the cut stem, not the name itself"
+        );
+    }
+
+    assert_eq!(
+        read_document_tree_with_options(&root, &options).unwrap(),
+        expected
+    );
+}
+
+// =============================================================================
+// Rewriting a tree
+// =============================================================================
+
+fn retain_first_module(ir: &mut IRFile) {
     let Distribution::Library(content) = &mut ir.distribution else {
         panic!("test fixture must be a library");
     };
@@ -89,123 +335,146 @@ fn retain_first_module(ir: &mut morphir_core::ir::v4::IRFile) {
     content.def.modules.insert(first.0, first.1);
 }
 
-fn rename_package(ir: &mut morphir_core::ir::v4::IRFile, package: &str) {
-    let Distribution::Library(content) = &mut ir.distribution else {
-        panic!("test fixture must be a library");
-    };
-    content.package_name = PackageName::parse(package);
-}
-
 #[test]
-fn v4_document_tree_round_trips_on_memory_vfs() {
-    assert_round_trip(memory_root());
-}
-
-#[test]
-fn v4_document_tree_round_trips_on_physical_vfs() {
-    let temp = tempfile::tempdir().unwrap();
-    assert_round_trip(physical_root(temp.path()));
-}
-
-#[test]
-fn rewriting_a_package_removes_stale_modules() {
+fn rewriting_a_package_removes_stale_modules_under_pkg() {
     let root = memory_root();
     write_document_tree(&root, &fixture()).unwrap();
+    let stale = own_module_dir(&fixture(), 1);
+    assert_file(
+        &root,
+        &module_manifest_path(Root::Pkg, &stale),
+        Profile::Json,
+    );
+
     let mut replacement = fixture();
     retain_first_module(&mut replacement);
-
     write_document_tree(&root, &replacement).unwrap();
 
+    assert!(
+        !at(
+            &root,
+            &module_manifest_path(Root::Pkg, &stale),
+            Profile::Json
+        )
+        .exists()
+        .unwrap()
+    );
     assert_eq!(read_document_tree(&root).unwrap(), replacement);
 }
 
 #[test]
-fn reading_a_tree_ignores_modules_from_other_packages() {
+fn rewriting_a_distribution_removes_stale_packages_under_deps() {
     let root = memory_root();
-    write_document_tree(&root, &fixture()).unwrap();
-    let mut current = fixture();
-    retain_first_module(&mut current);
-    rename_package(&mut current, "another/package");
+    write_document_tree(&root, &granular_fixture()).unwrap();
+    assert!(root.join("deps").unwrap().exists().unwrap());
 
-    write_document_tree(&root, &current).unwrap();
+    // The plain fixture depends on nothing, so nothing belongs under `deps/` afterwards.
+    let replacement = fixture();
+    write_document_tree(&root, &replacement).unwrap();
 
-    assert_eq!(read_document_tree(&root).unwrap(), current);
+    assert!(!root.join("deps").unwrap().exists().unwrap());
+    assert_eq!(read_document_tree(&root).unwrap(), replacement);
 }
 
+// =============================================================================
+// Discovery
+// =============================================================================
+
 #[test]
-fn yaml_tree_uses_only_yaml_physical_names() {
+fn a_yml_manifest_is_discovered_and_read() {
     let root = memory_root();
     let expected = granular_fixture();
-    let options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::yaml());
-
+    let options = options(FormatId::yaml());
     write_document_tree_with_options(&root, &expected, &options).unwrap();
 
-    assert!(root.join("manifest.yaml").unwrap().is_file().unwrap());
-    let module = root
-        .join("pkg/regulation/u-s/f-r-2052-a/data-tables")
+    let manifest = root.join("manifest.yaml").unwrap();
+    let text = manifest.read_to_string().unwrap();
+    manifest.remove_file().unwrap();
+    root.join("manifest.yml")
+        .unwrap()
+        .create_file()
+        .unwrap()
+        .write_all(text.as_bytes())
         .unwrap();
-    assert!(module.join("module.yaml").unwrap().is_file().unwrap());
-    assert!(
-        module
-            .join("data-tables.type.yaml")
-            .unwrap()
-            .is_file()
-            .unwrap()
-    );
-    assert!(
-        module
-            .join("calculate-total.value.yaml")
-            .unwrap()
-            .is_file()
-            .unwrap()
-    );
-    assert!(
-        root.walk_dir()
-            .unwrap()
-            .filter_map(Result::ok)
-            .all(|path| !path.filename().ends_with(".json"))
-    );
+
     assert_eq!(
-        read_document_tree_with_options(&root, &options).unwrap(),
-        expected
+        discover_document_tree_format(&root).unwrap(),
+        FormatId::yaml()
+    );
+    assert_eq!(read_document_tree(&root).unwrap(), expected);
+}
+
+#[test]
+fn discovery_rejects_ambiguous_tree_manifests() {
+    let root = memory_root();
+    root.create_dir_all().unwrap();
+    for name in ["manifest.json", "manifest.yaml"] {
+        let mut writer = root.join(name).unwrap().create_file().unwrap();
+        writer.write_all(b"{}").unwrap();
+    }
+
+    let diagnostic = discover_document_tree_format(&root).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::detection::ambiguous_manifest"
+    );
+}
+
+// =============================================================================
+// Refusals
+// =============================================================================
+
+#[test]
+fn a_json_node_file_in_a_yaml_tree_is_refused() {
+    let root = memory_root();
+    let options = options(FormatId::yaml());
+    write_document_tree_with_options(&root, &granular_fixture(), &options).unwrap();
+
+    let stray = "pkg/regulation/_us/stray/module.json";
+    let path = root.join(stray).unwrap();
+    path.parent().create_dir_all().unwrap();
+    path.create_file().unwrap().write_all(b"{}").unwrap();
+
+    let diagnostic = read_document_tree_with_options(&root, &options).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::invalid_distribution_shape"
+    );
+    assert!(
+        diagnostic
+            .message()
+            .contains(&format!("{stray} is not a {} file", Profile::Yaml.name())),
+        "unexpected message: {}",
+        diagnostic.message()
     );
 }
 
 #[test]
-fn a_module_manifest_accepts_an_array_of_lines_for_doc_and_writes_one_string() {
+fn a_tree_whose_manifest_has_no_path_budget_is_refused_with_migration_guidance() {
     let root = memory_root();
     write_document_tree(&root, &fixture()).unwrap();
 
-    let module_manifest = root
-        .walk_dir()
+    let path = root.join("manifest.json").unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&path.read_to_string().unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("pathBudget");
+    path.create_file()
         .unwrap()
-        .filter_map(Result::ok)
-        .find(|path| path.filename() == "module.json")
+        .write_all(serde_json::to_vec(&manifest).unwrap().as_slice())
         .unwrap();
-    let mut raw: serde_json::Value =
-        serde_json::from_reader(module_manifest.open_file().unwrap()).unwrap();
-    let module_path = raw["path"].as_str().unwrap().to_owned();
-    raw["doc"] = serde_json::json!(["line one", "line two"]);
-    let mut writer = module_manifest.create_file().unwrap();
-    writer
-        .write_all(serde_json::to_vec(&raw).unwrap().as_slice())
-        .unwrap();
-    drop(writer);
 
-    let read = read_document_tree(&root).unwrap();
-    let Distribution::Library(content) = &read.distribution else {
-        panic!("test fixture must be a library");
-    };
-    let module = content.def.modules.get(&module_path).unwrap();
+    let diagnostic = read_document_tree(&root).unwrap_err();
+
     assert_eq!(
-        module.value.doc.as_ref().unwrap().text(),
-        "line one\nline two"
+        diagnostic.code(),
+        "morphir::ir::document_tree::missing_member"
     );
-
-    write_document_tree(&root, &read).unwrap();
-    let rewritten: serde_json::Value =
-        serde_json::from_reader(module_manifest.open_file().unwrap()).unwrap();
-    assert_eq!(rewritten["doc"], serde_json::json!("line one\nline two"));
+    assert_eq!(
+        diagnostic.guidance(),
+        Some("this tree predates 0.4.0-alpha.7; regenerate it with morphir migrate")
+    );
 }
 
 #[derive(Default)]
@@ -252,8 +521,7 @@ fn document_tree_sink_refuses_a_specification_dependency_under_an_application_he
         .unwrap();
 
     let root = memory_root();
-    let options = CodecOptions::new(IrVersion::V4, Layout::DocumentTree, FormatId::json());
-    let mut sink = DocumentTreeSink::new(root, options).unwrap();
+    let mut sink = DocumentTreeSink::new(root, options(FormatId::json())).unwrap();
     sink.accept(application_begin).unwrap();
     let diagnostic = sink.accept(specification_dependency).unwrap_err();
 
@@ -263,19 +531,39 @@ fn document_tree_sink_refuses_a_specification_dependency_under_an_application_he
     );
 }
 
+// =============================================================================
+// The module manifest's documentation
+// =============================================================================
+
 #[test]
-fn discovery_rejects_ambiguous_tree_manifests() {
+fn a_module_manifest_accepts_an_array_of_lines_for_doc_and_writes_one_string() {
     let root = memory_root();
-    root.create_dir_all().unwrap();
-    for name in ["manifest.json", "manifest.yaml"] {
-        let mut writer = root.join(name).unwrap().create_file().unwrap();
-        writer.write_all(b"{}").unwrap();
-    }
+    write_document_tree(&root, &fixture()).unwrap();
 
-    let diagnostic = discover_document_tree_format(&root).unwrap_err();
+    let dir = own_module_dir(&fixture(), 0);
+    let module_manifest = at(&root, &module_manifest_path(Root::Pkg, &dir), Profile::Json);
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&module_manifest.read_to_string().unwrap()).unwrap();
+    let module_path = raw["path"].as_str().unwrap().to_owned();
+    raw["doc"] = serde_json::json!(["line one", "line two"]);
+    module_manifest
+        .create_file()
+        .unwrap()
+        .write_all(serde_json::to_vec(&raw).unwrap().as_slice())
+        .unwrap();
 
+    let read = read_document_tree(&root).unwrap();
+    let Distribution::Library(content) = &read.distribution else {
+        panic!("test fixture must be a library");
+    };
+    let module = content.def.modules.get(&module_path).unwrap();
     assert_eq!(
-        diagnostic.code(),
-        "morphir::ir::detection::ambiguous_manifest"
+        module.value.doc.as_ref().unwrap().text(),
+        "line one\nline two"
     );
+
+    write_document_tree(&root, &read).unwrap();
+    let rewritten: serde_json::Value =
+        serde_json::from_str(&module_manifest.read_to_string().unwrap()).unwrap();
+    assert_eq!(rewritten["doc"], serde_json::json!("line one\nline two"));
 }

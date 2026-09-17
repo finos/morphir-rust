@@ -18,6 +18,7 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 - [Complete Workflow](https://finos.github.io/morphir-rust/tutorials/complete-workflow): This guide walks through a complete end-to-end workflow using Morphir with Gleam.
 - [Tutorials](https://finos.github.io/morphir-rust/tutorials/): Step-by-step guides for using Morphir Rust.
 - [Extension Development Tutorial](https://finos.github.io/morphir-rust/tutorials/extension-tutorial): This tutorial follows the current Extism and MEP JSON-RPC extension model. The feature is implemented for contributor testing but has not produced a public release.
+- [Python ADT extension](https://finos.github.io/morphir-rust/tutorials/python-extension): The `morphir-python-binding` crate provides the `morphir-python` frontend and backend. Start with its [modeling example and supported subset](../../crates/morphir-python-binding/README.md). The ext...
 
 ## For Contributors
 

@@ -156,6 +156,21 @@ fn rejects_name_collisions_shared_variants_and_constructor_references() {
     }
 }
 
+#[test]
+fn rejects_names_whose_generated_spelling_is_reserved() {
+    for body in [
+        "@dataclass(frozen=True)\nclass Product:\n    Class: str\n",
+        "@dataclass(frozen=True)\nclass Variant:\n    Int: int\ntype Choice = Variant\n",
+        "@dataclass(frozen=True)\nclass none:\n    pass\n",
+        "@dataclass(frozen=True)\nclass Variant:\n    pass\ntype true = Variant\n",
+    ] {
+        let result = compile(&format!("from dataclasses import dataclass\n{body}"));
+        assert!(!result.success, "accepted: {body}");
+        assert!(result.ir.is_none());
+        assert_eq!(result.diagnostics[0].code.as_deref(), Some("PY003"));
+    }
+}
+
 fn a_library(definition: serde_json::Value) -> serde_json::Value {
     json!({"formatVersion": 4, "distribution": {"Library": {
         "packageName": "acme/example", "dependencies": {}, "def": {"modules": {

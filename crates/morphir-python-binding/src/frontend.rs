@@ -145,12 +145,14 @@ fn lower(statements: &[Stmt], package: &PackageName, module: &str) -> Outcome<Mo
                     ));
                 }
                 declare(&mut declared, class.name.as_str())?;
+                names::type_name(&names::identifier(class.name.as_str())?)?;
                 validate_class(class)?;
                 classes.insert(class.name.to_string(), class);
             }
             Stmt::TypeAlias(alias) if alias.type_params.is_none() => {
                 let name = expr_name(&alias.name)?;
                 declare(&mut declared, name)?;
+                names::type_name(&names::identifier(name)?)?;
                 let mut variants = vec![];
                 union_members(&alias.value, &mut variants)?;
                 sums.insert(name.to_owned(), variants);
@@ -285,8 +287,10 @@ fn fields(
             }
             let name = expr_name(&field.target)?;
             declare(&mut seen, name)?;
+            let name = names::identifier(name)?;
+            names::field_name(&name)?;
             Ok(Field::new(
-                names::identifier(name)?,
+                name,
                 annotation(&field.annotation, package, module, types)?,
             ))
         })

@@ -1,0 +1,116 @@
+use cucumber::{World, given, then, when};
+use morphir_extension_sdk::prelude::*;
+use morphir_python_binding::PythonExtension;
+
+#[derive(Debug, Default)]
+struct TestDriver {
+    source: String,
+    compiled: Option<CompileResult>,
+    generated: Option<GenerateResult>,
+}
+
+impl TestDriver {
+    fn compile(&self, text: String) -> CompileResult {
+        PythonExtension
+            .compile(CompileRequest {
+                language_id: "python".into(),
+                documents: vec![SourceDocument {
+                    uri: "models.py".into(),
+                    language_id: "python".into(),
+                    version: 1,
+                    text,
+                }],
+                package: CompilePackage {
+                    name: "acme/example".into(),
+                    exposed_modules: vec![],
+                },
+                dependencies: vec![],
+                options: CompileOptions {
+                    ir_version: "4".into(),
+                    types_only: true,
+                    ..Default::default()
+                },
+            })
+            .unwrap()
+    }
+
+    fn compile_and_generate(&mut self) {
+        let compiled = self.compile(self.source.clone());
+        assert!(compiled.success, "{:?}", compiled.diagnostics);
+        let generated = PythonExtension
+            .generate(GenerateRequest {
+                ir: compiled.ir.clone().unwrap(),
+                target: "python".into(),
+                options: Default::default(),
+            })
+            .unwrap();
+        assert!(generated.success, "{:?}", generated.diagnostics);
+        self.compiled = Some(compiled);
+        self.generated = Some(generated);
+    }
+
+    fn assert_roundtrip(&self) {
+        let recompiled = self.compile(
+            self.generated.as_ref().unwrap().artifacts[0]
+                .content
+                .clone(),
+        );
+        assert!(recompiled.success, "{:?}", recompiled.diagnostics);
+        assert_eq!(recompiled.ir, self.compiled.as_ref().unwrap().ir);
+    }
+
+    fn assert_rejected(&self) {
+        let result = self.compiled.as_ref().unwrap();
+        assert!(!result.success);
+        assert!(result.ir.is_none());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == DiagnosticSeverity::Error)
+        );
+    }
+}
+
+#[derive(Debug, Default, World)]
+struct PythonWorld {
+    driver: TestDriver,
+}
+
+#[given("a Python model with a product and a sum with payloads")]
+fn model(world: &mut PythonWorld) {
+    world.driver.source = include_str!("fixtures/models.py").into();
+}
+
+#[given("a Python model containing a function")]
+fn function(world: &mut PythonWorld) {
+    world.driver.source = "def value():\n    return 1\n".into();
+}
+
+#[when("I compile the model and generate Python")]
+fn roundtrip(world: &mut PythonWorld) {
+    world.driver.compile_and_generate();
+}
+
+#[when("I compile the model")]
+fn compile(world: &mut PythonWorld) {
+    world.driver.compiled = Some(world.driver.compile(world.driver.source.clone()));
+}
+
+#[then("compiling the generated Python preserves the model")]
+fn preserved(world: &mut PythonWorld) {
+    world.driver.assert_roundtrip();
+}
+
+#[then("compilation fails without partial IR")]
+fn rejected(world: &mut PythonWorld) {
+    world.driver.assert_rejected();
+}
+
+#[tokio::main]
+async fn main() {
+    PythonWorld::cucumber()
+        .fail_on_skipped()
+        .run_and_exit(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/features"))
+        .await;
+}

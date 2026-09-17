@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `morphir-python-binding` provides a Ruff-based Python ADT frontend and backend
+  as one native or WASM MEP extension. Frozen dataclasses and named unions map
+  to IR v4 records and custom types, with roundtrip tests and explicit diagnostics
+  for unsupported source and IR.
+
 - `morphir-package` provides draft `0.1.0-draft.1` metadata normalization,
   exact-byte SHA-256 digests, offline schema validation and closed Library-set
   integrity checks using the Rust IR v4 codec. This experimental package library

@@ -914,6 +914,10 @@ backend. Start with its [modeling example and supported subset](../../crates/mor
 The extension compiles frozen dataclasses, named unions, fixed tuples and annotated conditional
 functions to Morphir IR v4, and generates Python 3.12 or later code from those definitions.
 
+This checkout also supports multiple source modules and imports between them.
+That addition requires a development bundle built from this checkout; the
+published Python `0.1.0` bundle supports one module per request.
+
 Functions support returning `if`/`elif`/`else` branches and Python conditional
 expressions. For example:
 
@@ -938,6 +942,7 @@ Run these commands from the `morphir-rust` repository:
 rustup target add wasm32-unknown-unknown
 cargo test --locked -p morphir-python-binding
 cargo run --locked -p morphir-python-binding --example python_adt
+cargo run --locked -p morphir-python-binding --example python_modules
 cargo build --locked --release -p morphir-python-binding --target wasm32-unknown-unknown
 cargo test --locked -p morphir-daemon --test python_extension -- --ignored --exact python_adt_and_conditional_roundtrip_through_the_real_wasm_extension
 ```
@@ -1025,9 +1030,25 @@ Compilation installs `morphir-ir.json` under the `compiled` directory. The
 backend returns `models.py` as an artifact. The host writes it to the output
 location according to the CLI's install/output settings. The extension itself
 has no filesystem access. It fails with diagnostics if the request contains
-more than one module, unsupported function behavior, or types outside the
+unsupported imports, function behavior, or types outside the
 documented subset. The [binding README](../../crates/morphir-python-binding/README.md)
 lists the supported IR nodes, tuple forms, and the scope of its conformance evidence.
+
+With the development bundle installed, place related files under `src/` and
+compile the directory to resolve their imports together:
+
+```console
+morphir compile --language python --input src --output compiled
+morphir generate --target python --input compiled/morphir-ir.json --output generated
+morphir compile --language python --input generated --output recompiled
+```
+
+For example, `src/domain/models.py` may define `Decision`, and
+`src/domain/rules.py` may use `from .models import Decision` in its annotations.
+The resulting IR contains `domain/models` and `domain/rules`; generation returns
+`domain/models.py` and `domain/rules.py`. Nested directories are namespace
+packages, without `__init__.py` files. Keep all referenced modules in the source
+set. Cross-package dependencies and imported function calls remain unsupported.
 
 ---
 

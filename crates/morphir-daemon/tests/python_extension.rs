@@ -82,14 +82,9 @@ async fn packaged_python_installs_and_roundtrips_offline() {
         "\n",
         include_str!("../../morphir-python-binding/tests/fixtures/tuples.py"),
     );
-    let request = |text: String| CompileRequest {
+    let request = |documents| CompileRequest {
         language_id: "python".into(),
-        documents: vec![SourceDocument {
-            uri: "models.py".into(),
-            language_id: "python".into(),
-            version: 1,
-            text,
-        }],
+        documents,
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: vec![],
@@ -104,7 +99,21 @@ async fn packaged_python_installs_and_roundtrips_offline() {
         ready,
         CompileResult,
         methods::COMPILE,
-        request(source.into())
+        request(vec![
+            SourceDocument {
+                uri: "models.py".into(),
+                language_id: "python".into(),
+                version: 1,
+                text: source.into()
+            },
+            SourceDocument {
+                uri: "rules.py".into(),
+                language_id: "python".into(),
+                version: 1,
+                text: include_str!("../../morphir-python-binding/tests/fixtures/modules/rules.py")
+                    .into()
+            },
+        ])
     );
     assert!(compiled.success, "{:?}", compiled.diagnostics);
     let ir = compiled.ir.unwrap();
@@ -119,11 +128,23 @@ async fn packaged_python_installs_and_roundtrips_offline() {
         }
     );
     assert!(generated.success, "{:?}", generated.diagnostics);
+    assert_eq!(generated.artifacts.len(), 2);
     let (_, again) = invoke!(
         ready,
         CompileResult,
         methods::COMPILE,
-        request(generated.artifacts[0].content.clone())
+        request(
+            generated
+                .artifacts
+                .iter()
+                .map(|a| SourceDocument {
+                    uri: a.path.clone(),
+                    language_id: "python".into(),
+                    version: 1,
+                    text: a.content.clone(),
+                })
+                .collect()
+        )
     );
     assert!(again.success, "{:?}", again.diagnostics);
     assert_eq!(again.ir, Some(ir));

@@ -10,9 +10,7 @@ use std::collections::BTreeSet;
 
 pub(super) fn lower(
     function: &StmtFunctionDef,
-    package: &PackageName,
-    module: &str,
-    types: &BTreeSet<&str>,
+    types: &super::TypeScope,
     aliases: &values::TupleAliases,
 ) -> Outcome<ValueDefinition> {
     let parameters = &function.parameters;
@@ -46,8 +44,6 @@ pub(super) fn lower(
                 parameter.annotation().ok_or_else(|| {
                     unsupported("Every function parameter needs a type annotation")
                 })?,
-                package,
-                module,
                 types,
             )?;
             Ok((name.to_canonical_string(), tpe))
@@ -58,8 +54,6 @@ pub(super) fn lower(
             .returns
             .as_deref()
             .ok_or_else(|| unsupported("Functions need a return type annotation"))?,
-        package,
-        module,
         types,
     )?;
     let body = block(&function.body, None, &source_names)?;

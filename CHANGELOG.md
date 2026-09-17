@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Python compilation and generation support multiple modules in one package,
+  including nested paths, absolute and relative type imports, aliases and
+  cross-module tuple checking. The backend emits module-qualified imports;
+  native and installed WASM roundtrips cover the expanded subset.
+
 - **The document-tree layout through the kit.** `morphir_core::ir::layout` holds the reference
   binding's tree shape: `Profile`, `Tree`, `paths`, `stem_for`, `TreePolicy`, `read_tree`,
   `write_tree` and the per-module writers; the four tree-file models (distribution manifest,

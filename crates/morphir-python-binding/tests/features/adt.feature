@@ -18,3 +18,8 @@ Feature: Python algebraic data types
     Given Python tuple aliases and tuple-valued functions
     When I compile the model and generate Python
     Then compiling the generated Python preserves the model
+
+  Scenario: Imports preserve types and conditional bodies across modules
+    Given Python modules with imported ADTs and tuple aliases
+    When I compile the model and generate Python
+    Then compiling the generated Python preserves the model

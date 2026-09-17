@@ -249,8 +249,16 @@ fn syntax_errors_identify_the_source_document() {
 }
 
 #[test]
-fn refuses_nonportable_or_nested_output_module_names() {
-    for module in ["../models", "nested/models", "con", "aux", "COM1", "lpt9"] {
+fn refuses_nonportable_output_module_names() {
+    for module in [
+        "../models",
+        "nested/con",
+        "dataclasses",
+        "con",
+        "aux",
+        "COM1",
+        "lpt9",
+    ] {
         let mut ir = a_library(
             json!({"TypeAliasDefinition": {"typeParams": [], "typeExp": {"Record": {"fields": {}}}}}),
         );

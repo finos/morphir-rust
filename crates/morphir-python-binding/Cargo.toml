@@ -13,6 +13,8 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 num-bigint.workspace = true
+percent-encoding.workspace = true
+url.workspace = true
 morphir-core = { path = "../morphir-core" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 ruff_python_parser.workspace = true

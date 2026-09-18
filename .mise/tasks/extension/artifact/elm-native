@@ -31,11 +31,38 @@ if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) e
     echo "Python 3.11 or newer is required to package extensions" >&2
     exit 1
 fi
-if ! command -v clang >/dev/null 2>&1; then
+resolve_versioned_tool() {
+    base="$1"
+    if command -v "$base" >/dev/null 2>&1; then
+        command -v "$base"
+        return 0
+    fi
+    v=20
+    while [ "$v" -ge 14 ]; do
+        if command -v "$base-$v" >/dev/null 2>&1; then
+            command -v "$base-$v"
+            return 0
+        fi
+        v=$((v - 1))
+    done
+    return 1
+}
+
+if CLANG_PATH="$(resolve_versioned_tool clang)"; then
+    case "$CLANG_PATH" in
+        */clang) ;;
+        *) export CC_wasm32_unknown_unknown="$CLANG_PATH" ;;
+    esac
+else
     echo "clang is required to compile the vendored tree-sitter grammar for wasm32-unknown-unknown" >&2
     exit 1
 fi
-if ! command -v llvm-ar >/dev/null 2>&1; then
+
+if LLVM_AR_PATH="$(resolve_versioned_tool llvm-ar)"; then
+    export AR_wasm32_unknown_unknown="$LLVM_AR_PATH"
+elif LLVM_AR_PATH="$(dirname -- "$CLANG_PATH")/llvm-ar" && [ -x "$LLVM_AR_PATH" ]; then
+    export AR_wasm32_unknown_unknown="$LLVM_AR_PATH"
+else
     echo "llvm-ar is required to archive the vendored tree-sitter grammar for wasm32-unknown-unknown" >&2
     exit 1
 fi

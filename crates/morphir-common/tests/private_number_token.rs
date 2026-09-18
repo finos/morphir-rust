@@ -126,8 +126,10 @@ fn neither_encoder_writes_the_private_number_token() {
 ///
 /// `serde_yaml` and `serde-saphyr` read and write YAML that is not IR (the knowledge base, the
 /// OKF bundles, the Gleam binding's fixtures, `morphir.toml`'s sibling `morphir.yaml`); `toml`
-/// reads configuration. None of them may be handed an IR value, and the surest way to keep that
-/// true is for the IR crates not to depend on them at all.
+/// reads configuration. The Elm binding's use of `toml` is likewise limited to parsing
+/// `preludes/*.toml` (prelude configuration, never an IR value). None of them may be handed an
+/// IR value, and the surest way to keep that true is for the IR crates not to depend on them at
+/// all.
 const ALLOWED: &[(&str, &[&str])] = &[
     (
         "serde_yaml",
@@ -136,7 +138,12 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("serde-saphyr", &["morphir-config"]),
     (
         "toml",
-        &["morphir-common", "morphir-config", "morphir-daemon"],
+        &[
+            "morphir-common",
+            "morphir-config",
+            "morphir-daemon",
+            "morphir-elm-binding",
+        ],
     ),
 ];
 

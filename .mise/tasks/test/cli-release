@@ -95,6 +95,12 @@ fetch_cli() {
 if [ -z "${MORPHIR_CLI:-}" ]; then
     fetch_cli
 fi
+# Every call below runs inside the scratch project, so an override given as a relative path,
+# such as target/debug/morphir, is made absolute here. A bare command name stays a PATH lookup.
+case "$MORPHIR_CLI" in
+    /*) ;;
+    */*) MORPHIR_CLI="$(CDPATH='' cd -- "$(dirname -- "$MORPHIR_CLI")" && pwd -P)/$(basename -- "$MORPHIR_CLI")" ;;
+esac
 echo "Using $("$MORPHIR_CLI" --version | tail -n 1) at $MORPHIR_CLI" >&2
 
 # ---- a fresh home, repository and project ---------------------------------------------------

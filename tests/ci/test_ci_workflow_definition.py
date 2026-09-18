@@ -172,6 +172,34 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("https://github.com/finos/morphir/releases/download/v$VERSION", task)
         self.assertIn(".sha256", task)
 
+    def test_a_relative_cli_override_survives_the_change_into_the_project(self) -> None:
+        """MORPHIR_CLI=target/debug/morphir must still resolve after the task enters its project."""
+        task = REPOSITORY_ROOT / ".mise" / "tasks" / "test" / "cli-release"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "bin").mkdir()
+            cli = root / "bin" / "morphir"
+            cli.write_text("#!/bin/sh\necho \"morphir 0.0.0 $(pwd -P)\"\nexit 7\n", encoding="utf-8")
+            cli.chmod(0o755)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            (bundle / "stub.release.json").write_text("{}", encoding="utf-8")
+            result = subprocess.run(
+                ["sh", str(task), "avro"],
+                cwd=REPOSITORY_ROOT,
+                env={
+                    **os.environ,
+                    "MORPHIR_CLI": os.path.relpath(cli, REPOSITORY_ROOT),
+                    "MORPHIR_EXTENSION_BUNDLE": str(bundle),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        # The stub CLI exits 7 when it runs. A lost relative path exits 127 instead.
+        self.assertEqual(7, result.returncode, result.stderr)
+        self.assertNotIn("No such file", result.stderr)
+
     def test_released_cli_inputs_rebuild_every_bundle(self) -> None:
         impact = (REPOSITORY_ROOT / ".github" / "ci-impact.toml").read_text(encoding="utf-8")
         extensions = impact.split("[extensions]\n", 1)[1].split("\n[", 1)[0]

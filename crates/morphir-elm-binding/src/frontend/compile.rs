@@ -109,19 +109,23 @@ pub fn compile(request: CompileRequest) -> CompileResult {
     let (documents, skipped_documents) = read_documents(&request);
     diagnostics.extend(skipped_documents.iter().cloned());
 
-    let (baseline, baseline_interfaces, baseline_diagnostics) = read_baseline(&request, &validated);
-    diagnostics.extend(baseline_diagnostics);
+    let read = read_baseline(&request, &validated);
+    let (baseline, baseline_interfaces) = (read.modules, read.interfaces);
+    diagnostics.extend(read.diagnostics);
 
     let package: HashSet<String> = documents.iter().map(Document::dotted).collect();
-    // A module the baseline knew and the request no longer contains was
-    // deleted: its dependents can no longer resolve against it, so they are
-    // treated exactly as if its interface had changed.
+    // A baseline entry that cannot be reused is, to a dependent, exactly an
+    // interface that changed: a module the request no longer contains was
+    // deleted, and one whose IR would not decode has no interface to offer. If
+    // either were left out of `changed`, a dependent with untouched source
+    // would be reused against an interface that is no longer there.
     let mut run = Run {
         interfaces: HashMap::new(),
         changed: baseline
             .keys()
             .filter(|name| !package.contains(*name))
             .cloned()
+            .chain(read.dropped)
             .collect(),
         stopped: HashSet::new(),
         results: Vec::new(),
@@ -168,13 +172,20 @@ pub fn compile(request: CompileRequest) -> CompileResult {
         );
     }
 
+    // A distribution holds its dependencies' *specifications*, and a compile
+    // request supplies their definitions, so the specification is derived.
+    // `morphir_core` can do that for v4 (`PackageDefinition::to_specification`);
+    // the classic package model has no such conversion, so a classic
+    // distribution is still written with no dependencies. Once classic grows
+    // one, this is the single place that changes.
+    let specifications = match validated.ir_version.as_str() {
+        "4" => dependencies::v4_specifications(&request.dependencies),
+        _ => Vec::new(),
+    };
     let input = PackageInput {
         package: &validated.package,
         modules: &run.compiled,
-        // A classic distribution carries its dependencies' specifications
-        // inline, and a compile request supplies definitions rather than
-        // specifications, so none are written here.
-        dependencies: &[],
+        dependencies: &specifications,
     };
     let ir = match emitter.emit_distribution(&input, &run.module_irs) {
         Ok(ir) => Some(ir),
@@ -266,6 +277,8 @@ fn read_documents(request: &CompileRequest) -> (Vec<Document>, Vec<Diagnostic>) 
             }
         };
 
+        // Nothing is wrong with the document's syntax; the *request* named the
+        // same module twice, and only the request can say which one it meant.
         let dotted = module.name.join(".");
         if documents.iter().any(|document| document.dotted() == dotted) {
             skipped.push(source::diagnostic(
@@ -273,7 +286,7 @@ fn read_documents(request: &CompileRequest) -> (Vec<Document>, Vec<Diagnostic>) 
                 text,
                 module.span,
                 DiagnosticSeverity::Error,
-                SYNTAX,
+                boundary::REQUEST,
                 format!("module `{dotted}` is declared by more than one document"),
             ));
             continue;
@@ -291,42 +304,51 @@ fn read_documents(request: &CompileRequest) -> (Vec<Document>, Vec<Diagnostic>) 
     (documents, skipped)
 }
 
-/// The baseline, keyed by dotted module name, with the public interface each
-/// entry's IR describes. An entry whose IR this version cannot read is dropped
+/// The baseline the request supplied, once it has been read.
+struct Baseline {
+    /// Reusable entries, keyed by dotted module name.
+    modules: HashMap<String, BaselineModule>,
+    /// The public interface each reusable entry's IR describes.
+    interfaces: HashMap<String, Interface>,
+    /// Entries that were thrown away, by dotted module name.
+    dropped: Vec<String>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Reads the baseline. An entry whose IR this version cannot read is dropped
 /// entirely — reusing IR whose interface is unknown would let a dependent
-/// resolve against nothing — and reported as a warning.
-#[allow(clippy::type_complexity)]
-fn read_baseline(
-    request: &CompileRequest,
-    validated: &Validated,
-) -> (
-    HashMap<String, BaselineModule>,
-    HashMap<String, Interface>,
-    Vec<Diagnostic>,
-) {
-    let mut baseline = HashMap::new();
-    let mut interfaces = HashMap::new();
-    let mut diagnostics = Vec::new();
+/// resolve against nothing — reported as a warning, and named in `dropped` so
+/// that its dependents are recompiled rather than reused against it.
+fn read_baseline(request: &CompileRequest, validated: &Validated) -> Baseline {
+    let mut baseline = Baseline {
+        modules: HashMap::new(),
+        interfaces: HashMap::new(),
+        dropped: Vec::new(),
+        diagnostics: Vec::new(),
+    };
 
     let Some(supplied) = &request.baseline else {
-        return (baseline, interfaces, diagnostics);
+        return baseline;
     };
 
     for entry in &supplied.modules {
         let name: Vec<String> = entry.name.split('.').map(str::to_string).collect();
         match dependencies::interface_from_module_ir(&validated.ir_version, &name, &entry.ir) {
             Ok(interface) => {
-                interfaces.insert(entry.name.clone(), interface);
-                baseline.insert(entry.name.clone(), entry.clone());
+                baseline.interfaces.insert(entry.name.clone(), interface);
+                baseline.modules.insert(entry.name.clone(), entry.clone());
             }
-            Err(reason) => diagnostics.push(boundary::request_warning(format!(
-                "baseline for module {} ignored: {reason}",
-                entry.name
-            ))),
+            Err(reason) => {
+                baseline.dropped.push(entry.name.clone());
+                baseline.diagnostics.push(boundary::request_warning(format!(
+                    "baseline for module {} ignored: {reason}",
+                    entry.name
+                )));
+            }
         }
     }
 
-    (baseline, interfaces, diagnostics)
+    baseline
 }
 
 /// Document indices in dependency order, and the indices of the modules that

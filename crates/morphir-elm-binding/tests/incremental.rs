@@ -189,11 +189,13 @@ fn case_2_fixing_a_dependency_leaves_an_untouched_dependent_unchanged() {
     assert_eq!(library_modules(&result), vec!["B".to_string(), "A".into()]);
 }
 
+/// Retyping an exposed alias changes what the alias *specifies*, so it is an
+/// interface change and every dependent is recompiled.
 #[test]
 fn case_3_changing_a_dependency_interface_recompiles_its_dependents() {
     let (first, baseline) = first_run();
 
-    let result = compile(both(A, B_WIDER), Some(baseline));
+    let result = compile(both(A, B_FLOAT), Some(baseline));
 
     assert!(result.success, "{:?}", result.diagnostics);
     assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
@@ -204,29 +206,19 @@ fn case_3_changing_a_dependency_interface_recompiles_its_dependents() {
     assert_eq!(module(&result, "A").status, ModuleStatus::Compiled);
 }
 
-/// Retyping an exposed alias is *not* an interface change, because nothing a
-/// dependent writes can observe it: a reference to `B.U` is lowered to the
-/// qualified name `B.U` in every IR version, never to the type it aliases. So
-/// `B` is recompiled and `A` keeps its baseline IR, which is byte-identical to
-/// what recompiling `A` would produce.
+/// Exposing a new type is an interface change too, for the same reason.
 #[test]
-fn retyping_an_exposed_alias_does_not_recompile_dependents() {
+fn widening_a_dependency_interface_recompiles_its_dependents() {
     let (first, baseline) = first_run();
 
-    let result = compile(both(A, B_FLOAT), Some(baseline));
+    let result = compile(both(A, B_WIDER), Some(baseline));
 
     assert!(result.success, "{:?}", result.diagnostics);
-    assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
     assert_ne!(
-        module(&result, "B").ir,
-        module(&first, "B").ir,
-        "B's own IR still changed"
-    );
-    assert_eq!(
         module(&result, "B").interface_digest,
         module(&first, "B").interface_digest
     );
-    assert_eq!(module(&result, "A").status, ModuleStatus::Unchanged);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Compiled);
 }
 
 #[test]
@@ -274,6 +266,44 @@ fn case_6_a_broken_dependency_with_a_baseline_leaves_dependents_unchanged() {
     assert_eq!(module(&result, "B").status, ModuleStatus::Failed);
     assert_eq!(module(&result, "A").status, ModuleStatus::Unchanged);
     assert_eq!(library_modules(&result), vec!["A".to_string()]);
+}
+
+/// A baseline entry this version cannot read is no more usable than a deleted
+/// one, so it must invalidate its dependents just as a deletion does. Reusing
+/// `A` here would hand the host IR that references a module nothing describes.
+#[test]
+fn an_undecodable_baseline_entry_invalidates_its_dependents() {
+    let (_, baseline) = first_run();
+    let baseline = CompileBaseline {
+        modules: baseline
+            .modules
+            .into_iter()
+            .map(|mut entry| {
+                if entry.name == "B" {
+                    entry.ir = serde_json::json!({"not": "a module definition"});
+                }
+                entry
+            })
+            .collect(),
+    };
+
+    let result = compile(vec![document(A_URI, A)], Some(baseline));
+
+    assert!(!result.success);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Failed);
+    assert!(has_code(module(&result, "A"), "ELM_RESOLVE_NOT_FOUND"));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(
+                |diagnostic| diagnostic.severity == DiagnosticSeverity::Warning
+                    && diagnostic.code.as_deref() == Some("ELM_REQUEST")
+                    && diagnostic.message.contains("baseline for module B ignored")
+            ),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]

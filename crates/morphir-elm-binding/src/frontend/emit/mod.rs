@@ -3,7 +3,7 @@
 //! Each supported IR version has its own emitter, and both lower from the same
 //! version-neutral [`crate::resolved`] model: a v4 document is written natively
 //! rather than migrated from a classic one. The one step they share is name
-//! decomposition, which lives in [`names`].
+//! decomposition, which lives in [`crate::names`].
 //!
 //! An emitter writes a package in two steps so that an incremental build can keep
 //! the modules it did not have to re-resolve. [`Emitter::emit_module`] writes one
@@ -15,7 +15,6 @@
 //! the emitters report rather than panic or overwrite.
 
 pub mod classic;
-pub mod names;
 pub mod v4;
 
 use serde_json::Value;
@@ -28,13 +27,15 @@ pub struct PackageInput<'a> {
     pub package: &'a [String],
     /// The package's resolved modules, in the order they are written.
     pub modules: &'a [ResolvedModule],
-    /// Dependency specifications as `(package path, classic package specification
-    /// JSON)`.
+    /// Dependency specifications as `(package path, package specification JSON)`.
     ///
-    /// Only the classic emitter uses these: a classic distribution carries its
-    /// dependencies' specifications inline, and the JSON is passed through as
-    /// given. A v4 `Library` keys its dependencies by canonical package name, and
-    /// nothing supplies those specifications yet, so the v4 emitter writes none.
+    /// The JSON is read by the emitter that is writing, in that emitter's own
+    /// version: the classic emitter decodes each value as a classic
+    /// `PackageSpecification` and lists them inline, and the v4 emitter decodes
+    /// each as a v4 `PackageSpecification` and keys them by canonical package
+    /// name. A caller therefore supplies the specifications of the version it
+    /// asked for, and mixing the two is an emit error rather than a silent
+    /// mis-write.
     pub dependencies: &'a [(Vec<String>, Value)],
 }
 

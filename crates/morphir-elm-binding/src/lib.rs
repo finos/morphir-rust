@@ -11,6 +11,7 @@ pub mod ast;
 pub mod digest;
 pub mod frontend;
 pub mod incremental;
+pub mod names;
 pub mod prelude;
 pub mod resolved;
 pub mod span;

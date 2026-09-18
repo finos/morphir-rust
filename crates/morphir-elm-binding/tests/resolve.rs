@@ -106,6 +106,7 @@ fn qualified_alias_import_resolves_to_a_package_module_and_records_dependency() 
             types: vec![InterfaceType {
                 name: "Thing".into(),
                 params: vec![],
+                alias: None,
                 constructors: None,
             }],
         })
@@ -140,6 +141,7 @@ fn qualified_reference_requires_an_import() {
             types: vec![InterfaceType {
                 name: "Thing".into(),
                 params: vec![],
+                alias: None,
                 constructors: None,
             }],
         })
@@ -202,6 +204,7 @@ fn in_package_module_shadowing_a_platform_module_is_ambiguous() {
             types: vec![InterfaceType {
                 name: "String".into(),
                 params: vec![],
+                alias: None,
                 constructors: None,
             }],
         })
@@ -222,6 +225,7 @@ fn ambiguous_unqualified_name_is_an_error() {
             types: vec![InterfaceType {
                 name: "T".into(),
                 params: vec![],
+                alias: None,
                 constructors: None,
             }],
         })
@@ -252,6 +256,7 @@ fn dependency_package_overrides_prelude_package() {
             types: vec![InterfaceType {
                 name: "Int".into(),
                 params: vec![],
+                alias: None,
                 constructors: None,
             }],
         }],

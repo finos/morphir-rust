@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use crate::digest::sha256_hex;
+use crate::names;
 use crate::span::Span;
 
 /// A fully qualified name: package path, module path, local name.
@@ -93,42 +94,70 @@ pub struct Interface {
     pub types: Vec<InterfaceType>,
 }
 
-/// A publicly exposed type. `constructors` is `Some` only when the type's
-/// constructors are exposed too.
+/// A publicly exposed type, with everything a dependent can observe about it.
+///
+/// The *specification*, not just the name: an alias publishes the type it
+/// stands for and a custom type publishes its constructors' argument types, so
+/// that retyping either is an interface change its dependents are recompiled
+/// for. `alias` and `constructors` are never both `Some`; both are `None` for a
+/// custom type whose constructors are private, which is opaque to a dependent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InterfaceType {
     pub name: String,
     pub params: Vec<String>,
-    pub constructors: Option<Vec<String>>,
+    /// The type this alias stands for, when the declaration is an alias.
+    pub alias: Option<RType>,
+    /// The public constructors, each with its argument types.
+    pub constructors: Option<Vec<(String, Vec<RType>)>>,
 }
 
 impl ResolvedModule {
-    /// The module's public interface: public types only, sorted by name, with
-    /// constructor names recorded only when the constructors are public.
+    /// The module's public interface: the specification of every public type,
+    /// sorted by name, with constructors recorded only when they are public.
     ///
-    /// Docs, private types and private constructors are excluded, so the
-    /// digest of this value changes only when a dependent module could
-    /// observe the difference.
+    /// Docs, private types and private constructors are excluded, so the digest
+    /// of this value changes only when a dependent module could observe the
+    /// difference.
+    ///
+    /// Every identifier is written in its [`crate::names`] spelling, because
+    /// this value is compared against the one
+    /// [`crate::frontend::dependencies::interface_from_module_ir`] reads back
+    /// out of a Morphir document, and a document keeps only a name's words. Two
+    /// identifiers a document cannot tell apart are the same identifier here.
     pub fn interface(&self) -> Interface {
         let mut types: Vec<InterfaceType> = self
             .types
             .iter()
             .filter(|ty| ty.access == Access::Public)
             .map(|ty| InterfaceType {
-                name: ty.name.clone(),
-                params: ty.params.clone(),
+                name: names::type_spelling(&ty.name),
+                params: ty.params.iter().map(|p| names::value_spelling(p)).collect(),
+                alias: match &ty.body {
+                    ResolvedBody::Alias(body) => Some(spelled_type(body)),
+                    ResolvedBody::Custom { .. } => None,
+                },
                 constructors: match &ty.body {
                     ResolvedBody::Custom {
                         constructor_access: Access::Public,
                         constructors,
-                    } => Some(constructors.iter().map(|c| c.name.clone()).collect()),
+                    } => Some(
+                        constructors
+                            .iter()
+                            .map(|c| {
+                                (
+                                    names::type_spelling(&c.name),
+                                    c.args.iter().map(spelled_type).collect(),
+                                )
+                            })
+                            .collect(),
+                    ),
                     _ => None,
                 },
             })
             .collect();
         types.sort_by(|a, b| a.name.cmp(&b.name));
         Interface {
-            name: self.name.clone(),
+            name: self.name.iter().map(|s| names::type_spelling(s)).collect(),
             types,
         }
     }
@@ -138,5 +167,50 @@ impl ResolvedModule {
     pub fn interface_digest(&self) -> String {
         let json = serde_json::to_vec(&self.interface()).expect("Interface serializes to JSON");
         sha256_hex(&json)
+    }
+}
+
+/// A resolved type with every identifier in its document spelling.
+fn spelled_type(ty: &RType) -> RType {
+    match ty {
+        RType::Var(variable) => RType::Var(names::value_spelling(variable)),
+        RType::Ref(reference, arguments) => RType::Ref(
+            spelled_fqname(reference),
+            arguments.iter().map(spelled_type).collect(),
+        ),
+        RType::Record(fields) => RType::Record(fields.iter().map(spelled_field).collect()),
+        RType::ExtensibleRecord(variable, fields) => RType::ExtensibleRecord(
+            names::value_spelling(variable),
+            fields.iter().map(spelled_field).collect(),
+        ),
+        RType::Tuple(elements) => RType::Tuple(elements.iter().map(spelled_type).collect()),
+        RType::Function(argument, result) => RType::Function(
+            Box::new(spelled_type(argument)),
+            Box::new(spelled_type(result)),
+        ),
+        RType::Unit => RType::Unit,
+    }
+}
+
+fn spelled_field(field: &RField) -> RField {
+    RField {
+        name: names::value_spelling(&field.name),
+        ty: spelled_type(&field.ty),
+    }
+}
+
+fn spelled_fqname(reference: &FqName) -> FqName {
+    FqName {
+        package: reference
+            .package
+            .iter()
+            .map(|segment| names::type_spelling(segment))
+            .collect(),
+        module: reference
+            .module
+            .iter()
+            .map(|segment| names::type_spelling(segment))
+            .collect(),
+        name: names::type_spelling(&reference.name),
     }
 }

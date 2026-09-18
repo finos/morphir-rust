@@ -1,7 +1,7 @@
 //! The classic (v3) emitter.
 //!
 //! Classic names are word lists, so every identifier goes through
-//! [`names::words`], which splits `LocalDate` into `["local","date"]` and `SDK`
+//! [`crate::names::words`], which splits `LocalDate` into `["local","date"]` and `SDK`
 //! into `["s","d","k"]` exactly as morphir-elm's `Name.fromString` does. Type
 //! nodes carry no attributes, so every attribute is [`Attrs::None`], which writes
 //! `{}`.
@@ -15,8 +15,8 @@ use morphir_core::ir::classic::{
 };
 use serde_json::Value;
 
-use super::names::{argument_words, module_label, words};
 use super::{EmitError, Emitter, ModuleIr, PackageInput};
+use crate::names::{argument_words, module_label, words};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
 /// The classic module definition, with type attributes and no value attributes.

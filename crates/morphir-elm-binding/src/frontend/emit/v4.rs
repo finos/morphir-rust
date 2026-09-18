@@ -2,7 +2,7 @@
 //!
 //! A v4 document is written straight from the resolved model; nothing here
 //! migrates a classic one. Names go through the word split in
-//! [`super::names`] and are then rebuilt with [`Name::from_words`], which
+//! [`crate::names`] and are then rebuilt with [`Name::from_words`], which
 //! collapses a run of single letters back into an initialism — so `SDK` is the
 //! initialism `SDK` and `LocalDate` is `local-date`. Doing it this way is what
 //! makes the natively emitted document identical to the one a caller gets by
@@ -24,13 +24,13 @@ use indexmap::IndexMap;
 use morphir_core::ir::v4::{
     Access as VAccess, AccessControlled, ConstructorArg, ConstructorDefinition, Distribution,
     Documentation, Documented, FormatVersion, IRFile, LibraryContent, ModuleDefinition, Name,
-    PackageDefinition, Type, TypeAttributes, TypeDefinition,
+    PackageDefinition, PackageSpecification, Type, TypeAttributes, TypeDefinition,
 };
 use morphir_core::naming::{FQName, ModuleName, PackageName, Path};
 use serde_json::Value;
 
-use super::names::{argument_words, module_label, words};
 use super::{EmitError, Emitter, ModuleIr, PackageInput};
+use crate::names::{argument_words, module_label, words};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
 pub struct V4Emitter;
@@ -80,16 +80,33 @@ impl Emitter for V4Emitter {
             );
         }
 
+        // A v4 `Library` keys its dependencies by canonical package name and
+        // holds each one's *specification*. Two package paths that share a
+        // canonical name would silently replace one another in an `IndexMap`,
+        // so a collision is reported.
+        let mut dependencies: IndexMap<String, PackageSpecification> = IndexMap::new();
+        let mut written: HashMap<String, String> = HashMap::new();
+        for (dependency_path, specification) in input.dependencies {
+            let label = module_label(dependency_path);
+            let specification: PackageSpecification = serde_json::from_value(specification.clone())
+                .map_err(|error| {
+                    format!("dependency `{label}` is not a valid v4 package specification: {error}")
+                })?;
+            let key = package_name(dependency_path).to_canonical_string();
+            if let Some(earlier) = written.insert(key.clone(), label.clone()) {
+                return Err(format!(
+                    "dependency `{label}` and dependency `{earlier}` share the canonical package \
+                     name `{key}`, so only one of them could be written"
+                ));
+            }
+            dependencies.insert(key, specification);
+        }
+
         let file = IRFile {
             format_version: FormatVersion::Integer(4),
             distribution: Distribution::Library(LibraryContent {
                 package_name: package_name(input.package),
-                // A v4 `Library` keys its dependencies by canonical package name
-                // and holds each one's *specification*. Nothing supplies those
-                // yet — `PackageInput::dependencies` carries classic package
-                // specifications, which are the classic emitter's to write — so
-                // the map stays empty until a caller has real v4 specifications.
-                dependencies: IndexMap::new(),
+                dependencies,
                 def: PackageDefinition { modules },
             }),
         };

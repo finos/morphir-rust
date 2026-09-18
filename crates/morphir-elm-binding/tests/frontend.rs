@@ -23,13 +23,15 @@ fn document(uri: &str, text: &str) -> SourceDocument {
 }
 
 fn compile(documents: Vec<SourceDocument>, ir_version: &str) -> CompileResult {
-    compile_as("elm", documents, ir_version)
+    compile_as("elm", "local/example", documents, ir_version, vec![])
 }
 
 fn compile_as(
     language_id: &str,
+    package_name: &str,
     documents: Vec<SourceDocument>,
     ir_version: &str,
+    dependencies: Vec<CompileDependency>,
 ) -> CompileResult {
     let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
     extension
@@ -39,10 +41,10 @@ fn compile_as(
             language_id: language_id.into(),
             documents,
             package: CompilePackage {
-                name: "local/example".into(),
+                name: package_name.into(),
                 exposed_modules: None,
             },
-            dependencies: vec![],
+            dependencies,
             options: CompileOptions {
                 types_only: false,
                 ir_version: ir_version.into(),
@@ -122,8 +124,10 @@ fn compiles_a_two_module_package_for_every_supported_ir_version() {
 fn rejects_other_languages() {
     let result = compile_as(
         "gleam",
+        "local/example",
         vec![document("file:///work/My/Other.elm", OTHER)],
         "3",
+        vec![],
     );
 
     assert!(!result.success);
@@ -174,6 +178,69 @@ fn daemon_example_fixture_compiles() {
     let skipped = codes(&result, "ELM_VALUE_SKIPPED");
     assert_eq!(skipped.len(), 1, "{skipped:?}");
     assert!(skipped[0].message.contains("add"));
+}
+
+/// A v4 `Library` holds each dependency's *specification*, keyed by canonical
+/// package name. The request supplies the dependency's definitions, so the
+/// specification is derived from them and forwarded into the document.
+#[test]
+fn a_v4_distribution_forwards_its_dependencies_specifications() {
+    let dependency = compile_as(
+        "elm",
+        "acme/lib",
+        vec![document("file:///lib/My/Other.elm", OTHER)],
+        "4",
+        vec![],
+    );
+    assert!(dependency.success, "{:?}", dependency.diagnostics);
+
+    let result = compile_as(
+        "elm",
+        "local/example",
+        vec![document("file:///work/Example.elm", DAEMON_EXAMPLE)],
+        "4",
+        vec![CompileDependency {
+            package_name: "acme/lib".into(),
+            ir_version: "4".into(),
+            distribution: dependency.ir.expect("the dependency's distribution"),
+        }],
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    let dependencies =
+        result.ir.as_ref().expect("a distribution")["distribution"]["Library"]["dependencies"]
+            .as_object()
+            .expect("a dependency map");
+    let expected = morphir_core::naming::PackageName::new(morphir_core::naming::Path {
+        segments: vec![
+            morphir_core::naming::Name::from("acme"),
+            morphir_core::naming::Name::from("lib"),
+        ],
+    })
+    .to_canonical_string();
+    assert_eq!(dependencies.keys().collect::<Vec<_>>(), vec![&expected]);
+    // The specification carries the dependency's public module, not its definitions.
+    assert!(
+        dependencies[&expected]["modules"]
+            .as_object()
+            .expect("a module map")
+            .len()
+            == 1
+    );
+}
+
+#[test]
+fn a_classic_distribution_still_writes_no_dependencies() {
+    let result = compile(
+        vec![document("file:///work/Example.elm", DAEMON_EXAMPLE)],
+        "3",
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(
+        result.ir.as_ref().expect("a distribution")["distribution"][2],
+        serde_json::json!([])
+    );
 }
 
 #[test]

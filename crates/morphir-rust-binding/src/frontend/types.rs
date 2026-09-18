@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use syn::{ext::IdentExt, spanned::Spanned};
 
 pub(super) struct Context<'a> {
+    pub items: &'a [syn::Item],
     pub source: &'a Source<'a>,
     pub symbols: &'a BTreeMap<String, usize>,
     pub package: &'a Path,

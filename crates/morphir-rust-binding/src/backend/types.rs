@@ -346,7 +346,12 @@ pub(super) fn references(tpe: &Type, output: &mut BTreeSet<String>, stop_at_reco
     }
 }
 
-fn recursive(package: &Package, owner: &str, target: &str, visited: &mut BTreeSet<String>) -> bool {
+pub(super) fn recursive(
+    package: &Package,
+    owner: &str,
+    target: &str,
+    visited: &mut BTreeSet<String>,
+) -> bool {
     if owner == target {
         return true;
     }

@@ -2,15 +2,20 @@
 //!
 //! Each supported IR version has its own emitter, and both lower from the same
 //! version-neutral [`crate::resolved`] model: a v4 document is written natively
-//! rather than migrated from a classic one.
+//! rather than migrated from a classic one. The one step they share is name
+//! decomposition, which lives in [`names`].
 //!
 //! An emitter writes a package in two steps so that an incremental build can keep
 //! the modules it did not have to re-resolve. [`Emitter::emit_module`] writes one
 //! module's access-controlled definition, which the caller stores per module;
 //! [`Emitter::emit_distribution`] assembles a whole distribution out of those
 //! stored values, reading them back into the core model rather than re-resolving.
+//! Both are fallible: a stored value may be stale, hand-edited or written by the
+//! other version's emitter, and two names may collide once they are canonical, so
+//! the emitters report rather than panic or overwrite.
 
 pub mod classic;
+pub mod names;
 pub mod v4;
 
 use serde_json::Value;
@@ -37,17 +42,27 @@ pub struct PackageInput<'a> {
 /// the module path, its access, and the JSON [`Emitter::emit_module`] wrote.
 pub type ModuleIr = (Vec<String>, Access, Value);
 
+/// What an emitter reports when it cannot write the document asked of it.
+pub type EmitError = String;
+
 /// Writes a Morphir IR document for one IR version.
 pub trait Emitter {
     /// The module's access-controlled definition, for the per-module baseline.
-    fn emit_module(&self, module: &ResolvedModule) -> Value;
+    ///
+    /// Fails when two declarations in the module collide once their names are
+    /// canonical, since one would otherwise silently replace the other.
+    fn emit_module(&self, module: &ResolvedModule) -> Result<Value, EmitError>;
 
     /// A whole distribution, assembled from per-module values.
     ///
-    /// Each value must be one this emitter's [`Emitter::emit_module`] wrote;
-    /// anything else is a caller error and panics rather than writing a document
-    /// no reader accepts.
-    fn emit_distribution(&self, input: &PackageInput, module_irs: &[ModuleIr]) -> Value;
+    /// Fails when a stored module value is not one this emitter's
+    /// [`Emitter::emit_module`] wrote, or when two module paths collide once they
+    /// are canonical.
+    fn emit_distribution(
+        &self,
+        input: &PackageInput,
+        module_irs: &[ModuleIr],
+    ) -> Result<Value, EmitError>;
 
     /// The IR version this emitter writes, as the extension spells it.
     fn format_version(&self) -> &'static str;

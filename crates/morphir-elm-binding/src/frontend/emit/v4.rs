@@ -1,53 +1,84 @@
 //! The v4 emitter.
 //!
 //! A v4 document is written straight from the resolved model; nothing here
-//! migrates a classic one. Names go through the same word split the classic
-//! emitter uses and are then rebuilt with [`Name::from_words`], which collapses a
-//! run of single letters back into an initialism — so `SDK` is the initialism
-//! `SDK` and `LocalDate` is `local-date`. Doing it this way is what makes the
-//! natively emitted document identical to the one a caller gets by migrating the
-//! classic sibling, which `tests/emit.rs` checks.
+//! migrates a classic one. Names go through the word split in
+//! [`super::names`] and are then rebuilt with [`Name::from_words`], which
+//! collapses a run of single letters back into an initialism — so `SDK` is the
+//! initialism `SDK` and `LocalDate` is `local-date`. Doing it this way is what
+//! makes the natively emitted document identical to the one a caller gets by
+//! migrating the classic sibling, which `tests/emit.rs` checks.
+//!
+//! Serialization encoding: v4 type expressions are written under the thread-local
+//! [`morphir_core::ir::v4::TypeEncoding`], which defaults to `Expanded`. Neither
+//! [`V4Emitter::emit_module`] nor [`V4Emitter::emit_distribution`] sets it, so a
+//! caller wrapping either in `with_type_encoding` chooses the spelling — but both
+//! must run under the *same* choice, because `emit_distribution` reads the stored
+//! module values back through the v4 reader and writes them out again. A baseline
+//! written compact and assembled expanded (or the reverse) still decodes, since
+//! the reader accepts both, but the assembled document is written in whichever
+//! encoding is in force during assembly.
+
+use std::collections::HashMap;
 
 use indexmap::IndexMap;
-use morphir_core::ir::classic::Name as ClassicName;
 use morphir_core::ir::v4::{
     Access as VAccess, AccessControlled, ConstructorArg, ConstructorDefinition, Distribution,
     Documentation, Documented, FormatVersion, IRFile, LibraryContent, ModuleDefinition, Name,
     PackageDefinition, Type, TypeAttributes, TypeDefinition,
 };
-use morphir_core::naming::{FQName, ModuleName, PackageName, Path, resolve};
+use morphir_core::naming::{FQName, ModuleName, PackageName, Path};
 use serde_json::Value;
 
-use super::{Emitter, ModuleIr, PackageInput};
+use super::names::{argument_words, module_label, words};
+use super::{EmitError, Emitter, ModuleIr, PackageInput};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
 pub struct V4Emitter;
 
 impl Emitter for V4Emitter {
-    fn emit_module(&self, module: &ResolvedModule) -> Value {
+    fn emit_module(&self, module: &ResolvedModule) -> Result<Value, EmitError> {
         let definition = AccessControlled {
             access: access(module.access),
-            value: module_definition(module),
+            value: module_definition(module)?,
         };
-        serde_json::to_value(&definition).expect("a v4 module definition serializes")
+        serde_json::to_value(&definition).map_err(|error| {
+            format!(
+                "module `{}` could not be written as a v4 module definition: {error}",
+                module_label(&module.name)
+            )
+        })
     }
 
-    fn emit_distribution(&self, input: &PackageInput, module_irs: &[ModuleIr]) -> Value {
-        let modules = module_irs
-            .iter()
-            .map(|(module_path, module_access, module_ir)| {
-                let definition: AccessControlled<ModuleDefinition> =
-                    serde_json::from_value(module_ir.clone())
-                        .expect("a module value emit_module wrote");
-                (
-                    module_name(module_path).to_canonical_string(),
-                    AccessControlled {
-                        access: access(*module_access),
-                        value: definition.value,
-                    },
-                )
-            })
-            .collect();
+    fn emit_distribution(
+        &self,
+        input: &PackageInput,
+        module_irs: &[ModuleIr],
+    ) -> Result<Value, EmitError> {
+        let mut modules: IndexMap<String, AccessControlled<ModuleDefinition>> = IndexMap::new();
+        let mut written: HashMap<String, String> = HashMap::new();
+        for (module_path, module_access, module_ir) in module_irs {
+            let label = module_label(module_path);
+            let definition: AccessControlled<ModuleDefinition> =
+                serde_json::from_value(module_ir.clone()).map_err(|error| {
+                    format!("module `{label}` IR is not a valid v4 module definition: {error}")
+                })?;
+            let key = module_name(module_path).to_canonical_string();
+            // An `IndexMap` would replace the earlier module silently, so a
+            // collision of canonical names is reported instead.
+            if let Some(earlier) = written.insert(key.clone(), label.clone()) {
+                return Err(format!(
+                    "module `{label}` and module `{earlier}` share the canonical module name \
+                     `{key}`, so only one of them could be written"
+                ));
+            }
+            modules.insert(
+                key,
+                AccessControlled {
+                    access: access(*module_access),
+                    value: definition.value,
+                },
+            );
+        }
 
         let file = IRFile {
             format_version: FormatVersion::Integer(4),
@@ -62,7 +93,8 @@ impl Emitter for V4Emitter {
                 def: PackageDefinition { modules },
             }),
         };
-        serde_json::to_value(&file).expect("a v4 distribution serializes")
+        serde_json::to_value(&file)
+            .map_err(|error| format!("the v4 distribution could not be written: {error}"))
     }
 
     fn format_version(&self) -> &'static str {
@@ -77,14 +109,9 @@ fn access(access: Access) -> VAccess {
     }
 }
 
-/// The v4 name an identifier spells, by way of the classic word split.
+/// The v4 name an identifier spells, by way of the shared word split.
 fn name(source: &str) -> Name {
-    Name::from_words(
-        ClassicName::from_str(source)
-            .words
-            .iter()
-            .map(|word| resolve(*word).to_owned()),
-    )
+    Name::from_words(words(source))
 }
 
 fn path(segments: &[String]) -> Path {
@@ -107,12 +134,6 @@ fn fqname(reference: &FqName) -> FQName {
         path(&reference.module),
         name(&reference.name),
     )
-}
-
-/// The name morphir-elm gives the `index`-th positional constructor argument,
-/// migrated to v4: the classic words `["arg", "1"]` spell `arg-1`.
-fn argument_name(index: usize) -> Name {
-    Name::from_words(["arg".to_string(), (index + 1).to_string()])
 }
 
 fn attrs() -> TypeAttributes {
@@ -149,7 +170,7 @@ fn constructor(source: &RConstructor) -> ConstructorDefinition {
             .iter()
             .enumerate()
             .map(|(index, argument)| ConstructorArg {
-                name: argument_name(index),
+                name: Name::from_words(argument_words(index)),
                 arg_type: ty(argument),
             })
             .collect(),
@@ -176,26 +197,36 @@ fn type_definition(body: &ResolvedBody, params: &[String]) -> TypeDefinition {
     }
 }
 
-fn module_definition(module: &ResolvedModule) -> ModuleDefinition {
-    ModuleDefinition {
-        types: module
-            .types
-            .iter()
-            .map(|declaration| {
-                (
-                    name(&declaration.name).to_canonical_string(),
-                    AccessControlled {
-                        access: access(declaration.access),
-                        value: Documented::new(
-                            declaration.doc.clone().map(Documentation::new),
-                            type_definition(&declaration.body, &declaration.params),
-                        ),
-                    },
-                )
-            })
-            .collect(),
+fn module_definition(module: &ResolvedModule) -> Result<ModuleDefinition, EmitError> {
+    let mut types: IndexMap<String, AccessControlled<Documented<TypeDefinition>>> = IndexMap::new();
+    let mut written: HashMap<String, String> = HashMap::new();
+    for declaration in &module.types {
+        let key = name(&declaration.name).to_canonical_string();
+        // An `IndexMap` would replace the earlier declaration silently.
+        if let Some(earlier) = written.insert(key.clone(), declaration.name.clone()) {
+            return Err(format!(
+                "in module `{}`, types `{}` and `{earlier}` share the canonical name `{key}`, so \
+                 only one of them could be written",
+                module_label(&module.name),
+                declaration.name
+            ));
+        }
+        types.insert(
+            key,
+            AccessControlled {
+                access: access(declaration.access),
+                value: Documented::new(
+                    declaration.doc.clone().map(Documentation::new),
+                    type_definition(&declaration.body, &declaration.params),
+                ),
+            },
+        );
+    }
+
+    Ok(ModuleDefinition {
+        types,
         // Value declarations are skipped by this frontend.
         values: IndexMap::new(),
         doc: module.doc.clone().map(Documentation::new),
-    }
+    })
 }

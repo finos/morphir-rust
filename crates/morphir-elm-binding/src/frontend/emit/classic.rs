@@ -1,10 +1,12 @@
 //! The classic (v3) emitter.
 //!
 //! Classic names are word lists, so every identifier goes through
-//! [`classic::Name::from_str`], which splits `LocalDate` into `["local","date"]`
-//! and `SDK` into `["s","d","k"]` exactly as morphir-elm's `Name.fromString` does.
-//! Type nodes carry no attributes, so every attribute is [`Attrs::None`], which
-//! writes `{}`.
+//! [`names::words`], which splits `LocalDate` into `["local","date"]` and `SDK`
+//! into `["s","d","k"]` exactly as morphir-elm's `Name.fromString` does. Type
+//! nodes carry no attributes, so every attribute is [`Attrs::None`], which writes
+//! `{}`.
+
+use std::collections::HashSet;
 
 use morphir_core::ir::classic::{
     Access as CAccess, AccessControlled, Attrs, Constructor, Distribution, DistributionBody,
@@ -13,7 +15,8 @@ use morphir_core::ir::classic::{
 };
 use serde_json::Value;
 
-use super::{Emitter, ModuleIr, PackageInput};
+use super::names::{argument_words, module_label, words};
+use super::{EmitError, Emitter, ModuleIr, PackageInput};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
 /// The classic module definition, with type attributes and no value attributes.
@@ -22,41 +25,58 @@ type ClassicModule = ModuleDefinition<Attrs, Type<Attrs>>;
 pub struct ClassicEmitter;
 
 impl Emitter for ClassicEmitter {
-    fn emit_module(&self, module: &ResolvedModule) -> Value {
+    fn emit_module(&self, module: &ResolvedModule) -> Result<Value, EmitError> {
         let definition = AccessControlled {
             access: access(module.access),
             value: module_definition(module),
         };
-        serde_json::to_value(&definition).expect("a classic module definition serializes")
+        serde_json::to_value(&definition).map_err(|error| {
+            format!(
+                "module `{}` could not be written as a v3 module definition: {error}",
+                module_label(&module.name)
+            )
+        })
     }
 
-    fn emit_distribution(&self, input: &PackageInput, module_irs: &[ModuleIr]) -> Value {
-        let modules = module_irs
-            .iter()
-            .map(|(module_path, module_access, module_ir)| {
-                let definition: AccessControlled<ClassicModule> =
-                    serde_json::from_value(module_ir.clone())
-                        .expect("a module value emit_module wrote");
-                ModuleEntry {
-                    path: path(module_path),
-                    definition: AccessControlled {
-                        access: access(*module_access),
-                        value: definition.value,
-                    },
-                }
-            })
-            .collect();
+    fn emit_distribution(
+        &self,
+        input: &PackageInput,
+        module_irs: &[ModuleIr],
+    ) -> Result<Value, EmitError> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut modules = Vec::with_capacity(module_irs.len());
+        for (module_path, module_access, module_ir) in module_irs {
+            let label = module_label(module_path);
+            let definition: AccessControlled<ClassicModule> =
+                serde_json::from_value(module_ir.clone()).map_err(|error| {
+                    format!("module `{label}` IR is not a valid v3 module definition: {error}")
+                })?;
+            let path = path(module_path);
+            if !seen.insert(path.to_string()) {
+                return Err(format!(
+                    "module `{label}` is written twice: two module paths share the name `{path}`"
+                ));
+            }
+            modules.push(ModuleEntry {
+                path,
+                definition: AccessControlled {
+                    access: access(*module_access),
+                    value: definition.value,
+                },
+            });
+        }
 
-        let dependencies = input
-            .dependencies
-            .iter()
-            .map(|(dependency_path, specification)| {
-                let specification: PackageSpecification<Attrs> =
-                    serde_json::from_value(specification.clone())
-                        .expect("a classic package specification");
-                (path(dependency_path), specification)
-            })
-            .collect();
+        let mut dependencies = Vec::with_capacity(input.dependencies.len());
+        for (dependency_path, specification) in input.dependencies {
+            let specification: PackageSpecification<Attrs> =
+                serde_json::from_value(specification.clone()).map_err(|error| {
+                    format!(
+                        "dependency `{}` is not a valid v3 package specification: {error}",
+                        module_label(dependency_path)
+                    )
+                })?;
+            dependencies.push((path(dependency_path), specification));
+        }
 
         let distribution = Distribution {
             format_version: 3,
@@ -66,7 +86,8 @@ impl Emitter for ClassicEmitter {
                 PackageDefinition { modules },
             ),
         };
-        serde_json::to_value(&distribution).expect("a classic distribution serializes")
+        serde_json::to_value(&distribution)
+            .map_err(|error| format!("the v3 distribution could not be written: {error}"))
     }
 
     fn format_version(&self) -> &'static str {
@@ -82,7 +103,7 @@ fn access(access: Access) -> CAccess {
 }
 
 fn name(source: &str) -> Name {
-    Name::from_str(source)
+    Name::new(words(source))
 }
 
 fn path(segments: &[String]) -> Path {
@@ -97,14 +118,6 @@ fn fqname(reference: &FqName) -> FQName {
     )
 }
 
-/// The name morphir-elm gives the `index`-th positional constructor argument.
-///
-/// `Morphir.Elm.Frontend` builds the word list `[ "arg", String.fromInt (index + 1) ]`
-/// directly, so the argument names are one-based and their words are already split.
-fn argument_name(index: usize) -> Name {
-    Name::new(["arg".to_string(), (index + 1).to_string()])
-}
-
 fn ty(value: &RType) -> Type<Attrs> {
     match value {
         RType::Var(variable) => Type::Variable(Attrs::None, name(variable)),
@@ -113,32 +126,24 @@ fn ty(value: &RType) -> Type<Attrs> {
             fqname(reference),
             arguments.iter().map(ty).collect(),
         ),
-        RType::Record(fields) => Type::Record(
-            Attrs::None,
-            fields
-                .iter()
-                .map(|field| Field {
-                    name: name(&field.name),
-                    ty: ty(&field.ty),
-                })
-                .collect(),
-        ),
+        RType::Record(fields) => Type::Record(Attrs::None, fields.iter().map(field).collect()),
         RType::ExtensibleRecord(variable, fields) => Type::ExtensibleRecord(
             Attrs::None,
             name(variable),
-            fields
-                .iter()
-                .map(|field| Field {
-                    name: name(&field.name),
-                    ty: ty(&field.ty),
-                })
-                .collect(),
+            fields.iter().map(field).collect(),
         ),
         RType::Tuple(elements) => Type::Tuple(Attrs::None, elements.iter().map(ty).collect()),
         RType::Function(argument, result) => {
             Type::Function(Attrs::None, Box::new(ty(argument)), Box::new(ty(result)))
         }
         RType::Unit => Type::Unit(Attrs::None),
+    }
+}
+
+fn field(source: &crate::resolved::RField) -> Field<Attrs> {
+    Field {
+        name: name(&source.name),
+        ty: ty(&source.ty),
     }
 }
 
@@ -149,7 +154,7 @@ fn constructor(source: &RConstructor) -> Constructor<Attrs> {
             .args
             .iter()
             .enumerate()
-            .map(|(index, argument)| (argument_name(index), ty(argument)))
+            .map(|(index, argument)| (Name::new(argument_words(index)), ty(argument)))
             .collect(),
     }
 }

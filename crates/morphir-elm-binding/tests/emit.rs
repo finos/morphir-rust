@@ -7,7 +7,7 @@
 
 use morphir_elm_binding::frontend::emit::{PackageInput, emitter_for};
 use morphir_elm_binding::resolved::{
-    Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule, ResolvedType,
+    Access, FqName, RConstructor, RField, RType, ResolvedBody, ResolvedModule, ResolvedType,
 };
 use serde_json::{Value, json};
 
@@ -32,8 +32,34 @@ fn float() -> RType {
     RType::Ref(sdk("Basics", "Float"), vec![])
 }
 
-/// `My.Types`: a public alias, a public custom type with public constructors, and
-/// a private alias.
+fn bool() -> RType {
+    RType::Ref(sdk("Basics", "Bool"), vec![])
+}
+
+fn list(element: RType) -> RType {
+    RType::Ref(sdk("List", "List"), vec![element])
+}
+
+fn field(name: &str, ty: RType) -> RField {
+    RField {
+        name: name.to_string(),
+        ty,
+    }
+}
+
+fn public_alias(name: &str, params: &[&str], body: RType) -> ResolvedType {
+    ResolvedType {
+        name: name.to_string(),
+        access: Access::Public,
+        doc: None,
+        params: params.iter().map(|param| param.to_string()).collect(),
+        body: ResolvedBody::Alias(body),
+    }
+}
+
+/// `My.Types`: a public alias, a public custom type with public constructors, a
+/// private alias, and one declaration for every shape of type expression the
+/// resolved model can hold — so the v3-versus-v4 agreement check covers them all.
 fn sample_module() -> ResolvedModule {
     ResolvedModule {
         name: vec!["My".to_string(), "Types".to_string()],
@@ -73,6 +99,56 @@ fn sample_module() -> ResolvedModule {
                 params: vec![],
                 body: ResolvedBody::Alias(float()),
             },
+            // `type alias Box a = { value : a }`
+            public_alias(
+                "Box",
+                &["a"],
+                RType::Record(vec![field("value", RType::Var("a".to_string()))]),
+            ),
+            // `type alias Extended r = { r | email : String }`
+            public_alias(
+                "Extended",
+                &["r"],
+                RType::ExtensibleRecord("r".to_string(), vec![field("email", string())]),
+            ),
+            // `type alias Pair = ( Int, String )`
+            public_alias("Pair", &[], RType::Tuple(vec![int(), string()])),
+            // `type alias Handler = Int -> String -> Bool` (curried, so nested)
+            public_alias(
+                "Handler",
+                &[],
+                RType::Function(
+                    Box::new(int()),
+                    Box::new(RType::Function(Box::new(string()), Box::new(bool()))),
+                ),
+            ),
+            // `type alias Empty = ()`
+            public_alias("Empty", &[], RType::Unit),
+            // `type alias Same a = a`
+            public_alias("Same", &["a"], RType::Var("a".to_string())),
+            // `type Wrapper a = Boxed { value : a } | Many (List a)`
+            ResolvedType {
+                name: "Wrapper".to_string(),
+                access: Access::Public,
+                doc: Some("Wraps a value.".to_string()),
+                params: vec!["a".to_string()],
+                body: ResolvedBody::Custom {
+                    constructor_access: Access::Private,
+                    constructors: vec![
+                        RConstructor {
+                            name: "Boxed".to_string(),
+                            args: vec![RType::Record(vec![field(
+                                "value",
+                                RType::Var("a".to_string()),
+                            )])],
+                        },
+                        RConstructor {
+                            name: "Many".to_string(),
+                            args: vec![list(RType::Var("a".to_string()))],
+                        },
+                    ],
+                },
+            },
         ],
         depends_on: vec![],
         skipped_values: vec![],
@@ -95,7 +171,7 @@ fn emit(ir_version: &str) -> Value {
             (
                 module.name.clone(),
                 module.access,
-                emitter.emit_module(module),
+                emitter.emit_module(module).expect("the module is emitted"),
             )
         })
         .collect();
@@ -104,7 +180,9 @@ fn emit(ir_version: &str) -> Value {
         modules: &modules,
         dependencies: &[],
     };
-    emitter.emit_distribution(&input, &module_irs)
+    emitter
+        .emit_distribution(&input, &module_irs)
+        .expect("the distribution is assembled")
 }
 
 // ----------------------------------------------------------------------------
@@ -222,7 +300,7 @@ fn classic_keeps_a_private_type_private() {
 #[test]
 fn classic_emit_module_returns_the_access_controlled_module_definition() {
     let emitter = emitter_for("3").expect("classic emitter");
-    let module = emitter.emit_module(&sample_module());
+    let module = emitter.emit_module(&sample_module()).expect("a module");
     assert_eq!(module["access"], json!("Public"));
     assert_eq!(module["value"]["types"][0][0], json!(["id"]));
 }
@@ -313,9 +391,81 @@ fn v4_writes_constructors_keyed_by_canonical_name() {
 #[test]
 fn v4_emit_module_returns_the_access_controlled_module_definition() {
     let emitter = emitter_for("4").expect("v4 emitter");
-    let module = emitter.emit_module(&sample_module());
+    let module = emitter.emit_module(&sample_module()).expect("a module");
     assert!(module["Public"]["types"]["id"].is_object(), "{module}");
     assert_eq!(module["Public"]["values"], json!({}));
+}
+
+// ----------------------------------------------------------------------------
+// Refusals
+// ----------------------------------------------------------------------------
+
+#[test]
+fn emit_distribution_rejects_foreign_module_json() {
+    let package = package();
+    let modules = vec![sample_module()];
+    let module_irs = vec![(
+        modules[0].name.clone(),
+        modules[0].access,
+        json!({ "nope": 1 }),
+    )];
+    for version in ["3", "4"] {
+        let emitter = emitter_for(version).expect("an emitter");
+        let input = PackageInput {
+            package: &package,
+            modules: &modules,
+            dependencies: &[],
+        };
+        let error = emitter
+            .emit_distribution(&input, &module_irs)
+            .expect_err("a module value this emitter never wrote is refused");
+        assert!(error.contains("My.Types"), "v{version} error: {error}");
+    }
+}
+
+#[test]
+fn emit_distribution_rejects_two_modules_with_the_same_canonical_name() {
+    let package = package();
+    // `My.Types` and `My.types` split into the same words, so they name the same
+    // module once the name is canonical.
+    let mut clash = sample_module();
+    clash.name = vec!["My".to_string(), "types".to_string()];
+    let modules = vec![sample_module(), clash];
+    for version in ["3", "4"] {
+        let emitter = emitter_for(version).expect("an emitter");
+        let module_irs: Vec<(Vec<String>, Access, Value)> = modules
+            .iter()
+            .map(|module| {
+                (
+                    module.name.clone(),
+                    module.access,
+                    emitter.emit_module(module).expect("the module is emitted"),
+                )
+            })
+            .collect();
+        let input = PackageInput {
+            package: &package,
+            modules: &modules,
+            dependencies: &[],
+        };
+        let error = emitter
+            .emit_distribution(&input, &module_irs)
+            .expect_err("a colliding module name is refused rather than overwritten");
+        assert!(error.contains("My.types"), "v{version} error: {error}");
+    }
+}
+
+#[test]
+fn v4_emit_module_rejects_two_types_with_the_same_canonical_name() {
+    let mut module = sample_module();
+    // `Id` and `id` differ in Elm but spell the same v4 canonical name, and an
+    // `IndexMap` would keep only the second.
+    module.types.push(public_alias("id", &[], int()));
+    let error = emitter_for("4")
+        .expect("v4 emitter")
+        .emit_module(&module)
+        .expect_err("a colliding type name is refused rather than overwritten");
+    assert!(error.contains("id"), "error: {error}");
 }
 
 // ----------------------------------------------------------------------------
@@ -367,15 +517,48 @@ fn the_native_v4_distribution_is_what_migrating_the_classic_one_gives() {
 }
 
 #[test]
-fn agreement_is_checked_on_something() {
+fn agreement_is_checked_on_every_shape_of_type_expression() {
     // Guards the normalisation above: if it ever emptied the comparison, the
-    // agreement test would pass on two empty values.
+    // agreement test would pass on two empty values. Every declaration the
+    // fixture carries has to survive normalisation, so the agreement check really
+    // does cover records, extensible records, tuples, curried functions, unit,
+    // type variables, type parameters, and a documented custom type.
     let native = normalise(&emit("4")["distribution"]);
     let types = &native["Library"]["def"]["modules"]["my/types"]["Public"]["types"];
-    assert!(types["id"]["Public"]["TypeAliasDefinition"]["typeExp"].is_object());
+    let alias = |name: &str| types[name]["Public"]["TypeAliasDefinition"].clone();
+
+    assert!(alias("id")["typeExp"].is_object());
     assert!(
         types["status"]["Public"]["CustomTypeDefinition"]["constructors"]["closed"]
             .as_array()
             .is_some_and(|args| args.len() == 2)
     );
+    assert_eq!(alias("box")["typeParams"], json!(["a"]));
+    // The default encoding is expanded, so a variable is a wrapper, not a bare
+    // string (`morphir_core::ir::v4::serde_v4`).
+    assert_eq!(
+        alias("box")["typeExp"]["Record"]["fields"]["value"]["Variable"]["name"],
+        json!("a")
+    );
+    assert_eq!(
+        alias("extended")["typeExp"]["ExtensibleRecord"]["variable"],
+        json!("r")
+    );
+    assert!(
+        alias("pair")["typeExp"]["Tuple"]["elements"]
+            .as_array()
+            .is_some_and(|elements| elements.len() == 2)
+    );
+    assert!(alias("handler")["typeExp"]["Function"]["returnType"]["Function"].is_object());
+    assert!(alias("empty")["typeExp"]["Unit"].is_object());
+    assert_eq!(alias("same")["typeExp"]["Variable"]["name"], json!("a"));
+
+    let wrapper = &types["wrapper"]["Public"];
+    assert_eq!(wrapper["doc"], json!("Wraps a value."));
+    assert_eq!(
+        wrapper["CustomTypeDefinition"]["access"],
+        json!("Private"),
+        "the custom type's constructors are private"
+    );
+    assert!(wrapper["CustomTypeDefinition"]["constructors"]["many"].is_array());
 }

@@ -46,7 +46,7 @@ class PythonExtensionReleaseTests(unittest.TestCase):
         self.assertEqual("Morphir Python", descriptor["name"])
         self.assertEqual(["python"], descriptor["targets"])
         self.assertEqual([{"id": "python", "fileExtensions": [".py"]}], descriptor["languages"])
-        self.assertEqual(["4"], descriptor["irVersions"])
+        self.assertEqual(["3", "4"], descriptor["irVersions"])
 
     def test_packaging_accepts_frontend_only_and_rejects_invalid_languages(self) -> None:
         registry = tomllib.loads(AVRO_REGISTRY)["extensions"]["avro"]

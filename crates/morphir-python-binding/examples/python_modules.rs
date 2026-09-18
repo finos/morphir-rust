@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         dependencies: vec![],
         options: CompileOptions {
             types_only: false,
-            ir_version: "4".into(),
+            ir_version: std::env::args().nth(1).unwrap_or_else(|| "4".into()),
             ..Default::default()
         },
     };

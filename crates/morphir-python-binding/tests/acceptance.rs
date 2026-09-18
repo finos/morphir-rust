@@ -5,6 +5,7 @@ use morphir_python_binding::PythonExtension;
 #[derive(Debug, Default)]
 struct TestDriver {
     source: String,
+    ir_version: Option<String>,
     additional: Vec<SourceDocument>,
     compiled: Option<CompileResult>,
     generated: Option<GenerateResult>,
@@ -33,7 +34,7 @@ impl TestDriver {
                 },
                 dependencies: vec![],
                 options: CompileOptions {
-                    ir_version: "4".into(),
+                    ir_version: self.ir_version.clone().unwrap_or_else(|| "4".into()),
                     types_only: false,
                     ..Default::default()
                 },
@@ -91,6 +92,11 @@ impl TestDriver {
 #[derive(Debug, Default, World)]
 struct PythonWorld {
     driver: TestDriver,
+}
+
+#[given(expr = "IR version {word}")]
+fn ir_version(world: &mut PythonWorld, version: String) {
+    world.driver.ir_version = Some(version);
 }
 
 #[given("a Python model with a product and a sum with payloads")]

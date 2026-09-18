@@ -13,8 +13,7 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Vec<Artifact>> {
             "Expected target python without backend options",
         ));
     }
-    let ir: IRFile =
-        serde_json::from_value(request.ir.clone()).map_err(|e| error("PY005", e.to_string()))?;
+    let ir = crate::ir::decode(request.ir.clone())?;
     let Distribution::Library(library) = ir.distribution else {
         return Err(error("PY004", "Only Library distributions are supported"));
     };

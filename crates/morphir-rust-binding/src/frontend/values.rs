@@ -1,5 +1,11 @@
 //! The deliberately small, typed expression subset supported by the Rust binding.
+mod callable_types;
+mod calls;
 mod literals;
+mod signatures;
+use callable_types::CallableShape;
+use signatures::Signature;
+pub(super) use signatures::{collect, shared};
 mod patterns;
 mod storage;
 
@@ -26,12 +32,16 @@ struct Lower<'a, 'b> {
     parameters: Vec<syn::Ident>,
     next: usize,
     reserved: Vec<Name>,
+    functions: &'a BTreeMap<String, Signature>,
+    shapes: BTreeMap<String, CallableShape>,
+    lambdas: BTreeMap<String, CallableShape>,
 }
 
 pub(super) fn lower(
     context: &Context<'_>,
     function: &syn::ItemFn,
-    patterns: &crate::patterns::Context,
+    functions: &BTreeMap<String, Signature>,
+    shared: &crate::functions::Context,
 ) -> Outcome<ModuleValueDefinition<Attrs, Type<Attrs>>> {
     let signature = &function.sig;
     if signature.asyncness.is_some()
@@ -52,6 +62,9 @@ pub(super) fn lower(
         parameters: context.source.generics(&signature.generics)?,
         next: 0,
         reserved: vec![],
+        functions,
+        shapes: BTreeMap::new(),
+        lambdas: BTreeMap::new(),
     };
     let mut scope = Scope::default();
     let mut input_types = vec![];
@@ -66,6 +79,9 @@ pub(super) fn lower(
         let name = context.source.name(ident)?;
         let ty = lower.ty(&argument.ty)?;
         lower.reserved.push(name.clone());
+        lower
+            .shapes
+            .insert(format!("{name:?}"), lower.source_shape(&argument.ty)?);
         scope.bindings.insert(
             ident.unraw().to_string(),
             Binding {
@@ -94,8 +110,13 @@ pub(super) fn lower(
             return Err(lower.error(parameter, "Generic parameters must occur in the function signature; unused parameters cannot be represented in Morphir IR"));
         }
     }
-    let (body, actual) = lower.block(&function.block, &mut scope)?;
+    let (body, actual) = lower.block(&function.block, &mut scope, Some(&output_type))?;
     lower.same(&function.block, &output_type, &actual)?;
+    lower.check_shape(
+        &function.block,
+        &functions[&signature.ident.unraw().to_string()].output_shape,
+        &body,
+    )?;
     let definition = ValueDefinition {
         input_types,
         output_type,
@@ -104,7 +125,7 @@ pub(super) fn lower(
     let migrated =
         morphir_core::migration::migrate_value_definition(&definition, &mut Default::default())
             .map_err(|e| lower.error(&function.block, &format!("{e:?}")))?;
-    crate::values::validate_function(&migrated, patterns)
+    crate::values::validate_function(&migrated, shared)
         .map_err(|e| lower.error(&function.block, &e))?;
     Ok((
         context.source.name(&signature.ident)?,
@@ -161,7 +182,7 @@ fn contains_variable(ty: &Type<Attrs>, name: &Name) -> bool {
 impl Lower<'_, '_> {
     fn ty(&self, ty: &syn::Type) -> Outcome<Type<Attrs>> {
         self.check_storage_type(ty)?;
-        self.context.ty(ty, &self.parameters)
+        self.executable_type(ty)
     }
 
     fn error(&self, node: &impl Spanned, message: &str) -> morphir_extension_sdk::Diagnostic {
@@ -178,10 +199,14 @@ impl Lower<'_, '_> {
         if expected == actual {
             Ok(())
         } else {
+            // Debug names contain process-local interner IDs. The wire form
+            // keeps diagnostics stable between native and WASM executions.
+            let expected = serde_json::to_string(expected).expect("IR types serialize");
+            let actual = serde_json::to_string(actual).expect("IR types serialize");
             Err(self.context.source.error(
                 node.span(),
                 "RS_VALUE_TYPE",
-                format!("Expected {expected:?}, found {actual:?}"),
+                format!("Expected {expected}, found {actual}"),
             ))
         }
     }
@@ -208,13 +233,23 @@ impl Lower<'_, '_> {
             }
         }
     }
-    fn block(&mut self, block: &syn::Block, outer: &mut Scope) -> Outcome<Typed> {
+    fn block(
+        &mut self,
+        block: &syn::Block,
+        outer: &mut Scope,
+        expected: Option<&Type<Attrs>>,
+    ) -> Outcome<Typed> {
         let mut scope = outer.clone();
-        let result = self.statements(&block.stmts, &mut scope)?;
+        let result = self.statements(&block.stmts, &mut scope, expected)?;
         outer.moved.extend(scope.moved);
         Ok(result)
     }
-    fn statements(&mut self, statements: &[syn::Stmt], scope: &mut Scope) -> Outcome<Typed> {
+    fn statements(
+        &mut self,
+        statements: &[syn::Stmt],
+        scope: &mut Scope,
+        expected: Option<&Type<Attrs>>,
+    ) -> Outcome<Typed> {
         let Some((first, rest)) = statements.split_first() else {
             return Ok((
                 Value::Unit(Type::Unit(Attrs::None)),
@@ -235,11 +270,18 @@ impl Lower<'_, '_> {
                 if init.diverge.is_some() {
                     return Err(self.error(local, "Let-else is unsupported"));
                 }
-                let (body, ty) = self.expression(&init.expr, scope)?;
+                let declared = annotation.map(|a| self.ty(a)).transpose()?;
+                let (body, ty) = self.expression_expected(&init.expr, scope, declared.as_ref())?;
                 if let Some(annotation) = annotation {
                     self.same(annotation, &self.ty(annotation)?, &ty)?;
+                    self.check_shape(annotation, &self.source_shape(annotation)?, &body)?;
                 }
                 let name = self.fresh();
+                let shape = match annotation {
+                    Some(annotation) => self.source_shape(annotation)?,
+                    None => self.shape(&body)?,
+                };
+                self.shapes.insert(format!("{name:?}"), shape);
                 scope.bindings.insert(
                     ident.unraw().to_string(),
                     Binding {
@@ -247,7 +289,7 @@ impl Lower<'_, '_> {
                         ty: ty.clone(),
                     },
                 );
-                let (continuation, result_type) = self.statements(rest, scope)?;
+                let (continuation, result_type) = self.statements(rest, scope, expected)?;
                 Ok((
                     Value::LetDefinition(
                         result_type.clone(),
@@ -263,7 +305,7 @@ impl Lower<'_, '_> {
                 ))
             }
             syn::Stmt::Expr(expression, None) if rest.is_empty() => {
-                self.expression(expression, scope)
+                self.expression_expected(expression, scope, expected)
             }
             _ => Err(self.error(
                 first,
@@ -272,7 +314,16 @@ impl Lower<'_, '_> {
         }
     }
     fn expression(&mut self, expression: &syn::Expr, scope: &mut Scope) -> Outcome<Typed> {
-        let (mut value, ty) = self.expression_inner(expression, scope)?;
+        self.expression_expected(expression, scope, None)
+    }
+    fn expression_expected(
+        &mut self,
+        expression: &syn::Expr,
+        scope: &mut Scope,
+        expected: Option<&Type<Attrs>>,
+    ) -> Outcome<Typed> {
+        let (mut value, ty) = self.expression_inner(expression, scope, expected)?;
+
         match &mut value {
             Value::Literal(a, _)
             | Value::Variable(a, _)
@@ -281,48 +332,35 @@ impl Lower<'_, '_> {
             | Value::IfThenElse(a, _, _, _)
             | Value::LetDefinition(a, _, _, _)
             | Value::Apply(a, _, _)
+            | Value::Reference(a, _)
+            | Value::Lambda(a, _, _)
             | Value::Unit(a) => *a = ty.clone(),
             _ => unreachable!("supported expression"),
         }
         Ok((value, ty))
     }
-    fn expression_inner(&mut self, expression: &syn::Expr, scope: &mut Scope) -> Outcome<Typed> {
+    fn expression_inner(
+        &mut self,
+        expression: &syn::Expr,
+        scope: &mut Scope,
+        expected: Option<&Type<Attrs>>,
+    ) -> Outcome<Typed> {
         match expression {
             syn::Expr::Paren(p) => {
                 self.context.source.attributes(&p.attrs, false)?;
-                self.expression(&p.expr, scope)
+                self.expression_expected(&p.expr, scope, expected)
             }
             syn::Expr::Group(g) => {
                 self.context.source.attributes(&g.attrs, false)?;
-                self.expression(&g.expr, scope)
+                self.expression_expected(&g.expr, scope, expected)
             }
             syn::Expr::Block(b) if b.label.is_none() => {
                 self.context.source.attributes(&b.attrs, false)?;
-                self.block(&b.block, scope)
+                self.block(&b.block, scope, expected)
             }
-            syn::Expr::Path(p)
-                if p.qself.is_none()
-                    && p.path.leading_colon.is_none()
-                    && p.path.segments.len() == 1
-                    && matches!(p.path.segments[0].arguments, syn::PathArguments::None) =>
-            {
-                self.context.source.attributes(&p.attrs, false)?;
-                let ident = &p.path.segments[0].ident;
-                self.context.source.name(ident)?;
-                let Some(binding) = scope.bindings.get(&ident.unraw().to_string()) else {
-                    return Err(self.error(expression, "Unbound local or parameter"));
-                };
-                let key = format!("{:?}", binding.name);
-                if !copy_type(&binding.ty) && !scope.moved.insert(key) {
-                    return Err(
-                        self.error(expression, "Reusing a moved non-Copy value is unsupported")
-                    );
-                }
-                Ok((
-                    Value::Variable(Type::Unit(Attrs::None), binding.name.clone()),
-                    binding.ty.clone(),
-                ))
-            }
+            syn::Expr::Path(p) => self.path(p, scope, expected),
+            syn::Expr::Call(call) => self.call(call, scope, expected),
+            syn::Expr::Closure(closure) => self.closure(closure, scope),
             syn::Expr::Tuple(t) => {
                 self.context.source.attributes(&t.attrs, false)?;
                 if t.elems.is_empty() {
@@ -334,7 +372,14 @@ impl Lower<'_, '_> {
                 let elements = t
                     .elems
                     .iter()
-                    .map(|e| self.expression(e, scope))
+                    .enumerate()
+                    .map(|(index, e)| {
+                        let hint = match expected {
+                            Some(Type::Tuple(_, fields)) => fields.get(index),
+                            _ => None,
+                        };
+                        self.expression_expected(e, scope, hint)
+                    })
                     .collect::<Outcome<Vec<_>>>()?;
                 let (values, types) = elements.into_iter().unzip();
                 Ok((
@@ -360,15 +405,15 @@ impl Lower<'_, '_> {
                 self.same(expression, &scalar("Basics", "Bool"), &ty)?;
                 Ok((conditional(condition, boolean(false), boolean(true)), ty))
             }
-            syn::Expr::Match(m) => self.match_expression(m, scope),
+            syn::Expr::Match(m) => self.match_expression(m, scope, expected),
             syn::Expr::If(i) => {
                 self.context.source.attributes(&i.attrs, false)?;
                 let (condition, ty) = self.expression(&i.cond, scope)?;
                 self.same(&i.cond, &scalar("Basics", "Bool"), &ty)?;
                 let mut yes_scope = scope.clone();
-                let (yes, yes_type) = self.block(&i.then_branch, &mut yes_scope)?;
+                let (yes, yes_type) = self.block(&i.then_branch, &mut yes_scope, expected)?;
                 let (no, no_type) = if let Some((_, otherwise)) = &i.else_branch {
-                    self.expression(otherwise, scope)?
+                    self.expression_expected(otherwise, scope, expected)?
                 } else {
                     (
                         Value::Unit(Type::Unit(Attrs::None)),

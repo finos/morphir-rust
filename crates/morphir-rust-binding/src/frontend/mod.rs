@@ -45,6 +45,12 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
         patterns::context(&context, &definitions)?
     };
 
+    let functions = if request.options.types_only {
+        Default::default()
+    } else {
+        values::collect(&context)?
+    };
+    let shared = values::shared(&functions, pattern_context)?;
     let mut values = Vec::new();
     let mut expressions = Vec::new();
     if !request.options.types_only {
@@ -78,13 +84,33 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
                 "Type-only compilation omitted a Rust function",
             );
             if !request.options.types_only {
-                expressions.push(values::lower(&context, function, &pattern_context)?);
+                expressions.push(values::lower(&context, function, &functions, &shared)?);
                 continue;
             }
             diagnostic.severity = morphir_extension_sdk::DiagnosticSeverity::Warning;
             diagnostics.push(diagnostic);
         }
     }
+    let mut checked = std::collections::BTreeMap::new();
+    for (name, definition) in &expressions {
+        let name = FQName::new(
+            settings.package.clone(),
+            settings.module.clone(),
+            name.clone(),
+        );
+        let mut migration = morphir_core::migration::MigrationContext::default();
+        let key = morphir_core::migration::migrate_fqname(&name, &migration.cursor)
+            .map_err(|e| error("RS_MIGRATION", format!("{e:?}")))?
+            .to_canonical_string();
+        let value = morphir_core::migration::migrate_value_definition(
+            &definition.value.value,
+            &mut migration,
+        )
+        .map_err(|e| error("RS_MIGRATION", format!("{e:?}")))?;
+        checked.insert(key, value);
+    }
+    crate::functions::check_cycles(&checked)
+        .map_err(|e| source.error(proc_macro2::Span::call_site(), "RS_VALUE_RECURSION", e))?;
     let classic = Distribution {
         format_version: 3,
         distribution: DistributionBody::Library(

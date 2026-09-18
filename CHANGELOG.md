@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Rust frontend and backend support named calls, function values and typed
+  lambdas in IR v3 and v4, including immutable scalar and tuple Copy captures.
+  Executable native and WASM tests cover calls, aliases and higher-order values.
+
 - Rust frontend and backend support exhaustive pattern matching in IR v3 and v4:
   enums, Option/Result, nested tuples, literals, wildcards and bound variables.
   Match guards and other advanced pattern forms remain deferred.

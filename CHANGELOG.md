@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A native Elm binding, `morphir-elm-native`.** `morphir-elm-binding` reads Elm with a
+  vendored tree-sitter grammar and writes Morphir IR v3 or v4 natively, without migrating
+  between them, and generates Elm back from either. It compiles type declarations; a value
+  declaration is reported as an `ELM_VALUE_SKIPPED` warning rather than dropped. The
+  `elmPrelude` compile option chooses the name resolution prelude: `elm-core` (the default,
+  matching morphir-elm's `IncrementalResolve`), `none`, or an inline description of your own.
+  Compilation is incremental and stateless: `CompileRequest.baseline` carries the modules a
+  host holds, `CompileResult.moduleResults` reports each module's status, source digest,
+  interface digest, dependencies and IR, and a host feeds one run's `moduleResults` back as the next run's
+  `baseline`. A module's `dependsOn` is every in-package module it imports as well as every
+  one its references resolved to, so a module imported `exposing (..)` and never named still
+  invalidates its dependents when it grows a type — which is what keeps an incremental run's
+  answer equal to a clean run's. A baseline is scoped to the *compile context* it was built
+  under: `CompileResult.contextDigest` covers the IR version, the `typesOnly` flag, the
+  prelude and the interfaces of every dependency distribution the request supplied, and a
+  host echoes it back as `CompileBaseline.contextDigest`. A run reuses a baseline only when
+  the two agree; otherwise it ignores the baseline whole and says so with an `ELM_REQUEST`
+  warning, so a dependency that lost a type recompiles the modules that named it instead of
+  reusing IR that references nothing. A baseline with no `contextDigest` is ignored for the
+  same reason. All the MEP fields are optional and defaulted, so existing payloads are
+  unchanged. A package path is a module prefix, as in morphir-elm: a package `My.Package`
+  files `My.Package.Foo.Bar` under the IR module path `Foo.Bar`, so the package can be
+  imported under its natural name when it is used as a dependency, and generation writes the
+  package path back on (`src/My/Package/Foo/Bar.elm`). Module names the host sees — module
+  results, `dependsOn`, `exposedModules`, diagnostics — keep their Elm spelling. The
+  extension releases independently as `morphir-elm-native`, alongside the JavaScript
+  `morphir-elm` provider, which stays the default for Elm.
+- **Release bundles record whether a frontend is incremental.** `.github/extensions.toml`
+  takes an `incremental` flag, the release descriptor and the installed release record carry
+  it, and `ReleaseRecord::extension_capabilities` reports it instead of always saying `false`.
+  Without this an incremental guest fails activation with "frontend capabilities disagreed
+  with discovery". The field is written only when true, so descriptors for frontends that are
+  not incremental are byte-identical to the ones before this change.
 - Python functions support typed calls, same-package function imports and references, unary `Callable` annotations, captured lambdas and explicit currying in IR v3 and v4. Native, executable Python and packaged WASM tests cover the supported subset; unsupported arities and ill-typed calls return diagnostics.
 - Rust extension v0.1.0 bundles include the frontend/backend WASM guest, checksum
   and release descriptor for IR v3 and v4. CI selects Rust bundles through the

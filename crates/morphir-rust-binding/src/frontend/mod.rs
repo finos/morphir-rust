@@ -155,5 +155,7 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
         ir: Some(ir),
         diagnostics,
         modules: vec![settings.module_name],
+        module_results: vec![],
+        context_digest: None,
     })
 }

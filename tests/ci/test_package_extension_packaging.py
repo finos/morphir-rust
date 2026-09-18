@@ -47,6 +47,62 @@ class PackageExtensionTests(unittest.TestCase):
         # repository record derived from the identifier would not match it.
         self.assertEqual("Morphir OpenAPI", descriptor["name"])
 
+    @staticmethod
+    def _descriptor(short_id: str, extension: dict) -> dict:
+        return json.loads(
+            descriptor_bytes(
+                short_id,
+                extension,
+                "0.1.0",
+                f"{extension['artifact']}-0.1.0.wasm",
+                "0" * 64,
+                None,
+            )
+        )
+
+    def test_an_incremental_frontend_entry_reaches_the_release_descriptor(self) -> None:
+        """A host reads this before it starts the guest, so it has to be carried."""
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+
+        descriptor = self._descriptor(
+            "elm-native", registry["extensions"]["elm-native"]
+        )
+
+        self.assertIs(True, descriptor["incremental"])
+
+    def test_a_frontend_without_the_flag_writes_no_incremental_key(self) -> None:
+        """The flag is written only when true, so older descriptors are unchanged."""
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        python = registry["extensions"]["python"]
+        self.assertNotIn("incremental", python)
+
+        descriptor = self._descriptor("python", python)
+
+        self.assertNotIn("incremental", descriptor)
+
+    def test_rejects_incremental_without_a_frontend(self) -> None:
+        """Nothing honours the flag on a backend-only entry, so it is refused."""
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        avro = dict(registry["extensions"]["avro"])
+        self.assertNotIn("languages", avro)
+        avro["incremental"] = True
+
+        with self.assertRaises(PackageError) as refusal:
+            self._descriptor("avro", avro)
+
+        self.assertIn("avro", str(refusal.exception))
+        self.assertIn("incremental", str(refusal.exception))
+
+    def test_rejects_a_non_boolean_incremental_flag(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        elm = dict(registry["extensions"]["elm-native"])
+        elm["incremental"] = "yes"
+
+        with self.assertRaises(PackageError) as refusal:
+            self._descriptor("elm-native", elm)
+
+        self.assertIn("boolean", str(refusal.exception))
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.fixture = PackageFixture(

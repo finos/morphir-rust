@@ -324,6 +324,8 @@ mod tests {
                 ir: Some(serde_json::json!({ "typed": request.documents[0].text })),
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
+                module_results: vec![],
+                context_digest: None,
             })
         }
 
@@ -381,6 +383,8 @@ mod tests {
                 ir: None,
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
+                module_results: vec![],
+                context_digest: None,
             })
         }
 
@@ -550,6 +554,8 @@ mod tests {
                 ir: Some(serde_json::json!({ "call": *compile_calls })),
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
+                module_results: vec![],
+                context_digest: None,
             })
         }
 
@@ -766,6 +772,7 @@ mod tests {
                 ir_version: "3".into(),
                 extra: Default::default(),
             },
+            baseline: None,
         }
     }
 

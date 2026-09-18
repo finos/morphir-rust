@@ -14,6 +14,7 @@ default-members = [
     "crates/morphir-daemon",
     "crates/morphir-devkit",
     "crates/morphir-distribution",
+    "crates/morphir-elm-binding",
     "crates/morphir-ext",
     "crates/morphir-ext-core",
     "crates/morphir-extension-sdk",

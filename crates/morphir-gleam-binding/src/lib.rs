@@ -220,6 +220,8 @@ impl Frontend for GleamExtension {
             ir: Some(serde_json::to_value(ir_file)?),
             diagnostics,
             modules: module_names,
+            module_results: vec![],
+            context_digest: None,
         })
     }
 
@@ -258,6 +260,8 @@ fn failed_compile(diagnostics: Vec<Diagnostic>) -> CompileResult {
         ir: None,
         diagnostics,
         modules: vec![],
+        module_results: vec![],
+        context_digest: None,
     }
 }
 
@@ -752,6 +756,7 @@ mod tests {
                     ir_version: ir_version.into(),
                     extra,
                 },
+                baseline: None,
             },
             output_dir,
         )

@@ -393,7 +393,7 @@ impl InstalledExtension {
                     .collect(),
                 ir_versions: record.ir_versions().to_vec(),
                 compile: record.compile(),
-                incremental: false,
+                incremental: record.incremental(),
                 fragments: false,
             }),
             backend: self.backend.as_ref().map(|backend| BackendCapability {

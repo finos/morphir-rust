@@ -230,6 +230,15 @@ pub struct FrontendRecord {
     ir_versions: Vec<String>,
     #[serde(default = "default_frontend_compile")]
     compile: bool,
+    /// Whether the frontend accepts a baseline and reports per-module results.
+    /// Absent in records written before incremental frontends existed, and in
+    /// every record for a frontend that is not incremental.
+    #[serde(default, skip_serializing_if = "is_false")]
+    incremental: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Deserialize)]
@@ -239,6 +248,8 @@ struct FrontendRecordWire {
     ir_versions: Vec<String>,
     #[serde(default = "default_frontend_compile")]
     compile: bool,
+    #[serde(default)]
+    incremental: bool,
 }
 
 fn default_frontend_compile() -> bool {
@@ -287,6 +298,7 @@ impl<'de> Deserialize<'de> for FrontendRecord {
             languages: wire.languages,
             ir_versions: wire.ir_versions,
             compile: wire.compile,
+            incremental: wire.incremental,
         })
     }
 }
@@ -305,6 +317,11 @@ impl FrontendRecord {
     /// Return whether this frontend accepts compile requests.
     pub fn compile(&self) -> bool {
         self.compile
+    }
+
+    /// Return whether this frontend compiles incrementally against a baseline.
+    pub fn incremental(&self) -> bool {
+        self.incremental
     }
 }
 

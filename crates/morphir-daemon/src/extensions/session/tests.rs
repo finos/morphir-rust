@@ -248,6 +248,8 @@ impl Frontend for RecordingExtension {
             })),
             diagnostics: vec![],
             modules: request.package.exposed_modules.unwrap_or_default(),
+            module_results: vec![],
+            context_digest: None,
         })
     }
 
@@ -366,6 +368,8 @@ fn successful_recording_compile_result(request: CompileRequest) -> CompileResult
         })),
         diagnostics: vec![],
         modules: request.package.exposed_modules.unwrap_or_default(),
+        module_results: vec![],
+        context_digest: None,
     }
 }
 
@@ -388,6 +392,7 @@ fn recording_compile_request() -> CompileRequest {
             ir_version: "3".into(),
             extra: Default::default(),
         },
+        baseline: None,
     }
 }
 
@@ -919,6 +924,56 @@ async fn rejects_each_non_backend_locked_capability_drift() {
             failure.error()
         );
     }
+}
+
+/// A refused session says which member disagreed. An installed record that
+/// predates incremental frontends reads back as `incremental: false`, and the
+/// guest that says otherwise is stopped; the message has to name the member, or
+/// a reader is left comparing two structures by hand.
+#[tokio::test]
+async fn a_capability_mismatch_names_the_members_that_differ() {
+    let persisted = FrontendCapability {
+        languages: vec![LanguageCapability {
+            id: "elm".into(),
+            file_extensions: vec![".elm".into()],
+        }],
+        ir_versions: vec!["3".into(), "4".into()],
+        compile: true,
+        incremental: false,
+        fragments: false,
+    };
+    let mut advertised = persisted.clone();
+    advertised.incremental = true;
+    let mut initialized = initialization(extension(vec![ExtensionType::Frontend]));
+    initialized.capabilities = ExtensionCapabilities {
+        frontend: Some(advertised),
+        ..ExtensionCapabilities::default()
+    };
+    let response = ExtensionResponse::success(1, initialized).unwrap();
+    let transport = ScriptedTransport {
+        expected: ExpectedExtension::discovered_with_persisted_capabilities(
+            extension(vec![ExtensionType::Frontend]),
+            PersistedExtensionCapabilities::new(Some(persisted), None),
+        ),
+        responses: [Ok(response)].into(),
+        requests: Vec::new(),
+    };
+
+    let failure = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .err()
+        .expect("an incremental guest must not pass a non-incremental record");
+
+    let message = failure.error().to_string();
+    assert!(
+        message.contains("frontend capabilities disagreed with discovery"),
+        "{message}"
+    );
+    assert!(message.contains("incremental"), "{message}");
+    // The members that agree are not named.
+    assert!(!message.contains("languages"), "{message}");
+    assert!(!message.contains("compile"), "{message}");
 }
 
 #[tokio::test]

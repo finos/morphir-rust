@@ -284,6 +284,7 @@ fn a_type_model(version: &str) -> CompileRequest {
             ir_version: version.into(),
             ..Default::default()
         },
+        baseline: None,
     }
 }
 

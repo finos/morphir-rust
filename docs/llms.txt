@@ -33,6 +33,7 @@ Morphir Rust provides tools for working with Morphir IR (Intermediate Representa
 - [Development Guide](https://finos.github.io/morphir-rust/contributors/development): This guide helps developers contribute to Morphir Rust.
 - [For Contributors](https://finos.github.io/morphir-rust/contributors/): Documentation for developers contributing to Morphir Rust.
 - [Extension Development Reference](https://finos.github.io/morphir-rust/extensions/DEVELOPMENT): Morphir extensions provide frontends, backends, validators, and transforms through MEP JSON-RPC. The supported runtime kinds are `process` and `wasm`. WASM guests run through Extism and do not use ...
+- [Native Elm Extension](https://finos.github.io/morphir-rust/extensions/elm-native): `morphir-elm-native` is a Rust implementation of an Elm frontend and backend for Morphir. It reads Elm source with a vendored tree-sitter grammar and writes Morphir IR v3 or v4 natively, without mi...
 
 ## Optional
 

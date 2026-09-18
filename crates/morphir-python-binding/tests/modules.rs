@@ -24,6 +24,7 @@ fn request(sources: &[(&str, &str)]) -> CompileRequest {
             types_only: false,
             ..Default::default()
         },
+        baseline: None,
     }
 }
 

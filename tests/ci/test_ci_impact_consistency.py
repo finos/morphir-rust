@@ -48,6 +48,15 @@ class ImpactConsistencyTests(unittest.TestCase):
         extism = self.workflow.split("  test-extism:\n", 1)[1].split("  extension-bundle:\n", 1)[0]
         self.assertNotIn("morphir-rust-binding", extism)
 
+    def test_elm_native_guest_tests_are_owned_by_the_bundle_task(self) -> None:
+        task = REPOSITORY_ROOT / ".mise/tasks/extension/artifact/elm-native"
+        self.assertTrue(task.is_file())
+        script = task.read_text(encoding="utf-8")
+        self.assertIn("--features wasm-host-tests --test wasm -- --ignored", script)
+        self.assertIn("--test elm_native_extension -- --ignored", script)
+        extism = self.workflow.split("  test-extism:\n", 1)[1].split("  extension-bundle:\n", 1)[0]
+        self.assertNotIn("morphir-elm-binding", extism)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.impact = config.load_config(REPOSITORY_ROOT / ".github" / "ci-impact.toml")

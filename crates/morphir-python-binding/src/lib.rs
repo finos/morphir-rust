@@ -94,6 +94,8 @@ impl Frontend for PythonExtension {
                 ir: Some(ir),
                 modules,
                 diagnostics,
+                module_results: vec![],
+                context_digest: None,
             },
             Err(diagnostic) => CompileResult {
                 success: false,
@@ -101,6 +103,8 @@ impl Frontend for PythonExtension {
                 ir: None,
                 modules: vec![],
                 diagnostics: vec![diagnostic],
+                module_results: vec![],
+                context_digest: None,
             },
         })
     }

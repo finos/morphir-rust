@@ -59,6 +59,7 @@ fn types_compile_and_generate_through_native_mep_in_both_versions() {
             package: CompilePackage { name: "acme/example".into(), exposed_modules: Some(vec!["Models".into()]) },
             dependencies: vec![],
             options: CompileOptions { types_only: true, ir_version: version.into(), ..Default::default() },
+            baseline: None,
         };
         let response = extension
             .protocol()
@@ -96,6 +97,7 @@ fn generic_module_declarations_roundtrip_in_both_versions() {
             }],
             package: CompilePackage { name: "acme/example".into(), exposed_modules: Some(vec!["Models".into()]) },
             dependencies: vec![], options: CompileOptions { types_only: true, ir_version: version.into(), ..Default::default() },
+            baseline: None,
         };
         let compiled = RustExtension.compile(request.clone()).unwrap();
         assert!(compiled.success, "{:?}", compiled.diagnostics);

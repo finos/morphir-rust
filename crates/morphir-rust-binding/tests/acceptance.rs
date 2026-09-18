@@ -48,6 +48,7 @@ impl TestDriver {
                     },
                     dependencies: vec![],
                     options,
+                    baseline: None,
                 })
                 .unwrap(),
         );

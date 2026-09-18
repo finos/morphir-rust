@@ -101,7 +101,7 @@ fn custom_type_constructors_and_skipped_values() {
         panic!("custom")
     };
     assert_eq!(name, "Status");
-    assert!(doc.is_none());
+    assert_eq!(doc.as_deref(), Some("Account lifecycle."));
     assert_eq!(
         constructors
             .iter()

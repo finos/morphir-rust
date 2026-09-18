@@ -126,6 +126,9 @@ fn exposing(types: &[&ResolvedType]) -> ast::Exposing {
         })
         .collect();
     if exposed.is_empty() {
+        // Elm requires a non-empty exposing list, and a module with no public
+        // types has nothing meaningful to name in one, so `(..)` is the only
+        // legal spelling left.
         ast::Exposing::All
     } else {
         ast::Exposing::Explicit(exposed)
@@ -168,7 +171,7 @@ impl Raiser<'_> {
                         span: NONE,
                     })
                     .collect(),
-                doc: None,
+                doc: declaration.doc.clone(),
                 span: NONE,
             },
         }

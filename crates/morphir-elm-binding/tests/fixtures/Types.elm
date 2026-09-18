@@ -16,6 +16,7 @@ type alias Account a =
     }
 
 
+{-| Account lifecycle. -}
 type Status
     = Active
     | Closed String Int

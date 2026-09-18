@@ -293,13 +293,21 @@ fn printing_the_generated_elm_again_changes_nothing() {
     }
 }
 
-/// The doc comments a Morphir document does keep come back.
+/// The doc comments a Morphir document does keep come back — on the module, on
+/// an alias, and on a custom type alike.
 #[test]
 fn doc_comments_survive() {
-    let (types, _) = regenerate("3");
+    for version in ["3", "4"] {
+        let (types, _) = regenerate(version);
 
-    assert!(types.contains("{-| Module docs. -}"), "generated:\n{types}");
-    assert!(types.contains("{-| An account. -}"), "generated:\n{types}");
+        for doc in [
+            "{-| Module docs. -}",
+            "{-| An account. -}",
+            "{-| Account lifecycle. -}",
+        ] {
+            assert!(types.contains(doc), "v{version} lost {doc}:\n{types}");
+        }
+    }
 }
 
 /// The shape of the generated source, pinned: this is the import and
@@ -331,6 +339,7 @@ fn the_generated_source_is_elm_format_shaped() {
          \x20   }\n\
          \n\
          \n\
+         {-| Account lifecycle. -}\n\
          type Status\n\
          \x20   = Active\n\
          \x20   | Closed String Int\n\

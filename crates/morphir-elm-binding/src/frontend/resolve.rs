@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::ast;
+use crate::names;
 use crate::prelude::Prelude;
 use crate::resolved::{
     Access, FqName, Interface, RConstructor, RField, RType, ResolvedBody, ResolvedModule,
@@ -47,6 +48,7 @@ pub struct ResolveError {
 
 const NOT_FOUND: &str = "ELM_RESOLVE_NOT_FOUND";
 const AMBIGUOUS: &str = "ELM_RESOLVE_AMBIGUOUS";
+const DUPLICATE_TYPE: &str = "ELM_DUPLICATE_TYPE";
 
 /// Where a module path was found, and what it declares.
 struct ModuleTarget {
@@ -66,12 +68,17 @@ pub fn resolve(
     let mut resolver = Resolver {
         module,
         scope,
-        local: module.types.iter().map(|t| t.name().to_string()).collect(),
+        local: module
+            .types
+            .iter()
+            .map(|t| names::type_spelling(t.name()))
+            .collect(),
         visible: BTreeMap::new(),
         qualified: BTreeMap::new(),
         depends_on: BTreeSet::new(),
         errors: Vec::new(),
     };
+    resolver.report_duplicate_declarations();
     resolver.build_tables();
 
     let types = module
@@ -113,6 +120,35 @@ struct Resolver<'a> {
 }
 
 impl Resolver<'_> {
+    /// Reports two type declarations that a Morphir document could not tell
+    /// apart.
+    ///
+    /// A Morphir name keeps only a declaration's words, so `Foo_Bar` and
+    /// `FooBar` are one name once written. Writing both would leave one of them
+    /// silently replacing the other in the document — and in this module's
+    /// interface — so the pair is refused instead, naming both spellings.
+    fn report_duplicate_declarations(&mut self) {
+        let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+        let mut duplicates = Vec::new();
+        for declaration in &self.module.types {
+            let written = declaration.name();
+            if let Some(earlier) = seen.insert(names::type_spelling(written), written) {
+                duplicates.push((declaration.span(), earlier, written));
+            }
+        }
+        for (span, earlier, written) in duplicates {
+            self.error(
+                DUPLICATE_TYPE,
+                span,
+                format!(
+                    "types `{earlier}` and `{written}` are the same name in a Morphir document \
+                     (`{}`), so only one of them could be written",
+                    names::type_spelling(written)
+                ),
+            );
+        }
+    }
+
     /// Builds the visible-name and qualified-name tables from the prelude's
     /// implicit imports followed by the module's own imports.
     fn build_tables(&mut self) {
@@ -183,8 +219,10 @@ impl Resolver<'_> {
         }
     }
 
+    /// Names are filed under their document spelling, because that is the only
+    /// spelling a module interface can state (see [`crate::names`]).
     fn expose_name(&mut self, name: &str, module: &[String]) {
-        let candidates = self.visible.entry(name.to_string()).or_default();
+        let candidates = self.visible.entry(names::type_spelling(name)).or_default();
         if !candidates.iter().any(|c| c == module) {
             candidates.push(module.to_vec());
         }
@@ -303,17 +341,24 @@ impl Resolver<'_> {
     /// placeholder name) when it cannot be resolved, so that the rest of the
     /// module still reports its own errors.
     fn resolve_ref(&mut self, module: &[String], name: &str, span: Span) -> FqName {
+        // Every table and every module interface states a name in its document
+        // spelling, because that is the only spelling a Morphir document keeps.
+        // The reference is spelled the same way before it is looked up, so a
+        // declaration written `Foo_Bar` is found by a reference to `Foo_Bar` —
+        // and, unavoidably, by one to `FooBar`. Diagnostics keep the spelling
+        // the reader wrote.
+        let spelled = names::type_spelling(name);
         if module.is_empty() {
             // Rule 1: a locally declared type wins over every import and is
             // never ambiguous.
-            if self.local.contains(name) {
+            if self.local.contains(&spelled) {
                 return FqName {
                     package: self.scope.package.to_vec(),
                     module: self.module.name.clone(),
                     name: name.to_string(),
                 };
             }
-            let candidates = self.visible.get(name).cloned().unwrap_or_default();
+            let candidates = self.visible.get(&spelled).cloned().unwrap_or_default();
             if candidates.is_empty() {
                 self.error(
                     NOT_FOUND,
@@ -333,7 +378,7 @@ impl Resolver<'_> {
             let mut targets: Vec<ModuleTarget> = Vec::new();
             for candidate in &candidates {
                 for target in self.lookup_modules(candidate) {
-                    if !target.types.iter().any(|t| t == name) {
+                    if !target.types.contains(&spelled) {
                         continue;
                     }
                     if !targets
@@ -416,10 +461,11 @@ impl Resolver<'_> {
     }
 
     fn resolve_in_module(&mut self, module: &[String], name: &str, span: Span) -> FqName {
+        let spelled = names::type_spelling(name);
         match self
             .lookup_modules(module)
             .into_iter()
-            .find(|target| target.types.iter().any(|t| t == name))
+            .find(|target| target.types.contains(&spelled))
         {
             Some(target) => self.use_target(target, name),
             None => {
@@ -450,6 +496,9 @@ impl Resolver<'_> {
     /// Qualified references take the first entry; unqualified references
     /// consider all of them, so a name reachable through two different modules
     /// is reported as ambiguous instead of silently picking one.
+    /// Every target states its type names in their document spelling, so that a
+    /// reference compares against them the same way whether they came from an
+    /// in-package module's interface, a dependency's, or a prelude's TOML.
     fn lookup_modules(&self, raw: &[String]) -> Vec<ModuleTarget> {
         let mut found = Vec::new();
 
@@ -457,7 +506,11 @@ impl Resolver<'_> {
             found.push(ModuleTarget {
                 package: self.scope.package.to_vec(),
                 module: raw.to_vec(),
-                types: iface.types.into_iter().map(|t| t.name).collect(),
+                types: iface
+                    .types
+                    .into_iter()
+                    .map(|t| names::type_spelling(&t.name))
+                    .collect(),
                 in_package: true,
             });
         }
@@ -477,12 +530,22 @@ impl Resolver<'_> {
         deps.sort_by_key(|dep| std::cmp::Reverse(dep.package.len()));
         let shadows_prelude = !deps.is_empty();
         for dep in deps {
-            let remainder = &target[dep.package.len()..];
-            if let Some(module) = dep.modules.iter().find(|m| m.name == remainder) {
+            // A dependency's module paths come out of a document too, so they
+            // are matched in the same spelling as its type names.
+            let remainder = spelled_path(&target[dep.package.len()..]);
+            if let Some(module) = dep
+                .modules
+                .iter()
+                .find(|m| spelled_path(&m.name) == remainder)
+            {
                 found.push(ModuleTarget {
                     package: dep.package.clone(),
                     module: module.name.clone(),
-                    types: module.types.iter().map(|t| t.name.clone()).collect(),
+                    types: module
+                        .types
+                        .iter()
+                        .map(|t| names::type_spelling(&t.name))
+                        .collect(),
                     in_package: false,
                 });
                 break;
@@ -496,7 +559,11 @@ impl Resolver<'_> {
             found.push(ModuleTarget {
                 package: split_dotted(&pkg.name),
                 module: split_dotted(&module.name),
-                types: module.types.iter().map(|t| t.name.clone()).collect(),
+                types: module
+                    .types
+                    .iter()
+                    .map(|t| names::type_spelling(&t.name))
+                    .collect(),
                 in_package: false,
             });
         }
@@ -531,6 +598,13 @@ fn qualified_module_name(target: &ModuleTarget) -> String {
         .cloned()
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// A module path in the spelling a Morphir document keeps.
+fn spelled_path(path: &[String]) -> Vec<String> {
+    path.iter()
+        .map(|segment| names::type_spelling(segment))
+        .collect()
 }
 
 fn split_dotted(name: &str) -> Vec<String> {

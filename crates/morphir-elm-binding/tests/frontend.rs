@@ -8,6 +8,8 @@ use morphir_extension_sdk::prelude::*;
 
 const TYPES: &str = include_str!("fixtures/Types.elm");
 const OTHER: &str = "module My.Other exposing (Thing)\n\ntype Thing = Thing\n";
+const UNDERSCORE_B: &str = "module B exposing (Foo_Bar)\n\ntype alias Foo_Bar = Int\n";
+const UNDERSCORE_A: &str = "module A exposing (T)\n\nimport B\n\ntype alias T = B.Foo_Bar\n";
 const DAEMON_EXAMPLE: &str =
     include_str!("../../morphir-daemon/tests/fixtures/morphir-elm-extension/Example.elm");
 const DAEMON_INVALID: &str =
@@ -240,6 +242,68 @@ fn a_classic_distribution_still_writes_no_dependencies() {
     assert_eq!(
         result.ir.as_ref().expect("a distribution")["distribution"][2],
         serde_json::json!([])
+    );
+}
+
+/// An underscore is a legal part of an Elm type name, and a Morphir name keeps
+/// only the words, so `Foo_Bar` is written `["foo","bar"]`. A cross-module
+/// reference to it has to be looked up in that same spelling, or a module
+/// interface — which can only state the written spelling — would never match.
+#[test]
+fn an_underscored_type_name_resolves_across_modules() {
+    for version in ["3", "4"] {
+        let result = compile(
+            vec![
+                document("file:///work/A.elm", UNDERSCORE_A),
+                document("file:///work/B.elm", UNDERSCORE_B),
+            ],
+            version,
+        );
+
+        assert!(result.success, "{version}: {:?}", result.diagnostics);
+        assert_eq!(result.modules.len(), 2, "{version}");
+    }
+}
+
+/// The flip side: two declarations a Morphir document cannot tell apart are
+/// refused, rather than one silently replacing the other in the IR.
+#[test]
+fn two_type_names_a_document_cannot_tell_apart_are_refused() {
+    let result = compile(
+        vec![document(
+            "file:///work/B.elm",
+            "module B exposing (Foo_Bar, FooBar)\n\ntype alias Foo_Bar = Int\n\n\ntype alias FooBar = Int\n",
+        )],
+        "3",
+    );
+
+    assert!(!result.success);
+    assert_eq!(result.module_results[0].status, ModuleStatus::Failed);
+    let duplicate = codes(&result, "ELM_DUPLICATE_TYPE");
+    assert_eq!(duplicate.len(), 1, "{:?}", result.diagnostics);
+    assert!(duplicate[0].message.contains("Foo_Bar"), "{duplicate:?}");
+    assert!(duplicate[0].message.contains("FooBar"), "{duplicate:?}");
+    assert!(duplicate[0].location.is_some());
+}
+
+#[test]
+fn two_documents_declaring_one_module_are_refused() {
+    let result = compile(
+        vec![
+            document("file:///work/One.elm", OTHER),
+            document("file:///work/Two.elm", OTHER),
+        ],
+        "3",
+    );
+
+    assert!(!result.success);
+    assert_eq!(result.module_results.len(), 1);
+    let request = codes(&result, "ELM_REQUEST");
+    assert_eq!(request.len(), 1, "{:?}", result.diagnostics);
+    assert!(request[0].message.contains("My.Other"), "{request:?}");
+    assert_eq!(
+        request[0].location.as_ref().expect("a source location").uri,
+        "file:///work/Two.elm"
     );
 }
 

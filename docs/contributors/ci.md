@@ -52,9 +52,10 @@ full suite.
   `.mise/tasks/extension/artifact/<id>` task. The bundle matrix picks it up.
 - A new specialised job needs a `[jobs.<name>]` entry in `ci-impact.toml`, an
   output line in the `changes` job, a gate on that output, and a line in `ci-ok`.
-  `tests/ci/test_ci_workflow_definition.py` fails until the `changes` output line
-  and the workflow job exist; it only checks the gate and the `ci-ok` entry for
-  jobs listed in that test's own job table.
+  `tests/ci/test_ci_impact_consistency.py` fails until the `changes` output line
+  and the workflow job exist. `tests/ci/test_ci_workflow_definition.py` checks
+  the gate and the `ci-ok` entry for the jobs in its job table, so add the new
+  job there too.
 
 ## Required status check
 

@@ -156,9 +156,29 @@ pub fn compile(request: CompileRequest) -> CompileResult {
         stop_headerless(&mut run, entry, &baseline_interfaces);
     }
 
+    // Two Elm module names can print differently and still write the same IR
+    // module path once the package path is stripped from each (`Foo` and
+    // `My.Foo` under package `My` both become `Foo`: `My.Foo` is the
+    // package-qualified spelling of the very `Foo` the bare document already
+    // publishes). The first document to claim a path keeps compiling under it;
+    // every later one collides, and is reported and failed here — before either
+    // is walked — rather than left to fail late in the emitter, where the whole
+    // distribution would be lost and both modules would still be reported
+    // `Compiled`.
+    let duplicate_losers = stop_duplicate_relative_paths(
+        &mut run,
+        &documents,
+        &validated.package,
+        &baseline_interfaces,
+        &package,
+    );
+
     let (order, cycle) = ordered(&documents, &package);
 
     for index in order {
+        if duplicate_losers.contains(&index) {
+            continue;
+        }
         let document = &documents[index];
         compile_one(
             &mut run,
@@ -719,6 +739,63 @@ fn depends_on(
     names.sort_unstable();
     names.dedup();
     names
+}
+
+/// Finds every document whose IR module path — the relative path computed by
+/// [`boundary::relative_module`] — is already claimed by an earlier document,
+/// reports each collision with one `ELM_REQUEST` error naming both Elm module
+/// names and both document uris, fails the later document via [`stop`] exactly
+/// as any other module that could not be compiled, and returns the indices of
+/// every document [`compile`]'s walk must now skip.
+///
+/// The first document to claim a path is left untouched here — it keeps
+/// compiling under that path — so only strictly later documents (in request
+/// order) are ever reported or failed.
+fn stop_duplicate_relative_paths(
+    run: &mut Run,
+    documents: &[Document],
+    package_path: &[String],
+    baseline_interfaces: &HashMap<String, Interface>,
+    package: &HashSet<String>,
+) -> HashSet<usize> {
+    let mut claimed: HashMap<Vec<String>, usize> = HashMap::new();
+    let mut losers = HashSet::new();
+
+    for (index, document) in documents.iter().enumerate() {
+        let relative = boundary::relative_module(package_path, document.name());
+        let Some(&first) = claimed.get(&relative) else {
+            claimed.insert(relative, index);
+            continue;
+        };
+
+        let first_document = &documents[first];
+        let diagnostic = source::diagnostic(
+            &document.uri,
+            &document.text,
+            document.module.span,
+            DiagnosticSeverity::Error,
+            boundary::REQUEST,
+            format!(
+                "module `{}` ({}) and module `{}` ({}) both write the IR module path `{}`",
+                first_document.dotted(),
+                first_document.uri,
+                document.dotted(),
+                document.uri,
+                relative.join("."),
+            ),
+        );
+        stop(
+            run,
+            document,
+            baseline_interfaces,
+            ModuleStatus::Failed,
+            vec![diagnostic],
+            package,
+        );
+        losers.insert(index);
+    }
+
+    losers
 }
 
 /// Records a document whose module header could not be read but whose module

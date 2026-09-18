@@ -93,18 +93,21 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
 
 /// The identity of everything a module's compiled form depends on besides its
 /// own source: the IR version being written, the `typesOnly` flag, the prelude
-/// names resolve against, and the public interfaces the request's dependency
-/// distributions supply.
+/// names resolve against, the package the request compiles under, and the
+/// public interfaces the request's dependency distributions supply.
 ///
 /// This is the value a baseline is scoped to. A run is allowed to reuse a
 /// module only when it is compiling under the very same context, because a
 /// reused module's references were resolved under the old one — a dependency
-/// that lost a type, or a different prelude, would otherwise be invisible to
-/// the reuse decision.
+/// that lost a type, a different prelude, or a renamed package would
+/// otherwise be invisible to the reuse decision. Without the package path, a
+/// package renamed between two runs of the very same sources would reuse
+/// baseline IR whose FQNames and module keys still named the old package.
 ///
 /// The digest is computed over a canonical JSON rendering with the
-/// dependencies sorted by package path and each package's modules sorted by
-/// name, so two runs supplied the same dependencies in a different order agree.
+/// dependencies sorted end-to-end (by package path, then by module) and each
+/// package's modules sorted by name, so two runs supplied the same
+/// dependencies in a different order agree.
 pub fn context_digest(validated: &Validated, dependencies: &[DependencyInterface]) -> String {
     let mut dependencies: Vec<DependencyIdentity> = dependencies
         .iter()
@@ -121,12 +124,13 @@ pub fn context_digest(validated: &Validated, dependencies: &[DependencyInterface
             }
         })
         .collect();
-    dependencies.sort_by(|left, right| left.package.cmp(&right.package));
+    dependencies.sort();
 
     let identity = ContextIdentity {
         ir_version: &validated.ir_version,
         types_only: validated.types_only,
         prelude_digest: validated.prelude.digest(),
+        package: &validated.package,
         dependencies,
     };
     let json = serde_json::to_vec(&identity).expect("the compile context serializes to JSON");
@@ -140,11 +144,18 @@ struct ContextIdentity<'a> {
     ir_version: &'a str,
     types_only: bool,
     prelude_digest: String,
+    package: &'a [String],
     dependencies: Vec<DependencyIdentity>,
 }
 
 /// One dependency package's identity: its path and its modules' interfaces.
-#[derive(Serialize)]
+///
+/// `Ord` is derived, rather than comparing only the package path, so that
+/// [`context_digest`] can sort dependencies into a fully deterministic order:
+/// two runs supplied the same dependencies in a different order — or even two
+/// same-named dependencies with their modules given in a different order —
+/// hash identically.
+#[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct DependencyIdentity {
     package: Vec<String>,
     modules: Vec<(Vec<String>, String)>,
@@ -248,15 +259,15 @@ mod tests {
     /// Everything the identity is meant to cover moves the digest, and nothing
     /// else does — including the order the dependencies arrived in.
     #[test]
-    fn the_context_digest_covers_the_version_the_prelude_and_the_dependencies() {
+    fn the_context_digest_covers_the_version_the_prelude_the_package_and_the_dependencies() {
         use crate::resolved::{Interface, InterfaceType};
 
-        let validated = |ir_version: &str, prelude_id: &str| Validated {
+        let validated = |ir_version: &str, prelude_id: &str, package: &str| Validated {
             ir_version: ir_version.to_string(),
             types_only: false,
             prelude: prelude::from_option(Some(&serde_json::json!(prelude_id)))
                 .expect("a known prelude"),
-            package: vec!["My".into()],
+            package: package_path(package),
             exposed: None,
         };
         let interface = |type_name: &str| Interface {
@@ -273,20 +284,25 @@ mod tests {
             modules: vec![interface(type_name)],
         };
 
-        let base = context_digest(&validated("3", "elm-core"), &[]);
+        let base = context_digest(&validated("3", "elm-core", "My"), &[]);
         assert!(base.starts_with("sha256:"));
-        assert_ne!(base, context_digest(&validated("4", "elm-core"), &[]));
-        assert_ne!(base, context_digest(&validated("3", "none"), &[]));
+        assert_ne!(base, context_digest(&validated("4", "elm-core", "My"), &[]));
+        assert_ne!(base, context_digest(&validated("3", "none", "My"), &[]));
+        assert_ne!(
+            base,
+            context_digest(&validated("3", "elm-core", "Other"), &[]),
+            "compiling identical sources under a renamed package is a different context"
+        );
 
         let with = context_digest(
-            &validated("3", "elm-core"),
+            &validated("3", "elm-core", "My"),
             &[dependency("Acme", "T"), dependency("Beta", "U")],
         );
         assert_ne!(base, with);
         assert_eq!(
             with,
             context_digest(
-                &validated("3", "elm-core"),
+                &validated("3", "elm-core", "My"),
                 &[dependency("Beta", "U"), dependency("Acme", "T")]
             ),
             "the order dependencies arrive in is not part of the identity"
@@ -294,10 +310,56 @@ mod tests {
         assert_ne!(
             with,
             context_digest(
-                &validated("3", "elm-core"),
+                &validated("3", "elm-core", "My"),
                 &[dependency("Acme", "T"), dependency("Beta", "Renamed")]
             ),
             "a dependency whose interface changed is a different context"
+        );
+    }
+
+    /// [`DependencyIdentity`] sorts on its whole value, not only on the package
+    /// path, so two dependencies that arrived in a different order still hash
+    /// the same even when a package-only sort could not have told them apart on
+    /// its own (a stable sort over equal keys keeps the input order).
+    #[test]
+    fn two_dependencies_with_the_same_package_hash_the_same_in_either_order() {
+        use crate::resolved::{Interface, InterfaceType};
+
+        let validated = || Validated {
+            ir_version: "3".to_string(),
+            types_only: false,
+            prelude: prelude::from_option(Some(&serde_json::json!("elm-core")))
+                .expect("a known prelude"),
+            package: vec!["My".into()],
+            exposed: None,
+        };
+        let interface = |module_name: &str, type_name: &str| Interface {
+            name: vec![module_name.into()],
+            types: vec![InterfaceType {
+                name: type_name.into(),
+                params: vec![],
+                alias: None,
+                constructors: None,
+            }],
+        };
+        // Two same-named "Acme" dependencies, standing in for two module
+        // interfaces of the one package supplied in a different order.
+        let dependency = |module_name: &str, type_name: &str| DependencyInterface {
+            package: vec!["Acme".to_string()],
+            modules: vec![interface(module_name, type_name)],
+        };
+
+        let forward = context_digest(
+            &validated(),
+            &[dependency("Alpha", "T"), dependency("Beta", "U")],
+        );
+        let backward = context_digest(
+            &validated(),
+            &[dependency("Beta", "U"), dependency("Alpha", "T")],
+        );
+        assert_eq!(
+            forward, backward,
+            "two same-package dependencies given in either order hash the same"
         );
     }
 }

@@ -432,6 +432,72 @@ fn two_documents_declaring_one_module_are_refused() {
     );
 }
 
+/// Two Elm module names can differ and still write the same in-package IR
+/// path once the package prefix is stripped from each: a module named
+/// exactly `Foo`, and a module named `My.Foo`, both become the IR path `Foo`
+/// under package `My` — `My.Foo` is the package-qualified spelling of the
+/// very `Foo` a bare `Foo` document already publishes.
+///
+/// The collision is caught before either module is compiled, not left to
+/// fail late in the emitter: the first document to claim the path keeps
+/// compiling, the second is refused with one `ELM_REQUEST` error naming both
+/// modules and both uris, and a dependent of the refused module is blocked
+/// exactly as it would be for any other module that failed to compile.
+#[test]
+fn two_modules_that_collide_once_the_package_is_stripped_are_refused() {
+    const FOO: &str = "module Foo exposing (T)\n\ntype alias T = Int\n";
+    const MY_FOO: &str = "module My.Foo exposing (S)\n\ntype alias S = Int\n";
+    const DEPENDENT: &str =
+        "module Dependent exposing (D)\n\nimport My.Foo\n\ntype alias D = My.Foo.S\n";
+
+    let result = compile_as(
+        "elm",
+        "My",
+        vec![
+            document("file:///work/Foo.elm", FOO),
+            document("file:///work/My/Foo.elm", MY_FOO),
+            document("file:///work/Dependent.elm", DEPENDENT),
+        ],
+        "3",
+        vec![],
+    );
+
+    assert!(!result.success, "{:?}", result.diagnostics);
+    let request = codes(&result, "ELM_REQUEST");
+    assert_eq!(request.len(), 1, "{:?}", result.diagnostics);
+    assert_eq!(request[0].severity, DiagnosticSeverity::Error);
+    assert!(request[0].message.contains("Foo"), "{request:?}");
+    assert!(request[0].message.contains("My.Foo"), "{request:?}");
+    assert!(
+        request[0].message.contains("file:///work/Foo.elm"),
+        "{request:?}"
+    );
+    assert!(
+        request[0].message.contains("file:///work/My/Foo.elm"),
+        "{request:?}"
+    );
+    assert_eq!(
+        request[0].location.as_ref().expect("a source location").uri,
+        "file:///work/My/Foo.elm",
+        "the later document is the one refused"
+    );
+
+    let status = |name: &str| {
+        result
+            .module_results
+            .iter()
+            .find(|module| module.name == name)
+            .unwrap_or_else(|| panic!("no result for module {name} in {:?}", result.module_results))
+            .status
+    };
+    assert_eq!(result.module_results.len(), 3);
+    assert_eq!(status("Foo"), ModuleStatus::Compiled);
+    assert_eq!(status("My.Foo"), ModuleStatus::Failed);
+    assert_eq!(status("Dependent"), ModuleStatus::Blocked);
+    let blocked = codes(&result, "ELM_BLOCKED");
+    assert_eq!(blocked.len(), 1, "{:?}", result.diagnostics);
+}
+
 #[test]
 fn the_extension_advertises_the_elm_frontend_and_backend() {
     let info = ElmExtension::info();

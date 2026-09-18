@@ -124,11 +124,13 @@ recompiling a module whose unused import changed.
 ### The compile context
 
 A module's compiled form depends on more than its own source. It depends on the
-IR version being written, on the prelude its names were resolved against, and on
-the dependency distributions the request supplied — a dependency that loses a
-type changes what a module resolves to without touching a byte of it. All of
-that is folded into one value, the **context digest**, and a baseline is scoped
-to it.
+IR version being written, on the prelude its names were resolved against, on the
+package the request compiles under, and on the dependency distributions the
+request supplied — a dependency that loses a type changes what a module
+resolves to without touching a byte of it, and a renamed package changes the
+FQNames and module keys every module's IR is written with, without touching a
+byte of it either. All of that is folded into one value, the **context
+digest**, and a baseline is scoped to it.
 
 Every result that got as far as a validated request carries a `contextDigest`,
 including a failed one. A host stores it next to the module results it keeps and

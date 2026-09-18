@@ -491,6 +491,90 @@ fn a_baseline_from_a_different_prelude_is_ignored() {
     );
 }
 
+/// The words a v3 IR `Path` (a name array) spells, capitalized and joined —
+/// the same rendering [`library_modules`] uses for a module path.
+fn ir_words(path: &serde_json::Value) -> Vec<String> {
+    path.as_array()
+        .expect("a package path")
+        .iter()
+        .map(|segment| {
+            segment
+                .as_array()
+                .expect("a name")
+                .iter()
+                .filter_map(|word| word.as_str())
+                .map(|word| {
+                    let mut characters = word.chars();
+                    match characters.next() {
+                        Some(first) => {
+                            first.to_uppercase().collect::<String>() + characters.as_str()
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// The package path a v3 distribution names, as its words spell it.
+fn ir_package_path(result: &CompileResult) -> Vec<String> {
+    ir_words(&result.ir.as_ref().expect("a distribution")["distribution"][1])
+}
+
+/// The package path is part of the compile context: compiling the very same
+/// sources under a renamed package must not reuse baseline IR that still
+/// names the old package, since a reused module's FQNames and module keys
+/// were resolved under the old one.
+#[test]
+fn a_baseline_from_a_different_package_is_ignored() {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let compile_pkg = |package: &str, baseline: Option<CompileBaseline>| {
+        extension
+            .frontend()
+            .unwrap()
+            .compile(CompileRequest {
+                language_id: "elm".into(),
+                documents: both(A, B),
+                package: CompilePackage {
+                    name: package.into(),
+                    exposed_modules: None,
+                },
+                dependencies: Vec::new(),
+                options: CompileOptions {
+                    types_only: false,
+                    ir_version: "3".into(),
+                    extra: Default::default(),
+                },
+                baseline,
+            })
+            .unwrap()
+    };
+
+    let first = compile_pkg("my/pkg", None);
+    assert!(first.success, "{:?}", first.diagnostics);
+    assert_eq!(
+        ir_package_path(&first),
+        vec!["My".to_string(), "Pkg".to_string()]
+    );
+    let baseline = baseline_from(&CompileBaseline::default(), &first);
+
+    let result = compile_pkg("other/pkg", Some(baseline));
+
+    assert_ne!(result.context_digest, first.context_digest);
+    assert_eq!(
+        ignored_baseline_warning(&result),
+        Some("baseline ignored: it was built under a different compile context")
+    );
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Compiled);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
+    assert_eq!(
+        ir_package_path(&result),
+        vec!["Other".to_string(), "Pkg".to_string()]
+    );
+}
+
 // ----------------------------------------------------------------------------
 // A dependency distribution is part of the compile context
 // ----------------------------------------------------------------------------

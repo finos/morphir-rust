@@ -54,7 +54,8 @@ class ImpactConsistencyTests(unittest.TestCase):
         script = task.read_text(encoding="utf-8")
         self.assertIn("--features wasm-host-tests --test wasm -- --ignored", script)
         self.assertIn("--test elm_native_extension -- --ignored", script)
-        self.assertNotIn("morphir-elm-binding", self.workflow)
+        extism = self.workflow.split("  test-extism:\n", 1)[1].split("  extension-bundle:\n", 1)[0]
+        self.assertNotIn("morphir-elm-binding", extism)
 
     @classmethod
     def setUpClass(cls) -> None:

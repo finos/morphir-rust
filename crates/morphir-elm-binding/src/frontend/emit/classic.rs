@@ -22,6 +22,7 @@ use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, Resolve
 /// The classic module definition, with type attributes and no value attributes.
 type ClassicModule = ModuleDefinition<Attrs, Type<Attrs>>;
 
+/// Writes Morphir IR v3 (the classic model).
 pub struct ClassicEmitter;
 
 impl Emitter for ClassicEmitter {

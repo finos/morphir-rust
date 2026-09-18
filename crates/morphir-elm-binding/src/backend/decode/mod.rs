@@ -59,17 +59,24 @@ pub struct Unsupported {
 /// What one version's reader produces: the package as the document holds it,
 /// before declarations with no Elm form are dropped.
 pub struct Decoded {
+    /// The package path, one document-spelled segment per element.
     pub package: Vec<String>,
+    /// The package's modules, in the order the document lists them.
     pub modules: Vec<ResolvedModule>,
+    /// How many value definitions the document held.
     pub omitted_values: usize,
+    /// Declarations with no Elm form.
     pub unsupported: Vec<Unsupported>,
 }
 
 /// What one version's reader makes of a single module definition: the module,
 /// how many values it held, and the declarations with no Elm form.
 pub struct DecodedModule {
+    /// The decoded module.
     pub module: ResolvedModule,
+    /// How many value definitions it held.
     pub omitted_values: usize,
+    /// Its declarations with no Elm form.
     pub unsupported: Vec<Unsupported>,
 }
 

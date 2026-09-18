@@ -33,6 +33,7 @@ use super::{EmitError, Emitter, ModuleIr, PackageInput};
 use crate::names::{argument_words, module_label, words};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
+/// Writes Morphir IR v4 natively.
 pub struct V4Emitter;
 
 impl Emitter for V4Emitter {

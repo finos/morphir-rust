@@ -5,6 +5,7 @@ use morphir_extension_sdk::{
     Diagnostic, DiagnosticSeverity, SourceLocation, SourcePosition, SourceRange,
 };
 
+/// The zero-based line and UTF-16 character offset a byte falls on.
 pub fn position(source: &str, byte: usize) -> SourcePosition {
     let byte = byte.min(source.len());
     let before = &source[..byte];
@@ -14,6 +15,7 @@ pub fn position(source: &str, byte: usize) -> SourcePosition {
     SourcePosition { line, character }
 }
 
+/// The source range a byte span covers.
 pub fn range(source: &str, span: Span) -> SourceRange {
     SourceRange {
         start: position(source, span.start),
@@ -21,6 +23,7 @@ pub fn range(source: &str, span: Span) -> SourceRange {
     }
 }
 
+/// A diagnostic located at a span in one document.
 pub fn diagnostic(
     uri: &str,
     source: &str,

@@ -16,7 +16,9 @@ use tree_sitter::Node;
 /// declaration, or an unsupported construct inside a type expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AstError {
+    /// Where the construct is.
     pub span: Span,
+    /// What the reader has to change.
     pub message: String,
 }
 

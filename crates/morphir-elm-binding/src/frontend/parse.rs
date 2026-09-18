@@ -1,3 +1,5 @@
+//! Parsing Elm with the vendored tree-sitter grammar.
+
 use crate::span::Span;
 use tree_sitter::{Language, Node, Parser, Tree};
 use tree_sitter_language::LanguageFn;
@@ -17,16 +19,23 @@ pub fn language() -> Language {
     LANGUAGE_FN.into()
 }
 
+/// A parsed document, ready to be lowered.
 pub struct ParsedTree {
+    /// The tree-sitter parse tree.
     pub tree: Tree,
 }
 
+/// One place the grammar could not read the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntaxError {
+    /// Where the error is.
     pub span: Span,
+    /// What the reader has to fix.
     pub message: String,
 }
 
+/// Parses Elm source. Tree-sitter always yields a tree; the errors in it are
+/// reported by [`syntax_errors`].
 pub fn parse(source: &str) -> ParsedTree {
     let mut parser = Parser::new();
     parser

@@ -575,7 +575,12 @@ fn an_unchanged_dependency_keeps_the_baseline_usable() {
     let first = compile_with(documents(), None, vec![acme_lib(DEP_WITH_V)], None);
     let baseline = baseline_from(&CompileBaseline::default(), &first);
 
-    let result = compile_with(documents(), Some(baseline), vec![acme_lib(DEP_WITH_V)], None);
+    let result = compile_with(
+        documents(),
+        Some(baseline),
+        vec![acme_lib(DEP_WITH_V)],
+        None,
+    );
 
     assert!(result.success, "{:?}", result.diagnostics);
     assert_eq!(ignored_baseline_warning(&result), None);

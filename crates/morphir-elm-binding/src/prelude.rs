@@ -15,11 +15,15 @@ pub const ELM_CORE: &str = include_str!("../preludes/elm-core.toml");
 /// platform package interfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prelude {
+    /// The prelude's identifier, named in diagnostics.
     pub id: String,
+    /// Imports every module is compiled as if it had written.
     #[serde(default)]
     pub implicit_import: Vec<ImplicitImport>,
+    /// Source-to-target module path mappings.
     #[serde(default)]
     pub module_alias: Vec<ModuleAlias>,
+    /// The platform packages this prelude makes available.
     #[serde(default)]
     pub package: Vec<PlatformPackage>,
 }
@@ -30,7 +34,9 @@ pub struct Prelude {
 /// or `".."` meaning everything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImplicitImport {
+    /// The dotted module path that is imported.
     pub module: String,
+    /// What the import exposes unqualified.
     #[serde(default)]
     pub exposing: Vec<String>,
 }
@@ -39,14 +45,18 @@ pub struct ImplicitImport {
 /// target module path (the module it actually resolves to).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleAlias {
+    /// The dotted path a reader writes.
     pub source: String,
+    /// The dotted path it resolves to.
     pub target: String,
 }
 
 /// A platform package (e.g. `Morphir.SDK`) and the modules it provides.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformPackage {
+    /// The package's dotted name.
     pub name: String,
+    /// The modules it provides.
     #[serde(default)]
     pub module: Vec<PlatformModule>,
 }
@@ -54,7 +64,9 @@ pub struct PlatformPackage {
 /// A module within a platform package, and the types it declares.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformModule {
+    /// The module's dotted name, relative to nothing: it is written in full.
     pub name: String,
+    /// The types the module declares.
     #[serde(default)]
     pub types: Vec<PlatformType>,
 }
@@ -63,7 +75,9 @@ pub struct PlatformModule {
 /// for custom types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformType {
+    /// The type's name.
     pub name: String,
+    /// Its constructors, for a custom type.
     #[serde(default)]
     pub constructors: Vec<String>,
 }

@@ -242,8 +242,7 @@ fn a_v4_distribution_forwards_its_dependencies_specifications() {
 #[test]
 fn a_package_is_imported_under_its_full_elm_module_name() {
     const LIB: &str = "module Acme.Lib.Types exposing (T)\n\ntype alias T = Int\n";
-    const APP: &str =
-        "module App exposing (Wrapped)\n\nimport Acme.Lib.Types\n\ntype alias Wrapped = Acme.Lib.Types.T\n";
+    const APP: &str = "module App exposing (Wrapped)\n\nimport Acme.Lib.Types\n\ntype alias Wrapped = Acme.Lib.Types.T\n";
 
     for version in ["3", "4"] {
         let library = compile_as(

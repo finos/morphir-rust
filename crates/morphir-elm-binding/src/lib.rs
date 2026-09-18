@@ -6,6 +6,7 @@
 //! let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
 //! assert_eq!(ElmExtension::info().id, "morphir-elm-native");
 //! ```
+#![warn(missing_docs)]
 
 pub mod ast;
 pub mod backend;
@@ -88,4 +89,13 @@ impl Backend for ElmExtension {
     }
 }
 
-morphir_extension_sdk::export_extension!(ElmExtension, frontend, backend);
+// The guest exports this expands to are reached by symbol name from the WASM
+// host, not by any Rust caller, and the macro writes them without doc
+// comments; the module is only here to carry the exemption.
+// The import is only read by the guest exports, which exist on wasm32 alone.
+#[allow(missing_docs, unused_imports)]
+mod guest {
+    use super::ElmExtension;
+
+    morphir_extension_sdk::export_extension!(ElmExtension, frontend, backend);
+}

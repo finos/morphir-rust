@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 
 type Environment = BTreeMap<String, Type>;
 
-pub(crate) fn validate_function(definition: &ValueDefinition) -> Result<(), String> {
+pub(crate) fn validate_function(
+    definition: &ValueDefinition,
+    context: &crate::patterns::Context,
+) -> Result<(), String> {
     let ValueBody::Expression(body) = &definition.body else {
         return Err("Only expression bodies can be validated as Rust functions".into());
     };
@@ -20,7 +23,7 @@ pub(crate) fn validate_function(definition: &ValueDefinition) -> Result<(), Stri
         .iter()
         .map(|(n, t)| (n.clone(), t.clone()))
         .collect();
-    require_type(&infer(body, &environment)?, output)
+    require_type(&infer(body, &environment, context)?, output)
 }
 
 pub(crate) fn same_type(left: &Type, right: &Type) -> bool {
@@ -76,7 +79,11 @@ pub(crate) fn scalar(module: &str, name: &str) -> Type {
     )
 }
 
-pub(crate) fn infer(value: &Value, environment: &Environment) -> Result<Type, String> {
+pub(crate) fn infer(
+    value: &Value,
+    environment: &Environment,
+    context: &crate::patterns::Context,
+) -> Result<Type, String> {
     let result = match value {
         Value::Unit(_) => Type::Unit(Default::default()),
         Value::Literal(_, literal) => match literal {
@@ -101,14 +108,37 @@ pub(crate) fn infer(value: &Value, environment: &Environment) -> Result<Type, St
             Default::default(),
             elements
                 .iter()
-                .map(|element| infer(element, environment))
+                .map(|element| infer(element, environment, context))
                 .collect::<Result<_, _>>()?,
         ),
         Value::IfThenElse(_, condition, yes, no) => {
-            require_type(&infer(condition, environment)?, &scalar("basics", "bool"))?;
-            let result = infer(yes, environment)?;
-            require_type(&infer(no, environment)?, &result)?;
+            require_type(
+                &infer(condition, environment, context)?,
+                &scalar("basics", "bool"),
+            )?;
+            let result = infer(yes, environment, context)?;
+            require_type(&infer(no, environment, context)?, &result)?;
             result
+        }
+        Value::PatternMatch(_, subject, cases) => {
+            let subject_type = infer(subject, environment, context)?;
+            if cases.is_empty() {
+                return Err("Empty matches are not supported".into());
+            }
+            let patterns = cases.iter().map(|case| case.0.clone()).collect::<Vec<_>>();
+            crate::patterns::exhaustive(&subject_type, &patterns, context)?;
+            let mut result = None;
+            for case in cases {
+                let mut scope = environment.clone();
+                scope.extend(crate::patterns::bindings(&case.0, &subject_type, context)?);
+                let arm_type = infer(&case.1, &scope, context)?;
+                if let Some(expected) = &result {
+                    require_type(&arm_type, expected)?;
+                } else {
+                    result = Some(arm_type);
+                }
+            }
+            result.expect("nonempty cases")
         }
         Value::LetDefinition(_, name, definition, continuation) => {
             if !definition.input_types.is_empty() {
@@ -117,7 +147,7 @@ pub(crate) fn infer(value: &Value, environment: &Environment) -> Result<Type, St
             let ValueBody::Expression(body) = &definition.body else {
                 return Err("Local bindings require expression bodies".into());
             };
-            let inferred = infer(body, environment)?;
+            let inferred = infer(body, environment, context)?;
             let declared = definition
                 .output_type
                 .as_ref()
@@ -125,12 +155,12 @@ pub(crate) fn infer(value: &Value, environment: &Environment) -> Result<Type, St
             require_type(&inferred, declared)?;
             let mut scope = environment.clone();
             scope.insert(name.to_canonical_string(), declared.clone());
-            infer(continuation, &scope)?
+            infer(continuation, &scope, context)?
         }
         Value::Apply(..) => {
             let (operator, left, right) = comparison(value)?;
-            let left_type = infer(left, environment)?;
-            require_type(&infer(right, environment)?, &left_type)?;
+            let left_type = infer(left, environment, context)?;
+            require_type(&infer(right, environment, context)?, &left_type)?;
             if !operator.accepts(&left_type) {
                 return Err(
                     "Comparisons require supported scalar operands of the same type".into(),
@@ -207,10 +237,98 @@ pub(crate) fn comparison(value: &Value) -> Result<(Comparison, &Value, &Value), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn validate_function(definition: &ValueDefinition) -> Result<(), String> {
+        super::validate_function(definition, &crate::patterns::Context::default())
+    }
     use morphir_core::ir::v4::{Literal, Type, Value, ValueBody};
 
     fn integer(value: i64) -> Value {
         Value::Literal(Default::default(), Literal::Integer(value.into()))
+    }
+
+    #[test]
+    fn validates_exhaustive_matches_and_rejects_missing_arms() {
+        use morphir_core::ir::v4::{Pattern, PatternCase};
+        let subject = Value::Literal(Default::default(), Literal::Bool(true));
+        let case = |value, body| {
+            PatternCase(
+                Pattern::LiteralPattern(Default::default(), Literal::Bool(value)),
+                body,
+            )
+        };
+        let body = Value::PatternMatch(
+            Default::default(),
+            Box::new(subject.clone()),
+            vec![case(true, integer(1)), case(false, integer(2))],
+        );
+        assert!(validate_function(&definition(body)).is_ok());
+        let incomplete = Value::PatternMatch(
+            Default::default(),
+            Box::new(subject),
+            vec![case(true, integer(1))],
+        );
+        assert!(validate_function(&definition(incomplete)).is_err());
+    }
+
+    #[test]
+    fn match_bindings_are_arm_local_and_annotations_are_checked() {
+        use morphir_core::{
+            ir::v4::{Pattern, PatternCase},
+            naming::Name,
+        };
+        let name = Name::from_canonical_string("bound").unwrap();
+        let variable = Value::Variable(Default::default(), name.clone());
+        let bound = Pattern::AsPattern(
+            Default::default(),
+            Box::new(Pattern::WildcardPattern(Default::default())),
+            name,
+        );
+        let matched = Value::PatternMatch(
+            Default::default(),
+            Box::new(integer(42)),
+            vec![PatternCase(bound.clone(), variable.clone())],
+        );
+        assert!(validate_function(&definition(matched.clone())).is_ok());
+        let leaked = Value::Tuple(Default::default(), vec![matched, variable.clone()]);
+        assert!(
+            infer(
+                &leaked,
+                &BTreeMap::new(),
+                &crate::patterns::Context::default()
+            )
+            .unwrap_err()
+            .contains("Unknown value")
+        );
+        let sibling = Value::PatternMatch(
+            Default::default(),
+            Box::new(integer(42)),
+            vec![
+                PatternCase(bound, integer(1)),
+                PatternCase(Pattern::WildcardPattern(Default::default()), variable),
+            ],
+        );
+        assert!(
+            validate_function(&definition(sibling))
+                .unwrap_err()
+                .contains("Unknown value")
+        );
+        let attributes = morphir_core::ir::v4::ValueAttributes {
+            inferred_type: Some(Box::new(scalar("basics", "bool"))),
+            ..Default::default()
+        };
+        let incorrect = Value::PatternMatch(
+            Default::default(),
+            Box::new(integer(42)),
+            vec![PatternCase(
+                Pattern::WildcardPattern(attributes),
+                integer(1),
+            )],
+        );
+        assert!(
+            validate_function(&definition(incorrect))
+                .unwrap_err()
+                .contains("annotation")
+        );
     }
 
     fn definition(body: Value) -> ValueDefinition {
@@ -303,7 +421,12 @@ mod tests {
             morphir_core::naming::Name::from_canonical_string("x").unwrap(),
         );
         assert!(same_type(
-            &infer(&variable, &environment).unwrap(),
+            &infer(
+                &variable,
+                &environment,
+                &crate::patterns::Context::default()
+            )
+            .unwrap(),
             &scalar("basics", "int")
         ));
         let wrong = Value::Literal(

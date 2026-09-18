@@ -26,6 +26,70 @@ use std::path::PathBuf;
 #[path = "support/conditional.rs"]
 mod conditional;
 
+#[path = "support/pattern.rs"]
+mod pattern;
+
+#[test]
+#[ignore = "requires a built Rust WASM guest"]
+fn wasm_compiles_and_generates_pattern_functions_in_both_versions() {
+    let mut plugin = guest();
+    initialize(&mut plugin);
+    for version in ["3", "4"] {
+        let mut request = a_type_model(version);
+        request.options.types_only = false;
+        request.documents[0].text = pattern::SOURCE.into();
+        let native = RustExtension.compile(request.clone()).unwrap();
+        assert!(native.success, "{:?}", native.diagnostics);
+        let compiled: CompileResult = serde_json::from_value(result(
+            &mut plugin,
+            ExtensionRequest::new(methods::COMPILE, request, 2).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&compiled).unwrap(),
+            serde_json::to_value(native).unwrap()
+        );
+        let request = GenerateRequest {
+            ir: compiled.ir.unwrap(),
+            target: "rust".into(),
+            options: Default::default(),
+        };
+        let native = RustExtension.generate(request.clone()).unwrap();
+        assert!(native.success, "{:?}", native.diagnostics);
+        let generated: GenerateResult = serde_json::from_value(result(
+            &mut plugin,
+            ExtensionRequest::new(methods::GENERATE, request, 3).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&generated).unwrap(),
+            serde_json::to_value(native).unwrap()
+        );
+        pattern::assert_executable(&generated.artifacts[0].content);
+        for source in [
+            "fn f(x: bool) -> i64 { match x { true => 1 } }",
+            "fn f(x: bool) -> i64 { match x { value if value => 1, _ => 0 } }",
+            "enum E { A, B } type Alias = E; fn f(x: Alias) -> i64 { match x { A => 1 } }",
+        ] {
+            let mut request = a_type_model(version);
+            request.options.types_only = false;
+            request.documents[0].text = source.into();
+            let native = RustExtension.compile(request.clone()).unwrap();
+            assert!(!native.success, "accepted {source}");
+            assert!(native.ir.is_none());
+            let rejected: CompileResult = serde_json::from_value(result(
+                &mut plugin,
+                ExtensionRequest::new(methods::COMPILE, request, 4).unwrap(),
+            ))
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(rejected).unwrap(),
+                serde_json::to_value(native).unwrap()
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires a built Rust WASM guest"]
 fn wasm_compiles_and_generates_conditional_functions_in_both_versions() {

@@ -42,13 +42,6 @@ pub(in crate::ir) fn decode(value: serde_json::Value) -> Outcome<v::IRFile> {
         for (_, function) in &module.definition.value.values {
             let function = &function.value.value;
             distinct(function.input_types.iter().map(|arg| &arg.name))?;
-            for arg in &function.input_types {
-                if arg.annotation != arg.ty {
-                    return Err(values::unsupported(
-                        "IR v3 parameter annotation does not match its declared type",
-                    ));
-                }
-            }
         }
     }
     let migrated = migration::migrate_distribution(&classic, Default::default())
@@ -63,6 +56,23 @@ pub(in crate::ir) fn decode(value: serde_json::Value) -> Outcome<v::IRFile> {
         unreachable!()
     };
     let aliases = crate::modules::tuple_aliases(&library.package_name, library.def.modules.iter())?;
+    for module in &package.modules {
+        for (_, function) in &module.definition.value.values {
+            for arg in &function.value.value.input_types {
+                let convert = |ty| {
+                    migration::migrate_type(ty, &mut Default::default())
+                        .map_err(|e| error("PY004", e.message))
+                };
+                if values::resolve_aliases(&convert(&arg.annotation)?, &aliases)?
+                    != values::resolve_aliases(&convert(&arg.ty)?, &aliases)?
+                {
+                    return Err(values::unsupported(
+                        "IR v3 parameter annotation does not match its declared type",
+                    ));
+                }
+            }
+        }
+    }
     for module in library.def.modules.values_mut() {
         clear_empty_doc(&mut module.value.doc);
         for definition in module.value.types.values_mut() {

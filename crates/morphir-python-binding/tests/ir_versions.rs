@@ -151,6 +151,21 @@ fn independently_authored_typed_v3_conditional_generates_python() {
 }
 
 #[test]
+fn v3_parameter_annotations_accept_an_expanded_tuple_alias() {
+    let mut ir = compile(a_request("3"));
+    let float = json!([
+        "Reference",
+        {},
+        [[["morphir"], ["s", "d", "k"]], [["basics"]], ["float"]],
+        []
+    ]);
+    ir["distribution"][3]["modules"][1][1]["value"]["values"][1][1]["value"]["value"]["inputTypes"]
+        [1][1] = json!(["Tuple", {}, [float.clone(), float]]);
+    let result = generate(ir);
+    assert!(result.success, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn v3_integer_range_is_checked_without_affecting_v4() {
     for number in ["-9223372036854775808", "9223372036854775807"] {
         let mut request = a_request("3");

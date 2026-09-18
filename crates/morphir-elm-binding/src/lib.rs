@@ -8,6 +8,7 @@
 //! ```
 
 pub mod ast;
+pub mod backend;
 pub mod digest;
 pub mod frontend;
 pub mod incremental;
@@ -78,18 +79,8 @@ impl Frontend for ElmExtension {
 }
 
 impl Backend for ElmExtension {
-    fn generate(&self, _request: GenerateRequest) -> Result<GenerateResult> {
-        Ok(GenerateResult {
-            success: false,
-            artifacts: vec![],
-            diagnostics: vec![Diagnostic {
-                severity: DiagnosticSeverity::Error,
-                code: Some("ELM_UNSUPPORTED".into()),
-                message: "Elm generation arrives in a later change".into(),
-                location: None,
-                related: vec![],
-            }],
-        })
+    fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
+        Ok(backend::generate(request))
     }
 
     fn target_languages() -> Vec<String> {

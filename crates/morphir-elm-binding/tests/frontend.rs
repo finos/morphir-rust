@@ -326,23 +326,36 @@ fn the_extension_advertises_the_elm_frontend_and_backend() {
     assert!(backend.generate);
 }
 
+/// The frontend and the backend meet: what this extension compiles, it
+/// generates again. `tests/backend.rs` and `tests/roundtrip.rs` take that
+/// apart; this is the end-to-end handle the daemon holds.
 #[test]
-fn generation_is_not_implemented_yet() {
+fn the_distribution_the_frontend_writes_generates_elm_again() {
+    let compiled = compile(
+        vec![
+            document("file:///work/My/Domain/Types.elm", TYPES),
+            document("file:///work/My/Other.elm", OTHER),
+        ],
+        "3",
+    );
+    assert!(compiled.success, "{:?}", compiled.diagnostics);
     let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
     let result = extension
         .backend()
         .unwrap()
         .generate(GenerateRequest {
-            ir: serde_json::json!({"formatVersion": 3}),
+            ir: compiled.ir.expect("a distribution"),
             target: "elm".into(),
             options: Default::default(),
         })
         .unwrap();
 
-    assert!(!result.success);
-    assert!(result.artifacts.is_empty());
-    assert_eq!(
-        result.diagnostics[0].code.as_deref(),
-        Some("ELM_UNSUPPORTED")
-    );
+    assert!(result.success, "{:?}", result.diagnostics);
+    let mut paths: Vec<&str> = result
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["src/My/Domain/Types.elm", "src/My/Other.elm"]);
 }

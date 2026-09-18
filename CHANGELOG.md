@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Python functions support typed calls, same-package function imports and references, unary `Callable` annotations, captured lambdas and explicit currying in IR v3 and v4. Native, executable Python and packaged WASM tests cover the supported subset; unsupported arities and ill-typed calls return diagnostics.
 - Rust extension v0.1.0 bundles include the frontend/backend WASM guest, checksum
   and release descriptor for IR v3 and v4. CI selects Rust bundles through the
   extension registry and validates offline installation and executable generated

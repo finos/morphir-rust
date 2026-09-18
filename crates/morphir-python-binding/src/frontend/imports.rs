@@ -1,6 +1,6 @@
 //! Static import resolution. Imports never load or execute Python code.
 
-use super::{TypeScope, declare, union_members};
+use super::{Symbol, TypeScope, declare, union_members};
 use crate::{Outcome, error, modules::ModuleIdentity, names};
 use morphir_core::{ir::v4::PackageName, naming::FQName};
 use ruff_python_ast::{Expr, Stmt};
@@ -15,8 +15,13 @@ pub(super) fn exports(
 ) -> Outcome<TypeScope> {
     let mut types = BTreeSet::new();
     let mut variants = vec![];
+    let mut functions = BTreeSet::new();
     for statement in statements {
         match statement {
+            Stmt::FunctionDef(function) => {
+                types.insert(function.name.to_string());
+                functions.insert(function.name.to_string());
+            }
             Stmt::ClassDef(class) => {
                 types.insert(class.name.to_string());
             }
@@ -38,10 +43,13 @@ pub(super) fn exports(
                 package.to_canonical_string(),
                 names::identifier(&name)?.to_canonical_string()
             );
-            Ok((
-                name,
-                FQName::from_canonical_string(&fq).map_err(|e| error("PY003", e))?,
-            ))
+            let fq = FQName::from_canonical_string(&fq).map_err(|e| error("PY003", e))?;
+            let symbol = if functions.contains(&name) {
+                Symbol::Function(fq)
+            } else {
+                Symbol::Type(fq)
+            };
+            Ok((name, symbol))
         })
         .collect()
 }
@@ -68,6 +76,30 @@ pub(super) fn scope(
                 let module = import.module.as_ref().map(|m| m.as_str()).unwrap_or("");
                 if import.is_lazy {
                     return Err(error("PY004", "Lazy imports are not supported"));
+                }
+                if import.level == 0 && ["typing", "collections.abc"].contains(&module) {
+                    for alias in &import.names {
+                        if alias.name.as_str() != "Callable" {
+                            return Err(error(
+                                "PY004",
+                                "Only Callable is supported from typing or collections.abc",
+                            ));
+                        }
+                        let bound = alias
+                            .asname
+                            .as_ref()
+                            .map(|n| n.as_str())
+                            .unwrap_or("Callable");
+                        if bound == "Callable" {
+                            if !bindings.insert("callable".into()) {
+                                return Err(error("PY003", "Duplicate Callable binding"));
+                            }
+                        } else {
+                            declare(&mut bindings, bound)?;
+                        }
+                        types.insert(bound.into(), Symbol::Callable);
+                    }
+                    continue;
                 }
                 if import.level == 0 && ["dataclasses", "__future__"].contains(&module) {
                     let expected = if module == "dataclasses" {
@@ -124,7 +156,11 @@ pub(super) fn scope(
                             module_bindings.insert(root, binding);
                         }
                     }
-                    import_module(&mut types, exports, target, bound)?;
+                    if ["typing", "collections.abc"].contains(&target) {
+                        types.insert(format!("{bound}.Callable"), Symbol::Callable);
+                    } else {
+                        import_module(&mut types, exports, target, bound)?;
+                    }
                 }
             }
             _ => {}

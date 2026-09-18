@@ -348,6 +348,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Test generated Python functions and closures
+        if: matrix.id == 'python'
+        env:
+          MORPHIR_TEST_PYTHON: python3
+        run: cargo test --locked -p morphir-python-binding --test functions -- --ignored
+
   workspace-wasm:
     name: Build (workspace discovery WASM)
     runs-on: ubuntu-latest

@@ -9,6 +9,7 @@ pub(super) fn prepare(
     current: &str,
     identities: &BTreeMap<String, ModuleIdentity>,
     scope: &mut BTreeMap<String, String>,
+    values: &mut BTreeMap<String, String>,
 ) -> Outcome<String> {
     let definition = &library.def.modules[current].value;
     let mut used: BTreeSet<_> = definition
@@ -18,6 +19,7 @@ pub(super) fn prepare(
         .cloned()
         .collect();
     let mut references = BTreeSet::new();
+    let mut value_references = BTreeSet::new();
     for entry in definition.types.values() {
         match &entry.value.value {
             TypeDefinition::TypeAliasDefinition { type_expr, .. } => {
@@ -35,6 +37,10 @@ pub(super) fn prepare(
         }
     }
     for entry in definition.values.values() {
+        used.extend(entry.value.value.input_types.keys().cloned());
+        if let ValueBody::Expression(body) = &entry.value.value.body {
+            collect_value(body, &mut value_references, &mut used);
+        }
         for input in entry.value.value.input_types.values() {
             collect(input, &mut references);
         }
@@ -45,11 +51,10 @@ pub(super) fn prepare(
     let mut source = String::new();
     let mut next_alias = 1;
     for (module, identity) in identities {
-        if module == current {
-            continue;
-        }
         let prefix = format!("{}:{module}#", library.package_name.to_canonical_string());
-        if !references.iter().any(|fq| fq.starts_with(&prefix)) {
+        if !(module != current && references.iter().any(|fq| fq.starts_with(&prefix)))
+            && !value_references.iter().any(|fq| fq.starts_with(&prefix))
+        {
             continue;
         }
         let alias = loop {
@@ -66,6 +71,12 @@ pub(super) fn prepare(
             )?;
             scope.insert(format!("{prefix}{name}"), format!("{alias}.{python}"));
         }
+        for name in library.def.modules[module].value.values.keys() {
+            let python = names::field_name(
+                &Name::from_canonical_string(name).map_err(|e| error("PY003", e))?,
+            )?;
+            values.insert(format!("{prefix}{name}"), format!("{alias}.{python}"));
+        }
     }
     if !source.is_empty() {
         source.push('\n');
@@ -75,6 +86,10 @@ pub(super) fn prepare(
 
 fn collect(tpe: &Type, references: &mut BTreeSet<String>) {
     match tpe {
+        Type::Function(_, input, output) => {
+            collect(input, references);
+            collect(output, references);
+        }
         Type::Reference(_, fq, args) => {
             references.insert(fq.to_canonical_string());
             for arg in args {
@@ -89,6 +104,35 @@ fn collect(tpe: &Type, references: &mut BTreeSet<String>) {
         Type::Record(_, fields) => {
             for field in fields {
                 collect(&field.tpe, references);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_value(value: &Value, references: &mut BTreeSet<String>, used: &mut BTreeSet<String>) {
+    match value {
+        Value::Reference(_, name) => {
+            references.insert(name.to_canonical_string());
+        }
+        Value::Lambda(_, pattern, body) => {
+            if let Pattern::AsPattern(_, _, name) = pattern {
+                used.insert(name.to_canonical_string());
+            }
+            collect_value(body, references, used);
+        }
+        Value::Apply(_, function, argument) => {
+            collect_value(function, references, used);
+            collect_value(argument, references, used);
+        }
+        Value::Tuple(_, elements) => {
+            for value in elements {
+                collect_value(value, references, used);
+            }
+        }
+        Value::IfThenElse(_, condition, yes, no) => {
+            for value in [condition, yes, no] {
+                collect_value(value, references, used);
             }
         }
         _ => {}

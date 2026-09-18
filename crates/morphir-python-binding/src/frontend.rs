@@ -11,7 +11,13 @@ mod functions;
 mod imports;
 mod project;
 
-type TypeScope = BTreeMap<String, FQName>;
+#[derive(Clone)]
+enum Symbol {
+    Type(FQName),
+    Function(FQName),
+    Callable,
+}
+type TypeScope = BTreeMap<String, Symbol>;
 
 pub(crate) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)> {
     crate::ir::Version::parse(&request.options.ir_version)?;
@@ -60,6 +66,7 @@ fn lower(
     statements: &[Stmt],
     types: &TypeScope,
     aliases: Option<&crate::values::TupleAliases>,
+    signatures: &crate::values::Signatures,
 ) -> Outcome<ModuleDefinition> {
     let mut classes = BTreeMap::new();
     let mut sums = BTreeMap::new();
@@ -190,7 +197,7 @@ fn lower(
                     names::identifier(&name)?.to_canonical_string(),
                     public(Documented::new(
                         None,
-                        functions::lower(function, types, aliases)?,
+                        functions::lower(function, types, aliases, signatures)?,
                     )),
                 ))
             })
@@ -258,7 +265,7 @@ fn fields(class: &StmtClassDef, types: &TypeScope) -> Outcome<Vec<Field>> {
 fn annotation(expr: &Expr, types: &TypeScope) -> Outcome<Type> {
     match expr {
         Expr::Name(name) => {
-            if let Some(fq) = types.get(name.id.as_str()) {
+            if let Some(Symbol::Type(fq)) = types.get(name.id.as_str()) {
                 return Ok(Type::Reference(Default::default(), fq.clone(), vec![]));
             }
             let fq = match name.id.as_str() {
@@ -281,10 +288,34 @@ fn annotation(expr: &Expr, types: &TypeScope) -> Outcome<Type> {
         }
         Expr::Attribute(_) => {
             let name = imports::qualified_name(expr)?;
-            let fq = types
-                .get(&name)
-                .ok_or_else(|| error("PY004", format!("Unknown imported type: {name}")))?;
+            let Some(Symbol::Type(fq)) = types.get(&name) else {
+                return Err(error("PY004", format!("Unknown imported type: {name}")));
+            };
             Ok(Type::Reference(Default::default(), fq.clone(), vec![]))
+        }
+        Expr::Subscript(subscript)
+            if matches!(
+                types.get(&imports::qualified_name(&subscript.value)?),
+                Some(Symbol::Callable)
+            ) =>
+        {
+            let Expr::Tuple(parts) = subscript.slice.as_ref() else {
+                return Err(error("PY004", "Expected Callable[[input], output]"));
+            };
+            let [Expr::List(inputs), output] = parts.elts.as_slice() else {
+                return Err(error("PY004", "Expected Callable[[input], output]"));
+            };
+            let [input] = inputs.elts.as_slice() else {
+                return Err(error(
+                    "PY004",
+                    "Callable requires exactly one input; nest Callable for curried functions",
+                ));
+            };
+            Ok(Type::Function(
+                Default::default(),
+                Box::new(annotation(input, types)?),
+                Box::new(annotation(output, types)?),
+            ))
         }
         Expr::Subscript(subscript) if expr_name(&subscript.value)? == "tuple" => {
             let elements: Vec<&Expr> = match subscript.slice.as_ref() {

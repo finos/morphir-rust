@@ -3,16 +3,15 @@
 use super::{Type, fqname, name, tpe};
 use crate::{Outcome, values};
 use morphir_core::ir::{classic as c, v4 as v};
-use std::collections::BTreeMap;
 
 type Value = c::Value<c::Attrs, Type>;
 
 fn annotation(
-    value: &v::Value,
+    value: &v::ValueAttributes,
     expected: &v::Type,
     aliases: &values::TupleAliases,
 ) -> Outcome<Type> {
-    let attrs = value.attributes();
+    let attrs = value;
     if attrs.source.is_some() || !attrs.extensions.is_empty() {
         return Err(values::unsupported(
             "Value metadata cannot be preserved in Python",
@@ -30,12 +29,15 @@ fn annotation(
 
 pub(super) fn encode(
     value: &v::Value,
-    parameters: &BTreeMap<String, v::Type>,
+    typed: &v::Value,
     aliases: &values::TupleAliases,
 ) -> Outcome<Value> {
-    let clean = erase(value)?;
-    let inferred = values::infer(&clean, parameters)?;
-    let attrs = annotation(value, &inferred, aliases)?;
+    let inferred = typed
+        .attributes()
+        .inferred_type
+        .as_ref()
+        .expect("checked expression");
+    let attrs = annotation(value.attributes(), inferred, aliases)?;
     Ok(match value {
         v::Value::Variable(_, key) => c::Value::Variable(attrs, name(key)?),
         v::Value::Literal(_, literal) => c::Value::Literal(attrs, match literal {
@@ -45,21 +47,23 @@ pub(super) fn encode(
             v::Literal::String(value) => c::Literal::String(value.clone()),
             _ => return Err(values::unsupported("Unsupported Python literal")),
         }),
-        v::Value::Tuple(_, elements) => c::Value::Tuple(attrs, elements.iter().map(|value| encode(value, parameters, aliases)).collect::<Outcome<_>>()?),
-        v::Value::IfThenElse(_, condition, yes, no) => c::Value::IfThenElse(attrs,
-            Box::new(encode(condition, parameters, aliases)?), Box::new(encode(yes, parameters, aliases)?), Box::new(encode(no, parameters, aliases)?)),
-        v::Value::Apply(_, partial, right) => {
-            // The shared subset validator has already required a fully applied scalar comparison.
-            let v::Value::Apply(_, reference, left) = partial.as_ref() else { unreachable!() };
-            let v::Value::Reference(_, key) = reference.as_ref() else { unreachable!() };
-            let operand = values::infer(&erase(left)?, parameters)?;
-            let tail = v::Type::Function(Default::default(), Box::new(operand.clone()), Box::new(values::scalar("bool")));
-            let full = v::Type::Function(Default::default(), Box::new(operand), Box::new(tail.clone()));
-            c::Value::Apply(attrs, Box::new(c::Value::Apply(annotation(partial, &tail, aliases)?,
-                Box::new(c::Value::Reference(annotation(reference, &full, aliases)?, fqname(key)?)),
-                Box::new(encode(left, parameters, aliases)?))), Box::new(encode(right, parameters, aliases)?))
+        v::Value::Reference(_, key) => c::Value::Reference(attrs, fqname(key)?),
+        v::Value::Tuple(_, elements) => {
+            let v::Value::Tuple(_, checked) = typed else { unreachable!() };
+            c::Value::Tuple(attrs, elements.iter().zip(checked).map(|(value, typed)| encode(value, typed, aliases)).collect::<Outcome<_>>()?)
         }
-        _ => return Err(values::unsupported("Unsupported Python expression")),
+        v::Value::IfThenElse(_, condition, yes, no) => {
+            let v::Value::IfThenElse(_, tc, ty, tn) = typed else { unreachable!() };
+            c::Value::IfThenElse(attrs, Box::new(encode(condition, tc, aliases)?), Box::new(encode(yes, ty, aliases)?), Box::new(encode(no, tn, aliases)?))
+        }
+        v::Value::Apply(_, function, argument) => {
+            let v::Value::Apply(_, tf, ta) = typed else { unreachable!() };
+            c::Value::Apply(attrs, Box::new(encode(function, tf, aliases)?), Box::new(encode(argument, ta, aliases)?))
+        }
+        v::Value::Lambda(_, pattern, body) => {
+            let v::Value::Lambda(_, tp, tb) = typed else { unreachable!() };
+            c::Value::Lambda(attrs, encode_pattern(pattern, tp, aliases)?, Box::new(encode(body, tb, aliases)?))
+        }        _ => return Err(values::unsupported("Unsupported Python expression")),
     })
 }
 
@@ -72,6 +76,9 @@ pub(super) fn erase(value: &v::Value) -> Outcome<v::Value> {
         v::Value::Literal(_, literal) => v::Value::Literal(a, literal.clone()),
         v::Value::Tuple(_, elements) => {
             v::Value::Tuple(a, elements.iter().map(erase).collect::<Outcome<_>>()?)
+        }
+        v::Value::Lambda(_, pattern, body) => {
+            v::Value::Lambda(a, erase_pattern(pattern)?, Box::new(erase(body)?))
         }
         v::Value::Apply(_, function, argument) => {
             v::Value::Apply(a, Box::new(erase(function)?), Box::new(erase(argument)?))
@@ -87,5 +94,43 @@ pub(super) fn erase(value: &v::Value) -> Outcome<v::Value> {
                 "IR v3 expression is outside the Python subset",
             ));
         }
+    })
+}
+
+fn encode_pattern(
+    pattern: &v::Pattern,
+    typed: &v::Pattern,
+    aliases: &values::TupleAliases,
+) -> Outcome<c::Pattern<Type>> {
+    let attrs = annotation(
+        pattern.attributes(),
+        typed
+            .attributes()
+            .inferred_type
+            .as_ref()
+            .expect("checked pattern"),
+        aliases,
+    )?;
+    Ok(match (pattern, typed) {
+        (v::Pattern::WildcardPattern(_), _) => c::Pattern::Wildcard(attrs),
+        (v::Pattern::AsPattern(_, inner, key), v::Pattern::AsPattern(_, checked, _)) => {
+            c::Pattern::As(
+                attrs,
+                Box::new(encode_pattern(inner, checked, aliases)?),
+                name(key)?,
+            )
+        }
+        _ => return Err(values::unsupported("Unsupported lambda pattern")),
+    })
+}
+fn erase_pattern(pattern: &v::Pattern) -> Outcome<v::Pattern> {
+    Ok(match pattern {
+        v::Pattern::WildcardPattern(_) => v::Pattern::WildcardPattern(Default::default()),
+        v::Pattern::AsPattern(_, inner, name) => v::Pattern::AsPattern(
+            Default::default(),
+            Box::new(erase_pattern(inner)?),
+            name.clone(),
+        ),
+        _ => return Err(values::unsupported("Unsupported lambda pattern")),
     })
 }

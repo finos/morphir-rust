@@ -150,6 +150,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `morphir-python-binding` is released as `0.2.0`, published with the `extension/python/v0.2.0` tag. The
+  bundle adds multiple modules, private modules, IR v3, typed calls and captured lambdas. Morphir CLI
+  `0.4.0-beta.1` omits `exposedModules` from a compile request when the project configures none. The
+  `extension/python/v0.1.0` bundle requires that member and rejects the request with `missing field
+  exposedModules`, so use `0.2.0` with that CLI.
 - The document-tree `missing_member` guidance for a tree in the earlier layout names `0.4.0-beta.1`, the CLI release that ships the new layout, instead of the unreleased `0.4.0-alpha.8`.
 - **Impact-based CI.** CI runs only the jobs a change can affect, computed from the cargo dependency
   graph and `.github/ci-impact.toml`. Extension bundles build as a matrix.

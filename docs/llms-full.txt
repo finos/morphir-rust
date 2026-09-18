@@ -915,10 +915,9 @@ The extension compiles frozen dataclasses, named unions, fixed tuples and annota
 functions, typed calls and unary lambdas to Morphir IR v3 or v4, and generates
 Python 3.12 or later code from those definitions.
 
-This checkout also supports IR v3, private modules, multiple source modules with
-imports, and higher-order functions using unary `Callable` annotations.
-That addition requires a development bundle built from this checkout; the
-published Python `0.1.0` bundle supports one public module per request and IR v4 only.
+The published Python `0.2.0` bundle also supports IR v3, private modules, multiple source modules
+with imports, and higher-order functions using unary `Callable` annotations. The earlier `0.1.0`
+bundle supports one public module per request and IR v4 only.
 
 Functions support returning `if`/`elif`/`else` branches and Python conditional
 expressions. For example:
@@ -955,20 +954,20 @@ through the daemon's actual extension container. CI runs it with a release guest
 
 ## Install a release bundle
 
-The Python extension is released independently as `extension/python/v0.1.0` in
+The Python extension is released independently as `extension/python/v0.2.0` in
 [finos/morphir-rust releases](https://github.com/finos/morphir-rust/releases).
 It contains a WASM guest, SHA-256 checksum and release descriptor. It is a Morphir
 extension, not a PyPI package or a CPython import module.
 
-Use the Rust Morphir CLI with frontend-bundle publication support; CLI
-`0.4.0-alpha.6` and earlier cannot publish this descriptor. The npm `morphir-elm`
+Use Rust Morphir CLI `0.4.0-beta.1` or later with this bundle. The earlier `extension/python/v0.1.0`
+bundle does not compile with that CLI. CLI `0.4.0-alpha.6` and earlier cannot publish this descriptor. The npm `morphir-elm`
 executable does not provide these installation commands.
 
 Download and install with PowerShell:
 
 ```powershell
-gh release download extension/python/v0.1.0 --repo finos/morphir-rust --dir python-bundle
-Rename-Item -LiteralPath python-bundle/morphir-python-binding-0.1.0.release.json -NewName release.json
+gh release download extension/python/v0.2.0 --repo finos/morphir-rust --dir python-bundle
+Rename-Item -LiteralPath python-bundle/morphir-python-binding-0.2.0.release.json -NewName release.json
 $pythonIndex = Join-Path (Get-Location) '.morphir/python-index'
 $env:MORPHIR_HOME = Join-Path (Get-Location) '.morphir/python-home'
 morphir extension repository init $pythonIndex

@@ -203,6 +203,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `morphir extension repository init <name>` with a bare relative path such as `repo` failed with `failed to access : No such file or directory`. The durable directory helper counted the empty ancestor of a relative path as a directory to create and sync.
 - **`morphir-common` YAML encoding.** A `DocumentLiteral` number is written with the lexeme it
   was read with. It used to be rounded through `f64` or retyped as a YAML string, which changed
   the payload on a JSON→YAML→JSON round trip; for a while it was refused instead. The canonical

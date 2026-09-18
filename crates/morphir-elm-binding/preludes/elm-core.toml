@@ -1,0 +1,231 @@
+id = "elm-core"
+
+# Implicit imports, as morphir-elm's IncrementalResolve.defaultImports
+# (ecosystem/morphir-elm/src/Morphir/Elm/IncrementalResolve.elm:114-186).
+
+[[implicit_import]]
+module = "Basics"
+exposing = ["Int", "Float", "Order(..)", "Bool", "Never"]
+# values (for the values task): toFloat round floor ceiling truncate max min compare not xor modBy remainderBy negate abs clamp sqrt logBase e pi cos sin tan acos asin atan atan2 degrees radians turns toPolar fromPolar isNaN isInfinite identity always never
+
+[[implicit_import]]
+module = "List"
+exposing = ["List"]
+
+[[implicit_import]]
+module = "Maybe"
+exposing = ["Maybe(..)"]
+
+[[implicit_import]]
+module = "Result"
+exposing = ["Result(..)"]
+
+[[implicit_import]]
+module = "String"
+exposing = ["String"]
+
+[[implicit_import]]
+module = "Char"
+exposing = ["Char"]
+
+[[implicit_import]]
+module = "Tuple"
+exposing = []
+
+# Module aliases, one per morphir-elm's IncrementalResolve.sdkModuleMapping
+# (ecosystem/morphir-elm/src/Morphir/Elm/IncrementalResolve.elm:191-209).
+
+[[module_alias]]
+source = "Basics"
+target = "Morphir.SDK.Basics"
+
+[[module_alias]]
+source = "List"
+target = "Morphir.SDK.List"
+
+[[module_alias]]
+source = "Dict"
+target = "Morphir.SDK.Dict"
+
+[[module_alias]]
+source = "Set"
+target = "Morphir.SDK.Set"
+
+[[module_alias]]
+source = "Maybe"
+target = "Morphir.SDK.Maybe"
+
+[[module_alias]]
+source = "Result"
+target = "Morphir.SDK.Result"
+
+[[module_alias]]
+source = "String"
+target = "Morphir.SDK.String"
+
+[[module_alias]]
+source = "Char"
+target = "Morphir.SDK.Char"
+
+[[module_alias]]
+source = "Tuple"
+target = "Morphir.SDK.Tuple"
+
+[[module_alias]]
+source = "Regex"
+target = "Morphir.SDK.Regex"
+
+# Platform package: types declared by each ecosystem/morphir-elm/src/Morphir/IR/SDK/*.elm module.
+
+[[package]]
+name = "Morphir.SDK"
+
+  [[package.module]]
+  name = "Basics"
+  types = [
+    { name = "Int" },
+    { name = "Float" },
+    { name = "Order", constructors = ["LT", "EQ", "GT"] },
+    { name = "Bool" },
+    { name = "Never" },
+  ]
+
+  [[package.module]]
+  name = "List"
+  types = [
+    { name = "List" },
+  ]
+
+  [[package.module]]
+  name = "Dict"
+  types = [
+    { name = "Dict" },
+  ]
+
+  [[package.module]]
+  name = "Set"
+  types = [
+    { name = "Set" },
+  ]
+
+  [[package.module]]
+  name = "Maybe"
+  types = [
+    { name = "Maybe", constructors = ["Just", "Nothing"] },
+  ]
+
+  [[package.module]]
+  name = "Result"
+  types = [
+    { name = "Result", constructors = ["Ok", "Err"] },
+  ]
+
+  [[package.module]]
+  name = "String"
+  types = [
+    { name = "String" },
+  ]
+
+  [[package.module]]
+  name = "Char"
+  types = [
+    { name = "Char" },
+  ]
+
+  [[package.module]]
+  name = "Tuple"
+  types = []
+
+  [[package.module]]
+  name = "Regex"
+  types = [
+    { name = "Regex" },
+    { name = "Options" },
+    { name = "Match" },
+  ]
+
+  [[package.module]]
+  name = "Decimal"
+  types = [
+    { name = "Decimal" },
+  ]
+
+  [[package.module]]
+  name = "LocalDate"
+  types = [
+    { name = "LocalDate" },
+    { name = "DayOfWeek", constructors = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] },
+    { name = "Month", constructors = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] },
+  ]
+
+  [[package.module]]
+  name = "LocalTime"
+  types = [
+    { name = "LocalTime" },
+  ]
+
+  [[package.module]]
+  name = "Key"
+  types = [
+    { name = "Key0" },
+    { name = "Key2" },
+    { name = "Key3" },
+    { name = "Key4" },
+    { name = "Key5" },
+    { name = "Key6" },
+    { name = "Key7" },
+    { name = "Key8" },
+    { name = "Key9" },
+    { name = "Key10" },
+    { name = "Key11" },
+    { name = "Key12" },
+    { name = "Key13" },
+    { name = "Key14" },
+    { name = "Key15" },
+    { name = "Key16" },
+  ]
+
+  [[package.module]]
+  name = "Aggregate"
+  types = [
+    { name = "Aggregation" },
+    { name = "Aggregator" },
+  ]
+
+  [[package.module]]
+  name = "Rule"
+  types = [
+    { name = "Rule" },
+  ]
+
+  [[package.module]]
+  name = "StatefulApp"
+  types = [
+    { name = "StatefulApp", constructors = ["StatefulApp"] },
+  ]
+
+  # Note: Morphir.IR.SDK.Number.elm's moduleSpec declares its one type under the
+  # name "Decimal" (apparently copy-pasted from Decimal.elm), not "Number", even
+  # though the module's own `numberType` helper references a type named "Number".
+  # This mirrors the source as written; see task-3-report.md.
+  [[package.module]]
+  name = "Number"
+  types = [
+    { name = "Decimal" },
+  ]
+
+  [[package.module]]
+  name = "Int"
+  types = [
+    { name = "Int8" },
+    { name = "Int16" },
+    { name = "Int32" },
+    { name = "Int64" },
+  ]
+
+  [[package.module]]
+  name = "UUID"
+  types = [
+    { name = "UUID" },
+    { name = "Error", constructors = ["WrongFormat", "WrongLength", "UnsupportedVariant", "IsNil", "NoVersion"] },
+  ]

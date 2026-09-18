@@ -191,6 +191,10 @@ struct ReleaseBundleDescriptor {
     targets: Vec<String>,
     #[serde(default)]
     languages: Option<Vec<FrontendLanguageRecord>>,
+    /// Whether the frontend compiles incrementally. Written only when true, so
+    /// a descriptor for a frontend that is not incremental is unchanged.
+    #[serde(default)]
+    incremental: bool,
     ir_versions: Vec<String>,
     artifact: ArtifactFilename,
     sha256: Sha256Digest,
@@ -362,7 +366,8 @@ impl ReleaseBundleDescriptor {
             record["frontend"] = serde_json::json!({
                 "languages": languages,
                 "irVersions": self.ir_versions,
-                "compile": true
+                "compile": true,
+                "incremental": self.incremental
             });
         }
         if !self.targets.is_empty() {

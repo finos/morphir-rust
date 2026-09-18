@@ -118,7 +118,11 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
         request("Invalid.elm", INVALID)
     );
     assert!(!rejected.success, "malformed Elm must not compile");
-    assert!(rejected.ir.is_none());
+    assert!(
+        rejected.modules.is_empty(),
+        "a module that did not compile is not reported as compiled: {:?}",
+        rejected.modules
+    );
     assert!(
         rejected
             .diagnostics

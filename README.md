@@ -27,6 +27,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-daemon` | Workspace, build, IDE, and extension services for long-running Morphir tooling. |
 | `morphir-devkit` | Workspace, configuration, and extension discovery APIs for developer tools. |
 | `morphir-distribution` | Verified Morphir artifact acquisition, installation, and activation. |
+| `morphir-elm-binding` | Tree-sitter based Elm frontend and backend for type declarations in Morphir IR v3 and v4, with incremental compilation, available natively and as a WebAssembly extension. |
 | `morphir-ext` | Actor-based extension runtime built on Kameo. |
 | `morphir-ext-core` | Core extension ABI and envelope protocol types. |
 | `morphir-ext-example` | Example TEA counter WebAssembly component extension. |
@@ -54,6 +55,7 @@ This table lists independently releasable extensions. Registrations come from
 | Extension | Package | Version | Description |
 | --- | --- | --- | --- |
 | `morphir-avro` | `morphir-avro-extension` | `0.1.1` | Generates Avro JSON schemas or protocols and Avro IDL from Morphir specifications. |
+| `morphir-elm-native` | `morphir-elm-binding` | `0.1.0` | Compiles Elm type declarations to IR v3 and v4 and generates Elm back; incremental. |
 | `morphir-openapi` | `morphir-openapi-extension` | `0.1.0` | Generates OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents from Morphir specifications. |
 | `morphir-python` | `morphir-python-binding` | `0.1.0` | Compiles and generates Python ADTs, fixed tuples and conditional function bodies using IR v4. |
 

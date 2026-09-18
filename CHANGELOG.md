@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A native Elm binding, `morphir-elm-native`.** `morphir-elm-binding` reads Elm with a
+  vendored tree-sitter grammar and writes Morphir IR v3 or v4 natively, without migrating
+  between them, and generates Elm back from either. It compiles type declarations; a value
+  declaration is reported as an `ELM_VALUE_SKIPPED` warning rather than dropped. The
+  `elmPrelude` compile option chooses the name resolution prelude: `elm-core` (the default,
+  matching morphir-elm's `IncrementalResolve`), `none`, or an inline description of your own.
+  Compilation is incremental and stateless: `CompileRequest.baseline` carries the modules a
+  host holds, `CompileResult.moduleResults` reports each module's status, source digest,
+  interface digest, dependencies and IR, and a host feeds one run's `moduleResults` back as
+  the next run's `baseline`. Both MEP fields are optional and defaulted, so existing payloads
+  are unchanged. The extension releases independently as `morphir-elm-native`, alongside the
+  JavaScript `morphir-elm` provider, which stays the default for Elm.
+- **Release bundles record whether a frontend is incremental.** `.github/extensions.toml`
+  takes an `incremental` flag, the release descriptor and the installed release record carry
+  it, and `ReleaseRecord::extension_capabilities` reports it instead of always saying `false`.
+  Without this an incremental guest fails activation with "frontend capabilities disagreed
+  with discovery". The field is written only when true, so descriptors for frontends that are
+  not incremental are byte-identical to the ones before this change.
 - Python frontend and backend support IR v3 alongside v4, including private modules, imports, ADTs, fixed tuples and conditional functions. V3 output uses the shared classic model with inferred value types; incoming types are checked before generation. The v3 codec's signed 64-bit integer limit is diagnosed; v4 retains arbitrary precision. Native and installed WASM tests cover both versions, and release descriptors advertise both.
 - Rust frontend and backend support exhaustive pattern matching in IR v3 and v4:
   enums, Option/Result, nested tuples, literals, wildcards and bound variables.

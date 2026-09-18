@@ -8,6 +8,18 @@ targets = ["avro"]
 ir_versions = ["3", "4"]
 release_with_workspace = true
 
+[extensions.elm-native]
+package = "morphir-elm-binding"
+artifact = "morphir-elm-binding"
+extension_id = "morphir-elm-native"
+name = "Morphir Elm (native)"
+mep_versions = ["0.1"]
+targets = ["elm"]
+languages = [{ id = "elm", file_extensions = [".elm"] }]
+incremental = true
+ir_versions = ["3", "4"]
+release_with_workspace = true
+
 [extensions.python]
 package = "morphir-python-binding"
 artifact = "morphir-python-binding"

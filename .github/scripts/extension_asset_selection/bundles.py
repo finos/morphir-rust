@@ -105,6 +105,10 @@ def expected_descriptor(
             {"id": language["id"], "fileExtensions": language["file_extensions"]}
             for language in extension["languages"]
         ]
+        # Written only when true, so a non-incremental frontend's descriptor
+        # keeps the fields it always had.
+        if extension.get("incremental") is True:
+            expected["incremental"] = True
     if "name" in extension:
         expected["name"] = extension.get("name")
     expected["gitCommit"] = expected_commit

@@ -374,6 +374,38 @@ fn publishing_frontend_bundles_preserves_declared_capabilities() {
     }
 }
 
+/// A frontend that compiles against a baseline says so in its descriptor, and
+/// the released record has to repeat it: a host reads these capabilities before
+/// it starts the guest and refuses to go on when they disagree with what the
+/// guest then advertises. The flag is absent from a descriptor that does not
+/// set it, and absent means not incremental.
+#[test]
+fn publishing_carries_the_frontend_incremental_flag_into_the_release_record() {
+    for (declared, expected) in [
+        (Some(serde_json::json!(true)), true),
+        (Some(serde_json::json!(false)), false),
+        (None, false),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+        let bundle = release_bundle(root.path(), "morphir-elm-native", "0.1.0", b"elm wasm");
+        let path = bundle.join("release.json");
+        let mut descriptor: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        descriptor["languages"] = serde_json::json!([{ "id": "elm", "fileExtensions": [".elm"] }]);
+        if let Some(declared) = declared {
+            descriptor["incremental"] = declared;
+        }
+        fs::write(&path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+
+        let published = repository.publish(&bundle).unwrap();
+        assert_eq!(
+            published.release().frontend().unwrap().incremental(),
+            expected
+        );
+    }
+}
+
 #[test]
 fn publishing_rejects_invalid_frontend_languages_without_partial_metadata() {
     for languages in [

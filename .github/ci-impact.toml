@@ -1,0 +1,111 @@
+# Declarative input for .github/scripts/classify_ci_changes.py.
+#
+# Crate-to-crate impact comes from `cargo metadata`, not from this file.
+# This file only says which non-crate paths matter and which crates or
+# paths turn each specialised CI job on.
+
+[global]
+# A change to any of these affects every crate and every job.
+paths = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "mise.toml",
+  "rust-toolchain*",
+  ".cargo/**",
+  ".github/workflows/ci.yml",
+  ".github/ci-impact.toml",
+  ".github/scripts/classify_ci_changes.py",
+  ".github/scripts/ci_impact/**",
+]
+
+[safe]
+# Changes limited to these affect no crate. They can still turn on a job
+# through that job's `paths`.
+exact = [
+  "README.md",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "MAINTAINERS.md",
+  "LICENSE",
+  "LICENSE.spdx",
+  "NOTICE",
+  "AGENTS.md",
+  "renovate.json",
+]
+prefixes = [
+  ".beads/",
+  "docs/",
+  ".github/ISSUE_TEMPLATE/",
+  ".github/PULL_REQUEST_TEMPLATE/",
+]
+
+[extensions]
+# When one of these crates is affected, every extension bundle is rebuilt,
+# because the bundle tasks run daemon tests against the bundle.
+crates = ["morphir-daemon"]
+
+[rust]
+# Task scripts the shared Rust jobs (lint-rust, test-unit, docs, coverage) run.
+# A change here turns those jobs on for the whole workspace.
+paths = [
+  ".mise/tasks/test/unit",
+  ".mise/tasks/test/integration",
+  ".mise/tasks/check/fmt",
+  ".mise/tasks/check/lint/rust",
+  ".mise/tasks/check/coverage",
+  ".mise/tasks/check/coverage-report",
+]
+
+[jobs.kit-conformance]
+crates = ["morphir-package", "morphir-mck-adapter"]
+paths = [".config/mck-driver-version", ".mise/tasks/check/kit"]
+
+[jobs.workspace-wasm]
+crates = [
+  "morphir-config",
+  "morphir-workspace",
+  "morphir-workspace-wasm",
+  "morphir-devkit",
+  "morphir-daemon",
+]
+paths = [".mise/tasks/build/workspace-wasm"]
+
+[jobs.test-native-extension]
+crates = ["morphir-daemon"]
+paths = [".mise/tasks/test/process"]
+
+[jobs.test-daemon-extension]
+crates = ["morphir-daemon"]
+paths = [".mise/tasks/test/daemon"]
+
+[jobs.test-extism]
+crates = [
+  "morphir-daemon",
+  "morphir-wasm-binding",
+  "morphir-avro-extension",
+  "morphir-rust-binding",
+]
+paths = [".mise/tasks/test/extism"]
+
+[jobs.example-wasm]
+crates = ["morphir-ext-example"]
+paths = [".mise/tasks/build/wasm", ".mise/tasks/check/lint/wasm"]
+
+[jobs.lint-shell]
+paths = ["**/*.sh", ".mise/tasks/**", ".shellcheckrc", ".mise/tasks/check/lint/shell"]
+
+[jobs.lint-yaml]
+paths = ["**/*.yml", "**/*.yaml", ".yamllint*", ".mise/tasks/check/lint/yaml"]
+
+[jobs.docs-generated]
+paths = ["docs/**", "CHANGELOG.md", ".mise/tasks/docs/**"]
+
+[jobs.test-release-workflow]
+paths = [
+  "tests/ci/**",
+  ".github/**",
+  "scripts/**",
+  ".mise/tasks/extension/**",
+  "README.md",
+  "crates/*/Cargo.toml",
+]

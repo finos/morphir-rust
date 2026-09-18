@@ -1,0 +1,17 @@
+#!/bin/sh
+#MISE description="Show which CI jobs the current changes would run (default base: origin/main)"
+
+set -eu
+
+BASE="${1:-origin/main}"
+HEAD="${2:-HEAD}"
+
+if [ "$BASE" = "--full" ]; then
+    exec python3 .github/scripts/classify_ci_changes.py --full --format text
+fi
+
+MERGE_BASE="$(git merge-base "$BASE" "$HEAD")"
+exec python3 .github/scripts/classify_ci_changes.py \
+    --base "$MERGE_BASE" \
+    --head "$HEAD" \
+    --format text

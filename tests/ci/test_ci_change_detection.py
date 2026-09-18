@@ -1,8 +1,8 @@
-"""Tests for the conservative CI change classifier."""
+"""End-to-end tests for the CI change classifier CLI."""
 
 from __future__ import annotations
 
-import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -11,161 +11,246 @@ import tempfile
 import unittest
 from unittest import mock
 
+from ci_impact_test_support import *
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CLASSIFIER_SCRIPT = REPOSITORY_ROOT / ".github" / "scripts" / "classify_ci_changes.py"
 
 
-def load_classifier():
-    """Import the repository classifier script as a module."""
-    if not CLASSIFIER_SCRIPT.exists():
-        raise AssertionError(f"classifier script is missing: {CLASSIFIER_SCRIPT}")
-    spec = importlib.util.spec_from_file_location(
-        "classify_ci_changes_under_test", CLASSIFIER_SCRIPT
+def _git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    return environment
+
+
+def _git(*arguments: str) -> list[str]:
+    return ["git", "-c", "commit.gpgSign=false", "-c", f"core.hooksPath={os.devnull}", *arguments]
+
+
+def _init_repository(repository: Path) -> None:
+    subprocess.run(_git("init", "-q", str(repository)), check=True, env=_git_environment())
+    for key, value in (("user.email", "ci@example.invalid"), ("user.name", "CI Test")):
+        subprocess.run(_git("config", key, value), cwd=repository, check=True, env=_git_environment())
+
+
+def _commit(repository: Path, message: str) -> str:
+    subprocess.run(_git("add", "."), cwd=repository, check=True, env=_git_environment())
+    subprocess.run(_git("commit", "-qm", message), cwd=repository, check=True, env=_git_environment())
+    return subprocess.check_output(
+        _git("rev-parse", "HEAD"), cwd=repository, text=True, env=_git_environment()
+    ).strip()
+
+
+def _seed_repository(repository: Path) -> None:
+    """Create a fake repository with a config, an extensions registry, and a fake cargo."""
+    (repository / ".github").mkdir()
+    (repository / ".github" / "ci-impact.toml").write_text(
+        "[global]\npaths = ['Cargo.lock']\n"
+        "[safe]\nexact = ['README.md']\nprefixes = ['docs/']\n"
+        "[jobs.docs-generated]\npaths = ['docs/**']\n"
+        "[jobs.kit-conformance]\ncrates = ['morphir-projection']\n",
+        encoding="utf-8",
     )
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"cannot load {CLASSIFIER_SCRIPT}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    (repository / ".github" / "extensions.toml").write_text(
+        "[extensions.python]\npackage = 'morphir-python-binding'\n", encoding="utf-8"
+    )
+    (repository / "crates" / "morphir-python-binding" / "src").mkdir(parents=True)
+    (repository / "crates" / "morphir-python-binding" / "src" / "lib.rs").write_text("", encoding="utf-8")
+    (repository / "README.md").write_text("base\n", encoding="utf-8")
+    (repository / "Cargo.lock").write_text("base\n", encoding="utf-8")
 
 
-class CiChangeDetectionTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.classifier = load_classifier()
+def _fake_cargo(directory: Path) -> Path:
+    """Write a cargo stand-in that prints the fake metadata."""
+    directory.mkdir(exist_ok=True)
+    metadata = json.dumps(fake_metadata())
+    shim = directory / "cargo_metadata.py"
+    shim.write_text(f"import sys\nsys.stdout.write({metadata!r})\n", encoding="utf-8")
+    if os.name == "nt":
+        script = directory / "cargo.cmd"
+        script.write_text(f'@echo off\r\n"{sys.executable}" "{shim}"\r\n', encoding="utf-8")
+    else:
+        script = directory / "cargo"
+        script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{shim}"\n', encoding="utf-8")
+        script.chmod(0o755)
+    return directory
 
-    def test_safe_exact_paths_are_metadata(self) -> None:
-        for path in (
-            "README.md",
-            "CHANGELOG.md",
-            "CONTRIBUTING.md",
-            "MAINTAINERS.md",
-            "LICENSE",
-            "LICENSE.spdx",
-            "NOTICE",
-            "AGENTS.md",
-            "renovate.json",
-        ):
-            with self.subTest(path=path):
-                self.assertTrue(self.classifier.is_metadata_path(path))
 
-    def test_safe_prefix_paths_are_metadata(self) -> None:
-        for path in (
-            ".beads/issues.jsonl",
-            "docs/getting-started.md",
-            ".github/ISSUE_TEMPLATE/bug.md",
-            ".github/PULL_REQUEST_TEMPLATE/change.md",
-        ):
-            with self.subTest(path=path):
-                self.assertTrue(self.classifier.is_metadata_path(path))
+def _run_cli(repository: Path, *arguments: str, output: Path | None = None, fake_cargo: Path | None = None):
+    environment = os.environ.copy()
+    if output is not None:
+        environment["GITHUB_OUTPUT"] = str(output)
+    else:
+        environment.pop("GITHUB_OUTPUT", None)
+    if fake_cargo is not None:
+        environment["PATH"] = f"{fake_cargo}{os.pathsep}{environment['PATH']}"
+    return subprocess.run(
+        [sys.executable, str(CLASSIFIER_SCRIPT), "--root", str(repository), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
 
-    def test_unsafe_paths_are_not_metadata(self) -> None:
-        for path in (
-            ".gitignore",
-            "Cargo.toml",
-            "Cargo.lock",
-            "crates/morphir-core/src/lib.rs",
-            ".github/workflows/ci.yml",
-            ".github/scripts/classify_ci_changes.py",
-            "mise.toml",
-            "unknown.txt",
-        ):
-            with self.subTest(path=path):
-                self.assertFalse(self.classifier.is_metadata_path(path))
 
-    def test_requires_expensive_ci_for_empty_or_unsafe_changes(self) -> None:
-        self.assertTrue(self.classifier.requires_expensive_ci([]))
-        self.assertFalse(
-            self.classifier.requires_expensive_ci(
-                ["README.md", "docs/getting-started.md"]
-            )
-        )
-        self.assertTrue(
-            self.classifier.requires_expensive_ci(["README.md", "Cargo.toml"])
-        )
-
+class ClassifierCliTests(unittest.TestCase):
     def test_zero_sha_accepts_only_full_zero_sha1_or_sha256(self) -> None:
-        self.assertTrue(self.classifier.is_zero_sha("0" * 40))
-        self.assertTrue(self.classifier.is_zero_sha("0" * 64))
+        self.assertTrue(cli.is_zero_sha("0" * 40))
+        self.assertTrue(cli.is_zero_sha("0" * 64))
         for value in ("0" * 39, "0" * 41, "0" * 63, "0" * 65, "0" * 39 + "1"):
             with self.subTest(value=value):
-                self.assertFalse(self.classifier.is_zero_sha(value))
+                self.assertFalse(cli.is_zero_sha(value))
 
     def test_changed_paths_preserves_filenames_containing_spaces(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary)
-            self._init_repository(repository)
+            _init_repository(repository)
             readme = repository / "README.md"
             readme.write_text("base\n", encoding="utf-8")
-            base = self._commit(repository, "base")
+            base = _commit(repository, "base")
             readme.write_text("head\n", encoding="utf-8")
-            spaced = repository / "notes with space.txt"
-            spaced.write_text("notes\n", encoding="utf-8")
-            head = self._commit(repository, "head")
+            (repository / "notes with space.txt").write_text("notes\n", encoding="utf-8")
+            head = _commit(repository, "head")
 
             self.assertEqual(
                 ("README.md", "notes with space.txt"),
-                self.classifier.changed_paths(repository, base, head),
+                cli.changed_paths(repository, base, head),
             )
 
-    def test_unsafe_rename_into_docs_still_requires_expensive_ci(self) -> None:
+    def test_cli_writes_scoped_outputs_for_a_leaf_crate_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            self._init_repository(repository)
-            unsafe_source = repository / "crates" / "example" / "src" / "lib.rs"
-            unsafe_source.parent.mkdir(parents=True)
-            unsafe_source.write_text("unsafe\n", encoding="utf-8")
-            base = self._commit(repository, "base")
-            destination = repository / "docs" / "lib.rs"
-            destination.parent.mkdir()
-            unsafe_source.rename(destination)
-            head = self._commit(repository, "rename into docs")
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _init_repository(repository)
+            _seed_repository(repository)
+            base = _commit(repository, "base")
+            (repository / "crates" / "morphir-python-binding" / "src" / "lib.rs").write_text("// change\n", encoding="utf-8")
+            head = _commit(repository, "head")
+            output = Path(temporary) / "github-output"
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
 
-            paths = self.classifier.changed_paths(repository, base, head)
-
-            self.assertTrue(self.classifier.requires_expensive_ci(paths))
-
-    def test_cli_writes_false_for_readme_only_commit(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            self._init_repository(repository)
-            readme = repository / "README.md"
-            readme.write_text("base\n", encoding="utf-8")
-            base = self._commit(repository, "base")
-            readme.write_text("head\n", encoding="utf-8")
-            head = self._commit(repository, "head")
-            output = repository / "github-output"
-            result = self._run_cli(repository, base, head, output)
+            result = _run_cli(repository, "--base", base, "--head", head, output=output, fake_cargo=fake_cargo)
 
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual("", result.stdout)
-            self.assertEqual("expensive=false\n", output.read_text(encoding="utf-8"))
-            self.assertEqual("", result.stderr)
+            lines = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+            self.assertEqual("false", lines["all"])
+            self.assertEqual("-p morphir-python-binding", lines["cargo_packages"])
+            self.assertEqual("false", lines["job_kit_conformance"])
+            self.assertEqual([{"id": "python", "package": "morphir-python-binding"}], json.loads(lines["extensions"]))
+
+    def test_cli_writes_all_true_for_readme_plus_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _init_repository(repository)
+            _seed_repository(repository)
+            base = _commit(repository, "base")
+            (repository / "Cargo.lock").write_text("head\n", encoding="utf-8")
+            head = _commit(repository, "head")
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
+
+            result = _run_cli(repository, "--base", base, "--head", head, fake_cargo=fake_cargo)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            lines = dict(line.split("=", 1) for line in result.stdout.splitlines())
+            self.assertEqual("true", lines["all"])
+            self.assertEqual("", lines["cargo_packages"])
+
+    def test_cli_full_flag_forces_everything_without_git(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _seed_repository(repository)
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
+
+            result = _run_cli(repository, "--full", fake_cargo=fake_cargo)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            lines = dict(line.split("=", 1) for line in result.stdout.splitlines())
+            self.assertEqual("true", lines["all"])
+            self.assertEqual("true", lines["job_docs_generated"])
+
+    def test_cli_text_format_is_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _seed_repository(repository)
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
+
+            result = _run_cli(repository, "--full", "--format", "text", fake_cargo=fake_cargo)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("all: true", result.stdout)
+            self.assertIn("docs-generated: run", result.stdout)
+
+    def test_cli_text_format_never_writes_github_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _seed_repository(repository)
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
+            output = Path(temporary) / "github-output"
+
+            result = _run_cli(repository, "--full", "--format", "text", output=output, fake_cargo=fake_cargo)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("all: true", result.stdout)
+            self.assertIn("docs-generated: run", result.stdout)
+            self.assertTrue(not output.exists() or output.read_text(encoding="utf-8") == "")
 
     def test_cli_fails_safe_for_all_zero_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            self._init_repository(repository)
-            (repository / "README.md").write_text("head\n", encoding="utf-8")
-            head = self._commit(repository, "head")
-            result = self._run_cli(repository, "0" * 40, head)
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _init_repository(repository)
+            _seed_repository(repository)
+            head = _commit(repository, "head")
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
+
+            result = _run_cli(repository, "--base", "0" * 40, "--head", head, fake_cargo=fake_cargo)
 
             self.assertEqual(0, result.returncode)
-            self.assertEqual("expensive=true\n", result.stdout)
+            lines = dict(line.split("=", 1) for line in result.stdout.splitlines())
+            self.assertEqual("true", lines["all"])
             self.assertIn("warning", result.stderr.lower())
 
-    def test_cli_fails_safe_for_unknown_base_object(self) -> None:
+    def test_cli_fails_safe_when_cargo_metadata_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            self._init_repository(repository)
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _init_repository(repository)
+            _seed_repository(repository)
+            base = _commit(repository, "base")
             (repository / "README.md").write_text("head\n", encoding="utf-8")
-            head = self._commit(repository, "head")
-            result = self._run_cli(repository, "f" * 40, head)
+            head = _commit(repository, "head")
+            broken = Path(temporary) / "bin"
+            broken.mkdir()
+            name = "cargo.cmd" if os.name == "nt" else "cargo"
+            (broken / name).write_text("@echo off\r\nexit /b 1\r\n" if os.name == "nt" else "#!/bin/sh\nexit 1\n", encoding="utf-8")
+            if os.name != "nt":
+                (broken / name).chmod(0o755)
+
+            result = _run_cli(repository, "--base", base, "--head", head, fake_cargo=broken)
 
             self.assertEqual(0, result.returncode)
-            self.assertEqual("expensive=true\n", result.stdout)
+            lines = dict(line.split("=", 1) for line in result.stdout.splitlines())
+            self.assertEqual("true", lines["all"])
+            self.assertIn("warning", result.stderr.lower())
+
+    def test_cli_fails_safe_when_config_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _init_repository(repository)
+            (repository / "README.md").write_text("base\n", encoding="utf-8")
+            base = _commit(repository, "base")
+            (repository / "README.md").write_text("head\n", encoding="utf-8")
+            head = _commit(repository, "head")
+
+            result = _run_cli(repository, "--base", base, "--head", head)
+
+            self.assertEqual(0, result.returncode)
+            self.assertIn("all=true", result.stdout)
             self.assertIn("warning", result.stderr.lower())
 
     def test_git_fixture_commits_with_hostile_global_signing_and_hook_config(self) -> None:
@@ -181,107 +266,14 @@ class CiChangeDetectionTests(unittest.TestCase):
                 f"[commit]\n\tgpgSign = true\n[core]\n\thooksPath = {hook_directory}\n",
                 encoding="utf-8",
             )
-            environment = {
-                **os.environ,
-                "GIT_CONFIG_GLOBAL": str(global_config),
-                "GIT_CONFIG_NOSYSTEM": "1",
-            }
+            environment = {**os.environ, "GIT_CONFIG_GLOBAL": str(global_config), "GIT_CONFIG_NOSYSTEM": "1"}
             with mock.patch.dict(os.environ, environment, clear=True):
                 repository = root / "repository"
                 repository.mkdir()
-                self._init_repository(repository)
+                _init_repository(repository)
                 (repository / "README.md").write_text("base\n", encoding="utf-8")
-
-                base = self._commit(repository, "base")
-
+                base = _commit(repository, "base")
             self.assertRegex(base, r"^[0-9a-f]{40}$")
-
-    @staticmethod
-    def _init_repository(repository: Path) -> None:
-        subprocess.run(
-            CiChangeDetectionTests._git_command("init", "-q", str(repository)),
-            check=True,
-            env=CiChangeDetectionTests._git_environment(),
-        )
-        subprocess.run(
-            CiChangeDetectionTests._git_command(
-                "config", "user.email", "ci@example.invalid"
-            ),
-            cwd=repository,
-            check=True,
-            env=CiChangeDetectionTests._git_environment(),
-        )
-        subprocess.run(
-            CiChangeDetectionTests._git_command("config", "user.name", "CI Test"),
-            cwd=repository,
-            check=True,
-            env=CiChangeDetectionTests._git_environment(),
-        )
-
-    @staticmethod
-    def _commit(repository: Path, message: str) -> str:
-        subprocess.run(
-            CiChangeDetectionTests._git_command("add", "."),
-            cwd=repository,
-            check=True,
-            env=CiChangeDetectionTests._git_environment(),
-        )
-        subprocess.run(
-            CiChangeDetectionTests._git_command("commit", "-qm", message),
-            cwd=repository,
-            check=True,
-            env=CiChangeDetectionTests._git_environment(),
-        )
-        return subprocess.check_output(
-            CiChangeDetectionTests._git_command("rev-parse", "HEAD"),
-            cwd=repository,
-            text=True,
-            env=CiChangeDetectionTests._git_environment(),
-        ).strip()
-
-    @staticmethod
-    def _git_command(*arguments: str) -> list[str]:
-        return [
-            "git",
-            "-c",
-            "commit.gpgSign=false",
-            "-c",
-            f"core.hooksPath={os.devnull}",
-            *arguments,
-        ]
-
-    @staticmethod
-    def _git_environment() -> dict[str, str]:
-        environment = os.environ.copy()
-        environment["GIT_CONFIG_GLOBAL"] = os.devnull
-        environment["GIT_CONFIG_NOSYSTEM"] = "1"
-        return environment
-
-    @staticmethod
-    def _run_cli(
-        repository: Path, base: str, head: str, output: Path | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        environment = os.environ.copy()
-        if output is not None:
-            environment["GITHUB_OUTPUT"] = str(output)
-        else:
-            environment.pop("GITHUB_OUTPUT", None)
-        return subprocess.run(
-            [
-                sys.executable,
-                str(CLASSIFIER_SCRIPT),
-                "--root",
-                str(repository),
-                "--base",
-                base,
-                "--head",
-                head,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=environment,
-        )
 
 
 if __name__ == "__main__":

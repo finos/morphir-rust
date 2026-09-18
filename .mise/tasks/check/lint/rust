@@ -1,9 +1,8 @@
 #!/bin/sh
-#MISE description="Lint Rust code with clippy"
+#MISE description="Lint Rust code with clippy (pass -p <crate> after -- to scope)"
 
 set -eu
 
 echo "Running Rust linter..."
-cargo clippy --all-targets --all-features -- -D warnings
-
+cargo clippy "$@" --all-targets --all-features -- -D warnings
 echo "Rust lint OK"

@@ -46,7 +46,17 @@ fn document(uri: &str, text: &str) -> SourceDocument {
     }
 }
 
+/// The fixture package is called `My`, which is the prefix of both fixture
+/// module names, so the frontend strips it and the backend writes it back.
 fn compile(documents: Vec<SourceDocument>, ir_version: &str) -> CompileResult {
+    compile_as("My", documents, ir_version)
+}
+
+fn compile_as(
+    package_name: &str,
+    documents: Vec<SourceDocument>,
+    ir_version: &str,
+) -> CompileResult {
     let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
     let result = extension
         .frontend()
@@ -55,7 +65,7 @@ fn compile(documents: Vec<SourceDocument>, ir_version: &str) -> CompileResult {
             language_id: "elm".into(),
             documents,
             package: CompilePackage {
-                name: "local/example".into(),
+                name: package_name.into(),
                 exposed_modules: None,
             },
             dependencies: vec![],
@@ -290,6 +300,49 @@ fn printing_the_generated_elm_again_changes_nothing() {
                 "v{version}, generated:\n{generated}"
             );
         }
+    }
+}
+
+/// A package whose modules are *not* named after it, which is what a package
+/// called `local/example` holding a module `Example` is.
+///
+/// The frontend strips nothing, because `Example` does not start with
+/// `Local.Example`, so the IR module path is `Example`. The backend always
+/// writes the package path back on, so the generated module is
+/// `Local.Example.Example` — a different name from the one that was compiled.
+/// That is the price of a symmetric rule, and it is only paid once: compiling
+/// the generated source under the same package strips the prefix again and
+/// yields the very same distribution.
+#[test]
+fn a_package_that_does_not_prefix_its_modules_still_round_trips() {
+    const EXAMPLE: &str = "module Example exposing (Id)\n\ntype alias Id = String\n";
+
+    for version in ["3", "4"] {
+        let original = compile_as(
+            "local/example",
+            vec![document("file:///work/Example.elm", EXAMPLE)],
+            version,
+        );
+        let generated = generate(original.ir.clone().expect("a distribution"));
+
+        let paths: Vec<&str> = generated
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.path.as_str())
+            .collect();
+        assert_eq!(paths, ["src/Local/Example/Example.elm"], "v{version}");
+        let source = artifact(&generated, "src/Local/Example/Example.elm");
+        assert!(
+            source.starts_with("module Local.Example.Example exposing (Id)\n"),
+            "v{version}, generated:\n{source}"
+        );
+
+        let again = compile_as(
+            "local/example",
+            vec![document("file:///work/Example.elm", &source)],
+            version,
+        );
+        assert_eq!(again.ir, original.ir, "v{version}, generated:\n{source}");
     }
 }
 

@@ -82,11 +82,7 @@ pub fn raise(package: &[String], module: &ResolvedModule, prelude: &Prelude) -> 
         .collect();
 
     ast::Module {
-        name: module
-            .name
-            .iter()
-            .map(|s| names::type_spelling(s))
-            .collect(),
+        name: elm_module_name(package, &module.name),
         exposing,
         imports,
         doc: module.doc.clone(),
@@ -94,6 +90,25 @@ pub fn raise(package: &[String], module: &ResolvedModule, prelude: &Prelude) -> 
         skipped_values: Vec::new(),
         span: NONE,
     }
+}
+
+/// The Elm module name a package's module path spells: the package path
+/// followed by the module path, every segment in its document spelling.
+///
+/// The frontend strips the package path from an in-package module name before
+/// it writes the IR module path (see
+/// [`crate::frontend::boundary::relative_module`]), so putting it back is what
+/// makes generated source read back as the document it came from: `My.Package`
+/// plus `Foo.Bar` is `My.Package.Foo.Bar`, and the frontend strips it again.
+/// A package whose modules were never prefixed (`local/example` holding
+/// `Example`) gains the prefix here — `Local.Example.Example` — which the
+/// frontend then strips, so the round trip is still stable.
+pub fn elm_module_name(package: &[String], module: &[String]) -> Vec<String> {
+    package
+        .iter()
+        .chain(module)
+        .map(|segment| names::type_spelling(segment))
+        .collect()
 }
 
 /// Whether Elm has a form for this declaration.
@@ -230,8 +245,12 @@ impl Raiser<'_> {
             if reference.module == self.module.name {
                 return (Vec::new(), name);
             }
-            self.imports.insert(reference.module.clone());
-            return (reference.module.clone(), name);
+            // A sibling module is written under its full Elm name — the
+            // package path plus its module path — which is the name the
+            // frontend will strip the package path back off again.
+            let sibling = elm_module_name(self.package, &reference.module);
+            self.imports.insert(sibling.clone());
+            return (sibling, name);
         }
 
         // Outside the package, the module a reader writes is the one the

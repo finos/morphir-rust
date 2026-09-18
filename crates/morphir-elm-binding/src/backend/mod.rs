@@ -35,7 +35,10 @@ pub const TARGET: &str = "elm";
 
 /// Generates Elm for every module a distribution defines.
 ///
-/// One artifact per module, at `src/<Module/Path>.elm`. Value definitions are
+/// One artifact per module, at `src/<Package/Path>/<Module/Path>.elm` — the
+/// Elm module name is the package path followed by the module path, so the
+/// generated tree is laid out under the package's own directories. Value
+/// definitions are
 /// counted and reported once as a warning; a construct with no Elm form is
 /// reported, left out, and makes the result unsuccessful — the artifacts for
 /// the modules that did generate are still returned. A document this backend
@@ -68,7 +71,10 @@ pub fn generate(request: GenerateRequest) -> GenerateResult {
         .modules
         .iter()
         .map(|module| Artifact {
-            path: format!("src/{}.elm", module.name.join("/")),
+            path: format!(
+                "src/{}.elm",
+                raise::elm_module_name(&decoded.package, &module.name).join("/")
+            ),
             content: print::print(&raise::raise(&decoded.package, module, &prelude)),
             binary: false,
         })

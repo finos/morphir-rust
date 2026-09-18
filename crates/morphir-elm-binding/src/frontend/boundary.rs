@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::digest::sha256_hex;
 use crate::frontend::resolve::DependencyInterface;
+use crate::names;
 use crate::prelude::{self, Prelude};
 use crate::resolved::Access;
 
@@ -159,6 +160,36 @@ pub fn package_path(name: &str) -> Vec<String> {
         .collect()
 }
 
+/// The IR module path an Elm module name spells, with the package path
+/// stripped when the name starts with it.
+///
+/// This is morphir-elm's rule (`Morphir.Elm.Frontend`, `List.drop (List.length
+/// currentPackagePath)`): a package `My.Package` holding `My.Package.Foo.Bar`
+/// publishes the module as `Foo.Bar`, so a dependent that imports
+/// `My.Package.Foo.Bar` finds it by the same package-path prefix match the
+/// resolver already does for dependency packages. Without the strip, a package
+/// this frontend compiles could not be imported under its natural name.
+///
+/// Segments are compared in their [`crate::names`] spelling, because that is
+/// the only spelling a Morphir document keeps. A name that does not start with
+/// the package path (package `local/example`, module `Example`) is its own IR
+/// module path, and so is one that *is* the package path exactly, since a
+/// module path cannot be empty.
+pub fn relative_module(package: &[String], module: &[String]) -> Vec<String> {
+    if module.len() <= package.len() {
+        return module.to_vec();
+    }
+    let matches = package
+        .iter()
+        .zip(module)
+        .all(|(left, right)| names::type_spelling(left) == names::type_spelling(right));
+    if matches {
+        module[package.len()..].to_vec()
+    } else {
+        module.to_vec()
+    }
+}
+
 /// A module is public when the request exposes every module, or names this one.
 pub fn module_access(exposed: Option<&[String]>, dotted_name: &str) -> Access {
     match exposed {
@@ -178,6 +209,30 @@ mod tests {
         assert_eq!(package_path("My.Package"), ["My", "Package"]);
         assert_eq!(package_path("morphir/sdk.core"), ["morphir", "sdk", "core"]);
         assert!(package_path("  ").is_empty());
+    }
+
+    #[test]
+    fn the_package_path_is_stripped_from_a_module_that_starts_with_it() {
+        let path = |name: &str| package_path(name);
+        assert_eq!(
+            relative_module(&path("My.Package"), &path("My.Package.Foo.Bar")),
+            ["Foo", "Bar"]
+        );
+        // Not a prefix: the module keeps its whole name.
+        assert_eq!(
+            relative_module(&path("local/example"), &path("Example")),
+            ["Example"]
+        );
+        // A module path cannot be empty, so an exact match is not stripped.
+        assert_eq!(
+            relative_module(&path("My.Package"), &path("My.Package")),
+            ["My", "Package"]
+        );
+        // The comparison is on the words a document keeps, not on the letters.
+        assert_eq!(
+            relative_module(&path("local/example"), &path("Local.Example.Thing")),
+            ["Thing"]
+        );
     }
 
     #[test]

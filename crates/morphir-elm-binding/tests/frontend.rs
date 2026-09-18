@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use morphir_elm_binding::ElmExtension;
+use morphir_elm_binding::resolved::{RType, ResolvedBody};
 use morphir_extension_sdk::prelude::*;
 
 const TYPES: &str = include_str!("fixtures/Types.elm");
@@ -231,6 +232,60 @@ fn a_v4_distribution_forwards_its_dependencies_specifications() {
     );
 }
 
+/// A package we compile can be depended on under its natural Elm name.
+///
+/// `Acme.Lib` files its module `Acme.Lib.Types` under the module path `Types`,
+/// because the package path is the module's prefix — the rule morphir-elm
+/// follows. A dependent that writes `import Acme.Lib.Types` then finds it by
+/// the very prefix match the resolver already does for dependency packages,
+/// and the reference is `Acme.Lib:Types#T`.
+#[test]
+fn a_package_is_imported_under_its_full_elm_module_name() {
+    const LIB: &str = "module Acme.Lib.Types exposing (T)\n\ntype alias T = Int\n";
+    const APP: &str =
+        "module App exposing (Wrapped)\n\nimport Acme.Lib.Types\n\ntype alias Wrapped = Acme.Lib.Types.T\n";
+
+    for version in ["3", "4"] {
+        let library = compile_as(
+            "elm",
+            "Acme.Lib",
+            vec![document("file:///lib/Acme/Lib/Types.elm", LIB)],
+            version,
+            vec![],
+        );
+        assert!(library.success, "{version}: {:?}", library.diagnostics);
+
+        let result = compile_as(
+            "elm",
+            "My.App",
+            vec![document("file:///work/App.elm", APP)],
+            version,
+            vec![CompileDependency {
+                package_name: "Acme.Lib".into(),
+                ir_version: version.into(),
+                distribution: library.ir.expect("the library's distribution"),
+            }],
+        );
+
+        assert!(result.success, "{version}: {:?}", result.diagnostics);
+        let decoded = morphir_elm_binding::backend::decode::module_of(
+            version,
+            &["App".to_string()],
+            result.module_results[0]
+                .ir
+                .as_ref()
+                .expect("the module's IR"),
+        )
+        .unwrap_or_else(|error| panic!("v{version}: {error}"));
+        let ResolvedBody::Alias(RType::Ref(reference, _)) = &decoded.module.types[0].body else {
+            panic!("v{version}: `Wrapped` is not an alias to a reference");
+        };
+        assert_eq!(reference.package, ["Acme", "Lib"], "v{version}");
+        assert_eq!(reference.module, ["Types"], "v{version}");
+        assert_eq!(reference.name, "T", "v{version}");
+    }
+}
+
 #[test]
 fn a_classic_distribution_still_writes_no_dependencies() {
     let result = compile(
@@ -400,14 +455,21 @@ fn the_extension_advertises_the_elm_frontend_and_backend() {
 /// The frontend and the backend meet: what this extension compiles, it
 /// generates again. `tests/backend.rs` and `tests/roundtrip.rs` take that
 /// apart; this is the end-to-end handle the daemon holds.
+///
+/// The package is `My`, which is the prefix of both module names, so the
+/// frontend files them under `Domain.Types` and `Other` and the backend writes
+/// the prefix back on.
 #[test]
 fn the_distribution_the_frontend_writes_generates_elm_again() {
-    let compiled = compile(
+    let compiled = compile_as(
+        "elm",
+        "My",
         vec![
             document("file:///work/My/Domain/Types.elm", TYPES),
             document("file:///work/My/Other.elm", OTHER),
         ],
         "3",
+        vec![],
     );
     assert!(compiled.success, "{:?}", compiled.diagnostics);
     let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();

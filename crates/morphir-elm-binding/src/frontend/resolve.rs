@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::ast;
+use crate::frontend::boundary;
 use crate::names;
 use crate::prelude::Prelude;
 use crate::resolved::{
@@ -24,15 +25,18 @@ use crate::span::Span;
 pub struct Scope<'a> {
     /// This package's path, e.g. `["local", "example"]`.
     pub package: &'a [String],
+    /// The prelude names are resolved against.
     pub prelude: &'a Prelude,
     /// Looks up a module of *this* package by its module path (the request's
     /// own modules plus the incremental baseline).
     pub package_modules: &'a dyn Fn(&[String]) -> Option<Interface>,
+    /// The public interfaces of the packages this one depends on.
     pub dependencies: &'a [DependencyInterface],
 }
 
 /// The public interfaces of one dependency package.
 pub struct DependencyInterface {
+    /// The dependency's package path.
     pub package: Vec<String>,
     /// Module interfaces, named relative to `package`.
     pub modules: Vec<Interface>,
@@ -41,8 +45,11 @@ pub struct DependencyInterface {
 /// A resolution failure. `span` is the span of the offending reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolveError {
+    /// The diagnostic code the failure is reported under.
     pub code: &'static str,
+    /// The span of the offending reference.
     pub span: Span,
+    /// What the reader has to change.
     pub message: String,
 }
 
@@ -458,11 +465,7 @@ impl Resolver<'_> {
             // Rule 1: a locally declared type wins over every import and is
             // never ambiguous.
             if self.local.contains(&spelled) {
-                return FqName {
-                    package: self.scope.package.to_vec(),
-                    module: self.module.name.clone(),
-                    name: name.to_string(),
-                };
+                return self.own_name(name);
             }
             let candidates = self.visible.get(&spelled).cloned().unwrap_or_default();
             if candidates.is_empty() {
@@ -555,13 +558,32 @@ impl Resolver<'_> {
     }
 
     /// Records the in-package dependency, if any, and builds the name.
+    ///
+    /// An in-package module is recorded as a dependency under its *Elm* name,
+    /// which is what a document imports and what a module result reports, but
+    /// named in the IR under its module path relative to the package, the way
+    /// morphir-elm does.
     fn use_target(&mut self, target: ModuleTarget, name: &str) -> FqName {
-        if target.in_package && target.module != self.module.name {
-            self.depends_on.insert(target.module.clone());
-        }
+        let module = if target.in_package {
+            if target.module != self.module.name {
+                self.depends_on.insert(target.module.clone());
+            }
+            boundary::relative_module(self.scope.package, &target.module)
+        } else {
+            target.module
+        };
         FqName {
             package: target.package,
-            module: target.module,
+            module,
+            name: name.to_string(),
+        }
+    }
+
+    /// A name this very module declares.
+    fn own_name(&self, name: &str) -> FqName {
+        FqName {
+            package: self.scope.package.to_vec(),
+            module: boundary::relative_module(self.scope.package, &self.module.name),
             name: name.to_string(),
         }
     }
@@ -679,11 +701,7 @@ impl Resolver<'_> {
     /// A placeholder for a reference that failed to resolve; the error list is
     /// non-empty by then, so this value is never returned to a caller.
     fn unresolved(&self, name: &str) -> FqName {
-        FqName {
-            package: self.scope.package.to_vec(),
-            module: self.module.name.clone(),
-            name: name.to_string(),
-        }
+        self.own_name(name)
     }
 
     fn error(&mut self, code: &'static str, span: Span, message: String) {

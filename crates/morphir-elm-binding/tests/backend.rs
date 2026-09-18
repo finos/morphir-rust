@@ -26,10 +26,11 @@ fn sdk(module: &str, name: &str) -> FqName {
     }
 }
 
-/// `My.Types`: `type alias Id = Int` and `type Status = Active | Closed String Int`.
+/// The module `Types` of the package `My`, so its Elm name is `My.Types`:
+/// `type alias Id = Int` and `type Status = Active | Closed String Int`.
 fn sample_module() -> ResolvedModule {
     ResolvedModule {
-        name: vec!["My".to_string(), "Types".to_string()],
+        name: vec!["Types".to_string()],
         access: Access::Public,
         doc: None,
         types: vec![
@@ -85,9 +86,9 @@ fn classic_reference(module: &str, name: &str) -> Value {
 fn classic_ir() -> Value {
     json!({
         "formatVersion": 3,
-        "distribution": ["Library", [["local"], ["example"]], [], {
+        "distribution": ["Library", [["my"]], [], {
             "modules": [[
-                [["my"], ["types"]],
+                [["types"]],
                 {"access": "Public", "value": {
                     "types": [
                         [["id"], {"access": "Public", "value": {
@@ -118,7 +119,7 @@ fn classic_ir() -> Value {
 fn v4_ir() -> Value {
     let emitter = emitter_for("4").expect("a v4 emitter");
     let modules = vec![sample_module()];
-    let package = vec!["Local".to_string(), "Example".to_string()];
+    let package = vec!["My".to_string()];
     let module_irs = vec![(
         modules[0].name.clone(),
         modules[0].access,

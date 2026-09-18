@@ -298,7 +298,7 @@ fn compile(
             language_id: "elm".into(),
             documents,
             package: CompilePackage {
-                name: "local/example".into(),
+                name: "My".into(),
                 exposed_modules: None,
             },
             dependencies: vec![],
@@ -459,7 +459,7 @@ fn generate_elm(world: &mut ElmWorld) {
 fn alias_with_parameters(world: &mut ElmWorld, name: String, params: usize) {
     let result = world.result();
     assert!(result.success, "{:?}", result.diagnostics);
-    match type_info(world.ir(), &world.version, "My.Domain.Types", &name) {
+    match type_info(world.ir(), &world.version, "Domain.Types", &name) {
         TypeInfo::Alias { params: actual } => assert_eq!(actual, params),
         other => panic!("`{name}` is not an alias: {other:?}"),
     }
@@ -469,7 +469,7 @@ fn alias_with_parameters(world: &mut ElmWorld, name: String, params: usize) {
 fn custom_with_constructors(world: &mut ElmWorld, name: String, expected: String) {
     let result = world.result();
     assert!(result.success, "{:?}", result.diagnostics);
-    match type_info(world.ir(), &world.version, "My.Domain.Types", &name) {
+    match type_info(world.ir(), &world.version, "Domain.Types", &name) {
         TypeInfo::Custom { constructors } => assert_eq!(
             constructors,
             expected

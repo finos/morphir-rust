@@ -77,6 +77,30 @@ A dependency supplied in the compile request wins over a prelude package of the
 same name, so a real `Morphir.SDK` distribution shadows the built-in
 description of it.
 
+## Package names and module paths
+
+A Morphir module path is relative to its package, so the package path is
+stripped from an Elm module name that starts with it — the rule morphir-elm
+follows (`Morphir.Elm.Frontend`, `List.drop (List.length currentPackagePath)`).
+A package `My.Package` holding `My.Package.Foo.Bar` files the module as
+`Foo.Bar`, and a dependent that writes `import My.Package.Foo.Bar` finds it by
+that same prefix. Without the strip, a package this frontend compiles could not
+be imported under its natural name.
+
+Module names the host sees keep the Elm spelling. `moduleResults[].name`,
+`modules`, `dependsOn`, `exposedModules` and every diagnostic name the module
+the way the source does; only the IR module path and the module half of a fully
+qualified name are relative.
+
+Generation writes the package path back on: a module whose IR path is `Foo.Bar`
+in a package `My.Package` is generated as `src/My/Package/Foo/Bar.elm`, holding
+`module My.Package.Foo.Bar`. The rule is symmetric, so what this extension
+generates it compiles again into the very same distribution. A package whose
+modules were never named after it pays for that once: `local/example` holding a
+module `Example` generates `src/Local/Example/Example.elm` with
+`module Local.Example.Example` — a different name from the one compiled, which
+then round-trips unchanged.
+
 ## Incremental compilation
 
 The extension holds no state between calls. The host holds the baseline, and

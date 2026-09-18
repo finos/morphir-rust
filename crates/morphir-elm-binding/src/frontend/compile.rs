@@ -561,8 +561,11 @@ fn compile_one(
             run.interfaces
                 .insert(document.name().to_vec(), interface.clone());
         }
-        run.module_irs
-            .push((document.name().to_vec(), access, entry.ir.clone()));
+        run.module_irs.push((
+            boundary::relative_module(&validated.package, document.name()),
+            access,
+            entry.ir.clone(),
+        ));
         run.results.push(ModuleResult {
             name: dotted,
             uri: document.uri.clone(),
@@ -667,8 +670,11 @@ fn compile_one(
 
     run.interfaces
         .insert(document.name().to_vec(), resolved.interface());
-    run.module_irs
-        .push((document.name().to_vec(), access, ir.clone()));
+    run.module_irs.push((
+        boundary::relative_module(&validated.package, document.name()),
+        access,
+        ir.clone(),
+    ));
     run.results.push(ModuleResult {
         name: dotted,
         uri: document.uri.clone(),

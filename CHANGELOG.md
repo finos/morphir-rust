@@ -28,8 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning, so a dependency that lost a type recompiles the modules that named it instead of
   reusing IR that references nothing. A baseline with no `contextDigest` is ignored for the
   same reason. All the MEP fields are optional and defaulted, so existing payloads are
-  unchanged. The extension releases independently as `morphir-elm-native`, alongside the
-  JavaScript `morphir-elm` provider, which stays the default for Elm.
+  unchanged. A package path is a module prefix, as in morphir-elm: a package `My.Package`
+  files `My.Package.Foo.Bar` under the IR module path `Foo.Bar`, so the package can be
+  imported under its natural name when it is used as a dependency, and generation writes the
+  package path back on (`src/My/Package/Foo/Bar.elm`). Module names the host sees — module
+  results, `dependsOn`, `exposedModules`, diagnostics — keep their Elm spelling. The
+  extension releases independently as `morphir-elm-native`, alongside the JavaScript
+  `morphir-elm` provider, which stays the default for Elm.
 - **Release bundles record whether a frontend is incremental.** `.github/extensions.toml`
   takes an `incremental` flag, the release descriptor and the installed release record carry
   it, and `ReleaseRecord::extension_capabilities` reports it instead of always saying `false`.

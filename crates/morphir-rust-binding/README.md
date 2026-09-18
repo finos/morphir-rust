@@ -340,9 +340,49 @@ WASI disabled and compare native and guest results for both IR versions.
 
 The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.1.0`,
 frontend language `rust`, suffix `.rs`, backend target `rust`, and
-`irVersions: ["3", "4"]` on both capabilities. Release bundle packaging and
-CLI installation coverage are follow-on work; this increment verifies the
-guest directly through the extension protocol.
+`irVersions: ["3", "4"]` on both capabilities.
+
+## Release bundle
+
+Build and validate the installable bundle with Python 3.11+ and the workspace's
+mise tools available:
+
+```console
+mise run extension:artifact:rust
+```
+
+The task runs native tests, validates the release WASM guest, checks the guest
+through MEP, and tests installation into a fresh Morphir home. The installed
+extension compiles and generates executable Rust for IR v3 and v4 after its
+source repository has been removed.
+
+The bundle is written to `.morphir/build/extensions/rust/`: a versioned WASM
+artifact, its SHA-256 checksum and `release.json`. A clean checkout builds from
+an archived HEAD and records that commit in the descriptor. A dirty checkout
+can produce a local test bundle, without release provenance.
+
+Independent releases use tags such as `extension/rust/v0.1.0`. Download the
+assets from the [Rust v0.1.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.1.0).
+The published descriptor is named `morphir-rust-binding-0.1.0.release.json`;
+rename it to `release.json` alongside the WASM and checksum before publishing
+the directory to a local extension repository.
+
+Use the Rust Morphir CLI with frontend-bundle publication support; CLI
+`0.4.0-alpha.6` and earlier cannot publish this descriptor. The npm
+`morphir-elm` executable does not provide these installation commands.
+
+```console
+morphir extension repository init /absolute/path/to/rust-index
+morphir extension repository add rust-local --directory /absolute/path/to/rust-index
+morphir extension repository publish rust-local --bundle rust-bundle
+morphir extension install --repository rust-local morphir-rust
+```
+
+Here `rust-bundle` is the downloaded bundle directory after renaming its
+descriptor. Use the same Morphir home for installation, compilation and
+generation. Hosts predating this release's daemon update have a smaller WASM
+instruction budget and may reject larger supported source files with an
+out-of-fuel error.
 
 Round-trip tests compare supported module declarations, not source formatting,
 derive implementations, Rust ownership, or ignored values. Generated crate

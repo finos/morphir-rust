@@ -11,7 +11,7 @@ SCRIPTS_DIRECTORY = REPOSITORY_ROOT / ".github" / "scripts"
 if os.fspath(SCRIPTS_DIRECTORY) not in sys.path:
     sys.path.insert(0, os.fspath(SCRIPTS_DIRECTORY))
 
-from ci_impact import config  # noqa: E402
+from ci_impact import config, graph  # noqa: E402
 
 
 def fake_metadata() -> dict:

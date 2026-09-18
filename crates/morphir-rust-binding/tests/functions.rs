@@ -298,3 +298,20 @@ fn contextual_generic_results_coerce_function_items_and_closures() {
         }
     }
 }
+
+#[test]
+fn nested_generic_calls_preserve_inferred_function_item_identity() {
+    for version in ["3", "4"] {
+        for source in [
+            "fn id<T>(x:T)->T{x} fn first<T>(x:T,y:T)->T{x} fn a(x:i64)->i64{x} fn f()->i64{first(a,id(a))(1)}",
+            "fn id<T>(x:T)->T{x} fn first<T>(x:T,y:T)->T{x} fn f()->i64{let a=|x:i64|x;first(a,id(a))(1)}",
+        ] {
+            let result = compile(source, version);
+            assert!(
+                result.success,
+                "v{version} {source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+}

@@ -230,7 +230,10 @@ impl Lower<'_, '_> {
             let mut arguments = Vec::new();
             for ((expr, input), shape) in call.args.iter().zip(&sig.inputs).zip(&sig.input_shapes) {
                 let hint = substitute(input, &variables);
-                let (argument, actual) = self.expression_expected(expr, scope, Some(&hint))?;
+                // An inferred item/closure identity is not a pointer coercion
+                // site. Its erased IR function type would lose that distinction.
+                let hint = (!shape.substitute(&shape_variables).has_identity()).then_some(&hint);
+                let (argument, actual) = self.expression_expected(expr, scope, hint)?;
                 unify(input, &actual, &flexible, &mut variables)
                     .map_err(|e| self.error(expr, &e))?;
                 shape

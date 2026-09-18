@@ -30,6 +30,19 @@ impl CallableKind {
     }
 }
 impl CallableShape {
+    pub(super) fn has_identity(&self) -> bool {
+        match self {
+            Self::Function {
+                kind: CallableKind::Item(_) | CallableKind::Closure { .. },
+                ..
+            } => true,
+            Self::Function { inputs, output, .. } => {
+                inputs.iter().any(Self::has_identity) || output.has_identity()
+            }
+            Self::Tuple(items) => items.iter().any(Self::has_identity),
+            _ => false,
+        }
+    }
     pub(super) fn pointer(inputs: Vec<Self>, output: Self) -> Self {
         Self::Function {
             inputs,

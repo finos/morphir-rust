@@ -2,6 +2,7 @@
 
 from package_extension_test_support import *
 from extension_release_test_support import AssetFixture, extension_release, select_extension_assets
+from ci_impact_test_support import classify
 
 
 class PythonExtensionReleaseTests(unittest.TestCase):
@@ -61,6 +62,9 @@ class PythonExtensionReleaseTests(unittest.TestCase):
 
     def test_python_ci_publishes_a_downloadable_bundle(self) -> None:
         workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertIn("mise run extension:artifact:python", workflow)
-        self.assertIn("name: morphir-python-extension-bundle", workflow)
-        self.assertIn("path: .morphir/build/extensions/python/*", workflow)
+        self.assertIn('mise run "extension:artifact:${{ matrix.id }}"', workflow)
+        self.assertIn("name: morphir-${{ matrix.id }}-extension-bundle", workflow)
+        self.assertIn("path: .morphir/build/extensions/${{ matrix.id }}/*", workflow)
+        self.assertIn("include: ${{ fromJSON(needs.changes.outputs.extensions) }}", workflow)
+        extensions = classify.load_extensions(REPOSITORY_ROOT / ".github/extensions.toml")
+        self.assertIn(classify.Extension("python", "morphir-python-binding"), extensions)

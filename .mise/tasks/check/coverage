@@ -13,6 +13,15 @@ fi
 # Get all package metadata once
 METADATA=$(cargo metadata --format-version=1 --no-deps 2>/dev/null)
 
+# CI_PACKAGES is a JSON list of crate names from the CI impact plan.
+# Empty or unset means every crate.
+in_ci_packages() {
+    if [ -z "${CI_PACKAGES:-}" ] || [ "$CI_PACKAGES" = "[]" ]; then
+        return 0
+    fi
+    echo "$CI_PACKAGES" | jq -e --arg name "$1" 'index($name) != null' >/dev/null
+}
+
 # Track if any crate was checked
 CRATES_CHECKED=0
 FAILED=0
@@ -20,6 +29,9 @@ FAILED=0
 # Check each crate
 for crate_dir in crates/*; do
     crate_name=$(basename "$crate_dir")
+    if ! in_ci_packages "$crate_name"; then
+        continue
+    fi
 
     # Read threshold from Cargo.toml metadata (default 0)
     threshold=$(echo "$METADATA" |

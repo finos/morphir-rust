@@ -60,6 +60,7 @@ def fake_config_data() -> dict:
             "prefixes": [".beads/", "docs/"],
         },
         "extensions": {"crates": ["morphir-daemon"]},
+        "rust": {"paths": [".mise/tasks/test/unit"]},
         "jobs": {
             "kit-conformance": {"crates": ["morphir-projection"], "paths": [".config/mck-driver-version"]},
             "test-extism": {"crates": ["morphir-daemon", "morphir-avro-extension"], "paths": [".mise/tasks/test/extism"]},

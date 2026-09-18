@@ -94,12 +94,16 @@ def plan_changes(
             continue
         claimed = any(
             matches_pattern(pattern, path) for job in config.jobs for pattern in job.paths
-        )
+        ) or any(matches_pattern(pattern, path) for pattern in config.rust_paths)
         if not claimed:
             return full_plan(config, workspace, extensions, f"unclaimed path changed: {path}")
 
     affected = affected_closure(workspace, changed_crates)
     crates = tuple(sorted(affected))
+    cargo_packages = _cargo_packages(crates, workspace)
+    rust_paths_matched = any(
+        matches_pattern(pattern, path) for pattern in config.rust_paths for path in paths
+    )
     jobs = {
         job.name: bool(job.crates & affected)
         or any(matches_pattern(pattern, path) for pattern in job.paths for path in paths)
@@ -115,8 +119,8 @@ def plan_changes(
     return Plan(
         all=False,
         crates=crates,
-        cargo_packages=_cargo_packages(crates, workspace),
-        rust=bool(crates),
+        cargo_packages=cargo_packages,
+        rust=bool(cargo_packages) or rust_paths_matched,
         jobs=jobs,
         extensions=matrix,
         reasons=reasons,

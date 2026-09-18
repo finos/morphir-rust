@@ -86,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Impact-based CI.** CI runs only the jobs a change can affect, computed from the cargo dependency
   graph and `.github/ci-impact.toml`. Extension bundles build as a matrix.
   `CI OK` is the single required status check. Force a full run with the
-  `ci:full` label or `mise run ci:impact --full` to preview locally.
+  `ci:full` label or `mise run ci:impact -- --full` to preview locally.
 - **Breaking (document-tree transport): the canonical layout.** `morphir-common`'s document-tree
   transport is now an adapter over `morphir_core::ir::layout`: it writes `deps/<package>/@/<module>/`
   rather than `pkg/<package>/`, escapes stems the way the reference binding does, honors

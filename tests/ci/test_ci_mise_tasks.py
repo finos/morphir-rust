@@ -18,8 +18,11 @@ class MiseTaskScopingTests(unittest.TestCase):
         for name in ("coverage", "coverage-report"):
             with self.subTest(task=name):
                 script = (TASKS / "check" / name).read_text(encoding="utf-8")
-                self.assertIn("CI_PACKAGES", script)
-                self.assertIn("in_ci_packages", script)
+                self.assertIn('[ "$CI_PACKAGES" = "[]" ]', script)
+                self.assertIn(
+                    "jq -e --arg name \"$1\" 'index($name) != null'", script
+                )
+                self.assertIn('in_ci_packages "$crate_name"', script)
 
     def test_ci_impact_task_exists_and_calls_the_classifier(self) -> None:
         script = (TASKS / "ci" / "impact").read_text(encoding="utf-8")

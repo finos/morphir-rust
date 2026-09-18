@@ -44,6 +44,18 @@ prefixes = [
 # because the bundle tasks run daemon tests against the bundle.
 crates = ["morphir-daemon"]
 
+[rust]
+# Task scripts the shared Rust jobs (lint-rust, test-unit, docs, coverage) run.
+# A change here turns those jobs on for the whole workspace.
+paths = [
+  ".mise/tasks/test/unit",
+  ".mise/tasks/test/integration",
+  ".mise/tasks/check/fmt",
+  ".mise/tasks/check/lint/rust",
+  ".mise/tasks/check/coverage",
+  ".mise/tasks/check/coverage-report",
+]
+
 [jobs.kit-conformance]
 crates = ["morphir-package", "morphir-mck-adapter"]
 paths = [".config/mck-driver-version", ".mise/tasks/check/kit"]

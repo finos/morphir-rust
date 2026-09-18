@@ -73,7 +73,7 @@ def _fallback_plan(root: Path, reason: str) -> Plan:
     try:
         config = load_config(root / ".github" / "ci-impact.toml")
     except (OSError, ValueError):
-        config = ImpactConfig((), frozenset(), (), frozenset(), ())
+        config = ImpactConfig((), frozenset(), (), frozenset(), (), ())
     try:
         extensions = load_extensions(root / ".github" / "extensions.toml")
     except (OSError, ValueError, KeyError):

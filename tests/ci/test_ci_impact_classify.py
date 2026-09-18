@@ -82,6 +82,16 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual((), plan.crates)
         self.assertTrue(plan.jobs["lint-shell"])
         self.assertFalse(plan.jobs["test-extism"])
+        self.assertTrue(plan.rust)
+        self.assertEqual("", plan.cargo_packages)
+
+    def test_non_default_member_change_does_not_enable_shared_rust_jobs(self) -> None:
+        plan = self.plan("crates/morphir-ext-example/src/lib.rs")
+        self.assertFalse(plan.all)
+        self.assertEqual(("morphir-ext-example",), plan.crates)
+        self.assertEqual("", plan.cargo_packages)
+        self.assertFalse(plan.rust)
+        self.assertFalse(plan.jobs["test-extism"])
 
     def test_empty_change_set_affects_everything(self) -> None:
         plan = self.plan()

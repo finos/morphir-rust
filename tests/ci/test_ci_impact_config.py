@@ -15,6 +15,7 @@ class ImpactConfigTests(unittest.TestCase):
         self.assertEqual(frozenset({"README.md", "LICENSE"}), loaded.safe_exact)
         self.assertEqual((".beads/", "docs/"), loaded.safe_prefixes)
         self.assertEqual(frozenset({"morphir-daemon"}), loaded.extension_crates)
+        self.assertEqual((".mise/tasks/test/unit",), loaded.rust_paths)
         names = [job.name for job in loaded.jobs]
         self.assertEqual(["kit-conformance", "test-extism", "lint-shell", "docs-generated"], names)
         kit = loaded.jobs[0]

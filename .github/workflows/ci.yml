@@ -71,9 +71,10 @@ jobs:
             full=true
           elif [ -n "$PR_NUMBER" ]; then
             # Read the labels live so that adding ci:full and re-running works.
-            if gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' | grep -qx 'ci:full'; then
-              full=true
-            fi
+            labels="$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' || true)"
+            case "$labels" in
+              *ci:full*) full=true ;;
+            esac
           fi
           echo "full=$full" >> "$GITHUB_OUTPUT"
 
@@ -86,7 +87,7 @@ jobs:
         run: |
           if [ "$FULL_RUN" = "true" ]; then
             python3 .github/scripts/classify_ci_changes.py --full
-            python3 .github/scripts/classify_ci_changes.py --full --format text >&2
+            python3 .github/scripts/classify_ci_changes.py --full --format text >&2 || true
           else
             python3 .github/scripts/classify_ci_changes.py \
               --base "$BASE_SHA" \
@@ -94,7 +95,7 @@ jobs:
             python3 .github/scripts/classify_ci_changes.py \
               --base "$BASE_SHA" \
               --head "$HEAD_SHA" \
-              --format text >&2
+              --format text >&2 || true
           fi
 
   test-release-workflow:
@@ -512,6 +513,7 @@ jobs:
         with:
           name: coverage-report
           path: target/llvm-cov/html/
+          if-no-files-found: ignore
           retention-days: 14
 
   ci-ok:

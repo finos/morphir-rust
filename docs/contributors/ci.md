@@ -43,7 +43,7 @@ full suite.
 
     mise run ci:impact            # against origin/main
     mise run ci:impact main       # against another base
-    mise run ci:impact --full     # what a full run would do
+    mise run ci:impact -- --full  # what a full run would do
 
 ## Adding a crate or a job
 
@@ -52,7 +52,9 @@ full suite.
   `.mise/tasks/extension/artifact/<id>` task. The bundle matrix picks it up.
 - A new specialised job needs a `[jobs.<name>]` entry in `ci-impact.toml`, an
   output line in the `changes` job, a gate on that output, and a line in `ci-ok`.
-  `tests/ci/test_ci_impact_consistency.py` fails until all four are present.
+  `tests/ci/test_ci_workflow_definition.py` fails until the `changes` output line
+  and the workflow job exist; it only checks the gate and the `ci-ok` entry for
+  jobs listed in that test's own job table.
 
 ## Required status check
 

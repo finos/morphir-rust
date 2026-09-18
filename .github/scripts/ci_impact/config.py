@@ -24,6 +24,7 @@ class ImpactConfig:
     safe_exact: frozenset[str]
     safe_prefixes: tuple[str, ...]
     extension_crates: frozenset[str]
+    rust_paths: tuple[str, ...]
     jobs: tuple[JobRule, ...]
 
 
@@ -47,12 +48,13 @@ def _table(data: Mapping[str, Any], key: str, allowed: Sequence[str]) -> Mapping
 
 def parse_config(data: Mapping[str, Any]) -> ImpactConfig:
     """Build an ImpactConfig from decoded TOML, rejecting unknown keys."""
-    unknown = sorted(set(data) - {"global", "safe", "extensions", "jobs"})
+    unknown = sorted(set(data) - {"global", "safe", "extensions", "rust", "jobs"})
     if unknown:
         raise ValueError(f"unknown top-level keys: {', '.join(unknown)}")
     global_table = _table(data, "global", ["paths"])
     safe_table = _table(data, "safe", ["exact", "prefixes"])
     extensions_table = _table(data, "extensions", ["crates"])
+    rust_table = _table(data, "rust", ["paths"])
     jobs_table = data.get("jobs", {})
     if not isinstance(jobs_table, dict):
         raise ValueError("[jobs] must be a table")
@@ -75,6 +77,7 @@ def parse_config(data: Mapping[str, Any]) -> ImpactConfig:
         safe_exact=frozenset(_strings(safe_table.get("exact"), "safe.exact")),
         safe_prefixes=_strings(safe_table.get("prefixes"), "safe.prefixes"),
         extension_crates=frozenset(_strings(extensions_table.get("crates"), "extensions.crates")),
+        rust_paths=_strings(rust_table.get("paths"), "rust.paths"),
         jobs=tuple(jobs),
     )
 

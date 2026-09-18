@@ -32,7 +32,7 @@ def render_github(plan: Plan) -> str:
 def render_text(plan: Plan) -> str:
     lines = [f"all: {_flag(plan.all)}"]
     lines.append("crates: " + (", ".join(plan.crates) if plan.crates else "(none)"))
-    lines.append("cargo packages: " + (plan.cargo_packages or "(workspace)" if plan.all else plan.cargo_packages or "(none)"))
+    lines.append("cargo packages: " + ("(workspace)" if plan.all else (plan.cargo_packages or "(none)")))
     lines.append(f"rust jobs: {'run' if plan.rust else 'skip'}")
     for name, enabled in plan.jobs.items():
         lines.append(f"{name}: {'run' if enabled else 'skip'}")

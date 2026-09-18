@@ -9,7 +9,7 @@ type Environment = BTreeMap<String, Type>;
 
 pub(crate) fn validate_function(
     definition: &ValueDefinition,
-    context: &crate::patterns::Context,
+    context: &crate::functions::Context,
 ) -> Result<(), String> {
     let ValueBody::Expression(body) = &definition.body else {
         return Err("Only expression bodies can be validated as Rust functions".into());
@@ -82,7 +82,7 @@ pub(crate) fn scalar(module: &str, name: &str) -> Type {
 pub(crate) fn infer(
     value: &Value,
     environment: &Environment,
-    context: &crate::patterns::Context,
+    context: &crate::functions::Context,
 ) -> Result<Type, String> {
     let result = match value {
         Value::Unit(_) => Type::Unit(Default::default()),
@@ -126,11 +126,15 @@ pub(crate) fn infer(
                 return Err("Empty matches are not supported".into());
             }
             let patterns = cases.iter().map(|case| case.0.clone()).collect::<Vec<_>>();
-            crate::patterns::exhaustive(&subject_type, &patterns, context)?;
+            crate::patterns::exhaustive(&subject_type, &patterns, &context.patterns)?;
             let mut result = None;
             for case in cases {
                 let mut scope = environment.clone();
-                scope.extend(crate::patterns::bindings(&case.0, &subject_type, context)?);
+                scope.extend(crate::patterns::bindings(
+                    &case.0,
+                    &subject_type,
+                    &context.patterns,
+                )?);
                 let arm_type = infer(&case.1, &scope, context)?;
                 if let Some(expected) = &result {
                     require_type(&arm_type, expected)?;
@@ -157,7 +161,7 @@ pub(crate) fn infer(
             scope.insert(name.to_canonical_string(), declared.clone());
             infer(continuation, &scope, context)?
         }
-        Value::Apply(..) => {
+        Value::Apply(..) if comparison(value).is_ok() => {
             let (operator, left, right) = comparison(value)?;
             let left_type = infer(left, environment, context)?;
             require_type(&infer(right, environment, context)?, &left_type)?;
@@ -167,6 +171,45 @@ pub(crate) fn infer(
                 );
             }
             scalar("basics", "bool")
+        }
+        Value::Reference(attributes, name) => context
+            .signatures
+            .get(&name.to_canonical_string())
+            .ok_or_else(|| format!("Unknown or non-expression function reference {name}"))?
+            .instantiate(attributes.inferred_type.as_deref())?,
+        Value::Apply(_, function, argument) => {
+            let function_type = infer(function, environment, context)?;
+            let Type::Function(_, input, output) = function_type else {
+                return Err("Application requires a function value".into());
+            };
+            require_type(&infer(argument, environment, context)?, &input)?;
+            *output
+        }
+        Value::Lambda(_, pattern, body) => {
+            let input = pattern
+                .attributes()
+                .inferred_type
+                .as_deref()
+                .ok_or("Lambda parameters require an explicit input type annotation")?;
+            let bindings = crate::patterns::bindings(pattern, input, &context.patterns)?;
+            crate::patterns::exhaustive(input, std::slice::from_ref(pattern), &context.patterns)?;
+            for name in crate::functions::free_variables(value) {
+                let ty = environment
+                    .get(&name)
+                    .ok_or_else(|| format!("Unknown captured value {name}"))?;
+                if !crate::functions::copy_type(ty) {
+                    return Err(format!(
+                        "Lambda capture {name} requires a supported immutable Copy type"
+                    ));
+                }
+            }
+            let mut scope = environment.clone();
+            scope.extend(bindings);
+            Type::Function(
+                Default::default(),
+                Box::new(input.clone()),
+                Box::new(infer(body, &scope, context)?),
+            )
         }
         _ => return Err("Unsupported Rust value expression".into()),
     };
@@ -238,7 +281,7 @@ pub(crate) fn comparison(value: &Value) -> Result<(Comparison, &Value, &Value), 
 mod tests {
     use super::*;
     fn validate_function(definition: &ValueDefinition) -> Result<(), String> {
-        super::validate_function(definition, &crate::patterns::Context::default())
+        super::validate_function(definition, &crate::functions::Context::default())
     }
     use morphir_core::ir::v4::{Literal, Type, Value, ValueBody};
 
@@ -294,7 +337,7 @@ mod tests {
             infer(
                 &leaked,
                 &BTreeMap::new(),
-                &crate::patterns::Context::default()
+                &crate::functions::Context::default()
             )
             .unwrap_err()
             .contains("Unknown value")
@@ -424,7 +467,7 @@ mod tests {
             &infer(
                 &variable,
                 &environment,
-                &crate::patterns::Context::default()
+                &crate::functions::Context::default()
             )
             .unwrap(),
             &scalar("basics", "int")

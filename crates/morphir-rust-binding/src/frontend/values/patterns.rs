@@ -19,6 +19,7 @@ impl Lower<'_, '_> {
         &mut self,
         expression: &syn::ExprMatch,
         scope: &mut Scope,
+        expected: Option<&Type<Attrs>>,
     ) -> Outcome<Typed> {
         self.context.source.attributes(&expression.attrs, false)?;
         let (subject, subject_type) = self.expression(&expression.expr, scope)?;
@@ -37,7 +38,8 @@ impl Lower<'_, '_> {
                 &mut arm_scope,
                 &mut BTreeSet::new(),
             )?;
-            let (body, ty) = self.expression(&arm.body, &mut arm_scope)?;
+            self.install_shapes(&pattern, &self.shape(&subject)?);
+            let (body, ty) = self.expression_expected(&arm.body, &mut arm_scope, expected)?;
             if let Some(expected) = &result_type {
                 self.same(&arm.body, expected, &ty)?;
             } else {
@@ -58,7 +60,7 @@ impl Lower<'_, '_> {
         ))
     }
 
-    fn match_pattern(
+    pub(super) fn match_pattern(
         &mut self,
         pattern: &syn::Pat,
         ty: &Type<Attrs>,

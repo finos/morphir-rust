@@ -34,6 +34,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile.workspace = true
 regex-lite = "0.1"
 
+[[test]]
+name = "acceptance"
+harness = false
+
 [features]
 wasm-host-tests = ["dep:extism"]
 

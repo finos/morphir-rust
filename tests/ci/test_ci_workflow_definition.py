@@ -29,102 +29,158 @@ def extract_job_blocks(workflow: str) -> dict[str, str]:
     }
 
 
+GATED_JOBS = {
+    "lint-rust": "job_rust",
+    "test-unit": "job_rust",
+    "docs": "job_rust",
+    "coverage": "job_rust",
+    "kit-conformance": "job_kit_conformance",
+    "workspace-wasm": "job_workspace_wasm",
+    "test-native-extension": "job_test_native_extension",
+    "test-daemon-extension": "job_test_daemon_extension",
+    "test-extism": "job_test_extism",
+    "example-wasm": "job_example_wasm",
+    "lint-shell": "job_lint_shell",
+    "lint-yaml": "job_lint_yaml",
+    "docs-generated": "job_docs_generated",
+    "test-release-workflow": "job_test_release_workflow",
+}
+
+RUST_CACHE_GROUPS = {
+    "native": (
+        "lint-rust",
+        "test-unit",
+        "docs",
+        "kit-conformance",
+        "workspace-wasm",
+        "test-native-extension",
+        "test-daemon-extension",
+    ),
+    "wasm": ("test-extism", "example-wasm", "extension-bundle"),
+    "coverage": ("coverage",),
+}
+
+QUICK_JOBS = ("changes", "test-release-workflow", "lint-shell", "lint-yaml", "docs-generated", "ci-ok")
+
+
+def gate(output: str) -> str:
+    return (
+        "    if: ${{ !cancelled() && needs.changes.result == 'success' && "
+        f"(needs.changes.outputs.all == 'true' || needs.changes.outputs.{output} == 'true') }}}}"
+    )
+
+
 class CiWorkflowDefinitionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         cls.jobs = extract_job_blocks(cls.workflow)
 
-    def test_changes_job_classifies_changed_paths_with_full_history(self) -> None:
-        self.assertIn("changes", self.jobs)
-        self.assertLess(list(self.jobs).index("changes"), list(self.jobs).index("lint-rust"))
-        changes = self.jobs["changes"]
+    def test_workflow_triggers_include_schedule_and_manual_full_runs(self) -> None:
+        header = self.workflow.split("jobs:\n", 1)[0]
+        self.assertIn("  schedule:\n    - cron:", header)
+        self.assertIn("  workflow_dispatch:\n    inputs:\n      full:", header)
+        self.assertIn('  pull_request:\n    branches: ["main"]\n', header)
+        self.assertNotIn("labeled", header)
 
-        self.assertIn("    outputs:\n      expensive: ${{ steps.classify.outputs.expensive }}", changes)
-        self.assertIn("      - uses: actions/checkout@v7", changes)
+    def test_concurrency_cancels_only_off_main(self) -> None:
+        header = self.workflow.split("jobs:\n", 1)[0]
+        self.assertIn("  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}", header)
+        self.assertIn("  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", header)
+
+    def test_every_job_has_a_timeout(self) -> None:
+        for job_name, job in self.jobs.items():
+            with self.subTest(job=job_name):
+                minutes = 15 if job_name in QUICK_JOBS else 45
+                self.assertIn(f"    timeout-minutes: {minutes}\n", job)
+
+    def test_changes_job_classifies_changed_paths_with_full_history(self) -> None:
+        self.assertEqual("changes", list(self.jobs)[0])
+        changes = self.jobs["changes"]
+        for output in ("all", "crates", "cargo_packages", "extensions", *GATED_JOBS.values()):
+            with self.subTest(output=output):
+                self.assertIn(f"      {output}: ${{{{ steps.classify.outputs.{output} }}}}", changes)
+        self.assertIn("      pull-requests: read", changes)
         self.assertIn("          fetch-depth: 0", changes)
-        self.assertIn(
-            "          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}",
-            changes,
-        )
+        self.assertNotIn("jdx/mise-action", changes)
+        self.assertIn("          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}", changes)
         self.assertIn("          HEAD_SHA: ${{ github.sha }}", changes)
+        self.assertIn("gh pr view", changes)
+        self.assertIn("--json labels", changes)
+        self.assertIn("ci:full", changes)
+        self.assertIn("github.event_name == 'schedule'", changes)
+        self.assertIn("github.event.inputs.full == 'true'", changes)
         self.assertIn("          python3 .github/scripts/classify_ci_changes.py", changes)
         self.assertIn("            --base \"$BASE_SHA\"", changes)
         self.assertIn("            --head \"$HEAD_SHA\"", changes)
 
-    def test_lint_rust_is_the_root_of_the_expensive_job_chain(self) -> None:
-        lint_rust = self.jobs["lint-rust"]
-
-        self.assertIn("    needs: changes", lint_rust)
-        self.assertIn(
-            "    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.expensive != 'false') }}",
-            lint_rust,
-        )
-
-        for job_name in (
-            "build-wasm",
-            "workspace-wasm",
-            "test-native-extension",
-            "test-daemon-extension",
-            "test-unit",
-            "docs",
-            "coverage",
-        ):
+    def test_every_gated_job_depends_on_changes_and_uses_its_output(self) -> None:
+        for job_name, output in GATED_JOBS.items():
             with self.subTest(job=job_name):
                 job = self.jobs[job_name]
-                self.assertIn("    needs: [lint-rust]", job)
-                self.assertIn(
-                    "    if: ${{ !cancelled() && needs.lint-rust.result == 'success' }}",
-                    job,
-                )
+                self.assertIn("    needs: changes\n", job)
+                self.assertIn(gate(output), job)
 
-    def test_every_job_declares_a_ci_classification(self) -> None:
-        expected_jobs = {
-            "changes",
-            "test-release-workflow",
-            "lint-shell",
-            "lint-yaml",
-            "docs-generated",
-            "lint-rust",
-            "kit-conformance",
-            "build-wasm",
-            "workspace-wasm",
-            "test-native-extension",
-            "test-daemon-extension",
-            "test-unit",
-            "docs",
-            "coverage",
-        }
+    def test_rust_jobs_share_caches_by_profile_and_save_only_on_main(self) -> None:
+        self.assertNotIn("actions/cache@", self.workflow)
+        for shared_key, job_names in RUST_CACHE_GROUPS.items():
+            for job_name in job_names:
+                with self.subTest(job=job_name):
+                    job = self.jobs[job_name]
+                    self.assertIn("        uses: Swatinem/rust-cache@v2\n", job)
+                    self.assertIn(f"          shared-key: {shared_key}\n", job)
+                    self.assertIn("          save-if: ${{ github.ref == 'refs/heads/main' }}\n", job)
+                    self.assertIn("          cache-on-failure: true\n", job)
+        cached_jobs = {name for names in RUST_CACHE_GROUPS.values() for name in names}
+        for job_name in set(self.jobs) - cached_jobs:
+            with self.subTest(job=job_name):
+                self.assertNotIn("rust-cache", self.jobs[job_name])
 
-        self.assertEqual(expected_jobs, set(self.jobs))
+    def test_extension_bundle_job_uses_the_matrix_from_changes(self) -> None:
+        job = self.jobs["extension-bundle"]
+        self.assertIn("    needs: changes\n", job)
+        self.assertIn(
+            "    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.extensions != '[]' }}",
+            job,
+        )
+        self.assertIn("      fail-fast: false\n", job)
+        self.assertIn("        include: ${{ fromJSON(needs.changes.outputs.extensions) }}", job)
+        self.assertIn('        run: mise run "extension:artifact:${{ matrix.id }}"', job)
+        self.assertIn("          name: morphir-${{ matrix.id }}-extension-bundle", job)
+        self.assertIn("          path: .morphir/build/extensions/${{ matrix.id }}/*", job)
+
+    def test_rust_jobs_scope_cargo_to_affected_packages(self) -> None:
+        self.assertIn("        run: mise run check:fmt", self.jobs["lint-rust"])
+        self.assertIn("        run: mise run check:lint:rust -- ${{ needs.changes.outputs.cargo_packages }}", self.jobs["lint-rust"])
+        self.assertIn("        run: mise run test:unit -- ${{ needs.changes.outputs.cargo_packages }}", self.jobs["test-unit"])
+        self.assertIn("        run: mise run test:integration -- ${{ needs.changes.outputs.cargo_packages }}", self.jobs["test-unit"])
+        self.assertIn("        run: cargo doc --no-deps ${{ needs.changes.outputs.cargo_packages }}", self.jobs["docs"])
+        self.assertIn("          CI_PACKAGES: ${{ needs.changes.outputs.crates }}", self.jobs["coverage"])
+
+    def test_every_job_is_expected(self) -> None:
+        self.assertEqual({"changes", "extension-bundle", "ci-ok", *GATED_JOBS}, set(self.jobs))
+
+    def test_ci_ok_aggregates_every_other_job(self) -> None:
+        ci_ok = self.jobs["ci-ok"]
+        self.assertEqual("ci-ok", list(self.jobs)[-1])
+        self.assertIn("    if: ${{ always() }}", ci_ok)
+        for job_name in ("changes", "extension-bundle", *GATED_JOBS):
+            with self.subTest(job=job_name):
+                self.assertIn(f"      - {job_name}\n", ci_ok)
+        self.assertIn("needs.changes.result != 'success'", ci_ok)
+        self.assertIn("contains(needs.*.result, 'failure')", ci_ok)
+        self.assertIn("contains(needs.*.result, 'cancelled')", ci_ok)
 
     def test_generated_docs_are_checked_independently(self) -> None:
         docs_generated = self.jobs["docs-generated"]
-
-        self.assertNotIn("    needs:", docs_generated)
-        self.assertNotIn("\n    if:", docs_generated)
-        self.assertIn("      - name: Checkout repository", docs_generated)
-        self.assertIn("        uses: actions/checkout@v7", docs_generated)
-        self.assertIn(
-            "        uses: jdx/mise-action@v4\n        with:\n          install: false",
-            docs_generated,
-        )
+        self.assertIn("        uses: jdx/mise-action@v4\n        with:\n          install: false", docs_generated)
         self.assertIn("        run: mise run --skip-tools docs:generate", docs_generated)
         self.assertIn(
             "          if ! docs_status=\"$(git status --porcelain --untracked-files=all -- docs/)\"; then",
             docs_generated,
         )
-        self.assertIn(
-            '            echo "::error::Unable to inspect generated documentation."',
-            docs_generated,
-        )
-        self.assertIn("          if [ -n \"$docs_status\" ]; then", docs_generated)
-        self.assertIn(
-            "            git status --short --untracked-files=all -- docs/",
-            docs_generated,
-        )
+        self.assertIn('            echo "::error::Unable to inspect generated documentation."', docs_generated)
         self.assertIn("            git diff -- docs/", docs_generated)
-        self.assertIn("            exit 1", docs_generated)
 
     def test_generated_docs_drift_check_fails_when_git_inspection_fails(self) -> None:
         docs_generated = self.jobs["docs-generated"]
@@ -224,26 +280,6 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
                 env=git_environment,
             )
             self.assertIn("?? docs/llms.txt", status.stdout.splitlines())
-
-    def test_expensive_docs_job_only_builds_rust_documentation(self) -> None:
-        docs = self.jobs["docs"]
-
-        self.assertIn("    needs: [lint-rust]", docs)
-        self.assertIn(
-            "    if: ${{ !cancelled() && needs.lint-rust.result == 'success' }}",
-            docs,
-        )
-        self.assertIn("        run: cargo doc --no-deps", docs)
-        self.assertNotIn("docs:generate", docs)
-        self.assertNotIn("git diff --quiet docs/", docs)
-
-    def test_release_shell_and_yaml_checks_are_always_independent(self) -> None:
-        for job_name in ("test-release-workflow", "lint-shell", "lint-yaml"):
-            with self.subTest(job=job_name):
-                job = self.jobs[job_name]
-                self.assertNotIn("changes", job)
-                self.assertNotIn("lint-rust", job)
-
 
 if __name__ == "__main__":
     unittest.main()

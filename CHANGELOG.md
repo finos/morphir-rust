@@ -83,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- CI runs only the jobs a change can affect, computed from the cargo dependency
+- **Impact-based CI.** CI runs only the jobs a change can affect, computed from the cargo dependency
   graph and `.github/ci-impact.toml`. Extension bundles build as a matrix.
   `CI OK` is the single required status check. Force a full run with the
   `ci:full` label or `mise run ci:impact --full` to preview locally.

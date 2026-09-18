@@ -10,6 +10,7 @@
 
 mod backend;
 mod frontend;
+mod functions;
 mod patterns;
 mod values;
 

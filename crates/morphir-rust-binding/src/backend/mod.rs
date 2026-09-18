@@ -97,8 +97,9 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<GenerateResult> {
             .items
             .push(tokens);
     }
+    let context = values::semantic_context(&renderer)?;
     for function in &package.functions {
-        let tokens = values::render(&mut renderer, function)?;
+        let tokens = values::render(&mut renderer, function, &context)?;
         root.ensure(&module_names(&function.owner.module)?, Access::Public)
             .items
             .push(tokens);

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Python functions support typed calls, same-package function imports and references, unary `Callable` annotations, captured lambdas and explicit currying in IR v3 and v4. Native, executable Python and packaged WASM tests cover the supported subset; unsupported arities and ill-typed calls return diagnostics.
+- Rust frontend and backend support named calls, function values and typed
+  lambdas in IR v3 and v4, including immutable scalar and tuple Copy captures.
+  Executable native and WASM tests cover calls, aliases and higher-order values.
+
 - Python frontend and backend support IR v3 alongside v4, including private modules, imports, ADTs, fixed tuples and conditional functions. V3 output uses the shared classic model with inferred value types; incoming types are checked before generation. The v3 codec's signed 64-bit integer limit is diagnosed; v4 retains arbitrary precision. Native and installed WASM tests cover both versions, and release descriptors advertise both.
 - Rust frontend and backend support exhaustive pattern matching in IR v3 and v4:
   enums, Option/Result, nested tuples, literals, wildcards and bound variables.

@@ -58,6 +58,14 @@ impl Lower<'_, '_> {
                     }
                 }
             }
+            syn::Type::BareFn(function) => {
+                for input in &function.inputs {
+                    self.check_storage_type_inner(&input.ty, parameters, aliases)?;
+                }
+                if let syn::ReturnType::Type(_, output) = &function.output {
+                    self.check_storage_type_inner(output, parameters, aliases)?;
+                }
+            }
             syn::Type::Tuple(tuple) => {
                 for ty in &tuple.elems {
                     self.check_storage_type_inner(ty, parameters, aliases)?;

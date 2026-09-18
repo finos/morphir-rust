@@ -55,6 +55,7 @@ pub(in crate::ir) fn decode(value: serde_json::Value) -> Outcome<v::IRFile> {
     let v::Distribution::Library(library) = &mut ir.distribution else {
         unreachable!()
     };
+    let signatures = values::signatures(library)?;
     let aliases = crate::modules::tuple_aliases(&library.package_name, library.def.modules.iter())?;
     for module in &package.modules {
         for (_, function) in &module.definition.value.values {
@@ -81,7 +82,7 @@ pub(in crate::ir) fn decode(value: serde_json::Value) -> Outcome<v::IRFile> {
         for definition in module.value.values.values_mut() {
             clear_empty_doc(&mut definition.value.doc);
             // Encoding checks every supplied inferred type, including intermediate comparison applications.
-            super::definition(&definition.value.value, &aliases)?;
+            super::definition(&definition.value.value, &aliases, &signatures)?;
             if let v::ValueBody::Expression(body) = &mut definition.value.value.body {
                 *body = super::expressions::erase(body)?;
             }

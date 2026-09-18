@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Python ADT, tuple and conditional function frontend and backend for Morphir"
+description = "Python ADT, tuple, function and lambda frontend and backend for Morphir"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
@@ -22,6 +22,7 @@ ruff_text_size.workspace = true
 serde_json = "1.0"
 
 [dev-dependencies]
+tempfile.workspace = true
 cucumber = "0.23"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

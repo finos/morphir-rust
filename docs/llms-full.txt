@@ -912,9 +912,11 @@ Source: https://finos.github.io/morphir-rust/tutorials/python-extension
 The `morphir-python-binding` crate provides the `morphir-python` frontend and
 backend. Start with its [modeling example and supported subset](../../crates/morphir-python-binding/README.md).
 The extension compiles frozen dataclasses, named unions, fixed tuples and annotated conditional
-functions to Morphir IR v3 or v4, and generates Python 3.12 or later code from those definitions.
+functions, typed calls and unary lambdas to Morphir IR v3 or v4, and generates
+Python 3.12 or later code from those definitions.
 
-This checkout also supports IR v3, private modules, and multiple source modules with imports.
+This checkout also supports IR v3, private modules, multiple source modules with
+imports, and higher-order functions using unary `Callable` annotations.
 That addition requires a development bundle built from this checkout; the
 published Python `0.1.0` bundle supports one public module per request and IR v4 only.
 
@@ -1048,7 +1050,8 @@ For example, `src/domain/models.py` may define `Decision`, and
 The resulting IR contains `domain/models` and `domain/rules`; generation returns
 `domain/models.py` and `domain/rules.py`. Nested directories are namespace
 packages, without `__init__.py` files. Keep all referenced modules in the source
-set. Cross-package dependencies and imported function calls remain unsupported.
+set. Same-package function imports and typed calls work too; cross-package
+dependencies remain unsupported.
 
 With a CLI and development bundle containing project-context support, the
 configured source directory is sufficient:
@@ -1093,6 +1096,7 @@ morphir compile --ir-version 4 --output compiled-v4
 The backend detects the version from the input document. Through MEP, set
 `options.irVersion` to `3` or `3.0.0`, or to `4` or `4.0.0`. Both capabilities
 advertise versions `3` and `4`. The supported ADTs, tuples, conditional functions,
+typed calls, unary `Callable` annotations and captured lambdas,
 imports and private modules work with both versions. V3 functions carry typed
 value annotations, which the backend checks before generating Python. The current
 v3 codec limits whole-number literals to signed 64-bit integers; v4 retains

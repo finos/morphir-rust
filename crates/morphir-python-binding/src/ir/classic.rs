@@ -88,15 +88,17 @@ fn tpe(value: &v::Type) -> Outcome<Type> {
     })
 }
 
-fn definition(value: &v::ValueDefinition, aliases: &values::TupleAliases) -> Outcome<Definition> {
-    let parameters = value
-        .input_types
-        .iter()
-        .map(|(name, tpe)| Ok((name.clone(), values::resolve_aliases(tpe, aliases)?)))
-        .collect::<Outcome<_>>()?;
+fn definition(
+    value: &v::ValueDefinition,
+    aliases: &values::TupleAliases,
+    signatures: &values::Signatures,
+) -> Outcome<Definition> {
     let v::ValueBody::Expression(body) = &value.body else {
         return Err(values::unsupported("Expected an expression body"));
     };
+    let mut clean = value.clone();
+    clean.body = v::ValueBody::Expression(expressions::erase(body)?);
+    let typed = values::annotate_function(&clean, aliases, signatures)?;
     Ok(Definition {
         input_types: value
             .input_types
@@ -113,7 +115,7 @@ fn definition(value: &v::ValueDefinition, aliases: &values::TupleAliases) -> Out
             .output_type
             .as_ref()
             .ok_or_else(|| values::unsupported("Expected a return type"))?)?,
-        body: expressions::encode(body, &parameters, aliases)?,
+        body: expressions::encode(body, &typed, aliases)?,
     })
 }
 
@@ -121,6 +123,7 @@ pub(super) fn encode(ir: &v::IRFile) -> Outcome<c::Distribution> {
     let v::Distribution::Library(library) = &ir.distribution else {
         return Err(values::unsupported("Expected a Library"));
     };
+    let signatures = values::signatures(library)?;
     let aliases = crate::modules::tuple_aliases(&library.package_name, library.def.modules.iter())?;
     let modules = library
         .def
@@ -188,7 +191,10 @@ pub(super) fn encode(ir: &v::IRFile) -> Outcome<c::Distribution> {
                         canonical_name(key)?,
                         c::AccessControlled {
                             access: access(item.access),
-                            value: c::Documented::new("", definition(&item.value.value, &aliases)?),
+                            value: c::Documented::new(
+                                "",
+                                definition(&item.value.value, &aliases, &signatures)?,
+                            ),
                         },
                     ))
                 })

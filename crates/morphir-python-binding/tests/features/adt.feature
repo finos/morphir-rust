@@ -1,4 +1,15 @@
 Feature: Python algebraic data types
+  Scenario Outline: Higher-order functions and closures roundtrip in both IR versions
+    Given IR version <version>
+    And Python higher-order functions and captured lambdas
+    When I compile the model and generate Python
+    Then compiling the generated Python preserves the model
+
+    Examples:
+      | version |
+      | 3       |
+      | 4       |
+
   Scenario: Model declarations survive a Python and Morphir roundtrip
     Given a Python model with a product and a sum with payloads
     When I compile the model and generate Python

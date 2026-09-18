@@ -10,7 +10,7 @@ use morphir_extension_sdk::CompileRequest;
 use ruff_text_size::Ranged;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, Vec<String>)> {
+pub(super) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)> {
     if request.documents.is_empty() {
         return Err(error("PY001", "Expected at least one Python source module"));
     }
@@ -119,9 +119,5 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(serde_json::Value, V
             },
         }),
     };
-    Ok((
-        with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(ir))
-            .map_err(|e| error("PY005", e.to_string()))?,
-        names.into_iter().collect(),
-    ))
+    Ok((ir, names.into_iter().collect()))
 }

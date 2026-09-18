@@ -23,3 +23,14 @@ Feature: Python algebraic data types
     Given Python modules with imported ADTs and tuple aliases
     When I compile the model and generate Python
     Then compiling the generated Python preserves the model
+
+  Scenario Outline: Versioned multi-module models roundtrip
+    Given IR version <version>
+    And Python modules with imported ADTs and tuple aliases
+    When I compile the model and generate Python
+    Then compiling the generated Python preserves the model
+
+    Examples:
+      | version |
+      | 3       |
+      | 4       |

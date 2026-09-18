@@ -20,6 +20,12 @@ struct PythonExtensionDriver {
 #[tokio::test]
 #[ignore = "requires MORPHIR_PYTHON_BUNDLE from extension:artifact:python"]
 async fn packaged_python_installs_and_roundtrips_offline() {
+    for version in ["3", "4"] {
+        packaged_roundtrip(version).await;
+    }
+}
+
+async fn packaged_roundtrip(version: &str) {
     use morphir_common::home::MorphirHome;
     use morphir_daemon::extensions::{InvokeOutcome, activate_transport};
     use morphir_distribution::{
@@ -91,7 +97,7 @@ async fn packaged_python_installs_and_roundtrips_offline() {
         },
         dependencies: vec![],
         options: CompileOptions {
-            ir_version: "4".into(),
+            ir_version: version.into(),
             ..Default::default()
         },
     };

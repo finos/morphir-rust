@@ -16,7 +16,7 @@ name = "Morphir Python"
 mep_versions = ["0.1"]
 targets = ["python"]
 languages = [{ id = "python", file_extensions = [".py"] }]
-ir_versions = ["4"]
+ir_versions = ["3", "4"]
 release_with_workspace = true
 
 [extensions.openapi]

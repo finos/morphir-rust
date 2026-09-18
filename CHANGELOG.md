@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Python frontend and backend support IR v3 alongside v4, including private modules, imports, ADTs, fixed tuples and conditional functions. V3 output uses the shared classic model with inferred value types; incoming types are checked before generation. The v3 codec's signed 64-bit integer limit is diagnosed; v4 retains arbitrary precision. Native and installed WASM tests cover both versions, and release descriptors advertise both.
 - Rust frontend and backend support exhaustive pattern matching in IR v3 and v4:
   enums, Option/Result, nested tuples, literals, wildcards and bound variables.
   Match guards and other advanced pattern forms remain deferred.

@@ -8,12 +8,12 @@ declarations, parses them into Ruff's AST, and uses Ruff's generator to write
 Python. All four direct Ruff component dependencies are pinned together.
 
 This is an initial implementation of a defined subset of Python 3.12 and later
-and Morphir IR v4. It supports ADT declarations, fixed tuples and annotated pure conditional
+and Morphir IR v3 and v4. It supports ADT declarations, fixed tuples and annotated pure conditional
 functions. It does not implement all Python syntax or all Morphir IR nodes, and
 does not claim full Morphir Compatibility Kit conformance for this extension.
 It has no dependency on `finos/morphir-python`.
 
-The examples below describe this checkout. Multi-module support is not included
+The examples below describe this checkout. Multi-module, private-module and IR v3 support are not included
 in the published `extension/python/v0.1.0` bundle. Build this checkout and use the
 [local installation guide](../../docs/tutorials/python-extension.md) to try it.
 
@@ -186,7 +186,8 @@ module imports and postponed annotations, so mutually referring record types
 can be generated without eager cross-module type imports. Recursive tuple aliases
 remain unsupported. No imports execute during compilation or generation.
 
-Run `cargo run -p morphir-python-binding --example python_modules` for a complete
+Run `cargo run -p morphir-python-binding --example python_modules -- 3` for a v3
+example, or omit the final argument for v4. Both provide a complete
 native MEP example with imported ADTs and tuple aliases.
 
 ## Conditional function bodies
@@ -219,7 +220,7 @@ return as its fallback, for example `if flag: return first` followed by
 returning `if`/`else` blocks, preserving which branch is evaluated. It may use a
 conditional expression inside a condition or comparison operand.
 
-Function and parameter names generate as snake_case. Integer literals preserve
+Function and parameter names generate as snake_case. For IR v4, integer literals preserve
 arbitrary precision, including decimal, hexadecimal, octal and binary source
 literals. The backend emits decimal integers. Float literals must be finite. Python's implicit
 truthiness and numeric coercions are not part of this subset. These restrictions
@@ -305,19 +306,44 @@ of this binding, not claims that Morphir IR cannot represent those concepts.
 
 ## Morphir IR support and conformance
 
-Both directions use `morphir-core::ir::v4` and its JSON codec. The frontend emits
-`formatVersion: 4` and canonical names; the backend reads supported v4 documents
-through that codec. There is no v1-v3 migration in this extension.
+Both directions support IR v3 and v4 through the shared `morphir-core` models.
+The frontend uses one v4 language model and encodes the requested version. The
+backend detects the document version, migrates v3 through the shared core API,
+and applies the same Python subset checks. IR v1 and v2 are unsupported.
+Readers follow the shared compatibility intervals `[3.0.0,3.1.0)` and
+`[4.0.0,4.1.0)`, accepting later patches but rejecting later minor versions.
+Compilation targets the baseline versions 3.0.0 and 4.0.0.
+
+| Version | Encoding and attributes |
+| --- | --- |
+| v3 | `formatVersion: 3`, classic tagged arrays and word-array names; function values carry checked inferred types |
+| v4 | `formatVersion: 4`, canonical names and the v4 JSON codec; emitted node attributes remain empty |
+
+V3 generation accepts typed value annotations, checks them against the supported
+expression types, and regenerates them on recompilation. Empty documentation
+wrappers normalize to absent documentation. Other documentation and metadata
+remain unsupported. Untyped v3 function bodies are not accepted by the current
+typed distribution reader. V3 whole-number literals must fit the shared codec's
+signed 64-bit range, from -9223372036854775808 to 9223372036854775807. Larger
+Python integer literals produce a diagnostic for v3 and remain supported in v4.
+These are current binding/codec limits, not limits attributed to Morphir IR.
+V3 compilation also checks that every name survives the shared legacy name
+conversion. For example, `a_b` would become the initialism `AB`, so it is rejected
+with `PY003` for v3; rename it or target v4. Initialisms such as `APIResponse`
+remain supported.
+
+The type and value subset below applies to both versions; the displayed JSON
+examples elsewhere in this README use v4.
 
 | IR area | Frontend emits / backend accepts |
 | --- | --- |
 | Distribution | `Library`, one or more public or private modules, empty dependency map; definitions within modules are public |
 | Type definitions | Non-generic record aliases, fixed tuple aliases, custom types with public constructors |
 | Type expressions | The four SDK scalar references, same-package type references across modules, fixed tuples; a record at a record-alias body |
-| Value definitions | `ExpressionBody` with annotated inputs and a required output type |
+| Value definitions | V4 `ExpressionBody`, or the classic v3 value-definition object, with annotated inputs and a required output type |
 | Value expressions | Parameter `Variable`, scalar `Literal`, fixed `Tuple`, `IfThenElse`, and fully applied two-argument SDK scalar comparisons |
-| Literal kinds | `BoolLiteral`, arbitrary-precision `IntegerLiteral`, finite `FloatLiteral`, `StringLiteral` |
-| Metadata | Default/empty node attributes; documentation and non-empty retained type/value attributes are rejected |
+| Literal kinds | `BoolLiteral`, finite `FloatLiteral`, `StringLiteral`; v4 arbitrary-precision `IntegerLiteral` or v3 signed 64-bit `WholeNumberLiteral` |
+| Metadata | Empty type attributes; v4 empty value attributes or v3 checked inferred types. Nonempty documentation and other retained metadata are rejected |
 
 Unsupported IR includes `Specs` and `Application` distributions, dependencies,
 private types, constructors and values, generic types, opaque types, empty custom types, extensible
@@ -345,6 +371,7 @@ Current evidence is scoped to the checked-in cases:
 | --- | --- |
 | [ADT integration tests](tests/pipeline.rs) | Expected IR mappings, independent custom-type input, recursive references, naming and rejection boundaries |
 | [Function and tuple integration tests](tests/conditionals.rs) | Exact `IfThenElse`/tuple encodings, alias expansion, branch/type validation and round-trips |
+| [Version integration tests](tests/ir_versions.rs) | V3/v4 roundtrips, private imports, independently authored v3 input, integer bounds and annotation validation |
 | [Module integration tests](tests/modules.rs) | Absolute and relative imports, nested modules, cyclic record references, import collisions and cross-module tuple checking |
 | [Acceptance scenarios](tests/features/adt.feature) | Supported models pass through the public extension API; unsupported input returns diagnostics |
 | [WASM host test](../morphir-daemon/tests/python_extension.rs) | Capability negotiation and compile/generate/recompile through an actual Extism guest; run by CI |
@@ -386,7 +413,7 @@ whose false path reaches the end of the function without a return, and
 
 Compile functions with `typesOnly=false`. A request containing functions with
 `typesOnly=true` returns a diagnostic; bodies are never silently dropped. ADT-only
-sources accept either value. `irVersion` accepts `4` or `4.0.0`. The CLI's
+sources accept either value. `irVersion` accepts `3`, `3.0.0`, `4` or `4.0.0`. The CLI's
 `outputDir` string option is accepted as context; `sourceRootUri` determines
 module paths for absolute document URIs. Neither grants filesystem access.
 `emitParseStage=true` produces warning `PY006`; combining it
@@ -445,7 +472,7 @@ are written to `.morphir/build/extensions/python/`.
 CI uploads these files as `morphir-python-extension-bundle`. Tags such as
 `extension/python/v0.1.0` publish the same tested bundle as GitHub release assets.
 The descriptor declares language `python` (`.py`), target `python`, MEP `0.1`
-and IR `4`; these declarations cover only the subset documented above. The
+and IR `3` and `4`; these declarations cover only the subset documented above. The
 release is a Morphir WASM extension, not a PyPI package or a CPython import module.
 
 For installation with the parent Morphir CLI, see the

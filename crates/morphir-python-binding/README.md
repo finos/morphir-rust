@@ -13,9 +13,10 @@ functions, typed calls and unary lambdas. It does not implement all Python synta
 does not claim full Morphir Compatibility Kit conformance for this extension.
 It has no dependency on `finos/morphir-python`.
 
-The examples below describe this checkout. Multi-module, private-module, IR v3 and higher-order function support are not included
-in the published `extension/python/v0.1.0` bundle. Build this checkout and use the
-[local installation guide](../../docs/tutorials/python-extension.md) to try it.
+The examples below describe the published `extension/python/v0.2.0` bundle. The earlier
+`extension/python/v0.1.0` bundle does not include multi-module, private-module, IR v3 or higher-order
+function support, and Morphir CLI `0.4.0-beta.1` and later cannot compile with it. Use the
+[installation guide](../../docs/tutorials/python-extension.md) to install the bundle.
 
 ## A complete model
 
@@ -538,7 +539,7 @@ fresh Morphir Home after removing the source repository. The three bundle files
 are written to `.morphir/build/extensions/python/`.
 
 CI uploads these files as `morphir-python-extension-bundle`. Tags such as
-`extension/python/v0.1.0` publish the same tested bundle as GitHub release assets.
+`extension/python/v0.2.0` publish the same tested bundle as GitHub release assets.
 The descriptor declares language `python` (`.py`), target `python`, MEP `0.1`
 and IR `3` and `4`; these declarations cover only the subset documented above. The
 release is a Morphir WASM extension, not a PyPI package or a CPython import module.

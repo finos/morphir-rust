@@ -453,8 +453,8 @@ also do not enforce argument types at runtime.
 
 ## Current boundary
 
-Supported fields are scalars, same-package references and fixed tuples of at least two
-elements. The imports described above, frozen dataclasses, non-generic
+Supported fields are scalars, same-package references, unary `Callable` types and
+fixed tuples of at least two elements. The imports described above, frozen dataclasses, non-generic
 `type` aliases of dataclass variants or fixed tuples, and annotated pure functions
 are the accepted module statements.
 Comments and whitespace are not preserved. Methods, field defaults,
@@ -464,7 +464,7 @@ are rejected. Constructor calls, assignments, loops, bare returns,
 decorated or async functions, parameter defaults, variadic parameters,
 positional-only or keyword-only parameters, chained comparisons, and boolean
 operators are not supported yet. The backend also rejects private types, constructors and values, documentation,
-attributes, dependencies and IR type forms outside this subset. Failures return
+unsupported metadata, dependencies and IR type forms outside this subset. Failures return
 diagnostics with no partial IR or artifacts.
 
 For example, this is valid Python but rejected with `PY004`, because an integer

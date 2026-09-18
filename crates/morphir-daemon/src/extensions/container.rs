@@ -585,11 +585,12 @@ mod tests {
 
     #[tokio::test]
     async fn exhausts_the_fuel_budget_for_non_terminating_guests() {
-        let container = ExtensionContainer::from_bytes_with_timeout(
+        let container = ExtensionContainer::from_bytes_with_limits(
             "runtime-limit-fixture",
             &guest_with_non_terminating_handle(),
             MorphirHostFunctions::default(),
             Duration::from_secs(2),
+            100_000,
         )
         .unwrap();
 

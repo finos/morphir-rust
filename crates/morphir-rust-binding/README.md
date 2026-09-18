@@ -115,17 +115,60 @@ coercion are not supported. Built-in `Box` is rejected in executable signatures
 and local annotations because its type-only erasure would lose Rust ownership
 information.
 
-The backend supports scalar, tuple, generic and named domain types in function
-signatures. Anonymous structural records and higher-order function signatures
-are rejected in this increment; their standalone type declarations remain
-supported.
+The backend supports scalar, tuple, generic, named domain and function types in
+function signatures. Anonymous structural records are rejected in executable
+signatures; their standalone type declarations remain supported.
 
-Calls, arithmetic operators, loops, mutation, destructuring outside `match`, closures,
-early `return`, and macro invocations are outside this increment. Ordinary
+Arithmetic operators, loops, mutation, destructuring `let` bindings, early
+`return`, and macro invocations are outside this increment. Ordinary
 functions must be safe, synchronous and non-const, without an ABI, lifetimes or
 trait bounds. Unsupported expressions and invalid types return diagnostics
 without partial IR or generated artifacts. `typesOnly: true` continues to omit
 ordinary functions with a warning without validating their bodies.
+
+## Calls and lambdas in IR v3 and v4
+
+Both directions support named calls, function values and typed lambdas:
+
+```rust
+pub fn positive(value: i64) -> bool { value > 0 }
+pub fn invoke(predicate: fn(i64) -> bool, value: i64) -> bool {
+    predicate(value)
+}
+pub fn above(limit: i64, value: i64) -> bool {
+    let predicate = |n: i64| n > limit;
+    predicate(value)
+}
+pub fn run(value: i64) -> bool { invoke(positive, value) }
+```
+
+The frontend resolves ordinary functions within the source module, including
+forward references and unconstrained generic calls. Function pointer types and
+aliases may appear in parameters, results and local annotations. Every lambda
+parameter needs a type annotation; its result can be inferred or annotated.
+Irrefutable tuple, wildcard and variable parameter patterns are supported.
+Calls preserve Rust argument count, including zero-argument calls.
+Callable aliases are expanded for expression checking; other aliases retain
+the existing nominal checking rules.
+
+Lambdas can capture immutable `i64`, `f64`, `bool`, `char`, Unit and tuples of
+these types, and can be called repeatedly. A `move` lambda is accepted within
+that same subset. Capturing lambdas cannot coerce to a Rust `fn` pointer;
+noncapturing lambdas can. Mutable captures, owned non-Copy captures, captures of
+function values, trait-based callables, methods and recursion are deferred.
+Calls to annotated native/external declarations are also deferred.
+
+IR uses standard Reference, Apply, Lambda and Function nodes. Function types are
+curried, and zero-argument source callables use a Unit argument when represented
+as function values. A reference to a zero-input IR definition evaluates that
+definition's result. The backend emits named definitions with ordinary Rust
+arguments and represents function values as `Rc<dyn Fn(A) -> B>`. Saturated
+named calls use direct Rust calls; other applications invoke the generated
+callable. Partial applications that would retain non-Copy arguments return a
+diagnostic. Generated callable handles can be reused without consuming them.
+The generated API therefore uses `Rc` callbacks even where source uses `fn`.
+Multiargument lambdas also use nested IR lambdas, so parameters before the last
+must have supported Copy types even when the source call supplies every argument.
 
 ## Pattern matching in IR v3 and v4
 
@@ -297,14 +340,54 @@ WASI disabled and compare native and guest results for both IR versions.
 
 The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.1.0`,
 frontend language `rust`, suffix `.rs`, backend target `rust`, and
-`irVersions: ["3", "4"]` on both capabilities. Release bundle packaging and
-CLI installation coverage are follow-on work; this increment verifies the
-guest directly through the extension protocol.
+`irVersions: ["3", "4"]` on both capabilities.
+
+## Release bundle
+
+Build and validate the installable bundle with Python 3.11+ and the workspace's
+mise tools available:
+
+```console
+mise run extension:artifact:rust
+```
+
+The task runs native tests, validates the release WASM guest, checks the guest
+through MEP, and tests installation into a fresh Morphir home. The installed
+extension compiles and generates executable Rust for IR v3 and v4 after its
+source repository has been removed.
+
+The bundle is written to `.morphir/build/extensions/rust/`: a versioned WASM
+artifact, its SHA-256 checksum and `release.json`. A clean checkout builds from
+an archived HEAD and records that commit in the descriptor. A dirty checkout
+can produce a local test bundle, without release provenance.
+
+Independent releases use tags such as `extension/rust/v0.1.0`. Download the
+assets from the [Rust v0.1.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.1.0).
+The published descriptor is named `morphir-rust-binding-0.1.0.release.json`;
+rename it to `release.json` alongside the WASM and checksum before publishing
+the directory to a local extension repository.
+
+Use the Rust Morphir CLI with frontend-bundle publication support; CLI
+`0.4.0-alpha.6` and earlier cannot publish this descriptor. The npm
+`morphir-elm` executable does not provide these installation commands.
+
+```console
+morphir extension repository init /absolute/path/to/rust-index
+morphir extension repository add rust-local --directory /absolute/path/to/rust-index
+morphir extension repository publish rust-local --bundle rust-bundle
+morphir extension install --repository rust-local morphir-rust
+```
+
+Here `rust-bundle` is the downloaded bundle directory after renaming its
+descriptor. Use the same Morphir home for installation, compilation and
+generation. Hosts predating this release's daemon update have a smaller WASM
+instruction budget and may reject larger supported source files with an
+out-of-fuel error.
 
 Round-trip tests compare supported module declarations, not source formatting,
 derive implementations, Rust ownership, or ignored values. Generated crate
 module wrappers and backend-only helper types exceed the frontend's one-module
 subset. Additional expressions, imports and whole-crate name resolution are
-follow-on work. Conditional and pattern tests compile and execute source and
+follow-on work. Conditional, pattern and callable tests compile and execute source and
 generated Rust against fixed expected results for both IR versions, including
 the native and WASM extension protocols.

@@ -43,6 +43,11 @@ prefixes = [
 # When one of these crates is affected, every extension bundle is rebuilt,
 # because the bundle tasks run daemon tests against the bundle.
 crates = ["morphir-daemon"]
+paths = [
+  ".github/extensions.toml",
+  "scripts/package_extension.py",
+  "scripts/extension_packaging/**",
+]
 
 [rust]
 # Task scripts the shared Rust jobs (lint-rust, test-unit, docs, coverage) run.
@@ -83,7 +88,6 @@ crates = [
   "morphir-daemon",
   "morphir-wasm-binding",
   "morphir-avro-extension",
-  "morphir-rust-binding",
 ]
 paths = [".mise/tasks/test/extism"]
 

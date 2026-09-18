@@ -29,6 +29,72 @@ mod conditional;
 #[path = "support/pattern.rs"]
 mod pattern;
 
+#[path = "support/functions.rs"]
+mod functions;
+
+#[test]
+#[ignore = "requires a built Rust WASM guest"]
+fn wasm_compiles_and_generates_functions_and_lambdas_in_both_versions() {
+    let mut plugin = guest();
+    initialize(&mut plugin);
+    for version in ["3", "4"] {
+        let mut request = a_type_model(version);
+        request.options.types_only = false;
+        request.documents[0].text = functions::SOURCE.into();
+        let native = RustExtension.compile(request.clone()).unwrap();
+        assert!(native.success, "{:?}", native.diagnostics);
+        let compiled: CompileResult = serde_json::from_value(result(
+            &mut plugin,
+            ExtensionRequest::new(methods::COMPILE, request, 2).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&compiled).unwrap(),
+            serde_json::to_value(native).unwrap()
+        );
+        let request = GenerateRequest {
+            ir: compiled.ir.unwrap(),
+            target: "rust".into(),
+            options: Default::default(),
+        };
+        let native = RustExtension.generate(request.clone()).unwrap();
+        assert!(native.success, "{:?}", native.diagnostics);
+        let generated: GenerateResult = serde_json::from_value(result(
+            &mut plugin,
+            ExtensionRequest::new(methods::GENERATE, request, 3).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&generated).unwrap(),
+            serde_json::to_value(native).unwrap()
+        );
+        functions::assert_executable(&generated.artifacts[0].content);
+        for source in [
+            "fn f(x: String) -> String { let p = || x; p() }",
+            "fn f(x: i64) -> i64 { let p = |n: i64| n; p(true) }",
+            "fn f(x: i64) -> fn(i64) -> bool { |n: i64| n > x }",
+            "fn id<T>(x:T)->T{x} fn f(g:fn(i64)->fn(i64)->i64,x:i64)->i64{id::<fn(i64,i64)->i64>(g)(x)(x)}",
+            "fn first<T>(a:T,b:T)->T{a} fn a(x:i64)->i64{x} fn b(x:i64)->i64{x} fn f()->i64{first(a,b)(1)}",
+        ] {
+            let mut request = a_type_model(version);
+            request.options.types_only = false;
+            request.documents[0].text = source.into();
+            let native = RustExtension.compile(request.clone()).unwrap();
+            assert!(!native.success, "accepted {source}");
+            assert!(native.ir.is_none());
+            let rejected: CompileResult = serde_json::from_value(result(
+                &mut plugin,
+                ExtensionRequest::new(methods::COMPILE, request, 4).unwrap(),
+            ))
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(rejected).unwrap(),
+                serde_json::to_value(native).unwrap()
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires a built Rust WASM guest"]
 fn wasm_compiles_and_generates_pattern_functions_in_both_versions() {

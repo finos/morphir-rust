@@ -8,6 +8,9 @@ mod conditional;
 #[path = "support/pattern.rs"]
 mod pattern;
 
+#[path = "support/functions.rs"]
+mod functions;
+
 #[derive(Debug, Default)]
 struct TestDriver {
     source: String,
@@ -162,6 +165,16 @@ fn main() {
         );
     }
 
+    fn assert_function_results(&self) {
+        let generated = self.generated.as_ref().expect("generate Rust first");
+        assert!(
+            generated.diagnostics.is_empty(),
+            "{:?}",
+            generated.diagnostics
+        );
+        functions::assert_executable(&generated.artifacts[0].content);
+    }
+
     fn assert_conditional_results(&self) {
         let generated = self.generated.as_ref().expect("generate Rust first");
         assert!(
@@ -176,6 +189,16 @@ fn main() {
 #[derive(Debug, Default, World)]
 struct RustWorld {
     driver: TestDriver,
+}
+
+#[given("Rust functions using calls and typed lambdas with Copy captures")]
+fn function_model(world: &mut RustWorld) {
+    world.driver.source = functions::SOURCE.into();
+}
+
+#[then("the generated functions return the expected callable results")]
+fn function_results(world: &mut RustWorld) {
+    world.driver.assert_function_results();
 }
 
 #[given("Rust functions matching enums, options, results, tuples and literals")]

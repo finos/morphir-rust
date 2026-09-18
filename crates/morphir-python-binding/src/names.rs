@@ -43,6 +43,8 @@ const RESERVED: &[&str] = &[
     "float",
     "bool",
     "tuple",
+    "Callable",
+    "callable",
 ];
 
 pub(crate) fn identifier(text: &str) -> Outcome<Name> {

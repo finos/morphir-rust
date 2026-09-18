@@ -14,6 +14,29 @@ pub(super) struct Context<'a> {
 impl Context<'_> {
     pub fn ty(&self, ty: &syn::Type, parameters: &[syn::Ident]) -> Outcome<Type<Attrs>> {
         match ty {
+            syn::Type::BareFn(function)
+                if function.unsafety.is_none()
+                    && function.abi.is_none()
+                    && function.lifetimes.is_none()
+                    && function.variadic.is_none() =>
+            {
+                let mut inputs = function
+                    .inputs
+                    .iter()
+                    .map(|i| self.ty(&i.ty, parameters))
+                    .collect::<Outcome<Vec<_>>>()?;
+                if inputs.is_empty() {
+                    inputs.push(Type::Unit(Attrs::None));
+                }
+                let output = match &function.output {
+                    syn::ReturnType::Default => Type::Unit(Attrs::None),
+                    syn::ReturnType::Type(_, t) => self.ty(t, parameters)?,
+                };
+                Ok(inputs.iter().rev().fold(output, |output, input| {
+                    Type::Function(Attrs::None, Box::new(input.clone()), Box::new(output))
+                }))
+            }
+
             syn::Type::Tuple(tuple) if tuple.elems.is_empty() => Ok(Type::Unit(Attrs::None)),
             syn::Type::Tuple(tuple) => Ok(Type::Tuple(
                 Attrs::None,

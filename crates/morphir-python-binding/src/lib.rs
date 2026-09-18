@@ -1,4 +1,4 @@
-//! Python ADT, tuple and conditional function extension for Morphir.
+//! Python ADT, tuple, function and lambda extension for Morphir.
 //!
 //! Source is parsed statically, never imported or executed.
 //! See the crate README for the supported Python subset.
@@ -43,9 +43,7 @@ impl Extension for PythonExtension {
             name: "Morphir Python".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             types: vec![ExtensionType::Frontend, ExtensionType::Backend],
-            description: Some(
-                "Python algebraic data types, tuples and conditional functions".into(),
-            ),
+            description: Some("Python algebraic data types, tuples, functions and lambdas".into()),
             license: Some("Apache-2.0".into()),
             ..Default::default()
         }

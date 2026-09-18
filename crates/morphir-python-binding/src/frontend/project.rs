@@ -75,12 +75,25 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)
                 .map_err(|e| at(e, &document.uri, &document.text, syntax.syntax().range()))
         })
         .collect::<Outcome<Vec<_>>>()?;
+    let mut signatures = crate::values::Signatures::new();
+    for ((document, _, syntax), scope) in parsed.iter().zip(&scopes) {
+        for statement in syntax.suite() {
+            if let ruff_python_ast::Stmt::FunctionDef(function) = statement {
+                let super::Symbol::Function(name) = &scope[function.name.as_str()] else {
+                    unreachable!()
+                };
+                let signature = super::functions::signature(function, scope)
+                    .map_err(|e| at(e, &document.uri, &document.text, function.range()))?;
+                signatures.insert(name.to_canonical_string(), signature);
+            }
+        }
+    }
     let lower_modules = |aliases| -> Outcome<BTreeMap<_, _>> {
         parsed
             .iter()
             .zip(&scopes)
             .map(|((document, id, syntax), scope)| {
-                lower(syntax.suite(), scope, aliases)
+                lower(syntax.suite(), scope, aliases, &signatures)
                     .map(|module| {
                         (
                             id.canonical.clone(),

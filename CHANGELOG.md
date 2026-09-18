@@ -32,6 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Without this an incremental guest fails activation with "frontend capabilities disagreed
   with discovery". The field is written only when true, so descriptors for frontends that are
   not incremental are byte-identical to the ones before this change.
+- Python functions support typed calls, same-package function imports and references, unary `Callable` annotations, captured lambdas and explicit currying in IR v3 and v4. Native, executable Python and packaged WASM tests cover the supported subset; unsupported arities and ill-typed calls return diagnostics.
+- Rust extension v0.1.0 bundles include the frontend/backend WASM guest, checksum
+  and release descriptor for IR v3 and v4. CI selects Rust bundles through the
+  extension registry and validates offline installation and executable generated
+  Rust; artifact-task and shared packaging changes also select affected bundles.
+- Installed WASM extensions receive a one-billion-instruction request budget so
+  supported Rust compiler inputs can complete. Execution timeout and memory
+  limits remain unchanged.
+
+- Rust frontend and backend support named calls, function values and typed
+  lambdas in IR v3 and v4, including immutable scalar and tuple Copy captures.
+  Executable native and WASM tests cover calls, aliases and higher-order values.
+
 - Python frontend and backend support IR v3 alongside v4, including private modules, imports, ADTs, fixed tuples and conditional functions. V3 output uses the shared classic model with inferred value types; incoming types are checked before generation. The v3 codec's signed 64-bit integer limit is diagnosed; v4 retains arbitrary precision. Native and installed WASM tests cover both versions, and release descriptors advertise both.
 - Rust frontend and backend support exhaustive pattern matching in IR v3 and v4:
   enums, Option/Result, nested tuples, literals, wildcards and bound variables.

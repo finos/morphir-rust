@@ -77,7 +77,9 @@ async fn packaged_roundtrip(version: &str) {
             match $ready.invoke::<$result>($method, $request).await {
                 InvokeOutcome::Success(ready, result) => (ready, result),
                 InvokeOutcome::Rejected(_, error) => panic!("request rejected: {error}"),
-                InvokeOutcome::Failed(failure) => panic!("MEP failed: {}", failure.error()),
+                InvokeOutcome::Failed(failure) => {
+                    panic!("{} (IR {}) failed: {}", $method, version, failure.error())
+                }
             }
         };
     }
@@ -108,6 +110,13 @@ async fn packaged_roundtrip(version: &str) {
         methods::COMPILE,
         request(vec![
             SourceDocument {
+                uri: "functions.py".into(),
+                language_id: "python".into(),
+                version: 1,
+                text: include_str!("../../morphir-python-binding/tests/fixtures/functions.py")
+                    .into(),
+            },
+            SourceDocument {
                 uri: "models.py".into(),
                 language_id: "python".into(),
                 version: 1,
@@ -135,7 +144,13 @@ async fn packaged_roundtrip(version: &str) {
         }
     );
     assert!(generated.success, "{:?}", generated.diagnostics);
-    assert_eq!(generated.artifacts.len(), 2);
+    assert_eq!(generated.artifacts.len(), 3);
+    assert!(
+        generated
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "functions.py" && artifact.content.contains("lambda"))
+    );
     let (_, again) = invoke!(
         ready,
         CompileResult,

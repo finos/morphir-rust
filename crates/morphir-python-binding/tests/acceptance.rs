@@ -120,6 +120,11 @@ fn tuples(world: &mut PythonWorld) {
     world.driver.source = include_str!("fixtures/tuples.py").into();
 }
 
+#[given("Python higher-order functions and captured lambdas")]
+fn higher_order(world: &mut PythonWorld) {
+    world.driver.source = include_str!("fixtures/functions.py").into();
+}
+
 #[given("Python modules with imported ADTs and tuple aliases")]
 fn modules(world: &mut PythonWorld) {
     world.driver.source = format!(

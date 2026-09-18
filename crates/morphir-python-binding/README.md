@@ -1,4 +1,4 @@
-# Python models and conditional functions
+# Python models, functions and lambdas
 
 `morphir-python-binding` implements the `morphir-python` extension in Rust.
 It provides MEP `frontend/compile` and `backend/generate` through the Morphir
@@ -9,11 +9,11 @@ Python. All four direct Ruff component dependencies are pinned together.
 
 This is an initial implementation of a defined subset of Python 3.12 and later
 and Morphir IR v3 and v4. It supports ADT declarations, fixed tuples and annotated pure conditional
-functions. It does not implement all Python syntax or all Morphir IR nodes, and
+functions, typed calls and unary lambdas. It does not implement all Python syntax or all Morphir IR nodes, and
 does not claim full Morphir Compatibility Kit conformance for this extension.
 It has no dependency on `finos/morphir-python`.
 
-The examples below describe this checkout. Multi-module, private-module and IR v3 support are not included
+The examples below describe this checkout. Multi-module, private-module, IR v3 and higher-order function support are not included
 in the published `extension/python/v0.1.0` bundle. Build this checkout and use the
 [local installation guide](../../docs/tutorials/python-extension.md) to try it.
 
@@ -62,7 +62,7 @@ assert choose(False, approved, pending) is pending
 ```
 
 This caller is ordinary application code, not input to the Morphir frontend.
-The frontend rejects its imports, calls, assignments and assertions.
+The frontend rejects its constructor calls, assignments and assertions.
 
 ## Mapping
 
@@ -78,6 +78,9 @@ The frontend rejects its imports, calls, assignments and assertions.
 | `(x, y)` or `return x, y` | Tuple value with ordered elements |
 | Local or imported type annotation | Fully qualified reference to its defining module in the current package |
 | Annotated function | Value definition with typed parameters and an expression body |
+| `Callable[[A], B]` | Unary `Function` type from `A` to `B` |
+| Named function / function call | Same-package `Reference` / ordered `Apply` nodes |
+| `lambda item: body` | `Lambda` with a named wildcard `AsPattern` and a lexically scoped body |
 | Returning `if`/`elif`/`else`, or `a if condition else b` | `IfThenElse` with `condition`, `then`, and `else` members |
 
 The scalar references are exactly `morphir/SDK:basics#int`,
@@ -163,11 +166,12 @@ Supported imports include `from models import Decision`, optional `as` aliases,
 `import models`, `import domain.models as model`, and relative imports such as
 `from .models import Decision` or `from ..models import Decision` inside nested
 modules. `from domain import models` also binds a source module. Imports must
-resolve to files supplied in the request, and named type imports must refer to
-declarations in that module. Importing functions, constructors or re-exported
+resolve to files supplied in the request, and named type or function imports must refer to
+declarations in that module. Importing constructors or re-exported
 names, wildcard imports, lazy imports and external package imports are rejected.
-The existing `dataclasses.dataclass` and `__future__.annotations` imports remain
-supported. A sum's variant classes must stay in the same module as its alias.
+The standard imports `dataclasses.dataclass`, `__future__.annotations`, and
+`Callable` from `typing` or `collections.abc` are supported. A sum's variant
+classes must stay in the same module as its alias.
 
 Relative document paths are relative to the source root. For multiple absolute
 paths or file URIs, set the MEP option `sourceRootUri`; the CLI does this when
@@ -190,6 +194,68 @@ Run `cargo run -p morphir-python-binding --example python_modules -- 3` for a v3
 example, or omit the final argument for v4. Both provide a complete
 native MEP example with imported ADTs and tuple aliases.
 
+## Functions and lambdas
+
+Both IR v3 and v4 support these declarations:
+
+```python
+from collections.abc import Callable
+
+def identity(value: int) -> int:
+    return value
+
+def apply(transform: Callable[[int], int], value: int) -> int:
+    return transform(value)
+
+def retain(value: int) -> Callable[[int], int]:
+    return lambda ignored: value
+
+def run(value: int) -> int:
+    return apply(lambda item: identity(item), value)
+```
+
+Functions may call other annotated functions in the supplied package, including
+forward references, recursion, and functions imported from private modules.
+Calls are checked against the declared parameter and return types. Lambdas can
+capture enclosing parameters and shadow a parameter with the same source name.
+Different spellings that would collapse two lexical bindings to the same Morphir
+name are rejected. Generated global function references use module aliases that
+avoid parameter and lambda names, including when referencing the current module.
+Keep generated files together and import them as modules when executing them.
+
+Import `Callable` from `collections.abc` or `typing`, optionally with an alias;
+qualified forms such as `typing.Callable` also work after importing the module.
+`Callable` and `callable` are reserved declaration names. Lambda input types come
+from an annotated return, a function argument, or a containing tuple/conditional.
+An immediately called lambda can infer its input from its argument.
+
+Morphir function types are unary. First-class function values therefore use
+exactly one parameter: `Callable[[A], B]`, a unary named function, or a unary
+lambda. For currying, nest the types and lambdas explicitly:
+
+```python
+def select(flag: bool) -> Callable[[int], Callable[[int], int]]:
+    return lambda first: lambda second: first if flag else second
+
+def selected(value: int) -> int:
+    return select(True)(value)(0)
+```
+
+Ordinary `def` functions may still have multiple parameters, but their direct
+calls must supply all arguments positionally. A zero-parameter `def` call maps
+to a value `Reference` and generates as a zero-argument call. Zero-parameter or
+multi-parameter definitions cannot themselves be passed as callable values.
+Partial applications of multi-parameter definitions, multi-argument `Callable`
+annotations or lambdas, keyword arguments, starred arguments, defaults,
+variadics, untyped lambda inputs without context, and lambda destructuring
+patterns are outside this binding's subset. Nested `def`, assignments and
+general Python inference remain unsupported.
+
+The [function fixture](tests/fixtures/functions.py) is complete frontend input.
+The [function tests](tests/functions.rs) cover structural round trips, independently
+authored IR and executable Python results. CI also sends these functions through
+the packaged WASM extension in both IR versions.
+
 ## Conditional function bodies
 
 This function can be added to `models.py`:
@@ -205,8 +271,8 @@ def classify(value: int) -> str:
 ```
 
 Functions need parameter and return type annotations. They may return parameters,
-`bool`, `int`, `float` or `str` literals, fixed tuples, comparisons, and conditional
-expressions.
+`bool`, `int`, `float` or `str` literals, fixed tuples, comparisons, conditional
+expressions, typed calls, function references and contextual lambdas.
 Parameters can also carry local ADTs or fixed tuples. Conditions must have type
 `bool`; both branches must have the same type and match the declared return type.
 Scalar comparisons `==`, `!=`, `<`, `<=`, `>` and `>=` map respectively to SDK
@@ -254,7 +320,7 @@ equivalent expanded type encoding, for example
 `{"Reference": {"fqname": "morphir/SDK:basics#bool"}}` in place of the compact
 string. Such spelling changes do not change the type.
 
-The frontend emits explicit parameter and return types, but does not attach
+For v4, the frontend emits explicit parameter and return types, but does not attach
 inferred-type or source-location attributes to each IR value node. Its expression
 checks cover the supported subset; they are not a general Morphir type checker.
 
@@ -339,21 +405,22 @@ examples elsewhere in this README use v4.
 | --- | --- |
 | Distribution | `Library`, one or more public or private modules, empty dependency map; definitions within modules are public |
 | Type definitions | Non-generic record aliases, fixed tuple aliases, custom types with public constructors |
-| Type expressions | The four SDK scalar references, same-package type references across modules, fixed tuples; a record at a record-alias body |
+| Type expressions | The four SDK scalar references, same-package type references across modules, fixed tuples, unary `Function`; a record at a record-alias body |
 | Value definitions | V4 `ExpressionBody`, or the classic v3 value-definition object, with annotated inputs and a required output type |
-| Value expressions | Parameter `Variable`, scalar `Literal`, fixed `Tuple`, `IfThenElse`, and fully applied two-argument SDK scalar comparisons |
+| Value expressions | Parameter `Variable`, scalar `Literal`, fixed `Tuple`, `IfThenElse`, same-package function `Reference`, typed `Apply`, unary `Lambda`, and fully applied two-argument SDK scalar comparisons |
+| Lambda patterns | `AsPattern` over `WildcardPattern`, binding one parameter; v3 pattern annotations are checked |
 | Literal kinds | `BoolLiteral`, finite `FloatLiteral`, `StringLiteral`; v4 arbitrary-precision `IntegerLiteral` or v3 signed 64-bit `WholeNumberLiteral` |
 | Metadata | Empty type attributes; v4 empty value attributes or v3 checked inferred types. Nonempty documentation and other retained metadata are rejected |
 
 Unsupported IR includes `Specs` and `Application` distributions, dependencies,
 private types, constructors and values, generic types, opaque types, empty custom types, extensible
-records, unit and function types, free type variables, and other SDK types such
+records, unit types, free type variables, and other SDK types such
 as List, Maybe and Decimal. Arbitrary aliases such as an alias directly to `int`
 are not supported. Type references must resolve within the supplied package.
 
 Unsupported value forms include record construction or field access,
-constructor application, general calls or references, lists, arithmetic,
-lambdas, let bindings, pattern matching, record updates, holes, and
+constructor application, external calls or references, lists, arithmetic,
+let bindings, general pattern matching, record updates, holes, and
 `NativeBody`, `ExternalBody` or `IncompleteBody` definitions. A valid Morphir IR
 document can therefore still be outside this extension's supported subset.
 
@@ -371,6 +438,7 @@ Current evidence is scoped to the checked-in cases:
 | --- | --- |
 | [ADT integration tests](tests/pipeline.rs) | Expected IR mappings, independent custom-type input, recursive references, naming and rejection boundaries |
 | [Function and tuple integration tests](tests/conditionals.rs) | Exact `IfThenElse`/tuple encodings, alias expansion, branch/type validation and round-trips |
+| [Functions and lambdas](tests/functions.rs) | V3/v4 calls, closures, independent IR, annotation and scope checks; opt-in Python execution runs in CI |
 | [Version integration tests](tests/ir_versions.rs) | V3/v4 roundtrips, private imports, independently authored v3 input, integer bounds and annotation validation |
 | [Module integration tests](tests/modules.rs) | Absolute and relative imports, nested modules, cyclic record references, import collisions and cross-module tuple checking |
 | [Acceptance scenarios](tests/features/adt.feature) | Supported models pass through the public extension API; unsupported input returns diagnostics |
@@ -385,18 +453,18 @@ also do not enforce argument types at runtime.
 
 ## Current boundary
 
-Supported fields are scalars, same-package references and fixed tuples of at least two
-elements. The imports described above, frozen dataclasses, non-generic
+Supported fields are scalars, same-package references, unary `Callable` types and
+fixed tuples of at least two elements. The imports described above, frozen dataclasses, non-generic
 `type` aliases of dataclass variants or fixed tuples, and annotated pure functions
 are the accepted module statements.
 Comments and whitespace are not preserved. Methods, field defaults,
 inheritance, arbitrary decorators or imports, docstrings, generic parameters,
 containers, optional fields, quoted annotations and cross-package dependencies
-are rejected. Function calls, constructor calls, assignments, loops, bare returns,
+are rejected. Constructor calls, assignments, loops, bare returns,
 decorated or async functions, parameter defaults, variadic parameters,
 positional-only or keyword-only parameters, chained comparisons, and boolean
 operators are not supported yet. The backend also rejects private types, constructors and values, documentation,
-attributes, dependencies and IR type forms outside this subset. Failures return
+unsupported metadata, dependencies and IR type forms outside this subset. Failures return
 diagnostics with no partial IR or artifacts.
 
 For example, this is valid Python but rejected with `PY004`, because an integer

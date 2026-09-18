@@ -21,7 +21,13 @@ esac
 cd "$REPO_ROOT"
 
 STAGING_DIR="$REPO_ROOT/.morphir/build/extensions/elm-native"
-WASM="target/wasm32-unknown-unknown/release/morphir_elm_binding.wasm"
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+case "$TARGET_DIR" in
+    /*) ;;
+    *) TARGET_DIR="$REPO_ROOT/$TARGET_DIR" ;;
+esac
+export CARGO_TARGET_DIR="$TARGET_DIR"
+WASM="$TARGET_DIR/wasm32-unknown-unknown/release/morphir_elm_binding.wasm"
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "Python 3.11 or newer is required to package extensions" >&2
@@ -113,6 +119,7 @@ require_snapshot_inputs() {
     require_snapshot_file "tests/ci/package_extension_test_support.py"
     require_snapshot_file "tests/ci/test_package_extension_packaging.py"
     require_snapshot_file "tests/ci/test_package_extension_task.py"
+    require_snapshot_file "tests/ci/test_extension_release_routing.py"
     require_snapshot_file "crates/morphir-elm-binding/Cargo.toml"
     require_snapshot_file "crates/morphir-elm-binding/build.rs"
     require_snapshot_file "crates/morphir-elm-binding/src/lib.rs"
@@ -144,7 +151,8 @@ run_pipeline() {
         cd "$source_root"
         cargo test --locked -p morphir-elm-binding
         cargo build --locked --release -p morphir-elm-binding --target wasm32-unknown-unknown
-        wasm-tools validate target/wasm32-unknown-unknown/release/morphir_elm_binding.wasm
+        wasm-tools validate "$WASM"
+        MORPHIR_ELM_GUEST="$WASM" cargo test --locked -p morphir-elm-binding --features wasm-host-tests --test wasm -- --ignored
         set -- scripts/package_extension.py \
             --short-id elm-native \
             --wasm "$WASM" \

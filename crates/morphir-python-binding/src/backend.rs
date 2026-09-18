@@ -36,11 +36,14 @@ pub(crate) fn generate(request: &GenerateRequest) -> Outcome<Vec<Artifact>> {
         })
         .collect::<Outcome<BTreeMap<_, _>>>()?;
     let aliases = crate::modules::tuple_aliases(&library.package_name, library.def.modules.iter())?;
+    let signatures = crate::values::signatures(&library)?;
     library
         .def
         .modules
         .iter()
-        .map(|(name, module)| render_module(&library, name, module, &identities, &aliases))
+        .map(|(name, module)| {
+            render_module(&library, name, module, &identities, &aliases, &signatures)
+        })
         .collect()
 }
 
@@ -50,6 +53,7 @@ fn render_module(
     module: &AccessControlled<ModuleDefinition>,
     identities: &BTreeMap<String, crate::modules::ModuleIdentity>,
     tuple_aliases: &crate::values::TupleAliases,
+    signatures: &crate::values::Signatures,
 ) -> Outcome<Artifact> {
     if module.value.doc.is_some() {
         return Err(error(
@@ -65,9 +69,21 @@ fn render_module(
         reserve(&mut symbols, &python)?;
         type_names.insert(name.clone(), python);
     }
-    let mut source =
-        String::from("from __future__ import annotations\nfrom dataclasses import dataclass\n\n");
-    let imported = imports::prepare(library, module_name, identities, &mut type_names)?;
+    let mut source = String::from(
+        "from __future__ import annotations\nfrom dataclasses import dataclass\nfrom collections.abc import Callable\n\n",
+    );
+    let mut value_names = BTreeMap::new();
+    let imported = imports::prepare(
+        library,
+        module_name,
+        identities,
+        &mut type_names,
+        &mut value_names,
+    )?;
+    let functions = functions::Context {
+        names: &value_names,
+        signatures,
+    };
     source.push_str(&imported);
     let mut aliases = vec![];
 
@@ -155,6 +171,7 @@ fn render_module(
             module_name,
             &type_names,
             tuple_aliases,
+            &functions,
         )?);
     }
     // Ruff validates the constructed declarations and owns AST-to-source rendering.
@@ -201,6 +218,11 @@ fn annotation(
 ) -> Outcome<String> {
     require_empty_attributes(tpe.attributes())?;
     match tpe {
+        Type::Function(_, input, output) => Ok(format!(
+            "Callable[[{}], {}]",
+            annotation(input, package, module, types)?,
+            annotation(output, package, module, types)?
+        )),
         Type::Reference(_, fq, args) if args.is_empty() => reference(fq, package, module, types),
         Type::Tuple(_, items) if items.len() >= 2 => Ok(format!(
             "tuple[{}]",

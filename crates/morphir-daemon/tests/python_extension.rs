@@ -77,7 +77,9 @@ async fn packaged_roundtrip(version: &str) {
             match $ready.invoke::<$result>($method, $request).await {
                 InvokeOutcome::Success(ready, result) => (ready, result),
                 InvokeOutcome::Rejected(_, error) => panic!("request rejected: {error}"),
-                InvokeOutcome::Failed(failure) => panic!("MEP failed: {}", failure.error()),
+                InvokeOutcome::Failed(failure) => {
+                    panic!("{} (IR {}) failed: {}", $method, version, failure.error())
+                }
             }
         };
     }

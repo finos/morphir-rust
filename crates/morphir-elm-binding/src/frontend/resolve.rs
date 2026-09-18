@@ -165,14 +165,20 @@ impl Resolver<'_> {
         }
     }
 
-    /// `exposing (..)`: every type the module declares becomes visible.
+    /// `exposing (..)`: every type the module path declares becomes visible.
+    ///
+    /// A written path can name more than one module (an in-package module and
+    /// a platform module of the same name), so the names of all of them are
+    /// exposed; the reference site decides whether that is ambiguous. An
+    /// unresolvable import contributes no names; the references that needed
+    /// them report themselves.
     fn expose_all(&mut self, module: &[String]) {
-        let Some(target) = self.lookup_module(module) else {
-            // An unresolvable import contributes no names; the references
-            // that needed them report themselves.
-            return;
-        };
-        for name in target.types {
+        let names: Vec<String> = self
+            .lookup_modules(module)
+            .into_iter()
+            .flat_map(|target| target.types)
+            .collect();
+        for name in names {
             self.expose_name(&name, module);
         }
     }
@@ -308,26 +314,62 @@ impl Resolver<'_> {
                 };
             }
             let candidates = self.visible.get(name).cloned().unwrap_or_default();
-            match self.distinct_targets(&candidates).as_slice() {
-                [] => {
+            if candidates.is_empty() {
+                self.error(
+                    NOT_FOUND,
+                    span,
+                    format!(
+                        "`{name}` is not in scope (prelude: {})",
+                        self.scope.prelude.id
+                    ),
+                );
+                return self.unresolved(name);
+            }
+
+            // Ambiguity is decided on resolved targets, not on written paths:
+            // one written path can name two different modules (an in-package
+            // `String` and the platform `Morphir.SDK.String`), and two written
+            // paths can name the same module (`List` and `Morphir.SDK.List`).
+            let mut targets: Vec<ModuleTarget> = Vec::new();
+            for candidate in &candidates {
+                for target in self.lookup_modules(candidate) {
+                    if !target.types.iter().any(|t| t == name) {
+                        continue;
+                    }
+                    if !targets
+                        .iter()
+                        .any(|seen| seen.package == target.package && seen.module == target.module)
+                    {
+                        targets.push(target);
+                    }
+                }
+            }
+
+            match targets.len() {
+                0 => {
+                    let modules = candidates
+                        .iter()
+                        .map(|c| format!("`{}`", c.join(".")))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     self.error(
                         NOT_FOUND,
                         span,
                         format!(
-                            "`{name}` is not in scope (prelude: {})",
+                            "`{name}` not found in module {modules} (prelude: {})",
                             self.scope.prelude.id
                         ),
                     );
                     self.unresolved(name)
                 }
-                [single] => {
-                    let single = single.clone();
-                    self.resolve_in_module(&single, name, span)
+                1 => {
+                    let target = targets.remove(0);
+                    self.use_target(target, name)
                 }
-                many => {
-                    let modules = many
+                _ => {
+                    let modules = targets
                         .iter()
-                        .map(|m| format!("`{}`", m.join(".")))
+                        .map(|t| format!("`{}`", qualified_module_name(t)))
                         .collect::<Vec<_>>()
                         .join(", ");
                     self.error(
@@ -342,48 +384,45 @@ impl Resolver<'_> {
                 }
             }
         } else {
-            let target = self
-                .qualified
-                .get(&module.join("."))
-                .cloned()
-                .unwrap_or_else(|| module.to_vec());
+            // A qualified reference must name an import: either an import's
+            // alias or its full module path (the prelude's implicit imports
+            // count).
+            let Some(target) = self.qualified.get(&module.join(".")).cloned() else {
+                self.error(
+                    NOT_FOUND,
+                    span,
+                    format!(
+                        "module `{}` is not imported (prelude: {})",
+                        module.join("."),
+                        self.scope.prelude.id
+                    ),
+                );
+                return self.unresolved(name);
+            };
             self.resolve_in_module(&target, name, span)
         }
     }
 
-    /// Collapses candidate module paths that name the same module once
-    /// prelude aliases are applied, so `List` and `Morphir.SDK.List` are not
-    /// reported as ambiguous with each other.
-    fn distinct_targets(&self, candidates: &[Vec<String>]) -> Vec<Vec<String>> {
-        let mut seen: Vec<Vec<String>> = Vec::new();
-        let mut out: Vec<Vec<String>> = Vec::new();
-        for candidate in candidates {
-            let canonical = self
-                .scope
-                .prelude
-                .alias_for(candidate)
-                .unwrap_or_else(|| candidate.clone());
-            if !seen.contains(&canonical) {
-                seen.push(canonical);
-                out.push(candidate.clone());
-            }
+    /// Records the in-package dependency, if any, and builds the name.
+    fn use_target(&mut self, target: ModuleTarget, name: &str) -> FqName {
+        if target.in_package && target.module != self.module.name {
+            self.depends_on.insert(target.module.clone());
         }
-        out
+        FqName {
+            package: target.package,
+            module: target.module,
+            name: name.to_string(),
+        }
     }
 
     fn resolve_in_module(&mut self, module: &[String], name: &str, span: Span) -> FqName {
-        match self.lookup_module(module) {
-            Some(target) if target.types.iter().any(|t| t == name) => {
-                if target.in_package && target.module != self.module.name {
-                    self.depends_on.insert(target.module.clone());
-                }
-                FqName {
-                    package: target.package,
-                    module: target.module,
-                    name: name.to_string(),
-                }
-            }
-            _ => {
+        match self
+            .lookup_modules(module)
+            .into_iter()
+            .find(|target| target.types.iter().any(|t| t == name))
+        {
+            Some(target) => self.use_target(target, name),
+            None => {
                 self.error(
                     NOT_FOUND,
                     span,
@@ -398,13 +437,24 @@ impl Resolver<'_> {
         }
     }
 
-    /// Rules 3 and 4: an in-package module (raw path), then — after prelude
-    /// alias mapping — a dependency module, then a prelude platform module.
-    /// A dependency package whose name is a prefix of the target path shadows
-    /// the prelude copy of that package entirely.
-    fn lookup_module(&self, raw: &[String]) -> Option<ModuleTarget> {
+    /// Rules 3 and 4: every module a written path can name, in priority order
+    /// — an in-package module (raw path, no alias mapping), then, after
+    /// prelude alias mapping, a dependency module, then a prelude platform
+    /// module.
+    ///
+    /// Dependency packages whose name is a prefix of the target path shadow
+    /// the prelude copy of that package entirely: the longest matching prefix
+    /// is tried first and shorter ones after it, but if none of them declares
+    /// the module, the prelude platform module is *not* consulted.
+    ///
+    /// Qualified references take the first entry; unqualified references
+    /// consider all of them, so a name reachable through two different modules
+    /// is reported as ambiguous instead of silently picking one.
+    fn lookup_modules(&self, raw: &[String]) -> Vec<ModuleTarget> {
+        let mut found = Vec::new();
+
         if let Some(iface) = (self.scope.package_modules)(raw) {
-            return Some(ModuleTarget {
+            found.push(ModuleTarget {
                 package: self.scope.package.to_vec(),
                 module: raw.to_vec(),
                 types: iface.types.into_iter().map(|t| t.name).collect(),
@@ -418,35 +468,39 @@ impl Resolver<'_> {
             .alias_for(raw)
             .unwrap_or_else(|| raw.to_vec());
 
-        if let Some(dep) = self
+        let mut deps: Vec<&DependencyInterface> = self
             .scope
             .dependencies
             .iter()
             .filter(|dep| starts_with(&target, &dep.package))
-            .max_by_key(|dep| dep.package.len())
-        {
+            .collect();
+        deps.sort_by_key(|dep| std::cmp::Reverse(dep.package.len()));
+        let shadows_prelude = !deps.is_empty();
+        for dep in deps {
             let remainder = &target[dep.package.len()..];
-            return dep
-                .modules
-                .iter()
-                .find(|m| m.name == remainder)
-                .map(|m| ModuleTarget {
+            if let Some(module) = dep.modules.iter().find(|m| m.name == remainder) {
+                found.push(ModuleTarget {
                     package: dep.package.clone(),
-                    module: m.name.clone(),
-                    types: m.types.iter().map(|t| t.name.clone()).collect(),
+                    module: module.name.clone(),
+                    types: module.types.iter().map(|t| t.name.clone()).collect(),
                     in_package: false,
                 });
+                break;
+            }
+        }
+        if shadows_prelude {
+            return found;
         }
 
-        self.scope
-            .prelude
-            .platform_module(&target)
-            .map(|(pkg, module)| ModuleTarget {
+        if let Some((pkg, module)) = self.scope.prelude.platform_module(&target) {
+            found.push(ModuleTarget {
                 package: split_dotted(&pkg.name),
                 module: split_dotted(&module.name),
                 types: module.types.iter().map(|t| t.name.clone()).collect(),
                 in_package: false,
-            })
+            });
+        }
+        found
     }
 
     /// A placeholder for a reference that failed to resolve; the error list is
@@ -466,6 +520,17 @@ impl Resolver<'_> {
             message,
         });
     }
+}
+
+/// `package.module` for diagnostics, e.g. `Morphir.SDK.String`.
+fn qualified_module_name(target: &ModuleTarget) -> String {
+    target
+        .package
+        .iter()
+        .chain(target.module.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn split_dotted(name: &str) -> Vec<String> {

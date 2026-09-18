@@ -132,6 +132,88 @@ fn qualified_alias_import_resolves_to_a_package_module_and_records_dependency() 
 }
 
 #[test]
+fn qualified_reference_requires_an_import() {
+    let p = prelude::builtin("elm-core").unwrap();
+    let other = |name: &[String]| {
+        (name == ["Other"]).then(|| Interface {
+            name: vec!["Other".into()],
+            types: vec![InterfaceType {
+                name: "Thing".into(),
+                params: vec![],
+                constructors: None,
+            }],
+        })
+    };
+
+    // `Other` is an in-package module and `Dict` a prelude-aliased platform
+    // module, but neither is imported here.
+    let m = module(
+        &["A"],
+        Exposing::All,
+        vec![],
+        vec![
+            alias("T", q(&["Other"], "Thing")),
+            alias("D", q(&["Dict"], "Dict")),
+        ],
+    );
+    let errors = resolve(&m, Access::Public, &scope(&p, &other, &[])).unwrap_err();
+    assert_eq!(errors.len(), 2);
+    assert!(errors.iter().all(|e| e.code == "ELM_RESOLVE_NOT_FOUND"));
+    assert!(errors[0].message.contains("module `Other` is not imported"));
+    assert!(errors[1].message.contains("module `Dict` is not imported"));
+
+    // `List` is imported implicitly by the prelude, so `List.List` resolves.
+    let ok = module(
+        &["A"],
+        Exposing::All,
+        vec![],
+        vec![alias("L", q(&["List"], "List"))],
+    );
+    let resolved = resolve(&ok, Access::Public, &scope(&p, &other, &[])).unwrap();
+    let ResolvedBody::Alias(RType::Ref(fq, _)) = &resolved.types[0].body else {
+        panic!()
+    };
+    assert_eq!(fq.package, vec!["Morphir", "SDK"]);
+    assert_eq!(fq.module, vec!["List"]);
+
+    // An explicit import makes the same reference work.
+    let imported = module(
+        &["A"],
+        Exposing::All,
+        vec![Import {
+            module: vec!["Other".into()],
+            alias: None,
+            exposing: None,
+            span: sp(),
+        }],
+        vec![alias("T", q(&["Other"], "Thing"))],
+    );
+    resolve(&imported, Access::Public, &scope(&p, &other, &[])).unwrap();
+}
+
+#[test]
+fn in_package_module_shadowing_a_platform_module_is_ambiguous() {
+    let p = prelude::builtin("elm-core").unwrap();
+    // An in-package module named `String` that declares its own `String`,
+    // competing with the prelude's implicit `import String exposing (String)`.
+    let strings = |name: &[String]| {
+        (name == ["String"]).then(|| Interface {
+            name: vec!["String".into()],
+            types: vec![InterfaceType {
+                name: "String".into(),
+                params: vec![],
+                constructors: None,
+            }],
+        })
+    };
+    let m = module(&["A"], Exposing::All, vec![], vec![alias("S", r("String"))]);
+    let errors = resolve(&m, Access::Public, &scope(&p, &strings, &[])).unwrap_err();
+    assert_eq!(errors[0].code, "ELM_RESOLVE_AMBIGUOUS");
+    assert!(errors[0].message.contains("local.example.String"));
+    assert!(errors[0].message.contains("Morphir.SDK.String"));
+}
+
+#[test]
 fn ambiguous_unqualified_name_is_an_error() {
     let p = prelude::builtin("none").unwrap();
     let both = |name: &[String]| {

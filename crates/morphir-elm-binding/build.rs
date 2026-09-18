@@ -23,4 +23,7 @@ fn main() {
     println!("cargo:rerun-if-changed=grammar/parser.c");
     println!("cargo:rerun-if-changed=grammar/scanner.c");
     println!("cargo:rerun-if-changed=grammar/tree_sitter/parser.h");
+    println!("cargo:rerun-if-changed=grammar/tree_sitter/alloc.h");
+    println!("cargo:rerun-if-changed=grammar/tree_sitter/array.h");
+    println!("cargo:rerun-if-changed=grammar/UPSTREAM");
 }

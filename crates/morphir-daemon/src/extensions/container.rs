@@ -20,7 +20,9 @@ use tracing::{debug, info};
 const MAX_WASM_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
 const WASM_PAGE_BYTES: u64 = 64 * 1024;
 const DEFAULT_WASM_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_WASM_FUEL_LIMIT: u64 = 100_000_000;
+// The 4.6 KB Rust compiler fixture needs up to 153 million fuel per request.
+// Allow compiler workloads headroom while retaining a finite execution budget.
+const DEFAULT_WASM_FUEL_LIMIT: u64 = 1_000_000_000;
 
 fn wasm_pages_for_bytes(bytes: u64) -> Result<u32> {
     if !bytes.is_multiple_of(WASM_PAGE_BYTES) {

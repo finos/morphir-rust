@@ -40,7 +40,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-projection` | Shared Morphir IR normalization that backend extensions project from. |
 | `morphir-python-binding` | Ruff-based frontend and backend for a Morphir IR v4 subset of Python ADTs, tuples and conditional functions, available natively and as a WebAssembly extension. |
 | `morphir-runtime` | Reserved runtime crate; currently a minimal scaffold. |
-| `morphir-rust-binding` | Syn-based Rust frontend and code generator for types, conditional functions and exhaustive pattern matching in Morphir IR v3 and v4, available natively and as a WebAssembly extension. |
+| `morphir-rust-binding` | Syn-based Rust frontend and code generator for types, conditional functions, exhaustive pattern matching, calls and typed lambdas in Morphir IR v3 and v4, available natively and as a WebAssembly extension. |
 | `morphir-tests` | Shared acceptance and Cucumber test harness. |
 | `morphir-wasm-binding` | Backend extension that generates WebAssembly and WAT from Morphir IR. |
 | `morphir-workspace` | Portable workspace discovery protocol and algorithms. |
@@ -56,6 +56,7 @@ This table lists independently releasable extensions. Registrations come from
 | `morphir-avro` | `morphir-avro-extension` | `0.1.1` | Generates Avro JSON schemas or protocols and Avro IDL from Morphir specifications. |
 | `morphir-openapi` | `morphir-openapi-extension` | `0.1.0` | Generates OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents from Morphir specifications. |
 | `morphir-python` | `morphir-python-binding` | `0.1.0` | Compiles and generates Python ADTs, fixed tuples and conditional function bodies using IR v4. |
+| `morphir-rust` | `morphir-rust-binding` | `0.1.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |
 
 ## Prerequisites
 

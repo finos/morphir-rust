@@ -20,7 +20,10 @@ CI runs only the jobs a change can affect.
    (`docs/`, `README.md`), and for each specialised job the crates and paths that
    turn it on.
 4. Extension bundles run as a matrix over `.github/extensions.toml`, filtered to
-   extensions whose crate is affected (or all of them when `morphir-daemon` is).
+   extensions whose crate or artifact task is affected. Changes to
+   `morphir-daemon`, the extension registry or shared bundle packaging select
+   all extensions. Rust guest and offline installation tests run in the Rust
+   bundle task, so Rust-only changes do not also run the shared Extism job.
 
 Anything the classifier does not recognise, and any classifier error, runs the
 full suite.

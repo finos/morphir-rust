@@ -3,6 +3,24 @@
 from extension_release_test_support import *
 
 class ExtensionReleaseRoutingTests(unittest.TestCase):
+    def test_rust_tag_preserves_frontend_backend_and_both_ir_versions(self) -> None:
+        from package_extension_test_support import descriptor_bytes
+
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        release = extension_release.resolve_release(
+            "extension/rust/v0.1.0", registry, "0.2.0", {"morphir-rust-binding": "0.1.0"}
+        )
+        self.assertEqual(["rust"], release.short_ids)
+        descriptor = json.loads(descriptor_bytes(
+            "rust", registry["extensions"]["rust"], "0.1.0",
+            "morphir-rust-binding-0.1.0.wasm", "0" * 64, RELEASE_COMMIT,
+        ))
+        self.assertEqual("morphir-rust", descriptor["extensionId"])
+        self.assertEqual("Morphir Rust", descriptor["name"])
+        self.assertEqual(["rust"], descriptor["targets"])
+        self.assertEqual([{"id": "rust", "fileExtensions": [".rs"]}], descriptor["languages"])
+        self.assertEqual(["3", "4"], descriptor["irVersions"])
+
     def test_dedicated_tag_selects_one_extension(self) -> None:
         release = extension_release.resolve_release(
             "extension/avro/v0.1.0", REGISTRY, "0.2.0", PACKAGE_VERSIONS
@@ -32,13 +50,14 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
             "morphir-avro-extension": "0.1.0",
             "morphir-openapi-extension": "0.1.0",
             "morphir-python-binding": "0.1.0",
+            "morphir-rust-binding": "0.1.0",
         }
 
         release = extension_release.resolve_release(
             "v0.2.0", registry, "0.2.0", package_versions
         )
 
-        self.assertEqual(["avro", "openapi", "python"], release.short_ids)
+        self.assertEqual(["avro", "openapi", "python", "rust"], release.short_ids)
 
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:
         release = extension_release.resolve_release(

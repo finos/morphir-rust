@@ -95,19 +95,28 @@ struct Run {
 pub fn compile(request: CompileRequest) -> CompileResult {
     let validated = match boundary::validate(&request) {
         Ok(validated) => validated,
-        Err(diagnostic) => return rejected(diagnostic),
-    };
-    let Some(emitter) = emit::emitter_for(&validated.ir_version) else {
-        return rejected(boundary::request_error(format!(
-            "no emitter for Morphir IR `{}`",
-            validated.ir_version
-        )));
+        Err(diagnostic) => return rejected(diagnostic, None),
     };
 
     let (dependency_interfaces, mut diagnostics) =
         dependencies::from_request(&request.dependencies);
 
-    let read = read_baseline(&request, &validated);
+    // The request itself is sound, so the context it compiles under is known
+    // and is reported whatever happens next: it is the value the host stores
+    // and echoes back, and a run that failed still tells it what it was.
+    let context_digest = boundary::context_digest(&validated, &dependency_interfaces);
+
+    let Some(emitter) = emit::emitter_for(&validated.ir_version) else {
+        return rejected(
+            boundary::request_error(format!(
+                "no emitter for Morphir IR `{}`",
+                validated.ir_version
+            )),
+            Some(context_digest),
+        );
+    };
+
+    let read = read_baseline(&request, &validated.ir_version, &context_digest);
     let (baseline, baseline_interfaces) = (read.modules, read.interfaces);
     diagnostics.extend(read.diagnostics);
 
@@ -240,6 +249,7 @@ pub fn compile(request: CompileRequest) -> CompileResult {
         diagnostics,
         modules,
         module_results: run.results,
+        context_digest: Some(context_digest),
     }
 }
 
@@ -247,7 +257,7 @@ fn is_written(status: ModuleStatus) -> bool {
     matches!(status, ModuleStatus::Compiled | ModuleStatus::Unchanged)
 }
 
-fn rejected(diagnostic: Diagnostic) -> CompileResult {
+fn rejected(diagnostic: Diagnostic, context_digest: Option<String>) -> CompileResult {
     CompileResult {
         success: false,
         ir_version: None,
@@ -255,6 +265,7 @@ fn rejected(diagnostic: Diagnostic) -> CompileResult {
         diagnostics: vec![diagnostic],
         modules: Vec::new(),
         module_results: Vec::new(),
+        context_digest,
     }
 }
 
@@ -379,7 +390,11 @@ struct Baseline {
 /// entirely — reusing IR whose interface is unknown would let a dependent
 /// resolve against nothing — reported as a warning, and named in `dropped` so
 /// that its dependents are recompiled rather than reused against it.
-fn read_baseline(request: &CompileRequest, validated: &Validated) -> Baseline {
+///
+/// The whole baseline is thrown away unless it states the very context this
+/// run compiles under, because every entry in it describes resolution against
+/// that context and nothing in an entry reveals which one it was.
+fn read_baseline(request: &CompileRequest, ir_version: &str, context_digest: &str) -> Baseline {
     let mut baseline = Baseline {
         modules: HashMap::new(),
         interfaces: HashMap::new(),
@@ -391,22 +406,30 @@ fn read_baseline(request: &CompileRequest, validated: &Validated) -> Baseline {
         return baseline;
     };
 
-    // What a name resolved to last time depends on the prelude, so a baseline
-    // built with a different one describes a different compilation. It is
-    // thrown away whole rather than partly trusted.
-    let active = validated.prelude.digest();
-    if let Some(recorded) = &supplied.prelude_digest
-        && *recorded != active
-    {
-        baseline.diagnostics.push(boundary::request_warning(
-            "baseline ignored: it was built with a different prelude",
-        ));
-        return baseline;
+    // What a module resolved to last time depends on the whole compile context
+    // — the IR version, the prelude, and the dependency distributions supplied
+    // with the request — so a baseline from a different one, or one that will
+    // not say which one it came from, is thrown away whole rather than partly
+    // trusted.
+    match &supplied.context_digest {
+        Some(recorded) if recorded == context_digest => {}
+        Some(_) => {
+            baseline.diagnostics.push(boundary::request_warning(
+                "baseline ignored: it was built under a different compile context",
+            ));
+            return baseline;
+        }
+        None => {
+            baseline.diagnostics.push(boundary::request_warning(
+                "baseline ignored: it carries no contextDigest",
+            ));
+            return baseline;
+        }
     }
 
     for entry in &supplied.modules {
         let name: Vec<String> = entry.name.split('.').map(str::to_string).collect();
-        match dependencies::interface_from_module_ir(&validated.ir_version, &name, &entry.ir) {
+        match dependencies::interface_from_module_ir(ir_version, &name, &entry.ir) {
             Ok(interface) => {
                 baseline.interfaces.insert(entry.name.clone(), interface);
                 baseline.modules.insert(entry.name.clone(), entry.clone());

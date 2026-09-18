@@ -97,14 +97,28 @@ reused against a scope that moved underneath it. Widening to the imports is what
 keeps an incremental run's answer equal to a clean run's; the cost is
 recompiling a module whose unused import changed.
 
-The baseline also carries an optional `preludeDigest`. What a name resolves to
-depends on the prelude, so a baseline built with a different one describes a
-different compilation: when the request's `preludeDigest` does not match the
-prelude the request selects, the whole baseline is ignored and an `ELM_REQUEST`
-warning says so. A host should store the digest next to the results it keeps and
-echo it back on the next request; `morphir_elm_binding::frontend::boundary::prelude_digest_for`
-computes it from the same `CompileOptions` the request carries. A baseline with
-no `preludeDigest` is taken at face value, as before.
+### The compile context
+
+A module's compiled form depends on more than its own source. It depends on the
+IR version being written, on the prelude its names were resolved against, and on
+the dependency distributions the request supplied — a dependency that loses a
+type changes what a module resolves to without touching a byte of it. All of
+that is folded into one value, the **context digest**, and a baseline is scoped
+to it.
+
+Every result that got as far as a validated request carries a `contextDigest`,
+including a failed one. A host stores it next to the module results it keeps and
+echoes it back as the baseline's `contextDigest`. A run reuses a baseline only
+when the two agree; otherwise it ignores the baseline whole and reports one
+`ELM_REQUEST` warning:
+
+- `baseline ignored: it was built under a different compile context` — the
+  digests differ.
+- `baseline ignored: it carries no contextDigest` — the baseline will not say
+  which compilation it came from, so it cannot be shown to describe this one.
+
+Ignoring the baseline is never wrong, only slower: every module is recompiled,
+and the run's answer is the one a clean run would give.
 
 The statuses are:
 

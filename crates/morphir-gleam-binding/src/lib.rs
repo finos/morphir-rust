@@ -221,6 +221,7 @@ impl Frontend for GleamExtension {
             diagnostics,
             modules: module_names,
             module_results: vec![],
+            context_digest: None,
         })
     }
 
@@ -260,6 +261,7 @@ fn failed_compile(diagnostics: Vec<Diagnostic>) -> CompileResult {
         diagnostics,
         modules: vec![],
         module_results: vec![],
+        context_digest: None,
     }
 }
 

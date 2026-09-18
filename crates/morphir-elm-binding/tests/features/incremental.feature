@@ -64,6 +64,16 @@ Feature: Incremental Elm compilation
     And module "A" is unchanged
     And the distribution contains modules "A"
 
+  Scenario: A baseline that will not say which context it came from is ignored
+    Given a baseline from compiling A "original" and B "original"
+    And the baseline forgets which context it came from
+    When I compile A "original" and B "original"
+    Then compilation succeeds
+    And the compile reports the baseline was ignored because it "carries no contextDigest"
+    And module "A" is compiled
+    And module "B" is compiled
+    And the compile reports the context it ran under
+
   Scenario: Deleting a dependency fails its dependents
     Given a baseline from compiling A "original" and B "original"
     When I compile A "original" with B deleted

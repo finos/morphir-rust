@@ -14,46 +14,65 @@ use crate::span::Span;
 /// A fully qualified name: package path, module path, local name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FqName {
+    /// The package path.
     pub package: Vec<String>,
+    /// The module path, relative to the package.
     pub module: Vec<String>,
+    /// The local name.
     pub name: String,
 }
 
 /// Whether a module, type, or set of constructors is exposed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Access {
+    /// Visible outside its module or package.
     Public,
+    /// Visible only where it is declared.
     Private,
 }
 
 /// A module whose type references have all been resolved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedModule {
+    /// The module's name, as the frontend and the host see it.
     pub name: Vec<String>,
+    /// Whether the package exposes this module.
     pub access: Access,
+    /// The module's documentation comment.
     pub doc: Option<String>,
+    /// The module's type declarations, in source order.
     pub types: Vec<ResolvedType>,
     /// In-package modules this module references, deduplicated and sorted.
     pub depends_on: Vec<Vec<String>>,
+    /// Value declarations this frontend skipped, with where they were.
     pub skipped_values: Vec<(String, Span)>,
 }
 
 /// A resolved type declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedType {
+    /// The declared name.
     pub name: String,
+    /// Whether the module exposes this type.
     pub access: Access,
+    /// The declaration's documentation comment.
     pub doc: Option<String>,
+    /// The type parameters, in order.
     pub params: Vec<String>,
+    /// What the declaration declares.
     pub body: ResolvedBody,
 }
 
 /// The body of a resolved type declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ResolvedBody {
+    /// An alias for the type it stands for.
     Alias(RType),
+    /// A custom type and its constructors.
     Custom {
+        /// Whether the module exposes the constructors.
         constructor_access: Access,
+        /// The constructors, in declaration order.
         constructors: Vec<RConstructor>,
     },
 }
@@ -61,26 +80,37 @@ pub enum ResolvedBody {
 /// A custom type constructor with resolved argument types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RConstructor {
+    /// The constructor's name.
     pub name: String,
+    /// Its positional argument types.
     pub args: Vec<RType>,
 }
 
 /// A resolved type expression.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum RType {
+    /// A type variable.
     Var(String),
+    /// A reference to a declared type, with its arguments.
     Ref(FqName, Vec<RType>),
+    /// A record type.
     Record(Vec<RField>),
+    /// An extensible record type: the base variable and the added fields.
     ExtensibleRecord(String, Vec<RField>),
+    /// A tuple type.
     Tuple(Vec<RType>),
+    /// A function type: argument, then result.
     Function(Box<RType>, Box<RType>),
+    /// The unit type.
     Unit,
 }
 
 /// A record field with a resolved type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RField {
+    /// The field's name.
     pub name: String,
+    /// The field's type.
     pub ty: RType,
 }
 
@@ -90,8 +120,19 @@ pub struct RField {
 /// dependency modules) and the value the interface digest is computed over.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Interface {
+    /// The module's name, in its document spelling.
     pub name: Vec<String>,
+    /// The types the module exposes, sorted by name.
     pub types: Vec<InterfaceType>,
+}
+
+impl Interface {
+    /// A content digest of this interface. Two interfaces that a dependent
+    /// cannot tell apart have the same digest.
+    pub fn digest(&self) -> String {
+        let json = serde_json::to_vec(self).expect("Interface serializes to JSON");
+        sha256_hex(&json)
+    }
 }
 
 /// A publicly exposed type, with everything a dependent can observe about it.
@@ -103,7 +144,9 @@ pub struct Interface {
 /// custom type whose constructors are private, which is opaque to a dependent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InterfaceType {
+    /// The type's name.
     pub name: String,
+    /// Its type parameters, in order.
     pub params: Vec<String>,
     /// The type this alias stands for, when the declaration is an alias.
     pub alias: Option<RType>,
@@ -165,8 +208,7 @@ impl ResolvedModule {
     /// A content digest of [`ResolvedModule::interface`], used to decide
     /// whether dependents need recompiling.
     pub fn interface_digest(&self) -> String {
-        let json = serde_json::to_vec(&self.interface()).expect("Interface serializes to JSON");
-        sha256_hex(&json)
+        self.interface().digest()
     }
 }
 

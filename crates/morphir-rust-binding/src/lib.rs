@@ -67,6 +67,7 @@ impl Frontend for RustExtension {
                 diagnostics: vec![diagnostic],
                 modules: vec![],
                 module_results: vec![],
+                context_digest: None,
             }),
         )
     }

@@ -325,6 +325,7 @@ mod tests {
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
                 module_results: vec![],
+                context_digest: None,
             })
         }
 
@@ -383,6 +384,7 @@ mod tests {
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
                 module_results: vec![],
+                context_digest: None,
             })
         }
 
@@ -553,6 +555,7 @@ mod tests {
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
                 module_results: vec![],
+                context_digest: None,
             })
         }
 

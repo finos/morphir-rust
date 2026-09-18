@@ -20,11 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `baseline`. A module's `dependsOn` is every in-package module it imports as well as every
   one its references resolved to, so a module imported `exposing (..)` and never named still
   invalidates its dependents when it grows a type — which is what keeps an incremental run's
-  answer equal to a clean run's. `CompileBaseline.preludeDigest` records the prelude a
-  baseline was built with; a run whose prelude differs ignores the baseline whole and says so
-  with an `ELM_REQUEST` warning, and `frontend::boundary::prelude_digest_for` computes the
-  digest a host stores. All three MEP fields are optional and defaulted, so existing payloads
-  are unchanged. The extension releases independently as `morphir-elm-native`, alongside the
+  answer equal to a clean run's. A baseline is scoped to the *compile context* it was built
+  under: `CompileResult.contextDigest` covers the IR version, the `typesOnly` flag, the
+  prelude and the interfaces of every dependency distribution the request supplied, and a
+  host echoes it back as `CompileBaseline.contextDigest`. A run reuses a baseline only when
+  the two agree; otherwise it ignores the baseline whole and says so with an `ELM_REQUEST`
+  warning, so a dependency that lost a type recompiles the modules that named it instead of
+  reusing IR that references nothing. A baseline with no `contextDigest` is ignored for the
+  same reason. All the MEP fields are optional and defaulted, so existing payloads are
+  unchanged. The extension releases independently as `morphir-elm-native`, alongside the
   JavaScript `morphir-elm` provider, which stays the default for Elm.
 - **Release bundles record whether a frontend is incremental.** `.github/extensions.toml`
   takes an `incremental` flag, the release descriptor and the installed release record carry

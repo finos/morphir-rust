@@ -357,7 +357,7 @@ fn baseline_from(previous: &CompileBaseline, result: &CompileResult) -> CompileB
 
     CompileBaseline {
         modules,
-        prelude_digest: previous.prelude_digest.clone(),
+        context_digest: result.context_digest.clone(),
     }
 }
 
@@ -602,10 +602,39 @@ fn a_further_baseline(world: &mut ElmWorld, a: String, b: String) {
     world.extend_baseline(&a, &b);
 }
 
+#[given("the baseline forgets which context it came from")]
+fn forget_context(world: &mut ElmWorld) {
+    let held = world.baseline.take().expect("a baseline to forget");
+    world.baseline = Some(CompileBaseline {
+        context_digest: None,
+        ..held
+    });
+}
+
 #[when(expr = "I compile A {string} and B {string}")]
 fn compile_pair(world: &mut ElmWorld, a: String, b: String) {
     world.documents = vec![document(A_URI, a_source(&a)), document(B_URI, b_source(&b))];
     world.compile("3");
+}
+
+#[then(expr = "the compile reports the baseline was ignored because it {string}")]
+fn baseline_ignored(world: &mut ElmWorld, reason: String) {
+    let expected = format!("baseline ignored: it {reason}");
+    let result = world.result();
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Warning
+                && diagnostic.code.as_deref() == Some("ELM_REQUEST")
+                && diagnostic.message == expected
+        }),
+        "no `{expected}`: {:?}",
+        result.diagnostics
+    );
+}
+
+#[then("the compile reports the context it ran under")]
+fn reports_context(world: &mut ElmWorld) {
+    assert!(world.result().context_digest.is_some());
 }
 
 #[when(expr = "I compile A {string} with B deleted")]

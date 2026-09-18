@@ -30,6 +30,20 @@ fn document(uri: &str, text: &str) -> SourceDocument {
 }
 
 fn compile(documents: Vec<SourceDocument>, baseline: Option<CompileBaseline>) -> CompileResult {
+    compile_with(documents, baseline, Vec::new(), None)
+}
+
+/// One run of the package, with the dependencies and the prelude the case needs.
+fn compile_with(
+    documents: Vec<SourceDocument>,
+    baseline: Option<CompileBaseline>,
+    dependencies: Vec<CompileDependency>,
+    prelude: Option<&str>,
+) -> CompileResult {
+    let mut extra = std::collections::HashMap::new();
+    if let Some(prelude) = prelude {
+        extra.insert("elmPrelude".to_string(), serde_json::json!(prelude));
+    }
     let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
     extension
         .frontend()
@@ -41,11 +55,11 @@ fn compile(documents: Vec<SourceDocument>, baseline: Option<CompileBaseline>) ->
                 name: "local/example".into(),
                 exposed_modules: None,
             },
-            dependencies: vec![],
+            dependencies,
             options: CompileOptions {
                 types_only: false,
                 ir_version: "3".into(),
-                extra: Default::default(),
+                extra,
             },
             baseline,
         })
@@ -59,7 +73,8 @@ fn both(a: &str, b: &str) -> Vec<SourceDocument> {
 /// The baseline a host would hold after `result`: freshly compiled modules
 /// replace their entry, modules that were reused or could not be compiled keep
 /// the entry they had, and modules that are no longer in the request are
-/// dropped.
+/// dropped. The host also stores the context the run reported, which is what
+/// scopes the whole baseline to the compilation it came from.
 fn baseline_from(previous: &CompileBaseline, result: &CompileResult) -> CompileBaseline {
     let mut modules: Vec<BaselineModule> = previous
         .modules
@@ -102,7 +117,7 @@ fn baseline_from(previous: &CompileBaseline, result: &CompileResult) -> CompileB
 
     CompileBaseline {
         modules,
-        prelude_digest: previous.prelude_digest.clone(),
+        context_digest: result.context_digest.clone(),
     }
 }
 
@@ -277,6 +292,7 @@ fn case_6_a_broken_dependency_with_a_baseline_leaves_dependents_unchanged() {
 #[test]
 fn an_undecodable_baseline_entry_invalidates_its_dependents() {
     let (_, baseline) = first_run();
+    let context_digest = baseline.context_digest.clone();
     let baseline = CompileBaseline {
         modules: baseline
             .modules
@@ -288,7 +304,7 @@ fn an_undecodable_baseline_entry_invalidates_its_dependents() {
                 entry
             })
             .collect(),
-        prelude_digest: None,
+        context_digest,
     };
 
     let result = compile(vec![document(A_URI, A)], Some(baseline));
@@ -398,66 +414,173 @@ fn a_headerless_document_the_baseline_does_not_know_is_still_dropped() {
     assert!(has_code(module(&result, "A"), "ELM_RESOLVE_NOT_FOUND"));
 }
 
-/// What a name resolved to last time depends on the prelude, so a baseline
-/// built with a different one describes a different compilation and is thrown
-/// away whole.
-#[test]
-fn a_baseline_from_a_different_prelude_is_ignored() {
-    let (_, baseline) = first_run();
-    let mismatched = CompileBaseline {
-        prelude_digest: Some("sha256:some-other-prelude".to_string()),
-        ..baseline.clone()
-    };
-
-    let result = compile(both(A, B), Some(mismatched));
-
-    assert!(result.success, "{:?}", result.diagnostics);
-    assert_eq!(module(&result, "A").status, ModuleStatus::Compiled);
-    assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
-    assert!(
-        result.diagnostics.iter().any(|diagnostic| {
+/// Whether a run ignored the baseline, and why it said it did.
+fn ignored_baseline_warning(result: &CompileResult) -> Option<&str> {
+    result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
             diagnostic.severity == DiagnosticSeverity::Warning
                 && diagnostic.code.as_deref() == Some("ELM_REQUEST")
-                && diagnostic
-                    .message
-                    .contains("baseline ignored: it was built with a different prelude")
-        }),
-        "{:?}",
-        result.diagnostics
-    );
+        })
+        .map(|diagnostic| diagnostic.message.as_str())
+        .find(|message| message.starts_with("baseline ignored:"))
 }
 
-/// The digest the extension itself reports for the request's prelude is the one
-/// a host stores, so echoing it back reuses the baseline exactly as leaving it
-/// out does.
+/// The context digest a run reports is the one the host stores, so echoing it
+/// back reuses the baseline.
 #[test]
-fn a_baseline_from_the_same_prelude_is_reused() {
-    let (_, baseline) = first_run();
-    let matched = CompileBaseline {
-        prelude_digest: Some(
-            morphir_elm_binding::frontend::boundary::prelude_digest_for(&CompileOptions {
-                types_only: false,
-                ir_version: "3".into(),
-                extra: Default::default(),
-            })
-            .expect("the default prelude has a digest"),
-        ),
-        ..baseline.clone()
-    };
+fn a_baseline_from_the_same_context_is_reused() {
+    let (first, baseline) = first_run();
+    assert!(
+        first.context_digest.is_some(),
+        "a validated request reports the context it compiled under"
+    );
+    assert_eq!(baseline.context_digest, first.context_digest);
 
-    let result = compile(both(A, B), Some(matched));
+    let result = compile(both(A, B), Some(baseline));
 
     assert!(result.success, "{:?}", result.diagnostics);
     assert_eq!(module(&result, "A").status, ModuleStatus::Unchanged);
     assert_eq!(module(&result, "B").status, ModuleStatus::Unchanged);
-    assert!(
-        !result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("different prelude")),
-        "{:?}",
-        result.diagnostics
+    assert_eq!(ignored_baseline_warning(&result), None);
+    assert_eq!(result.context_digest, first.context_digest);
+}
+
+/// A baseline that will not say which compilation it came from cannot be shown
+/// to describe this one, so it is ignored rather than taken at face value.
+#[test]
+fn a_baseline_without_a_context_digest_is_ignored() {
+    let (_, baseline) = first_run();
+    let anonymous = CompileBaseline {
+        context_digest: None,
+        ..baseline
+    };
+
+    let result = compile(both(A, B), Some(anonymous));
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Compiled);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
+    assert_eq!(
+        ignored_baseline_warning(&result),
+        Some("baseline ignored: it carries no contextDigest")
     );
+}
+
+/// What a name resolved to last time depends on the prelude, so a run under a
+/// different one throws the baseline away whole — and then resolves the very
+/// names the old prelude had supplied against nothing.
+#[test]
+fn a_baseline_from_a_different_prelude_is_ignored() {
+    let (first, baseline) = first_run();
+
+    let result = compile_with(both(A, B), Some(baseline), Vec::new(), Some("none"));
+
+    assert_ne!(result.context_digest, first.context_digest);
+    assert_eq!(
+        ignored_baseline_warning(&result),
+        Some("baseline ignored: it was built under a different compile context")
+    );
+    assert!(!result.success);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Failed);
+    assert!(
+        has_code(module(&result, "B"), "ELM_RESOLVE_NOT_FOUND"),
+        "`Int` comes from the prelude, and there is no prelude now: {:?}",
+        module(&result, "B").diagnostics
+    );
+}
+
+// ----------------------------------------------------------------------------
+// A dependency distribution is part of the compile context
+// ----------------------------------------------------------------------------
+
+const DEP_URI: &str = "file:///dep/Types.elm";
+const DEP_WITH_V: &str =
+    "module Types exposing (U, V)\n\ntype alias U = Int\n\n\ntype alias V = String\n";
+const DEP_WITHOUT_V: &str = "module Types exposing (U)\n\ntype alias U = Int\n";
+const A_ON_DEP: &str =
+    "module A exposing (T)\n\nimport Acme.Lib.Types\n\ntype alias T = Acme.Lib.Types.V\n";
+
+/// The dependency package `Acme.Lib`, compiled by this very frontend, so that
+/// the two runs differ in nothing but the distribution supplied to them.
+fn acme_lib(source: &str) -> CompileDependency {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let result = extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents: vec![document(DEP_URI, source)],
+            package: CompilePackage {
+                name: "Acme.Lib".into(),
+                exposed_modules: None,
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: Default::default(),
+            },
+            baseline: None,
+        })
+        .unwrap();
+    assert!(result.success, "{:?}", result.diagnostics);
+    CompileDependency {
+        package_name: "Acme.Lib".into(),
+        ir_version: "3".into(),
+        distribution: result.ir.expect("a distribution"),
+    }
+}
+
+/// A module's compiled form depends on the dependency distributions it was
+/// resolved against just as much as on its own source. Reusing a module here
+/// would hand the host IR naming a type that no longer exists, and the run
+/// would call itself a success.
+#[test]
+fn a_dependency_that_lost_a_type_invalidates_the_whole_baseline() {
+    let documents = || vec![document(A_URI, A_ON_DEP), document(B_URI, B)];
+    let first = compile_with(documents(), None, vec![acme_lib(DEP_WITH_V)], None);
+    assert!(first.success, "{:?}", first.diagnostics);
+    let baseline = baseline_from(&CompileBaseline::default(), &first);
+
+    let result = compile_with(
+        documents(),
+        Some(baseline),
+        vec![acme_lib(DEP_WITHOUT_V)],
+        None,
+    );
+
+    assert_ne!(result.context_digest, first.context_digest);
+    assert_eq!(
+        ignored_baseline_warning(&result),
+        Some("baseline ignored: it was built under a different compile context")
+    );
+    assert!(!result.success);
+    // Nothing in the sources changed, so only the dependency can have done this.
+    assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Failed);
+    assert!(
+        has_code(module(&result, "A"), "ELM_RESOLVE_NOT_FOUND"),
+        "{:?}",
+        module(&result, "A").diagnostics
+    );
+}
+
+/// The same dependency, supplied again, is the same context: reuse still works
+/// when a run is handed dependencies at all.
+#[test]
+fn an_unchanged_dependency_keeps_the_baseline_usable() {
+    let documents = || vec![document(A_URI, A_ON_DEP), document(B_URI, B)];
+    let first = compile_with(documents(), None, vec![acme_lib(DEP_WITH_V)], None);
+    let baseline = baseline_from(&CompileBaseline::default(), &first);
+
+    let result = compile_with(documents(), Some(baseline), vec![acme_lib(DEP_WITH_V)], None);
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(ignored_baseline_warning(&result), None);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Unchanged);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Unchanged);
 }
 
 #[test]

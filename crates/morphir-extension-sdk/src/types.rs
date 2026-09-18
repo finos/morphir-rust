@@ -338,6 +338,12 @@ pub struct CompileResult {
     /// Per-module incremental compilation results, when the frontend supports them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub module_results: Vec<ModuleResult>,
+    /// Digest of the compile context these results were produced under, when the
+    /// frontend computes one. A host stores it next to the module results it
+    /// keeps and echoes it back as [`CompileBaseline::context_digest`]; a run
+    /// under a different context cannot reuse them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_digest: Option<String>,
 }
 
 /// A module baseline captured from a prior compilation.
@@ -366,12 +372,16 @@ pub struct CompileBaseline {
     /// Modules known from a prior compilation.
     #[serde(default)]
     pub modules: Vec<BaselineModule>,
-    /// Digest of the frontend configuration the baseline was built with, when
-    /// the host recorded one. A frontend whose configuration digest differs
-    /// cannot reuse this baseline, because the entries describe resolution
-    /// against something else.
+    /// Digest of the compile context the baseline was built under, as the
+    /// producing run reported it in [`CompileResult::context_digest`].
+    ///
+    /// Everything a module's compiled form depends on besides its own source —
+    /// the IR version, the frontend's configuration, and the dependency
+    /// distributions supplied with the request — is folded into this one value.
+    /// A run whose context digest differs, or a baseline that carries none,
+    /// describes resolution against something else and cannot be reused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prelude_digest: Option<String>,
+    pub context_digest: Option<String>,
 }
 
 /// Outcome of compiling (or reusing) a single module in an incremental compilation.
@@ -764,6 +774,7 @@ mod tests {
             }],
             modules: vec!["Example".into()],
             module_results: vec![],
+            context_digest: None,
         };
 
         assert_eq!(serde_json::to_value(&result).unwrap(), expected);
@@ -994,20 +1005,45 @@ mod incremental_tests {
         assert_eq!(serde_json::to_value(&baseline).unwrap(), json);
     }
 
-    /// `preludeDigest` is optional in both directions: a baseline written
+    /// `contextDigest` is optional in both directions: a baseline written
     /// before the field existed still decodes, and one that carries it comes
     /// back out byte-identical.
     #[test]
-    fn baseline_prelude_digest_is_optional_and_round_trips() {
+    fn baseline_context_digest_is_optional_and_round_trips() {
         let without = serde_json::json!({"modules": []});
         let baseline: CompileBaseline = serde_json::from_value(without.clone()).unwrap();
-        assert_eq!(baseline.prelude_digest, None);
+        assert_eq!(baseline.context_digest, None);
         assert_eq!(serde_json::to_value(&baseline).unwrap(), without);
 
-        let with = serde_json::json!({"modules": [], "preludeDigest": "sha256:cc"});
+        let with = serde_json::json!({"modules": [], "contextDigest": "sha256:cc"});
         let baseline: CompileBaseline = serde_json::from_value(with.clone()).unwrap();
-        assert_eq!(baseline.prelude_digest.as_deref(), Some("sha256:cc"));
+        assert_eq!(baseline.context_digest.as_deref(), Some("sha256:cc"));
         assert_eq!(serde_json::to_value(&baseline).unwrap(), with);
+    }
+
+    /// A result's `contextDigest` is what a host stores and echoes back: it is
+    /// omitted when the frontend computes none, and survives a round trip.
+    #[test]
+    fn result_context_digest_is_optional_and_round_trips() {
+        let json = serde_json::json!({
+            "success": true,
+            "diagnostics": [],
+            "modules": [],
+            "contextDigest": "sha256:dd"
+        });
+        let result: CompileResult = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(result.context_digest.as_deref(), Some("sha256:dd"));
+        assert_eq!(serde_json::to_value(&result).unwrap(), json);
+
+        let without: CompileResult =
+            serde_json::from_value(serde_json::json!({"success": true})).unwrap();
+        assert_eq!(without.context_digest, None);
+        assert!(
+            serde_json::to_value(&without)
+                .unwrap()
+                .get("contextDigest")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1019,6 +1055,7 @@ mod incremental_tests {
             diagnostics: vec![],
             modules: vec![],
             module_results: vec![],
+            context_digest: None,
         };
         assert!(
             serde_json::to_value(&result)

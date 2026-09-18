@@ -5,8 +5,11 @@
 //! diagnostic and no module results: nothing about the documents was even
 //! looked at, so there is nothing per-module to report.
 
-use morphir_extension_sdk::{CompileOptions, CompileRequest, Diagnostic, DiagnosticSeverity};
+use morphir_extension_sdk::{CompileRequest, Diagnostic, DiagnosticSeverity};
+use serde::Serialize;
 
+use crate::digest::sha256_hex;
+use crate::frontend::resolve::DependencyInterface;
 use crate::prelude::{self, Prelude};
 use crate::resolved::Access;
 
@@ -23,6 +26,7 @@ pub struct Validated {
     /// The request's `typesOnly` flag. This frontend lowers type declarations
     /// only, so it is recorded rather than acted on.
     pub types_only: bool,
+    /// The prelude names are resolved against.
     pub prelude: Prelude,
     /// The package path, one segment per `/`- or `.`-separated part.
     pub package: Vec<String>,
@@ -86,17 +90,63 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
     })
 }
 
-/// The digest of the prelude a set of compile options selects.
+/// The identity of everything a module's compiled form depends on besides its
+/// own source: the IR version being written, the `typesOnly` flag, the prelude
+/// names resolve against, and the public interfaces the request's dependency
+/// distributions supply.
 ///
-/// A baseline is only reusable by a run whose prelude is the same one, because
-/// what a name resolved to last time depends on it. The digest is what a host
-/// stores next to the results it keeps (`CompileBaseline::prelude_digest`) and
-/// echoes back on the next request; this function is how the host computes it
-/// through this crate rather than guessing at the prelude's shape.
-pub fn prelude_digest_for(options: &CompileOptions) -> Result<String, Diagnostic> {
-    prelude::from_option(options.extra.get("elmPrelude"))
-        .map(|prelude| prelude.digest())
-        .map_err(|reason| request_error(format!("invalid `elmPrelude` option: {reason}")))
+/// This is the value a baseline is scoped to. A run is allowed to reuse a
+/// module only when it is compiling under the very same context, because a
+/// reused module's references were resolved under the old one — a dependency
+/// that lost a type, or a different prelude, would otherwise be invisible to
+/// the reuse decision.
+///
+/// The digest is computed over a canonical JSON rendering with the
+/// dependencies sorted by package path and each package's modules sorted by
+/// name, so two runs supplied the same dependencies in a different order agree.
+pub fn context_digest(validated: &Validated, dependencies: &[DependencyInterface]) -> String {
+    let mut dependencies: Vec<DependencyIdentity> = dependencies
+        .iter()
+        .map(|dependency| {
+            let mut modules: Vec<(Vec<String>, String)> = dependency
+                .modules
+                .iter()
+                .map(|module| (module.name.clone(), module.digest()))
+                .collect();
+            modules.sort();
+            DependencyIdentity {
+                package: dependency.package.clone(),
+                modules,
+            }
+        })
+        .collect();
+    dependencies.sort_by(|left, right| left.package.cmp(&right.package));
+
+    let identity = ContextIdentity {
+        ir_version: &validated.ir_version,
+        types_only: validated.types_only,
+        prelude_digest: validated.prelude.digest(),
+        dependencies,
+    };
+    let json = serde_json::to_vec(&identity).expect("the compile context serializes to JSON");
+    sha256_hex(&json)
+}
+
+/// The canonical shape [`context_digest`] hashes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextIdentity<'a> {
+    ir_version: &'a str,
+    types_only: bool,
+    prelude_digest: String,
+    dependencies: Vec<DependencyIdentity>,
+}
+
+/// One dependency package's identity: its path and its modules' interfaces.
+#[derive(Serialize)]
+struct DependencyIdentity {
+    package: Vec<String>,
+    modules: Vec<(Vec<String>, String)>,
 }
 
 /// The package path a Morphir package name spells. Both the `local/example`
@@ -140,30 +190,59 @@ mod tests {
         assert_eq!(module_access(Some(&[]), "My.Types"), Access::Private);
     }
 
+    /// Everything the identity is meant to cover moves the digest, and nothing
+    /// else does — including the order the dependencies arrived in.
     #[test]
-    fn the_prelude_digest_follows_the_option_the_request_states() {
-        let options = |value: Option<serde_json::Value>| {
-            let mut extra = std::collections::HashMap::new();
-            if let Some(value) = value {
-                extra.insert("elmPrelude".to_string(), value);
-            }
-            CompileOptions {
-                types_only: false,
-                ir_version: "3".into(),
-                extra,
-            }
+    fn the_context_digest_covers_the_version_the_prelude_and_the_dependencies() {
+        use crate::resolved::{Interface, InterfaceType};
+
+        let validated = |ir_version: &str, prelude_id: &str| Validated {
+            ir_version: ir_version.to_string(),
+            types_only: false,
+            prelude: prelude::from_option(Some(&serde_json::json!(prelude_id)))
+                .expect("a known prelude"),
+            package: vec!["My".into()],
+            exposed: None,
+        };
+        let interface = |type_name: &str| Interface {
+            name: vec!["Types".into()],
+            types: vec![InterfaceType {
+                name: type_name.into(),
+                params: vec![],
+                alias: None,
+                constructors: None,
+            }],
+        };
+        let dependency = |package: &str, type_name: &str| DependencyInterface {
+            package: vec![package.to_string()],
+            modules: vec![interface(type_name)],
         };
 
-        let default = prelude_digest_for(&options(None)).expect("the default prelude");
-        assert!(default.starts_with("sha256:"));
+        let base = context_digest(&validated("3", "elm-core"), &[]);
+        assert!(base.starts_with("sha256:"));
+        assert_ne!(base, context_digest(&validated("4", "elm-core"), &[]));
+        assert_ne!(base, context_digest(&validated("3", "none"), &[]));
+
+        let with = context_digest(
+            &validated("3", "elm-core"),
+            &[dependency("Acme", "T"), dependency("Beta", "U")],
+        );
+        assert_ne!(base, with);
         assert_eq!(
-            default,
-            prelude_digest_for(&options(Some(serde_json::json!("elm-core")))).unwrap()
+            with,
+            context_digest(
+                &validated("3", "elm-core"),
+                &[dependency("Beta", "U"), dependency("Acme", "T")]
+            ),
+            "the order dependencies arrive in is not part of the identity"
         );
         assert_ne!(
-            default,
-            prelude_digest_for(&options(Some(serde_json::json!("none")))).unwrap()
+            with,
+            context_digest(
+                &validated("3", "elm-core"),
+                &[dependency("Acme", "T"), dependency("Beta", "Renamed")]
+            ),
+            "a dependency whose interface changed is a different context"
         );
-        assert!(prelude_digest_for(&options(Some(serde_json::json!("nope")))).is_err());
     }
 }

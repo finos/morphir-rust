@@ -249,6 +249,7 @@ impl Frontend for RecordingExtension {
             diagnostics: vec![],
             modules: request.package.exposed_modules.unwrap_or_default(),
             module_results: vec![],
+            context_digest: None,
         })
     }
 
@@ -368,6 +369,7 @@ fn successful_recording_compile_result(request: CompileRequest) -> CompileResult
         diagnostics: vec![],
         modules: request.package.exposed_modules.unwrap_or_default(),
         module_results: vec![],
+        context_digest: None,
     }
 }
 

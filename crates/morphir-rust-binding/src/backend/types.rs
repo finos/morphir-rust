@@ -24,6 +24,12 @@ pub(super) struct Renderer<'a> {
     pub helpers: BTreeMap<String, Vec<TokenStream>>,
 }
 
+#[derive(Clone, Copy)]
+enum RenderContext {
+    TypeDefinition,
+    FunctionSignature,
+}
+
 impl Renderer<'_> {
     pub fn markers(
         &self,
@@ -76,6 +82,19 @@ impl Renderer<'_> {
     }
 
     pub fn expression(&mut self, tpe: &Type, owner: &Declaration) -> Outcome<TokenStream> {
+        self.expression_in(tpe, owner, RenderContext::TypeDefinition)
+    }
+
+    pub fn signature(&mut self, tpe: &Type, owner: &Declaration) -> Outcome<TokenStream> {
+        self.expression_in(tpe, owner, RenderContext::FunctionSignature)
+    }
+
+    fn expression_in(
+        &mut self,
+        tpe: &Type,
+        owner: &Declaration,
+        context: RenderContext,
+    ) -> Outcome<TokenStream> {
         match tpe {
             Type::Unit(_) => Ok(quote!(())),
             Type::Variable(_, name) => {
@@ -91,13 +110,13 @@ impl Renderer<'_> {
             Type::Tuple(_, items) => {
                 let items = items
                     .iter()
-                    .map(|t| self.expression(t, owner))
+                    .map(|t| self.expression_in(t, owner, context))
                     .collect::<Outcome<Vec<_>>>()?;
                 Ok(quote!((#(#items,)*)))
             }
             Type::Function(_, input, output) => {
-                let input = self.expression(input, owner)?;
-                let output = self.expression(output, owner)?;
+                let input = self.expression_in(input, owner, context)?;
+                let output = self.expression_in(output, owner, context)?;
                 Ok(quote!(::std::rc::Rc<dyn ::std::ops::Fn(#input) -> #output>))
             }
             Type::Record(_, fields) => self.record_helper(fields, None, owner),
@@ -106,7 +125,7 @@ impl Renderer<'_> {
                 let fqname = name.to_canonical_string();
                 let args = args
                     .iter()
-                    .map(|t| self.expression(t, owner))
+                    .map(|t| self.expression_in(t, owner, context))
                     .collect::<Outcome<Vec<_>>>()?;
                 if let Some(symbol) = self.symbols.get(&fqname) {
                     arity(&fqname, symbol.arity, args.len())?;
@@ -114,7 +133,9 @@ impl Renderer<'_> {
                     let generics = arguments(&args);
                     let tpe = quote!(#path #generics);
                     return Ok(
-                        if recursive(self.package, &owner.fqname, &fqname, &mut BTreeSet::new()) {
+                        if matches!(context, RenderContext::TypeDefinition)
+                            && recursive(self.package, &owner.fqname, &fqname, &mut BTreeSet::new())
+                        {
                             quote!(::std::boxed::Box<#tpe>)
                         } else {
                             tpe

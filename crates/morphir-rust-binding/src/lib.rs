@@ -1,4 +1,4 @@
-//! Rust type frontend and backend for Morphir IR v3 and v4.
+//! Rust type and conditional-function frontend and backend for Morphir IR v3 and v4.
 //! Explicit native and external function bindings are extracted into v4 value definitions.
 //!
 //! ```
@@ -10,6 +10,7 @@
 
 mod backend;
 mod frontend;
+mod values;
 
 use morphir_extension_sdk::prelude::*;
 
@@ -25,7 +26,8 @@ impl Extension for RustExtension {
             version: env!("CARGO_PKG_VERSION").into(),
             types: vec![ExtensionType::Frontend, ExtensionType::Backend],
             description: Some(
-                "Rust types for Morphir IR v3/v4 and explicit v4 native/external bindings".into(),
+                "Rust types and conditional functions for IR v3/v4, with explicit v4 bindings"
+                    .into(),
             ),
             license: Some("Apache-2.0".into()),
             ..Default::default()

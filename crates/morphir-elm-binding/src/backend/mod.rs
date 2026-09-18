@@ -37,8 +37,9 @@ pub const TARGET: &str = "elm";
 ///
 /// One artifact per module, at `src/<Module/Path>.elm`. Value definitions are
 /// counted and reported once as a warning; a construct with no Elm form is
-/// reported and left out. Only a document this backend cannot read at all is a
-/// failure, and then there is nothing to write.
+/// reported, left out, and makes the result unsuccessful — the artifacts for
+/// the modules that did generate are still returned. A document this backend
+/// cannot read at all fails with nothing to write.
 pub fn generate(request: GenerateRequest) -> GenerateResult {
     if request.target != TARGET {
         return refused(format!(
@@ -87,8 +88,17 @@ pub fn generate(request: GenerateRequest) -> GenerateResult {
         });
     }
 
+    // A document that would not decode at all has already returned above. What
+    // is left is a document that decoded with something in it this backend
+    // could not write: the artifacts for every other module are still worth
+    // handing back, but the run did not generate what it was asked to, so it is
+    // not a success.
+    let success = !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+
     GenerateResult {
-        success: true,
+        success,
         artifacts,
         diagnostics,
     }

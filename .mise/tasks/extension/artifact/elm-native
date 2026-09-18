@@ -31,6 +31,14 @@ if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) e
     echo "Python 3.11 or newer is required to package extensions" >&2
     exit 1
 fi
+if ! command -v clang >/dev/null 2>&1; then
+    echo "clang is required to compile the vendored tree-sitter grammar for wasm32-unknown-unknown" >&2
+    exit 1
+fi
+if ! command -v llvm-ar >/dev/null 2>&1; then
+    echo "llvm-ar is required to archive the vendored tree-sitter grammar for wasm32-unknown-unknown" >&2
+    exit 1
+fi
 
 require_snapshot_file() {
     relative="$1"

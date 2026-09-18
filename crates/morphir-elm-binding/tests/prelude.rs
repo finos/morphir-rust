@@ -94,27 +94,45 @@ fn elm_core_matches_morphir_elm_resolver() {
         return;
     };
     let p = builtin("elm-core").unwrap();
-    // every morphirSdkPrefix "X" in sdkModuleMapping is an alias X -> Morphir.SDK.X
-    for cap in regex_lite::Regex::new(r#"morphirSdkPrefix "([A-Za-z]+)""#)
+
+    // A pin that matches nothing pins nothing: if either pattern stops
+    // capturing — because the upstream module was renamed or rewritten — the
+    // loops below would pass over an empty iterator and say the prelude is
+    // still in step when nothing was compared. Both are counted first.
+    let aliases: Vec<String> = regex_lite::Regex::new(r#"morphirSdkPrefix "([A-Za-z]+)""#)
         .unwrap()
         .captures_iter(&src)
-    {
-        let m = cap[1].to_string();
+        .map(|cap| cap[1].to_string())
+        .collect();
+    let imports: Vec<String> = regex_lite::Regex::new(r#"Import \(en \[ "([A-Za-z]+)" \]\)"#)
+        .unwrap()
+        .captures_iter(&src)
+        .map(|cap| cap[1].to_string())
+        .collect();
+    assert!(
+        !aliases.is_empty(),
+        "no `morphirSdkPrefix` entries found in {}: the pin would be vacuous",
+        path.display()
+    );
+    assert!(
+        !imports.is_empty(),
+        "no `Import (en [ .. ])` entries found in {}: the pin would be vacuous",
+        path.display()
+    );
+
+    // every morphirSdkPrefix "X" in sdkModuleMapping is an alias X -> Morphir.SDK.X
+    for m in &aliases {
         assert_eq!(
-            p.alias_for(std::slice::from_ref(&m)),
+            p.alias_for(std::slice::from_ref(m)),
             Some(vec!["Morphir".into(), "SDK".into(), m.clone()]),
             "alias missing for {m}"
         );
     }
     // every Import (en [ "X" ]) in defaultImports is an implicit import
-    for cap in regex_lite::Regex::new(r#"Import \(en \[ "([A-Za-z]+)" \]\)"#)
-        .unwrap()
-        .captures_iter(&src)
-    {
+    for m in &imports {
         assert!(
-            p.implicit_import.iter().any(|i| i.module == cap[1]),
-            "implicit import missing for {}",
-            &cap[1]
+            p.implicit_import.iter().any(|i| &i.module == m),
+            "implicit import missing for {m}"
         );
     }
 }

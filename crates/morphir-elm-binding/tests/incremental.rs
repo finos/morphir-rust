@@ -100,7 +100,10 @@ fn baseline_from(previous: &CompileBaseline, result: &CompileResult) -> CompileB
         }
     }
 
-    CompileBaseline { modules }
+    CompileBaseline {
+        modules,
+        prelude_digest: previous.prelude_digest.clone(),
+    }
 }
 
 fn module<'a>(result: &'a CompileResult, name: &str) -> &'a ModuleResult {
@@ -285,6 +288,7 @@ fn an_undecodable_baseline_entry_invalidates_its_dependents() {
                 entry
             })
             .collect(),
+        prelude_digest: None,
     };
 
     let result = compile(vec![document(A_URI, A)], Some(baseline));
@@ -301,6 +305,156 @@ fn an_undecodable_baseline_entry_invalidates_its_dependents() {
                     && diagnostic.code.as_deref() == Some("ELM_REQUEST")
                     && diagnostic.message.contains("baseline for module B ignored")
             ),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+// ----------------------------------------------------------------------------
+// What a module depends on, and what a baseline was built with
+// ----------------------------------------------------------------------------
+
+const AMBIGUOUS_A: &str = "module A exposing (T)\n\nimport B exposing (..)\n\nimport C exposing (..)\n\ntype alias T = X\n";
+const AMBIGUOUS_B: &str = "module B exposing (U)\n\ntype alias U = Int\n";
+const AMBIGUOUS_B_WITH_X: &str =
+    "module B exposing (U, X)\n\ntype alias U = Int\n\n\ntype alias X = Int\n";
+const AMBIGUOUS_C: &str = "module C exposing (X)\n\ntype alias X = String\n";
+
+fn three(a: &str, b: &str, c: &str) -> Vec<SourceDocument> {
+    vec![
+        document(A_URI, a),
+        document(B_URI, b),
+        document("file:///work/C.elm", c),
+    ]
+}
+
+/// `dependsOn` is every in-package module a module *imports*, not only the ones
+/// whose names it resolved against. A imports B and C, both `exposing (..)`,
+/// and uses only C's `X`. Widening B so that it exposes an `X` too makes A's
+/// bare `X` ambiguous — a change in a module A never named. Recording only the
+/// resolved references would leave A reused, and an incremental run would
+/// disagree with a clean one about a package that does not compile.
+#[test]
+fn an_unused_import_is_still_a_dependency() {
+    let clean = compile(three(AMBIGUOUS_A, AMBIGUOUS_B, AMBIGUOUS_C), None);
+    assert!(clean.success, "{:?}", clean.diagnostics);
+    assert_eq!(
+        module(&clean, "A").depends_on,
+        vec!["B".to_string(), "C".to_string()],
+        "A imports both, and uses only C"
+    );
+    let baseline = baseline_from(&CompileBaseline::default(), &clean);
+
+    let result = compile(
+        three(AMBIGUOUS_A, AMBIGUOUS_B_WITH_X, AMBIGUOUS_C),
+        Some(baseline),
+    );
+
+    // A's source did not change, so the only thing that can have recompiled it
+    // is the dependency it never named. Recompiling is what surfaces the
+    // ambiguity, and a module whose references do not resolve is `failed`.
+    assert_ne!(module(&result, "A").status, ModuleStatus::Unchanged);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Failed);
+    assert!(
+        has_code(module(&result, "A"), "ELM_RESOLVE_AMBIGUOUS"),
+        "{:?}",
+        module(&result, "A").diagnostics
+    );
+    assert!(!result.success);
+}
+
+/// A document whose module header is gone no longer says which module it is,
+/// but the baseline still recognises its uri. That is enough to report it as
+/// the module that failed rather than as a module that was deleted, so its
+/// dependents take the ordinary failed-dependency path and resolve against its
+/// last good interface.
+#[test]
+fn a_document_that_lost_its_module_header_fails_as_the_module_the_baseline_names() {
+    let (_, baseline) = first_run();
+
+    let headerless = "\ntype alias U = Int\n";
+    let result = compile(both(A, headerless), Some(baseline));
+
+    assert!(!result.success);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Failed);
+    assert!(has_code(module(&result, "B"), "ELM_SYNTAX"));
+    assert!(module(&result, "B").source_digest.is_some());
+    assert!(module(&result, "B").ir.is_none());
+    assert_eq!(module(&result, "B").uri, B_URI);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Unchanged);
+    assert_eq!(library_modules(&result), vec!["A".to_string()]);
+}
+
+/// Without a baseline there is no name to give the document, so it is dropped
+/// with its diagnostics as before, and its dependent is left with nothing to
+/// resolve against.
+#[test]
+fn a_headerless_document_the_baseline_does_not_know_is_still_dropped() {
+    let result = compile(both(A, "\ntype alias U = Int\n"), None);
+
+    assert!(!result.success);
+    assert_eq!(result.module_results.len(), 1);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Failed);
+    assert!(has_code(module(&result, "A"), "ELM_RESOLVE_NOT_FOUND"));
+}
+
+/// What a name resolved to last time depends on the prelude, so a baseline
+/// built with a different one describes a different compilation and is thrown
+/// away whole.
+#[test]
+fn a_baseline_from_a_different_prelude_is_ignored() {
+    let (_, baseline) = first_run();
+    let mismatched = CompileBaseline {
+        prelude_digest: Some("sha256:some-other-prelude".to_string()),
+        ..baseline.clone()
+    };
+
+    let result = compile(both(A, B), Some(mismatched));
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Compiled);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Compiled);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Warning
+                && diagnostic.code.as_deref() == Some("ELM_REQUEST")
+                && diagnostic
+                    .message
+                    .contains("baseline ignored: it was built with a different prelude")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+/// The digest the extension itself reports for the request's prelude is the one
+/// a host stores, so echoing it back reuses the baseline exactly as leaving it
+/// out does.
+#[test]
+fn a_baseline_from_the_same_prelude_is_reused() {
+    let (_, baseline) = first_run();
+    let matched = CompileBaseline {
+        prelude_digest: Some(
+            morphir_elm_binding::frontend::boundary::prelude_digest_for(&CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: Default::default(),
+            })
+            .expect("the default prelude has a digest"),
+        ),
+        ..baseline.clone()
+    };
+
+    let result = compile(both(A, B), Some(matched));
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(module(&result, "A").status, ModuleStatus::Unchanged);
+    assert_eq!(module(&result, "B").status, ModuleStatus::Unchanged);
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("different prelude")),
         "{:?}",
         result.diagnostics
     );

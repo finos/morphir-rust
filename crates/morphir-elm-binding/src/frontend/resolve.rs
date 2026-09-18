@@ -49,6 +49,7 @@ pub struct ResolveError {
 const NOT_FOUND: &str = "ELM_RESOLVE_NOT_FOUND";
 const AMBIGUOUS: &str = "ELM_RESOLVE_AMBIGUOUS";
 const DUPLICATE_TYPE: &str = "ELM_DUPLICATE_TYPE";
+const TYPE_CYCLE: &str = "ELM_TYPE_CYCLE";
 
 /// Where a module path was found, and what it declares.
 struct ModuleTarget {
@@ -79,6 +80,7 @@ pub fn resolve(
         errors: Vec::new(),
     };
     resolver.report_duplicate_declarations();
+    resolver.report_alias_cycles();
     resolver.build_tables();
 
     let types = module
@@ -146,6 +148,110 @@ impl Resolver<'_> {
                     names::type_spelling(written)
                 ),
             );
+        }
+    }
+
+    /// Reports a module's own type aliases that stand for each other in a
+    /// circle: `type alias T = T`, or `A = B` with `B = A`.
+    ///
+    /// An alias is not a type of its own — it is the type it stands for,
+    /// written out — so a circle of them describes nothing that can ever be
+    /// written down, and expanding one would not terminate. A custom type is a
+    /// type of its own and may name itself as often as it likes, so it is not
+    /// an edge here and a cycle that passes through one is no cycle at all.
+    ///
+    /// Every declaration on a circle is reported, at its own span, so the
+    /// reader is told the whole of what has to be broken rather than one
+    /// arbitrary member of it.
+    fn report_alias_cycles(&mut self) {
+        let aliases: BTreeMap<String, (&str, Span)> = self
+            .module
+            .types
+            .iter()
+            .filter_map(|declaration| match declaration {
+                ast::TypeDecl::Alias { name, span, .. } => {
+                    Some((names::type_spelling(name), (name.as_str(), *span)))
+                }
+                ast::TypeDecl::Custom { .. } => None,
+            })
+            .collect();
+
+        let edges: BTreeMap<String, BTreeSet<String>> = self
+            .module
+            .types
+            .iter()
+            .filter_map(|declaration| match declaration {
+                ast::TypeDecl::Alias { name, body, .. } => {
+                    let mut referenced = BTreeSet::new();
+                    self.collect_local_aliases(body, &aliases, &mut referenced);
+                    Some((names::type_spelling(name), referenced))
+                }
+                ast::TypeDecl::Custom { .. } => None,
+            })
+            .collect();
+
+        let mut reported: Vec<(Span, String)> = Vec::new();
+        for (spelled, (written, span)) in &aliases {
+            if !reaches(spelled, spelled, &edges, &mut BTreeSet::new()) {
+                continue;
+            }
+            reported.push((
+                *span,
+                format!(
+                    "type alias `{written}` stands for itself, directly or through other aliases \
+                     in this module; an alias cannot be circular"
+                ),
+            ));
+        }
+        for (span, message) in reported {
+            self.error(TYPE_CYCLE, span, message);
+        }
+    }
+
+    /// Every alias of this module a type expression names, however deeply.
+    ///
+    /// A reference qualified by this module's own path counts, because it names
+    /// the same declaration; one qualified by anything else cannot.
+    fn collect_local_aliases(
+        &self,
+        ty: &ast::TypeExpr,
+        aliases: &BTreeMap<String, (&str, Span)>,
+        found: &mut BTreeSet<String>,
+    ) {
+        match ty {
+            ast::TypeExpr::Var { .. } | ast::TypeExpr::Unit { .. } => {}
+            ast::TypeExpr::Ref {
+                module, name, args, ..
+            } => {
+                if module.is_empty() || module == &self.module.name {
+                    let spelled = names::type_spelling(name);
+                    if aliases.contains_key(&spelled) {
+                        found.insert(spelled);
+                    }
+                }
+                for arg in args {
+                    self.collect_local_aliases(arg, aliases, found);
+                }
+            }
+            ast::TypeExpr::Record { fields, .. } => {
+                for field in fields {
+                    self.collect_local_aliases(&field.ty, aliases, found);
+                }
+            }
+            ast::TypeExpr::ExtensibleRecord { fields, .. } => {
+                for field in fields {
+                    self.collect_local_aliases(&field.ty, aliases, found);
+                }
+            }
+            ast::TypeExpr::Tuple { items, .. } => {
+                for item in items {
+                    self.collect_local_aliases(item, aliases, found);
+                }
+            }
+            ast::TypeExpr::Function { arg, result, .. } => {
+                self.collect_local_aliases(arg, aliases, found);
+                self.collect_local_aliases(result, aliases, found);
+            }
         }
     }
 
@@ -587,6 +693,28 @@ impl Resolver<'_> {
             message,
         });
     }
+}
+
+/// Whether `target` is reachable from `from` by following one or more edges.
+/// Called with `from == target` it answers whether that node sits on a circle.
+fn reaches(
+    from: &str,
+    target: &str,
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    let Some(next) = edges.get(from) else {
+        return false;
+    };
+    for step in next {
+        if step == target {
+            return true;
+        }
+        if visited.insert(step.clone()) && reaches(step, target, edges, visited) {
+            return true;
+        }
+    }
+    false
 }
 
 /// `package.module` for diagnostics, e.g. `Morphir.SDK.String`.

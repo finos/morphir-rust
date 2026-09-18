@@ -119,6 +119,38 @@ fn custom_type_constructors_and_skipped_values() {
     );
 }
 
+/// With no imports, the comment after the module header sits directly in front
+/// of the first declaration. Elm gives it to the module, so the declaration is
+/// undocumented rather than borrowing the module's doc.
+#[test]
+fn the_module_doc_is_not_also_the_first_declarations_doc() {
+    let src = "module A exposing (..)\n\n{-| What this module is for. -}\ntype alias T = Int\n";
+    let m = to_ast(&parse(src), src).expect("the module lowers");
+
+    assert_eq!(m.doc.as_deref(), Some("What this module is for."));
+    assert!(m.imports.is_empty());
+    let TypeDecl::Alias { name, doc, .. } = &m.types[0] else {
+        panic!("alias")
+    };
+    assert_eq!(name, "T");
+    assert_eq!(doc.as_deref(), None);
+}
+
+/// A declaration that has a doc comment of its own still gets it: only the one
+/// comment the module claimed is withheld.
+#[test]
+fn a_declaration_after_the_module_doc_keeps_its_own_doc() {
+    let src =
+        "module A exposing (..)\n\n{-| The module. -}\n{-| The type. -}\ntype alias T = Int\n";
+    let m = to_ast(&parse(src), src).expect("the module lowers");
+
+    assert_eq!(m.doc.as_deref(), Some("The module."));
+    let TypeDecl::Alias { doc, .. } = &m.types[0] else {
+        panic!("alias")
+    };
+    assert_eq!(doc.as_deref(), Some("The type."));
+}
+
 #[test]
 fn source_ranges_are_zero_based_utf16() {
     use morphir_elm_binding::frontend::source::range;

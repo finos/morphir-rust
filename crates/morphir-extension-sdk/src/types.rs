@@ -366,6 +366,12 @@ pub struct CompileBaseline {
     /// Modules known from a prior compilation.
     #[serde(default)]
     pub modules: Vec<BaselineModule>,
+    /// Digest of the frontend configuration the baseline was built with, when
+    /// the host recorded one. A frontend whose configuration digest differs
+    /// cannot reuse this baseline, because the entries describe resolution
+    /// against something else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prelude_digest: Option<String>,
 }
 
 /// Outcome of compiling (or reusing) a single module in an incremental compilation.
@@ -986,6 +992,22 @@ mod incremental_tests {
         let baseline: CompileBaseline = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(baseline.modules[0].depends_on, vec!["My.Other".to_string()]);
         assert_eq!(serde_json::to_value(&baseline).unwrap(), json);
+    }
+
+    /// `preludeDigest` is optional in both directions: a baseline written
+    /// before the field existed still decodes, and one that carries it comes
+    /// back out byte-identical.
+    #[test]
+    fn baseline_prelude_digest_is_optional_and_round_trips() {
+        let without = serde_json::json!({"modules": []});
+        let baseline: CompileBaseline = serde_json::from_value(without.clone()).unwrap();
+        assert_eq!(baseline.prelude_digest, None);
+        assert_eq!(serde_json::to_value(&baseline).unwrap(), without);
+
+        let with = serde_json::json!({"modules": [], "preludeDigest": "sha256:cc"});
+        let baseline: CompileBaseline = serde_json::from_value(with.clone()).unwrap();
+        assert_eq!(baseline.prelude_digest.as_deref(), Some("sha256:cc"));
+        assert_eq!(serde_json::to_value(&baseline).unwrap(), with);
     }
 
     #[test]

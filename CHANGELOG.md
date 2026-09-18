@@ -16,8 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching morphir-elm's `IncrementalResolve`), `none`, or an inline description of your own.
   Compilation is incremental and stateless: `CompileRequest.baseline` carries the modules a
   host holds, `CompileResult.moduleResults` reports each module's status, source digest,
-  interface digest, dependencies and IR, and a host feeds one run's `moduleResults` back as
-  the next run's `baseline`. Both MEP fields are optional and defaulted, so existing payloads
+  interface digest, dependencies and IR, and a host feeds one run's `moduleResults` back as the next run's
+  `baseline`. A module's `dependsOn` is every in-package module it imports as well as every
+  one its references resolved to, so a module imported `exposing (..)` and never named still
+  invalidates its dependents when it grows a type — which is what keeps an incremental run's
+  answer equal to a clean run's. `CompileBaseline.preludeDigest` records the prelude a
+  baseline was built with; a run whose prelude differs ignores the baseline whole and says so
+  with an `ELM_REQUEST` warning, and `frontend::boundary::prelude_digest_for` computes the
+  digest a host stores. All three MEP fields are optional and defaulted, so existing payloads
   are unchanged. The extension releases independently as `morphir-elm-native`, alongside the
   JavaScript `morphir-elm` provider, which stays the default for Elm.
 - **Release bundles record whether a frontend is incremental.** `.github/extensions.toml`

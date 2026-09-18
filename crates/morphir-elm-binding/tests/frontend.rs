@@ -286,6 +286,77 @@ fn two_type_names_a_document_cannot_tell_apart_are_refused() {
     assert!(duplicate[0].location.is_some());
 }
 
+/// A dependency distribution that will not read is reported and then ignored,
+/// so every module in the request can still compile and the distribution is
+/// still assembled. The request was not carried out as asked, though — a module
+/// that *had* named the dependency would have failed — so the result does not
+/// claim success.
+#[test]
+fn an_unreadable_dependency_is_an_error_even_when_no_module_names_it() {
+    let result = compile_as(
+        "elm",
+        "local/example",
+        vec![document("file:///work/My/Other.elm", OTHER)],
+        "3",
+        vec![CompileDependency {
+            package_name: "acme/lib".into(),
+            ir_version: "3".into(),
+            distribution: serde_json::json!({"garbage": true}),
+        }],
+    );
+
+    assert!(!result.success, "{:?}", result.diagnostics);
+    let request = codes(&result, "ELM_REQUEST");
+    assert_eq!(request.len(), 1, "{:?}", result.diagnostics);
+    assert_eq!(request[0].severity, DiagnosticSeverity::Error);
+    assert!(request[0].message.contains("acme/lib"), "{request:?}");
+    // The module that did not need the dependency still compiled, and the
+    // distribution it produced is still handed back.
+    assert!(result.ir.is_some());
+    assert_eq!(result.modules, vec!["My.Other".to_string()]);
+    assert_eq!(result.module_results[0].status, ModuleStatus::Compiled);
+}
+
+/// An alias is the type it stands for, written out, so a circle of aliases
+/// describes nothing. Every declaration on the circle is reported.
+#[test]
+fn circular_type_aliases_are_refused() {
+    let result = compile(
+        vec![document(
+            "file:///work/Loop.elm",
+            "module Loop exposing (A, B)\n\ntype alias A = B\n\n\ntype alias B = A\n",
+        )],
+        "3",
+    );
+
+    assert!(!result.success);
+    assert_eq!(result.module_results[0].status, ModuleStatus::Failed);
+    let cycles = codes(&result, "ELM_TYPE_CYCLE");
+    assert_eq!(cycles.len(), 2, "{:?}", result.diagnostics);
+    assert!(cycles.iter().all(|c| c.location.is_some()));
+    assert!(
+        cycles.iter().any(|c| c.message.contains("`A`"))
+            && cycles.iter().any(|c| c.message.contains("`B`")),
+        "{cycles:?}"
+    );
+}
+
+/// A custom type is a type of its own, not a spelling of another one, so it may
+/// name itself as often as it likes.
+#[test]
+fn a_recursive_custom_type_is_not_a_cycle() {
+    let result = compile(
+        vec![document(
+            "file:///work/Tree.elm",
+            "module Tree exposing (Tree)\n\ntype Tree = Leaf | Node Tree Tree\n",
+        )],
+        "3",
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert!(codes(&result, "ELM_TYPE_CYCLE").is_empty());
+}
+
 #[test]
 fn two_documents_declaring_one_module_are_refused() {
     let result = compile(

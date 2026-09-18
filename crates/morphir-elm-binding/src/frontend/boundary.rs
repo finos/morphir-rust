@@ -5,7 +5,7 @@
 //! diagnostic and no module results: nothing about the documents was even
 //! looked at, so there is nothing per-module to report.
 
-use morphir_extension_sdk::{CompileRequest, Diagnostic, DiagnosticSeverity};
+use morphir_extension_sdk::{CompileOptions, CompileRequest, Diagnostic, DiagnosticSeverity};
 
 use crate::prelude::{self, Prelude};
 use crate::resolved::Access;
@@ -86,6 +86,19 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
     })
 }
 
+/// The digest of the prelude a set of compile options selects.
+///
+/// A baseline is only reusable by a run whose prelude is the same one, because
+/// what a name resolved to last time depends on it. The digest is what a host
+/// stores next to the results it keeps (`CompileBaseline::prelude_digest`) and
+/// echoes back on the next request; this function is how the host computes it
+/// through this crate rather than guessing at the prelude's shape.
+pub fn prelude_digest_for(options: &CompileOptions) -> Result<String, Diagnostic> {
+    prelude::from_option(options.extra.get("elmPrelude"))
+        .map(|prelude| prelude.digest())
+        .map_err(|reason| request_error(format!("invalid `elmPrelude` option: {reason}")))
+}
+
 /// The package path a Morphir package name spells. Both the `local/example`
 /// and the `My.Package` spellings are accepted, and both separators split.
 pub fn package_path(name: &str) -> Vec<String> {
@@ -125,5 +138,32 @@ mod tests {
             Access::Public
         );
         assert_eq!(module_access(Some(&[]), "My.Types"), Access::Private);
+    }
+
+    #[test]
+    fn the_prelude_digest_follows_the_option_the_request_states() {
+        let options = |value: Option<serde_json::Value>| {
+            let mut extra = std::collections::HashMap::new();
+            if let Some(value) = value {
+                extra.insert("elmPrelude".to_string(), value);
+            }
+            CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra,
+            }
+        };
+
+        let default = prelude_digest_for(&options(None)).expect("the default prelude");
+        assert!(default.starts_with("sha256:"));
+        assert_eq!(
+            default,
+            prelude_digest_for(&options(Some(serde_json::json!("elm-core")))).unwrap()
+        );
+        assert_ne!(
+            default,
+            prelude_digest_for(&options(Some(serde_json::json!("none")))).unwrap()
+        );
+        assert!(prelude_digest_for(&options(Some(serde_json::json!("nope")))).is_err());
     }
 }

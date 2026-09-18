@@ -106,14 +106,22 @@ pub fn compile(request: CompileRequest) -> CompileResult {
 
     let (dependency_interfaces, mut diagnostics) =
         dependencies::from_request(&request.dependencies);
-    let (documents, skipped_documents) = read_documents(&request);
-    diagnostics.extend(skipped_documents.iter().cloned());
 
     let read = read_baseline(&request, &validated);
     let (baseline, baseline_interfaces) = (read.modules, read.interfaces);
     diagnostics.extend(read.diagnostics);
 
-    let package: HashSet<String> = documents.iter().map(Document::dotted).collect();
+    let (documents, skipped_documents, headerless) = read_documents(&request, &baseline);
+    diagnostics.extend(skipped_documents.iter().cloned());
+
+    // A document whose header could not be read still names a module when the
+    // baseline recognises its uri, so it is part of the package: its dependents
+    // must see a module that failed, not a module that was deleted.
+    let package: HashSet<String> = documents
+        .iter()
+        .map(Document::dotted)
+        .chain(headerless.iter().map(|entry| entry.name.clone()))
+        .collect();
     // A baseline entry that cannot be reused is, to a dependent, exactly an
     // interface that changed: a module the request no longer contains was
     // deleted, and one whose IR would not decode has no interface to offer. If
@@ -132,6 +140,12 @@ pub fn compile(request: CompileRequest) -> CompileResult {
         module_irs: Vec::new(),
         compiled: Vec::new(),
     };
+
+    // Before anything is walked, so that a dependent of a headerless document
+    // already sees it as stopped.
+    for entry in &headerless {
+        stop_headerless(&mut run, entry, &baseline_interfaces);
+    }
 
     let (order, cycle) = ordered(&documents, &package);
 
@@ -208,9 +222,16 @@ pub fn compile(request: CompileRequest) -> CompileResult {
         .filter(|result| is_written(result.status))
         .map(|result| result.name.clone())
         .collect();
+    // An Error anywhere — including one about the request rather than about a
+    // module, such as a dependency distribution that would not read — means the
+    // frontend did not compile what it was asked to, whatever the per-module
+    // statuses say.
     let success = ir.is_some()
         && skipped_documents.is_empty()
-        && run.results.iter().all(|result| is_written(result.status));
+        && run.results.iter().all(|result| is_written(result.status))
+        && !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
 
     CompileResult {
         success,
@@ -237,11 +258,31 @@ fn rejected(diagnostic: Diagnostic) -> CompileResult {
     }
 }
 
-/// Parses every document. A document whose module name cannot be read has no
-/// module to report a result for, so it is dropped with its diagnostics.
-fn read_documents(request: &CompileRequest) -> (Vec<Document>, Vec<Diagnostic>) {
+/// A document whose module header could not be read, but whose uri the baseline
+/// recognises, so the module it stands for is known even though its text is not.
+struct Headerless {
+    /// Dotted module name, from the baseline entry.
+    name: String,
+    uri: String,
+    source_digest: String,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Parses every document.
+///
+/// A document whose module name cannot be read names no module by itself. When
+/// the baseline recognises its uri the name is known anyway, and the document
+/// becomes a failed module ([`Headerless`]) so that its dependents take the
+/// ordinary failed-dependency path instead of being told the module was
+/// deleted. Without a baseline match there is nothing to report a result for,
+/// so it is dropped with its diagnostics.
+fn read_documents(
+    request: &CompileRequest,
+    baseline: &HashMap<String, BaselineModule>,
+) -> (Vec<Document>, Vec<Diagnostic>, Vec<Headerless>) {
     let mut documents: Vec<Document> = Vec::with_capacity(request.documents.len());
     let mut skipped = Vec::new();
+    let mut headerless: Vec<Headerless> = Vec::new();
 
     for source_document in &request.documents {
         let uri = source_document.uri.as_str();
@@ -264,15 +305,34 @@ fn read_documents(request: &CompileRequest) -> (Vec<Document>, Vec<Diagnostic>) 
         let module = match cst_to_ast::to_ast(&parsed, text) {
             Ok(module) => module,
             Err(error) => {
-                skipped.push(source::diagnostic(
+                let reported = source::diagnostic(
                     uri,
                     text,
                     error.span,
                     DiagnosticSeverity::Error,
                     SYNTAX,
                     error.message,
-                ));
-                skipped.extend(syntax);
+                );
+                match baseline
+                    .values()
+                    .find(|entry| entry.uri == uri)
+                    .filter(|entry| {
+                        !headerless.iter().any(|held| held.name == entry.name)
+                            && !documents
+                                .iter()
+                                .any(|document| document.dotted() == entry.name)
+                    }) {
+                    Some(entry) => headerless.push(Headerless {
+                        name: entry.name.clone(),
+                        uri: uri.to_string(),
+                        source_digest: sha256_hex(text.as_bytes()),
+                        diagnostics: std::iter::once(reported).chain(syntax).collect(),
+                    }),
+                    None => {
+                        skipped.push(reported);
+                        skipped.extend(syntax);
+                    }
+                }
                 continue;
             }
         };
@@ -301,7 +361,7 @@ fn read_documents(request: &CompileRequest) -> (Vec<Document>, Vec<Diagnostic>) 
         });
     }
 
-    (documents, skipped)
+    (documents, skipped, headerless)
 }
 
 /// The baseline the request supplied, once it has been read.
@@ -330,6 +390,19 @@ fn read_baseline(request: &CompileRequest, validated: &Validated) -> Baseline {
     let Some(supplied) = &request.baseline else {
         return baseline;
     };
+
+    // What a name resolved to last time depends on the prelude, so a baseline
+    // built with a different one describes a different compilation. It is
+    // thrown away whole rather than partly trusted.
+    let active = validated.prelude.digest();
+    if let Some(recorded) = &supplied.prelude_digest
+        && *recorded != active
+    {
+        baseline.diagnostics.push(boundary::request_warning(
+            "baseline ignored: it was built with a different prelude",
+        ));
+        return baseline;
+    }
 
     for entry in &supplied.modules {
         let name: Vec<String> = entry.name.split('.').map(str::to_string).collect();
@@ -579,15 +652,74 @@ fn compile_one(
         status: ModuleStatus::Compiled,
         source_digest: Some(digests.source),
         interface_digest: Some(digests.interface),
-        depends_on: resolved
-            .depends_on
-            .iter()
-            .map(|name| name.join("."))
-            .collect(),
+        depends_on: depends_on(&resolved, document, package),
         ir: Some(ir),
         diagnostics,
     });
     run.compiled.push(resolved);
+}
+
+/// What a module result reports as its dependencies: every in-package module
+/// whose name the resolver actually used, *and* every in-package module the
+/// document imports.
+///
+/// The second half is an over-approximation on purpose. A name that resolves
+/// nowhere today can resolve to an imported module tomorrow — adding
+/// `type alias T = Int` to a module that is imported `exposing (..)` can make a
+/// name that resolved elsewhere ambiguous — and a dependent that recorded only
+/// the references it resolved would be reused against a scope that changed
+/// underneath it. Widening to the imports is what keeps an incremental run
+/// equal to a clean one; the cost is recompiling a module whose unused import
+/// changed.
+fn depends_on(
+    resolved: &ResolvedModule,
+    document: &Document,
+    package: &HashSet<String>,
+) -> Vec<String> {
+    let mut names: Vec<String> = resolved
+        .depends_on
+        .iter()
+        .map(|name| name.join("."))
+        .chain(
+            document
+                .imports_within(package)
+                .into_iter()
+                .map(|(name, _)| name.join(".")),
+        )
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Records a document whose module header could not be read but whose module
+/// the baseline names: a failed module, so that its dependents resolve against
+/// its last good interface when there is one and are blocked when there is not.
+fn stop_headerless(
+    run: &mut Run,
+    entry: &Headerless,
+    baseline_interfaces: &HashMap<String, Interface>,
+) {
+    run.stopped.insert(entry.name.clone());
+    match baseline_interfaces.get(&entry.name) {
+        Some(interface) => {
+            let path: Vec<String> = entry.name.split('.').map(str::to_string).collect();
+            run.interfaces.insert(path, interface.clone());
+        }
+        None => {
+            run.changed.insert(entry.name.clone());
+        }
+    }
+    run.results.push(ModuleResult {
+        name: entry.name.clone(),
+        uri: entry.uri.clone(),
+        status: ModuleStatus::Failed,
+        source_digest: Some(entry.source_digest.clone()),
+        interface_digest: None,
+        depends_on: Vec::new(),
+        ir: None,
+        diagnostics: entry.diagnostics.clone(),
+    });
 }
 
 /// Records a module that produced no IR this run.
@@ -620,11 +752,15 @@ fn stop(
         status,
         source_digest: Some(document.source_digest.clone()),
         interface_digest: None,
-        depends_on: document
-            .imports_within(package)
-            .into_iter()
-            .map(|(name, _)| name.join("."))
-            .collect(),
+        depends_on: {
+            let mut names: Vec<String> = document
+                .imports_within(package)
+                .into_iter()
+                .map(|(name, _)| name.join("."))
+                .collect();
+            names.sort_unstable();
+            names
+        },
         ir: None,
         diagnostics,
     });

@@ -320,6 +320,89 @@ fn exposing_controls_type_and_constructor_access_and_interface_digest_ignores_pr
     assert_ne!(r1.interface_digest(), r3.interface_digest());
 }
 
+/// An alias is the type it stands for, written out, so a circle of aliases —
+/// direct or through a record field, a tuple or a type argument — describes a
+/// type that can never be written down. Every declaration on the circle is
+/// reported, at its own span.
+#[test]
+fn circular_type_aliases_are_reported_on_every_declaration() {
+    let p = prelude::builtin("elm-core").unwrap();
+
+    let direct = module(&["A"], Exposing::All, vec![], vec![alias("T", r("T"))]);
+    let errors = resolve(&direct, Access::Public, &scope(&p, &no_modules, &[])).unwrap_err();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].code, "ELM_TYPE_CYCLE");
+    assert!(errors[0].message.contains("`T`"), "{errors:?}");
+
+    let mutual = module(
+        &["A"],
+        Exposing::All,
+        vec![],
+        vec![alias("X", r("Y")), alias("Y", r("X"))],
+    );
+    let errors = resolve(&mutual, Access::Public, &scope(&p, &no_modules, &[])).unwrap_err();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors.iter().all(|e| e.code == "ELM_TYPE_CYCLE"));
+
+    // Through a record field, and through a type argument.
+    let nested = module(
+        &["A"],
+        Exposing::All,
+        vec![],
+        vec![alias(
+            "R",
+            TypeExpr::Record {
+                fields: vec![Field {
+                    name: "self".into(),
+                    ty: TypeExpr::Ref {
+                        module: vec![],
+                        name: "R".into(),
+                        args: vec![],
+                        span: sp(),
+                    },
+                }],
+                span: sp(),
+            },
+        )],
+    );
+    let errors = resolve(&nested, Access::Public, &scope(&p, &no_modules, &[])).unwrap_err();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].code, "ELM_TYPE_CYCLE");
+}
+
+/// A custom type is a type of its own rather than a spelling of another one, so
+/// it may name itself, and an alias that stands for it is not in a circle.
+#[test]
+fn a_recursive_custom_type_is_not_a_cycle() {
+    let p = prelude::builtin("elm-core").unwrap();
+    let tree = TypeDecl::Custom {
+        name: "Tree".into(),
+        params: vec![],
+        constructors: vec![
+            Constructor {
+                name: "Leaf".into(),
+                args: vec![],
+                span: sp(),
+            },
+            Constructor {
+                name: "Node".into(),
+                args: vec![r("Tree"), r("Tree")],
+                span: sp(),
+            },
+        ],
+        doc: None,
+        span: sp(),
+    };
+    let m = module(
+        &["A"],
+        Exposing::All,
+        vec![],
+        vec![tree, alias("Alias", r("Tree"))],
+    );
+    let resolved = resolve(&m, Access::Public, &scope(&p, &no_modules, &[])).unwrap();
+    assert_eq!(resolved.types.len(), 2);
+}
+
 #[test]
 fn dependency_order_detects_cycles() {
     let a = (vec!["A".to_string()], vec![vec!["B".to_string()]]);

@@ -355,7 +355,10 @@ fn baseline_from(previous: &CompileBaseline, result: &CompileResult) -> CompileB
         }
     }
 
-    CompileBaseline { modules }
+    CompileBaseline {
+        modules,
+        prelude_digest: previous.prelude_digest.clone(),
+    }
 }
 
 fn status(word: &str) -> ModuleStatus {

@@ -22,6 +22,9 @@ pub struct AstError {
 
 struct Lower<'a> {
     src: &'a str,
+    /// The node id of the block comment taken as the module's doc, once it is
+    /// known. A declaration never claims that comment as its own.
+    module_doc: Option<usize>,
 }
 
 impl<'a> Lower<'a> {
@@ -55,21 +58,27 @@ impl<'a> Lower<'a> {
     }
 
     /// Doc comment immediately preceding `node`, if any.
+    ///
+    /// The comment that follows the module header is the module's doc, and Elm
+    /// gives it to the module even when the next thing in the file is a
+    /// declaration — which is what a file with no imports looks like. So the
+    /// module's own doc is never handed to a declaration as well.
     fn doc_before(&self, node: Node) -> Option<String> {
         let prev = node.prev_named_sibling()?;
-        if prev.kind() != "block_comment" {
+        if prev.kind() != "block_comment" || Some(prev.id()) == self.module_doc {
             return None;
         }
         self.doc_text(prev)
     }
 
-    /// Doc comment immediately following `node`, if any (used for the module doc).
-    fn doc_after(&self, node: Node) -> Option<String> {
+    /// The block comment immediately following `node`, if it is a doc comment
+    /// (used for the module doc).
+    fn doc_node_after(&self, node: Node<'a>) -> Option<(Node<'a>, String)> {
         let next = node.next_named_sibling()?;
         if next.kind() != "block_comment" {
             return None;
         }
-        self.doc_text(next)
+        self.doc_text(next).map(|text| (next, text))
     }
 
     fn exposing_list(&self, node: Node<'a>) -> Exposing {
@@ -377,7 +386,10 @@ impl<'a> Lower<'a> {
 /// declarations are never an error: they are recorded in
 /// [`Module::skipped_values`].
 pub fn to_ast(parsed: &ParsedTree, source: &str) -> Result<Module, AstError> {
-    let lower = Lower { src: source };
+    let mut lower = Lower {
+        src: source,
+        module_doc: None,
+    };
     let root = parsed.tree.root_node();
 
     let module_decl = root
@@ -400,7 +412,14 @@ pub fn to_ast(parsed: &ParsedTree, source: &str) -> Result<Module, AstError> {
         })?;
     let name = lower.qid(name_node);
     let exposing = lower.exposing_list(exposing_node);
-    let doc = lower.doc_after(module_decl);
+    let doc = match lower.doc_node_after(module_decl) {
+        Some((node, text)) => {
+            lower.module_doc = Some(node.id());
+            Some(text)
+        }
+        None => None,
+    };
+    let lower = lower;
 
     let mut imports = Vec::new();
     let mut types = Vec::new();

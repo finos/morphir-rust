@@ -311,6 +311,11 @@ fn v4_unsupported_construct_is_reported() {
 
     let result = generate(ir, "elm");
 
+    // A construct with no Elm form means the backend did not generate what it
+    // was asked to, so the result is not a success — but the modules it could
+    // write are still written, rather than the whole run being thrown away.
+    assert!(!result.success, "{:?}", result.diagnostics);
+
     let unsupported = codes(&result, "ELM_UNSUPPORTED");
     assert_eq!(unsupported.len(), 1, "{:?}", result.diagnostics);
     assert!(

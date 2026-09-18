@@ -55,6 +55,14 @@ fn request_diagnostic(severity: DiagnosticSeverity, message: impl Into<String>) 
     }
 }
 
+/// The member of [`IR_VERSIONS`] a request names. A host sends either the major version or the
+/// full first release of it (`4` or `4.0.0`), as the Morphir CLI does.
+fn normalized_ir_version(requested: &str) -> Option<&'static str> {
+    IR_VERSIONS
+        .into_iter()
+        .find(|version| requested == *version || requested == format!("{version}.0.0"))
+}
+
 /// Checks the request and derives the prelude and package path from it.
 pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
     if request.language_id != "elm" {
@@ -64,13 +72,14 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
         )));
     }
 
-    let ir_version = request.options.ir_version.clone();
-    if !IR_VERSIONS.contains(&ir_version.as_str()) {
+    let Some(ir_version) = normalized_ir_version(&request.options.ir_version) else {
         return Err(request_error(format!(
-            "unsupported `irVersion` `{ir_version}`: this extension writes Morphir IR {}",
+            "unsupported `irVersion` `{}`: this extension writes Morphir IR {}",
+            request.options.ir_version,
             IR_VERSIONS.join(" or ")
         )));
-    }
+    };
+    let ir_version = ir_version.to_string();
 
     let prelude = prelude::from_option(request.options.extra.get("elmPrelude"))
         .map_err(|reason| request_error(format!("invalid `elmPrelude` option: {reason}")))?;
@@ -213,6 +222,16 @@ pub fn module_access(exposed: Option<&[String]>, dotted_name: &str) -> Access {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_release_spelling_names_the_same_ir_version() {
+        assert_eq!(normalized_ir_version("3"), Some("3"));
+        assert_eq!(normalized_ir_version("3.0.0"), Some("3"));
+        assert_eq!(normalized_ir_version("4"), Some("4"));
+        assert_eq!(normalized_ir_version("4.0.0"), Some("4"));
+        assert_eq!(normalized_ir_version("4.1.0"), None);
+        assert_eq!(normalized_ir_version("5"), None);
+    }
 
     #[test]
     fn a_package_name_splits_on_both_separators() {

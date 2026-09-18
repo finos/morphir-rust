@@ -229,3 +229,28 @@ name = "Morphir.SDK"
     { name = "UUID" },
     { name = "Error", constructors = ["WrongFormat", "WrongLength", "UnsupportedVariant", "IsNil", "NoVersion"] },
   ]
+
+  [[package.module]]
+  name = "Instant"
+  types = [
+    { name = "Instant" },
+  ]
+
+  [[package.module]]
+  name = "Json.Decode"
+  types = [
+    { name = "Decode" },
+    { name = "Error" },
+  ]
+
+  [[package.module]]
+  name = "Json.Encode"
+  types = [
+    { name = "Encode" },
+  ]
+
+  [[package.module]]
+  name = "ResultList"
+  types = [
+    { name = "ResultList" },
+  ]

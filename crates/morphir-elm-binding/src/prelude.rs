@@ -149,11 +149,18 @@ impl Prelude {
     /// Finds the platform package and module whose combined dotted name
     /// matches `module` (package name segments as a prefix, remaining
     /// segments joined with `.` as the module name).
+    ///
+    /// When more than one package's name is a prefix of `module` (e.g. one
+    /// prelude configuring both `Morphir` and `Morphir.SDK` as packages),
+    /// the package with the longest (most specific) matching prefix wins, so
+    /// candidates are checked longest-prefix-first.
     pub fn platform_module(
         &self,
         module: &[String],
     ) -> Option<(&PlatformPackage, &PlatformModule)> {
-        self.package.iter().find_map(|pkg| {
+        let mut candidates: Vec<&PlatformPackage> = self.package.iter().collect();
+        candidates.sort_by_key(|pkg| std::cmp::Reverse(pkg.name.split('.').count()));
+        candidates.into_iter().find_map(|pkg| {
             let pkg_segments: Vec<&str> = pkg.name.split('.').collect();
             if module.len() <= pkg_segments.len() {
                 return None;

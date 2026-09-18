@@ -36,6 +36,23 @@ fn elm_core_prelude_loads_and_maps_basics() {
 }
 
 #[test]
+fn elm_core_prelude_has_nested_json_decode_module() {
+    let p = builtin("elm-core").unwrap();
+    let (pkg, module) = p
+        .platform_module(&[
+            "Morphir".into(),
+            "SDK".into(),
+            "Json".into(),
+            "Decode".into(),
+        ])
+        .unwrap();
+    assert_eq!(pkg.name, "Morphir.SDK");
+    assert_eq!(module.name, "Json.Decode");
+    assert!(module.types.iter().any(|t| t.name == "Decode"));
+    assert!(module.types.iter().any(|t| t.name == "Error"));
+}
+
+#[test]
 fn none_prelude_is_empty() {
     let p = builtin("none").unwrap();
     assert!(p.implicit_import.is_empty() && p.module_alias.is_empty() && p.package.is_empty());

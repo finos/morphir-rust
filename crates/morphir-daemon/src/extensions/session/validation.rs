@@ -12,7 +12,10 @@ use morphir_core::format_version::{
     NormalizedFormatVersion, ReleaseTriplet, ScalarValue, SupportTable,
 };
 use morphir_distribution::RelativeArtifactPath;
-use morphir_extension_sdk::{CompileRequest, CompileResult, ExtensionType, GenerateResult};
+use morphir_extension_sdk::{
+    BackendCapability, CompileRequest, CompileResult, ExtensionType, FrontendCapability,
+    GenerateResult,
+};
 use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
@@ -47,6 +50,65 @@ pub(super) fn validate_response(
         _ => Err(ResponseFailure::Invalid(DaemonError::Extension(
             "Extension response must contain exactly one of result or error".into(),
         ))),
+    }
+}
+
+/// The frontend members that differ, named as they are spelled on the wire.
+///
+/// A missing record on either side is one difference, not five: the host
+/// discovered a frontend the guest does not advertise, or the other way round.
+fn frontend_differences(
+    advertised: Option<&FrontendCapability>,
+    discovered: Option<&FrontendCapability>,
+) -> Vec<&'static str> {
+    match (advertised, discovered) {
+        (Some(advertised), Some(discovered)) => {
+            let mut members = Vec::new();
+            if advertised.languages != discovered.languages {
+                members.push("languages");
+            }
+            if advertised.ir_versions != discovered.ir_versions {
+                members.push("irVersions");
+            }
+            if advertised.compile != discovered.compile {
+                members.push("compile");
+            }
+            if advertised.incremental != discovered.incremental {
+                members.push("incremental");
+            }
+            if advertised.fragments != discovered.fragments {
+                members.push("fragments");
+            }
+            members
+        }
+        (None, Some(_)) => vec!["no frontend capability was advertised"],
+        (Some(_), None) => vec!["no frontend capability was discovered"],
+        (None, None) => Vec::new(),
+    }
+}
+
+/// The backend members that differ, named as they are spelled on the wire.
+fn backend_differences(
+    advertised: Option<&BackendCapability>,
+    discovered: Option<&BackendCapability>,
+) -> Vec<&'static str> {
+    match (advertised, discovered) {
+        (Some(advertised), Some(discovered)) => {
+            let mut members = Vec::new();
+            if advertised.targets != discovered.targets {
+                members.push("targets");
+            }
+            if advertised.ir_versions != discovered.ir_versions {
+                members.push("irVersions");
+            }
+            if advertised.generate != discovered.generate {
+                members.push("generate");
+            }
+            members
+        }
+        (None, Some(_)) => vec!["no backend capability was advertised"],
+        (Some(_), None) => vec!["no backend capability was discovered"],
+        (None, None) => Vec::new(),
     }
 }
 
@@ -367,40 +429,72 @@ pub(in crate::extensions) fn validate_negotiation(
         }
     }
     if let Some(discovered) = expected.capabilities {
-        let capability_scope = match discovered {
+        // A mismatch here stops the session, so the message names the members
+        // that differ: "frontend capabilities disagreed with discovery" alone
+        // leaves a reader comparing two structures by hand.
+        let mismatch = match discovered {
             CapabilityExpectation::Exact(discovered) if result.capabilities != discovered => {
-                if result.capabilities.backend != discovered.backend {
-                    Some("backend capabilities")
+                let backend = backend_differences(
+                    result.capabilities.backend.as_ref(),
+                    discovered.backend.as_ref(),
+                );
+                if backend.is_empty() {
+                    Some((
+                        "capabilities",
+                        frontend_differences(
+                            result.capabilities.frontend.as_ref(),
+                            discovered.frontend.as_ref(),
+                        ),
+                    ))
                 } else {
-                    Some("capabilities")
+                    Some(("backend capabilities", backend))
                 }
             }
             CapabilityExpectation::Backend(discovered)
                 if result.capabilities.backend.as_ref() != Some(&discovered) =>
             {
-                Some("backend capabilities")
+                Some((
+                    "backend capabilities",
+                    backend_differences(result.capabilities.backend.as_ref(), Some(&discovered)),
+                ))
             }
             CapabilityExpectation::Persisted(discovered)
                 if discovered.frontend().is_some_and(|expected| {
                     result.capabilities.frontend.as_ref() != Some(expected)
                 }) =>
             {
-                Some("frontend capabilities")
+                Some((
+                    "frontend capabilities",
+                    frontend_differences(
+                        result.capabilities.frontend.as_ref(),
+                        discovered.frontend(),
+                    ),
+                ))
             }
             CapabilityExpectation::Persisted(discovered)
                 if discovered.backend().is_some_and(|expected| {
                     result.capabilities.backend.as_ref() != Some(expected)
                 }) =>
             {
-                Some("backend capabilities")
+                Some((
+                    "backend capabilities",
+                    backend_differences(result.capabilities.backend.as_ref(), discovered.backend()),
+                ))
             }
             CapabilityExpectation::Exact(_)
             | CapabilityExpectation::Persisted(_)
             | CapabilityExpectation::Backend(_) => None,
         };
-        if let Some(capability_scope) = capability_scope {
+        if let Some((capability_scope, differences)) = mismatch {
+            // An `Exact` expectation also covers members outside the frontend
+            // and backend records, so the list can be empty.
+            let named = if differences.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", differences.join(", "))
+            };
             return Err(DaemonError::Extension(format!(
-                "Extension '{}' {capability_scope} disagreed with discovery",
+                "Extension '{}' {capability_scope} disagreed with discovery{named}",
                 expected.id
             )));
         }

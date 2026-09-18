@@ -464,6 +464,8 @@ fn alias_with_parameters(world: &mut ElmWorld, name: String, params: usize) {
 
 #[then(expr = "the IR contains custom type {string} with constructors {string}")]
 fn custom_with_constructors(world: &mut ElmWorld, name: String, expected: String) {
+    let result = world.result();
+    assert!(result.success, "{:?}", result.diagnostics);
     match type_info(world.ir(), &world.version, "My.Domain.Types", &name) {
         TypeInfo::Custom { constructors } => assert_eq!(
             constructors,

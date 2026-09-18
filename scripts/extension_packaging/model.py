@@ -121,6 +121,7 @@ def descriptor_bytes(
     git_commit: str | None,
 ) -> bytes:
     languages = frontend_languages(extension) if "languages" in extension else None
+    incremental = frontend_incremental(short_id, extension, languages is not None)
     targets = extension.get("targets", [])
     if targets != [] or languages is None:
         targets = require_string_list(extension, "targets")
@@ -139,7 +140,7 @@ def descriptor_bytes(
     }
     if languages is not None:
         descriptor["languages"] = languages
-        if frontend_incremental(extension):
+        if incremental:
             descriptor["incremental"] = True
     if "name" in extension:
         descriptor["name"] = require_string(extension, "name")
@@ -148,17 +149,28 @@ def descriptor_bytes(
     return (json.dumps(descriptor, indent=2) + "\n").encode("utf-8")
 
 
-def frontend_incremental(extension: dict[str, Any]) -> bool:
+def frontend_incremental(
+    short_id: str, extension: dict[str, Any], has_frontend: bool
+) -> bool:
     """Whether the frontend accepts a baseline and reports per-module results.
 
     A host reads this from the installed record before it starts the guest, so
     it has to agree with what the guest advertises at initialization. It is
-    written only when true, so a non-incremental frontend's descriptor is
-    unchanged.
+    written only when true, so a frontend that is not incremental keeps the
+    descriptor it always had.
+
+    This is read for every entry, not only the ones that declare a frontend, so
+    that a registry entry cannot carry the flag where nothing can honour it.
     """
     value = extension.get("incremental", False)
     if not isinstance(value, bool):
-        raise PackageError("extension registry field incremental must be a boolean")
+        raise PackageError(
+            f"extension {short_id} registry field incremental must be a boolean"
+        )
+    if value and not has_frontend:
+        raise PackageError(
+            f"extension {short_id} declares incremental without frontend languages"
+        )
     return value
 
 

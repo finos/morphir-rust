@@ -78,6 +78,27 @@ def read_descriptor(path: Path) -> dict[str, Any]:
     return value
 
 
+def frontend_incremental(
+    short_id: str, extension: Mapping[str, Any], has_frontend: bool
+) -> bool:
+    """Read the registry's incremental flag, for every entry that has one.
+
+    Reading it outside the frontend branch is what keeps a backend-only entry
+    from carrying a flag nothing can honour, and a non-boolean from passing
+    through unexamined.
+    """
+    value = extension.get("incremental", False)
+    if not isinstance(value, bool):
+        raise AssetError(
+            f"extension {short_id} registry field incremental must be a boolean"
+        )
+    if value and not has_frontend:
+        raise AssetError(
+            f"extension {short_id} declares incremental without frontend languages"
+        )
+    return value
+
+
 def expected_descriptor(
     short_id: str,
     extension: Mapping[str, Any],
@@ -87,6 +108,7 @@ def expected_descriptor(
     expected_commit: str,
 ) -> dict[str, Any]:
     """Build the tag- and registry-derived descriptor fields."""
+    incremental = frontend_incremental(short_id, extension, "languages" in extension)
     expected: dict[str, Any] = {
         "schemaVersion": 1,
         "shortId": short_id,
@@ -105,9 +127,9 @@ def expected_descriptor(
             {"id": language["id"], "fileExtensions": language["file_extensions"]}
             for language in extension["languages"]
         ]
-        # Written only when true, so a non-incremental frontend's descriptor
-        # keeps the fields it always had.
-        if extension.get("incremental") is True:
+        # Written only when true, so a frontend that is not incremental keeps
+        # the descriptor fields it always had.
+        if incremental:
             expected["incremental"] = True
     if "name" in extension:
         expected["name"] = extension.get("name")

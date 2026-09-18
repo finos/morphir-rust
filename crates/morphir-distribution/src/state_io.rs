@@ -361,11 +361,7 @@ pub(crate) fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 pub(crate) fn create_dir_all_durable(path: &Path) -> Result<()> {
-    let missing = path
-        .ancestors()
-        .take_while(|ancestor| !ancestor.exists())
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
+    let missing = missing_ancestors(path);
     fs::create_dir_all(path).map_err(|source| DistributionError::Io {
         path: path.to_path_buf(),
         source,
@@ -374,6 +370,16 @@ pub(crate) fn create_dir_all_durable(path: &Path) -> Result<()> {
         sync_parent_directory(created)?;
     }
     Ok(())
+}
+
+/// The ancestors `create_dir_all` has to create. A relative path ends its ancestors with the
+/// empty path, which stands for the current directory and never needs creating.
+fn missing_ancestors(path: &Path) -> Vec<PathBuf> {
+    path.ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .take_while(|ancestor| !ancestor.exists())
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
@@ -412,6 +418,15 @@ mod tests {
     #[test]
     fn single_component_paths_sync_through_the_current_directory() {
         assert_eq!(parent_directory(Path::new("mh")), Path::new("."));
+    }
+
+    #[test]
+    fn a_bare_relative_path_has_no_empty_missing_ancestor() {
+        let name = format!("morphir-missing-{}", std::process::id());
+        assert_eq!(
+            missing_ancestors(Path::new(&name)),
+            vec![PathBuf::from(&name)]
+        );
     }
 
     struct FailingCatalogAndJournalCleanup {

@@ -32,8 +32,8 @@ def changed_paths(root: Path, base: str, head: str) -> tuple[str, ...]:
     return tuple(path for path in result.stdout.split("\0") if path)
 
 
-def _emit(text: str) -> None:
-    output_path = os.environ.get("GITHUB_OUTPUT")
+def _emit(text: str, *, github: bool) -> None:
+    output_path = os.environ.get("GITHUB_OUTPUT") if github else None
     if output_path:
         with open(output_path, "a", encoding="utf-8") as output:
             output.write(text)
@@ -88,5 +88,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as error:  # noqa: BLE001 - any failure must fail safe
         print(f"warning: unable to classify CI changes: {error}", file=sys.stderr)
         plan = _fallback_plan(args.root, f"classifier error: {error}")
-    _emit(render_github(plan) if args.format == "github" else render_text(plan))
+    text = render_github(plan) if args.format == "github" else render_text(plan)
+    _emit(text, github=args.format == "github")
     return 0

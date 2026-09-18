@@ -184,6 +184,21 @@ class ClassifierCliTests(unittest.TestCase):
             self.assertIn("all: true", result.stdout)
             self.assertIn("docs-generated: run", result.stdout)
 
+    def test_cli_text_format_never_writes_github_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repo"
+            repository.mkdir()
+            _seed_repository(repository)
+            fake_cargo = _fake_cargo(Path(temporary) / "bin")
+            output = Path(temporary) / "github-output"
+
+            result = _run_cli(repository, "--full", "--format", "text", output=output, fake_cargo=fake_cargo)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("all: true", result.stdout)
+            self.assertIn("docs-generated: run", result.stdout)
+            self.assertTrue(not output.exists() or output.read_text(encoding="utf-8") == "")
+
     def test_cli_fails_safe_for_all_zero_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary) / "repo"

@@ -34,6 +34,7 @@ fn a_request(version: &str) -> CompileRequest {
         package: CompilePackage { name: "acme/example".into(), exposed_modules: Some(vec!["domain.rules".into()]) },
         dependencies: vec![],
         options: CompileOptions { ir_version: version.into(), types_only: false, ..Default::default() },
+        baseline: None,
     }
 }
 

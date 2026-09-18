@@ -86,7 +86,7 @@ pub struct FrontendCapability {
     pub ir_versions: Vec<String>,
     /// Whether the frontend accepts compile requests.
     pub compile: bool,
-    /// Whether the frontend supports incremental compilation.
+    /// Whether the frontend accepts `CompileRequest.baseline` and returns `CompileResult.moduleResults`.
     pub incremental: bool,
     /// Whether the frontend can compile source fragments.
     pub fragments: bool,
@@ -220,7 +220,7 @@ impl Default for ResourceLimits {
 }
 
 /// Source document supplied to a frontend compiler.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceDocument {
     /// URI that identifies the document.
@@ -234,7 +234,7 @@ pub struct SourceDocument {
 }
 
 /// Package metadata for a frontend compilation.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompilePackage {
     /// Morphir package name.
@@ -245,7 +245,7 @@ pub struct CompilePackage {
 }
 
 /// A package distribution available to a frontend compilation.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompileDependency {
     /// Name of the dependency package.
@@ -257,7 +257,7 @@ pub struct CompileDependency {
 }
 
 /// Options that control frontend compilation.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompileOptions {
     /// Emit type information without value bodies when supported.
@@ -298,7 +298,7 @@ impl Serialize for CompileOptions {
 }
 
 /// Request to compile source documents into Morphir IR.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompileRequest {
     /// Language identifier shared by the submitted documents.
@@ -312,6 +312,9 @@ pub struct CompileRequest {
     pub dependencies: Vec<CompileDependency>,
     /// Options that control the produced Morphir IR.
     pub options: CompileOptions,
+    /// Baseline from a prior compilation, for incremental frontends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<CompileBaseline>,
 }
 
 /// Result of compilation
@@ -332,6 +335,78 @@ pub struct CompileResult {
     /// Module names produced by the compilation.
     #[serde(default)]
     pub modules: Vec<String>,
+    /// Per-module incremental compilation results, when the frontend supports them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_results: Vec<ModuleResult>,
+}
+
+/// A module baseline captured from a prior compilation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaselineModule {
+    /// Module name.
+    pub name: String,
+    /// URI of the module's source document.
+    pub uri: String,
+    /// Digest of the module's source text.
+    pub source_digest: String,
+    /// Digest of the module's resolved public interface.
+    pub interface_digest: String,
+    /// Names of modules this module depends on.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Previously compiled IR for this module.
+    pub ir: serde_json::Value,
+}
+
+/// Baseline supplied by the host for incremental compilation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompileBaseline {
+    /// Modules known from a prior compilation.
+    #[serde(default)]
+    pub modules: Vec<BaselineModule>,
+}
+
+/// Outcome of compiling (or reusing) a single module in an incremental compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModuleStatus {
+    /// The module was recompiled.
+    Compiled,
+    /// The module was unchanged and reused from the baseline.
+    Unchanged,
+    /// The module failed to compile.
+    Failed,
+    /// The module was blocked by a failure in a dependency.
+    Blocked,
+}
+
+/// Per-module result of an incremental compilation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleResult {
+    /// Module name.
+    pub name: String,
+    /// URI of the module's source document.
+    pub uri: String,
+    /// Outcome for this module.
+    pub status: ModuleStatus,
+    /// Digest of the module's source text, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
+    /// Digest of the module's resolved public interface, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_digest: Option<String>,
+    /// Names of modules this module depends on.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Compiled IR for this module, when produced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ir: Option<serde_json::Value>,
+    /// Diagnostics for this module.
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Request to generate code
@@ -407,7 +482,7 @@ pub struct TransformResult {
 }
 
 /// A diagnostic message
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Diagnostic {
     /// Severity level
     pub severity: DiagnosticSeverity,
@@ -439,7 +514,7 @@ pub enum DiagnosticSeverity {
 }
 
 /// Source code location identified by URI and zero-based range.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
     /// URI of the source document.
@@ -449,7 +524,7 @@ pub struct SourceLocation {
 }
 
 /// Half-open range between two zero-based source positions.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRange {
     /// Inclusive start position.
@@ -459,7 +534,7 @@ pub struct SourceRange {
 }
 
 /// Zero-based line and character position in a source document.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourcePosition {
     /// Zero-based line number.
@@ -486,7 +561,7 @@ impl SourcePosition {
 }
 
 /// Related diagnostic information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelatedInformation {
     /// Location of related information
     pub location: SourceLocation,
@@ -557,6 +632,7 @@ mod tests {
                 ir_version: "3".into(),
                 extra: HashMap::new(),
             },
+            baseline: None,
         };
 
         assert_eq!(serde_json::to_value(request).unwrap(), expected);
@@ -604,6 +680,7 @@ mod tests {
                     serde_json::json!({"level": 2}),
                 )]),
             },
+            baseline: None,
         };
 
         assert_eq!(serde_json::to_value(request).unwrap(), expected);
@@ -680,6 +757,7 @@ mod tests {
                 related: vec![],
             }],
             modules: vec!["Example".into()],
+            module_results: vec![],
         };
 
         assert_eq!(serde_json::to_value(&result).unwrap(), expected);
@@ -866,5 +944,89 @@ mod generate_request_tests {
         .expect("options remain optional");
 
         assert!(request.options.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+
+    #[test]
+    fn request_without_baseline_serializes_as_before() {
+        let request = CompileRequest {
+            language_id: "elm".into(),
+            documents: vec![],
+            package: CompilePackage {
+                name: "local/example".into(),
+                exposed_modules: None,
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: true,
+                ir_version: "3".into(),
+                extra: Default::default(),
+            },
+            baseline: None,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("baseline").is_none());
+        let back: CompileRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(back, request);
+    }
+
+    #[test]
+    fn baseline_round_trips() {
+        let json = serde_json::json!({
+            "modules": [{
+                "name": "My.Types", "uri": "file:///My/Types.elm",
+                "sourceDigest": "sha256:aa", "interfaceDigest": "sha256:bb",
+                "dependsOn": ["My.Other"], "ir": {"types": []}
+            }]
+        });
+        let baseline: CompileBaseline = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(baseline.modules[0].depends_on, vec!["My.Other".to_string()]);
+        assert_eq!(serde_json::to_value(&baseline).unwrap(), json);
+    }
+
+    #[test]
+    fn module_results_are_omitted_when_empty_and_statuses_are_lowercase() {
+        let result = CompileResult {
+            success: true,
+            ir_version: Some("3".into()),
+            ir: None,
+            diagnostics: vec![],
+            modules: vec![],
+            module_results: vec![],
+        };
+        assert!(
+            serde_json::to_value(&result)
+                .unwrap()
+                .get("moduleResults")
+                .is_none()
+        );
+        let with = CompileResult {
+            module_results: vec![ModuleResult {
+                name: "A".into(),
+                uri: "file:///A.elm".into(),
+                status: ModuleStatus::Unchanged,
+                source_digest: Some("sha256:aa".into()),
+                interface_digest: None,
+                depends_on: vec![],
+                ir: None,
+                diagnostics: vec![],
+            }],
+            ..result
+        };
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["moduleResults"][0]["status"], "unchanged");
+        assert!(json["moduleResults"][0].get("ir").is_none());
+        assert!(json["moduleResults"][0].get("interfaceDigest").is_none());
+    }
+
+    #[test]
+    fn old_shape_result_still_decodes() {
+        let json = serde_json::json!({"success": false, "diagnostics": [], "modules": []});
+        let result: CompileResult = serde_json::from_value(json).unwrap();
+        assert!(result.module_results.is_empty());
     }
 }

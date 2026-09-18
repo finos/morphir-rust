@@ -38,6 +38,7 @@ impl TestDriver {
                     types_only: false,
                     ..Default::default()
                 },
+                baseline: None,
             })
             .unwrap()
     }

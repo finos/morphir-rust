@@ -54,6 +54,7 @@
 //!             ir: Some(serde_json::json!({})),
 //!             diagnostics: vec![],
 //!             modules: request.package.exposed_modules.unwrap_or_default(),
+//!             module_results: vec![],
 //!         })
 //!     }
 //!
@@ -84,6 +85,7 @@
 //!         ir_version: "3".into(),
 //!         extra: Default::default(),
 //!     },
+//!     baseline: None,
 //! };
 //! let result = MyExtension.compile(request).expect("frontend should compile");
 //! assert!(result.success);

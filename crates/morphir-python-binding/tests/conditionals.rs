@@ -24,6 +24,7 @@ fn request(source: &str) -> CompileRequest {
             ir_version: "4".into(),
             ..Default::default()
         },
+        baseline: None,
     }
 }
 

@@ -34,6 +34,7 @@ fn main() -> Result<()> {
             ir_version: std::env::args().nth(1).unwrap_or_else(|| "4".into()),
             ..Default::default()
         },
+        baseline: None,
     };
     let compiled =
         extension

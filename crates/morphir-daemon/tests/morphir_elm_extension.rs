@@ -40,6 +40,7 @@ fn an_elm_request(uri: &str, text: &str) -> CompileRequest {
             ir_version: "3".into(),
             extra: Default::default(),
         },
+        baseline: None,
     }
 }
 

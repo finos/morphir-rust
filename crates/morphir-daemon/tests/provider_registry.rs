@@ -62,6 +62,7 @@ macro_rules! native_provider {
                     ir: None,
                     diagnostics: vec![],
                     modules: vec![],
+                    module_results: vec![],
                 })
             }
 

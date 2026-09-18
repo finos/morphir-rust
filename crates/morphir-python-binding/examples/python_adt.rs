@@ -38,6 +38,7 @@ fn main() -> Result<()> {
             ir_version: "4".into(),
             ..Default::default()
         },
+        baseline: None,
     };
     let compiled =
         extension

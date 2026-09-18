@@ -100,6 +100,7 @@ async fn packaged_roundtrip(version: &str) {
             ir_version: version.into(),
             ..Default::default()
         },
+        baseline: None,
     };
     let (ready, compiled) = invoke!(
         ready,
@@ -195,6 +196,7 @@ impl PythonExtensionDriver {
                         types_only: false,
                         ..Default::default()
                     },
+                    baseline: None,
                 },
             )
             .await

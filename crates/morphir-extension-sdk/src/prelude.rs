@@ -6,12 +6,12 @@
 
 // Re-export all core types
 pub use crate::types::{
-    Artifact, BackendCapability, CompileDependency, CompileOptions, CompilePackage, CompileRequest,
-    CompileResult, Diagnostic, DiagnosticSeverity, ExtensionCapabilities, ExtensionInfo,
-    ExtensionType, FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability,
-    RelatedInformation, ResourceLimits, SourceDocument, SourceLocation, SourcePosition,
-    SourceRange, TransformRequest, TransformResult, ValidateRequest, ValidateResult,
-    WorkspaceCapability, WorkspaceInfo,
+    Artifact, BackendCapability, BaselineModule, CompileBaseline, CompileDependency,
+    CompileOptions, CompilePackage, CompileRequest, CompileResult, Diagnostic, DiagnosticSeverity,
+    ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability, GenerateRequest,
+    GenerateResult, LanguageCapability, ModuleResult, ModuleStatus, RelatedInformation,
+    ResourceLimits, SourceDocument, SourceLocation, SourcePosition, SourceRange, TransformRequest,
+    TransformResult, ValidateRequest, ValidateResult, WorkspaceCapability, WorkspaceInfo,
 };
 
 // Re-export traits

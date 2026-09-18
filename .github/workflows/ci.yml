@@ -303,14 +303,6 @@ jobs:
       - name: Test real Extism extension through MEP
         run: mise run test:extism
 
-      - name: Build Rust type extension
-        run: cargo build --locked --release -p morphir-rust-binding --target wasm32-unknown-unknown
-
-      - name: Test Rust types through the WASM extension
-        env:
-          MORPHIR_RUST_GUEST: ${{ github.workspace }}/target/wasm32-unknown-unknown/release/morphir_rust_binding.wasm
-        run: cargo test --locked -p morphir-rust-binding --features wasm-host-tests --test wasm -- --ignored
-
       - name: Upload MEP conformance extension artifact
         uses: actions/upload-artifact@v7
         with:

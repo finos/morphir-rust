@@ -26,6 +26,7 @@ class ImpactConfig:
     extension_crates: frozenset[str]
     rust_paths: tuple[str, ...]
     jobs: tuple[JobRule, ...]
+    extension_paths: tuple[str, ...] = ()
 
 
 def _strings(value: Any, label: str) -> tuple[str, ...]:
@@ -53,7 +54,7 @@ def parse_config(data: Mapping[str, Any]) -> ImpactConfig:
         raise ValueError(f"unknown top-level keys: {', '.join(unknown)}")
     global_table = _table(data, "global", ["paths"])
     safe_table = _table(data, "safe", ["exact", "prefixes"])
-    extensions_table = _table(data, "extensions", ["crates"])
+    extensions_table = _table(data, "extensions", ["crates", "paths"])
     rust_table = _table(data, "rust", ["paths"])
     jobs_table = data.get("jobs", {})
     if not isinstance(jobs_table, dict):
@@ -77,6 +78,7 @@ def parse_config(data: Mapping[str, Any]) -> ImpactConfig:
         safe_exact=frozenset(_strings(safe_table.get("exact"), "safe.exact")),
         safe_prefixes=_strings(safe_table.get("prefixes"), "safe.prefixes"),
         extension_crates=frozenset(_strings(extensions_table.get("crates"), "extensions.crates")),
+        extension_paths=_strings(extensions_table.get("paths"), "extensions.paths"),
         rust_paths=_strings(rust_table.get("paths"), "rust.paths"),
         jobs=tuple(jobs),
     )

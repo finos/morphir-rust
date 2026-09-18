@@ -16,6 +16,10 @@ class Extension:
     short_id: str
     package: str
 
+    @property
+    def artifact_task(self) -> str:
+        return f".mise/tasks/extension/artifact/{self.short_id}"
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -94,7 +98,8 @@ def plan_changes(
             continue
         claimed = any(
             matches_pattern(pattern, path) for job in config.jobs for pattern in job.paths
-        ) or any(matches_pattern(pattern, path) for pattern in config.rust_paths)
+        ) or any(matches_pattern(pattern, path) for pattern in config.rust_paths + config.extension_paths)
+        claimed = claimed or any(path == extension.artifact_task for extension in extensions)
         if not claimed:
             return full_plan(config, workspace, extensions, f"unclaimed path changed: {path}")
 
@@ -109,11 +114,13 @@ def plan_changes(
         or any(matches_pattern(pattern, path) for pattern in job.paths for path in paths)
         for job in config.jobs
     }
-    rebuild_all_extensions = bool(config.extension_crates & affected)
+    rebuild_all_extensions = bool(config.extension_crates & affected) or any(
+        matches_pattern(pattern, path) for pattern in config.extension_paths for path in paths
+    )
     matrix = tuple(
         extension
         for extension in extensions
-        if rebuild_all_extensions or extension.package in affected
+        if rebuild_all_extensions or extension.package in affected or extension.artifact_task in paths
     )
     reasons = tuple(f"crate changed: {crate}" for crate in sorted(changed_crates))
     return Plan(

@@ -1,0 +1,3 @@
+tree-sitter-elm 5.9.4 (crates.io), https://github.com/elm-tooling/tree-sitter-elm
+vendored 2026-09-17; regenerate with: copy src/parser.c, src/scanner.c, src/tree_sitter/*.h from the released crate
+

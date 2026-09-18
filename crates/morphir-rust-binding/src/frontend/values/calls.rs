@@ -226,6 +226,7 @@ impl Lower<'_, '_> {
                     .map_err(|e| self.error(call, &e))?;
             }
             let mut shape_variables = self.generic_shapes(path, &sig, &BTreeMap::new())?;
+            let contextual_types = variables.clone();
             let mut arguments = Vec::new();
             for ((expr, input), shape) in call.args.iter().zip(&sig.inputs).zip(&sig.input_shapes) {
                 let hint = substitute(input, &variables);
@@ -233,7 +234,11 @@ impl Lower<'_, '_> {
                 unify(input, &actual, &flexible, &mut variables)
                     .map_err(|e| self.error(expr, &e))?;
                 shape
-                    .bind(&self.shape(&argument)?, &mut shape_variables)
+                    .bind(
+                        &self.shape(&argument)?,
+                        &contextual_types,
+                        &mut shape_variables,
+                    )
                     .map_err(|e| self.error(expr, &e))?;
                 self.check_shape(expr, &shape.substitute(&shape_variables), &argument)?;
                 arguments.push(argument);

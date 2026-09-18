@@ -322,6 +322,7 @@ impl CallableShape {
     pub(super) fn bind(
         &self,
         actual: &Self,
+        contextual_types: &BTreeMap<String, Type<Attrs>>,
         variables: &mut BTreeMap<String, Self>,
     ) -> Result<(), String> {
         match (self, actual) {
@@ -331,12 +332,16 @@ impl CallableShape {
                         return Err("Inconsistent generic Rust callable types".into());
                     }
                 } else {
-                    variables.insert(n.clone(), actual.clone());
+                    let shape = contextual_types
+                        .get(n)
+                        .map(|ty| actual.in_context(ty))
+                        .unwrap_or_else(|| actual.clone());
+                    variables.insert(n.clone(), shape);
                 }
             }
             (Self::Tuple(a), Self::Tuple(b)) => {
                 for (a, b) in a.iter().zip(b) {
-                    a.bind(b, variables)?;
+                    a.bind(b, contextual_types, variables)?;
                 }
             }
             (
@@ -352,13 +357,30 @@ impl CallableShape {
                 },
             ) => {
                 for (a, b) in a.iter().zip(b) {
-                    a.bind(b, variables)?;
+                    a.bind(b, contextual_types, variables)?;
                 }
-                ao.bind(bo, variables)?;
+                ao.bind(bo, contextual_types, variables)?;
             }
             _ => {}
         }
         Ok(())
+    }
+    fn in_context(&self, ty: &Type<Attrs>) -> Self {
+        match (self, ty) {
+            // The IR type establishes pointer coercion, but cannot recover
+            // source arity. Keep that arity from the argument's source shape.
+            (Self::Function { inputs, output, .. }, Type::Function(..)) => {
+                Self::pointer(inputs.clone(), *output.clone())
+            }
+            (Self::Tuple(shapes), Type::Tuple(_, types)) => Self::Tuple(
+                shapes
+                    .iter()
+                    .zip(types)
+                    .map(|(shape, ty)| shape.in_context(ty))
+                    .collect(),
+            ),
+            _ => self.clone(),
+        }
     }
     pub(super) fn from_ir(ty: &Type<Attrs>) -> Self {
         match ty {

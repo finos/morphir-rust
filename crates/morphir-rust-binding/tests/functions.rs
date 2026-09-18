@@ -271,3 +271,30 @@ fn distinct_named_function_items_require_pointer_coercion_before_generic_unifica
         }
     }
 }
+
+#[test]
+fn contextual_generic_results_coerce_function_items_and_closures() {
+    for version in ["3", "4"] {
+        for source in [
+            "fn first<T>(a:T,b:T)->T{a} fn a(x:i64)->i64{x} fn b(x:i64)->i64{x} fn f()->fn(i64)->i64{first(a,b)}",
+            "fn first<T>(a:T,b:T)->T{a} fn f()->fn(i64)->i64{first(|x:i64|x,|x:i64|x)}",
+            "fn first<T>(a:T,b:T)->T{a} fn a(x:i64,y:i64)->i64{x} fn b(x:i64,y:i64)->i64{y} fn f()->fn(i64,i64)->i64{first(a,b)}",
+        ] {
+            let result = compile(source, version);
+            assert!(
+                result.success,
+                "v{version} {source}: {:?}",
+                result.diagnostics
+            );
+        }
+        for source in [
+            "fn first<T>(a:T,b:T)->T{a} fn f(x:i64)->fn(i64)->i64{first(|n:i64|x,|n:i64|n)}",
+            "fn first<T>(a:T,b:T)->T{a} fn a(x:i64,y:i64)->i64{x} fn b(x:i64,y:i64)->i64{y} fn f()->fn(i64)->fn(i64)->i64{first(a,b)}",
+        ] {
+            assert!(
+                !compile(source, version).success,
+                "v{version} accepted {source}"
+            );
+        }
+    }
+}

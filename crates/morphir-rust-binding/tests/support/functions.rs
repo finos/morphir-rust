@@ -20,6 +20,12 @@ pub fn annotated_lambda(value: i64) -> i64 {
     get()(value)
 }
 pub fn first<T>(left: T, right: T) -> T { left }
+pub fn contextual_pointer() -> fn(i64) -> bool { first(positive, negative) }
+pub fn negative(value: i64) -> bool { value < 0 }
+pub fn contextual_result(value: i64) -> bool { contextual_pointer()(value) }
+pub fn contextual_multi() -> fn(i64, i64) -> i64 { first(maximum, minimum) }
+pub fn minimum(left: i64, right: i64) -> i64 { if left < right { left } else { right } }
+pub fn contextual_multi_result(left: i64, right: i64) -> i64 { contextual_multi()(left, right) }
 pub fn coerced_lambdas(value: i64) -> i64 {
     let left: fn(i64) -> i64 = |n: i64| n;
     let right: fn(i64) -> i64 = |n: i64| n;
@@ -91,6 +97,9 @@ fn main() {
     assert_eq!(models::specialized_callable(-1), 0);
     assert_eq!(models::annotated_lambda(42), 42);
     assert_eq!(models::coerced_lambdas(42), 42);
+    assert!(models::contextual_result(42));
+    assert!(!models::contextual_result(-1));
+    assert_eq!(models::contextual_multi_result(2, 3), 3);
     assert_eq!(models::specialized_thunk(42), 42);
     assert_eq!(models::reused_callable_tuple(42), 42);
     assert!(models::tuple_lambda(10, 11));

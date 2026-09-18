@@ -340,6 +340,14 @@ jobs:
       - name: Build and test the extension release bundle
         run: mise run "extension:artifact:${{ matrix.id }}"
 
+      # The host that ships these bundles is the morphir CLI from finos/morphir. The pinned
+      # release is downloaded and verified by the task, so no checkout of that repository is used.
+      # morphir 0.4.0-alpha.7 does not map the rust language yet (finos/morphir#840 is
+      # unreleased). Drop this condition when .config/morphir-cli-version names a release with it.
+      - name: Publish, install and use the bundle through the released morphir CLI
+        if: matrix.id != 'rust'
+        run: mise run test:cli-release "${{ matrix.id }}"
+
       - name: Upload extension release bundle
         uses: actions/upload-artifact@v7
         with:

@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Without this an incremental guest fails activation with "frontend capabilities disagreed
   with discovery". The field is written only when true, so descriptors for frontends that are
   not incremental are byte-identical to the ones before this change.
+- `test:cli-release <id>` publishes, installs and uses a staged extension bundle through the morphir CLI release pinned in `.config/morphir-cli-version`, downloaded and checksum-verified from finos/morphir releases. The `extension-bundle` CI job runs it for the Avro, OpenAPI and Python bundles; the Rust bundle joins once a CLI release maps the `rust` language.
 - Python functions support typed calls, same-package function imports and references, unary `Callable` annotations, captured lambdas and explicit currying in IR v3 and v4. Native, executable Python and packaged WASM tests cover the supported subset; unsupported arities and ill-typed calls return diagnostics.
 - Rust extension v0.1.0 bundles include the frontend/backend WASM guest, checksum
   and release descriptor for IR v3 and v4. CI selects Rust bundles through the

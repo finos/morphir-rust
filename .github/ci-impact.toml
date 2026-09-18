@@ -47,6 +47,9 @@ paths = [
   ".github/extensions.toml",
   "scripts/package_extension.py",
   "scripts/extension_packaging/**",
+  # The released morphir CLI every bundle is proved through, and the task that does it.
+  ".config/morphir-cli-version",
+  ".mise/tasks/test/cli-release",
 ]
 
 [rust]

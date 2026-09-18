@@ -152,6 +152,28 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("          name: morphir-${{ matrix.id }}-extension-bundle", job)
         self.assertIn("          path: .morphir/build/extensions/${{ matrix.id }}/*", job)
 
+    def test_extension_bundle_job_proves_the_bundle_through_the_released_cli(self) -> None:
+        job = self.jobs["extension-bundle"]
+        self.assertIn('        run: mise run test:cli-release "${{ matrix.id }}"', job)
+        # The bundle has to exist before the released CLI can publish it.
+        self.assertLess(
+            job.index('mise run "extension:artifact:${{ matrix.id }}"'),
+            job.index("mise run test:cli-release"),
+        )
+        # The check uses a released CLI, never a checkout of finos/morphir.
+        self.assertNotIn("repository: finos/morphir\n", job)
+        version = (REPOSITORY_ROOT / ".config" / "morphir-cli-version").read_text(encoding="utf-8")
+        self.assertRegex(version, r"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$")
+        task = (REPOSITORY_ROOT / ".mise" / "tasks" / "test" / "cli-release").read_text(encoding="utf-8")
+        self.assertIn("https://github.com/finos/morphir/releases/download/v$VERSION", task)
+        self.assertIn(".sha256", task)
+
+    def test_released_cli_inputs_rebuild_every_bundle(self) -> None:
+        impact = (REPOSITORY_ROOT / ".github" / "ci-impact.toml").read_text(encoding="utf-8")
+        extensions = impact.split("[extensions]\n", 1)[1].split("\n[", 1)[0]
+        self.assertIn('".config/morphir-cli-version"', extensions)
+        self.assertIn('".mise/tasks/test/cli-release"', extensions)
+
     def test_rust_jobs_scope_cargo_to_affected_packages(self) -> None:
         self.assertIn("        run: mise run check:fmt", self.jobs["lint-rust"])
         self.assertIn("        run: mise run check:lint:rust -- ${{ needs.changes.outputs.cargo_packages }}", self.jobs["lint-rust"])

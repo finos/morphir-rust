@@ -3,6 +3,7 @@ mod binding_attributes;
 mod bindings;
 mod boundary;
 mod declarations;
+mod patterns;
 mod recursion;
 mod source;
 mod types;
@@ -28,8 +29,22 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
         symbols: &symbols,
         package: &settings.package,
         module: &settings.module,
+        items: &file.items,
     };
-    let mut definitions = Vec::new();
+    let definitions = file
+        .items
+        .iter()
+        .filter(|item| !matches!(item, syn::Item::Fn(_)))
+        .map(|item| declarations::lower(&context, item))
+        .collect::<Outcome<Vec<_>>>()?;
+    let definitions = recursion::nominalize(&context, &file.items, definitions)?;
+    declarations::validate_aliases(&context, &file.items, &definitions)?;
+    let pattern_context = if request.options.types_only {
+        crate::patterns::Context::default()
+    } else {
+        patterns::context(&context, &definitions)?
+    };
+
     let mut values = Vec::new();
     let mut expressions = Vec::new();
     if !request.options.types_only {
@@ -63,17 +78,13 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
                 "Type-only compilation omitted a Rust function",
             );
             if !request.options.types_only {
-                expressions.push(values::lower(&context, function)?);
+                expressions.push(values::lower(&context, function, &pattern_context)?);
                 continue;
             }
             diagnostic.severity = morphir_extension_sdk::DiagnosticSeverity::Warning;
             diagnostics.push(diagnostic);
-        } else {
-            definitions.push(declarations::lower(&context, item)?);
         }
     }
-    let definitions = recursion::nominalize(&context, &file.items, definitions)?;
-    declarations::validate_aliases(&context, &file.items, &definitions)?;
     let classic = Distribution {
         format_version: 3,
         distribution: DistributionBody::Library(

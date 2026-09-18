@@ -1,4 +1,4 @@
-# Rust types and conditional functions
+# Rust types and pure functions
 
 `morphir-rust-binding` implements the `morphir-rust` extension. It provides MEP
 `frontend/compile` and `backend/generate` natively and as an Extism WASM guest.
@@ -6,7 +6,7 @@ Both capabilities advertise IR versions `3` and `4`, language/target `rust` and
 source suffix `.rs`. Syn parses source without running rustc, macros or build
 scripts. The shared `morphir-core` codecs and typed migration handle the IR.
 
-The frontend and backend translate types and a small subset of pure conditional
+The frontend and backend translate types and a small subset of pure
 functions in both IR versions. The frontend also extracts explicitly annotated
 native/external declarations for IR v4. It does not claim complete Rust language
 support, all Morphir value semantics, or extension-level MCK conformance.
@@ -45,7 +45,7 @@ identifiers and are never opened by the extension.
 | Tuple or unit struct | Nominal custom type with one constructor |
 | Struct with private fields | Custom type with private constructor |
 | Enum | Custom type; variants become constructors |
-| Named enum payload | Constructor argument containing a record |
+| Named enum payload | Constructor arguments in field declaration order |
 | Tuple, `()` | Tuple, Unit |
 | `type Alias<T> = ...` | Transparent type alias |
 | Unconstrained type parameter | Type variable |
@@ -96,7 +96,7 @@ pub fn select(a: i64, b: i64) -> i64 {
 The backend generates callable Rust functions from this subset in either IR
 version. Supported expressions are parameters and local variables, `i64`, finite
 `f64`, Boolean and character literals, tuples, `()`, immutable named `let`
-bindings, scalar comparisons, `!`, `&&`, `||`, and nested `if/else`. Blocks end in
+bindings, scalar comparisons, `!`, `&&`, `||`, nested `if/else`, and the `match` subset below. Blocks end in
 a value expression, or yield Unit when empty. A missing `else` is valid only for
 a Unit result. Boolean operators preserve short-circuit evaluation.
 
@@ -120,12 +120,53 @@ signatures. Anonymous structural records and higher-order function signatures
 are rejected in this increment; their standalone type declarations remain
 supported.
 
-Calls, arithmetic operators, `match`, loops, mutation, destructuring, closures,
+Calls, arithmetic operators, loops, mutation, destructuring outside `match`, closures,
 early `return`, and macro invocations are outside this increment. Ordinary
 functions must be safe, synchronous and non-const, without an ABI, lifetimes or
 trait bounds. Unsupported expressions and invalid types return diagnostics
 without partial IR or generated artifacts. `typesOnly: true` continues to omit
 ordinary functions with a warning without validating their bodies.
+
+## Pattern matching in IR v3 and v4
+
+Both directions support ordered, exhaustive matches over local enums,
+`Option<T>`, `Result<T, E>`, tuples, Boolean, `i64`, character and Unit values.
+Patterns may nest and use wildcards or plain variable bindings. The subject is
+evaluated once, and bindings are scoped to their arm:
+
+```rust
+pub fn amount(value: Option<Result<i64, bool>>) -> i64 {
+    match value {
+        Some(Ok(amount)) => amount,
+        Some(Err(true)) => 1,
+        Some(Err(false)) => -1,
+        None => 0,
+    }
+}
+```
+
+Enum variants use qualified paths such as `Decision::Accepted(value)`. Named
+variant fields are supported and lower in declaration order; field shorthand
+and `..` are accepted. SDK variants accept short names (`Some`, `None`, `Ok`,
+`Err`) or `Option::`/`Result::` qualification. Generic payload types are
+substituted before checking arm bindings and results.
+
+Every arm must return the same type. Exhaustiveness checks include nested
+constructor and tuple cases. Integer, character and unconstrained generic
+subjects need wildcard or variable coverage. A missing case is an error;
+generation never inserts a panic fallback. Ownership checks remain conservative,
+including consumption of a non-Copy match subject.
+
+Guards, or-patterns, ranges, `@`, `ref`/`mut` bindings, reference and slice
+patterns, floating-point and string patterns, empty matches, ordinary struct
+patterns, and source patterns that require erased `Box` payloads are deferred.
+Type aliases remain nominal for pattern checking. Unsupported patterns return
+diagnostics without partial output.
+
+The backend includes phantom generic fields in constructor patterns. Matching
+private constructor wrappers, recursively boxed payloads and anonymous structural
+payloads is deferred and returns a diagnostic; their type declarations remain
+supported.
 
 ## IR v4 native and external declarations
 
@@ -264,6 +305,6 @@ Round-trip tests compare supported module declarations, not source formatting,
 derive implementations, Rust ownership, or ignored values. Generated crate
 module wrappers and backend-only helper types exceed the frontend's one-module
 subset. Additional expressions, imports and whole-crate name resolution are
-follow-on work. Conditional-function tests compile and execute source and
+follow-on work. Conditional and pattern tests compile and execute source and
 generated Rust against fixed expected results for both IR versions, including
 the native and WASM extension protocols.

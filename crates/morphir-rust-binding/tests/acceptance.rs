@@ -5,6 +5,9 @@ use morphir_rust_binding::RustExtension;
 #[path = "support/conditional.rs"]
 mod conditional;
 
+#[path = "support/pattern.rs"]
+mod pattern;
+
 #[derive(Debug, Default)]
 struct TestDriver {
     source: String,
@@ -172,6 +175,26 @@ fn main() {
 #[derive(Debug, Default, World)]
 struct RustWorld {
     driver: TestDriver,
+}
+
+#[given("Rust functions matching enums, options, results, tuples and literals")]
+fn pattern_model(world: &mut RustWorld) {
+    world.driver.source = pattern::SOURCE.into();
+}
+
+#[then("the generated functions return the expected pattern results")]
+fn pattern_results(world: &mut RustWorld) {
+    let generated = world
+        .driver
+        .generated
+        .as_ref()
+        .expect("generate Rust first");
+    assert!(
+        generated.diagnostics.is_empty(),
+        "{:?}",
+        generated.diagnostics
+    );
+    pattern::assert_executable(&generated.artifacts[0].content);
 }
 
 #[given("Rust functions using let bindings and nested conditionals")]

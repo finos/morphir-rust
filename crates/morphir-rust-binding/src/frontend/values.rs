@@ -1,5 +1,7 @@
 //! The deliberately small, typed expression subset supported by the Rust binding.
 mod literals;
+mod patterns;
+mod storage;
 
 use super::types::Context;
 use crate::Outcome;
@@ -29,6 +31,7 @@ struct Lower<'a, 'b> {
 pub(super) fn lower(
     context: &Context<'_>,
     function: &syn::ItemFn,
+    patterns: &crate::patterns::Context,
 ) -> Outcome<ModuleValueDefinition<Attrs, Type<Attrs>>> {
     let signature = &function.sig;
     if signature.asyncness.is_some()
@@ -101,7 +104,8 @@ pub(super) fn lower(
     let migrated =
         morphir_core::migration::migrate_value_definition(&definition, &mut Default::default())
             .map_err(|e| lower.error(&function.block, &format!("{e:?}")))?;
-    crate::values::validate_function(&migrated).map_err(|e| lower.error(&function.block, &e))?;
+    crate::values::validate_function(&migrated, patterns)
+        .map_err(|e| lower.error(&function.block, &e))?;
     Ok((
         context.source.name(&signature.ident)?,
         AccessControlled {
@@ -160,38 +164,6 @@ impl Lower<'_, '_> {
         self.context.ty(ty, &self.parameters)
     }
 
-    // Type-only lowering erases Box; executable lowering cannot confuse it with
-    // a Copy scalar or use a boxed Boolean directly as a condition.
-    fn check_storage_type(&self, ty: &syn::Type) -> Outcome<()> {
-        match ty {
-            syn::Type::Path(path) => {
-                for segment in &path.path.segments {
-                    if segment.ident.unraw() == "Box"
-                        && !self.context.symbols.contains_key("Box")
-                        && !self.parameters.iter().any(|p| p.unraw() == "Box")
-                    {
-                        return Err(self.error(ty, "Box types are not supported in executable function signatures or local annotations"));
-                    }
-                    if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
-                        for argument in &arguments.args {
-                            if let syn::GenericArgument::Type(ty) = argument {
-                                self.check_storage_type(ty)?;
-                            }
-                        }
-                    }
-                }
-            }
-            syn::Type::Tuple(tuple) => {
-                for ty in &tuple.elems {
-                    self.check_storage_type(ty)?;
-                }
-            }
-            syn::Type::Paren(paren) => self.check_storage_type(&paren.elem)?,
-            syn::Type::Group(group) => self.check_storage_type(&group.elem)?,
-            _ => {}
-        }
-        Ok(())
-    }
     fn error(&self, node: &impl Spanned, message: &str) -> morphir_extension_sdk::Diagnostic {
         self.context
             .source
@@ -305,6 +277,7 @@ impl Lower<'_, '_> {
             Value::Literal(a, _)
             | Value::Variable(a, _)
             | Value::Tuple(a, _)
+            | Value::PatternMatch(a, _, _)
             | Value::IfThenElse(a, _, _, _)
             | Value::LetDefinition(a, _, _, _)
             | Value::Apply(a, _, _)
@@ -387,6 +360,7 @@ impl Lower<'_, '_> {
                 self.same(expression, &scalar("Basics", "Bool"), &ty)?;
                 Ok((conditional(condition, boolean(false), boolean(true)), ty))
             }
+            syn::Expr::Match(m) => self.match_expression(m, scope),
             syn::Expr::If(i) => {
                 self.context.source.attributes(&i.attrs, false)?;
                 let (condition, ty) = self.expression(&i.cond, scope)?;

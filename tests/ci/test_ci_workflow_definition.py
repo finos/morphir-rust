@@ -152,6 +152,60 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("          name: morphir-${{ matrix.id }}-extension-bundle", job)
         self.assertIn("          path: .morphir/build/extensions/${{ matrix.id }}/*", job)
 
+    def test_extension_bundle_job_proves_the_bundle_through_the_released_cli(self) -> None:
+        job = self.jobs["extension-bundle"]
+        self.assertIn('        run: mise run test:cli-release "${{ matrix.id }}"', job)
+        # The bundle has to exist before the released CLI can publish it.
+        self.assertLess(
+            job.index('mise run "extension:artifact:${{ matrix.id }}"'),
+            job.index("mise run test:cli-release"),
+        )
+        # morphir-elm-native is built into the CLI, so finos/morphir checks it; every other
+        # bundle, the Rust one included, goes through the released CLI.
+        self.assertIn("        if: matrix.id != 'elm-native'\n", job)
+        self.assertNotIn("matrix.id != 'rust'", job)
+        # The check uses a released CLI, never a checkout of finos/morphir.
+        self.assertNotIn("repository: finos/morphir\n", job)
+        version = (REPOSITORY_ROOT / ".config" / "morphir-cli-version").read_text(encoding="utf-8")
+        self.assertRegex(version, r"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$")
+        task = (REPOSITORY_ROOT / ".mise" / "tasks" / "test" / "cli-release").read_text(encoding="utf-8")
+        self.assertIn("https://github.com/finos/morphir/releases/download/v$VERSION", task)
+        self.assertIn(".sha256", task)
+
+    def test_a_relative_cli_override_survives_the_change_into_the_project(self) -> None:
+        """MORPHIR_CLI=target/debug/morphir must still resolve after the task enters its project."""
+        task = REPOSITORY_ROOT / ".mise" / "tasks" / "test" / "cli-release"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "bin").mkdir()
+            cli = root / "bin" / "morphir"
+            cli.write_text("#!/bin/sh\necho \"morphir 0.0.0 $(pwd -P)\"\nexit 7\n", encoding="utf-8")
+            cli.chmod(0o755)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            (bundle / "stub.release.json").write_text("{}", encoding="utf-8")
+            result = subprocess.run(
+                ["sh", str(task), "avro"],
+                cwd=REPOSITORY_ROOT,
+                env={
+                    **os.environ,
+                    "MORPHIR_CLI": os.path.relpath(cli, REPOSITORY_ROOT),
+                    "MORPHIR_EXTENSION_BUNDLE": str(bundle),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        # The stub CLI exits 7 when it runs. A lost relative path exits 127 instead.
+        self.assertEqual(7, result.returncode, result.stderr)
+        self.assertNotIn("No such file", result.stderr)
+
+    def test_released_cli_inputs_rebuild_every_bundle(self) -> None:
+        impact = (REPOSITORY_ROOT / ".github" / "ci-impact.toml").read_text(encoding="utf-8")
+        extensions = impact.split("[extensions]\n", 1)[1].split("\n[", 1)[0]
+        self.assertIn('".config/morphir-cli-version"', extensions)
+        self.assertIn('".mise/tasks/test/cli-release"', extensions)
+
     def test_rust_jobs_scope_cargo_to_affected_packages(self) -> None:
         self.assertIn("        run: mise run check:fmt", self.jobs["lint-rust"])
         self.assertIn("        run: mise run check:lint:rust -- ${{ needs.changes.outputs.cargo_packages }}", self.jobs["lint-rust"])

@@ -340,6 +340,14 @@ jobs:
       - name: Build and test the extension release bundle
         run: mise run "extension:artifact:${{ matrix.id }}"
 
+      # The host that ships these bundles is the morphir CLI from finos/morphir. The pinned
+      # release is downloaded and verified by the task, so no checkout of that repository is used.
+      # The CLI compiles morphir-elm-native in as an opt-in provider, so finos/morphir owns that
+      # check; an installed bundle with the same id is not how users reach it.
+      - name: Publish, install and use the bundle through the released morphir CLI
+        if: matrix.id != 'elm-native'
+        run: mise run test:cli-release "${{ matrix.id }}"
+
       - name: Upload extension release bundle
         uses: actions/upload-artifact@v7
         with:

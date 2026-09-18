@@ -43,7 +43,7 @@ use super::{
 /// `pathBudget` is the one required manifest member no older tree has, so its absence is the
 /// reliable signal that a tree predates the change rather than being merely malformed.
 const MIGRATE_GUIDANCE: &str =
-    "this tree predates 0.4.0-alpha.8; regenerate it with morphir migrate";
+    "this tree predates 0.4.0-beta.1; regenerate it with morphir migrate";
 
 /// The manifest file names a tree root may carry, and the profile each selects.
 ///

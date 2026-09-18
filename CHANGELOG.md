@@ -150,6 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The document-tree `missing_member` guidance for a tree in the earlier layout names `0.4.0-beta.1`, the CLI release that ships the new layout, instead of the unreleased `0.4.0-alpha.8`.
 - **Impact-based CI.** CI runs only the jobs a change can affect, computed from the cargo dependency
   graph and `.github/ci-impact.toml`. Extension bundles build as a matrix.
   `CI OK` is the single required status check. Force a full run with the

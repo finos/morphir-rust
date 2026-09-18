@@ -160,6 +160,10 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
             job.index('mise run "extension:artifact:${{ matrix.id }}"'),
             job.index("mise run test:cli-release"),
         )
+        # morphir-elm-native is built into the CLI, so finos/morphir checks it; every other
+        # bundle, the Rust one included, goes through the released CLI.
+        self.assertIn("        if: matrix.id != 'elm-native'\n", job)
+        self.assertNotIn("matrix.id != 'rust'", job)
         # The check uses a released CLI, never a checkout of finos/morphir.
         self.assertNotIn("repository: finos/morphir\n", job)
         version = (REPOSITORY_ROOT / ".config" / "morphir-cli-version").read_text(encoding="utf-8")

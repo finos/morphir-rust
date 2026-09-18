@@ -342,10 +342,10 @@ jobs:
 
       # The host that ships these bundles is the morphir CLI from finos/morphir. The pinned
       # release is downloaded and verified by the task, so no checkout of that repository is used.
-      # morphir 0.4.0-alpha.7 does not map the rust language yet (finos/morphir#840 is
-      # unreleased). Drop this condition when .config/morphir-cli-version names a release with it.
+      # The CLI compiles morphir-elm-native in as an opt-in provider, so finos/morphir owns that
+      # check; an installed bundle with the same id is not how users reach it.
       - name: Publish, install and use the bundle through the released morphir CLI
-        if: matrix.id != 'rust'
+        if: matrix.id != 'elm-native'
         run: mise run test:cli-release "${{ matrix.id }}"
 
       - name: Upload extension release bundle

@@ -25,7 +25,13 @@ pub(crate) enum Decision {
 
 /// Hash the exact source bytes, including documentation and whitespace.
 pub(crate) fn source_digest(source: &str) -> String {
-    format!("sha256:{:x}", Sha256::digest(source.as_bytes()))
+    // sha2 0.11 digests are `hybrid_array::Array`s, which do not implement `LowerHex`.
+    let mut out = String::with_capacity(7 + 64);
+    out.push_str("sha256:");
+    for byte in Sha256::digest(source.as_bytes()) {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 /// Hash only the module's public shape and access, omitting implementation and docs.

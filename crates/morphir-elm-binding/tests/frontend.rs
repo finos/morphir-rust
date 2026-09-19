@@ -115,6 +115,79 @@ fn accesses(result: &CompileResult) -> std::collections::BTreeMap<String, String
         .collect()
 }
 
+/// Compiles a v3 package with the `elmOrdering` option set (or, for `None`,
+/// left out so the default applies).
+fn compile_ordered(order: Option<&str>, documents: Vec<SourceDocument>) -> CompileResult {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents,
+            package: CompilePackage {
+                name: "My.Pkg".into(),
+                exposed_modules: None,
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: order
+                    .map(|order| ("elmOrdering".to_string(), serde_json::Value::from(order)))
+                    .into_iter()
+                    .collect(),
+            },
+            baseline: None,
+        })
+        .unwrap()
+}
+
+/// The v3 distribution's module paths in the order it writes them, each with
+/// its type names and each custom type's constructor names, all in order.
+fn v3_layout(result: &CompileResult) -> Vec<(String, Vec<String>, Vec<Vec<String>>)> {
+    assert!(result.success, "{:?}", result.diagnostics);
+    let dashed = |name: &serde_json::Value| {
+        name.as_array()
+            .expect("a name")
+            .iter()
+            .map(|word| word.as_str().expect("a word").to_string())
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    result.ir.as_ref().expect("a distribution")["distribution"][3]["modules"]
+        .as_array()
+        .expect("a module list")
+        .iter()
+        .map(|entry| {
+            let path = entry[0]
+                .as_array()
+                .expect("a module path")
+                .iter()
+                .map(dashed)
+                .collect::<Vec<_>>()
+                .join(".");
+            let types = entry[1]["value"]["types"]
+                .as_array()
+                .expect("a type list")
+                .to_vec();
+            let constructors = types
+                .iter()
+                .filter_map(|ty| {
+                    ty[1]["value"]["value"][2]["value"]
+                        .as_array()
+                        .map(|list| list.iter().map(|entry| dashed(&entry[0])).collect())
+                })
+                .collect();
+            (
+                path,
+                types.iter().map(|ty| dashed(&ty[0])).collect(),
+                constructors,
+            )
+        })
+        .collect()
+}
+
 /// Compiles one v3 module with the `elmDocComments` option set (or, for
 /// `None`, left out so the default applies).
 fn compile_with_doc_mode(mode: Option<&str>, text: &str) -> CompileResult {
@@ -828,6 +901,149 @@ fn a_doc_only_edit_does_not_change_the_interface_digest() {
         before.context_digest,
         compile_with_doc_mode(Some("trimmed"), DOCS).context_digest,
         "a different doc comment mode is a different context"
+    );
+}
+
+/// Two modules whose declarations are deliberately not in alphabetical order,
+/// including a custom type whose constructors are not either.
+fn unsorted_package() -> Vec<SourceDocument> {
+    vec![
+        document(
+            "file:///work/My/Pkg/Shared.elm",
+            "module My.Pkg.Shared exposing (..)\n\n\
+             type alias Money = Int\n\n\n\
+             type Currency = USD | EUR | GBP\n\n\n\
+             type alias Code = String\n",
+        ),
+        document(
+            "file:///work/My/Pkg/Aliases.elm",
+            "module My.Pkg.Aliases exposing (..)\n\n\
+             type alias Zeta = Int\n\n\n\
+             type alias Alpha = Int\n",
+        ),
+    ]
+}
+
+/// The default writes everything in the order the source declares it: modules
+/// in request order, types and constructors as written.
+#[test]
+fn the_default_ordering_is_source_order() {
+    for order in [None, Some("source")] {
+        assert_eq!(
+            v3_layout(&compile_ordered(order, unsorted_package())),
+            vec![
+                (
+                    "shared".to_string(),
+                    vec![
+                        "money".to_string(),
+                        "currency".to_string(),
+                        "code".to_string()
+                    ],
+                    vec![vec![
+                        "u-s-d".to_string(),
+                        "e-u-r".to_string(),
+                        "g-b-p".to_string()
+                    ]]
+                ),
+                (
+                    "aliases".to_string(),
+                    vec!["zeta".to_string(), "alpha".to_string()],
+                    vec![]
+                ),
+            ],
+            "{order:?}"
+        );
+    }
+}
+
+/// `morphir-elm` writes them the way morphir-elm's `Dict`s do: modules, types
+/// and constructors sorted by their key.
+#[test]
+fn the_morphir_elm_ordering_sorts_modules_types_and_constructors() {
+    assert_eq!(
+        v3_layout(&compile_ordered(Some("morphir-elm"), unsorted_package())),
+        vec![
+            (
+                "aliases".to_string(),
+                vec!["alpha".to_string(), "zeta".to_string()],
+                vec![]
+            ),
+            (
+                "shared".to_string(),
+                vec![
+                    "code".to_string(),
+                    "currency".to_string(),
+                    "money".to_string()
+                ],
+                // `["e","u","r"] < ["g","b","p"] < ["u","s","d"]`, which is the
+                // order morphir-elm writes for this very type.
+                vec![vec![
+                    "e-u-r".to_string(),
+                    "g-b-p".to_string(),
+                    "u-s-d".to_string()
+                ]]
+            ),
+        ]
+    );
+}
+
+/// The sort is on the *words* a Morphir name holds, not on a rendered spelling
+/// of it. `LocalDate` is `["local","date"]` and `Locale` is `["locale"]`, so
+/// `Locale` sorts *after* `LocalDate` — `"local" < "locale"` element by
+/// element — where a rendered `"localdate" < "locale"` comparison would agree
+/// by luck, but `ListOf` (`["list","of"]`) against `Listen` (`["listen"]`)
+/// would not: joined, `"listen" < "listof"`; by words, `["list","of"]` comes
+/// first because `"list" < "listen"`.
+#[test]
+fn the_morphir_elm_ordering_sorts_on_words_not_on_a_rendered_name() {
+    let result = compile_ordered(
+        Some("morphir-elm"),
+        vec![document(
+            "file:///work/My/Pkg/Words.elm",
+            "module My.Pkg.Words exposing (..)\n\n\
+             type alias Listen = Int\n\n\n\
+             type alias ListOf = Int\n\n\n\
+             type alias Locale = Int\n\n\n\
+             type alias LocalDate = Int\n",
+        )],
+    );
+
+    assert_eq!(
+        v3_layout(&result)[0].1,
+        vec![
+            "list-of".to_string(),
+            "listen".to_string(),
+            "local-date".to_string(),
+            "locale".to_string(),
+        ],
+        "a rendered-name sort would give listen, list-of, locale, local-date"
+    );
+}
+
+/// An order nobody implements is a request this extension cannot act on, and is
+/// refused by name rather than quietly falling back to the default.
+#[test]
+fn an_unknown_ordering_is_refused() {
+    let result = compile_ordered(Some("alphabetical"), unsorted_package());
+
+    assert!(!result.success);
+    let refusals = codes(&result, "ELM_REQUEST");
+    assert_eq!(refusals.len(), 1, "{:?}", result.diagnostics);
+    assert!(
+        refusals[0].message.contains("elmOrdering") && refusals[0].message.contains("alphabetical"),
+        "{}",
+        refusals[0].message
+    );
+    assert!(result.ir.is_none());
+}
+
+/// The ordering changes the document, so a baseline built under one order is
+/// not reusable by a run compiling under the other.
+#[test]
+fn the_two_orderings_are_two_compile_contexts() {
+    assert_ne!(
+        compile_ordered(None, unsorted_package()).context_digest,
+        compile_ordered(Some("morphir-elm"), unsorted_package()).context_digest
     );
 }
 

@@ -107,7 +107,7 @@ pub fn compile(request: CompileRequest) -> CompileResult {
     // and echoes back, and a run that failed still tells it what it was.
     let context_digest = boundary::context_digest(&validated, &dependency_interfaces);
 
-    let Some(emitter) = emit::emitter_for(&validated.ir_version) else {
+    let Some(emitter) = emit::emitter_for(&validated.ir_version, validated.ordering) else {
         return rejected(
             boundary::request_error(format!(
                 "no emitter for Morphir IR `{}`",

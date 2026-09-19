@@ -7,7 +7,7 @@
 //! on which version the document was written in.
 
 use morphir_elm_binding::ElmExtension;
-use morphir_elm_binding::frontend::emit::{PackageInput, emitter_for};
+use morphir_elm_binding::frontend::emit::{Ordering, PackageInput, emitter_for};
 use morphir_elm_binding::resolved::{
     Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule, ResolvedType,
 };
@@ -117,7 +117,7 @@ fn classic_ir() -> Value {
 /// The v4 document for [`sample_module`], written natively by this crate's own
 /// v4 emitter.
 fn v4_ir() -> Value {
-    let emitter = emitter_for("4").expect("a v4 emitter");
+    let emitter = emitter_for("4", Ordering::Source).expect("a v4 emitter");
     let modules = vec![sample_module()];
     let package = vec!["My".to_string()];
     let module_irs = vec![(

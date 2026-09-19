@@ -15,7 +15,7 @@ use morphir_core::ir::classic::{
 };
 use serde_json::Value;
 
-use super::{EmitError, Emitter, ModuleIr, PackageInput};
+use super::{EmitError, Emitter, ModuleIr, Ordering, PackageInput, in_order, name_key, path_key};
 use crate::names::{argument_words, module_label, words};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
@@ -23,13 +23,16 @@ use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, Resolve
 type ClassicModule = ModuleDefinition<Attrs, Type<Attrs>>;
 
 /// Writes Morphir IR v3 (the classic model).
-pub struct ClassicEmitter;
+pub struct ClassicEmitter {
+    /// The order modules, types and constructors are written in.
+    pub ordering: Ordering,
+}
 
 impl Emitter for ClassicEmitter {
     fn emit_module(&self, module: &ResolvedModule) -> Result<Value, EmitError> {
         let definition = AccessControlled {
             access: access(module.access),
-            value: module_definition(module),
+            value: module_definition(module, self.ordering),
         };
         serde_json::to_value(&definition).map_err(|error| {
             format!(
@@ -46,7 +49,9 @@ impl Emitter for ClassicEmitter {
     ) -> Result<Value, EmitError> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut modules = Vec::with_capacity(module_irs.len());
-        for (module_path, module_access, module_ir) in module_irs {
+        for (module_path, module_access, module_ir) in
+            in_order(module_irs, self.ordering, |(path, _, _)| path_key(path))
+        {
             let label = module_label(module_path);
             let definition: AccessControlled<ClassicModule> =
                 serde_json::from_value(module_ir.clone()).map_err(|error| {
@@ -160,7 +165,11 @@ fn constructor(source: &RConstructor) -> Constructor<Attrs> {
     }
 }
 
-fn type_definition(body: &ResolvedBody, params: &[String]) -> TypeDefinition<Attrs> {
+fn type_definition(
+    body: &ResolvedBody,
+    params: &[String],
+    ordering: Ordering,
+) -> TypeDefinition<Attrs> {
     let params = params.iter().map(|param| name(param)).collect();
     match body {
         ResolvedBody::Alias(alias) => TypeDefinition::Alias(params, ty(alias)),
@@ -171,32 +180,36 @@ fn type_definition(body: &ResolvedBody, params: &[String]) -> TypeDefinition<Att
             params,
             AccessControlled {
                 access: access(*constructor_access),
-                value: constructors.iter().map(constructor).collect(),
+                value: in_order(constructors, ordering, |source| name_key(&source.name))
+                    .into_iter()
+                    .map(constructor)
+                    .collect(),
             },
         ),
     }
 }
 
-fn module_definition(module: &ResolvedModule) -> ClassicModule {
+fn module_definition(module: &ResolvedModule, ordering: Ordering) -> ClassicModule {
     ModuleDefinition {
-        types: module
-            .types
-            .iter()
-            .map(|declaration| {
-                (
-                    name(&declaration.name),
-                    AccessControlled {
-                        access: access(declaration.access),
-                        value: Documented {
-                            // Classic documentation is a string, so an
-                            // undocumented declaration carries the empty one.
-                            doc: declaration.doc.clone().unwrap_or_default(),
-                            value: type_definition(&declaration.body, &declaration.params),
-                        },
+        types: in_order(&module.types, ordering, |declaration| {
+            name_key(&declaration.name)
+        })
+        .into_iter()
+        .map(|declaration| {
+            (
+                name(&declaration.name),
+                AccessControlled {
+                    access: access(declaration.access),
+                    value: Documented {
+                        // Classic documentation is a string, so an
+                        // undocumented declaration carries the empty one.
+                        doc: declaration.doc.clone().unwrap_or_default(),
+                        value: type_definition(&declaration.body, &declaration.params, ordering),
                     },
-                )
-            })
-            .collect(),
+                },
+            )
+        })
+        .collect(),
         // Value declarations are skipped by this frontend.
         values: vec![],
         doc: module.doc.clone(),

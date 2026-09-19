@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module never opens what *it* names, leaving a public type pointing into a
   private module. This frontend follows every declaration it reaches, which can
   only publish more modules, never fewer.
+- `elmOrdering` compile option for the native Elm frontend, choosing the order a
+  document lists its modules, types and constructors in: `"source"` (the
+  default, declaration order) or `"morphir-elm"`, which sorts them the way
+  morphir-elm's `Dict`s do — on the words a Morphir name holds, not on a
+  rendered spelling of it. Record fields and constructor arguments are
+  positional in morphir-elm too and are never reordered. Any other value is
+  refused with `ELM_REQUEST`. The order is part of the compile context digest.
+  In `"morphir-elm"` order the v3 document this frontend writes for the
+  comparison corpus matches morphir-elm 2.100.0's exactly, apart from the values
+  it does not compile.
 - `elmDocComments` compile option for the native Elm frontend, choosing how much
   of a `{-| ... -}` comment the IR keeps: `"morphir-elm"` (the default) writes
   what morphir-elm writes byte for byte, and `"trimmed"` takes the surrounding

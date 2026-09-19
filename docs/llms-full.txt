@@ -2248,6 +2248,36 @@ whitespace a second layout. A source → IR → source → IR round trip is exac
 under `"trimmed"`; under `"morphir-elm"` the regenerated docs are equivalent but
 not character-identical.
 
+## The ordering option
+
+`elmOrdering` chooses the order the document lists its modules, types and
+constructors in:
+
+- `"source"` is the **default**: everything appears in the order the source
+  declares it. It is the default because it is the better order to read — a
+  reader comparing a document with the Elm it came from finds things where they
+  were written, and a diff between two versions of a package shows the edit
+  rather than a reshuffle.
+- `"morphir-elm"` writes the order morphir-elm writes. morphir-elm holds
+  modules, types and constructors in Elm `Dict`s, so its JSON order is the
+  `Dict`'s key order. Use it when a document has to compare byte for byte
+  against one morphir-elm produced.
+
+Any other value is refused with an `ELM_REQUEST` error naming the option.
+
+The sort is on the *words* a Morphir name holds, never on a rendered spelling of
+it: a key is a `Path` (`List Name`) or a `Name` (`List String`), compared
+element by element with a shorter prefix first. So `ListOf` (`["list","of"]`)
+sorts before `Listen` (`["listen"]`), where comparing the joined spellings would
+put them the other way round.
+
+Record fields and constructor arguments are never reordered. They are positional
+in morphir-elm too — a list, not a `Dict` — so source order already matches.
+
+The order changes the document, so it is part of the [compile
+context](#the-compile-context): switching it invalidates a baseline rather than
+assembling a distribution out of modules emitted under both.
+
 ## Package names and module paths
 
 A Morphir module path is relative to its package, so the package path is
@@ -2292,12 +2322,9 @@ nothing.
 
 ## Differences from morphir-elm
 
-These are deliberate, not gaps:
+These are deliberate, not gaps. Declaration order is not among them: it is a
+default, and [`elmOrdering`](#the-ordering-option) switches it.
 
-- **Declaration order is source order.** Modules, types and constructors are
-  written in the order the source declares them. morphir-elm builds them from a
-  `Dict`, so it writes them sorted by Morphir name. The two documents describe
-  the same package; they list it differently.
 - **Values are skipped.** This frontend compiles type declarations only. Each
   value declaration is reported as an `ELM_VALUE_SKIPPED` warning and the
   compile still succeeds, so a distribution written here has no `values`.

@@ -17,9 +17,85 @@
 pub mod classic;
 pub mod v4;
 
+use serde::Serialize;
 use serde_json::Value;
 
+use crate::names::words;
 use crate::resolved::{Access, ResolvedModule};
+
+/// The order the modules, types and constructors of a document are written in.
+///
+/// This changes the document, so it is part of the compile context
+/// ([`crate::frontend::boundary::context_digest`]): a run must not assemble a
+/// distribution out of modules emitted under the other order.
+///
+/// Record fields and constructor arguments are *not* affected. They are
+/// positional in morphir-elm too — it keeps them in a list, not a `Dict` — so
+/// source order is already the matching order for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Ordering {
+    /// The order the source declares things in. This is the default: a reader
+    /// comparing a document with the Elm it came from finds them in the same
+    /// order, and a diff between two versions of a package shows the edit
+    /// rather than a reshuffle.
+    Source,
+    /// The order morphir-elm writes.
+    ///
+    /// morphir-elm holds modules, types and constructors in Elm `Dict`s, so the
+    /// order in its JSON is the `Dict`'s key order. A key is a `Path`
+    /// (`List Name`) or a `Name` (`List String`), compared element by element
+    /// with a shorter prefix first — which is exactly Rust's `Ord` on
+    /// `Vec<Vec<String>>` and `Vec<String>`. So the sort is on the *words* a
+    /// name splits into, never on a rendered spelling of it: `LocalDate` sorts
+    /// as `["local", "date"]`, and `SDK` as `["s", "d", "k"]`.
+    MorphirElm,
+}
+
+/// Resolves the `elmOrdering` extension option into an [`Ordering`].
+///
+/// - `None` selects [`Ordering::Source`].
+/// - `"source"` and `"morphir-elm"` name the two orders.
+pub fn ordering_from_option(value: Option<&Value>) -> Result<Ordering, String> {
+    match value {
+        None => Ok(Ordering::Source),
+        Some(Value::String(order)) => match order.as_str() {
+            "source" => Ok(Ordering::Source),
+            "morphir-elm" => Ok(Ordering::MorphirElm),
+            other => Err(format!(
+                "unknown order `{other}`: expected `source` or `morphir-elm`"
+            )),
+        },
+        Some(other) => Err(format!("expected a string, got {other}")),
+    }
+}
+
+/// The key a `Dict` keyed by `Name` orders an identifier by: its words.
+pub(crate) fn name_key(source: &str) -> Vec<String> {
+    words(source)
+}
+
+/// The key a `Dict` keyed by `Path` orders a module path by: one word list per
+/// segment.
+pub(crate) fn path_key(segments: &[String]) -> Vec<Vec<String>> {
+    segments.iter().map(|segment| words(segment)).collect()
+}
+
+/// `items`, in the order `ordering` asks for, given the sort key of each.
+pub(crate) fn in_order<'a, T, K: Ord>(
+    items: impl IntoIterator<Item = &'a T>,
+    ordering: Ordering,
+    key: impl Fn(&T) -> K,
+) -> Vec<&'a T>
+where
+    T: 'a,
+{
+    let mut items: Vec<&T> = items.into_iter().collect();
+    if ordering == Ordering::MorphirElm {
+        items.sort_by_key(|item| key(item));
+    }
+    items
+}
 
 /// Everything a distribution needs beyond its modules' definitions.
 pub struct PackageInput<'a> {
@@ -70,10 +146,10 @@ pub trait Emitter {
 }
 
 /// The emitter for an IR version, or nothing when the version is not one of ours.
-pub fn emitter_for(ir_version: &str) -> Option<Box<dyn Emitter>> {
+pub fn emitter_for(ir_version: &str, ordering: Ordering) -> Option<Box<dyn Emitter>> {
     match ir_version {
-        "3" => Some(Box::new(classic::ClassicEmitter)),
-        "4" => Some(Box::new(v4::V4Emitter)),
+        "3" => Some(Box::new(classic::ClassicEmitter { ordering })),
+        "4" => Some(Box::new(v4::V4Emitter { ordering })),
         _ => None,
     }
 }

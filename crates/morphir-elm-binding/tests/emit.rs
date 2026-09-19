@@ -5,7 +5,7 @@
 //! migrating the classic distribution in the test (`src/` never migrates) and
 //! comparing it with the natively emitted v4 one.
 
-use morphir_elm_binding::frontend::emit::{PackageInput, emitter_for};
+use morphir_elm_binding::frontend::emit::{Ordering, PackageInput, emitter_for};
 use morphir_elm_binding::resolved::{
     Access, FqName, RConstructor, RField, RType, ResolvedBody, ResolvedModule, ResolvedType,
 };
@@ -162,7 +162,8 @@ fn package() -> Vec<String> {
 /// Emits the sample package the way a caller does: one module at a time, then the
 /// distribution assembled from those per-module values.
 fn emit(ir_version: &str) -> Value {
-    let emitter = emitter_for(ir_version).expect("an emitter for a supported IR version");
+    let emitter =
+        emitter_for(ir_version, Ordering::Source).expect("an emitter for a supported IR version");
     let modules = vec![sample_module()];
     let package = package();
     let module_irs: Vec<(Vec<String>, Access, Value)> = modules
@@ -186,18 +187,83 @@ fn emit(ir_version: &str) -> Value {
 }
 
 // ----------------------------------------------------------------------------
+// Ordering
+// ----------------------------------------------------------------------------
+
+/// `Ordering` reaches both emitters, and in v4 it is the `IndexMap` insertion
+/// order that decides the key order a document is written with.
+///
+/// `sample_module` declares `Id` first and `Zed` last, so sorting is visible in
+/// either direction.
+#[test]
+fn the_ordering_reaches_both_emitters() {
+    let module = sample_module();
+
+    for version in ["3", "4"] {
+        let source = emitter_for(version, Ordering::Source)
+            .expect("an emitter")
+            .emit_module(&module)
+            .expect("the module is emitted");
+        let sorted = emitter_for(version, Ordering::MorphirElm)
+            .expect("an emitter")
+            .emit_module(&module)
+            .expect("the module is emitted");
+
+        // A v3 module definition is `{"access":…,"value":…}` and lists its
+        // types as `[name, definition]` pairs; a v4 one is `{"Public":…}` and
+        // keys them in an object. Either way the order is what is read back.
+        // Every type of the sample module is a single word, so the two
+        // spellings sort alike.
+        let keys = |value: &Value| -> Vec<String> {
+            let types = match value.get("value") {
+                Some(inner) => &inner["types"],
+                None => &value["Public"]["types"],
+            };
+            match types {
+                Value::Array(entries) => entries
+                    .iter()
+                    .map(|entry| entry[0][0].as_str().expect("a word").to_string())
+                    .collect::<Vec<_>>(),
+                Value::Object(map) => map.keys().cloned().collect(),
+                other => panic!("v{version}: unexpected types shape {other}"),
+            }
+        };
+
+        let source_keys = keys(&source);
+        let mut expected = source_keys.clone();
+        expected.sort();
+        assert_ne!(
+            source_keys, expected,
+            "v{version}: the sample module is already sorted, so this proves nothing"
+        );
+        assert_eq!(
+            keys(&sorted),
+            expected,
+            "v{version}: morphir-elm ordering sorts the module's types"
+        );
+    }
+}
+
+// ----------------------------------------------------------------------------
 // Emitter selection
 // ----------------------------------------------------------------------------
 
 #[test]
 fn an_emitter_is_selected_by_ir_version() {
     assert_eq!(
-        emitter_for("3").expect("classic emitter").format_version(),
+        emitter_for("3", Ordering::Source)
+            .expect("classic emitter")
+            .format_version(),
         "3"
     );
-    assert_eq!(emitter_for("4").expect("v4 emitter").format_version(), "4");
-    assert!(emitter_for("5").is_none());
-    assert!(emitter_for("").is_none());
+    assert_eq!(
+        emitter_for("4", Ordering::Source)
+            .expect("v4 emitter")
+            .format_version(),
+        "4"
+    );
+    assert!(emitter_for("5", Ordering::Source).is_none());
+    assert!(emitter_for("", Ordering::Source).is_none());
 }
 
 // ----------------------------------------------------------------------------
@@ -299,7 +365,7 @@ fn classic_keeps_a_private_type_private() {
 
 #[test]
 fn classic_emit_module_returns_the_access_controlled_module_definition() {
-    let emitter = emitter_for("3").expect("classic emitter");
+    let emitter = emitter_for("3", Ordering::Source).expect("classic emitter");
     let module = emitter.emit_module(&sample_module()).expect("a module");
     assert_eq!(module["access"], json!("Public"));
     assert_eq!(module["value"]["types"][0][0], json!(["id"]));
@@ -390,7 +456,7 @@ fn v4_writes_constructors_keyed_by_canonical_name() {
 
 #[test]
 fn v4_emit_module_returns_the_access_controlled_module_definition() {
-    let emitter = emitter_for("4").expect("v4 emitter");
+    let emitter = emitter_for("4", Ordering::Source).expect("v4 emitter");
     let module = emitter.emit_module(&sample_module()).expect("a module");
     assert!(module["Public"]["types"]["id"].is_object(), "{module}");
     assert_eq!(module["Public"]["values"], json!({}));
@@ -410,7 +476,7 @@ fn emit_distribution_rejects_foreign_module_json() {
         json!({ "nope": 1 }),
     )];
     for version in ["3", "4"] {
-        let emitter = emitter_for(version).expect("an emitter");
+        let emitter = emitter_for(version, Ordering::Source).expect("an emitter");
         let input = PackageInput {
             package: &package,
             modules: &modules,
@@ -432,7 +498,7 @@ fn emit_distribution_rejects_two_modules_with_the_same_canonical_name() {
     clash.name = vec!["My".to_string(), "types".to_string()];
     let modules = vec![sample_module(), clash];
     for version in ["3", "4"] {
-        let emitter = emitter_for(version).expect("an emitter");
+        let emitter = emitter_for(version, Ordering::Source).expect("an emitter");
         let module_irs: Vec<(Vec<String>, Access, Value)> = modules
             .iter()
             .map(|module| {
@@ -461,7 +527,7 @@ fn v4_emit_module_rejects_two_types_with_the_same_canonical_name() {
     // `Id` and `id` differ in Elm but spell the same v4 canonical name, and an
     // `IndexMap` would keep only the second.
     module.types.push(public_alias("id", &[], int()));
-    let error = emitter_for("4")
+    let error = emitter_for("4", Ordering::Source)
         .expect("v4 emitter")
         .emit_module(&module)
         .expect_err("a colliding type name is refused rather than overwritten");

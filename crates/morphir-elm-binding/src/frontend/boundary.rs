@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::digest::sha256_hex;
 use crate::frontend::cst_to_ast::{self, DocComments};
+use crate::frontend::emit::{self, Ordering};
 use crate::frontend::resolve::DependencyInterface;
 use crate::names;
 use crate::prelude::{self, Prelude};
@@ -32,6 +33,8 @@ pub struct Validated {
     pub prelude: Prelude,
     /// How a doc comment becomes the doc text the IR carries.
     pub doc_comments: DocComments,
+    /// The order modules, types and constructors are written in.
+    pub ordering: Ordering,
     /// The package path, one segment per `/`- or `.`-separated part.
     pub package: Vec<String>,
     /// The exact public module list, when the request states one.
@@ -92,6 +95,9 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
     )
     .map_err(|reason| request_error(format!("invalid `elmDocComments` option: {reason}")))?;
 
+    let ordering = emit::ordering_from_option(request.options.extra.get("elmOrdering"))
+        .map_err(|reason| request_error(format!("invalid `elmOrdering` option: {reason}")))?;
+
     let package = package_path(&request.package.name);
     if package.is_empty() {
         return Err(request_error(
@@ -104,6 +110,7 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
         types_only: request.options.types_only,
         prelude,
         doc_comments,
+        ordering,
         package,
         exposed: request.package.exposed_modules.clone(),
     })
@@ -111,9 +118,9 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
 
 /// The identity of everything a module's compiled form depends on besides its
 /// own source: the IR version being written, the `typesOnly` flag, the prelude
-/// names resolve against, the doc comment mode the IR is written in, the
-/// package the request compiles under, and the public interfaces the request's
-/// dependency distributions supply.
+/// names resolve against, the doc comment mode and declaration order the IR is
+/// written in, the package the request compiles under, and the public
+/// interfaces the request's dependency distributions supply.
 ///
 /// This is the value a baseline is scoped to. A run is allowed to reuse a
 /// module only when it is compiling under the very same context, because a
@@ -150,6 +157,7 @@ pub fn context_digest(validated: &Validated, dependencies: &[DependencyInterface
         types_only: validated.types_only,
         prelude_digest: validated.prelude.digest(),
         doc_comments: validated.doc_comments,
+        ordering: validated.ordering,
         package: &validated.package,
         dependencies,
     };
@@ -165,6 +173,7 @@ struct ContextIdentity<'a> {
     types_only: bool,
     prelude_digest: String,
     doc_comments: DocComments,
+    ordering: Ordering,
     package: &'a [String],
     dependencies: Vec<DependencyIdentity>,
 }
@@ -398,6 +407,7 @@ mod tests {
             ir_version: ir_version.to_string(),
             types_only: false,
             doc_comments: DocComments::MorphirElm,
+            ordering: Ordering::Source,
             prelude: prelude::from_option(Some(&serde_json::json!(prelude_id)))
                 .expect("a known prelude"),
             package: package_path(package),
@@ -450,23 +460,33 @@ mod tests {
         );
     }
 
-    /// The doc comment mode changes the text the IR carries, so IR built under
-    /// one mode must not be reused by a run compiling under the other — which
-    /// means the mode has to move the digest a baseline is scoped to.
+    /// The doc comment mode changes the text the IR carries and the ordering
+    /// changes where each declaration lands, so IR built under one of either
+    /// must not be reused by a run compiling under the other — which means both
+    /// have to move the digest a baseline is scoped to.
     #[test]
-    fn the_context_digest_covers_the_doc_comment_mode() {
-        let validated = |doc_comments| Validated {
+    fn the_context_digest_covers_the_doc_comment_mode_and_the_ordering() {
+        let validated = |doc_comments, ordering| Validated {
             ir_version: "3".to_string(),
             types_only: false,
             prelude: prelude::from_option(None).expect("the default prelude"),
             doc_comments,
+            ordering,
             package: package_path("My"),
             exposed: None,
         };
+        let base = context_digest(&validated(DocComments::MorphirElm, Ordering::Source), &[]);
 
         assert_ne!(
-            context_digest(&validated(DocComments::MorphirElm), &[]),
-            context_digest(&validated(DocComments::Trimmed), &[])
+            base,
+            context_digest(&validated(DocComments::Trimmed, Ordering::Source), &[])
+        );
+        assert_ne!(
+            base,
+            context_digest(
+                &validated(DocComments::MorphirElm, Ordering::MorphirElm),
+                &[]
+            )
         );
     }
 
@@ -482,6 +502,7 @@ mod tests {
             ir_version: "3".to_string(),
             types_only: false,
             doc_comments: DocComments::MorphirElm,
+            ordering: Ordering::Source,
             prelude: prelude::from_option(Some(&serde_json::json!("elm-core")))
                 .expect("a known prelude"),
             package: vec!["My".into()],

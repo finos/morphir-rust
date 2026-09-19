@@ -32,7 +32,7 @@ serde_json = "1.0"
 # Parser dependencies
 gleam-core = { git = "https://github.com/gleam-lang/gleam.git", rev = "4a83802ca33a8a96227a1b332768725f232f9779" }
 # Match the upstream release lockfile; gleam-core's broad bound also admits incompatible 0.3.
-ecow = "=0.2.6"
+ecow = "=0.3.1"
 
 # Morphir IR (for visitors)
 morphir-core = { path = "../morphir-core" }
@@ -56,7 +56,7 @@ extism = { version = "1", optional = true }
 wasm-host-tests = ["dep:extism"]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom = { version = "0.2", features = ["custom"] }
+getrandom = { version = "0.4", features = ["custom"] }
 
 [dev-dependencies]
 cucumber = { version = "0.23", features = ["output-json"] }

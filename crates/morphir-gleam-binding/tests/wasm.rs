@@ -262,3 +262,36 @@ fn initialize(guest: &mut Plugin) {
     );
     assert!(capabilities.frontend.unwrap().incremental);
 }
+
+#[test]
+#[ignore = "requires a built Gleam WASM guest"]
+fn guest_structural_values_match_native_and_the_golden() {
+    let mut guest = guest();
+    initialize(&mut guest);
+    let mut request = request("4");
+    request.options.types_only = false;
+    request.documents.truncate(1);
+    request.documents[0].text = include_str!("fixtures/structural_values.gleam").into();
+    let compiled = same_compilation(&mut guest, &request);
+    let generate = GenerateRequest {
+        ir: compiled.ir.unwrap(),
+        target: "gleam".into(),
+        options: Default::default(),
+    };
+    let native = GleamExtension.generate(generate.clone()).unwrap();
+    assert!(native.success, "{:?}", native.diagnostics);
+    assert_eq!(native.artifacts.len(), 1);
+    assert_eq!(
+        native.artifacts[0].content,
+        include_str!("goldens/source_structural_values.gleam")
+    );
+    let generated: GenerateResult = serde_json::from_value(result(
+        &mut guest,
+        ExtensionRequest::new(methods::GENERATE, generate, 3).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(generated).unwrap(),
+        serde_json::to_value(native).unwrap()
+    );
+}

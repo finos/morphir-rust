@@ -8,7 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Gleam extension 0.2.1 uses the official Gleam 1.18.1 `gleam-core` parser in
+- Gleam value compilation preserves list tails, list patterns and block bindings.
+  Generation supports scoped destructuring and SDK list construction, preserves
+  string escapes and float identity, and rejects unsupported IR instead of
+  emitting successful placeholder code. New structural IR assertions, generation
+  goldens and real-Gleam checks document the coverage and remaining gaps.
+- Gleam extension 0.3.0 uses the official Gleam 1.18.1 `gleam-core` parser in
   native and WASM builds. The handwritten lexer and parser are removed. The
   adapter preserves types, sum types, labelled records and function syntax,
   rejects incomplete source, and invalidates previous incremental baselines.

@@ -81,10 +81,11 @@ external function bindings and record updates, remains available for type-only
 compilation and produces an error when compiling values. Labelled function
 parameters, labelled calls and imported values also report errors until their
 metadata and name resolution can be preserved; labelled type declarations remain
-supported. Existing value
-lowering still has limitations, including list tails, block bindings and
-operator resolution; using the official parser does not establish complete
-value semantics.
+supported. List tails and list patterns preserve their structure, and block
+bindings lower to scoped IR destructuring. Operator and value-name resolution
+still need work; using the official parser does not establish complete value
+semantics. See the [IR coverage inventory](IR_COVERAGE.md) for each value,
+pattern and type variant, its tests and remaining limitations.
 
 Constant lowering currently accepts explicitly annotated literals and tuples or
 lists of those literals. Function-typed or inferred constants, constant
@@ -105,7 +106,7 @@ Baselines are scoped to the package, exposure list, output version, semantic
 options and dependency interfaces. Malformed entries are discarded with a
 warning. The per-module baseline payload is wrapped v4 module IR, including for
 a v3 distribution, and is private to this extension's versioned cache context.
-The official-parser migration invalidates baselines from the previous parser.
+Changes to the parser or value-lowering semantics invalidate older baselines.
 
 ## Verification and packaging
 

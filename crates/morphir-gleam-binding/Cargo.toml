@@ -30,7 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Parser dependencies
-gleam-core = { git = "https://github.com/gleam-lang/gleam.git", rev = "4a83802ca33a8a96227a1b332768725f232f9779" }
+gleam-core = { git = "https://github.com/gleam-lang/gleam.git", rev = "49f8762da595eb3c8f576656a4200a142ca188c9" }
 # Match the upstream release lockfile; gleam-core's broad bound also admits incompatible 0.3.
 ecow = "=0.2.6"
 

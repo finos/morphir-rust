@@ -1,6 +1,7 @@
 //! Gleam backend - generate Gleam code from Morphir IR
 
 pub mod codegen;
+mod names;
 pub mod pretty_printer;
 pub mod visitor;
 

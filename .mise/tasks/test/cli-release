@@ -1,6 +1,6 @@
 #!/bin/sh
 #MISE description="Publish, install and use an extension bundle through the released morphir CLI"
-#USAGE arg "<id>" help="Extension short id: avro, openapi, python or rust"
+#USAGE arg "<id>" help="Extension short id: avro, gleam, openapi, python or rust"
 
 # The extension bundles built here are hosted by the morphir CLI, which finos/morphir releases.
 # This task is the compatibility check between the two: it takes the bundle that
@@ -16,11 +16,12 @@ set -eu
 ID="${usage_id:-${1:-}}"
 case "$ID" in
     avro) EXTENSION_ID=morphir-avro ;;
+    gleam) EXTENSION_ID=morphir-gleam-binding ;;
     openapi) EXTENSION_ID=morphir-openapi ;;
     python) EXTENSION_ID=morphir-python ;;
     rust) EXTENSION_ID=morphir-rust ;;
     *)
-        echo "usage: mise run test:cli-release <avro|openapi|python|rust>" >&2
+        echo "usage: mise run test:cli-release <avro|gleam|openapi|python|rust>" >&2
         exit 2
         ;;
 esac
@@ -197,6 +198,33 @@ case "$ID" in
         require_file out/json-schema-v4/domain.Customer.schema.json
         morphir generate --target openapi --input "$CANONICAL_IR" --output out/openapi-v4
         require_file out/openapi-v4/openapi.json
+        ;;
+    gleam)
+        mkdir -p "$PROJECT/src/domain"
+        cat >"$PROJECT/morphir.toml" <<'TOML'
+[project]
+name = "acme/example"
+version = "0.1.0"
+source_directory = "src"
+[frontend]
+language = "gleam"
+emit_parse_stage = false
+TOML
+        cat >"$PROJECT/src/domain/models.gleam" <<'GLEAM'
+pub type Decision {
+  Accept(value: Int)
+  Reject
+}
+pub type Pair = #(Int, Bool)
+GLEAM
+        for version in 3 4; do
+            morphir compile --language gleam --ir-version "$version" --input src --output "compiled-v$version"
+            [ "$(format_version "compiled-v$version/morphir-ir.json")" = "$version" ]
+            morphir generate --target gleam --input "compiled-v$version/morphir-ir.json" --output "generated-v$version"
+            require_file "generated-v$version/domain/models.gleam"
+            morphir compile --language gleam --ir-version "$version" --input "generated-v$version" --output "recompiled-v$version"
+            same_json "compiled-v$version/morphir-ir.json" "recompiled-v$version/morphir-ir.json"
+        done
         ;;
     python)
         mkdir -p "$PROJECT/src/domain"

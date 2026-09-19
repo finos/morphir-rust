@@ -284,6 +284,27 @@ impl<'a> GleamPrinter<'a> {
     /// Print a type expression
     pub fn type_expr(&self, t: &TypeExpr) -> Doc<'a> {
         match t {
+            TypeExpr::Resolved { name, parameters } => {
+                let qualifier = super::names::module_path(&name.module_path)
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let qualified = if qualifier.is_empty() {
+                    name.local_name.to_title_case()
+                } else {
+                    format!("{qualifier}.{}", name.local_name.to_title_case())
+                };
+                let head = self.text(qualified);
+                if parameters.is_empty() {
+                    head
+                } else {
+                    head.append(self.parens(self.join(
+                        parameters.iter().map(|p| self.type_expr(p)),
+                        self.text(", "),
+                    )))
+                }
+            }
             TypeExpr::Variable { name } => self.text(name.clone()),
             TypeExpr::Unit => self.text("Nil"),
             TypeExpr::Function {

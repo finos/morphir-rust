@@ -201,6 +201,13 @@ fn compare_types(original: &TypeDef, regenerated: &TypeDef, differences: &mut Ve
         });
     }
 
+    if original.constructor_access != regenerated.constructor_access {
+        differences.push(Difference::TypeDifference {
+            name: original.name.clone(),
+            detail: "Constructor access differs".into(),
+        });
+    }
+
     // Compare type parameters
     if original.params != regenerated.params {
         differences.push(Difference::TypeDifference {
@@ -321,6 +328,20 @@ fn type_expr_equivalent(a: &TypeExpr, b: &TypeExpr) -> bool {
                     .all(|(a, b)| variant_equivalent(a, b))
         }
         (TypeExpr::Hole { name: name_a }, TypeExpr::Hole { name: name_b }) => name_a == name_b,
+        (
+            TypeExpr::Resolved {
+                name: a,
+                parameters: pa,
+            },
+            TypeExpr::Resolved {
+                name: b,
+                parameters: pb,
+            },
+        ) => {
+            a == b
+                && pa.len() == pb.len()
+                && pa.iter().zip(pb).all(|(a, b)| type_expr_equivalent(a, b))
+        }
         _ => false,
     }
 }
@@ -328,6 +349,17 @@ fn type_expr_equivalent(a: &TypeExpr, b: &TypeExpr) -> bool {
 /// Check if two variants are equivalent
 fn variant_equivalent(a: &Variant, b: &Variant) -> bool {
     a.name == b.name
+        && (0..a.fields.len()).all(|position| {
+            let synthetic = format!("arg_{}", position + 1);
+            let label = |variant: &Variant| {
+                variant
+                    .labels
+                    .get(position)
+                    .and_then(|label| label.as_deref())
+                    .map(str::to_owned)
+            };
+            label(a).unwrap_or_else(|| synthetic.clone()) == label(b).unwrap_or(synthetic)
+        })
         && a.fields.len() == b.fields.len()
         && a.fields
             .iter()
@@ -654,6 +686,7 @@ mod tests {
 
     fn make_simple_module(name: &str, values: Vec<ValueDef>) -> ModuleIR {
         ModuleIR {
+            imports: vec![],
             name: name.to_string(),
             doc: None,
             types: vec![],
@@ -663,6 +696,9 @@ mod tests {
 
     fn make_value(name: &str, body: Expr) -> ValueDef {
         ValueDef {
+            span: Default::default(),
+            params: vec![],
+            doc: None,
             access: Access::Public,
             name: name.to_string(),
             type_annotation: None,

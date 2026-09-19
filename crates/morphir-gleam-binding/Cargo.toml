@@ -1,6 +1,6 @@
 [package]
 name = "morphir-gleam-binding"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -35,19 +35,24 @@ chumsky = "0.13"
 
 # Morphir IR (for visitors)
 morphir-core = { path = "../morphir-core" }
-morphir-common = { path = "../morphir-common" } # For Vfs and pipeline
 indexmap = "2.0"                                # Required for V4 IndexMap structures
 num-bigint = "0.4"                              # IntegerLiteral is arbitrary precision
 anyhow = "1.0"
 url = { workspace = true }
 percent-encoding = { workspace = true }
+sha2 = "0.10"
 
 # Pretty printing (Wadler-style)
 pretty = "0.12"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+morphir-common = { path = "../morphir-common" }
 cap-std = { workspace = true }
 cap-fs-ext = { workspace = true }
+extism = { version = "1", optional = true }
+
+[features]
+wasm-host-tests = ["dep:extism"]
 
 [dev-dependencies]
 cucumber = { version = "0.23", features = ["output-json"] }

@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod compare;
+pub(crate) mod compile;
 pub(crate) mod dependencies;
 pub mod errors;
 pub mod lexer;
@@ -11,6 +12,7 @@ pub(crate) mod parse_stage;
 #[path = "parse_stage_wasm.rs"]
 pub(crate) mod parse_stage;
 pub mod parser;
+pub mod resolver;
 pub mod visitor;
 
 pub use compare::{ComparisonResult, Difference, compare_modules, modules_equivalent};

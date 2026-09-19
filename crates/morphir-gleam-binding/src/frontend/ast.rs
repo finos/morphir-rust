@@ -154,6 +154,20 @@ pub struct ModuleIR {
     /// Value definitions (functions and constants)
     #[serde(default)]
     pub values: Vec<ValueDef>,
+    /// Imported modules and exposed names.
+    #[serde(default)]
+    pub imports: Vec<Import>,
+}
+
+/// A module import with an optional alias and unqualified type names.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Import {
+    /// Slash-separated source module path.
+    pub module: String,
+    /// Local qualifier.
+    pub alias: Option<String>,
+    /// Original name and local alias of each imported type.
+    pub types: Vec<(String, String)>,
 }
 
 /// Type definition
@@ -166,6 +180,15 @@ pub struct TypeDef {
     pub params: Vec<String>,
     /// Type body
     pub body: TypeExpr,
+    /// Documentation attached to the declaration.
+    #[serde(default)]
+    pub doc: Option<String>,
+    /// Declaration location in source bytes.
+    #[serde(default)]
+    pub span: Span,
+    /// Constructor visibility; opaque types keep their constructors private.
+    #[serde(default)]
+    pub constructor_access: Access,
     /// Access control (pub or private)
     #[serde(default)]
     pub access: Access,
@@ -202,6 +225,11 @@ pub enum TypeExpr {
         name: String,
         parameters: Vec<TypeExpr>,
     },
+    /// A validated, fully qualified type reference.
+    Resolved {
+        name: morphir_core::naming::FQName,
+        parameters: Vec<TypeExpr>,
+    },
     /// Custom type definition (variants)
     CustomType { variants: Vec<Variant> },
     /// Type hole (_)
@@ -216,11 +244,23 @@ pub struct Variant {
     /// Variant fields
     #[serde(default)]
     pub fields: Vec<TypeExpr>,
+    /// Labels in argument order; unlabelled fields contain None.
+    #[serde(default)]
+    pub labels: Vec<Option<String>>,
 }
 
 /// Value definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValueDef {
+    /// Declaration location in source bytes.
+    #[serde(default)]
+    pub span: Span,
+    /// Function parameter names in declaration order.
+    #[serde(default)]
+    pub params: Vec<String>,
+    /// Documentation attached to the declaration.
+    #[serde(default)]
+    pub doc: Option<String>,
     /// Value name
     pub name: String,
     /// Type annotation

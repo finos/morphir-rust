@@ -45,8 +45,8 @@ release_with_workspace = true
 [extensions.gleam]
 package = "morphir-gleam-binding"
 artifact = "morphir-gleam-binding"
-extension_id = "morphir-gleam-binding"
-name = "Morphir Gleam Binding"
+extension_id = "morphir-gleam"
+name = "Morphir Gleam"
 mep_versions = ["0.1"]
 targets = ["gleam"]
 languages = [{ id = "gleam", file_extensions = [".gleam"] }]

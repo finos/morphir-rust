@@ -292,14 +292,22 @@ fn nested_argument_block_annotations_are_resolved() {
 }
 
 #[test]
-fn anonymous_record_type_source_has_an_explicit_diagnostic() {
+fn anonymous_record_type_source_has_an_official_syntax_diagnostic() {
     let result = compile_sources(&[("main", "pub type Person = { name: String }")]);
     assert!(!result.success);
     assert!(
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code.as_deref() == Some("GLEAM_UNSUPPORTED_TYPE")),
+            .any(
+                |diagnostic| diagnostic.code.as_deref() == Some("PARSE_ERROR")
+                    && diagnostic.message.contains("expecting a type")
+                    && diagnostic.location.as_ref().is_some_and(|location| location
+                        .range
+                        .start
+                        .character
+                        == 16)
+            ),
         "{:?}",
         result.diagnostics
     );

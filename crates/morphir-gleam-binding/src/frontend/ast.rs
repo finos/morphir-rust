@@ -1,8 +1,7 @@
 //! Gleam AST types - Abstract Syntax Tree representation
 //!
 //! This module contains the AST types that represent parsed Gleam source code.
-//! Based on glance (official Gleam parser) type definitions.
-//! Reference: https://github.com/lpil/glance
+//! This is the Morphir lowering input adapted from the official `gleam-core` AST.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,10 +26,10 @@ impl From<std::ops::Range<usize>> for Span {
 }
 
 // ============================================================================
-// Binary Operators (matching glance)
+// Binary Operators
 // ============================================================================
 
-/// Binary operator types (matching glance BinaryOperator)
+/// Binary operator types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BinaryOperator {
@@ -70,7 +69,7 @@ pub enum BinaryOperator {
 // Field Type (for labelled arguments)
 // ============================================================================
 
-/// Field in function calls or record construction (matching glance Field)
+/// Field in function calls or record construction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Field<T> {
@@ -86,7 +85,7 @@ pub enum Field<T> {
 // Statement Type (for function bodies)
 // ============================================================================
 
-/// Statement in a function body (matching glance Statement)
+/// Statement in a function body
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Statement {
@@ -168,6 +167,9 @@ pub struct Import {
     pub alias: Option<String>,
     /// Original name and local alias of each imported type.
     pub types: Vec<(String, String)>,
+    /// Original name and local alias of each imported value.
+    #[serde(default)]
+    pub values: Vec<(String, String)>,
 }
 
 /// Type definition
@@ -202,7 +204,7 @@ pub enum Access {
     Public,
 }
 
-/// Type expression (matching glance Type)
+/// Type expression
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TypeExpr {
@@ -258,6 +260,9 @@ pub struct ValueDef {
     /// Function parameter names in declaration order.
     #[serde(default)]
     pub params: Vec<String>,
+    /// External argument labels in parameter order.
+    #[serde(default)]
+    pub param_labels: Vec<Option<String>>,
     /// Documentation attached to the declaration.
     #[serde(default)]
     pub doc: Option<String>,
@@ -273,10 +278,12 @@ pub struct ValueDef {
     pub access: Access,
 }
 
-/// Expression (matching glance Expression)
+/// Expression
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Expr {
+    /// Valid Gleam syntax that the Morphir value lowering cannot represent.
+    Unsupported { feature: String, span: Span },
     /// Literal value
     Literal { value: Literal },
     /// Variable reference
@@ -386,7 +393,7 @@ pub struct CaseBranch {
     pub body: Expr,
 }
 
-/// Pattern for matching (matching glance Pattern)
+/// Pattern for matching
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Pattern {

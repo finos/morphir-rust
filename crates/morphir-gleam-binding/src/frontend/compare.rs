@@ -5,7 +5,8 @@
 //! the meaning of the code.
 
 use super::ast::{
-    CaseBranch, Expr, Field, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef, Variant,
+    CaseBranch, Expr, Field, Import, Literal, ModuleIR, Pattern, Statement, TypeDef, TypeExpr,
+    ValueDef, Variant,
 };
 
 /// Result of comparing two ModuleIRs
@@ -26,6 +27,8 @@ pub enum Difference {
         original: String,
         regenerated: String,
     },
+    /// Imported modules or exposed names differ.
+    ImportDifference,
     /// Different number of type definitions
     TypeCountMismatch { original: usize, regenerated: usize },
     /// Different number of value definitions
@@ -61,6 +64,7 @@ impl std::fmt::Display for Difference {
             } => {
                 write!(f, "Module name: '{}' vs '{}'", original, regenerated)
             }
+            Difference::ImportDifference => write!(f, "Imported modules or names differ"),
             Difference::TypeCountMismatch {
                 original,
                 regenerated,
@@ -129,6 +133,10 @@ pub fn compare_modules(original: &ModuleIR, regenerated: &ModuleIR) -> Compariso
         });
     }
 
+    if !imports_equivalent(&original.imports, &regenerated.imports) {
+        differences.push(Difference::ImportDifference);
+    }
+
     // Compare type counts
     if original.types.len() != regenerated.types.len() {
         differences.push(Difference::TypeCountMismatch {
@@ -183,6 +191,25 @@ pub fn compare_modules(original: &ModuleIR, regenerated: &ModuleIR) -> Compariso
     }
 }
 
+fn imports_equivalent(original: &[Import], regenerated: &[Import]) -> bool {
+    fn names_equivalent(a: &[(String, String)], b: &[(String, String)]) -> bool {
+        let mut a: Vec<_> = a.iter().collect();
+        let mut b: Vec<_> = b.iter().collect();
+        a.sort();
+        b.sort();
+        a == b
+    }
+    original.len() == regenerated.len()
+        && original.iter().all(|a| {
+            regenerated.iter().any(|b| {
+                a.module == b.module
+                    && a.alias == b.alias
+                    && names_equivalent(&a.types, &b.types)
+                    && names_equivalent(&a.values, &b.values)
+            })
+        })
+}
+
 /// Check if two modules are semantically equivalent
 pub fn modules_equivalent(original: &ModuleIR, regenerated: &ModuleIR) -> bool {
     compare_modules(original, regenerated).equivalent
@@ -233,6 +260,21 @@ fn compare_types(original: &TypeDef, regenerated: &TypeDef, differences: &mut Ve
 
 /// Compare two value definitions
 fn compare_values(original: &ValueDef, regenerated: &ValueDef, differences: &mut Vec<Difference>) {
+    if original.params != regenerated.params || original.param_labels != regenerated.param_labels {
+        differences.push(Difference::ValueDifference {
+            name: original.name.clone(),
+            detail: "Function parameters or labels differ".into(),
+        });
+    }
+    if !annotations_equivalent(
+        original.type_annotation.as_ref(),
+        regenerated.type_annotation.as_ref(),
+    ) {
+        differences.push(Difference::ValueDifference {
+            name: original.name.clone(),
+            detail: "Type annotation differs".into(),
+        });
+    }
     // Compare access
     if original.access != regenerated.access {
         differences.push(Difference::ValueDifference {
@@ -251,6 +293,14 @@ fn compare_values(original: &ValueDef, regenerated: &ValueDef, differences: &mut
             original: format!("{:?}", original.body),
             regenerated: format!("{:?}", regenerated.body),
         });
+    }
+}
+
+fn annotations_equivalent(a: Option<&TypeExpr>, b: Option<&TypeExpr>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => type_expr_equivalent(a, b),
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -392,6 +442,12 @@ fn field_expr_list_equivalent(a: &[Field<Expr>], b: &[Field<Expr>]) -> bool {
 /// Check if two expressions are equivalent
 fn expr_equivalent(a: &Expr, b: &Expr) -> bool {
     match (a, b) {
+        // Unsupported nodes intentionally omit lowering details, so matching
+        // feature names cannot prove their source programs equivalent.
+        (Expr::Unsupported { .. }, _) | (_, Expr::Unsupported { .. }) => false,
+        (Expr::Block { statements: a }, Expr::Block { statements: b }) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| statements_equivalent(a, b))
+        }
         (Expr::Literal { value: lit_a }, Expr::Literal { value: lit_b }) => {
             literal_equivalent(lit_a, lit_b)
         }
@@ -566,6 +622,43 @@ fn expr_equivalent(a: &Expr, b: &Expr) -> bool {
     }
 }
 
+fn statements_equivalent(a: &Statement, b: &Statement) -> bool {
+    match (a, b) {
+        (Statement::Expression(a), Statement::Expression(b)) => expr_equivalent(a, b),
+        (
+            Statement::Assignment {
+                pattern: a,
+                annotation: ta,
+                value: va,
+            },
+            Statement::Assignment {
+                pattern: b,
+                annotation: tb,
+                value: vb,
+            },
+        ) => {
+            pattern_equivalent(a, b)
+                && annotations_equivalent(ta.as_ref(), tb.as_ref())
+                && expr_equivalent(va, vb)
+        }
+        (
+            Statement::Use {
+                patterns: a,
+                function: fa,
+            },
+            Statement::Use {
+                patterns: b,
+                function: fb,
+            },
+        ) => {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| pattern_equivalent(a, b))
+                && expr_equivalent(fa, fb)
+        }
+        _ => false,
+    }
+}
+
 /// Check if two case branches are equivalent
 fn case_branch_equivalent(a: &CaseBranch, b: &CaseBranch) -> bool {
     pattern_equivalent(&a.pattern, &b.pattern) && expr_equivalent(&a.body, &b.body)
@@ -698,6 +791,7 @@ mod tests {
         ValueDef {
             span: Default::default(),
             params: vec![],
+            param_labels: vec![],
             doc: None,
             access: Access::Public,
             name: name.to_string(),
@@ -777,5 +871,62 @@ mod tests {
 
         let result = compare_modules(&module1, &module2);
         assert!(!result.equivalent);
+    }
+
+    #[test]
+    fn imported_names_and_aliases_affect_equivalence() {
+        let original = super::super::parser::parse_gleam(
+            "a.gleam",
+            "import one.{type Item as Thing, make as build}",
+        )
+        .unwrap();
+        for source in [
+            "import one.{type Item as Thing, make as construct}",
+            "import one.{type Item as Other, make as build}",
+            "import two.{type Item as Thing, make as build}",
+        ] {
+            let changed = super::super::parser::parse_gleam("a.gleam", source).unwrap();
+            assert!(!modules_equivalent(&original, &changed), "{source}");
+        }
+    }
+
+    #[test]
+    fn function_parameter_labels_and_annotations_affect_equivalence() {
+        let original = super::super::parser::parse_gleam(
+            "a.gleam",
+            "pub fn identity(value x: Int) -> Int { x }",
+        )
+        .unwrap();
+        assert!(modules_equivalent(&original, &original));
+        for source in [
+            "pub fn identity(item x: Int) -> Int { x }",
+            "pub fn identity(value x: Float) -> Int { x }",
+            "pub fn identity(value x: Int) -> Float { x }",
+        ] {
+            let changed = super::super::parser::parse_gleam("a.gleam", source).unwrap();
+            assert!(!modules_equivalent(&original, &changed), "{source}");
+        }
+    }
+
+    #[test]
+    fn import_order_does_not_affect_equivalence() {
+        let original = super::super::parser::parse_gleam(
+            "a.gleam",
+            "import one.{type A, type B, a, b}\nimport two",
+        )
+        .unwrap();
+        let reordered = super::super::parser::parse_gleam(
+            "a.gleam",
+            "import two\nimport one.{b, a, type B, type A}",
+        )
+        .unwrap();
+        assert!(modules_equivalent(&original, &reordered));
+    }
+
+    #[test]
+    fn unsupported_bodies_cannot_establish_semantic_equivalence() {
+        let module =
+            super::super::parser::parse_gleam("a.gleam", "pub fn pending() { todo }").unwrap();
+        assert!(!modules_equivalent(&module, &module));
     }
 }

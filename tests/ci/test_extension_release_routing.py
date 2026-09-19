@@ -15,7 +15,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
             "gleam", registry["extensions"]["gleam"], "0.2.0",
             "morphir-gleam-binding-0.2.0.wasm", "0" * 64, RELEASE_COMMIT,
         ))
-        self.assertEqual("morphir-gleam-binding", descriptor["extensionId"])
+        self.assertEqual("morphir-gleam", descriptor["extensionId"])
         self.assertEqual(["gleam"], descriptor["targets"])
         self.assertEqual([{"id": "gleam", "fileExtensions": [".gleam"]}], descriptor["languages"])
         self.assertEqual(["3", "4"], descriptor["irVersions"])

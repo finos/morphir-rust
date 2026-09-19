@@ -2,10 +2,7 @@
 //!
 //! This module contains error types and utilities for handling parsing errors.
 
-use chumsky::prelude::*;
-use chumsky::span::SimpleSpan;
-
-use crate::frontend::lexer::{Span, Token};
+type Span = std::ops::Range<usize>;
 
 /// Parse error type with span information
 #[derive(Debug, Clone)]
@@ -94,38 +91,55 @@ fn clamped_char_boundary(source: &str, offset: usize) -> usize {
     boundary
 }
 
-/// Convert chumsky Rich error to ParseError
-pub(crate) fn to_parse_error(err: &Rich<'_, Token, SimpleSpan>, source: &str) -> ParseError {
-    let span = err.span();
-    let span_start = clamped_char_boundary(source, span.start);
-    let span_end = clamped_char_boundary(source, span.end);
+/// Adapt official compiler diagnostics without depending on the compiler's renderer.
+pub(crate) fn from_upstream(
+    path: &str,
+    source: &str,
+    error: gleam_core::parse::error::ParseError,
+) -> ParseError {
+    let location = error.location;
+    let diagnostics = gleam_core::Error::Parse {
+        path: path.into(),
+        src: source.into(),
+        error: Box::new(error),
+    }
+    .to_diagnostics();
+    let mut result = located_error("Gleam syntax error", location, source);
+    if let Some(diagnostic) = diagnostics.into_iter().next() {
+        if let Some(location) = &diagnostic.location {
+            result = located_error(&diagnostic.title, location.label.span, source);
+        }
+        result.message = [
+            Some(diagnostic.title),
+            diagnostic.location.and_then(|location| location.label.text),
+            (!diagnostic.text.is_empty()).then_some(diagnostic.text),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
+        result.hint = diagnostic.hint;
+    }
+    result
+}
 
-    // Extract expected tokens
-    let expected: Vec<String> = err.expected().map(|e| format!("{:?}", e)).collect();
-
-    let found = err.found().map(|t| format!("{:?}", t));
-
-    // Extract source snippet for context
-    let snippet = if span_start < source.len() && span_start <= span_end {
-        Some(source[span_start..span_end].to_string())
-    } else {
-        None
-    };
-
-    // Generate hint based on expected tokens
-    let hint = if !expected.is_empty() {
-        Some(format!("Expected one of: {}", expected.join(", ")))
-    } else {
-        None
-    };
-
+pub(crate) fn located_error(
+    message: &str,
+    location: gleam_core::ast::SrcSpan,
+    source: &str,
+) -> ParseError {
+    let start = clamped_char_boundary(source, location.start as usize);
+    let end = clamped_char_boundary(source, location.end as usize).max(start);
     ParseError {
-        message: format!("Parse error: {:?}", err.reason()),
-        span: span_start..span_end,
-        expected,
-        found,
-        hint,
-        source_snippet: snippet,
+        message: message.into(),
+        span: start..end,
+        expected: vec![],
+        found: None,
+        hint: None,
+        source_snippet: source
+            .get(start..end)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned),
     }
 }
 

@@ -5,7 +5,6 @@ pub mod compare;
 pub(crate) mod compile;
 pub(crate) mod dependencies;
 pub mod errors;
-pub mod lexer;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod parse_stage;
 #[cfg(target_arch = "wasm32")]

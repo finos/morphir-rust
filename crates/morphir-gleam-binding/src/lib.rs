@@ -17,6 +17,15 @@ pub mod roundtrip;
 mod version;
 pub mod vfs;
 
+// Parsing does not require entropy. Fail explicitly if another upstream path requests it.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn unavailable_randomness(_: &mut [u8]) -> std::result::Result<(), getrandom::Error> {
+    Err(getrandom::Error::UNSUPPORTED)
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+getrandom::register_custom_getrandom!(unavailable_randomness);
+
 /// Gleam extension implementing both Frontend and Backend
 #[derive(Default)]
 pub struct GleamExtension;
@@ -24,8 +33,8 @@ pub struct GleamExtension;
 impl Extension for GleamExtension {
     fn info() -> ExtensionInfo {
         ExtensionInfo {
-            id: "morphir-gleam-binding".into(),
-            name: "Morphir Gleam Binding".into(),
+            id: "morphir-gleam".into(),
+            name: "Morphir Gleam".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some("Gleam language support for Morphir".into()),
             types: vec![ExtensionType::Frontend, ExtensionType::Backend],

@@ -3,6 +3,9 @@
 //! This visitor traverses the parsed Gleam AST and converts it to Morphir IR V4
 //! format, producing a Document Tree structure by default.
 
+mod validation;
+pub(crate) use validation::UnsupportedValue;
+
 use crate::frontend::ast::{
     Access, Expr, Field as AstField, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef,
 };
@@ -61,6 +64,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
     /// Convert ModuleIR to Morphir IR V4 in Document Tree format
     pub fn visit_module_v4(&self, module_ir: &ModuleIR) -> Result<()> {
+        validation::validate_values(module_ir)?;
         match self.layout {
             DistributionLayout::VfsMode => self.visit_module_vfs_mode(module_ir),
             DistributionLayout::Classic => self.visit_module_classic(module_ir),
@@ -85,6 +89,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         module_ir: &ModuleIR,
         access: MorphirAccess,
     ) -> Result<AccessControlled<ModuleDefinition>> {
+        validation::validate_values(module_ir)?;
         let types = module_ir
             .types
             .iter()
@@ -341,7 +346,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         };
 
         // Convert body expression
-        let body_value = self.convert_expr(&value_def.body);
+        let body_value = self.convert_expr(&value_def.body)?;
         let body = V4ValueBody::Expression(body_value);
 
         let v4_value_def = V4ValueDefinition {
@@ -495,21 +500,24 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
     }
 
     /// Helper to extract expression from Field<Expr>
-    fn extract_field_expr(&self, field: &AstField<Expr>) -> Value {
+    fn extract_field_expr(&self, field: &AstField<Expr>) -> Result<Value> {
         match field {
-            AstField::Labelled { item, .. } => self.convert_expr(item),
-            AstField::Shorthand { name } => {
-                Value::Variable(ValueAttributes::default(), Name::from(name.as_str()))
-            }
+            AstField::Labelled { .. } | AstField::Shorthand { .. } => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "labelled call arguments require signature-based ordering",
+            )),
             AstField::Unlabelled { item } => self.convert_expr(item),
         }
     }
 
     /// Convert Expr to Morphir IR Value
-    pub(crate) fn convert_expr(&self, expr: &Expr) -> Value {
+    pub(crate) fn convert_expr(&self, expr: &Expr) -> Result<Value> {
         let attrs = ValueAttributes::default();
 
-        match expr {
+        Ok(match expr {
+            Expr::Unsupported { feature, span } => {
+                return Err(validation::unsupported(feature.clone(), *span));
+            }
             Expr::Literal { value } => Value::Literal(attrs, self.convert_literal(value)),
             Expr::Variable { name } => Value::Variable(attrs, Name::from(name.as_str())),
             Expr::Apply {
@@ -517,19 +525,19 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 arguments,
             } => {
                 // Convert multiple arguments to curried apply
-                let mut result = self.convert_expr(function);
+                let mut result = self.convert_expr(function)?;
                 for arg in arguments {
                     result = Value::Apply(
                         attrs.clone(),
                         Box::new(result),
-                        Box::new(self.extract_field_expr(arg)),
+                        Box::new(self.extract_field_expr(arg)?),
                     );
                 }
                 result
             }
             Expr::Lambda { params, body } => {
                 // Convert multi-param lambda to curried form
-                let mut result = self.convert_expr(body);
+                let mut result = self.convert_expr(body)?;
                 for param in params.iter().rev() {
                     result = Value::Lambda(
                         attrs.clone(),
@@ -548,14 +556,14 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let def = V4ValueDefinition {
                     input_types: IndexMap::new(),
                     output_type: Some(Type::Unit(TypeAttributes::default())),
-                    body: V4ValueBody::Expression(self.convert_expr(value)),
+                    body: V4ValueBody::Expression(self.convert_expr(value)?),
                 };
 
                 Value::LetDefinition(
                     attrs,
                     Name::from(name.as_str()),
                     Box::new(def),
-                    Box::new(self.convert_expr(body)),
+                    Box::new(self.convert_expr(body)?),
                 )
             }
             Expr::If {
@@ -564,35 +572,40 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 else_branch,
             } => Value::IfThenElse(
                 attrs,
-                Box::new(self.convert_expr(condition)),
-                Box::new(self.convert_expr(then_branch)),
-                Box::new(self.convert_expr(else_branch)),
+                Box::new(self.convert_expr(condition)?),
+                Box::new(self.convert_expr(then_branch)?),
+                Box::new(self.convert_expr(else_branch)?),
             ),
             Expr::Record { fields } => {
                 use morphir_core::ir::v4::RecordFieldEntry;
                 let morphir_fields: Vec<RecordFieldEntry> = fields
                     .iter()
                     .map(|(name, expr)| {
-                        RecordFieldEntry(Name::from(name.as_str()), self.convert_expr(expr))
+                        Ok(RecordFieldEntry(
+                            Name::from(name.as_str()),
+                            self.convert_expr(expr)?,
+                        ))
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
                 Value::Record(attrs, morphir_fields)
             }
             Expr::FieldAccess { container, label } => Value::Field(
                 attrs,
-                Box::new(self.convert_expr(container)),
+                Box::new(self.convert_expr(container)?),
                 Name::from(label.as_str()),
             ),
             Expr::Tuple { elements } => {
-                let morphir_elements: Vec<Value> =
-                    elements.iter().map(|e| self.convert_expr(e)).collect();
+                let morphir_elements: Vec<Value> = elements
+                    .iter()
+                    .map(|e| self.convert_expr(e))
+                    .collect::<Result<_>>()?;
                 Value::Tuple(attrs, morphir_elements)
             }
             Expr::TupleIndex { tuple, index } => {
                 // Convert to field access with numeric index
                 Value::Field(
                     attrs,
-                    Box::new(self.convert_expr(tuple)),
+                    Box::new(self.convert_expr(tuple)?),
                     Name::from(format!("{}", index).as_str()),
                 )
             }
@@ -602,17 +615,18 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let subject = subjects
                     .first()
                     .map(|s| self.convert_expr(s))
+                    .transpose()?
                     .unwrap_or_else(|| Value::Unit(attrs.clone()));
 
                 let morphir_cases: Vec<PatternCase> = clauses
                     .iter()
                     .map(|branch| {
-                        PatternCase(
+                        Ok(PatternCase(
                             self.convert_pattern(&branch.pattern),
-                            self.convert_expr(&branch.body),
-                        )
+                            self.convert_expr(&branch.body)?,
+                        ))
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
 
                 Value::PatternMatch(attrs, Box::new(subject), morphir_cases)
             }
@@ -639,9 +653,9 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     Box::new(Value::Apply(
                         attrs.clone(),
                         Box::new(op_ref),
-                        Box::new(self.convert_expr(left)),
+                        Box::new(self.convert_expr(left)?),
                     )),
-                    Box::new(self.convert_expr(right)),
+                    Box::new(self.convert_expr(right)?),
                 )
             }
             Expr::NegateInt { value } => {
@@ -654,7 +668,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Value::Apply(
                     attrs.clone(),
                     Box::new(Value::Reference(attrs, fqname)),
-                    Box::new(self.convert_expr(value)),
+                    Box::new(self.convert_expr(value)?),
                 )
             }
             Expr::NegateBool { value } => {
@@ -667,64 +681,54 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Value::Apply(
                     attrs.clone(),
                     Box::new(Value::Reference(attrs, fqname)),
-                    Box::new(self.convert_expr(value)),
+                    Box::new(self.convert_expr(value)?),
                 )
             }
             Expr::List { elements, tail } => {
-                let morphir_elements: Vec<Value> =
-                    elements.iter().map(|e| self.convert_expr(e)).collect();
+                let morphir_elements: Vec<Value> = elements
+                    .iter()
+                    .map(|e| self.convert_expr(e))
+                    .collect::<Result<_>>()?;
                 // For now, ignore tail and just create a list
-                let _ = tail; // TODO: Handle tail properly
+                if let Some(tail) = tail {
+                    self.convert_expr(tail)?;
+                } // Tail lowering remains unsupported.
                 Value::List(attrs, morphir_elements)
             }
             Expr::Block { statements } => {
-                // Convert block to sequence of let bindings
-                // For now, just return the last expression
-                if let Some(last) = statements.last() {
-                    match last {
-                        crate::frontend::ast::Statement::Expression(e) => self.convert_expr(e),
-                        _ => Value::Unit(attrs),
-                    }
-                } else {
-                    Value::Unit(attrs)
+                // Retain the existing final-expression lowering, but check every value.
+                let mut last = Value::Unit(attrs.clone());
+                for statement in statements {
+                    last = match statement {
+                        crate::frontend::ast::Statement::Expression(value) => {
+                            self.convert_expr(value)?
+                        }
+                        crate::frontend::ast::Statement::Assignment { value, .. } => {
+                            self.convert_expr(value)?;
+                            Value::Unit(attrs.clone())
+                        }
+                        crate::frontend::ast::Statement::Use { .. } => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Unsupported,
+                                "use expressions are not supported",
+                            ));
+                        }
+                    };
                 }
+                last
             }
-            Expr::Panic { message } => {
-                // Convert to panic function call
-                let msg_expr = message
-                    .as_ref()
-                    .map(|m| self.convert_expr(m))
-                    .unwrap_or_else(|| {
-                        Value::Literal(attrs.clone(), MorphirLiteral::String("panic".to_string()))
-                    });
-                let _ = msg_expr; // TODO: Use message in panic representation
-                Value::Unit(attrs) // Placeholder - Morphir IR doesn't have panic
+            Expr::Panic { .. }
+            | Expr::Todo { .. }
+            | Expr::Echo { .. }
+            | Expr::BitString { .. }
+            | Expr::FnCapture { .. }
+            | Expr::RecordUpdate { .. } => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "unsupported Gleam value expression",
+                ));
             }
-            Expr::Todo { message } => {
-                // Convert to todo placeholder
-                let _ = message;
-                Value::Unit(attrs) // Placeholder
-            }
-            Expr::Echo {
-                expression,
-                body: _,
-            } => {
-                // Echo just returns its expression
-                self.convert_expr(expression)
-            }
-            Expr::BitString { .. } => {
-                // Bit strings not yet supported
-                Value::Unit(attrs)
-            }
-            Expr::FnCapture { .. } => {
-                // Function capture not yet supported
-                Value::Unit(attrs)
-            }
-            Expr::RecordUpdate { .. } => {
-                // Record update not yet supported
-                Value::Unit(attrs)
-            }
-        }
+        })
     }
 
     /// Helper to extract pattern from Field<Pattern>
@@ -840,6 +844,7 @@ mod tests {
             values: vec![ValueDef {
                 span: Default::default(),
                 params: vec![],
+                param_labels: vec![],
                 doc: None,
                 name: "hello".to_string(),
                 type_annotation: None,

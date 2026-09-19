@@ -211,12 +211,52 @@ pub fn relative_module(package: &[String], module: &[String]) -> Vec<String> {
 }
 
 /// A module is public when the request exposes every module, or names this one.
-pub fn module_access(exposed: Option<&[String]>, dotted_name: &str) -> Access {
-    match exposed {
-        None => Access::Public,
-        Some(names) if names.iter().any(|name| name == dotted_name) => Access::Public,
-        Some(_) => Access::Private,
+///
+/// A request states its exposed modules the way `morphir.json` does: package-
+/// relative, so a package `My.Pkg` holding `My.Pkg.Aliases` lists `Aliases`.
+/// morphir-elm prepends the package name before matching (`Morphir.Elm.Frontend`,
+/// `exposedModuleNames`), and so does this: an entry matches when it spells
+/// either the package-relative path ([`relative_module`]) or the module's full
+/// dotted name, so a request that writes `My.Pkg.Aliases` out in full is
+/// understood too. Matching against the full name alone would make every module
+/// of every package that names its modules the usual way `Private`.
+///
+/// Segments are compared in their [`crate::names`] spelling, as everywhere else
+/// in this crate: two names a Morphir document cannot tell apart are one name.
+pub fn module_access(exposed: Option<&[String]>, package: &[String], module: &[String]) -> Access {
+    // `None` exposes every module; `Some(vec![])` exposes none.
+    let Some(entries) = exposed else {
+        return Access::Public;
+    };
+    let relative = relative_module(package, module);
+    let exposes = |entry: &String| {
+        let entry = module_path(entry);
+        same_path(&entry, &relative) || same_path(&entry, module)
+    };
+    if entries.iter().any(exposes) {
+        Access::Public
+    } else {
+        Access::Private
     }
+}
+
+/// The segments a dotted Elm module name spells.
+fn module_path(name: &str) -> Vec<String> {
+    name.split('.')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether two module paths name the same module, segment by segment, in the
+/// only spelling a Morphir document keeps.
+fn same_path(left: &[String], right: &[String]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| names::type_spelling(left) == names::type_spelling(right))
 }
 
 #[cfg(test)]
@@ -267,12 +307,73 @@ mod tests {
 
     #[test]
     fn an_unlisted_module_is_private_only_when_a_list_is_given() {
-        assert_eq!(module_access(None, "My.Types"), Access::Public);
+        let package = package_path("My");
+        let types = package_path("My.Types");
+        assert_eq!(module_access(None, &package, &types), Access::Public);
         assert_eq!(
-            module_access(Some(&["My.Types".to_string()]), "My.Types"),
+            module_access(Some(&["Types".to_string()]), &package, &types),
             Access::Public
         );
-        assert_eq!(module_access(Some(&[]), "My.Types"), Access::Private);
+        assert_eq!(module_access(Some(&[]), &package, &types), Access::Private);
+    }
+
+    /// `morphir.json` names its exposed modules package-relative, which is the
+    /// spelling morphir-elm prepends the package name to before matching. An
+    /// entry may also be the module's full dotted name.
+    #[test]
+    fn an_exposed_module_is_named_package_relative_or_in_full() {
+        let package = package_path("My.Pkg");
+        let aliases = package_path("My.Pkg.Aliases");
+        let hidden = package_path("My.Pkg.Hidden");
+        let relative = ["Aliases".to_string()];
+        let full = ["My.Pkg.Aliases".to_string()];
+
+        assert_eq!(
+            module_access(Some(&relative), &package, &aliases),
+            Access::Public
+        );
+        assert_eq!(
+            module_access(Some(&relative), &package, &hidden),
+            Access::Private
+        );
+        assert_eq!(
+            module_access(Some(&full), &package, &aliases),
+            Access::Public,
+            "an entry written out in full names the same module"
+        );
+        assert_eq!(
+            module_access(Some(&full), &package, &hidden),
+            Access::Private
+        );
+    }
+
+    /// A module whose name does not start with the package path is its own
+    /// relative path, so the entry that names it is that same path — the shape
+    /// the daemon's fixture package uses.
+    #[test]
+    fn a_module_outside_the_package_prefix_is_exposed_by_its_own_name() {
+        let package = package_path("local/example");
+        let example = package_path("Example");
+        assert_eq!(
+            module_access(Some(&["Example".to_string()]), &package, &example),
+            Access::Public
+        );
+        assert_eq!(
+            module_access(Some(&["Other".to_string()]), &package, &example),
+            Access::Private
+        );
+    }
+
+    /// Entries are matched on the words a Morphir document keeps, not on the
+    /// letters that were typed.
+    #[test]
+    fn an_exposed_module_entry_is_matched_on_its_words() {
+        let package = package_path("My.Pkg");
+        let module = package_path("My.Pkg.Foo_Bar");
+        assert_eq!(
+            module_access(Some(&["FooBar".to_string()]), &package, &module),
+            Access::Public
+        );
     }
 
     /// Everything the identity is meant to cover moves the digest, and nothing

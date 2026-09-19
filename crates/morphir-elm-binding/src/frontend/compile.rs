@@ -527,7 +527,11 @@ fn compile_one(
     dependency_interfaces: &[DependencyInterface],
 ) {
     let dotted = document.dotted();
-    let access = boundary::module_access(validated.exposed.as_deref(), &dotted);
+    let access = boundary::module_access(
+        validated.exposed.as_deref(),
+        &validated.package,
+        document.name(),
+    );
 
     if !document.syntax.is_empty() {
         stop(

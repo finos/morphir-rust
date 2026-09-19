@@ -58,6 +58,63 @@ fn compile_as(
         .unwrap()
 }
 
+/// Compiles a v3 package with an exact exposed-module list.
+fn compile_exposing(
+    package_name: &str,
+    exposed: &[&str],
+    documents: Vec<SourceDocument>,
+) -> CompileResult {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents,
+            package: CompilePackage {
+                name: package_name.into(),
+                exposed_modules: Some(exposed.iter().map(|name| name.to_string()).collect()),
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: Default::default(),
+            },
+            baseline: None,
+        })
+        .unwrap()
+}
+
+/// Each module of a v3 distribution by its IR module path, with the access the
+/// document writes for it.
+fn accesses(result: &CompileResult) -> std::collections::BTreeMap<String, String> {
+    assert!(result.success, "{:?}", result.diagnostics);
+    result.ir.as_ref().expect("a distribution")["distribution"][3]["modules"]
+        .as_array()
+        .expect("a module list")
+        .iter()
+        .map(|entry| {
+            let path = entry[0]
+                .as_array()
+                .expect("a module path")
+                .iter()
+                .map(|name| {
+                    name.as_array()
+                        .expect("a name")
+                        .iter()
+                        .map(|word| word.as_str().expect("a word").to_string())
+                        .collect::<Vec<_>>()
+                        .join("-")
+                })
+                .collect::<Vec<_>>()
+                .join(".");
+            let access = entry[1]["access"].as_str().expect("an access").to_string();
+            (path, access)
+        })
+        .collect()
+}
+
 fn codes(result: &CompileResult, code: &str) -> Vec<Diagnostic> {
     result
         .diagnostics
@@ -352,6 +409,38 @@ fn a_higher_order_alias_is_written_the_way_morphir_elm_writes_it() {
                 ["Function", {}, list_int, list_int]
             ]
         ])
+    );
+}
+
+/// `morphir.json` lists exposed modules package-relative, so a package
+/// `My.Pkg` exposes `My.Pkg.Aliases` by writing `Aliases`. Matching the entry
+/// against the full dotted name alone never hit, and every module of every
+/// ordinary package came out `Private` where morphir-elm writes `Public`.
+#[test]
+fn a_package_relative_exposed_module_entry_makes_the_module_public() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Aliases"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Aliases.elm",
+                "module My.Pkg.Aliases exposing (..)\n\ntype alias T = Int\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Other.elm",
+                "module My.Pkg.Other exposing (..)\n\ntype alias U = Int\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("aliases".to_string(), "Public".to_string()),
+            ("other".to_string(), "Private".to_string()),
+        ]
+        .into_iter()
+        .collect()
     );
 }
 

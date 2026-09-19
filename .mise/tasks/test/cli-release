@@ -16,7 +16,7 @@ set -eu
 ID="${usage_id:-${1:-}}"
 case "$ID" in
     avro) EXTENSION_ID=morphir-avro ;;
-    gleam) EXTENSION_ID=morphir-gleam-native ;;
+    gleam) EXTENSION_ID=morphir-gleam ;;
     openapi) EXTENSION_ID=morphir-openapi ;;
     python) EXTENSION_ID=morphir-python ;;
     rust) EXTENSION_ID=morphir-rust ;;

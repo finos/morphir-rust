@@ -25,7 +25,7 @@ fn guest_metadata_and_initialization_match_native_capabilities() {
         .call::<&[u8], &[u8]>("morphir_extension_info", &[])
         .unwrap();
     let metadata: ExtensionInfo = serde_json::from_slice(metadata).unwrap();
-    assert_eq!(metadata.id, "morphir-gleam-native");
+    assert_eq!(metadata.id, "morphir-gleam");
     assert_eq!(
         serde_json::to_value(metadata).unwrap(),
         serde_json::to_value(GleamExtension::info()).unwrap()
@@ -254,7 +254,7 @@ fn initialize(guest: &mut Plugin) {
     ))
     .unwrap();
     assert_eq!(initialized.protocol_version, MEP_VERSION);
-    assert_eq!(initialized.extension.id, "morphir-gleam-native");
+    assert_eq!(initialized.extension.id, "morphir-gleam");
     let capabilities = initialized.capabilities;
     assert_eq!(
         serde_json::to_value(&capabilities).unwrap(),

@@ -29,7 +29,7 @@ async fn installed_compilation(version: &str) {
     let publication = repository.publish(bundle).unwrap();
     assert!(publication.release().frontend().is_some());
     assert!(publication.release().backend().is_some());
-    let id = ExtensionId::parse("morphir-gleam-native").unwrap();
+    let id = ExtensionId::parse("morphir-gleam").unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
     let selected = LocalIndex::open(repository.root())
         .unwrap()
@@ -55,7 +55,7 @@ async fn installed_compilation(version: &str) {
         })
         .await
         .unwrap_or_else(|failure| panic!("negotiation failed: {}", failure.error()));
-    assert_eq!(ready.negotiated().extension().id, "morphir-gleam-native");
+    assert_eq!(ready.negotiated().extension().id, "morphir-gleam");
     let capabilities = ready.negotiated().capabilities();
     let frontend = capabilities.frontend.as_ref().expect("Gleam frontend");
     assert_eq!(frontend.languages[0].id, "gleam");

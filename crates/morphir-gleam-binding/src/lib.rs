@@ -33,8 +33,8 @@ pub struct GleamExtension;
 impl Extension for GleamExtension {
     fn info() -> ExtensionInfo {
         ExtensionInfo {
-            id: "morphir-gleam-native".into(),
-            name: "Morphir Gleam (native)".into(),
+            id: "morphir-gleam".into(),
+            name: "Morphir Gleam".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some("Gleam language support for Morphir".into()),
             types: vec![ExtensionType::Frontend, ExtensionType::Backend],

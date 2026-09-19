@@ -286,30 +286,26 @@ fn metaschema(name: &str) -> Value {
         .unwrap_or_else(|error| panic!("vendored metaschema {name} is valid JSON: {error}"))
 }
 
-fn resource(name: &str) -> jsonschema::Resource {
-    jsonschema::Resource::from_contents(metaschema(name))
-        .unwrap_or_else(|error| panic!("vendored metaschema {name} is a schema resource: {error}"))
-}
-
 fn openapi_31_validator() -> jsonschema::Validator {
+    let registry = jsonschema::Registry::new()
+        .extend([
+            (
+                "https://spec.openapis.org/oas/3.1/schema/2022-10-07",
+                metaschema("oas-3.1-schema-2022-10-07.json"),
+            ),
+            (
+                "https://spec.openapis.org/oas/3.1/dialect/base",
+                metaschema("oas-3.1-dialect-base.json"),
+            ),
+            (
+                "https://spec.openapis.org/oas/3.1/meta/base",
+                metaschema("oas-3.1-meta-base.json"),
+            ),
+        ])
+        .and_then(jsonschema::RegistryBuilder::prepare)
+        .expect("the vendored OpenAPI 3.1 metaschemas form a registry");
     jsonschema::options()
-        .with_resources(
-            [
-                (
-                    "https://spec.openapis.org/oas/3.1/schema/2022-10-07",
-                    resource("oas-3.1-schema-2022-10-07.json"),
-                ),
-                (
-                    "https://spec.openapis.org/oas/3.1/dialect/base",
-                    resource("oas-3.1-dialect-base.json"),
-                ),
-                (
-                    "https://spec.openapis.org/oas/3.1/meta/base",
-                    resource("oas-3.1-meta-base.json"),
-                ),
-            ]
-            .into_iter(),
-        )
+        .with_registry(&registry)
         .build(&metaschema("oas-3.1-schema-base-2022-10-07.json"))
         .expect("the vendored OpenAPI 3.1 metaschema compiles")
 }
@@ -324,7 +320,7 @@ fn openapi_30_validator() -> jsonschema::Validator {
 fn assert_valid(validator: &jsonschema::Validator, label: &str, document: &Value) {
     let errors: Vec<String> = validator
         .iter_errors(document)
-        .map(|error| format!("  at {}: {error}", error.instance_path))
+        .map(|error| format!("  at {}: {error}", error.instance_path()))
         .collect();
     assert!(
         errors.is_empty(),

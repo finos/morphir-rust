@@ -580,6 +580,107 @@ fn implicit_exposure_follows_the_chain_it_opened() {
     );
 }
 
+/// Two types of one module open two different modules in turn, and both are
+/// published.
+///
+/// This is where the walk parts company with morphir-elm, which stops at the
+/// module: `Morphir.Elm.IncrementalFrontend` (1250-1252) drops a reference into
+/// an already-published module without following it, so only whichever of
+/// `Hidden.A` and `Hidden.B` it reached first would have its own references
+/// followed and only one of `DeepA` and `DeepB` would come out public — while a
+/// public type still pointed into the other.
+#[test]
+fn every_declaration_that_publishes_a_module_is_followed_not_just_the_first() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (..)\n\n\
+                 import My.Pkg.Hidden\n\n\
+                 type alias First = My.Pkg.Hidden.A\n\n\n\
+                 type alias Second = My.Pkg.Hidden.B\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Hidden.elm",
+                "module My.Pkg.Hidden exposing (A, B)\n\n\
+                 import My.Pkg.DeepA\nimport My.Pkg.DeepB\n\n\n\
+                 type alias A = My.Pkg.DeepA.T\n\n\n\
+                 type alias B = My.Pkg.DeepB.T\n",
+            ),
+            document(
+                "file:///work/My/Pkg/DeepA.elm",
+                "module My.Pkg.DeepA exposing (T)\n\ntype alias T = Int\n",
+            ),
+            document(
+                "file:///work/My/Pkg/DeepB.elm",
+                "module My.Pkg.DeepB exposing (T)\n\ntype alias T = String\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("deep-a".to_string(), "Public".to_string()),
+            ("deep-b".to_string(), "Public".to_string()),
+            ("hidden".to_string(), "Public".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// A type that refers to itself, and a pair that refer to each other, do not
+/// send the walk round for ever: a declaration is followed once.
+///
+/// The cycle is inside one module because that is the only place this frontend
+/// can have one — two modules that referred to each other would have to import
+/// each other, which is refused as `ELM_IMPORT_CYCLE` long before this runs.
+#[test]
+fn a_reference_cycle_inside_a_published_module_terminates() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (..)\n\n\
+                 import My.Pkg.Knot\n\n\
+                 type alias Entry = My.Pkg.Knot.Tree\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Knot.elm",
+                "module My.Pkg.Knot exposing (Tree(..), Odd(..), Even(..))\n\n\
+                 import My.Pkg.Tail\n\n\n\
+                 type Tree = Leaf | Branch Tree Odd\n\n\n\
+                 type Odd = Odd Even\n\n\n\
+                 type Even = Even Odd My.Pkg.Tail.End\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Tail.elm",
+                "module My.Pkg.Tail exposing (End)\n\ntype alias End = Int\n",
+            ),
+        ],
+    );
+
+    // `Tail` is reached only through `Knot.Even`, which is reached only through
+    // `Knot.Odd` — so the cycle has to be walked all the way, once, for it to
+    // be published at all.
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("knot".to_string(), "Public".to_string()),
+            ("tail".to_string(), "Public".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
 /// Only what a module actually publishes counts. A private type's body, and an
 /// opaque custom type's constructor arguments, show a dependent nothing, so
 /// neither publishes the module it names.

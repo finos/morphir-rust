@@ -731,10 +731,17 @@ fn compile_one(
 /// [`Interface`] holds.
 ///
 /// It is transitive, as morphir-elm's is: the type that made a module public
-/// contributes its own references in turn. Like morphir-elm, a module is
-/// entered once — a second reference into an already-published module does not
-/// reopen it — so a type is followed only when it is the first one reached in
-/// its module.
+/// contributes its own references in turn.
+///
+/// It diverges from morphir-elm in one place, deliberately. morphir-elm stops
+/// at the *module* — `Morphir.Elm.IncrementalFrontend`, lines 1250-1252, drop a
+/// reference into an already-published module without following it — so if an
+/// exposed module publishes `Hidden.A` and `Hidden.B`, only whichever of them
+/// was reached first has its own references followed, and a module the other
+/// one names stays private while a public type points into it. That result is
+/// internally inconsistent, so this walk follows every *declaration* it
+/// reaches, not every module. It only ever publishes more modules than
+/// morphir-elm would, never fewer, so nothing that was public becomes private.
 ///
 /// This runs after the walk rather than during it, because a module's access is
 /// not knowable until every module that could reach it has been resolved. The
@@ -779,16 +786,25 @@ fn promote_implicitly_exposed(run: &mut Run, package: &[String]) {
     }
 
     let mut implicit: HashSet<Vec<String>> = HashSet::new();
+    // The declarations already followed, by module path and type name. Keying
+    // this on the *declaration* and not on its module is what makes the walk
+    // complete: a module is published by the first reference that reaches it,
+    // but every reference that reaches it still has its own declaration
+    // followed, so a second type of the same module opens what *it* names too.
+    // It is also what makes the walk terminate, since there are finitely many
+    // declarations and none is followed twice.
+    let mut followed: HashSet<(Vec<String>, String)> = HashSet::new();
     while let Some(reference) = pending.pop() {
-        // A reference out of the package is somebody else's to publish, an
-        // explicitly exposed module is already public, and a module already
-        // reached is not entered twice.
-        if reference.package != package
-            || exposed.contains(&reference.module)
-            || !implicit.insert(reference.module.clone())
-        {
+        // A reference out of the package is somebody else's to publish, and an
+        // explicitly exposed module's own public declarations are already
+        // seeds, so there is nothing to add by following one again.
+        if reference.package != package || exposed.contains(&reference.module) {
             continue;
         }
+        if !followed.insert((reference.module.clone(), reference.name.clone())) {
+            continue;
+        }
+        implicit.insert(reference.module.clone());
         if let Some(interface) = interfaces.get(&reference.module)
             && let Some(declared) = interface
                 .types

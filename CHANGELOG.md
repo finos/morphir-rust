@@ -36,7 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native Elm frontend: a module an exposed module reaches into is published too,
   transitively, as morphir-elm's `collectImplicitlyExposedModules` does — an
   exposed module may not describe its public types in terms nobody outside the
-  package can name.
+  package can name. This deliberately diverges from morphir-elm in one place:
+  morphir-elm drops a reference into a module it has already published without
+  following it (`IncrementalFrontend.elm:1250-1252`), so a second type of that
+  module never opens what *it* names, leaving a public type pointing into a
+  private module. This frontend follows every declaration it reaches, which can
+  only publish more modules, never fewer.
 - `elmDocComments` compile option for the native Elm frontend, choosing how much
   of a `{-| ... -}` comment the IR keeps: `"morphir-elm"` (the default) writes
   what morphir-elm writes byte for byte, and `"trimmed"` takes the surrounding

@@ -167,6 +167,15 @@ These are deliberate, not gaps:
 - **Values are skipped.** This frontend compiles type declarations only. Each
   value declaration is reported as an `ELM_VALUE_SKIPPED` warning and the
   compile still succeeds, so a distribution written here has no `values`.
+- **Implicit exposure follows every declaration, not every module.** morphir-elm
+  stops walking at the module: a reference into a module it has already
+  published is dropped without being followed
+  (`Morphir.Elm.IncrementalFrontend.elm:1250-1252`). So if an exposed module
+  publishes two types of one private module, only the first one reached has its
+  own references followed, and a module the second names stays private while a
+  public type points into it. This frontend follows every declaration it
+  reaches, which is the only way the result is internally consistent. It can
+  only publish more modules than morphir-elm, never fewer.
 - **An unreachable private module is kept.** morphir-elm drops a module that is
   neither exposed nor reached from an exposed one (`Repo.removeUnusedModules`).
   This frontend writes it into the distribution as `Private` instead: the

@@ -685,38 +685,37 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 )
             }
             Expr::List { elements, tail } => {
-                let morphir_elements: Vec<Value> = elements
+                let elements = elements
                     .iter()
-                    .map(|e| self.convert_expr(e))
-                    .collect::<Result<_>>()?;
-                // For now, ignore tail and just create a list
-                if let Some(tail) = tail {
-                    self.convert_expr(tail)?;
-                } // Tail lowering remains unsupported.
-                Value::List(attrs, morphir_elements)
-            }
-            Expr::Block { statements } => {
-                // Retain the existing final-expression lowering, but check every value.
-                let mut last = Value::Unit(attrs.clone());
-                for statement in statements {
-                    last = match statement {
-                        crate::frontend::ast::Statement::Expression(value) => {
-                            self.convert_expr(value)?
-                        }
-                        crate::frontend::ast::Statement::Assignment { value, .. } => {
-                            self.convert_expr(value)?;
-                            Value::Unit(attrs.clone())
-                        }
-                        crate::frontend::ast::Statement::Use { .. } => {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::Unsupported,
-                                "use expressions are not supported",
-                            ));
-                        }
-                    };
+                    .map(|element| self.convert_expr(element))
+                    .collect::<Result<Vec<_>>>()?;
+                match tail {
+                    None => Value::List(attrs, elements),
+                    Some(tail) => {
+                        let tail = self.convert_expr(tail)?;
+                        let cons = Value::Reference(
+                            attrs.clone(),
+                            FQName {
+                                package_path: PackageName::parse("morphir/SDK").into(),
+                                module_path: ModuleName::parse("list").into(),
+                                local_name: Name::from("cons"),
+                            },
+                        );
+                        elements.into_iter().rev().fold(tail, |tail, head| {
+                            Value::Apply(
+                                attrs.clone(),
+                                Box::new(Value::Apply(
+                                    attrs.clone(),
+                                    Box::new(cons.clone()),
+                                    Box::new(head),
+                                )),
+                                Box::new(tail),
+                            )
+                        })
+                    }
                 }
-                last
             }
+            Expr::Block { statements } => self.convert_block(statements)?,
             Expr::Panic { .. }
             | Expr::Todo { .. }
             | Expr::Echo { .. }
@@ -728,6 +727,68 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                     "unsupported Gleam value expression",
                 ));
             }
+        })
+    }
+
+    /// Preserve block scope and evaluation order without inventing binding types.
+    fn convert_block(&self, statements: &[crate::frontend::ast::Statement]) -> Result<Value> {
+        use crate::frontend::ast::Statement;
+        let Some((last, preceding)) = statements.split_last() else {
+            return Ok(Value::Unit(ValueAttributes::default()));
+        };
+        // A final assignment returns its RHS in Gleam. Alias the whole pattern
+        // so destructuring is preserved and the RHS is evaluated exactly once.
+        let result = match last {
+            Statement::Expression(value) => self.convert_expr(value)?,
+            Statement::Assignment { pattern, value, .. } => {
+                let pattern = self.convert_pattern(pattern);
+                let result_name =
+                    std::iter::once(Name::from("morphir_block_result"))
+                        .chain((1..).map(|index| {
+                            Name::from(format!("morphir_block_result_{index}").as_str())
+                        }))
+                        .find(|candidate| !pattern_binds(&pattern, candidate))
+                        .expect("a finite pattern cannot bind every candidate name");
+                Value::Destructure(
+                    ValueAttributes::default(),
+                    MorphirPattern::AsPattern(
+                        ValueAttributes::default(),
+                        Box::new(pattern),
+                        result_name.clone(),
+                    ),
+                    Box::new(self.convert_expr(value)?),
+                    Box::new(Value::Variable(ValueAttributes::default(), result_name)),
+                )
+            }
+            Statement::Use { .. } => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "use expressions are not supported",
+                ));
+            }
+        };
+        preceding.iter().rev().try_fold(result, |body, statement| {
+            let (pattern, value) = match statement {
+                Statement::Expression(value) => (
+                    MorphirPattern::WildcardPattern(ValueAttributes::default()),
+                    self.convert_expr(value)?,
+                ),
+                Statement::Assignment { pattern, value, .. } => {
+                    (self.convert_pattern(pattern), self.convert_expr(value)?)
+                }
+                Statement::Use { .. } => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "use expressions are not supported",
+                    ));
+                }
+            };
+            Ok(Value::Destructure(
+                ValueAttributes::default(),
+                pattern,
+                Box::new(value),
+                Box::new(body),
+            ))
         })
     }
 
@@ -784,12 +845,17 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 MorphirPattern::TuplePattern(attrs, morphir_elements)
             }
             Pattern::List { elements, tail } => {
-                // Convert to nested HeadTail or EmptyList
-                let morphir_elements: Vec<MorphirPattern> =
-                    elements.iter().map(|e| self.convert_pattern(e)).collect();
-                // For now, just convert to tuple pattern (Morphir IR list patterns)
-                let _ = tail; // TODO: Handle tail properly
-                MorphirPattern::TuplePattern(attrs, morphir_elements)
+                let tail = tail
+                    .as_deref()
+                    .map(|tail| self.convert_pattern(tail))
+                    .unwrap_or_else(|| MorphirPattern::EmptyListPattern(attrs.clone()));
+                elements.iter().rev().fold(tail, |tail, head| {
+                    MorphirPattern::HeadTailPattern(
+                        attrs.clone(),
+                        Box::new(self.convert_pattern(head)),
+                        Box::new(tail),
+                    )
+                })
             }
             Pattern::Assignment { pattern, name } => MorphirPattern::AsPattern(
                 attrs.clone(),
@@ -816,6 +882,26 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
             Literal::String { value } => MorphirLiteral::String(value.clone()),
             Literal::Char { value } => MorphirLiteral::Char(*value),
         }
+    }
+}
+
+/// Generated result aliases must not duplicate a binder inside their pattern.
+fn pattern_binds(pattern: &MorphirPattern, candidate: &Name) -> bool {
+    match pattern {
+        MorphirPattern::AsPattern(_, inner, name) => {
+            name == candidate || pattern_binds(inner, candidate)
+        }
+        MorphirPattern::TuplePattern(_, elements)
+        | MorphirPattern::ConstructorPattern(_, _, elements) => elements
+            .iter()
+            .any(|pattern| pattern_binds(pattern, candidate)),
+        MorphirPattern::HeadTailPattern(_, head, tail) => {
+            pattern_binds(head, candidate) || pattern_binds(tail, candidate)
+        }
+        MorphirPattern::WildcardPattern(_)
+        | MorphirPattern::LiteralPattern(_, _)
+        | MorphirPattern::UnitPattern(_)
+        | MorphirPattern::EmptyListPattern(_) => false,
     }
 }
 

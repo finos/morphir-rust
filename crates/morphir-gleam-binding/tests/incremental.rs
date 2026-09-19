@@ -328,3 +328,52 @@ fn an_unrelated_module_still_compiles_when_another_fails() {
     assert_eq!(module(&result, "unrelated").status, ModuleStatus::Compiled);
     assert_eq!(result.modules, vec!["unrelated"]);
 }
+
+#[test]
+fn baseline_from_before_structural_value_fixes_recompiles_unchanged_source() {
+    use morphir_core::ir::v4::{AccessControlled, Literal, ModuleDefinition, Value, ValueBody};
+
+    // Frozen from 0.3.0 commit 2a04872632a6cbd9f0ccd02dab533b1042adc3e5,
+    // incremental-v2-gleam-1.18.1, for this suite's sample/gleam/v4 request.
+    // Source text does not participate in the context digest. Do not derive
+    // this old context from the current compiler: the revision must invalidate it.
+    const PRE_STRUCTURAL_FIX_CONTEXT: &str =
+        "sha256:18db626c9393713204c6086f5f9476a138fd3b3fbb0cba9e038eef5cdd8aaa6b";
+    const SOURCE: &str = "pub fn prepend(rest: List(Int)) -> List(Int) { [1, ..rest] }";
+    let fresh = compile(request(SOURCE, None));
+    assert!(fresh.success, "{:?}", fresh.diagnostics);
+    let mut old = baseline(&CompileBaseline::default(), &fresh);
+    old.context_digest = Some(PRE_STRUCTURAL_FIX_CONTEXT.into());
+    let entry = &mut old.modules[0];
+    let mut definition: AccessControlled<ModuleDefinition> =
+        serde_json::from_value(entry.ir.clone()).unwrap();
+    // That release checked the tail for unsupported syntax but discarded it
+    // during lowering. The stored public signature and source digest still match.
+    definition
+        .value
+        .values
+        .get_mut("prepend")
+        .unwrap()
+        .value
+        .value
+        .body = ValueBody::Expression(Value::List(
+        Default::default(),
+        vec![Value::Literal(Default::default(), Literal::integer(1))],
+    ));
+    entry.ir = serde_json::to_value(definition).unwrap();
+
+    let result = rerun(SOURCE, None, old);
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(module(&result, "a").status, ModuleStatus::Compiled);
+    assert_eq!(result.ir, fresh.ir, "the lost list tail must be rebuilt");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code.as_deref() == Some("GLEAM_BASELINE")
+            && diagnostic.message.contains("different compile context")
+    }));
+    let rebuilt: AccessControlled<ModuleDefinition> =
+        serde_json::from_value(module(&result, "a").ir.clone().unwrap()).unwrap();
+    assert!(matches!(
+        rebuilt.value.values["prepend"].value.value.body,
+        ValueBody::Expression(Value::Apply(..))
+    ));
+}

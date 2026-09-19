@@ -353,24 +353,14 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             morphir_core::ir::v4::ValueBody::Expression(body) => {
                 self.generate_value_expr(output, body)?;
             }
-            morphir_core::ir::v4::ValueBody::Native { native_info } => {
-                output.push_str("// native: ");
-                output.push_str(&format!("{:?}", native_info.hint));
+            morphir_core::ir::v4::ValueBody::Native { .. } => {
+                return Err(unsupported("Native definition body"));
             }
-            morphir_core::ir::v4::ValueBody::External { externals, .. } => {
-                output.push_str("// external: ");
-                output.push_str(
-                    &externals
-                        .iter()
-                        .map(|binding| {
-                            format!("{}={}", binding.target_platform, binding.external_name)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
+            morphir_core::ir::v4::ValueBody::External { .. } => {
+                return Err(unsupported("External definition body"));
             }
             morphir_core::ir::v4::ValueBody::Incomplete { .. } => {
-                output.push_str("todo // incomplete");
+                return Err(unsupported("Incomplete definition body"));
             }
         }
 
@@ -388,6 +378,19 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(&name.to_snake_case());
             }
             Value::Apply(_, function, argument) => {
+                if let Value::Apply(_, cons, head) = function.as_ref()
+                    && let Value::Reference(_, name) = cons.as_ref()
+                    && name.package_path == Path::new("morphir/SDK")
+                    && name.module_path == Path::new("list")
+                    && name.local_name == Name::from("cons")
+                {
+                    output.push('[');
+                    self.generate_value_expr(output, head)?;
+                    output.push_str(", ..");
+                    self.generate_value_expr(output, argument)?;
+                    output.push(']');
+                    return Ok(());
+                }
                 self.generate_value_expr(output, function)?;
                 output.push('(');
                 self.generate_value_expr(output, argument)?;
@@ -401,13 +404,29 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str(" }");
             }
             Value::LetDefinition(_, name, def, body) => {
+                if !def.input_types.is_empty() {
+                    return Err(unsupported("LetDefinition with function parameters"));
+                }
                 // Gleam uses: let name = value \n body (no 'in' keyword)
-                output.push_str("let ");
+                output.push_str("{ let ");
                 output.push_str(&name.to_snake_case());
                 output.push_str(" = ");
                 self.generate_value_expr(output, def.body.get_expression()?)?;
                 output.push_str("\n  ");
                 self.generate_value_expr(output, body)?;
+                output.push_str(" }");
+            }
+            Value::Destructure(_, pattern, value, body) => {
+                output.push_str("{ let ");
+                if !irrefutable(pattern) {
+                    output.push_str("assert ");
+                }
+                self.generate_pattern(output, pattern)?;
+                output.push_str(" = ");
+                self.generate_value_expr(output, value)?;
+                output.push_str("\n  ");
+                self.generate_value_expr(output, body)?;
+                output.push_str(" }");
             }
             Value::IfThenElse(_, condition, then_branch, else_branch) => {
                 // Gleam supports case for boolean pattern matching
@@ -415,21 +434,14 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 self.generate_value_expr(output, condition)?;
                 output.push_str(" { True -> ");
                 self.generate_value_expr(output, then_branch)?;
-                output.push_str(", False -> ");
+                output.push_str(" False -> ");
                 self.generate_value_expr(output, else_branch)?;
                 output.push_str(" }");
             }
-            Value::Record(_, fields) => {
-                output.push_str("{ ");
-                for (i, field) in fields.iter().enumerate() {
-                    if i > 0 {
-                        output.push_str(", ");
-                    }
-                    output.push_str(&field.0.to_snake_case());
-                    output.push_str(": ");
-                    self.generate_value_expr(output, &field.1)?;
-                }
-                output.push_str(" }");
+            Value::Record(..) => {
+                return Err(unsupported(
+                    "Record expression requires a resolved named Gleam constructor",
+                ));
             }
             Value::Field(_, record, field) => {
                 self.generate_value_expr(output, record)?;
@@ -480,9 +492,10 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
             Value::Unit(_) => {
                 output.push_str("Nil");
             }
-            _ => {
-                output.push_str("todo");
-            }
+            Value::FieldFunction(..) => return Err(unsupported("FieldFunction")),
+            Value::LetRecursion(..) => return Err(unsupported("LetRecursion")),
+            Value::UpdateRecord(..) => return Err(unsupported("UpdateRecord")),
+            Value::Hole(..) => return Err(unsupported("Hole")),
         }
         Ok(())
     }
@@ -534,11 +547,29 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
                 output.push_str("Nil");
             }
             MorphirPattern::HeadTailPattern(_, head, tail) => {
-                // Gleam list pattern: [head, ..tail]
                 output.push('[');
                 self.generate_pattern(output, head)?;
-                output.push_str(", ..");
-                self.generate_pattern(output, tail)?;
+                let mut rest = tail.as_ref();
+                while let MorphirPattern::HeadTailPattern(_, head, tail) = rest {
+                    output.push_str(", ");
+                    self.generate_pattern(output, head)?;
+                    rest = tail;
+                }
+                match rest {
+                    MorphirPattern::EmptyListPattern(_) => {}
+                    MorphirPattern::WildcardPattern(_) => output.push_str(", .._"),
+                    MorphirPattern::AsPattern(_, pattern, name)
+                        if matches!(pattern.as_ref(), MorphirPattern::WildcardPattern(_)) =>
+                    {
+                        output.push_str(", ..");
+                        output.push_str(&name.to_snake_case());
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            "list tail pattern requires a binding, wildcard, or list pattern",
+                        ));
+                    }
+                }
                 output.push(']');
             }
             MorphirPattern::EmptyListPattern(_) => {
@@ -550,39 +581,26 @@ impl<V: Vfs> MorphirToGleamVisitor<V> {
 
     /// Generate literal
     fn generate_literal(&self, output: &mut String, lit: &MorphirLiteral) -> Result<()> {
-        match lit {
-            MorphirLiteral::Bool(b) => {
-                output.push_str(if *b { "True" } else { "False" });
-            }
-            MorphirLiteral::Integer(i) => {
-                output.push_str(&i.to_string());
-            }
-            MorphirLiteral::Float(f) => {
-                output.push_str(&f.value().to_string());
-            }
-            MorphirLiteral::Decimal(d) => {
-                output.push_str(d.lexeme());
-            }
-            MorphirLiteral::String(s) => {
-                output.push('"');
-                output.push_str(s);
-                output.push('"');
-            }
-            MorphirLiteral::Char(c) => {
-                output.push('\'');
-                output.push(*c);
-                output.push('\'');
-            }
-            // Gleam has no schema-less document type, so a document literal has no source
-            // spelling here rather than a lossy one.
-            MorphirLiteral::Document(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "a document literal has no Gleam spelling",
-                ));
-            }
-        }
-        Ok(())
+        super::literals::generate(output, lit)
+    }
+}
+
+fn unsupported(feature: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("Gleam generation does not support {feature}"),
+    )
+}
+
+fn irrefutable(pattern: &MorphirPattern) -> bool {
+    match pattern {
+        MorphirPattern::WildcardPattern(_) | MorphirPattern::UnitPattern(_) => true,
+        MorphirPattern::AsPattern(_, pattern, _) => irrefutable(pattern),
+        MorphirPattern::TuplePattern(_, elements) => elements.iter().all(irrefutable),
+        MorphirPattern::ConstructorPattern(..)
+        | MorphirPattern::LiteralPattern(..)
+        | MorphirPattern::HeadTailPattern(..)
+        | MorphirPattern::EmptyListPattern(_) => false,
     }
 }
 

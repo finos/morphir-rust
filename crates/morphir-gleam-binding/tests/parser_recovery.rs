@@ -17,7 +17,7 @@ fn request(body: &str, version: &str, types_only: bool) -> CompileRequest {
         options: CompileOptions {
             ir_version: version.into(),
             types_only,
-            ..Default::default()
+            extra: [("emitParseStage".into(), false.into())].into(),
         },
         ..Default::default()
     }

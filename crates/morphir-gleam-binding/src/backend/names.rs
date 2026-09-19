@@ -7,7 +7,16 @@ use std::io::{Error, ErrorKind, Result};
 pub(super) fn module_path(path: &Path) -> String {
     path.segments
         .iter()
-        .map(|part| part.to_snake_case())
+        .map(|part| {
+            let name = part.to_snake_case();
+            // IR names discard trailing underscores. Restore Gleam's escape
+            // consistently for artifact paths, imports and module qualifiers.
+            if gleam_core::parse::lexer::string_to_keyword(&name).is_some() {
+                format!("{name}_")
+            } else {
+                name
+            }
+        })
         .collect::<Vec<_>>()
         .join("/")
 }

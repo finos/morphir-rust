@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Gleam generation escapes reserved words in module paths and import qualifiers,
+  allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
+
 ### Changed
 - Gleam value compilation preserves list tails, list patterns and block bindings.
   Generation supports scoped destructuring and SDK list construction, preserves

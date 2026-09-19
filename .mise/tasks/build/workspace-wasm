@@ -13,7 +13,7 @@ CRATE_NAME="morphir-workspace-wasm"
 METADATA_BIN="morphir-workspace-wasm-metadata"
 OUT_NAME="morphir_workspace_wasm"
 CORPUS_SOURCE="$REPO_ROOT/tests/fixtures/workspace-discovery/corpus.json"
-WASM_BINDGEN_VERSION="0.2.127"
+WASM_BINDGEN_VERSION="0.2.128"
 
 WORK_DIR=""
 STAGING_DIR=""
@@ -276,16 +276,22 @@ if grep -E '(/Users/[^/[:space:]"]+|/home/[^/[:space:]"]+|[[:alpha:]]:[/\\]Users
     exit 1
 fi
 
+# wasm-bindgen suffixes each generated shim name with a hash that changes
+# between releases, so the audit compares shim names with the hash replaced by
+# a placeholder. The set of imports it allows is unchanged; only the release
+# specific suffix is ignored, which keeps a wasm-bindgen upgrade from needing a
+# hand edit here.
 awk '/^[[:space:]]*\(import / {
     module=$2
     name=$3
     gsub(/"/, "", module)
     gsub(/"/, "", name)
+    if (name ~ /^__wbg_/) sub(/_[0-9a-f]+$/, "_<hash>", name)
     print module "\t" name
 }' "$WAT_FILE" | LC_ALL=C sort -u >"$ACTUAL_IMPORTS_FILE"
 
 printf '%s\t%s\n' \
-    "./${OUT_NAME}_bg.js" "__wbg_Error_408e67f47ca7b58b" \
+    "./${OUT_NAME}_bg.js" "__wbg_Error_<hash>" \
     "./${OUT_NAME}_bg.js" "__wbindgen_init_externref_table" |
     LC_ALL=C sort -u >"$EXPECTED_IMPORTS_FILE"
 

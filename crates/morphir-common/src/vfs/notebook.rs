@@ -27,12 +27,17 @@ impl NotebookVfs {
         // Extract v4 notebook or convert
         let v4_notebook = match notebook {
             Notebook::V4(nb) => nb,
+            // nbformat 3 reports v4.5 notebooks that break the spec (e.g. cells
+            // without ids) separately; their missing ids are already filled.
+            Notebook::V4QuirksMode(nb) => nb.repair(),
             Notebook::Legacy(nb) => {
                 nbformat::upgrade_legacy_notebook(nb).unwrap_or_else(|_| Self::empty_v4_notebook())
             }
             Notebook::V3(nb) => {
                 nbformat::upgrade_v3_notebook(nb).unwrap_or_else(|_| Self::empty_v4_notebook())
             }
+            // `Notebook` is non-exhaustive; formats added later have no upgrade path yet.
+            _ => Self::empty_v4_notebook(),
         };
 
         let mut path_index = HashMap::new();
@@ -424,4 +429,32 @@ mod tests {
 
         assert_eq!(cell_sources(&vfs), vec!["intro", "print(1)"]);
     }
+
+    #[test]
+    fn v4_notebook_missing_cell_ids_is_repaired() {
+        let notebook = nbformat::parse_notebook(V45_NOTEBOOK_WITHOUT_IDS)
+            .expect("quirky v4.5 notebook should parse");
+        assert!(matches!(notebook, Notebook::V4QuirksMode(_)));
+
+        let vfs = NotebookVfs::from_notebook(notebook);
+
+        assert_eq!(cell_sources(&vfs), vec!["intro", "print(1)"]);
+        assert_eq!(vfs.path_index.lock().unwrap().len(), 2);
+    }
+
+    const V45_NOTEBOOK_WITHOUT_IDS: &str = r#"{
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["intro"]},
+            {
+                "cell_type": "code",
+                "metadata": {},
+                "execution_count": 1,
+                "source": ["print(1)"],
+                "outputs": []
+            }
+        ]
+    }"#;
 }

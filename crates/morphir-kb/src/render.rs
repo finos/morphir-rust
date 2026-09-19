@@ -4,7 +4,7 @@
 //! Takes primitives rather than CLI option structs, so this stays independent
 //! of the argument-parsing layer. The JSON output matches the Scala CLI's
 //! ujson output byte for byte — field names, key order, and the indent-2
-//! layout — which is why the writer is hand-rolled ([`JVal`]) rather than
+//! layout — which is why the writer is hand-rolled (`JVal`) rather than
 //! serde-derived: serde would alphabetize nothing, but it also cannot express
 //! ujson's `[]`-on-one-line / objects-across-lines mix without ceremony.
 

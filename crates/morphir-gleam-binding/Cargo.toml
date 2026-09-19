@@ -37,11 +37,11 @@ ecow = "=0.2.6"
 # Morphir IR (for visitors)
 morphir-core = { path = "../morphir-core" }
 indexmap = "2.0"                                # Required for V4 IndexMap structures
-num-bigint = "0.4"                              # IntegerLiteral is arbitrary precision
+num-bigint = "0.5"                              # IntegerLiteral is arbitrary precision
 anyhow = "1.0"
 url = { workspace = true }
 percent-encoding = { workspace = true }
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Pretty printing (Wadler-style)
 pretty = "0.12"

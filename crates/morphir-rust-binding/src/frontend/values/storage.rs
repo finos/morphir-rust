@@ -58,7 +58,7 @@ impl Lower<'_, '_> {
                     }
                 }
             }
-            syn::Type::BareFn(function) => {
+            syn::Type::FnPtr(function) => {
                 for input in &function.inputs {
                     self.check_storage_type_inner(&input.ty, parameters, aliases)?;
                 }

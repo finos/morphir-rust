@@ -56,7 +56,7 @@ This table lists independently releasable extensions. Registrations come from
 | --- | --- | --- | --- |
 | `morphir-avro` | `morphir-avro-extension` | `0.1.2` | Generates Avro JSON schemas or protocols and Avro IDL from Morphir specifications. |
 | `morphir-elm-native` | `morphir-elm-binding` | `0.1.0` | Compiles Elm type declarations to IR v3 and v4 and generates Elm back; incremental. |
-| `morphir-gleam-binding` | `morphir-gleam-binding` | `0.2.1` | Compiles Gleam type declarations to IR v3 and v4 with the official Gleam parser and generates Gleam back; incremental. |
+| `morphir-gleam-native` | `morphir-gleam-binding` | `0.2.1` | Native Gleam frontend and backend using the official Gleam parser; IR v3/v4 types and incremental compilation. |
 | `morphir-openapi` | `morphir-openapi-extension` | `0.1.1` | Generates OpenAPI 3.1, OpenAPI 3.0, and JSON Schema 2020-12 documents from Morphir specifications. |
 | `morphir-python` | `morphir-python-binding` | `0.2.0` | Compiles and generates Python ADTs, fixed tuples, conditional functions, typed calls and unary lambdas across multiple modules, using IR v3 or v4. |
 | `morphir-rust` | `morphir-rust-binding` | `0.1.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |

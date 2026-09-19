@@ -1,8 +1,27 @@
-# Gleam extension
+# Native Gleam extension
 
 The Gleam extension compiles types to Morphir IR v3 and v4, generates Gleam,
 and supports incremental compilation through the Morphir Extension Protocol.
-Its identifier remains `morphir-gleam-binding` for existing configurations.
+Its extension identifier is `morphir-gleam-native`, matching the native Elm
+extension's naming convention. The Rust crate and WASM artifact remain
+`morphir-gleam-binding`.
+
+The Morphir CLI includes the extension as a native Rust provider. Compilation
+and generation use direct in-process calls by default, without installing an
+extension or running a Gleam executable. The same implementation supports MEP
+invocation and an optional WASM package.
+
+For a Gleam project, select it explicitly with:
+
+```sh
+morphir compile --extension morphir-gleam-native
+morphir generate --target gleam
+```
+
+The CLI still accepts `morphir-gleam-binding` as a legacy selector. An installed
+extension with that exact old id takes precedence over the alias. Existing
+installations retain their recorded identity; newly published bundles use
+`morphir-gleam-native`.
 
 The frontend uses the official [`gleam-core`](https://github.com/gleam-lang/gleam/tree/v1.18.1/compiler-core)
 parser, pinned to Gleam 1.18.1 (commit `4a83802ca33a8a96227a1b332768725f232f9779`).

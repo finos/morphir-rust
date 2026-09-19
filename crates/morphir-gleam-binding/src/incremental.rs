@@ -78,7 +78,7 @@ pub(crate) fn context_digest(
         names
     });
     digest_json(&json!({
-        "frontend": concat!("morphir-gleam-binding/", env!("CARGO_PKG_VERSION"), "/incremental-v2-gleam-1.18.1"),
+        "frontend": concat!("morphir-gleam-native/", env!("CARGO_PKG_VERSION"), "/incremental-v2-gleam-1.18.1"),
         "package": request.package.name,
         "exposed": exposed,
         "language": request.language_id,

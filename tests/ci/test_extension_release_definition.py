@@ -239,7 +239,7 @@ class ReleaseWorkflowDefinitionTests(unittest.TestCase):
             "needs: [release-info, create-extension-artifacts]", publish
         )
         self.assertIn("permissions:\n      contents: write", publish)
-        self.assertIn("uses: actions/download-artifact@v7", publish)
+        self.assertIn("uses: actions/download-artifact@v8", publish)
         self.assertIn("pattern: extension-*", publish)
         self.assertIn("select_extension_assets.py", publish)
         self.assertNotIn("cargo build", publish)

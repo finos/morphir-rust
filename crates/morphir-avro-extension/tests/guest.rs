@@ -280,3 +280,27 @@ fn a_single_target_backend_ignores_the_requested_target() {
     assert!(stated.success);
     assert_eq!(stated.artifacts, unexpected.artifacts);
 }
+
+#[test]
+fn canonical_v4_access_wrappers_generate_customer_fields() {
+    let ir = serde_json::from_str(include_str!(
+        "../../morphir-projection/tests/fixtures/canonical-customer-v4.json"
+    ))
+    .unwrap();
+    let result = generate(ir, options([("representation", json!("json"))]));
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.artifacts.len(), 1);
+    let artifact = &result.artifacts[0];
+    assert_eq!(artifact.path, "examples/customer/domain/Customer.avsc");
+    let schema: Value = serde_json::from_str(&artifact.content).unwrap();
+    assert_eq!(schema["type"], "record");
+    assert_eq!(schema["namespace"], "examples.customer.domain");
+    assert_eq!(schema["name"], "Customer");
+    assert_eq!(
+        schema["fields"],
+        json!([
+            {"name": "age", "type": "long"},
+            {"name": "name", "type": "string"}
+        ])
+    );
+}

@@ -94,3 +94,40 @@ fn reports_an_invalid_option_before_an_ir_error() {
     assert_eq!(diagnostic.code.as_deref(), Some("JSC002"));
     assert_ne!(diagnostic.code.as_deref(), Some("missing_format_version"));
 }
+
+#[test]
+fn canonical_v4_access_wrappers_generate_both_customer_schemas() {
+    let ir: Value = serde_json::from_str(include_str!(
+        "../../morphir-projection/tests/fixtures/canonical-customer-v4.json"
+    ))
+    .unwrap();
+    for target in ["json-schema", "openapi"] {
+        let result = generate(target, ir.clone(), HashMap::new());
+        assert!(result.success, "{target}: {:?}", result.diagnostics);
+        assert_eq!(result.artifacts.len(), 1);
+        let artifact = &result.artifacts[0];
+        let document: Value = serde_json::from_str(&artifact.content).unwrap();
+        let schema = if target == "openapi" {
+            assert_eq!(artifact.path, "openapi.json");
+            assert_eq!(document["openapi"], "3.1.0");
+            assert_eq!(document["paths"], json!({}));
+            &document["components"]["schemas"]["Customer"]
+        } else {
+            assert_eq!(artifact.path, "domain.Customer.schema.json");
+            assert_eq!(
+                document["$schema"],
+                "https://json-schema.org/draft/2020-12/schema"
+            );
+            &document
+        };
+        assert_eq!(schema["type"], "object");
+        assert_eq!(
+            schema["properties"],
+            json!({
+                "age": {"type": "integer", "format": "int64"},
+                "name": {"type": "string"}
+            })
+        );
+        assert_eq!(schema["required"], json!(["age", "name"]));
+    }
+}

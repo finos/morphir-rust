@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Without this an incremental guest fails activation with "frontend capabilities disagreed
   with discovery". The field is written only when true, so descriptors for frontends that are
   not incremental are byte-identical to the ones before this change.
+- `test:cli-release <id>` publishes, installs and uses a staged extension bundle through the morphir CLI release pinned in `.config/morphir-cli-version`, downloaded and checksum-verified from finos/morphir releases. The `extension-bundle` CI job runs it for the Avro, OpenAPI, Python and Rust bundles. The CLI compiles `morphir-elm-native` in, so finos/morphir owns that check.
 - Python functions support typed calls, same-package function imports and references, unary `Callable` annotations, captured lambdas and explicit currying in IR v3 and v4. Native, executable Python and packaged WASM tests cover the supported subset; unsupported arities and ill-typed calls return diagnostics.
 - Rust extension v0.1.0 bundles include the frontend/backend WASM guest, checksum
   and release descriptor for IR v3 and v4. CI selects Rust bundles through the
@@ -212,6 +213,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   types-0012, distributions-0009.
 
 ### Fixed
+- Avro 0.1.2 and OpenAPI 0.1.1 refresh the WASM backends with the canonical v4
+  access-wrapper reader. The released-CLI checks cover both classic v3 input and
+  a canonical v4 customer record for Avro, JSON Schema and OpenAPI generation.
+  Fixed schema assertions retain primitive field mappings in native tests.
 
 - `morphir extension repository init <name>` with a bare relative path such as `repo` failed with `failed to access : No such file or directory`. The durable directory helper counted the empty ancestor of a relative path as a directory to create and sync.
 - `morphir-elm-native` accepts `irVersion` `3.0.0` and `4.0.0` as well as `3` and `4`. The Morphir CLI

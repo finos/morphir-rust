@@ -300,10 +300,7 @@ impl Lower<'_, '_> {
         outer: &mut Scope,
     ) -> Outcome<Typed> {
         self.context.source.attributes(&closure.attrs, false)?;
-        if closure.asyncness.is_some()
-            || closure.movability.is_some()
-            || closure.constness.is_some()
-            || closure.lifetimes.is_some()
+        if closure.asyncness.is_some() || closure.constness.is_some() || closure.lifetimes.is_some()
         {
             return Err(self.error(closure, "Only synchronous immutable closures are supported"));
         }

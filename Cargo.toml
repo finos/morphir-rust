@@ -45,7 +45,7 @@ keywords = ["morphir", "functional", "domain-modeling", "ir"]
 categories = ["development-tools", "parsers"]
 
 [workspace.dependencies]
-syn = { version = "2.0.119", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "extra-traits"] }
+syn = { version = "3.0.6", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "extra-traits"] }
 quote = { version = "1", default-features = false }
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
 prettyplease = "0.3.0"

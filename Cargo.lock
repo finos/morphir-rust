@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "morphir-gleam-binding"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cap-fs-ext 4.0.3",

@@ -30,6 +30,11 @@ incomplete editor-recovery nodes are rejected before IR generation. The Cargo
 lockfile retains upstream's `ecow` 0.2.6 because its broad dependency bound also
 admits an incompatible newer release.
 
+Version 0.3.0 includes breaking changes to the public Rust API: pretty-printer
+entry points now return `Result`, and the AST has additional fields and variants
+for unsupported syntax. Rust callers must handle rendering errors and update
+AST construction and exhaustive matches when upgrading from 0.2.
+
 ## Type compatibility
 
 The frontend resolves aliases, generic custom types, opaque types, labelled

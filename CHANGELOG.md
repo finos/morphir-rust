@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aliases, opaque types, labelled records, source diagnostics and incremental
   module baselines. Closed record aliases generate labelled Gleam ADTs. V3 is
   types-only with explicit skipped-value diagnostics; V4 retains existing value
-  lowering. The Gleam extension can be packaged and tested as an Extism WASM guest.
+  lowering. The Gleam extension can be packaged and tested as an Extism WASM guest,
+  including compile/generate roundtrips through the released Morphir CLI.
 - **A native Elm binding, `morphir-elm-native`.** `morphir-elm-binding` reads Elm with a
   vendored tree-sitter grammar and writes Morphir IR v3 or v4 natively, without migrating
   between them, and generates Elm back from either. It compiles type declarations; a value

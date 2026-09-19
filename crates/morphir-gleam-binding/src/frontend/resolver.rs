@@ -324,22 +324,9 @@ fn resolve(
         errors: Vec::new(),
     };
     for import in &module.imports {
-        match scope.import_targets(&import.module).len() {
-            0 => scope.error(
-                "GLEAM_RESOLVE_NOT_FOUND",
-                format!("Unknown imported module '{}'", import.module),
-            ),
-            1 => {}
-            _ => scope.error(
-                "GLEAM_RESOLVE_AMBIGUOUS",
-                format!(
-                    "Imported module '{}' exists in multiple packages",
-                    import.module
-                ),
-            ),
-        }
-        for (name, alias) in &import.types {
-            let _ = name;
+        // Value-only imports need no type interface. Qualified type uses are
+        // checked by lookup; explicitly imported types are checked here too.
+        for (_, alias) in &import.types {
             scope.lookup(None, alias);
         }
     }

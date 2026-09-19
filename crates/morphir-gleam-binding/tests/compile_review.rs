@@ -47,6 +47,38 @@ fn baseline(result: &CompileResult) -> CompileBaseline {
 }
 
 #[test]
+fn value_only_imports_do_not_require_type_interfaces() {
+    for version in ["3", "4"] {
+        for source in [
+            "import gleam/io\npub type Id = Int",
+            "import gleam/io.{println}\npub type Id = Int",
+        ] {
+            let result = GleamExtension
+                .compile(request(version, &[("model", source)]))
+                .unwrap();
+            assert!(result.success, "{version}: {:?}", result.diagnostics);
+        }
+        for source in [
+            "import gleam/io\npub type Id = io.Missing",
+            "import gleam/io.{type Missing}\npub type Id = Int",
+        ] {
+            let result = GleamExtension
+                .compile(request(version, &[("model", source)]))
+                .unwrap();
+            assert!(!result.success);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code.as_deref() == Some("GLEAM_RESOLVE_NOT_FOUND")),
+                "{:?}",
+                result.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
 fn edited_baseline_imports_cannot_reuse_a_now_invalid_reference() {
     let first = GleamExtension
         .compile(request(

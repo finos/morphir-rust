@@ -444,6 +444,119 @@ fn a_package_relative_exposed_module_entry_makes_the_module_public() {
     );
 }
 
+/// An exposed module whose public surface names a type of an unexposed module
+/// would describe a type nobody outside the package may name, so morphir-elm
+/// publishes the module that owns it. A module nothing reaches into stays
+/// private.
+#[test]
+fn a_module_an_exposed_module_reaches_into_is_published_too() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Aliases"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Aliases.elm",
+                "module My.Pkg.Aliases exposing (..)\n\n\
+                 import My.Pkg.Hidden\n\n\
+                 type alias FromHidden = My.Pkg.Hidden.Secret\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Hidden.elm",
+                "module My.Pkg.Hidden exposing (Secret)\n\ntype alias Secret = { key : String }\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Unreached.elm",
+                "module My.Pkg.Unreached exposing (..)\n\ntype alias Lonely = Int\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("aliases".to_string(), "Public".to_string()),
+            ("hidden".to_string(), "Public".to_string()),
+            ("unreached".to_string(), "Private".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// The promotion is transitive, as morphir-elm's is: the very type that
+/// published a module contributes its own references in turn, so a chain of
+/// unexposed modules is published end to end.
+#[test]
+fn implicit_exposure_follows_the_chain_it_opened() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (..)\n\n\
+                 import My.Pkg.Middle\n\n\
+                 type Request = Request My.Pkg.Middle.Body\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Middle.elm",
+                "module My.Pkg.Middle exposing (Body)\n\n\
+                 import My.Pkg.Deep\n\n\
+                 type alias Body = { tag : My.Pkg.Deep.Tag }\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Deep.elm",
+                "module My.Pkg.Deep exposing (Tag)\n\ntype alias Tag = String\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("deep".to_string(), "Public".to_string()),
+            ("middle".to_string(), "Public".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// Only what a module actually publishes counts. A private type's body, and an
+/// opaque custom type's constructor arguments, show a dependent nothing, so
+/// neither publishes the module it names.
+#[test]
+fn a_reference_a_module_does_not_publish_exposes_nothing() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (Opaque)\n\n\
+                 import My.Pkg.Inner\n\n\
+                 type Opaque = Opaque My.Pkg.Inner.Hidden\n\n\n\
+                 type alias Private = My.Pkg.Inner.Hidden\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Inner.elm",
+                "module My.Pkg.Inner exposing (Hidden)\n\ntype alias Hidden = Int\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("inner".to_string(), "Private".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
 /// An underscore is a legal part of an Elm type name, and a Morphir name keeps
 /// only the words, so `Foo_Bar` is written `["foo","bar"]`. A cross-module
 /// reference to it has to be looked up in that same spelling, or a module

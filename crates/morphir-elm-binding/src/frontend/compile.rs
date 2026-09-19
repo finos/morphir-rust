@@ -26,7 +26,8 @@ use crate::frontend::resolve::{DependencyInterface, Scope, dependency_order, res
 use crate::frontend::source;
 use crate::frontend::{cst_to_ast, parse};
 use crate::incremental::{Decision, Digests, decide};
-use crate::resolved::{Interface, ResolvedModule};
+use crate::names;
+use crate::resolved::{Access, FqName, Interface, InterfaceType, RType, ResolvedModule};
 use crate::span::Span;
 use morphir_extension_sdk::{
     BaselineModule, CompileRequest, CompileResult, Diagnostic, DiagnosticSeverity, ModuleResult,
@@ -214,6 +215,10 @@ pub fn compile(request: CompileRequest) -> CompileResult {
             &package,
         );
     }
+
+    // Only now, with every module's public interface known, can a module that
+    // an exposed module reaches into be found and published too.
+    promote_implicitly_exposed(&mut run, &validated.package);
 
     // A distribution holds its dependencies' *specifications*, and a compile
     // request supplies their definitions, so the specification is derived.
@@ -710,6 +715,135 @@ fn compile_one(
         diagnostics,
     });
     run.compiled.push(resolved);
+}
+
+/// Publishes every module an exposed module reaches into.
+///
+/// An exposed module whose public surface names a type of an unexposed module
+/// would otherwise describe a type nobody outside the package may name.
+/// morphir-elm resolves that by publishing the module that owns the type
+/// (`Morphir.Elm.IncrementalFrontend`, `collectImplicitlyExposedModules`), and
+/// this does the same, from the same starting point: only what a *public* type
+/// of an *exposed* module publishes counts — a public alias's body and a public
+/// custom type's constructor arguments — which is exactly what a module's
+/// [`Interface`] holds.
+///
+/// It is transitive, as morphir-elm's is: the type that made a module public
+/// contributes its own references in turn. Like morphir-elm, a module is
+/// entered once — a second reference into an already-published module does not
+/// reopen it — so a type is followed only when it is the first one reached in
+/// its module.
+///
+/// This runs after the walk rather than during it, because a module's access is
+/// not knowable until every module that could reach it has been resolved. The
+/// access an emitter writes into the distribution is the one in
+/// [`Run::module_irs`], not the one the per-module IR was emitted under, so
+/// setting it here is what the document ends up saying. A reused module is
+/// covered too: its interface came out of the baseline, and the promotion is
+/// recomputed from scratch on every run.
+fn promote_implicitly_exposed(run: &mut Run, package: &[String]) {
+    let spelled = |path: &[String]| -> Vec<String> {
+        path.iter()
+            .map(|segment| names::type_spelling(segment))
+            .collect()
+    };
+    // Keyed by IR module path, spelled the way an `Interface` spells names, so
+    // that the paths in `module_irs` and the ones inside an `FqName` agree.
+    let interfaces: HashMap<Vec<String>, &Interface> = run
+        .interfaces
+        .iter()
+        .map(|(name, interface)| {
+            (
+                spelled(&boundary::relative_module(package, name)),
+                interface,
+            )
+        })
+        .collect();
+    let exposed: HashSet<Vec<String>> = run
+        .module_irs
+        .iter()
+        .filter(|(_, access, _)| *access == Access::Public)
+        .map(|(path, _, _)| spelled(path))
+        .collect();
+
+    let package = spelled(package);
+    let mut pending: Vec<FqName> = Vec::new();
+    for path in &exposed {
+        if let Some(interface) = interfaces.get(path) {
+            for declared in &interface.types {
+                published_references(declared, &mut pending);
+            }
+        }
+    }
+
+    let mut implicit: HashSet<Vec<String>> = HashSet::new();
+    while let Some(reference) = pending.pop() {
+        // A reference out of the package is somebody else's to publish, an
+        // explicitly exposed module is already public, and a module already
+        // reached is not entered twice.
+        if reference.package != package
+            || exposed.contains(&reference.module)
+            || !implicit.insert(reference.module.clone())
+        {
+            continue;
+        }
+        if let Some(interface) = interfaces.get(&reference.module)
+            && let Some(declared) = interface
+                .types
+                .iter()
+                .find(|declared| declared.name == reference.name)
+        {
+            published_references(declared, &mut pending);
+        }
+    }
+
+    for (path, access, _) in &mut run.module_irs {
+        if implicit.contains(&spelled(path)) {
+            *access = Access::Public;
+        }
+    }
+}
+
+/// Every type reference a public declaration publishes: an alias publishes the
+/// type it stands for, and a custom type publishes its constructors' argument
+/// types — but only when the constructors are public, since an opaque type
+/// shows a dependent nothing.
+fn published_references(declared: &InterfaceType, out: &mut Vec<FqName>) {
+    if let Some(alias) = &declared.alias {
+        type_references(alias, out);
+    }
+    for (_, arguments) in declared.constructors.iter().flatten() {
+        for argument in arguments {
+            type_references(argument, out);
+        }
+    }
+}
+
+/// Every [`FqName`] a resolved type mentions, however deeply nested.
+fn type_references(ty: &RType, out: &mut Vec<FqName>) {
+    match ty {
+        RType::Var(_) | RType::Unit => {}
+        RType::Ref(name, arguments) => {
+            out.push(name.clone());
+            for argument in arguments {
+                type_references(argument, out);
+            }
+        }
+        RType::Record(fields) | RType::ExtensibleRecord(_, fields) => {
+            for field in fields {
+                type_references(&field.ty, out);
+            }
+        }
+        RType::Tuple(elements) => {
+            for element in elements {
+                type_references(element, out);
+            }
+        }
+        RType::Function(argument, result) => {
+            type_references(argument, out);
+            type_references(result, out);
+        }
+    }
 }
 
 /// What a module result reports as its dependencies: every in-package module

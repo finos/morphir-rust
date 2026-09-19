@@ -299,6 +299,62 @@ fn a_classic_distribution_still_writes_no_dependencies() {
     );
 }
 
+/// The v3 type definition a distribution holds for the single type of its
+/// single module.
+fn only_v3_type_definition(ir: &serde_json::Value) -> serde_json::Value {
+    let modules = &ir["distribution"][3]["modules"];
+    assert_eq!(modules.as_array().map(Vec::len), Some(1), "one module");
+    let types = &modules[0][1]["value"]["types"];
+    assert_eq!(types.as_array().map(Vec::len), Some(1), "one type");
+    types[0][1]["value"]["value"].clone()
+}
+
+/// A function type is a spine of segments, and every segment keeps the type
+/// arguments it was written with. This pins the whole v3 definition against the
+/// one morphir-elm 2.100.0 writes for the very same alias, copied out of its
+/// `morphir-ir.json`: an earlier lowering dropped `List Int` from
+/// `List Int -> List Int` and answered `(Int -> Int) -> List Int` with no
+/// diagnostic at all.
+#[test]
+fn a_higher_order_alias_is_written_the_way_morphir_elm_writes_it() {
+    let source = "module My.Pkg.Aliases exposing (..)\n\n\
+                  type alias AHigherOrder =\n    (Int -> Int) -> List Int -> List Int\n";
+    let result = compile_as(
+        "elm",
+        "My.Pkg",
+        vec![document("file:///work/My/Pkg/Aliases.elm", source)],
+        "3",
+        vec![],
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    let int = serde_json::json!([
+        "Reference",
+        {},
+        [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]],
+        []
+    ]);
+    let list_int = serde_json::json!([
+        "Reference",
+        {},
+        [[["morphir"], ["s", "d", "k"]], [["list"]], ["list"]],
+        [int]
+    ]);
+    assert_eq!(
+        only_v3_type_definition(result.ir.as_ref().expect("a distribution")),
+        serde_json::json!([
+            "TypeAliasDefinition",
+            [],
+            [
+                "Function",
+                {},
+                ["Function", {}, int, int],
+                ["Function", {}, list_int, list_int]
+            ]
+        ])
+    );
+}
+
 /// An underscore is a legal part of an Elm type name, and a Morphir name keeps
 /// only the words, so `Foo_Bar` is written `["foo","bar"]`. A cross-module
 /// reference to it has to be looked up in that same spelling, or a module

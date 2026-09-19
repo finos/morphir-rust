@@ -142,9 +142,9 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// A `part` of a `type_expression`, `type_ref`, or `union_variant`: one
-    /// of `type_ref`, `type_variable`, `record_type`, `tuple_type`, or a
-    /// parenthesised (nested) `type_expression`.
+    /// One segment of a `type_expression`, or one `part` of a `type_ref` or
+    /// `union_variant`: `type_ref`, `type_variable`, `record_type`,
+    /// `tuple_type`, or a parenthesised (nested) `type_expression`.
     fn type_expr_part(&self, node: Node<'a>) -> Result<TypeExpr, AstError> {
         match node.kind() {
             "type_ref" => self.type_ref(node),
@@ -162,26 +162,25 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// A `type_expression` node: one or more `part`s joined by `arrow`s,
+    /// A `type_expression` node: one or more segments joined by `arrow`s,
     /// folded right-associatively into nested [`TypeExpr::Function`]s. A
-    /// single part (including a parenthesised type expression) unwraps to
-    /// that part directly.
+    /// single segment (including a parenthesised type expression) unwraps to
+    /// that segment directly.
+    ///
+    /// The segments are the node's named children in source order, and *not*
+    /// its `part`-tagged children: tree-sitter-elm leaves a segment untagged
+    /// when it is a `type_ref` carrying arguments, so `List Int -> Bool` tags
+    /// only `Bool`. Reading the field would drop `List Int` silently and lower
+    /// the alias to `Bool`. Everything between the segments — the `->` token
+    /// and any comment written mid-type — is skipped; anything else that turns
+    /// up is handed to [`Lower::type_expr_part`], which reports it rather than
+    /// ignoring it.
     fn type_expression(&self, node: Node<'a>) -> Result<TypeExpr, AstError> {
         let mut cursor = node.walk();
-        let mut parts: Vec<Node> = node.children_by_field_name("part", &mut cursor).collect();
-        if parts.is_empty() {
-            // A type_expression with a single part that is itself a type_ref
-            // carrying its own args is not field-tagged by the grammar; fall
-            // back to its one named child (skipping the `arrow` token type,
-            // which cannot appear without tagged parts on either side).
-            let mut cursor = node.walk();
-            if let Some(only) = node
-                .named_children(&mut cursor)
-                .find(|c| c.kind() != "arrow")
-            {
-                parts.push(only);
-            }
-        }
+        let parts: Vec<Node> = node
+            .named_children(&mut cursor)
+            .filter(|child| !matches!(child.kind(), "arrow" | "line_comment" | "block_comment"))
+            .collect();
         if parts.is_empty() {
             return Err(AstError {
                 span: self.span(node),

@@ -46,6 +46,11 @@ async fn i_have_gleam_source_file(
     }
 }
 
+#[given(expr = "I have a Gleam source file with:")]
+async fn i_have_unnamed_gleam_source_file(w: &mut GleamTestWorld, step: &cucumber::gherkin::Step) {
+    i_have_gleam_source_file(w, "main.gleam".into(), step).await;
+}
+
 #[given(expr = "I have a Gleam project at {string}")]
 async fn i_have_gleam_project(w: &mut GleamTestWorld, project_path: String) {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
@@ -612,11 +617,15 @@ async fn json_lines_output_should_be_valid(w: &mut GleamTestWorld) {
 async fn main() {
     // Skip scenarios tagged with @wip (work in progress)
     GleamTestWorld::cucumber()
-        .filter_run("tests/features", |feature, _rule, scenario| {
-            // Skip if the feature or scenario has the @wip tag
-            let feature_has_wip = feature.tags.iter().any(|t| t == "wip");
-            let scenario_has_wip = scenario.tags.iter().any(|t| t == "wip");
-            !feature_has_wip && !scenario_has_wip
-        })
+        .fail_on_skipped()
+        .filter_run_and_exit(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/features"),
+            |feature, _rule, scenario| {
+                // Skip if the feature or scenario has the @wip tag
+                let feature_has_wip = feature.tags.iter().any(|t| t == "wip");
+                let scenario_has_wip = scenario.tags.iter().any(|t| t == "wip");
+                !feature_has_wip && !scenario_has_wip
+            },
+        )
         .await;
 }

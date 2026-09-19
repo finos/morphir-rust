@@ -1,10 +1,7 @@
 //! Gleam code generation from Morphir IR
 
-use morphir_common::vfs::{MemoryVfs, Vfs};
-use morphir_core::ir::v4::{
-    Distribution as MorphirDistribution, FormatVersion as MorphirFormatVersion, IRFile,
-    PackageDefinition,
-};
+use crate::vfs::{MemoryVfs, Vfs};
+use morphir_core::ir::v4::{Distribution as MorphirDistribution, PackageDefinition};
 use morphir_core::naming::ModuleName;
 use morphir_extension_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -52,40 +49,19 @@ pub fn generate_gleam(
     ir: &serde_json::Value,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
-    // The release is judged before the document is read. A v4 reader refuses a release it does
-    // not support outright, so without this the legacy fallbacks below would answer for it and
-    // report whatever they made of the document instead of the version that was the problem.
-    if let Some(written) = ir.get("formatVersion") {
-        let release = serde_json::from_value::<MorphirFormatVersion>(written.clone())
-            .ok()
-            .and_then(|version| version.normalize().ok())
-            .map(|normalized| normalized.release.to_exact_string());
-        if release.as_deref() != Some(crate::GLEAM_IR_VERSION) {
-            return Err(ExtensionError::execution(format!(
-                "unsupported Morphir IR formatVersion '{written}'; Gleam supports '{}'",
-                crate::GLEAM_IR_VERSION
-            )));
-        }
-    }
-
-    if let Ok(ir_file) = serde_json::from_value::<IRFile>(ir.clone()) {
-        let normalized = ir_file.format_version.normalize().map_err(|error| {
-            ExtensionError::execution(format!("Invalid Morphir IR formatVersion: {error}"))
-        })?;
-        let release = normalized.release.to_exact_string();
-        if !normalized.is_supported() || release != crate::GLEAM_IR_VERSION {
-            return Err(ExtensionError::execution(format!(
-                "unsupported Morphir IR formatVersion '{release}'; Gleam supports '{}'",
-                crate::GLEAM_IR_VERSION
-            )));
-        }
+    if ir.get("formatVersion").is_some() {
+        let ir_file = crate::version::read_ir(ir).map_err(ExtensionError::execution)?;
         return match ir_file.distribution {
-            MorphirDistribution::Library(content) => {
-                generate_from_package_definition(content.def, options)
-            }
-            MorphirDistribution::Application(content) => {
-                generate_from_package_definition(content.def, options)
-            }
+            MorphirDistribution::Library(content) => generate_from_package_definition(
+                content.def,
+                Some(content.package_name.to_string()),
+                options,
+            ),
+            MorphirDistribution::Application(content) => generate_from_package_definition(
+                content.def,
+                Some(content.package_name.to_string()),
+                options,
+            ),
             MorphirDistribution::Specs(_) => Err(ExtensionError::execution(
                 "Gleam generation requires a V4 Library or Application distribution",
             )),
@@ -94,7 +70,7 @@ pub fn generate_gleam(
 
     // Try to parse as V4 PackageDefinition first
     if let Ok(package_def) = serde_json::from_value::<PackageDefinition>(ir.clone()) {
-        return generate_from_package_definition(package_def, options);
+        return generate_from_package_definition(package_def, None, options);
     }
 
     // Fallback to legacy format
@@ -134,15 +110,18 @@ pub fn generate_gleam(
 /// Generate from V4 PackageDefinition using visitor
 fn generate_from_package_definition(
     package_def: PackageDefinition,
+    declared_package: Option<String>,
     options: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<Artifact>> {
     use super::visitor::MorphirToGleamVisitor;
 
-    let package_name = options
-        .get("packageName")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| "default-package".to_string());
+    let package_name = declared_package.unwrap_or_else(|| {
+        options
+            .get("packageName")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| "default-package".to_string())
+    });
 
     let vfs = MemoryVfs::new();
     let visitor = MorphirToGleamVisitor::new(vfs.clone(), PathBuf::new(), package_name);
@@ -151,16 +130,18 @@ fn generate_from_package_definition(
 
     // Generate each module
     for (module_path_str, module_def) in &package_def.modules {
-        let module_path = ModuleName::parse(module_path_str);
+        let module_path = ModuleName::from_canonical_string(module_path_str)
+            .map_err(ExtensionError::execution)?;
+        let source_path = super::names::module_path(module_path.as_path());
 
         match visitor.visit_module(&module_path, module_def) {
             Ok(_) => {
-                let file_path = PathBuf::from(format!("{}.gleam", module_path_str));
+                let file_path = PathBuf::from(format!("{}.gleam", source_path));
                 if vfs.exists(&file_path) {
                     match vfs.read_to_string(&file_path) {
                         Ok(content) => {
                             artifacts.push(Artifact {
-                                path: format!("{}.gleam", module_path_str),
+                                path: format!("{}.gleam", source_path),
                                 content,
                                 binary: false,
                             });

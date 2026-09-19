@@ -42,6 +42,18 @@ languages = [{ id = "python", file_extensions = [".py"] }]
 ir_versions = ["3", "4"]
 release_with_workspace = true
 
+[extensions.gleam]
+package = "morphir-gleam-binding"
+artifact = "morphir-gleam-binding"
+extension_id = "morphir-gleam-binding"
+name = "Morphir Gleam Binding"
+mep_versions = ["0.1"]
+targets = ["gleam"]
+languages = [{ id = "gleam", file_extensions = [".gleam"] }]
+incremental = true
+ir_versions = ["3", "4"]
+release_with_workspace = true
+
 [extensions.openapi]
 package = "morphir-openapi-extension"
 artifact = "morphir-openapi-extension"

@@ -6,9 +6,9 @@
 use crate::backend::MorphirToGleamVisitor;
 use crate::frontend::ast::ModuleIR;
 use crate::frontend::{GleamToMorphirVisitor, parse_gleam};
-use morphir_common::vfs::{MemoryVfs, Vfs};
+use crate::vfs::{MemoryVfs, Vfs};
 use morphir_core::ir::v4::{AccessControlled, Documentation, Documented, ModuleDefinition};
-use morphir_core::naming::{ModuleName, PackageName};
+use morphir_core::naming::{ModuleName, Name, PackageName};
 use std::path::{Path, PathBuf};
 
 // Type alias for the new V4 generic type
@@ -123,8 +123,14 @@ pub fn roundtrip_gleam_with_options(
         .map_err(|e| RoundtripError::CodeGenError(e.to_string()))?;
 
     // Read generated Gleam code
-    // Use mod_name.to_string() to match the path format used by the visitor
-    let gen_file_path = gen_output_dir.join(format!("{}.gleam", mod_name));
+    let gleam_path = mod_name
+        .as_path()
+        .segments
+        .iter()
+        .map(Name::to_snake_case)
+        .collect::<Vec<_>>()
+        .join("/");
+    let gen_file_path = gen_output_dir.join(format!("{gleam_path}.gleam"));
     let generated_code = gen_vfs.read_to_string(&gen_file_path).map_err(|e| {
         RoundtripError::CodeGenError(format!("Failed to read generated file: {}", e))
     })?;
@@ -163,59 +169,27 @@ fn build_v4_module_from_ir(
     let mut values: IndexMap<String, AccessControlled<Documented<ValueDefinition>>> =
         IndexMap::new();
 
-    // Read type definitions - frontend writes .type.json extension
-    // Note: MemoryVfs doesn't track directories, so we directly check file existence
-    let types_dir = module_dir.join("types");
     for type_def in &module_ir.types {
-        let type_file = types_dir.join(format!("{}.type.json", type_def.name));
-        if vfs.exists(&type_file)
-            && let Ok(content) = vfs.read_to_string(&type_file)
-        {
-            match serde_json::from_str::<AccessControlled<TypeDefinition>>(&content) {
-                Ok(type_def_v4) => {
-                    types.insert(
-                        type_def.name.clone(),
-                        AccessControlled {
-                            access: type_def_v4.access,
-                            value: Documented::new(None, type_def_v4.value),
-                        },
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to deserialize type '{}': {}",
-                        type_def.name, e
-                    );
-                }
-            }
-        }
+        let name = Name::from(type_def.name.as_str()).to_string();
+        let definition = read_definition::<TypeDefinition>(
+            vfs,
+            &module_dir.join("types"),
+            &name,
+            &type_def.name,
+            "type",
+        )?;
+        types.insert(name, definition);
     }
-
-    // Read value definitions - frontend writes .value.json extension
-    let values_dir = module_dir.join("values");
     for value_def in &module_ir.values {
-        let value_file = values_dir.join(format!("{}.value.json", value_def.name));
-        if vfs.exists(&value_file)
-            && let Ok(content) = vfs.read_to_string(&value_file)
-        {
-            match serde_json::from_str::<AccessControlled<ValueDefinition>>(&content) {
-                Ok(value_def_v4) => {
-                    values.insert(
-                        value_def.name.clone(),
-                        AccessControlled {
-                            access: value_def_v4.access,
-                            value: Documented::new(None, value_def_v4.value),
-                        },
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to deserialize value '{}': {}",
-                        value_def.name, e
-                    );
-                }
-            }
-        }
+        let name = Name::from(value_def.name.as_str()).to_string();
+        let definition = read_definition::<ValueDefinition>(
+            vfs,
+            &module_dir.join("values"),
+            &name,
+            &value_def.name,
+            "value",
+        )?;
+        values.insert(name, definition);
     }
 
     Ok(AccessControlled {
@@ -226,6 +200,38 @@ fn build_v4_module_from_ir(
             doc: module_ir.doc.clone().map(Documentation::from),
         },
     })
+}
+
+// Older stage files used source names and omitted the documentation wrapper.
+fn read_definition<T: serde::de::DeserializeOwned>(
+    vfs: &MemoryVfs,
+    directory: &Path,
+    canonical: &str,
+    source_name: &str,
+    kind: &str,
+) -> std::io::Result<AccessControlled<Documented<T>>> {
+    let path = directory.join(format!("{canonical}.{kind}.json"));
+    let path = if vfs.exists(&path) {
+        path
+    } else {
+        directory.join(format!("{source_name}.{kind}.json"))
+    };
+    let content = vfs.read_to_string(&path)?;
+    serde_json::from_str(&content)
+        .or_else(|_| {
+            serde_json::from_str::<AccessControlled<T>>(&content).map(|definition| {
+                AccessControlled {
+                    access: definition.access,
+                    value: Documented::new(None, definition.value),
+                }
+            })
+        })
+        .map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid stage definition '{}': {error}", path.display()),
+            )
+        })
 }
 
 #[cfg(test)]

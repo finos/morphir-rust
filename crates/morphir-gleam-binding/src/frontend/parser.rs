@@ -8,8 +8,8 @@ use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
 use crate::frontend::ast::{
-    Access, BinaryOperator, CaseBranch, Expr, Field, Literal, ModuleIR, Pattern, TypeDef, TypeExpr,
-    ValueDef, Variant,
+    Access, BinaryOperator, CaseBranch, Expr, Field, Import, Literal, ModuleIR, Pattern, TypeDef,
+    TypeExpr, ValueDef, Variant,
 };
 use crate::frontend::errors::{ParseError, to_parse_error};
 use crate::frontend::lexer::{Token, tokenize};
@@ -23,6 +23,7 @@ use crate::frontend::lexer::{Token, tokenize};
 enum Statement {
     TypeDef(TypeDef),
     ValueDef(ValueDef),
+    Import(Import),
 }
 
 /// Main module parser
@@ -37,11 +38,13 @@ where
     stmt.repeated().collect::<Vec<_>>().map(|stmts| {
         let mut types = Vec::new();
         let mut values = Vec::new();
+        let mut imports = Vec::new();
 
         for stmt in stmts {
             match stmt {
                 Statement::TypeDef(td) => types.push(td),
                 Statement::ValueDef(vd) => values.push(vd),
+                Statement::Import(import) => imports.push(import),
             }
         }
 
@@ -50,6 +53,7 @@ where
             doc: None,
             types,
             values,
+            imports,
         }
     })
 }
@@ -63,6 +67,70 @@ where
     type_def_parser()
         .map(Statement::TypeDef)
         .or(value_def_parser().map(Statement::ValueDef))
+        .or(import_parser().map(Statement::Import))
+}
+
+/// Import declarations retain type exposure and local module aliases.
+fn import_parser<'src, I>()
+-> impl Parser<'src, I, Import, extra::Err<Rich<'src, Token, SimpleSpan>>>
+where
+    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
+{
+    let module = identifier_parser()
+        .separated_by(just(Token::Slash))
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .map(|parts| parts.join("/"));
+    let name = type_identifier_parser().or(identifier_parser()).boxed();
+    let item = just(Token::Type)
+        .or_not()
+        .then(name.clone())
+        .then(just(Token::As).ignore_then(name).or_not())
+        .map(|((kind, name), alias)| (kind.is_some(), name.clone(), alias.unwrap_or(name)));
+    let exposed = just(Token::Dot)
+        .ignore_then(
+            item.separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .or_not();
+    just(Token::Import)
+        .ignore_then(module)
+        .then(exposed)
+        .then(just(Token::As).ignore_then(identifier_parser()).or_not())
+        .map(|((module, names), alias)| Import {
+            module,
+            alias,
+            types: names
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(is_type, name, alias)| is_type.then_some((name, alias)))
+                .collect(),
+        })
+}
+
+fn declaration_docs(tokens: &[(Token, SimpleSpan)]) -> std::collections::HashMap<String, String> {
+    let mut docs = std::collections::HashMap::new();
+    let mut lines = Vec::new();
+    let mut declaration = false;
+    for (token, _) in tokens {
+        match token {
+            Token::CommentDoc(line) => lines.push(line.trim().to_owned()),
+            Token::Pub | Token::Opaque => {}
+            Token::Type | Token::Fn if !lines.is_empty() => declaration = true,
+            Token::TypeIdent(name) | Token::Ident(name) if declaration => {
+                docs.insert(name.clone(), lines.join("\n"));
+                lines.clear();
+                declaration = false;
+            }
+            _ => {
+                lines.clear();
+                declaration = false;
+            }
+        }
+    }
+    docs
 }
 
 /// Type definition parser
@@ -85,18 +153,38 @@ where
         .map(|opt: Option<Vec<String>>| opt.unwrap_or_default());
 
     access
+        .then(just(Token::Opaque).or_not())
         .then_ignore(just(Token::Type))
         .then(type_identifier_parser())
         .then(type_params)
-        .then_ignore(just(Token::LBrace))
-        .then(custom_type_body_parser())
-        .then_ignore(just(Token::RBrace))
-        .map(|(((access, name), params), body)| TypeDef {
-            name,
-            params,
-            body,
-            access,
-        })
+        .then(
+            custom_type_body_parser()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .or(just(Token::Equals).ignore_then(type_expr_parser())),
+        )
+        .try_map(
+            |((((access, opaque), name), params), body), span: SimpleSpan| {
+                if opaque.is_some() && !matches!(body, TypeExpr::CustomType { .. }) {
+                    return Err(Rich::custom(span, "Only custom types can be opaque"));
+                }
+                Ok(TypeDef {
+                    name,
+                    params,
+                    body,
+                    access,
+                    doc: None,
+                    span: crate::frontend::ast::Span {
+                        start: span.start,
+                        end: span.end,
+                    },
+                    constructor_access: if opaque.is_some() {
+                        Access::Private
+                    } else {
+                        access
+                    },
+                })
+            },
+        )
 }
 
 /// Custom type body parser (variants)
@@ -125,8 +213,8 @@ where
     let variant_field = identifier_parser()
         .then_ignore(just(Token::Colon))
         .then(type_expr_parser())
-        .map(|(_label, ty)| ty) // For now, discard label and keep type
-        .or(type_expr_parser());
+        .map(|(label, ty)| (Some(label), ty))
+        .or(type_expr_parser().map(|ty| (None, ty)));
 
     let variant_fields = variant_field
         .separated_by(just(Token::Comma))
@@ -134,11 +222,18 @@ where
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LParen), just(Token::RParen))
         .or_not()
-        .map(|opt: Option<Vec<TypeExpr>>| opt.unwrap_or_default());
+        .map(|opt: Option<Vec<(Option<String>, TypeExpr)>>| opt.unwrap_or_default());
 
     type_identifier_parser()
         .then(variant_fields)
-        .map(|(name, fields)| Variant { name, fields })
+        .map(|(name, entries)| {
+            let (labels, fields) = entries.into_iter().unzip();
+            Variant {
+                name,
+                fields,
+                labels,
+            }
+        })
 }
 
 /// Block body parser - handles function bodies with multiple statements
@@ -188,17 +283,16 @@ where
 
     // Parameter can be: `name` or `name: Type`
     // For now we just capture the name and ignore the type annotation
-    let param = identifier_parser()
-        .then(just(Token::Colon).ignore_then(type_expr_parser()).or_not())
-        .map(|(name, _type_ann)| name);
+    let param =
+        identifier_parser().then(just(Token::Colon).ignore_then(type_expr_parser()).or_not());
 
     let params = param
         .separated_by(just(Token::Comma))
         .allow_trailing()
-        .collect::<Vec<String>>()
+        .collect::<Vec<_>>()
         .delimited_by(just(Token::LParen), just(Token::RParen))
         .or_not()
-        .map(|opt: Option<Vec<String>>| opt.unwrap_or_default());
+        .map(|opt: Option<Vec<(String, Option<TypeExpr>)>>| opt.unwrap_or_default());
 
     // Return type annotation: `-> Type`
     let return_type_ann = just(Token::Arrow).ignore_then(type_expr_parser()).or_not();
@@ -211,14 +305,28 @@ where
         .then_ignore(just(Token::LBrace))
         .then(block_body_parser())
         .then_ignore(just(Token::RBrace))
-        .map(
-            |((((access, name), _params), type_annotation), body)| ValueDef {
+        .map_with(|((((access, name), params), return_type), body), extra| {
+            let span: SimpleSpan = extra.span();
+            let type_annotation = Some(TypeExpr::Function {
+                parameters: params
+                    .iter()
+                    .map(|(_, ty)| ty.clone().unwrap_or(TypeExpr::Hole { name: "_".into() }))
+                    .collect(),
+                return_type: Box::new(return_type.unwrap_or(TypeExpr::Hole { name: "_".into() })),
+            });
+            ValueDef {
+                span: crate::frontend::ast::Span {
+                    start: span.start,
+                    end: span.end,
+                },
                 name,
+                params: params.into_iter().map(|(name, _)| name).collect(),
                 type_annotation,
                 body,
                 access,
-            },
-        )
+                doc: None,
+            }
+        })
 }
 
 /// Expression parser
@@ -618,10 +726,13 @@ where
             .or_not()
             .map(|opt: Option<Vec<TypeExpr>>| opt.unwrap_or_default());
 
-        let ref_type = type_identifier_parser()
+        let ref_type = identifier_parser()
+            .then_ignore(just(Token::Dot))
+            .or_not()
+            .then(type_identifier_parser())
             .then(type_args)
-            .map(|(name, parameters)| TypeExpr::Named {
-                module: None,
+            .map(|((module, name), parameters)| TypeExpr::Named {
+                module,
                 name,
                 parameters,
             });
@@ -631,8 +742,24 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        let function = just(Token::Fn)
+            .ignore_then(
+                type_expr
+                    .clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .then_ignore(just(Token::Arrow))
+            .then(type_expr.clone())
+            .map(|(parameters, return_type)| TypeExpr::Function {
+                parameters,
+                return_type: Box::new(return_type),
+            });
         // Primary types
-        let primary = unit
+        let primary = function
+            .or(unit)
             .or(tuple_type)
             .or(record_type)
             .or(ref_type)
@@ -817,6 +944,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
 
     // Extract module documentation from //// comments before filtering
     let module_doc = extract_module_doc(&tokens);
+    let declaration_docs = declaration_docs(&tokens);
 
     // Filter out comment tokens for parsing
     // Comments are captured above for documentation but shouldn't be parsed
@@ -836,6 +964,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
             doc: module_doc,
             types: vec![],
             values: vec![],
+            imports: vec![],
         });
     }
 
@@ -853,6 +982,12 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
             module.name = extract_module_name(path);
             // Set module documentation from //// comments
             module.doc = module_doc;
+            for definition in &mut module.types {
+                definition.doc = declaration_docs.get(&definition.name).cloned();
+            }
+            for definition in &mut module.values {
+                definition.doc = declaration_docs.get(&definition.name).cloned();
+            }
             Ok(module)
         }
         Err(errors) => {
@@ -875,7 +1010,7 @@ pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
 
 /// Extract module name from file path
 fn extract_module_name(path: &str) -> String {
-    path.trim_end_matches(".gleam").replace(['/', '\\'], "_")
+    path.trim_end_matches(".gleam").replace('\\', "/")
 }
 
 #[cfg(test)]

@@ -3,6 +3,24 @@
 from extension_release_test_support import *
 
 class ExtensionReleaseRoutingTests(unittest.TestCase):
+    def test_gleam_tag_preserves_frontend_backend_and_incremental_capabilities(self) -> None:
+        from package_extension_test_support import descriptor_bytes
+
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        release = extension_release.resolve_release(
+            "extension/gleam/v0.2.0", registry, "0.2.0", {"morphir-gleam-binding": "0.2.0"}
+        )
+        self.assertEqual(["gleam"], release.short_ids)
+        descriptor = json.loads(descriptor_bytes(
+            "gleam", registry["extensions"]["gleam"], "0.2.0",
+            "morphir-gleam-binding-0.2.0.wasm", "0" * 64, RELEASE_COMMIT,
+        ))
+        self.assertEqual("morphir-gleam-binding", descriptor["extensionId"])
+        self.assertEqual(["gleam"], descriptor["targets"])
+        self.assertEqual([{"id": "gleam", "fileExtensions": [".gleam"]}], descriptor["languages"])
+        self.assertEqual(["3", "4"], descriptor["irVersions"])
+        self.assertTrue(descriptor["incremental"])
+
     def test_rust_tag_preserves_frontend_backend_and_both_ir_versions(self) -> None:
         from package_extension_test_support import descriptor_bytes
 
@@ -49,6 +67,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         package_versions = {
             "morphir-avro-extension": "0.1.0",
             "morphir-elm-binding": "0.1.0",
+            "morphir-gleam-binding": "0.2.0",
             "morphir-openapi-extension": "0.1.0",
             "morphir-python-binding": "0.1.0",
             "morphir-rust-binding": "0.1.0",
@@ -59,7 +78,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            ["avro", "elm-native", "openapi", "python", "rust"], release.short_ids
+            ["avro", "elm-native", "gleam", "openapi", "python", "rust"], release.short_ids
         )
 
     def test_workspace_tag_selects_opted_in_extensions_in_sorted_order(self) -> None:

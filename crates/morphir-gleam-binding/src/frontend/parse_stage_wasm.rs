@@ -25,6 +25,8 @@ pub(crate) enum EmitParseStageOutcome {
     /// No requested output remains partially updated.
     RolledBack { failure: EmitFailure },
     /// Rollback failed; transaction backups were retained at `recovery_path`.
+    // Kept for the shared diagnostic handler; the guest never stages filesystem recovery.
+    #[allow(dead_code)]
     RecoveryRequired {
         failure: EmitFailure,
         recovery_path: PathBuf,

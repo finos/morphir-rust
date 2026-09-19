@@ -20,9 +20,11 @@ class ImpactConsistencyTests(unittest.TestCase):
         cases = [
             ("crates/morphir-rust-binding/src/lib.rs", ("rust",)),
             ("crates/morphir-python-binding/src/lib.rs", ("python",)),
+            ("crates/morphir-gleam-binding/src/lib.rs", ("gleam",)),
             ("README.md", ()),
             (".mise/tasks/extension/artifact/rust", ("rust",)),
             (".mise/tasks/extension/artifact/python", ("python",)),
+            (".mise/tasks/extension/artifact/gleam", ("gleam",)),
             (".github/extensions.toml", all_extensions),
             ("scripts/package_extension.py", all_extensions),
             ("scripts/extension_packaging/model.py", all_extensions),

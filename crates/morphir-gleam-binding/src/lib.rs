@@ -4,23 +4,18 @@
 //! - Frontend: Parse Gleam source files to Morphir IR
 //! - Backend: Generate Gleam code from Morphir IR
 
-use indexmap::IndexMap;
-use morphir_common::vfs::OsVfs;
-use morphir_core::ir::v4::{
-    Access as MorphirAccess, Distribution, FormatVersion, IRFile, LibraryContent, PackageDefinition,
-};
 use morphir_core::naming::{ModuleName, Name, PackageName};
 use morphir_extension_sdk::prelude::*;
 use percent_encoding::percent_decode_str;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use url::Url;
-
-const GLEAM_IR_VERSION: &str = "4.0.0";
 
 pub mod backend;
 pub mod frontend;
+mod incremental;
 pub mod roundtrip;
+mod version;
+pub mod vfs;
 
 /// Gleam extension implementing both Frontend and Backend
 #[derive(Default)]
@@ -48,16 +43,17 @@ impl Extension for GleamExtension {
                     id: "gleam".into(),
                     file_extensions: vec![".gleam".into()],
                 }],
-                ir_versions: vec![GLEAM_IR_VERSION.into()],
+                ir_versions: vec!["3".into(), "4".into()],
                 compile: true,
-                incremental: false,
+                incremental: true,
                 fragments: false,
             }),
             backend: Some(BackendCapability {
                 targets: vec!["gleam".into()],
-                ir_versions: vec![GLEAM_IR_VERSION.into()],
+                ir_versions: vec!["3".into(), "4".into()],
                 generate: true,
             }),
+            incremental: true,
             ..Default::default()
         }
     }
@@ -65,164 +61,7 @@ impl Extension for GleamExtension {
 
 impl Frontend for GleamExtension {
     fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
-        if request.options.ir_version != GLEAM_IR_VERSION {
-            return Ok(unsupported_ir_version(&request.options.ir_version));
-        }
-
-        if let Some(diagnostic) = validate_request_semantics(&request) {
-            return Ok(failed_compile(vec![diagnostic]));
-        }
-
-        let package_name = match validate_package_name(&request.package.name) {
-            Ok(package_name) => package_name,
-            Err(message) => {
-                return Ok(failed_compile(vec![error_diagnostic(
-                    "INVALID_PACKAGE_NAME",
-                    message,
-                    None,
-                )]));
-            }
-        };
-        let dependencies = match frontend::dependencies::package_specifications(
-            &request.dependencies,
-            GLEAM_IR_VERSION,
-        ) {
-            Ok(dependencies) => dependencies,
-            Err(errors) => {
-                return Ok(failed_compile(
-                    errors
-                        .into_iter()
-                        .map(|error| error_diagnostic(error.code, error.message, None))
-                        .collect(),
-                ));
-            }
-        };
-
-        host_info!("Compiling {} Gleam source file(s)", request.documents.len());
-
-        let output_dir = request
-            .options
-            .extra
-            .get("outputDir")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let emit_parse_stage = request
-            .options
-            .extra
-            .get("emitParseStage")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        let emit_parse_stage_fatal = request
-            .options
-            .extra
-            .get("emitParseStageFatal")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let source_root = request
-            .options
-            .extra
-            .get("sourceRootUri")
-            .or_else(|| request.options.extra.get("sourceRoot"))
-            .and_then(|value| value.as_str());
-
-        let prepared = match prepare_documents(&request.documents, source_root) {
-            Ok(prepared) => prepared,
-            Err(diagnostics) => return Ok(failed_compile(diagnostics)),
-        };
-        let exposed_modules = match validate_exposed_modules(
-            request.package.exposed_modules.as_deref(),
-            prepared.iter().map(|document| document.module_key.as_str()),
-        ) {
-            Ok(exposed) => exposed,
-            Err(diagnostics) => return Ok(failed_compile(diagnostics)),
-        };
-
-        let mut parsed_modules = Vec::with_capacity(prepared.len());
-        let mut diagnostics = Vec::new();
-        for document in prepared {
-            match frontend::parse_gleam(&format!("{}.gleam", document.module_key), &document.text) {
-                Ok(module) => parsed_modules.push((document, module)),
-                Err(error) => diagnostics.push(error.to_diagnostic(&document.uri, &document.text)),
-            }
-        }
-        if !diagnostics.is_empty() {
-            return Ok(failed_compile(diagnostics));
-        }
-
-        let mut modules = IndexMap::new();
-        for (document, module_ir) in &parsed_modules {
-            let visitor = frontend::GleamToMorphirVisitor::new(
-                OsVfs,
-                output_dir.clone(),
-                package_name.clone(),
-                document.module_name.clone(),
-            );
-            let access = if exposed_modules.contains(&document.module_key) {
-                MorphirAccess::Public
-            } else {
-                MorphirAccess::Private
-            };
-            match visitor.build_module_definition(module_ir, access) {
-                Ok(module) => {
-                    modules.insert(document.module_key.clone(), module);
-                }
-                Err(error) => diagnostics.push(error_diagnostic(
-                    "IR_CONVERSION_ERROR",
-                    format!("Failed to convert to Morphir IR: {error}"),
-                    Some(&document.uri),
-                )),
-            }
-        }
-        if !diagnostics.is_empty() {
-            return Ok(failed_compile(diagnostics));
-        }
-
-        let distribution = Distribution::Library(LibraryContent {
-            package_name,
-            dependencies,
-            def: PackageDefinition { modules },
-        });
-
-        if emit_parse_stage {
-            let parse_modules = parsed_modules
-                .iter()
-                .map(
-                    |(document, module)| frontend::parse_stage::ParseStageModule {
-                        module_name: document.module_key.as_str(),
-                        uri: document.uri.as_str(),
-                        module,
-                    },
-                )
-                .collect::<Vec<_>>();
-            let outcome = frontend::parse_stage::emit_parse_stage(&output_dir, &parse_modules);
-            if let Some((diagnostic, fatal)) =
-                parse_stage_diagnostic(outcome, emit_parse_stage_fatal)
-            {
-                if fatal {
-                    return Ok(failed_compile(vec![diagnostic]));
-                }
-                diagnostics.push(diagnostic);
-            }
-        }
-
-        let module_names = match &distribution {
-            Distribution::Library(content) => content.def.modules.keys().cloned().collect(),
-            _ => unreachable!("Gleam produces Library distributions"),
-        };
-        let ir_file = IRFile {
-            format_version: FormatVersion::default(),
-            distribution,
-        };
-        Ok(CompileResult {
-            success: true,
-            ir_version: Some(GLEAM_IR_VERSION.into()),
-            ir: Some(serde_json::to_value(ir_file)?),
-            diagnostics,
-            modules: module_names,
-            module_results: vec![],
-            context_digest: None,
-        })
+        frontend::compile::compile(request)
     }
 
     fn supported_languages() -> Vec<String> {
@@ -232,18 +71,6 @@ impl Frontend for GleamExtension {
     fn file_extensions() -> Vec<String> {
         vec![".gleam".into()]
     }
-}
-
-fn unsupported_ir_version(requested_version: &str) -> CompileResult {
-    failed_compile(vec![Diagnostic {
-        severity: DiagnosticSeverity::Error,
-        code: Some("UNSUPPORTED_IR_VERSION".into()),
-        message: format!(
-            "Unsupported Morphir IR version '{requested_version}'; Gleam supports '{GLEAM_IR_VERSION}'"
-        ),
-        location: None,
-        related: vec![],
-    }])
 }
 
 fn document_location(uri: &str) -> SourceLocation {
@@ -361,13 +188,7 @@ fn validate_request_semantics(request: &CompileRequest) -> Option<Diagnostic> {
             Some(&document.uri),
         ));
     }
-    request.options.types_only.then(|| {
-        error_diagnostic(
-            "UNSUPPORTED_TYPES_ONLY",
-            "The Gleam frontend does not support types-only compilation",
-            None,
-        )
-    })
+    None
 }
 
 fn validate_package_name(value: &str) -> std::result::Result<PackageName, String> {
@@ -681,6 +502,20 @@ fn validate_exposed_modules<'a>(
 
 impl Backend for GleamExtension {
     fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
+        if request.target != "gleam" {
+            return Ok(GenerateResult {
+                success: false,
+                artifacts: vec![],
+                diagnostics: vec![error_diagnostic(
+                    "UNSUPPORTED_TARGET",
+                    format!(
+                        "Expected generation target 'gleam', got '{}'",
+                        request.target
+                    ),
+                    None,
+                )],
+            });
+        }
         host_info!("Generating Gleam code from IR");
 
         match backend::generate_gleam(&request.ir, &request.options) {
@@ -714,6 +549,7 @@ morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
     use morphir_core::ir::v4::{
         Access as MorphirAccess, AccessControlled, Distribution, Documented, ExternalBinding,
         FormatVersion, IRFile, Incompleteness, LibraryContent, ModuleDefinition, PackageDefinition,
@@ -721,6 +557,7 @@ mod tests {
         TypeSpecification, ValueBody, ValueDefinition, ValueSpecification,
     };
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     const IR_VERSION: &str = "4.0.0";
 
@@ -820,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_advertise_the_gleam_v4_frontend() {
+    fn capabilities_advertise_both_releases_and_incremental_compilation() {
         let capabilities = serde_json::to_value(GleamExtension::capabilities())
             .expect("serialize Gleam capabilities");
 
@@ -828,9 +665,9 @@ mod tests {
             capabilities["frontend"],
             serde_json::json!({
                 "languages": [{"id": "gleam", "fileExtensions": [".gleam"]}],
-                "irVersions": [IR_VERSION],
+                "irVersions": ["3", "4"],
                 "compile": true,
-                "incremental": false,
+                "incremental": true,
                 "fragments": false
             })
         );
@@ -838,7 +675,7 @@ mod tests {
             capabilities["backend"],
             serde_json::json!({
                 "targets": ["gleam"],
-                "irVersions": [IR_VERSION],
+                "irVersions": ["3", "4"],
                 "generate": true
             })
         );
@@ -1021,7 +858,7 @@ mod tests {
             IR_VERSION,
         );
         let mut dependency = specs_dependency("example/dependency");
-        dependency.ir_version = "3".into();
+        dependency.ir_version = "5".into();
         request.dependencies.push(dependency);
 
         let result = GleamExtension
@@ -1315,7 +1152,7 @@ mod tests {
             assert!(
                 generated.diagnostics[0]
                     .message
-                    .contains("unsupported Morphir IR formatVersion"),
+                    .contains("Unsupported Morphir IR version"),
                 "{}",
                 generated.diagnostics[0].message
             );
@@ -1660,7 +1497,10 @@ mod tests {
             .compile(request)
             .expect("return compile failure");
 
-        assert_typed_failure(&result);
+        assert!(!result.success);
+        assert!(result.ir.is_none());
+        assert_eq!(result.modules, vec!["valid"]);
+        assert_eq!(result.module_results.len(), 2);
         assert_directory_empty(&output_dir);
     }
 
@@ -1695,7 +1535,7 @@ mod tests {
         let (mut types_only, output_dir) =
             compile_request("file:///workspace/src/main.gleam", "", IR_VERSION);
         types_only.options.types_only = true;
-        assert_typed_failure(&GleamExtension.compile(types_only).unwrap());
+        assert!(GleamExtension.compile(types_only).unwrap().success);
         assert_directory_empty(&output_dir);
     }
 
@@ -2149,7 +1989,7 @@ mod tests {
 
     #[test]
     fn unsupported_ir_version_returns_a_typed_failure() {
-        let (request, _output_dir) = compile_request("file:///main.gleam", "", "3");
+        let (request, _output_dir) = compile_request("file:///main.gleam", "", "5");
 
         let result = GleamExtension
             .compile(request)

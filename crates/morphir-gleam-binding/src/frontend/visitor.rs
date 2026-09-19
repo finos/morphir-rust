@@ -6,8 +6,8 @@
 use crate::frontend::ast::{
     Access, Expr, Field as AstField, Literal, ModuleIR, Pattern, TypeDef, TypeExpr, ValueDef,
 };
+use crate::vfs::Vfs;
 use indexmap::IndexMap;
-use morphir_common::vfs::Vfs;
 use morphir_core::ir::v4::{
     Access as MorphirAccess, AccessControlled, ConstructorDefinition, Documentation, Documented,
     Literal as MorphirLiteral, ModuleDefinition, Pattern as MorphirPattern, TypeDefinition,
@@ -154,8 +154,8 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         let manifest = serde_json::json!({
             "module": self.module_name.to_string(),
             "doc": module_ir.doc,
-            "types": module_ir.types.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
-            "values": module_ir.values.iter().map(|v| v.name.clone()).collect::<Vec<_>>(),
+            "types": module_ir.types.iter().map(|t| Name::from(t.name.as_str()).to_string()).collect::<Vec<_>>(),
+            "values": module_ir.values.iter().map(|v| Name::from(v.name.as_str()).to_string()).collect::<Vec<_>>(),
         });
 
         let manifest_path = module_dir.join("module.json");
@@ -173,7 +173,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         let json = serde_json::to_string_pretty(&morphir_type_def)?;
 
         // Write to types/{type-name}.type.json
-        let file_path = types_dir.join(format!("{}.type.json", type_def.name));
+        let file_path = types_dir.join(format!("{}.type.json", Name::from(type_def.name.as_str())));
         self.vfs.write_from_string(&file_path, &json)?;
         Ok(())
     }
@@ -187,7 +187,10 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         let json = serde_json::to_string_pretty(&morphir_value_def)?;
 
         // Write to values/{value-name}.value.json
-        let file_path = values_dir.join(format!("{}.value.json", value_def.name));
+        let file_path = values_dir.join(format!(
+            "{}.value.json",
+            Name::from(value_def.name.as_str())
+        ));
         self.vfs.write_from_string(&file_path, &json)?;
         Ok(())
     }
@@ -256,7 +259,14 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                                     // Gleam's constructor arguments are positional, and a
                                     // Morphir name has at least one segment, so the position
                                     // names them: `arg-1`, `arg-2`, …
-                                    name: Name::from(format!("arg-{}", position + 1).as_str()),
+                                    name: v
+                                        .labels
+                                        .get(position)
+                                        .and_then(|label| label.as_deref())
+                                        .map(Name::from)
+                                        .unwrap_or_else(|| {
+                                            Name::from(format!("arg-{}", position + 1).as_str())
+                                        }),
                                     arg_type: morphir_type,
                                 }
                             })
@@ -272,14 +282,20 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 let v4_type_def = TypeDefinition::CustomTypeDefinition {
                     type_params: type_params.clone(),
                     constructors: AccessControlled {
-                        access: MorphirAccess::Public,
+                        access: match type_def.constructor_access {
+                            Access::Public => MorphirAccess::Public,
+                            Access::Private => MorphirAccess::Private,
+                        },
                         value: constructors,
                     },
                 };
 
                 Ok(AccessControlledTypeDefinition {
                     access,
-                    value: Documented::new(None, v4_type_def),
+                    value: Documented::new(
+                        type_def.doc.clone().map(Documentation::from),
+                        v4_type_def,
+                    ),
                 })
             }
             _ => {
@@ -292,7 +308,10 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
                 Ok(AccessControlledTypeDefinition {
                     access,
-                    value: Documented::new(None, v4_type_def),
+                    value: Documented::new(
+                        type_def.doc.clone().map(Documentation::from),
+                        v4_type_def,
+                    ),
                 })
             }
         }
@@ -309,7 +328,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         // V4 uses IndexMap<String, Type> - the contract gives each parameter a bare type
         let input_types: IndexMap<String, Type> = if let Some(type_ann) = &value_def.type_annotation
         {
-            self.extract_input_types_v4(type_ann)
+            self.extract_input_types_v4(type_ann, &value_def.params)
         } else {
             IndexMap::new()
         };
@@ -333,12 +352,16 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
         Ok(AccessControlledValueDefinition {
             access,
-            value: Documented::new(None, v4_value_def),
+            value: Documented::new(value_def.doc.clone().map(Documentation::from), v4_value_def),
         })
     }
 
     /// Extract input types from function type annotation (returns V4 IndexMap format)
-    fn extract_input_types_v4(&self, type_expr: &TypeExpr) -> IndexMap<String, Type> {
+    fn extract_input_types_v4(
+        &self,
+        type_expr: &TypeExpr,
+        names: &[String],
+    ) -> IndexMap<String, Type> {
         let mut inputs = IndexMap::new();
 
         // Extract function argument types
@@ -350,7 +373,17 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
         {
             for (i, param) in parameters.iter().enumerate() {
                 let morphir_type = self.convert_type_expr(param);
-                inputs.insert(format!("arg{}", i + 1), morphir_type);
+                inputs.insert(
+                    Name::from(
+                        names
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| format!("arg{}", i + 1))
+                            .as_str(),
+                    )
+                    .to_string(),
+                    morphir_type,
+                );
             }
         }
 
@@ -406,15 +439,32 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
                 Type::Tuple(attrs, morphir_elements)
             }
             TypeExpr::Named {
-                module: _,
+                module,
                 name,
                 parameters,
             } => {
-                // Build FQName from reference name
-                // For now, assume it's in the current module
+                if module.is_none() && name == "Nil" {
+                    return Type::Unit(attrs);
+                }
+                if module.is_none()
+                    && let Some((fqname, _)) = super::resolver::builtin(name)
+                {
+                    let mut arguments: Vec<_> = parameters
+                        .iter()
+                        .map(|ty| self.convert_type_expr(ty))
+                        .collect();
+                    if name == "Result" && arguments.len() == 2 {
+                        arguments.swap(0, 1);
+                    }
+                    return Type::Reference(attrs, fqname, arguments);
+                }
                 let fqname = FQName {
                     package_path: self.package_name.clone().into(),
-                    module_path: self.module_name.clone().into(),
+                    module_path: module
+                        .as_deref()
+                        .map(ModuleName::parse)
+                        .unwrap_or_else(|| self.module_name.clone())
+                        .into(),
                     local_name: Name::from(name.as_str()),
                 };
 
@@ -425,6 +475,14 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 
                 Type::Reference(attrs, fqname, morphir_args)
             }
+            TypeExpr::Resolved { name, parameters } => Type::Reference(
+                attrs,
+                name.clone(),
+                parameters
+                    .iter()
+                    .map(|ty| self.convert_type_expr(ty))
+                    .collect(),
+            ),
             TypeExpr::CustomType { .. } => {
                 // Custom types are handled at definition level
                 Type::Unit(attrs) // Placeholder
@@ -761,7 +819,7 @@ impl<V: Vfs> GleamToMorphirVisitor<V> {
 mod tests {
     use super::*;
     use crate::frontend::ast::{Access, Expr, Literal, ModuleIR, ValueDef};
-    use morphir_common::vfs::MemoryVfs;
+    use crate::vfs::MemoryVfs;
     use morphir_core::naming::{ModuleName, PackageName};
     use std::path::PathBuf;
 
@@ -775,10 +833,14 @@ mod tests {
         let visitor = GleamToMorphirVisitor::new(vfs, output_dir, package_name, module_name);
 
         let module_ir = ModuleIR {
+            imports: vec![],
             name: "test_module".to_string(),
             doc: None,
             types: vec![],
             values: vec![ValueDef {
+                span: Default::default(),
+                params: vec![],
+                doc: None,
                 name: "hello".to_string(),
                 type_annotation: None,
                 body: Expr::Literal {

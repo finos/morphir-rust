@@ -115,6 +115,63 @@ fn accesses(result: &CompileResult) -> std::collections::BTreeMap<String, String
         .collect()
 }
 
+/// Compiles one v3 module with the `elmDocComments` option set (or, for
+/// `None`, left out so the default applies).
+fn compile_with_doc_mode(mode: Option<&str>, text: &str) -> CompileResult {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents: vec![document("file:///work/Docs.elm", text)],
+            package: CompilePackage {
+                name: "local/example".into(),
+                exposed_modules: None,
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: mode
+                    .map(|mode| ("elmDocComments".to_string(), serde_json::Value::from(mode)))
+                    .into_iter()
+                    .collect(),
+            },
+            baseline: None,
+        })
+        .unwrap()
+}
+
+/// The module doc a v3 distribution's only module carries, and the doc of each
+/// of its types by name.
+fn v3_docs(
+    result: &CompileResult,
+) -> (
+    serde_json::Value,
+    std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    assert!(result.success, "{:?}", result.diagnostics);
+    let module =
+        &result.ir.as_ref().expect("a distribution")["distribution"][3]["modules"][0][1]["value"];
+    let types = module["types"]
+        .as_array()
+        .expect("a type list")
+        .iter()
+        .map(|entry| {
+            let name = entry[0]
+                .as_array()
+                .expect("a name")
+                .iter()
+                .map(|word| word.as_str().expect("a word").to_string())
+                .collect::<Vec<_>>()
+                .join("-");
+            (name, entry[1]["value"]["doc"].clone())
+        })
+        .collect();
+    (module["doc"].clone(), types)
+}
+
 fn codes(result: &CompileResult, code: &str) -> Vec<Diagnostic> {
     result
         .diagnostics
@@ -554,6 +611,122 @@ fn a_reference_a_module_does_not_publish_exposes_nothing() {
         ]
         .into_iter()
         .collect()
+    );
+}
+
+const DOCS: &str = "module Example exposing (..)\n\n\
+                    {-| Values of several kinds.\n-}\n\n\
+                    import Dict\n\n\n\
+                    {-|    Leading and trailing whitespace in a doc.   \n-}\n\
+                    type alias Padded =\n    Int\n\n\n\
+                    {-| First line.\n\n  - a bullet\n\n-}\n\
+                    type alias Spread =\n    Int\n\n\n\
+                    {-| | Doc with a leading bar.\n-}\n\
+                    type alias Barred =\n    Int\n\n\n\
+                    type alias Undocumented =\n    Int\n";
+
+/// The default mode writes what morphir-elm writes: the text between the
+/// delimiters, with every space and newline of its own kept. An undocumented
+/// type carries the empty string a classic document uses, and a module with no
+/// doc carries `null`.
+#[test]
+fn the_default_doc_comment_mode_keeps_the_text_morphir_elm_keeps() {
+    for mode in [None, Some("morphir-elm")] {
+        let (module_doc, types) = v3_docs(&compile_with_doc_mode(mode, DOCS));
+
+        assert_eq!(module_doc, serde_json::json!(" Values of several kinds."));
+        assert_eq!(
+            types["padded"],
+            serde_json::json!("    Leading and trailing whitespace in a doc.   \n")
+        );
+        // A declaration's doc loses the delimiters and nothing else, so the
+        // blank line in front of `-}` is part of it. A *module* doc loses one
+        // character more — morphir-elm's `String.dropRight 3` — which is why
+        // the module doc above has no trailing newline.
+        assert_eq!(
+            types["spread"],
+            serde_json::json!(" First line.\n\n  - a bullet\n\n")
+        );
+        assert_eq!(
+            types["barred"],
+            serde_json::json!(" | Doc with a leading bar.\n")
+        );
+        assert_eq!(types["undocumented"], serde_json::json!(""));
+    }
+}
+
+/// `trimmed` takes the surrounding whitespace off, which is what this frontend
+/// did before the mode existed.
+#[test]
+fn the_trimmed_doc_comment_mode_takes_the_surrounding_whitespace_off() {
+    let (module_doc, types) = v3_docs(&compile_with_doc_mode(Some("trimmed"), DOCS));
+
+    assert_eq!(module_doc, serde_json::json!("Values of several kinds."));
+    assert_eq!(
+        types["padded"],
+        serde_json::json!("Leading and trailing whitespace in a doc.")
+    );
+    assert_eq!(
+        types["spread"],
+        serde_json::json!("First line.\n\n  - a bullet")
+    );
+    assert_eq!(
+        types["barred"],
+        serde_json::json!("| Doc with a leading bar.")
+    );
+    assert_eq!(types["undocumented"], serde_json::json!(""));
+}
+
+/// An undocumented module carries `null` in either mode.
+#[test]
+fn an_undocumented_module_has_no_doc_in_either_mode() {
+    let source = "module Example exposing (..)\n\ntype alias T =\n    Int\n";
+    for mode in [Some("morphir-elm"), Some("trimmed")] {
+        let (module_doc, types) = v3_docs(&compile_with_doc_mode(mode, source));
+        assert_eq!(module_doc, serde_json::Value::Null, "{mode:?}");
+        assert_eq!(types["t"], serde_json::json!(""), "{mode:?}");
+    }
+}
+
+/// A mode nobody implements is a request this extension cannot act on, and is
+/// refused by name rather than quietly falling back to the default.
+#[test]
+fn an_unknown_doc_comment_mode_is_refused() {
+    let result = compile_with_doc_mode(Some("verbatim"), DOCS);
+
+    assert!(!result.success);
+    let refusals = codes(&result, "ELM_REQUEST");
+    assert_eq!(refusals.len(), 1, "{:?}", result.diagnostics);
+    assert!(
+        refusals[0].message.contains("elmDocComments") && refusals[0].message.contains("verbatim"),
+        "{}",
+        refusals[0].message
+    );
+    assert!(result.ir.is_none());
+}
+
+/// A module's interface is what its dependents can observe, and a doc is not
+/// part of it: editing only a doc comment must not make every dependent
+/// recompile. The doc *is* part of the compile context, though, so switching
+/// modes invalidates the baseline as a whole.
+#[test]
+fn a_doc_only_edit_does_not_change_the_interface_digest() {
+    let before = compile_with_doc_mode(None, DOCS);
+    let after = compile_with_doc_mode(None, &DOCS.replace("First line.", "A different line."));
+
+    assert_ne!(before.ir, after.ir, "the doc text itself did change");
+    assert_eq!(
+        before.module_results[0].interface_digest,
+        after.module_results[0].interface_digest
+    );
+    assert_eq!(
+        before.context_digest, after.context_digest,
+        "the same options are the same context"
+    );
+    assert_ne!(
+        before.context_digest,
+        compile_with_doc_mode(Some("trimmed"), DOCS).context_digest,
+        "a different doc comment mode is a different context"
     );
 }
 

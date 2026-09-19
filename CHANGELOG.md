@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Native Elm frontend: a function type keeps every segment it was written with.
+  tree-sitter-elm leaves a segment untagged when it is a type reference carrying
+  arguments, so `List Int -> Bool` lowered to `Bool` and
+  `(Int -> Int) -> List Int -> List Int` to `(Int -> Int)` — silently, with no
+  diagnostic.
+- Native Elm frontend: `exposedModules` entries are matched package-relative, the
+  way `morphir.json` writes them and morphir-elm reads them, so a package
+  `My.Pkg` exposing `Aliases` now marks `My.Pkg.Aliases` public. Every module of
+  every ordinary package was previously written `Private`. A full dotted entry is
+  still understood.
 - Gleam generation escapes reserved words in module paths and import qualifiers,
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
@@ -23,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Native Elm frontend: a module an exposed module reaches into is published too,
+  transitively, as morphir-elm's `collectImplicitlyExposedModules` does — an
+  exposed module may not describe its public types in terms nobody outside the
+  package can name.
+- `elmDocComments` compile option for the native Elm frontend, choosing how much
+  of a `{-| ... -}` comment the IR keeps: `"morphir-elm"` (the default) writes
+  what morphir-elm writes byte for byte, and `"trimmed"` takes the surrounding
+  whitespace off. Any other value is refused with `ELM_REQUEST`. The mode is part
+  of the compile context digest, so switching it invalidates a baseline rather
+  than mixing IR built under both; it is not part of a module's interface, so a
+  doc-only edit still does not recompile dependents.
 - Gleam type compilation and generation for IR v3 and v4, resolved imports,
   aliases, opaque types, labelled records, source diagnostics and incremental
   module baselines. Closed record aliases generate labelled Gleam ADTs. V3 is

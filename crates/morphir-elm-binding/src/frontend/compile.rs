@@ -121,7 +121,8 @@ pub fn compile(request: CompileRequest) -> CompileResult {
     let (baseline, baseline_interfaces) = (read.modules, read.interfaces);
     diagnostics.extend(read.diagnostics);
 
-    let (documents, skipped_documents, headerless) = read_documents(&request, &baseline);
+    let (documents, skipped_documents, headerless) =
+        read_documents(&request, &baseline, validated.doc_comments);
     diagnostics.extend(skipped_documents.iter().cloned());
 
     // A document whose header could not be read still names a module when the
@@ -315,6 +316,7 @@ struct Headerless {
 fn read_documents(
     request: &CompileRequest,
     baseline: &HashMap<String, BaselineModule>,
+    docs: cst_to_ast::DocComments,
 ) -> (Vec<Document>, Vec<Diagnostic>, Vec<Headerless>) {
     let mut documents: Vec<Document> = Vec::with_capacity(request.documents.len());
     let mut skipped = Vec::new();
@@ -338,7 +340,7 @@ fn read_documents(
             })
             .collect();
 
-        let module = match cst_to_ast::to_ast(&parsed, text) {
+        let module = match cst_to_ast::to_ast(&parsed, text, docs) {
             Ok(module) => module,
             Err(error) => {
                 let reported = source::diagnostic(

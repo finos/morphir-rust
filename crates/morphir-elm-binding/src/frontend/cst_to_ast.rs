@@ -10,7 +10,58 @@ use crate::ast::{
 };
 use crate::frontend::parse::ParsedTree;
 use crate::span::Span;
+use serde::Serialize;
 use tree_sitter::Node;
+
+/// How a `{-| ... -}` comment becomes the doc text the IR carries.
+///
+/// The choice changes what is written, so it is part of the compile context
+/// ([`crate::frontend::boundary::context_digest`]): a run must not reuse IR
+/// that was built under the other mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DocComments {
+    /// What morphir-elm writes, byte for byte: the delimiters come off and
+    /// every other character — leading spaces, interior and trailing newlines —
+    /// stays. This is the default, because a document this frontend writes is
+    /// meant to be the document morphir-elm would have written.
+    MorphirElm,
+    /// The doc with its surrounding whitespace trimmed away.
+    Trimmed,
+}
+
+/// Resolves the `elmDocComments` extension option into a [`DocComments`].
+///
+/// - `None` selects [`DocComments::MorphirElm`].
+/// - `"morphir-elm"` and `"trimmed"` name the two modes.
+pub fn doc_comments_from_option(value: Option<&serde_json::Value>) -> Result<DocComments, String> {
+    match value {
+        None => Ok(DocComments::MorphirElm),
+        Some(serde_json::Value::String(mode)) => match mode.as_str() {
+            "morphir-elm" => Ok(DocComments::MorphirElm),
+            "trimmed" => Ok(DocComments::Trimmed),
+            other => Err(format!(
+                "unknown mode `{other}`: expected `morphir-elm` or `trimmed`"
+            )),
+        },
+        Some(other) => Err(format!("expected a string, got {other}")),
+    }
+}
+
+/// How many characters *beyond* the closing `-}` morphir-elm drops from the
+/// right of a declaration's doc comment: none. `Morphir.Elm.IncrementalFrontend`
+/// takes a declaration's doc with `String.dropLeft 3 >> String.dropRight 2`, so
+/// only the two delimiters come off.
+const DECLARATION_DOC_EXTRA: usize = 0;
+
+/// How many characters beyond the closing `-}` morphir-elm drops from the right
+/// of a *module* doc comment: one more than a declaration's.
+/// `Morphir.Elm.ParsedModule.documentation` uses `String.dropRight 3` rather
+/// than `2`, which in the usual layout — a `-}` alone on the last line — eats
+/// the newline in front of it, and in the one-line layout `{-| Foo -}` eats a
+/// character of the doc itself. [`DocComments::MorphirElm`] reproduces this on
+/// purpose; [`DocComments::Trimmed`] does not, since it trims either way.
+const MODULE_DOC_EXTRA: usize = 1;
 
 /// Failure lowering the CST into an AST: a missing/malformed module
 /// declaration, or an unsupported construct inside a type expression.
@@ -24,6 +75,8 @@ pub struct AstError {
 
 struct Lower<'a> {
     src: &'a str,
+    /// How a doc comment becomes doc text.
+    docs: DocComments,
     /// The node id of the block comment taken as the module's doc, once it is
     /// known. A declaration never claims that comment as its own.
     module_doc: Option<usize>,
@@ -51,12 +104,20 @@ impl<'a> Lower<'a> {
     }
 
     /// The `{-| ... -}` doc comment text for `node`, given a named sibling
-    /// that is (or is not) a doc block comment.
-    fn doc_text(&self, comment: Node) -> Option<String> {
+    /// that is (or is not) a doc block comment. `extra` is the number of
+    /// characters morphir-elm drops beyond the closing delimiter — see
+    /// [`DECLARATION_DOC_EXTRA`] and [`MODULE_DOC_EXTRA`].
+    fn doc_text(&self, comment: Node, extra: usize) -> Option<String> {
         let text = self.text(comment);
-        let inner = text.strip_prefix("{-|")?;
-        let inner = inner.strip_suffix("-}")?;
-        Some(inner.trim().to_string())
+        let body = text.strip_prefix("{-|")?.strip_suffix("-}")?;
+        match self.docs {
+            // `String.dropRight` counts characters, not bytes.
+            DocComments::MorphirElm => {
+                let kept = body.chars().count().saturating_sub(extra);
+                Some(body.chars().take(kept).collect())
+            }
+            DocComments::Trimmed => Some(body.trim().to_string()),
+        }
     }
 
     /// Doc comment immediately preceding `node`, if any.
@@ -70,7 +131,7 @@ impl<'a> Lower<'a> {
         if prev.kind() != "block_comment" || Some(prev.id()) == self.module_doc {
             return None;
         }
-        self.doc_text(prev)
+        self.doc_text(prev, DECLARATION_DOC_EXTRA)
     }
 
     /// The block comment immediately following `node`, if it is a doc comment
@@ -80,7 +141,8 @@ impl<'a> Lower<'a> {
         if next.kind() != "block_comment" {
             return None;
         }
-        self.doc_text(next).map(|text| (next, text))
+        self.doc_text(next, MODULE_DOC_EXTRA)
+            .map(|text| (next, text))
     }
 
     fn exposing_list(&self, node: Node<'a>) -> Exposing {
@@ -386,9 +448,10 @@ impl<'a> Lower<'a> {
 /// type expression contains a construct this frontend does not model. Value
 /// declarations are never an error: they are recorded in
 /// [`Module::skipped_values`].
-pub fn to_ast(parsed: &ParsedTree, source: &str) -> Result<Module, AstError> {
+pub fn to_ast(parsed: &ParsedTree, source: &str, docs: DocComments) -> Result<Module, AstError> {
     let mut lower = Lower {
         src: source,
+        docs,
         module_doc: None,
     };
     let root = parsed.tree.root_node();

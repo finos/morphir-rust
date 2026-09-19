@@ -1,10 +1,13 @@
 use morphir_elm_binding::ast::*;
-use morphir_elm_binding::frontend::{cst_to_ast::to_ast, parse::parse};
+use morphir_elm_binding::frontend::{
+    cst_to_ast::{DocComments, to_ast},
+    parse::parse,
+};
 
 const SRC: &str = include_str!("fixtures/Types.elm");
 
 fn module() -> Module {
-    to_ast(&parse(SRC), SRC).expect("fixture lowers")
+    to_ast(&parse(SRC), SRC, DocComments::Trimmed).expect("fixture lowers")
 }
 
 #[test]
@@ -125,7 +128,7 @@ fn custom_type_constructors_and_skipped_values() {
 #[test]
 fn the_module_doc_is_not_also_the_first_declarations_doc() {
     let src = "module A exposing (..)\n\n{-| What this module is for. -}\ntype alias T = Int\n";
-    let m = to_ast(&parse(src), src).expect("the module lowers");
+    let m = to_ast(&parse(src), src, DocComments::Trimmed).expect("the module lowers");
 
     assert_eq!(m.doc.as_deref(), Some("What this module is for."));
     assert!(m.imports.is_empty());
@@ -142,7 +145,7 @@ fn the_module_doc_is_not_also_the_first_declarations_doc() {
 fn a_declaration_after_the_module_doc_keeps_its_own_doc() {
     let src =
         "module A exposing (..)\n\n{-| The module. -}\n{-| The type. -}\ntype alias T = Int\n";
-    let m = to_ast(&parse(src), src).expect("the module lowers");
+    let m = to_ast(&parse(src), src, DocComments::Trimmed).expect("the module lowers");
 
     assert_eq!(m.doc.as_deref(), Some("The module."));
     let TypeDecl::Alias { doc, .. } = &m.types[0] else {
@@ -151,10 +154,116 @@ fn a_declaration_after_the_module_doc_keeps_its_own_doc() {
     assert_eq!(doc.as_deref(), Some("The type."));
 }
 
+// ----------------------------------------------------------------------------
+// Doc comment modes
+// ----------------------------------------------------------------------------
+
+/// The module doc and the first declaration's doc, lowered in `mode`.
+fn docs(src: &str, mode: DocComments) -> (Option<String>, Option<String>) {
+    let module = to_ast(&parse(src), src, mode).expect("the module lowers");
+    let declaration = match module.types.first() {
+        Some(TypeDecl::Alias { doc, .. } | TypeDecl::Custom { doc, .. }) => doc.clone(),
+        None => None,
+    };
+    (module.doc, declaration)
+}
+
+/// `morphir-elm` keeps the text between the delimiters exactly as it was
+/// written; `trimmed` takes the surrounding whitespace off.
+#[test]
+fn the_two_doc_comment_modes_differ_in_the_whitespace_they_keep() {
+    let src = "module A exposing (..)\n\n\
+               {-| Values of several kinds.\n-}\n\n\n\
+               {-|    Leading and trailing whitespace.   \n-}\n\
+               type alias T =\n    Int\n";
+
+    assert_eq!(
+        docs(src, DocComments::MorphirElm),
+        (
+            Some(" Values of several kinds.".to_string()),
+            Some("    Leading and trailing whitespace.   \n".to_string())
+        )
+    );
+    assert_eq!(
+        docs(src, DocComments::Trimmed),
+        (
+            Some("Values of several kinds.".to_string()),
+            Some("Leading and trailing whitespace.".to_string())
+        )
+    );
+}
+
+/// A doc that runs over several lines keeps its interior newlines in both
+/// modes; only the outside differs.
+#[test]
+fn a_multi_line_doc_keeps_its_interior_in_both_modes() {
+    let src = "module A exposing (..)\n\n\
+               {-| Type aliases of every shape.\n\n\
+               \x20 - primitives\n  - collections\n\n-}\n\n\n\
+               {-| First line.\n\nSecond paragraph.\n-}\n\
+               type alias T =\n    Int\n";
+
+    assert_eq!(
+        docs(src, DocComments::MorphirElm),
+        (
+            Some(" Type aliases of every shape.\n\n  - primitives\n  - collections\n".to_string()),
+            Some(" First line.\n\nSecond paragraph.\n".to_string())
+        )
+    );
+    assert_eq!(
+        docs(src, DocComments::Trimmed),
+        (
+            Some("Type aliases of every shape.\n\n  - primitives\n  - collections".to_string()),
+            Some("First line.\n\nSecond paragraph.".to_string())
+        )
+    );
+}
+
+/// A `|` in the doc body is body text: only the `{-|` opener is a delimiter.
+#[test]
+fn a_doc_with_a_leading_bar_keeps_the_bar() {
+    let src = "module A exposing (..)\n\n\
+               import Dict\n\n\n\
+               {-| | Doc with a leading bar.\n-}\n\
+               type alias T =\n    Int\n";
+
+    assert_eq!(
+        docs(src, DocComments::MorphirElm).1,
+        Some(" | Doc with a leading bar.\n".to_string())
+    );
+    assert_eq!(
+        docs(src, DocComments::Trimmed).1,
+        Some("| Doc with a leading bar.".to_string())
+    );
+}
+
+/// No doc comment is no doc in either mode — it is the emitters that write the
+/// `""` a Morphir document uses for an undocumented type, and `null` for an
+/// undocumented module.
+#[test]
+fn an_undocumented_declaration_has_no_doc_in_either_mode() {
+    let src = "module A exposing (..)\n\nimport Dict\n\n\ntype alias T =\n    Int\n";
+    for mode in [DocComments::MorphirElm, DocComments::Trimmed] {
+        assert_eq!(docs(src, mode), (None, None), "{mode:?}");
+    }
+}
+
+/// A plain `{- ... -}` block comment is not a doc comment, so it is not taken
+/// for one in either mode.
+#[test]
+fn a_plain_block_comment_is_not_a_doc_in_either_mode() {
+    let src = "module A exposing (..)\n\n{- not a doc -}\n\n\n\
+               {- nor this -}\ntype alias T =\n    Int\n";
+    for mode in [DocComments::MorphirElm, DocComments::Trimmed] {
+        assert_eq!(docs(src, mode), (None, None), "{mode:?}");
+    }
+}
+
 /// The body of `type alias T = <src>`, lowered.
 fn alias_body(src: &str) -> TypeExpr {
     let text = format!("module A exposing (..)\n\ntype alias T =\n    {src}\n");
-    let module = to_ast(&parse(&text), &text).unwrap_or_else(|error| panic!("{error:?}\n{text}"));
+    let module = to_ast(&parse(&text), &text, DocComments::Trimmed)
+        .unwrap_or_else(|error| panic!("{error:?}\n{text}"));
     let TypeDecl::Alias { body, .. } = module.types.into_iter().next().expect("one declaration")
     else {
         panic!("alias")

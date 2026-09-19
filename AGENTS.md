@@ -36,7 +36,7 @@ When uncertain about Morphir-specific design decisions, consult the reference im
 
 ### Key Libraries & Frameworks
 - **CLI Framework**: `starbase` (application structure), `clap` (command parsing)
-- **TUI**: `ratatui` (terminal UI widgets), `crossterm` (cross-platform terminal manipulation), `tuirealm` (component framework)
+- **TUI**: none in this repository. The terminal UI lives in the `morphir` CLI in [finos/morphir](https://github.com/finos/morphir), which declares `ratatui`, `crossterm` and `tuirealm` in its own workspace.
 - **Serialization**: `serde` & `serde_json` (JSON handling), `schemars` (JSON Schema generation)
 - **Logging**: `tracing` (structured logging), `tracing-subscriber` (log subscribers), `tracing-appender` (file logging)
 - **Error Handling**: `thiserror` (library errors), `anyhow` (application/CLI errors)

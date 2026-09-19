@@ -73,13 +73,6 @@ serde-saphyr = { version = "1", default-features = false, features = ["deseriali
 granit-parser = { version = "=1.3.0", default-features = false, features = ["std", "error_messages"] }
 stacker = "0.1"
 
-# TUI
-ratatui = "0.30"
-crossterm = "0.29"
-tuirealm = "4"
-tui-realm-stdlib = "4"
-tui-realm-textarea = "4"
-
 # Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

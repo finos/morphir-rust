@@ -4,6 +4,14 @@ The Gleam extension compiles types to Morphir IR v3 and v4, generates Gleam,
 and supports incremental compilation through the Morphir Extension Protocol.
 Its identifier remains `morphir-gleam-binding` for existing configurations.
 
+The frontend uses the official [`gleam-core`](https://github.com/gleam-lang/gleam/tree/v1.18.1/compiler-core)
+parser, pinned to Gleam 1.18.1 (commit `4a83802ca33a8a96227a1b332768725f232f9779`).
+An adapter translates its untyped AST into the extension's lowering model; it
+does not run Gleam's type inference or compiler backend. Syntax errors and
+incomplete editor-recovery nodes are rejected before IR generation. The Cargo
+lockfile retains upstream's `ecow` 0.2.6 because its broad dependency bound also
+admits an incompatible newer release.
+
 ## Type compatibility
 
 The frontend resolves aliases, generic custom types, opaque types, labelled
@@ -45,6 +53,21 @@ lowering; this work does not establish complete Gleam expression semantics or
 native evaluation. Requesting `typesOnly` omits values in either version.
 Dependencies may supply v3 or v4 interfaces independently of the output version.
 
+Valid syntax that the adapter cannot lower, such as guarded cases, bit arrays,
+external function bindings and record updates, remains available for type-only
+compilation and produces an error when compiling values. Labelled function
+parameters, labelled calls and imported values also report errors until their
+metadata and name resolution can be preserved; labelled type declarations remain
+supported. Existing value
+lowering still has limitations, including list tails, block bindings and
+operator resolution; using the official parser does not establish complete
+value semantics.
+
+Constant lowering currently accepts explicitly annotated literals and tuples or
+lists of those literals. Function-typed or inferred constants, constant
+references, constructor values, list tails and concatenation require further
+lowering work and report diagnostics.
+
 ## Incremental compilation
 
 The extension is stateless. The caller supplies `CompileBaseline` and receives
@@ -59,6 +82,7 @@ Baselines are scoped to the package, exposure list, output version, semantic
 options and dependency interfaces. Malformed entries are discarded with a
 warning. The per-module baseline payload is wrapped v4 module IR, including for
 a v3 distribution, and is private to this extension's versioned cache context.
+The official-parser migration invalidates baselines from the previous parser.
 
 ## Verification and packaging
 
@@ -88,3 +112,6 @@ MORPHIR_TEST_GLEAM="$(command -v gleam)" cargo test -p morphir-gleam-binding \
 The WASM guest uses in-memory output. Native parse-stage filesystem emission
 is unavailable in WASM; set `emitParseStage: false` for identical native/guest
 results. Explicit fatal parse-stage requests still report failure.
+The official parser also runs inside the WASM guest. Parsing does not need
+randomness; the guest explicitly returns an unsupported error if an upstream
+code path requests entropy.

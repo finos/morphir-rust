@@ -267,11 +267,18 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                                             available.insert(name.clone(), definition.clone());
                                             modules.insert(name.clone(), definition);
                                         }
-                                        Err(error) => result.diagnostics.push(error_diagnostic(
-                                            "IR_CONVERSION_ERROR",
-                                            error.to_string(),
-                                            Some(&source.uri),
-                                        )),
+                                        Err(error) => {
+                                            let diagnostic = match error.get_ref().and_then(|error| error.downcast_ref::<super::visitor::UnsupportedValue>()) {
+                                                Some(unsupported) => located_resolution(resolver::ResolutionError {
+                                                    code: "GLEAM_UNSUPPORTED_VALUE",
+                                                    module: name.clone(),
+                                                    span: unsupported.span,
+                                                    message: error.to_string(),
+                                                }, source),
+                                                None => error_diagnostic("IR_CONVERSION_ERROR", error.to_string(), Some(&source.uri)),
+                                            };
+                                            result.diagnostics.push(diagnostic);
+                                        }
                                     }
                                 }
                             }

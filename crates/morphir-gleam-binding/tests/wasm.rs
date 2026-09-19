@@ -104,6 +104,45 @@ fn guest_protocol_errors_do_not_poison_subsequent_requests() {
     );
 }
 
+#[test]
+#[ignore = "requires a built Gleam WASM guest"]
+fn guest_official_parser_and_diagnostics_match_native() {
+    let mut guest = guest();
+    initialize(&mut guest);
+    for (source, succeeds) in [
+        ("pub const answer: Int = 0x2A\n", true),
+        ("pub fn text() { \"\\u{1F600}\" }\n", true),
+        ("pub type Wrapped = (Int)\n", false),
+        ("pub fn missing(x: Int) -> Int\n", false),
+        ("pub const inferred = 42\n", false),
+        (
+            "pub fn labelled(named value: Int) -> Int { value }\n",
+            false,
+        ),
+    ] {
+        let mut request = request("4");
+        request.options.types_only = false;
+        request.documents.truncate(1);
+        request.documents[0].text = source.into();
+        let native = GleamExtension.compile(request.clone()).unwrap();
+        assert_eq!(
+            native.success, succeeds,
+            "{source}: {:?}",
+            native.diagnostics
+        );
+        let compiled: CompileResult = serde_json::from_value(result(
+            &mut guest,
+            ExtensionRequest::new(methods::COMPILE, request, 2).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(compiled).unwrap(),
+            serde_json::to_value(native).unwrap(),
+            "{source}"
+        );
+    }
+}
+
 fn same_compilation(guest: &mut Plugin, request: &CompileRequest) -> CompileResult {
     let native = GleamExtension.compile(request.clone()).unwrap();
     assert!(native.success, "{:?}", native.diagnostics);

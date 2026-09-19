@@ -118,7 +118,10 @@ pub(super) fn resolve_body_annotations(
                 }
             }
         }
-        Expr::Literal { .. } | Expr::Variable { .. } | Expr::Constructor { .. } => {}
+        Expr::Unsupported { .. }
+        | Expr::Literal { .. }
+        | Expr::Variable { .. }
+        | Expr::Constructor { .. } => {}
     }
 }
 

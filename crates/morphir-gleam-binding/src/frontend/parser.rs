@@ -1,1139 +1,810 @@
-//! Gleam parser - converts Gleam source code to Morphir IR
+//! Adapt the official Gleam parser's syntax tree to the frontend's lowering input.
 //!
-//! This implementation uses `chumsky` for parsing, following patterns from
-//! the official Gleam implementations (glance).
+//! Syntax, lexing, precedence, comments and escape rules belong to `gleam-core`.
+//! Valid syntax outside the lowering subset remains an explicit, located
+//! `Expr::Unsupported`, so extracting a module's types does not require lowering
+//! every function. Incomplete syntax accepted for upstream editor recovery is an
+//! error here, because it cannot describe a complete source module.
 
-use chumsky::input::{IterInput, ValueInput};
-use chumsky::prelude::*;
-use chumsky::span::SimpleSpan;
+#![allow(
+    clippy::result_large_err,
+    reason = "Preserve the existing public ParseError API across the adapter"
+)]
+
+use gleam_core::{ast as gleam, warning::WarningEmitter};
 
 use crate::frontend::ast::{
-    Access, BinaryOperator, CaseBranch, Expr, Field, Import, Literal, ModuleIR, Pattern, TypeDef,
-    TypeExpr, ValueDef, Variant,
+    Access, BinaryOperator, CaseBranch, Expr, Field, Import, Literal, ModuleIR, Pattern, Span,
+    Statement, TypeDef, TypeExpr, ValueDef, Variant,
 };
-use crate::frontend::errors::{ParseError, to_parse_error};
-use crate::frontend::lexer::{Token, tokenize};
+use crate::frontend::errors::{ParseError, from_upstream, located_error};
 
-// ============================================================================
-// Parser Combinators (Chumsky 0.12 API)
-// ============================================================================
+#[path = "parser_recovery.rs"]
+mod recovery;
 
-/// Statement enum
-#[derive(Debug, Clone)]
-enum Statement {
-    TypeDef(TypeDef),
-    ValueDef(ValueDef),
-    Import(Import),
-}
-
-/// Main module parser
-fn module_parser<'src, I>()
--> impl Parser<'src, I, ModuleIR, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    // Parse module-level statements
-    let stmt = statement_parser().then_ignore(just(Token::Semicolon).or_not());
-
-    stmt.repeated().collect::<Vec<_>>().map(|stmts| {
-        let mut types = Vec::new();
-        let mut values = Vec::new();
-        let mut imports = Vec::new();
-
-        for stmt in stmts {
-            match stmt {
-                Statement::TypeDef(td) => types.push(td),
-                Statement::ValueDef(vd) => values.push(vd),
-                Statement::Import(import) => imports.push(import),
-            }
-        }
-
-        ModuleIR {
-            name: String::new(), // Will be set from path
-            doc: None,
-            types,
-            values,
-            imports,
-        }
-    })
-}
-
-/// Statement parser
-fn statement_parser<'src, I>()
--> impl Parser<'src, I, Statement, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    type_def_parser()
-        .map(Statement::TypeDef)
-        .or(value_def_parser().map(Statement::ValueDef))
-        .or(import_parser().map(Statement::Import))
-}
-
-/// Import declarations retain type exposure and local module aliases.
-fn import_parser<'src, I>()
--> impl Parser<'src, I, Import, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    let module = identifier_parser()
-        .separated_by(just(Token::Slash))
-        .at_least(1)
+pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
+    let parsed = gleam_core::parse::parse_module(path.into(), source, &WarningEmitter::null())
+        .map_err(|error| from_upstream(path, source, error))?;
+    recovery::validate(&parsed.module, source)?;
+    let module_doc = parsed
+        .extra
+        .module_comments
+        .iter()
+        .map(|span| source[span.start as usize..span.end as usize].trim())
         .collect::<Vec<_>>()
-        .map(|parts| parts.join("/"));
-    let name = type_identifier_parser().or(identifier_parser()).boxed();
-    let item = just(Token::Type)
-        .or_not()
-        .then(name.clone())
-        .then(just(Token::As).ignore_then(name).or_not())
-        .map(|((kind, name), alias)| (kind.is_some(), name.clone(), alias.unwrap_or(name)));
-    let exposed = just(Token::Dot)
-        .ignore_then(
-            item.separated_by(just(Token::Comma))
-                .allow_trailing()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
-        .or_not();
-    just(Token::Import)
-        .ignore_then(module)
-        .then(exposed)
-        .then(just(Token::As).ignore_then(identifier_parser()).or_not())
-        .map(|((module, names), alias)| Import {
-            module,
-            alias,
-            types: names
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|(is_type, name, alias)| is_type.then_some((name, alias)))
-                .collect(),
-        })
-}
-
-fn declaration_docs(tokens: &[(Token, SimpleSpan)]) -> std::collections::HashMap<String, String> {
-    let mut docs = std::collections::HashMap::new();
-    let mut lines = Vec::new();
-    let mut declaration = false;
-    for (token, _) in tokens {
-        match token {
-            Token::CommentDoc(line) => lines.push(line.trim().to_owned()),
-            Token::Pub | Token::Opaque => {}
-            Token::Type | Token::Fn if !lines.is_empty() => declaration = true,
-            Token::TypeIdent(name) | Token::Ident(name) if declaration => {
-                docs.insert(name.clone(), lines.join("\n"));
-                lines.clear();
-                declaration = false;
-            }
-            _ => {
-                lines.clear();
-                declaration = false;
-            }
+        .join("\n");
+    let mut module = ModuleIR {
+        name: path.trim_end_matches(".gleam").replace('\\', "/"),
+        doc: (!parsed.extra.module_comments.is_empty()).then_some(module_doc),
+        types: vec![],
+        values: vec![],
+        imports: vec![],
+    };
+    for targeted in &parsed.module.definitions {
+        if targeted.target.is_some() {
+            return Err(located_error(
+                "Target-specific declarations are not supported",
+                targeted.definition.location(),
+                source,
+            ));
         }
-    }
-    docs
-}
-
-/// Type definition parser
-fn type_def_parser<'src, I>()
--> impl Parser<'src, I, TypeDef, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    let access = just(Token::Pub)
-        .to(Access::Public)
-        .or_not()
-        .map(|opt| opt.unwrap_or(Access::Private));
-
-    let type_params = identifier_parser()
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen))
-        .or_not()
-        .map(|opt: Option<Vec<String>>| opt.unwrap_or_default());
-
-    access
-        .then(just(Token::Opaque).or_not())
-        .then_ignore(just(Token::Type))
-        .then(type_identifier_parser())
-        .then(type_params)
-        .then(
-            custom_type_body_parser()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-                .or(just(Token::Equals).ignore_then(type_expr_parser())),
-        )
-        .try_map(
-            |((((access, opaque), name), params), body), span: SimpleSpan| {
-                if opaque.is_some() && !matches!(body, TypeExpr::CustomType { .. }) {
-                    return Err(Rich::custom(span, "Only custom types can be opaque"));
+        match &targeted.definition {
+            gleam::Definition::Import(import) => module.imports.push(Import {
+                module: import.module.to_string(),
+                alias: import
+                    .as_name
+                    .as_ref()
+                    .map(|(name, _)| name.name().to_string()),
+                types: import
+                    .unqualified_types
+                    .iter()
+                    .map(|item| (item.name.to_string(), item.used_name().to_string()))
+                    .collect(),
+                values: import
+                    .unqualified_values
+                    .iter()
+                    .map(|item| (item.name.to_string(), item.used_name().to_string()))
+                    .collect(),
+            }),
+            gleam::Definition::TypeAlias(alias) => module.types.push(TypeDef {
+                name: alias.alias.to_string(),
+                params: alias
+                    .parameters
+                    .iter()
+                    .map(|(_, name)| name.to_string())
+                    .collect(),
+                body: type_expr(&alias.type_ast, source)?,
+                doc: documentation(alias.documentation.as_ref().map(|(_, text)| text.as_str())),
+                span: span(gleam::SrcSpan::new(
+                    alias.location.start,
+                    alias.type_ast.location().end,
+                )),
+                access: access(alias.publicity, alias.location, source)?,
+                constructor_access: access(alias.publicity, alias.location, source)?,
+            }),
+            gleam::Definition::CustomType(custom) => {
+                if custom.external_erlang.is_some() || custom.external_javascript.is_some() {
+                    return Err(located_error(
+                        "External types are not supported",
+                        custom.full_location(),
+                        source,
+                    ));
                 }
-                Ok(TypeDef {
-                    name,
-                    params,
-                    body,
-                    access,
-                    doc: None,
-                    span: crate::frontend::ast::Span {
-                        start: span.start,
-                        end: span.end,
+                let access = access(custom.publicity, custom.location, source)?;
+                module.types.push(TypeDef {
+                    name: custom.name.to_string(),
+                    params: custom
+                        .parameters
+                        .iter()
+                        .map(|(_, name)| name.to_string())
+                        .collect(),
+                    body: TypeExpr::CustomType {
+                        variants: custom
+                            .constructors
+                            .iter()
+                            .map(|constructor| {
+                                Ok(Variant {
+                                    name: constructor.name.to_string(),
+                                    labels: constructor
+                                        .arguments
+                                        .iter()
+                                        .map(|arg| {
+                                            arg.label.as_ref().map(|(_, label)| label.to_string())
+                                        })
+                                        .collect(),
+                                    fields: constructor
+                                        .arguments
+                                        .iter()
+                                        .map(|arg| type_expr(&arg.ast, source))
+                                        .collect::<Result<_, ParseError>>()?,
+                                })
+                            })
+                            .collect::<Result<_, ParseError>>()?,
                     },
-                    constructor_access: if opaque.is_some() {
+                    doc: documentation(
+                        custom.documentation.as_ref().map(|(_, text)| text.as_str()),
+                    ),
+                    span: span(custom.full_location()),
+                    access,
+                    constructor_access: if custom.opaque {
                         Access::Private
                     } else {
                         access
                     },
-                })
-            },
-        )
-}
-
-/// Custom type body parser (variants)
-/// In Gleam, variants are listed consecutively without separators (whitespace is skipped)
-fn custom_type_body_parser<'src, I>()
--> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    variant_parser()
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>()
-        .map(|variants| TypeExpr::CustomType { variants })
-}
-
-/// Variant parser
-fn variant_parser<'src, I>()
--> impl Parser<'src, I, Variant, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    // Variant field can be:
-    // - Just a type: `Int`, `String`
-    // - Labelled: `name: Type`
-    let variant_field = identifier_parser()
-        .then_ignore(just(Token::Colon))
-        .then(type_expr_parser())
-        .map(|(label, ty)| (Some(label), ty))
-        .or(type_expr_parser().map(|ty| (None, ty)));
-
-    let variant_fields = variant_field
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen))
-        .or_not()
-        .map(|opt: Option<Vec<(Option<String>, TypeExpr)>>| opt.unwrap_or_default());
-
-    type_identifier_parser()
-        .then(variant_fields)
-        .map(|(name, entries)| {
-            let (labels, fields) = entries.into_iter().unzip();
-            Variant {
-                name,
-                fields,
-                labels,
-            }
-        })
-}
-
-/// Block body parser - handles function bodies with multiple statements
-fn block_body_parser<'src, I>()
--> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    use crate::frontend::ast::Statement;
-
-    // Let assignment: `let pattern = value`
-    let let_statement = just(Token::Let)
-        .ignore_then(pattern_parser())
-        .then(just(Token::Colon).ignore_then(type_expr_parser()).or_not())
-        .then_ignore(just(Token::Equals))
-        .then(expr_parser())
-        .map(|((pattern, annotation), value)| Statement::Assignment {
-            pattern,
-            annotation,
-            value: Box::new(value),
-        });
-
-    // Expression statement (used for final expression or intermediate effects)
-    let expr_statement = expr_parser().map(Statement::Expression);
-
-    // A statement is either a let binding or an expression
-    let statement = let_statement.or(expr_statement);
-
-    // Block body: sequence of statements, last one is the result
-    statement
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>()
-        .map(|statements| Expr::Block { statements })
-}
-
-/// Value definition parser
-fn value_def_parser<'src, I>()
--> impl Parser<'src, I, ValueDef, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    let access = just(Token::Pub)
-        .to(Access::Public)
-        .or_not()
-        .map(|opt| opt.unwrap_or(Access::Private));
-
-    // Parameter can be: `name` or `name: Type`
-    // For now we just capture the name and ignore the type annotation
-    let param =
-        identifier_parser().then(just(Token::Colon).ignore_then(type_expr_parser()).or_not());
-
-    let params = param
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen))
-        .or_not()
-        .map(|opt: Option<Vec<(String, Option<TypeExpr>)>>| opt.unwrap_or_default());
-
-    // Return type annotation: `-> Type`
-    let return_type_ann = just(Token::Arrow).ignore_then(type_expr_parser()).or_not();
-
-    access
-        .then_ignore(just(Token::Fn))
-        .then(identifier_parser())
-        .then(params)
-        .then(return_type_ann)
-        .then_ignore(just(Token::LBrace))
-        .then(block_body_parser())
-        .then_ignore(just(Token::RBrace))
-        .map_with(|((((access, name), params), return_type), body), extra| {
-            let span: SimpleSpan = extra.span();
-            let type_annotation = Some(TypeExpr::Function {
-                parameters: params
-                    .iter()
-                    .map(|(_, ty)| ty.clone().unwrap_or(TypeExpr::Hole { name: "_".into() }))
-                    .collect(),
-                return_type: Box::new(return_type.unwrap_or(TypeExpr::Hole { name: "_".into() })),
-            });
-            ValueDef {
-                span: crate::frontend::ast::Span {
-                    start: span.start,
-                    end: span.end,
-                },
-                name,
-                params: params.into_iter().map(|(name, _)| name).collect(),
-                type_annotation,
-                body,
-                access,
-                doc: None,
-            }
-        })
-}
-
-/// Expression parser
-fn expr_parser<'src, I>() -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    recursive(|expr| {
-        // Literals
-        let literal = literal_parser().map(|lit| Expr::Literal { value: lit });
-
-        // Variables
-        let variable = identifier_parser().map(|name| Expr::Variable { name });
-
-        // Constructors (uppercase identifiers)
-        let constructor =
-            type_identifier_parser().map(|name| Expr::Constructor { module: None, name });
-
-        // Tuples: #(expr, expr, ...)
-        let tuple = just(Token::Hash)
-            .ignore_then(
-                expr.clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|elements| Expr::Tuple { elements });
-
-        // Records: { field: expr, ... }
-        let record_field = identifier_parser()
-            .then_ignore(just(Token::Colon))
-            .then(expr.clone());
-
-        let record = record_field
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map(|fields| Expr::Record { fields });
-
-        // Block expression: { let ... let ... expr }
-        // This is parsed similarly to function bodies but as an expression
-        let block_statement = {
-            use crate::frontend::ast::Statement;
-
-            let let_stmt = just(Token::Let)
-                .ignore_then(pattern_parser())
-                .then(just(Token::Colon).ignore_then(type_expr_parser()).or_not())
-                .then_ignore(just(Token::Equals))
-                .then(expr.clone())
-                .map(|((pattern, annotation), value)| Statement::Assignment {
-                    pattern,
-                    annotation,
-                    value: Box::new(value),
                 });
-
-            let expr_stmt = expr.clone().map(Statement::Expression);
-
-            let_stmt.or(expr_stmt)
-        };
-
-        let block_expr = block_statement
-            .repeated()
-            .at_least(1)
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map(|statements| Expr::Block { statements });
-
-        // Lambda: fn(param) { expr }
-        let lambda = just(Token::Fn)
-            .ignore_then(identifier_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
-            .then_ignore(just(Token::LBrace))
-            .then(expr.clone())
-            .then_ignore(just(Token::RBrace))
-            .map(|(param, body)| Expr::Lambda {
-                params: vec![param],
-                body: Box::new(body),
-            });
-
-        // Let binding: let name = expr { expr }
-        let let_binding = just(Token::Let)
-            .ignore_then(identifier_parser())
-            .then_ignore(just(Token::Equals))
-            .then(expr.clone())
-            .then(
-                expr.clone()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .map(|((name, value), body)| Expr::Let {
-                name,
-                value: Box::new(value),
-                body: Box::new(body),
-            });
-
-        // If expression: if expr { expr } else { expr }
-        let if_expr = just(Token::If)
-            .ignore_then(expr.clone())
-            .then(
-                expr.clone()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .then_ignore(just(Token::Else))
-            .then(
-                expr.clone()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .map(|((condition, then_branch), else_branch)| Expr::If {
-                condition: Box::new(condition),
-                then_branch: Box::new(then_branch),
-                else_branch: Box::new(else_branch),
-            });
-
-        // Case expression: case expr { pattern -> expr ... }
-        // Note: Gleam case branches are NOT comma-separated
-        let case_branch = pattern_parser()
-            .then_ignore(just(Token::Arrow))
-            .then(expr.clone())
-            .map(|(pattern, body)| CaseBranch { pattern, body });
-
-        let case_expr = just(Token::Case)
-            .ignore_then(expr.clone())
-            .then(
-                case_branch
-                    .repeated()
-                    .at_least(1)
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .map(|(subject, clauses)| Expr::Case {
-                subjects: vec![subject],
-                clauses,
-            });
-
-        // Parenthesized expression
-        let paren_expr = expr
-            .clone()
-            .delimited_by(just(Token::LParen), just(Token::RParen));
-
-        // List literal: [elem, elem, ...] or [elem, ..rest]
-        let list_tail = just(Token::Spread).ignore_then(expr.clone()).or_not();
-
-        let list_literal = expr
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .then(list_tail)
-            .delimited_by(just(Token::LBracket), just(Token::RBracket))
-            .map(|(elements, tail)| Expr::List {
-                elements,
-                tail: tail.map(Box::new),
-            });
-
-        // Todo expression: todo or todo("message")
-        let todo_message = expr
-            .clone()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .or_not();
-
-        let todo_expr = just(Token::Todo)
-            .ignore_then(todo_message.clone())
-            .map(|message| Expr::Todo {
-                message: message.map(Box::new),
-            });
-
-        // Panic expression: panic or panic("message")
-        let panic_expr = just(Token::Panic)
-            .ignore_then(todo_message)
-            .map(|message| Expr::Panic {
-                message: message.map(Box::new),
-            });
-
-        // Primary expressions (atoms)
-        // Note: block_expr must come after record to avoid ambiguity
-        // Records require `ident: expr`, blocks can start with `let` or any expr
-        let atom = literal
-            .or(variable)
-            .or(constructor)
-            .or(tuple)
-            .or(record)
-            .or(block_expr)
-            .or(list_literal)
-            .or(todo_expr)
-            .or(panic_expr)
-            .or(paren_expr);
-
-        // Field access: expr.field
-        let field_access = just(Token::Dot).ignore_then(identifier_parser());
-
-        // Function application: expr(arg1, arg2, ...)
-        let application = expr
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen));
-
-        // Build up expressions with postfix operators
-        let postfix = atom
-            .foldl(
-                field_access
-                    .map(PostfixOp::Field)
-                    .or(application.map(PostfixOp::Apply))
-                    .repeated(),
-                |lhs, op| match op {
-                    PostfixOp::Field(label) => Expr::FieldAccess {
-                        container: Box::new(lhs),
-                        label,
-                    },
-                    PostfixOp::Apply(arguments) => Expr::Apply {
-                        function: Box::new(lhs),
-                        arguments: arguments
-                            .into_iter()
-                            .map(|item| Field::Unlabelled { item })
-                            .collect(),
-                    },
-                },
-            )
-            .boxed(); // Box to enable Clone
-
-        // Binary operators with proper precedence (lowest to highest):
-        // 1. Pipe: |>
-        // 2. Or: ||
-        // 3. And: &&
-        // 4. Comparison: == != < > <= >= (and float variants)
-        // 5. Concatenate: <>
-        // 6. Addition: + - (and float variants)
-        // 7. Multiplication: * / % (and float variants)
-
-        // Helper to create binary expression
-        fn make_binop(left: Expr, op: BinaryOperator, right: Expr) -> Expr {
-            Expr::BinaryOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
             }
+            gleam::Definition::Function(function) => {
+                module.values.push(function_definition(function, source)?)
+            }
+            gleam::Definition::ModuleConstant(constant) => module.values.push(ValueDef {
+                span: span(gleam::SrcSpan::new(
+                    constant.location.start,
+                    constant.value.location().end,
+                )),
+                params: vec![],
+                param_labels: vec![],
+                doc: documentation(
+                    constant
+                        .documentation
+                        .as_ref()
+                        .map(|(_, text)| text.as_str()),
+                ),
+                name: constant.name.to_string(),
+                type_annotation: constant
+                    .annotation
+                    .as_ref()
+                    .map(|annotation| type_expr(annotation, source))
+                    .transpose()?,
+                body: match constant.annotation.as_ref() {
+                    None => unsupported(
+                        "unannotated constant declarations require type inference",
+                        gleam::SrcSpan::new(constant.location.start, constant.value.location().end),
+                    ),
+                    Some(gleam::TypeAst::Fn(_)) => unsupported(
+                        "function-typed constant declarations require distinct constant lowering",
+                        gleam::SrcSpan::new(constant.location.start, constant.value.location().end),
+                    ),
+                    Some(_) => constant_expr(&constant.value, source)?,
+                },
+                access: access(constant.publicity, constant.location, source)?,
+            }),
         }
-
-        // Level 7 (highest): Multiplication, division, remainder
-        let mult_op = choice((
-            just(Token::Star).to(BinaryOperator::MultInt),
-            just(Token::StarDot).to(BinaryOperator::MultFloat),
-            just(Token::Slash).to(BinaryOperator::DivInt),
-            just(Token::SlashDot).to(BinaryOperator::DivFloat),
-            just(Token::Percent).to(BinaryOperator::RemainderInt),
-        ));
-
-        let multiplicative = postfix
-            .clone()
-            .foldl(mult_op.then(postfix.clone()).repeated(), |l, (op, r)| {
-                make_binop(l, op, r)
-            })
-            .boxed();
-
-        // Level 6: Addition, subtraction
-        let add_op = choice((
-            just(Token::Plus).to(BinaryOperator::AddInt),
-            just(Token::PlusDot).to(BinaryOperator::AddFloat),
-            just(Token::Minus).to(BinaryOperator::SubInt),
-            just(Token::MinusDot).to(BinaryOperator::SubFloat),
-        ));
-
-        let additive = multiplicative
-            .clone()
-            .foldl(
-                add_op.then(multiplicative.clone()).repeated(),
-                |l, (op, r)| make_binop(l, op, r),
-            )
-            .boxed();
-
-        // Level 5: Concatenate
-        let concat_op = just(Token::Concatenate).to(BinaryOperator::Concatenate);
-
-        let concatenative = additive
-            .clone()
-            .foldl(concat_op.then(additive.clone()).repeated(), |l, (op, r)| {
-                make_binop(l, op, r)
-            })
-            .boxed();
-
-        // Level 4: Comparison operators
-        let cmp_op = choice((
-            just(Token::LtEq).to(BinaryOperator::LtEqInt),
-            just(Token::GtEq).to(BinaryOperator::GtEqInt),
-            just(Token::LtEqDot).to(BinaryOperator::LtEqFloat),
-            just(Token::GtEqDot).to(BinaryOperator::GtEqFloat),
-            just(Token::Lt).to(BinaryOperator::LtInt),
-            just(Token::Gt).to(BinaryOperator::GtInt),
-            just(Token::LtDot).to(BinaryOperator::LtFloat),
-            just(Token::GtDot).to(BinaryOperator::GtFloat),
-            just(Token::EqEq).to(BinaryOperator::Eq),
-            just(Token::NotEq).to(BinaryOperator::NotEq),
-        ));
-
-        let comparison = concatenative
-            .clone()
-            .foldl(
-                cmp_op.then(concatenative.clone()).repeated(),
-                |l, (op, r)| make_binop(l, op, r),
-            )
-            .boxed();
-
-        // Level 3: Logical and
-        let and_op = just(Token::AndAnd).to(BinaryOperator::And);
-
-        let logical_and = comparison
-            .clone()
-            .foldl(and_op.then(comparison.clone()).repeated(), |l, (op, r)| {
-                make_binop(l, op, r)
-            })
-            .boxed();
-
-        // Level 2: Logical or
-        let or_op = just(Token::OrOr).to(BinaryOperator::Or);
-
-        let logical_or = logical_and
-            .clone()
-            .foldl(or_op.then(logical_and.clone()).repeated(), |l, (op, r)| {
-                make_binop(l, op, r)
-            })
-            .boxed();
-
-        // Level 1 (lowest): Pipe operator
-        let pipe_op = just(Token::PipeRight).to(BinaryOperator::Pipe);
-
-        let binary_expr = logical_or
-            .clone()
-            .foldl(pipe_op.then(logical_or).repeated(), |l, (op, r)| {
-                make_binop(l, op, r)
-            })
-            .boxed();
-
-        // All expression forms
-        binary_expr
-            .or(lambda)
-            .or(let_binding)
-            .or(if_expr)
-            .or(case_expr)
-            .boxed()
-    })
+    }
+    Ok(module)
 }
 
-/// Helper enum for postfix operators
-#[derive(Clone)]
-enum PostfixOp {
-    Field(String),
-    Apply(Vec<Expr>),
+fn span(location: gleam::SrcSpan) -> Span {
+    Span {
+        start: location.start as usize,
+        end: location.end as usize,
+    }
 }
 
-/// Type expression parser
-fn type_expr_parser<'src, I>()
--> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    recursive(|type_expr| {
-        // Type variable (lowercase)
-        let type_var = identifier_parser().map(|name| TypeExpr::Variable { name });
+fn documentation(text: Option<&str>) -> Option<String> {
+    text.map(|text| text.lines().map(str::trim).collect::<Vec<_>>().join("\n"))
+}
 
-        // Unit type: ()
-        let unit = just(Token::LParen)
-            .then(just(Token::RParen))
-            .to(TypeExpr::Unit);
+fn access(
+    publicity: gleam::Publicity,
+    location: gleam::SrcSpan,
+    source: &str,
+) -> Result<Access, ParseError> {
+    match publicity {
+        gleam::Publicity::Public => Ok(Access::Public),
+        gleam::Publicity::Private => Ok(Access::Private),
+        gleam::Publicity::Internal { .. } => Err(located_error(
+            "Internal visibility is not supported",
+            location,
+            source,
+        )),
+    }
+}
 
-        // Tuple type: #(Type, Type, ...)
-        let tuple_type = just(Token::Hash)
-            .ignore_then(
-                type_expr
-                    .clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|elements| TypeExpr::Tuple { elements });
-
-        // Record type: { field: Type, ... }
-        let record_field = identifier_parser()
-            .then_ignore(just(Token::Colon))
-            .then(type_expr.clone());
-
-        let record_type = record_field
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map(|fields| TypeExpr::Record { fields });
-
-        // Reference type: TypeName or TypeName(Type, ...)
-        let type_args = type_expr
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .or_not()
-            .map(|opt: Option<Vec<TypeExpr>>| opt.unwrap_or_default());
-
-        let ref_type = identifier_parser()
-            .then_ignore(just(Token::Dot))
-            .or_not()
-            .then(type_identifier_parser())
-            .then(type_args)
-            .map(|((module, name), parameters)| TypeExpr::Named {
+fn type_expr(annotation: &gleam::TypeAst, source: &str) -> Result<TypeExpr, ParseError> {
+    Ok(match annotation {
+        gleam::TypeAst::Constructor(constructor) => {
+            let (module, name) = match &constructor.name {
+                gleam::TypeAstConstructorName::Unqualified { name, .. } => (None, name.to_string()),
+                gleam::TypeAstConstructorName::Qualified {
+                    module,
+                    name: Some((name, _)),
+                    ..
+                } => (Some(module.to_string()), name.to_string()),
+                gleam::TypeAstConstructorName::Qualified { name: None, .. } => {
+                    return Err(located_error(
+                        "Missing qualified type name",
+                        constructor.location,
+                        source,
+                    ));
+                }
+            };
+            TypeExpr::Named {
                 module,
                 name,
-                parameters,
-            });
-
-        // Parenthesized type
-        let paren_type = type_expr
-            .clone()
-            .delimited_by(just(Token::LParen), just(Token::RParen));
-
-        let function = just(Token::Fn)
-            .ignore_then(
-                type_expr
-                    .clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .then_ignore(just(Token::Arrow))
-            .then(type_expr.clone())
-            .map(|(parameters, return_type)| TypeExpr::Function {
-                parameters,
-                return_type: Box::new(return_type),
-            });
-        // Primary types
-        let primary = function
-            .or(unit)
-            .or(tuple_type)
-            .or(record_type)
-            .or(ref_type)
-            .or(type_var)
-            .or(paren_type);
-
-        // Function types: Type -> Type (right-associative)
-        // Note: For simplicity, we treat `A -> B` as fn(A) -> B
-        primary
-            .foldl(
-                just(Token::Arrow).ignore_then(type_expr).repeated(),
-                |param, return_type| TypeExpr::Function {
-                    parameters: vec![param],
-                    return_type: Box::new(return_type),
-                },
-            )
-            .boxed()
+                parameters: constructor
+                    .arguments
+                    .iter()
+                    .map(|arg| type_expr(arg, source))
+                    .collect::<Result<_, _>>()?,
+            }
+        }
+        gleam::TypeAst::Fn(function) => TypeExpr::Function {
+            parameters: function
+                .arguments
+                .iter()
+                .map(|arg| type_expr(arg, source))
+                .collect::<Result<_, _>>()?,
+            return_type: Box::new(type_expr(&function.return_, source)?),
+        },
+        gleam::TypeAst::Var(variable) => TypeExpr::Variable {
+            name: variable.name.to_string(),
+        },
+        gleam::TypeAst::Tuple(tuple) => TypeExpr::Tuple {
+            elements: tuple
+                .elements
+                .iter()
+                .map(|element| type_expr(element, source))
+                .collect::<Result<_, _>>()?,
+        },
+        gleam::TypeAst::Hole(hole) => TypeExpr::Hole {
+            name: hole.name.to_string(),
+        },
     })
 }
 
-/// Pattern parser
-fn pattern_parser<'src, I>()
--> impl Parser<'src, I, Pattern, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    recursive(|pattern| {
-        // Wildcard: _
-        let wildcard = just(Token::Underscore).to(Pattern::Wildcard);
+fn argument_name(argument: &gleam::UntypedArg) -> String {
+    match &argument.names {
+        gleam::ArgNames::Discard { name, .. }
+        | gleam::ArgNames::LabelledDiscard { name, .. }
+        | gleam::ArgNames::Named { name, .. }
+        | gleam::ArgNames::NamedLabelled { name, .. } => name.to_string(),
+    }
+}
 
-        // Variable pattern (lowercase)
-        let var_pattern = identifier_parser().map(|name| Pattern::Variable { name });
-
-        // Literal pattern
-        let lit_pattern = literal_parser().map(|lit| Pattern::Literal { value: lit });
-
-        // Tuple pattern: #(pattern, ...)
-        let tuple_pattern = just(Token::Hash)
-            .ignore_then(
-                pattern
-                    .clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|elements| Pattern::Tuple { elements });
-
-        // Constructor pattern: ConstructorName or ConstructorName(pattern, ...)
-        let constructor_args = pattern
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .or_not()
-            .map(|opt: Option<Vec<Pattern>>| opt.unwrap_or_default());
-
-        let constructor_pattern =
-            type_identifier_parser()
-                .then(constructor_args)
-                .map(|(name, args)| Pattern::Constructor {
-                    module: None,
-                    name,
-                    arguments: args
-                        .into_iter()
-                        .map(|p| Field::Unlabelled { item: p })
-                        .collect(),
-                    with_spread: false,
-                });
-
-        // Parenthesized pattern
-        let paren_pattern = pattern
-            .clone()
-            .delimited_by(just(Token::LParen), just(Token::RParen));
-
-        // List pattern: [elem, elem, ...] or [elem, ..rest]
-        let list_tail = just(Token::Spread).ignore_then(pattern.clone()).or_not();
-
-        let list_pattern = pattern
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .then(list_tail)
-            .delimited_by(just(Token::LBracket), just(Token::RBracket))
-            .map(|(elements, tail)| Pattern::List {
-                elements,
-                tail: tail.map(Box::new),
-            });
-
-        wildcard
-            .or(lit_pattern)
-            .or(tuple_pattern)
-            .or(constructor_pattern)
-            .or(list_pattern)
-            .or(var_pattern)
-            .or(paren_pattern)
-            .boxed()
+fn function_definition(
+    function: &gleam::UntypedFunction,
+    source: &str,
+) -> Result<ValueDef, ParseError> {
+    let name = function
+        .name
+        .as_ref()
+        .ok_or_else(|| located_error("Missing function name", function.location, source))?;
+    Ok(ValueDef {
+        span: span(function.full_location()),
+        params: function.arguments.iter().map(argument_name).collect(),
+        param_labels: function
+            .arguments
+            .iter()
+            .map(|arg| arg.names.get_label().map(ToString::to_string))
+            .collect(),
+        doc: documentation(
+            function
+                .documentation
+                .as_ref()
+                .map(|(_, text)| text.as_str()),
+        ),
+        name: name.1.to_string(),
+        type_annotation: Some(TypeExpr::Function {
+            parameters: function
+                .arguments
+                .iter()
+                .map(|arg| optional_annotation(arg.annotation.as_ref(), source))
+                .collect::<Result<_, _>>()?,
+            return_type: Box::new(optional_annotation(
+                function.return_annotation.as_ref(),
+                source,
+            )?),
+        }),
+        body: if function.external_erlang.is_some() || function.external_javascript.is_some() {
+            unsupported("external function bindings", function.full_location())
+        } else {
+            block(&function.body, source)?
+        },
+        access: access(function.publicity, function.location, source)?,
     })
 }
 
-/// Literal parser
-fn literal_parser<'src, I>()
--> impl Parser<'src, I, Literal, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    select! {
-        Token::True => Literal::Bool { value: true },
-        Token::False => Literal::Bool { value: false },
-        Token::Int(i) => Literal::Int { value: i },
-        Token::Float(f) => Literal::Float { value: f },
-        Token::String(s) => Literal::String { value: s },
-    }
-    .labelled("literal")
+fn optional_annotation(
+    annotation: Option<&gleam::TypeAst>,
+    source: &str,
+) -> Result<TypeExpr, ParseError> {
+    annotation
+        .map(|annotation| type_expr(annotation, source))
+        .transpose()
+        .map(|annotation| annotation.unwrap_or(TypeExpr::Hole { name: "_".into() }))
 }
 
-/// Identifier parser (lowercase)
-fn identifier_parser<'src, I>()
--> impl Parser<'src, I, String, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    select! {
-        Token::Ident(name) => name,
-    }
-    .labelled("identifier")
-}
-
-/// Type identifier parser (uppercase)
-fn type_identifier_parser<'src, I>()
--> impl Parser<'src, I, String, extra::Err<Rich<'src, Token, SimpleSpan>>>
-where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
-{
-    select! {
-        Token::TypeIdent(name) => name,
-    }
-    .labelled("type identifier")
-}
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/// Extract module-level documentation from comment tokens
-///
-/// Module doc comments start with `////` and appear at the top of the file.
-/// Returns the combined documentation string (lines joined with newlines).
-fn extract_module_doc(tokens: &[(Token, SimpleSpan)]) -> Option<String> {
-    let mut doc_lines = Vec::new();
-
-    for (tok, _span) in tokens {
-        match tok {
-            Token::CommentModule(text) => {
-                doc_lines.push(text.trim().to_string());
-            }
-            // Normal comments and doc comments don't break the module doc block
-            Token::CommentNormal(_) | Token::CommentDoc(_) => {
-                // Continue looking for module docs
-            }
-            // Any non-comment token ends the module doc block
-            _ => {
-                break;
-            }
-        }
-    }
-
-    if doc_lines.is_empty() {
-        None
-    } else {
-        Some(doc_lines.join("\n"))
+fn unsupported(feature: &str, location: gleam::SrcSpan) -> Expr {
+    Expr::Unsupported {
+        feature: feature.into(),
+        span: span(location),
     }
 }
 
-/// Parse Gleam source code into ModuleIR
-#[allow(clippy::result_large_err)]
-pub fn parse_gleam(path: &str, source: &str) -> Result<ModuleIR, ParseError> {
-    // Tokenize
-    let tokens = tokenize(source);
-
-    // Extract module documentation from //// comments before filtering
-    let module_doc = extract_module_doc(&tokens);
-    let declaration_docs = declaration_docs(&tokens);
-
-    // Filter out comment tokens for parsing
-    // Comments are captured above for documentation but shouldn't be parsed
-    let tokens: Vec<_> = tokens
-        .into_iter()
-        .filter(|(tok, _)| {
-            !matches!(
-                tok,
-                Token::CommentModule(_) | Token::CommentDoc(_) | Token::CommentNormal(_)
-            )
-        })
-        .collect();
-
-    if tokens.is_empty() {
-        return Ok(ModuleIR {
-            name: extract_module_name(path),
-            doc: module_doc,
-            types: vec![],
-            values: vec![],
-            imports: vec![],
-        });
-    }
-
-    // Create end-of-input span
-    let eoi = SimpleSpan::from(source.len()..source.len());
-
-    // Create IterInput from tokens for parsing (handles (Token, Span) tuples)
-    let input = IterInput::new(tokens.into_iter(), eoi);
-
-    // Parse using chumsky 0.12 API
-    let parser = module_parser();
-    match parser.parse(input).into_result() {
-        Ok(mut module) => {
-            // Set module name from path
-            module.name = extract_module_name(path);
-            // Set module documentation from //// comments
-            module.doc = module_doc;
-            for definition in &mut module.types {
-                definition.doc = declaration_docs.get(&definition.name).cloned();
-            }
-            for definition in &mut module.values {
-                definition.doc = declaration_docs.get(&definition.name).cloned();
-            }
-            Ok(module)
-        }
-        Err(errors) => {
-            // Return first error (could be enhanced to return multiple)
-            if let Some(err) = errors.first() {
-                Err(to_parse_error(err, source))
-            } else {
-                Err(ParseError {
-                    message: "Unknown parse error".to_string(),
-                    span: 0..0,
-                    expected: vec![],
-                    found: None,
-                    hint: None,
-                    source_snippet: None,
+fn block(statements: &[gleam::UntypedStatement], source: &str) -> Result<Expr, ParseError> {
+    Ok(Expr::Block {
+        statements: statements
+            .iter()
+            .map(|statement| {
+                Ok(match statement {
+                    gleam::Statement::Expression(value) => {
+                        Statement::Expression(expression(value, source)?)
+                    }
+                    gleam::Statement::Assignment(assignment) => {
+                        if !matches!(assignment.kind, gleam::AssignmentKind::Let) {
+                            Statement::Expression(unsupported(
+                                "assert assignments",
+                                assignment.location,
+                            ))
+                        } else {
+                            match pattern(&assignment.pattern) {
+                                Ok(pattern) => Statement::Assignment {
+                                    pattern,
+                                    annotation: assignment
+                                        .annotation
+                                        .as_ref()
+                                        .map(|annotation| type_expr(annotation, source))
+                                        .transpose()?,
+                                    value: Box::new(expression(&assignment.value, source)?),
+                                },
+                                Err((feature, location)) => {
+                                    Statement::Expression(unsupported(feature, location))
+                                }
+                            }
+                        }
+                    }
+                    gleam::Statement::Use(use_) => {
+                        Statement::Expression(unsupported("use expressions", use_.location))
+                    }
+                    gleam::Statement::Assert(assertion) => {
+                        Statement::Expression(unsupported("boolean assertions", assertion.location))
+                    }
                 })
+            })
+            .collect::<Result<_, ParseError>>()?,
+    })
+}
+
+fn expression(value: &gleam::UntypedExpr, source: &str) -> Result<Expr, ParseError> {
+    use gleam::UntypedExpr as G;
+    Ok(match value {
+        G::Int {
+            int_value,
+            location,
+            ..
+        } => match int_value.to_string().parse() {
+            Ok(value) => Expr::Literal {
+                value: Literal::Int { value },
+            },
+            Err(_) => unsupported(
+                "integer literals outside the signed 64-bit range",
+                *location,
+            ),
+        },
+        G::Float {
+            float_value,
+            location,
+            ..
+        } => float_literal(float_value.value(), *location),
+        G::String { value, .. } => Expr::Literal {
+            value: Literal::String {
+                value: gleam_core::strings::convert_string_escape_chars(value).to_string(),
+            },
+        },
+        G::Var { name, .. } => variable_or_constructor(None, name),
+        G::Block { statements, .. } => block(statements, source)?,
+        G::Fn {
+            arguments,
+            body,
+            kind,
+            location,
+            ..
+        } => {
+            if matches!(kind, gleam::FunctionLiteralKind::Capture { .. }) {
+                unsupported("function captures", *location)
+            } else {
+                Expr::Lambda {
+                    params: arguments.iter().map(argument_name).collect(),
+                    body: Box::new(block(body, source)?),
+                }
             }
         }
+        G::List { elements, tail, .. } => Expr::List {
+            elements: elements
+                .iter()
+                .map(|element| expression(element, source))
+                .collect::<Result<_, _>>()?,
+            tail: tail
+                .as_deref()
+                .map(|tail| expression(tail, source).map(Box::new))
+                .transpose()?,
+        },
+        G::Call { fun, arguments, .. } => Expr::Apply {
+            function: Box::new(expression(fun, source)?),
+            arguments: arguments
+                .iter()
+                .map(|arg| {
+                    expression(&arg.value, source).map(|value| field(arg.label.as_deref(), value))
+                })
+                .collect::<Result<_, _>>()?,
+        },
+        G::BinOp {
+            operator,
+            left,
+            right,
+            ..
+        } => Expr::BinaryOp {
+            op: binary_operator(*operator),
+            left: Box::new(expression(left, source)?),
+            right: Box::new(expression(right, source)?),
+        },
+        G::PipeLine { expressions } => {
+            let mut expressions = expressions.iter();
+            let first = expressions.next().expect("upstream pipeline is nonempty");
+            expressions.try_fold(expression(first, source)?, |left, right| {
+                Ok::<_, ParseError>(Expr::BinaryOp {
+                    op: BinaryOperator::Pipe,
+                    left: Box::new(left),
+                    right: Box::new(expression(right, source)?),
+                })
+            })?
+        }
+        G::Case {
+            subjects,
+            clauses,
+            location,
+        } => {
+            let clauses = clauses
+                .as_ref()
+                .ok_or_else(|| located_error("Missing case expression body", *location, source))?;
+            if subjects.len() != 1 || clauses.iter().any(|clause| clause.pattern.len() != 1) {
+                unsupported("case expressions with multiple subjects", *location)
+            } else if clauses.iter().any(|clause| clause.guard.is_some()) {
+                unsupported("case guards", *location)
+            } else {
+                match case_branches(clauses, source)? {
+                    Ok(clauses) => Expr::Case {
+                        subjects: subjects
+                            .iter()
+                            .map(|subject| expression(subject, source))
+                            .collect::<Result<_, _>>()?,
+                        clauses,
+                    },
+                    Err((feature, location)) => unsupported(feature, location),
+                }
+            }
+        }
+        G::FieldAccess {
+            container, label, ..
+        } => {
+            if label.is_empty() {
+                return Err(located_error(
+                    "Missing field name",
+                    value.location(),
+                    source,
+                ));
+            }
+            if label.chars().next().is_some_and(char::is_uppercase) {
+                match container.as_ref() {
+                    G::Var { name, .. } => variable_or_constructor(Some(name.to_string()), label),
+                    _ => {
+                        return Err(located_error(
+                            "Invalid qualified constructor",
+                            value.location(),
+                            source,
+                        ));
+                    }
+                }
+            } else {
+                Expr::FieldAccess {
+                    container: Box::new(expression(container, source)?),
+                    label: label.to_string(),
+                }
+            }
+        }
+        G::Tuple { elements, .. } => Expr::Tuple {
+            elements: elements
+                .iter()
+                .map(|element| expression(element, source))
+                .collect::<Result<_, _>>()?,
+        },
+        G::TupleIndex { tuple, index, .. } => Expr::TupleIndex {
+            tuple: Box::new(expression(tuple, source)?),
+            index: *index,
+        },
+        G::Todo {
+            kind: gleam::TodoKind::IncompleteUse,
+            location,
+            ..
+        } => {
+            return Err(located_error(
+                "Incomplete use expression",
+                *location,
+                source,
+            ));
+        }
+        G::Todo { location, .. } => unsupported("todo expressions", *location),
+        G::Panic { location, .. } => unsupported("panic expressions", *location),
+        G::Echo { location, .. } => unsupported("echo expressions", *location),
+        G::BitArray { location, .. } => unsupported("bit array expressions", *location),
+        G::RecordUpdate { location, .. } => unsupported("record updates", *location),
+        G::NegateBool { value, .. } => Expr::NegateBool {
+            value: Box::new(expression(value, source)?),
+        },
+        G::NegateInt { value, .. } => Expr::NegateInt {
+            value: Box::new(expression(value, source)?),
+        },
+    })
+}
+
+fn float_literal(value: f64, location: gleam::SrcSpan) -> Expr {
+    if value.is_finite() {
+        Expr::Literal {
+            value: Literal::Float { value },
+        }
+    } else {
+        unsupported("non-finite floating point literals", location)
     }
 }
 
-/// Extract module name from file path
-fn extract_module_name(path: &str) -> String {
-    path.trim_end_matches(".gleam").replace('\\', "/")
+fn variable_or_constructor(module: Option<String>, name: &str) -> Expr {
+    match (module.as_deref(), name) {
+        (None, "True") => Expr::Literal {
+            value: Literal::Bool { value: true },
+        },
+        (None, "False") => Expr::Literal {
+            value: Literal::Bool { value: false },
+        },
+        _ if name.chars().next().is_some_and(char::is_uppercase) => Expr::Constructor {
+            module,
+            name: name.into(),
+        },
+        _ => match module {
+            None => Expr::Variable { name: name.into() },
+            Some(module) => Expr::FieldAccess {
+                container: Box::new(Expr::Variable { name: module }),
+                label: name.into(),
+            },
+        },
+    }
+}
+
+fn field<T>(label: Option<&str>, item: T) -> Field<T> {
+    match label {
+        Some(label) => Field::Labelled {
+            label: label.into(),
+            item,
+        },
+        None => Field::Unlabelled { item },
+    }
+}
+
+type UnsupportedPattern = (&'static str, gleam::SrcSpan);
+
+fn case_branches(
+    clauses: &[gleam::UntypedClause],
+    source: &str,
+) -> Result<Result<Vec<CaseBranch>, UnsupportedPattern>, ParseError> {
+    let mut branches = vec![];
+    for clause in clauses {
+        let body = expression(&clause.then, source)?;
+        for patterns in std::iter::once(&clause.pattern).chain(&clause.alternative_patterns) {
+            let [single] = patterns.as_slice() else {
+                return Ok(Err((
+                    "case expressions with multiple subjects",
+                    clause.location,
+                )));
+            };
+            match pattern(single) {
+                Ok(pattern) => branches.push(CaseBranch {
+                    pattern,
+                    body: body.clone(),
+                }),
+                Err(unsupported) => return Ok(Err(unsupported)),
+            }
+        }
+    }
+    Ok(Ok(branches))
+}
+
+fn pattern(value: &gleam::UntypedPattern) -> Result<Pattern, UnsupportedPattern> {
+    use gleam::Pattern as G;
+    Ok(match value {
+        G::Int {
+            int_value,
+            location,
+            ..
+        } => Pattern::Literal {
+            value: Literal::Int {
+                value: int_value.to_string().parse().map_err(|_| {
+                    (
+                        "integer patterns outside the signed 64-bit range",
+                        *location,
+                    )
+                })?,
+            },
+        },
+        G::Float {
+            float_value,
+            location,
+            ..
+        } => {
+            let value = float_value.value();
+            if !value.is_finite() {
+                return Err(("non-finite float patterns", *location));
+            }
+            Pattern::Literal {
+                value: Literal::Float { value },
+            }
+        }
+        G::String { value, .. } => Pattern::Literal {
+            value: Literal::String {
+                value: gleam_core::strings::convert_string_escape_chars(value).to_string(),
+            },
+        },
+        G::Variable { name, .. } => Pattern::Variable {
+            name: name.to_string(),
+        },
+        G::Discard { name, .. } if name == "_" => Pattern::Wildcard,
+        G::Discard { name, .. } => Pattern::Discard {
+            name: name.to_string(),
+        },
+        G::Assign {
+            name,
+            pattern: inner,
+            ..
+        } => Pattern::Assignment {
+            pattern: Box::new(pattern(inner)?),
+            name: name.to_string(),
+        },
+        G::List { elements, tail, .. } => Pattern::List {
+            elements: elements.iter().map(pattern).collect::<Result<_, _>>()?,
+            tail: tail
+                .as_ref()
+                .map(|tail| pattern(&tail.pattern).map(Box::new))
+                .transpose()?,
+        },
+        G::Constructor {
+            name,
+            module,
+            arguments,
+            spread,
+            ..
+        } => {
+            if module.is_none()
+                && arguments.is_empty()
+                && spread.is_none()
+                && (name == "True" || name == "False")
+            {
+                Pattern::Literal {
+                    value: Literal::Bool {
+                        value: name == "True",
+                    },
+                }
+            } else {
+                Pattern::Constructor {
+                    module: module.as_ref().map(|(module, _)| module.to_string()),
+                    name: name.to_string(),
+                    arguments: arguments
+                        .iter()
+                        .map(|arg| {
+                            pattern(&arg.value).map(|value| field(arg.label.as_deref(), value))
+                        })
+                        .collect::<Result<_, _>>()?,
+                    with_spread: spread.is_some(),
+                }
+            }
+        }
+        G::Tuple { elements, .. } => Pattern::Tuple {
+            elements: elements.iter().map(pattern).collect::<Result<_, _>>()?,
+        },
+        G::StringPrefix { location, .. } => return Err(("string prefix patterns", *location)),
+        G::BitArray { location, .. } => return Err(("bit array patterns", *location)),
+        G::BitArraySize(size) => return Err(("bit array size patterns", size.location())),
+        G::Invalid { location, .. } => return Err(("invalid patterns", *location)),
+    })
+}
+
+fn constant_expr(value: &gleam::UntypedConstant, source: &str) -> Result<Expr, ParseError> {
+    use gleam::Constant as G;
+    Ok(match value {
+        G::Int {
+            int_value,
+            location,
+            ..
+        } => match int_value.to_string().parse() {
+            Ok(value) => Expr::Literal {
+                value: Literal::Int { value },
+            },
+            Err(_) => unsupported(
+                "integer literals outside the signed 64-bit range",
+                *location,
+            ),
+        },
+        G::Float {
+            float_value,
+            location,
+            ..
+        } => float_literal(float_value.value(), *location),
+        G::String { value, .. } => Expr::Literal {
+            value: Literal::String {
+                value: gleam_core::strings::convert_string_escape_chars(value).to_string(),
+            },
+        },
+        G::Tuple { elements, .. } => Expr::Tuple {
+            elements: elements
+                .iter()
+                .map(|element| constant_expr(element, source))
+                .collect::<Result<_, _>>()?,
+        },
+        G::List {
+            tail: Some(_),
+            location,
+            ..
+        } => unsupported("constant list tails", *location),
+        G::List { elements, .. } => Expr::List {
+            elements: elements
+                .iter()
+                .map(|element| constant_expr(element, source))
+                .collect::<Result<_, _>>()?,
+            tail: None,
+        },
+        G::Record {
+            module,
+            name,
+            arguments,
+            ..
+        } if module.is_none()
+            && arguments.is_none()
+            && matches!(name.as_str(), "True" | "False") =>
+        {
+            variable_or_constructor(None, name)
+        }
+        G::Record { location, .. } => unsupported("constant constructor resolution", *location),
+        G::Var { location, .. } => unsupported("constant value references", *location),
+        G::StringConcatenation { location, .. } => {
+            unsupported("constant string concatenation", *location)
+        }
+        G::RecordUpdate { location, .. } => unsupported("constant record updates", *location),
+        G::BitArray { location, .. } => unsupported("constant bit arrays", *location),
+        G::Todo { location, .. } => unsupported("todo constants", *location),
+        G::Invalid { location, .. } => {
+            return Err(located_error(
+                "Invalid constant expression",
+                *location,
+                source,
+            ));
+        }
+    })
+}
+
+fn binary_operator(operator: gleam::BinOp) -> BinaryOperator {
+    match operator {
+        gleam::BinOp::And => BinaryOperator::And,
+        gleam::BinOp::Or => BinaryOperator::Or,
+        gleam::BinOp::Eq => BinaryOperator::Eq,
+        gleam::BinOp::NotEq => BinaryOperator::NotEq,
+        gleam::BinOp::LtInt => BinaryOperator::LtInt,
+        gleam::BinOp::LtEqInt => BinaryOperator::LtEqInt,
+        gleam::BinOp::GtInt => BinaryOperator::GtInt,
+        gleam::BinOp::GtEqInt => BinaryOperator::GtEqInt,
+        gleam::BinOp::LtFloat => BinaryOperator::LtFloat,
+        gleam::BinOp::LtEqFloat => BinaryOperator::LtEqFloat,
+        gleam::BinOp::GtFloat => BinaryOperator::GtFloat,
+        gleam::BinOp::GtEqFloat => BinaryOperator::GtEqFloat,
+        gleam::BinOp::AddInt => BinaryOperator::AddInt,
+        gleam::BinOp::SubInt => BinaryOperator::SubInt,
+        gleam::BinOp::MultInt => BinaryOperator::MultInt,
+        gleam::BinOp::DivInt => BinaryOperator::DivInt,
+        gleam::BinOp::RemainderInt => BinaryOperator::RemainderInt,
+        gleam::BinOp::AddFloat => BinaryOperator::AddFloat,
+        gleam::BinOp::SubFloat => BinaryOperator::SubFloat,
+        gleam::BinOp::MultFloat => BinaryOperator::MultFloat,
+        gleam::BinOp::DivFloat => BinaryOperator::DivFloat,
+        gleam::BinOp::Concatenate => BinaryOperator::Concatenate,
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::frontend::lexer::{Token, tokenize};
-
-    #[test]
-    fn test_tokenize_simple() {
-        let source = "pub fn hello() { \"world\" }";
-        let tokens = tokenize(source);
-
-        assert!(!tokens.is_empty());
-        assert_eq!(tokens[0].0, Token::Pub);
-        assert_eq!(tokens[1].0, Token::Fn);
-    }
-
-    #[test]
-    fn test_tokenize_literals() {
-        let source = "42 True False \"hello\" 3.14";
-        let tokens = tokenize(source);
-
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Int(_))));
-        assert!(tokens.iter().any(|(t, _)| t == &Token::True));
-        assert!(tokens.iter().any(|(t, _)| t == &Token::False));
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::String(_))));
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Float(_))));
-    }
-
-    #[test]
-    fn test_tokenize_identifiers() {
-        let source = "hello world MyType";
-        let tokens = tokenize(source);
-
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Ident(_))));
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::TypeIdent(_))));
-    }
-
-    #[test]
-    fn test_parse_simple_function() {
-        let source = r#"
-pub fn hello() {
-    "world"
-}
-"#;
-
-        let result = parse_gleam("example.gleam", source);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert_eq!(module.values.len(), 1);
-        assert_eq!(module.values[0].name, "hello");
-    }
-
-    #[test]
-    fn test_parse_type_definition() {
-        let source = r#"
-pub type Maybe {
-    Just
-    Nothing
-}
-"#;
-
-        let result = parse_gleam("example.gleam", source);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert_eq!(module.types.len(), 1);
-        assert_eq!(module.types[0].name, "Maybe");
-    }
-
-    #[test]
-    fn test_parse_empty_module() {
-        let source = "";
-        let result = parse_gleam("example.gleam", source);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert_eq!(module.types.len(), 0);
-        assert_eq!(module.values.len(), 0);
-    }
-
-    #[test]
-    fn test_extract_module_doc() {
-        let source = r#"
-//// This is a module doc comment
-//// It spans multiple lines
-//// And describes the module
-
-pub fn hello() { "world" }
-"#;
-        let result = parse_gleam("documented.gleam", source);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert!(module.doc.is_some());
-        let doc = module.doc.unwrap();
-        assert!(doc.contains("This is a module doc comment"));
-        assert!(doc.contains("It spans multiple lines"));
-        assert!(doc.contains("And describes the module"));
-    }
-
-    #[test]
-    fn test_no_module_doc() {
-        let source = r#"
-// This is a normal comment
-/// This is a doc comment for the function
-pub fn hello() { "world" }
-"#;
-        let result = parse_gleam("no_module_doc.gleam", source);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        // Normal comments and item doc comments shouldn't become module doc
-        assert!(module.doc.is_none());
-    }
-
-    #[test]
-    fn test_module_doc_before_normal_comment() {
-        let source = r#"
-//// Module documentation here
-// Normal comment
-pub fn hello() { "world" }
-"#;
-        let result = parse_gleam("mixed_comments.gleam", source);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert!(module.doc.is_some());
-        assert!(module.doc.unwrap().contains("Module documentation here"));
-    }
-}
+#[path = "parser_tests.rs"]
+mod tests;

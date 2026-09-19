@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Gleam extension 0.2.1 uses the official Gleam 1.18.1 `gleam-core` parser in
+  native and WASM builds. The handwritten lexer and parser are removed. The
+  adapter preserves types, sum types, labelled records and function syntax,
+  rejects incomplete source, and invalidates previous incremental baselines.
+
 ### Added
 - Gleam type compilation and generation for IR v3 and v4, resolved imports,
   aliases, opaque types, labelled records, source diagnostics and incremental

@@ -17,6 +17,15 @@ pub mod roundtrip;
 mod version;
 pub mod vfs;
 
+// Parsing does not require entropy. Fail explicitly if another upstream path requests it.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn unavailable_randomness(_: &mut [u8]) -> std::result::Result<(), getrandom::Error> {
+    Err(getrandom::Error::UNSUPPORTED)
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+getrandom::register_custom_getrandom!(unavailable_randomness);
+
 /// Gleam extension implementing both Frontend and Backend
 #[derive(Default)]
 pub struct GleamExtension;

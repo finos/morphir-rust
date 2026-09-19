@@ -74,12 +74,43 @@ impl Precedence {
 /// Gleam pretty printer using the `pretty` crate
 pub struct GleamPrinter<'a> {
     alloc: &'a RcAllocator,
+    error: std::cell::RefCell<Option<std::io::Error>>,
 }
 
 impl<'a> GleamPrinter<'a> {
     /// Create a new printer with the given allocator
     pub fn new(alloc: &'a RcAllocator) -> Self {
-        Self { alloc }
+        Self {
+            alloc,
+            error: Default::default(),
+        }
+    }
+
+    fn finish(&self, document: Doc<'a>) -> std::io::Result<Doc<'a>> {
+        match self.error.borrow_mut().take() {
+            Some(error) => Err(error),
+            None => Ok(document),
+        }
+    }
+
+    /// Build a module document, rejecting expressions without printable source.
+    pub fn module(&self, module: &ModuleIR) -> std::io::Result<Doc<'a>> {
+        self.finish(self.module_doc(module))
+    }
+
+    /// Build a value document, rejecting expressions without printable source.
+    pub fn value_def(&self, value: &ValueDef) -> std::io::Result<Doc<'a>> {
+        self.finish(self.value_def_doc(value))
+    }
+
+    /// Build an expression document, rejecting unsupported nodes at any depth.
+    pub fn expr(&self, expr: &Expr) -> std::io::Result<Doc<'a>> {
+        self.finish(self.expr_doc(expr))
+    }
+
+    /// Build a pattern document, rejecting unsupported bit-size expressions.
+    pub fn pattern(&self, pattern: &Pattern) -> std::io::Result<Doc<'a>> {
+        self.finish(self.pattern_doc(pattern))
     }
 
     // ========================================================================
@@ -142,7 +173,7 @@ impl<'a> GleamPrinter<'a> {
     // ========================================================================
 
     /// Print a complete module
-    pub fn module(&self, m: &ModuleIR) -> Doc<'a> {
+    fn module_doc(&self, m: &ModuleIR) -> Doc<'a> {
         let mut parts = Vec::new();
 
         // Module documentation
@@ -160,7 +191,7 @@ impl<'a> GleamPrinter<'a> {
 
         // Value definitions
         for value_def in &m.values {
-            parts.push(self.value_def(value_def));
+            parts.push(self.value_def_doc(value_def));
             parts.push(self.hardline());
             parts.push(self.hardline());
         }
@@ -228,7 +259,7 @@ impl<'a> GleamPrinter<'a> {
     }
 
     /// Print a value definition
-    pub fn value_def(&self, v: &ValueDef) -> Doc<'a> {
+    fn value_def_doc(&self, v: &ValueDef) -> Doc<'a> {
         let access = match v.access {
             Access::Public => self.text("pub "),
             Access::Private => self.nil(),
@@ -253,7 +284,7 @@ impl<'a> GleamPrinter<'a> {
                     .append(annotation)
                     .append(self.text(" {"))
                     .append(self.line())
-                    .append(self.expr(body))
+                    .append(self.expr_doc(body))
                     .nest(INDENT)
                     .append(self.line())
                     .append(self.text("}"))
@@ -272,7 +303,7 @@ impl<'a> GleamPrinter<'a> {
                     .append(self.text(v.name.clone()))
                     .append(annotation)
                     .append(self.text(" = "))
-                    .append(self.expr(&v.body))
+                    .append(self.expr_doc(&v.body))
             }
         }
     }
@@ -373,13 +404,28 @@ impl<'a> GleamPrinter<'a> {
     // ========================================================================
 
     /// Print an expression
-    pub fn expr(&self, e: &Expr) -> Doc<'a> {
+    fn expr_doc(&self, e: &Expr) -> Doc<'a> {
         self.expr_prec(e, Precedence::Lowest)
     }
 
     /// Print an expression with precedence context
     fn expr_prec(&self, e: &Expr, outer_prec: Precedence) -> Doc<'a> {
         match e {
+            Expr::Unsupported { feature, span } => {
+                let mut error = self.error.borrow_mut();
+                if error.is_none() {
+                    *error = Some(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        format!(
+                            "Cannot print unsupported Gleam expression: {feature} at {}..{}",
+                            span.start, span.end
+                        ),
+                    ));
+                }
+                // The public entry point returns the stored error before the
+                // unfinished document can be rendered.
+                self.nil()
+            }
             Expr::Literal { value } => self.literal(value),
             Expr::Variable { name } => self.text(name.clone()),
             Expr::Constructor { module, name } => {
@@ -406,7 +452,7 @@ impl<'a> GleamPrinter<'a> {
                 self.text("fn(")
                     .append(params_doc)
                     .append(self.text(") { "))
-                    .append(self.expr(body))
+                    .append(self.expr_doc(body))
                     .append(self.text(" }"))
                     .group()
             }
@@ -414,23 +460,23 @@ impl<'a> GleamPrinter<'a> {
                 .text("let ")
                 .append(self.text(name.clone()))
                 .append(self.text(" = "))
-                .append(self.expr(value))
+                .append(self.expr_doc(value))
                 .append(self.hardline())
-                .append(self.expr(body)),
+                .append(self.expr_doc(body)),
             Expr::If {
                 condition,
                 then_branch,
                 else_branch,
             } => self
                 .text("case ")
-                .append(self.expr(condition))
+                .append(self.expr_doc(condition))
                 .append(self.text(" {"))
                 .append(self.line())
                 .append(self.text("True -> "))
-                .append(self.expr(then_branch))
+                .append(self.expr_doc(then_branch))
                 .append(self.line())
                 .append(self.text("False -> "))
-                .append(self.expr(else_branch))
+                .append(self.expr_doc(else_branch))
                 .nest(INDENT)
                 .append(self.line())
                 .append(self.text("}"))
@@ -443,7 +489,7 @@ impl<'a> GleamPrinter<'a> {
                         fields.iter().map(|(name, value)| {
                             self.text(name.clone())
                                 .append(self.text(": "))
-                                .append(self.expr(value))
+                                .append(self.expr_doc(value))
                         }),
                         self.text(", ").append(self.line()),
                     );
@@ -456,7 +502,7 @@ impl<'a> GleamPrinter<'a> {
                 .append(self.text(label.clone())),
             Expr::Tuple { elements } => {
                 let elements_doc =
-                    self.join(elements.iter().map(|e| self.expr(e)), self.text(", "));
+                    self.join(elements.iter().map(|e| self.expr_doc(e)), self.text(", "));
                 self.text("#(").append(elements_doc).append(self.text(")"))
             }
             Expr::TupleIndex { tuple, index } => self
@@ -464,7 +510,7 @@ impl<'a> GleamPrinter<'a> {
                 .append(self.text(format!(".{}", index))),
             Expr::Case { subjects, clauses } => {
                 let subjects_doc =
-                    self.join(subjects.iter().map(|s| self.expr(s)), self.text(", "));
+                    self.join(subjects.iter().map(|s| self.expr_doc(s)), self.text(", "));
                 let clauses_doc =
                     self.join(clauses.iter().map(|c| self.case_branch(c)), self.hardline());
                 self.text("case ")
@@ -500,9 +546,11 @@ impl<'a> GleamPrinter<'a> {
                     self.text("[]")
                 } else {
                     let elements_doc =
-                        self.join(elements.iter().map(|e| self.expr(e)), self.text(", "));
+                        self.join(elements.iter().map(|e| self.expr_doc(e)), self.text(", "));
                     let with_tail = if let Some(t) = tail {
-                        elements_doc.append(self.text(", ..")).append(self.expr(t))
+                        elements_doc
+                            .append(self.text(", .."))
+                            .append(self.expr_doc(t))
                     } else {
                         elements_doc
                     };
@@ -518,7 +566,7 @@ impl<'a> GleamPrinter<'a> {
             }
             Expr::Panic { message } => {
                 let msg_doc = if let Some(m) = message {
-                    self.parens(self.expr(m))
+                    self.parens(self.expr_doc(m))
                 } else {
                     self.nil()
                 };
@@ -526,16 +574,16 @@ impl<'a> GleamPrinter<'a> {
             }
             Expr::Todo { message } => {
                 let msg_doc = if let Some(m) = message {
-                    self.parens(self.expr(m))
+                    self.parens(self.expr_doc(m))
                 } else {
                     self.nil()
                 };
                 self.text("todo").append(msg_doc)
             }
             Expr::Echo { expression, body } => {
-                let doc = self.text("echo ").append(self.expr(expression));
+                let doc = self.text("echo ").append(self.expr_doc(expression));
                 if let Some(b) = body {
-                    doc.append(self.hardline()).append(self.expr(b))
+                    doc.append(self.hardline()).append(self.expr_doc(b))
                 } else {
                     doc
                 }
@@ -552,7 +600,7 @@ impl<'a> GleamPrinter<'a> {
                 arguments_before,
                 arguments_after,
             } => {
-                let fn_doc = self.expr(function);
+                let fn_doc = self.expr_doc(function);
                 let before_doc = self.join(
                     arguments_before.iter().map(|a| self.field_expr(a)),
                     self.text(", "),
@@ -585,13 +633,13 @@ impl<'a> GleamPrinter<'a> {
                     fields.iter().map(|(name, value)| {
                         self.text(name.clone())
                             .append(self.text(": "))
-                            .append(self.expr(value))
+                            .append(self.expr_doc(value))
                     }),
                     self.text(", "),
                 );
                 constructor_doc
                     .append(self.text("(.."))
-                    .append(self.expr(record))
+                    .append(self.expr_doc(record))
                     .append(self.text(", "))
                     .append(fields_doc)
                     .append(self.text(")"))
@@ -605,9 +653,9 @@ impl<'a> GleamPrinter<'a> {
             Field::Labelled { label, item } => self
                 .text(label.clone())
                 .append(self.text(": "))
-                .append(self.expr(item)),
+                .append(self.expr_doc(item)),
             Field::Shorthand { name } => self.text(name.clone()),
-            Field::Unlabelled { item } => self.expr(item),
+            Field::Unlabelled { item } => self.expr_doc(item),
         }
     }
 
@@ -662,12 +710,14 @@ impl<'a> GleamPrinter<'a> {
     fn statement(&self, s: &Statement) -> Doc<'a> {
         match s {
             Statement::Use { patterns, function } => {
-                let patterns_doc =
-                    self.join(patterns.iter().map(|p| self.pattern(p)), self.text(", "));
+                let patterns_doc = self.join(
+                    patterns.iter().map(|p| self.pattern_doc(p)),
+                    self.text(", "),
+                );
                 self.text("use ")
                     .append(patterns_doc)
                     .append(self.text(" <- "))
-                    .append(self.expr(function))
+                    .append(self.expr_doc(function))
             }
             Statement::Assignment {
                 pattern,
@@ -680,25 +730,25 @@ impl<'a> GleamPrinter<'a> {
                     self.nil()
                 };
                 self.text("let ")
-                    .append(self.pattern(pattern))
+                    .append(self.pattern_doc(pattern))
                     .append(ann_doc)
                     .append(self.text(" = "))
-                    .append(self.expr(value))
+                    .append(self.expr_doc(value))
             }
-            Statement::Expression(e) => self.expr(e),
+            Statement::Expression(e) => self.expr_doc(e),
         }
     }
 
     /// Print a case branch
     fn case_branch(&self, c: &CaseBranch) -> Doc<'a> {
-        self.pattern(&c.pattern)
+        self.pattern_doc(&c.pattern)
             .append(self.text(" -> "))
-            .append(self.expr(&c.body))
+            .append(self.expr_doc(&c.body))
     }
 
     /// Print a bit string segment for expressions
     fn bit_string_segment_expr(&self, seg: &BitStringSegment<Expr>) -> Doc<'a> {
-        let value_doc = self.expr(&seg.value);
+        let value_doc = self.expr_doc(&seg.value);
         if seg.options.is_empty() {
             value_doc
         } else {
@@ -727,7 +777,7 @@ impl<'a> GleamPrinter<'a> {
             BitStringOption::Native => self.text("native"),
             BitStringOption::Size(expr) => self
                 .text("size(")
-                .append(self.expr(expr))
+                .append(self.expr_doc(expr))
                 .append(self.text(")")),
             BitStringOption::Unit(n) => self.text(format!("unit({})", n)),
         }
@@ -738,7 +788,7 @@ impl<'a> GleamPrinter<'a> {
     // ========================================================================
 
     /// Print a pattern
-    pub fn pattern(&self, p: &Pattern) -> Doc<'a> {
+    fn pattern_doc(&self, p: &Pattern) -> Doc<'a> {
         match p {
             Pattern::Wildcard => self.text("_"),
             Pattern::Variable { name } => self.text(name.clone()),
@@ -776,20 +826,24 @@ impl<'a> GleamPrinter<'a> {
                 }
             }
             Pattern::Tuple { elements } => {
-                let elements_doc =
-                    self.join(elements.iter().map(|e| self.pattern(e)), self.text(", "));
+                let elements_doc = self.join(
+                    elements.iter().map(|e| self.pattern_doc(e)),
+                    self.text(", "),
+                );
                 self.text("#(").append(elements_doc).append(self.text(")"))
             }
             Pattern::List { elements, tail } => {
                 if elements.is_empty() && tail.is_none() {
                     self.text("[]")
                 } else {
-                    let elements_doc =
-                        self.join(elements.iter().map(|e| self.pattern(e)), self.text(", "));
+                    let elements_doc = self.join(
+                        elements.iter().map(|e| self.pattern_doc(e)),
+                        self.text(", "),
+                    );
                     let with_tail = if let Some(t) = tail {
                         elements_doc
                             .append(self.text(", .."))
-                            .append(self.pattern(t))
+                            .append(self.pattern_doc(t))
                     } else {
                         elements_doc
                     };
@@ -797,7 +851,7 @@ impl<'a> GleamPrinter<'a> {
                 }
             }
             Pattern::Assignment { pattern, name } => self
-                .pattern(pattern)
+                .pattern_doc(pattern)
                 .append(self.text(" as "))
                 .append(self.text(name.clone())),
             Pattern::Concatenate {
@@ -827,15 +881,15 @@ impl<'a> GleamPrinter<'a> {
             Field::Labelled { label, item } => self
                 .text(label.clone())
                 .append(self.text(": "))
-                .append(self.pattern(item)),
+                .append(self.pattern_doc(item)),
             Field::Shorthand { name } => self.text(name.clone()),
-            Field::Unlabelled { item } => self.pattern(item),
+            Field::Unlabelled { item } => self.pattern_doc(item),
         }
     }
 
     /// Print a bit string segment for patterns
     fn bit_string_segment_pattern(&self, seg: &BitStringSegment<Pattern>) -> Doc<'a> {
-        let value_doc = self.pattern(&seg.value);
+        let value_doc = self.pattern_doc(&seg.value);
         if seg.options.is_empty() {
             value_doc
         } else {
@@ -853,33 +907,41 @@ impl<'a> GleamPrinter<'a> {
 // ============================================================================
 
 /// Render a module to a string with default width
-pub fn render_module(module: &ModuleIR) -> String {
+pub fn render_module(module: &ModuleIR) -> std::io::Result<String> {
     render_module_with_width(module, DEFAULT_WIDTH)
 }
 
 /// Render a module to a string with custom width
-pub fn render_module_with_width(module: &ModuleIR, width: usize) -> String {
+pub fn render_module_with_width(module: &ModuleIR, width: usize) -> std::io::Result<String> {
     let alloc = RcAllocator;
     let printer = GleamPrinter::new(&alloc);
-    let doc = printer.module(module);
+    let doc = printer.module(module)?;
     let mut output = Vec::new();
-    doc.render(width, &mut output).unwrap();
-    String::from_utf8(output).unwrap()
+    doc.render(width, &mut output)?;
+    String::from_utf8(output)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// Render an expression to a string
-pub fn render_expr(expr: &Expr) -> String {
+/// Render an expression to a string, rejecting unsupported syntax.
+///
+/// ```
+/// use morphir_gleam_binding::{backend::render_expr, frontend::ast::{Expr, Literal}};
+/// let expression = Expr::Literal { value: Literal::Int { value: 42 } };
+/// assert_eq!(render_expr(&expression).unwrap(), "42");
+/// ```
+pub fn render_expr(expr: &Expr) -> std::io::Result<String> {
     render_expr_with_width(expr, DEFAULT_WIDTH)
 }
 
 /// Render an expression to a string with custom width
-pub fn render_expr_with_width(expr: &Expr, width: usize) -> String {
+pub fn render_expr_with_width(expr: &Expr, width: usize) -> std::io::Result<String> {
     let alloc = RcAllocator;
     let printer = GleamPrinter::new(&alloc);
-    let doc = printer.expr(expr);
+    let doc = printer.expr(expr)?;
     let mut output = Vec::new();
-    doc.render(width, &mut output).unwrap();
-    String::from_utf8(output).unwrap()
+    doc.render(width, &mut output)?;
+    String::from_utf8(output)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// Render a type expression to a string
@@ -898,18 +960,19 @@ pub fn render_type_expr_with_width(type_expr: &TypeExpr, width: usize) -> String
 }
 
 /// Render a pattern to a string
-pub fn render_pattern(pattern: &Pattern) -> String {
+pub fn render_pattern(pattern: &Pattern) -> std::io::Result<String> {
     render_pattern_with_width(pattern, DEFAULT_WIDTH)
 }
 
 /// Render a pattern to a string with custom width
-pub fn render_pattern_with_width(pattern: &Pattern, width: usize) -> String {
+pub fn render_pattern_with_width(pattern: &Pattern, width: usize) -> std::io::Result<String> {
     let alloc = RcAllocator;
     let printer = GleamPrinter::new(&alloc);
-    let doc = printer.pattern(pattern);
+    let doc = printer.pattern(pattern)?;
     let mut output = Vec::new();
-    doc.render(width, &mut output).unwrap();
-    String::from_utf8(output).unwrap()
+    doc.render(width, &mut output)?;
+    String::from_utf8(output)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(test)]
@@ -921,7 +984,7 @@ mod tests {
         let expr = Expr::Literal {
             value: Literal::Bool { value: true },
         };
-        assert_eq!(render_expr(&expr), "True");
+        assert_eq!(render_expr(&expr).unwrap(), "True");
     }
 
     #[test]
@@ -929,7 +992,7 @@ mod tests {
         let expr = Expr::Literal {
             value: Literal::Int { value: 42 },
         };
-        assert_eq!(render_expr(&expr), "42");
+        assert_eq!(render_expr(&expr).unwrap(), "42");
     }
 
     #[test]
@@ -943,7 +1006,7 @@ mod tests {
                 value: Literal::Int { value: 2 },
             }),
         };
-        assert_eq!(render_expr(&expr), "1 + 2");
+        assert_eq!(render_expr(&expr).unwrap(), "1 + 2");
     }
 
     #[test]
@@ -960,7 +1023,7 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(render_expr(&expr), "#(1, \"hello\")");
+        assert_eq!(render_expr(&expr).unwrap(), "#(1, \"hello\")");
     }
 
     #[test]
@@ -979,13 +1042,13 @@ mod tests {
             ],
             tail: None,
         };
-        assert_eq!(render_expr(&expr), "[1, 2, 3]");
+        assert_eq!(render_expr(&expr).unwrap(), "[1, 2, 3]");
     }
 
     #[test]
     fn test_render_pattern_wildcard() {
         let pattern = Pattern::Wildcard;
-        assert_eq!(render_pattern(&pattern), "_");
+        assert_eq!(render_pattern(&pattern).unwrap(), "_");
     }
 
     #[test]
@@ -1003,5 +1066,29 @@ mod tests {
             }),
         };
         assert_eq!(render_type_expr(&ty), "fn(Int) -> String");
+    }
+
+    #[test]
+    fn rejects_nested_unsupported_expressions_without_emitting_source() {
+        let expression = Expr::Tuple {
+            elements: vec![Expr::Unsupported {
+                feature: "case guard".into(),
+                span: crate::frontend::ast::Span { start: 4, end: 12 },
+            }],
+        };
+        let error = render_expr(&expression).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("case guard"));
+        assert!(error.to_string().contains("4..12"));
+        let allocator = RcAllocator;
+        let printer = GleamPrinter::new(&allocator);
+        assert!(printer.expr(&expression).is_err());
+        assert!(
+            printer
+                .expr(&Expr::Literal {
+                    value: Literal::Int { value: 42 }
+                })
+                .is_ok()
+        );
     }
 }

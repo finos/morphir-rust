@@ -31,6 +31,7 @@ cd "$REPO_ROOT"
 VERSION=$(cat .config/morphir-cli-version)
 BUNDLE="${MORPHIR_EXTENSION_BUNDLE:-$REPO_ROOT/.morphir/build/extensions/$ID}"
 CLASSIC_IR="$REPO_ROOT/crates/morphir-core/tests/fixtures/ir/classic/greeting-example.json"
+CANONICAL_IR="$REPO_ROOT/crates/morphir-projection/tests/fixtures/canonical-customer-v4.json"
 
 [ -d "$BUNDLE" ] || {
     echo "no bundle at $BUNDLE; run 'mise run extension:artifact:$ID' first." >&2
@@ -180,6 +181,9 @@ case "$ID" in
             echo "generate --target avro wrote nothing" >&2
             exit 1
         }
+        morphir generate --target avro --input "$CANONICAL_IR" --output out/avro-v4 \
+            --option representation=json --option projection=schemas
+        require_file out/avro-v4/examples/customer/domain/Customer.avsc
         ;;
     openapi)
         for target in openapi json-schema; do
@@ -189,6 +193,10 @@ case "$ID" in
                 exit 1
             }
         done
+        morphir generate --target json-schema --input "$CANONICAL_IR" --output out/json-schema-v4
+        require_file out/json-schema-v4/domain.Customer.schema.json
+        morphir generate --target openapi --input "$CANONICAL_IR" --output out/openapi-v4
+        require_file out/openapi-v4/openapi.json
         ;;
     python)
         mkdir -p "$PROJECT/src/domain"

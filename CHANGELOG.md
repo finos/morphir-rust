@@ -208,6 +208,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   types-0012, distributions-0009.
 
 ### Fixed
+- Avro 0.1.2 and OpenAPI 0.1.1 refresh the WASM backends with the canonical v4
+  access-wrapper reader. The released-CLI checks cover both classic v3 input and
+  a canonical v4 customer record for Avro, JSON Schema and OpenAPI generation.
+  Fixed schema assertions retain primitive field mappings in native tests.
 
 - `morphir extension repository init <name>` with a bare relative path such as `repo` failed with `failed to access : No such file or directory`. The durable directory helper counted the empty ancestor of a relative path as a directory to create and sync.
 - `morphir-elm-native` accepts `irVersion` `3.0.0` and `4.0.0` as well as `3` and `4`. The Morphir CLI

@@ -26,7 +26,8 @@ use crate::frontend::resolve::{DependencyInterface, Scope, dependency_order, res
 use crate::frontend::source;
 use crate::frontend::{cst_to_ast, parse};
 use crate::incremental::{Decision, Digests, decide};
-use crate::resolved::{Interface, ResolvedModule};
+use crate::names;
+use crate::resolved::{Access, FqName, Interface, InterfaceType, RType, ResolvedModule};
 use crate::span::Span;
 use morphir_extension_sdk::{
     BaselineModule, CompileRequest, CompileResult, Diagnostic, DiagnosticSeverity, ModuleResult,
@@ -106,7 +107,7 @@ pub fn compile(request: CompileRequest) -> CompileResult {
     // and echoes back, and a run that failed still tells it what it was.
     let context_digest = boundary::context_digest(&validated, &dependency_interfaces);
 
-    let Some(emitter) = emit::emitter_for(&validated.ir_version) else {
+    let Some(emitter) = emit::emitter_for(&validated.ir_version, validated.ordering) else {
         return rejected(
             boundary::request_error(format!(
                 "no emitter for Morphir IR `{}`",
@@ -120,7 +121,8 @@ pub fn compile(request: CompileRequest) -> CompileResult {
     let (baseline, baseline_interfaces) = (read.modules, read.interfaces);
     diagnostics.extend(read.diagnostics);
 
-    let (documents, skipped_documents, headerless) = read_documents(&request, &baseline);
+    let (documents, skipped_documents, headerless) =
+        read_documents(&request, &baseline, validated.doc_comments);
     diagnostics.extend(skipped_documents.iter().cloned());
 
     // A document whose header could not be read still names a module when the
@@ -214,6 +216,10 @@ pub fn compile(request: CompileRequest) -> CompileResult {
             &package,
         );
     }
+
+    // Only now, with every module's public interface known, can a module that
+    // an exposed module reaches into be found and published too.
+    promote_implicitly_exposed(&mut run, &validated.package);
 
     // A distribution holds its dependencies' *specifications*, and a compile
     // request supplies their definitions, so the specification is derived.
@@ -310,6 +316,7 @@ struct Headerless {
 fn read_documents(
     request: &CompileRequest,
     baseline: &HashMap<String, BaselineModule>,
+    docs: cst_to_ast::DocComments,
 ) -> (Vec<Document>, Vec<Diagnostic>, Vec<Headerless>) {
     let mut documents: Vec<Document> = Vec::with_capacity(request.documents.len());
     let mut skipped = Vec::new();
@@ -333,7 +340,7 @@ fn read_documents(
             })
             .collect();
 
-        let module = match cst_to_ast::to_ast(&parsed, text) {
+        let module = match cst_to_ast::to_ast(&parsed, text, docs) {
             Ok(module) => module,
             Err(error) => {
                 let reported = source::diagnostic(
@@ -527,7 +534,11 @@ fn compile_one(
     dependency_interfaces: &[DependencyInterface],
 ) {
     let dotted = document.dotted();
-    let access = boundary::module_access(validated.exposed.as_deref(), &dotted);
+    let access = boundary::module_access(
+        validated.exposed.as_deref(),
+        &validated.package,
+        document.name(),
+    );
 
     if !document.syntax.is_empty() {
         stop(
@@ -706,6 +717,151 @@ fn compile_one(
         diagnostics,
     });
     run.compiled.push(resolved);
+}
+
+/// Publishes every module an exposed module reaches into.
+///
+/// An exposed module whose public surface names a type of an unexposed module
+/// would otherwise describe a type nobody outside the package may name.
+/// morphir-elm resolves that by publishing the module that owns the type
+/// (`Morphir.Elm.IncrementalFrontend`, `collectImplicitlyExposedModules`), and
+/// this does the same, from the same starting point: only what a *public* type
+/// of an *exposed* module publishes counts — a public alias's body and a public
+/// custom type's constructor arguments — which is exactly what a module's
+/// [`Interface`] holds.
+///
+/// It is transitive, as morphir-elm's is: the type that made a module public
+/// contributes its own references in turn.
+///
+/// It diverges from morphir-elm in one place, deliberately. morphir-elm stops
+/// at the *module* — `Morphir.Elm.IncrementalFrontend`, lines 1250-1252, drop a
+/// reference into an already-published module without following it — so if an
+/// exposed module publishes `Hidden.A` and `Hidden.B`, only whichever of them
+/// was reached first has its own references followed, and a module the other
+/// one names stays private while a public type points into it. That result is
+/// internally inconsistent, so this walk follows every *declaration* it
+/// reaches, not every module. It only ever publishes more modules than
+/// morphir-elm would, never fewer, so nothing that was public becomes private.
+///
+/// This runs after the walk rather than during it, because a module's access is
+/// not knowable until every module that could reach it has been resolved. The
+/// access an emitter writes into the distribution is the one in
+/// [`Run::module_irs`], not the one the per-module IR was emitted under, so
+/// setting it here is what the document ends up saying. A reused module is
+/// covered too: its interface came out of the baseline, and the promotion is
+/// recomputed from scratch on every run.
+fn promote_implicitly_exposed(run: &mut Run, package: &[String]) {
+    let spelled = |path: &[String]| -> Vec<String> {
+        path.iter()
+            .map(|segment| names::type_spelling(segment))
+            .collect()
+    };
+    // Keyed by IR module path, spelled the way an `Interface` spells names, so
+    // that the paths in `module_irs` and the ones inside an `FqName` agree.
+    let interfaces: HashMap<Vec<String>, &Interface> = run
+        .interfaces
+        .iter()
+        .map(|(name, interface)| {
+            (
+                spelled(&boundary::relative_module(package, name)),
+                interface,
+            )
+        })
+        .collect();
+    let exposed: HashSet<Vec<String>> = run
+        .module_irs
+        .iter()
+        .filter(|(_, access, _)| *access == Access::Public)
+        .map(|(path, _, _)| spelled(path))
+        .collect();
+
+    let package = spelled(package);
+    let mut pending: Vec<FqName> = Vec::new();
+    for path in &exposed {
+        if let Some(interface) = interfaces.get(path) {
+            for declared in &interface.types {
+                published_references(declared, &mut pending);
+            }
+        }
+    }
+
+    let mut implicit: HashSet<Vec<String>> = HashSet::new();
+    // The declarations already followed, by module path and type name. Keying
+    // this on the *declaration* and not on its module is what makes the walk
+    // complete: a module is published by the first reference that reaches it,
+    // but every reference that reaches it still has its own declaration
+    // followed, so a second type of the same module opens what *it* names too.
+    // It is also what makes the walk terminate, since there are finitely many
+    // declarations and none is followed twice.
+    let mut followed: HashSet<(Vec<String>, String)> = HashSet::new();
+    while let Some(reference) = pending.pop() {
+        // A reference out of the package is somebody else's to publish, and an
+        // explicitly exposed module's own public declarations are already
+        // seeds, so there is nothing to add by following one again.
+        if reference.package != package || exposed.contains(&reference.module) {
+            continue;
+        }
+        if !followed.insert((reference.module.clone(), reference.name.clone())) {
+            continue;
+        }
+        implicit.insert(reference.module.clone());
+        if let Some(interface) = interfaces.get(&reference.module)
+            && let Some(declared) = interface
+                .types
+                .iter()
+                .find(|declared| declared.name == reference.name)
+        {
+            published_references(declared, &mut pending);
+        }
+    }
+
+    for (path, access, _) in &mut run.module_irs {
+        if implicit.contains(&spelled(path)) {
+            *access = Access::Public;
+        }
+    }
+}
+
+/// Every type reference a public declaration publishes: an alias publishes the
+/// type it stands for, and a custom type publishes its constructors' argument
+/// types — but only when the constructors are public, since an opaque type
+/// shows a dependent nothing.
+fn published_references(declared: &InterfaceType, out: &mut Vec<FqName>) {
+    if let Some(alias) = &declared.alias {
+        type_references(alias, out);
+    }
+    for (_, arguments) in declared.constructors.iter().flatten() {
+        for argument in arguments {
+            type_references(argument, out);
+        }
+    }
+}
+
+/// Every [`FqName`] a resolved type mentions, however deeply nested.
+fn type_references(ty: &RType, out: &mut Vec<FqName>) {
+    match ty {
+        RType::Var(_) | RType::Unit => {}
+        RType::Ref(name, arguments) => {
+            out.push(name.clone());
+            for argument in arguments {
+                type_references(argument, out);
+            }
+        }
+        RType::Record(fields) | RType::ExtensibleRecord(_, fields) => {
+            for field in fields {
+                type_references(&field.ty, out);
+            }
+        }
+        RType::Tuple(elements) => {
+            for element in elements {
+                type_references(element, out);
+            }
+        }
+        RType::Function(argument, result) => {
+            type_references(argument, out);
+            type_references(result, out);
+        }
+    }
 }
 
 /// What a module result reports as its dependencies: every in-package module

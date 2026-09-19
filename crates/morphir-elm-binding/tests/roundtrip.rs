@@ -18,6 +18,13 @@
 //!    differ.
 //! 3. Printing the re-read module reproduces the generated text exactly, so the
 //!    printer has one normal form and generation is idempotent.
+//!
+//! The whole round trip runs with `elmDocComments: "trimmed"`, because the Elm
+//! printer lays a doc comment out itself — `{-| <text> -}` — and so is an
+//! inverse of the frontend only for doc text with no whitespace of its own to
+//! preserve. Under the default `morphir-elm` mode the frontend keeps the raw
+//! text and the printer would give it a second layout, which is a property of
+//! the *backend*, not of the round trip these tests are about.
 
 use morphir_elm_binding::ElmExtension;
 use morphir_elm_binding::ast::{Constructor, Field, Import, Module, TypeDecl, TypeExpr};
@@ -72,7 +79,9 @@ fn compile_as(
             options: CompileOptions {
                 types_only: false,
                 ir_version: ir_version.into(),
-                extra: Default::default(),
+                extra: [("elmDocComments".to_string(), Value::from("trimmed"))]
+                    .into_iter()
+                    .collect(),
             },
             baseline: None,
         })
@@ -113,7 +122,8 @@ fn to_ast(text: &str) -> Module {
         errors.is_empty(),
         "the Elm does not parse:\n{text}\n{errors:?}"
     );
-    cst_to_ast::to_ast(&parsed, text).unwrap_or_else(|error| panic!("{error:?}\n{text}"))
+    cst_to_ast::to_ast(&parsed, text, cst_to_ast::DocComments::Trimmed)
+        .unwrap_or_else(|error| panic!("{error:?}\n{text}"))
 }
 
 /// Source → IR → source, for one IR version: the generated `My.Domain.Types`

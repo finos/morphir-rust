@@ -29,18 +29,23 @@ use morphir_core::ir::v4::{
 use morphir_core::naming::{FQName, ModuleName, PackageName, Path};
 use serde_json::Value;
 
-use super::{EmitError, Emitter, ModuleIr, PackageInput};
+use super::{EmitError, Emitter, ModuleIr, Ordering, PackageInput, in_order, name_key, path_key};
 use crate::names::{argument_words, module_label, words};
 use crate::resolved::{Access, FqName, RConstructor, RType, ResolvedBody, ResolvedModule};
 
 /// Writes Morphir IR v4 natively.
-pub struct V4Emitter;
+pub struct V4Emitter {
+    /// The order modules, types and constructors are written in. A v4 document
+    /// keys its modules and types by canonical name in an `IndexMap`, so this
+    /// is the order they are inserted in.
+    pub ordering: Ordering,
+}
 
 impl Emitter for V4Emitter {
     fn emit_module(&self, module: &ResolvedModule) -> Result<Value, EmitError> {
         let definition = AccessControlled {
             access: access(module.access),
-            value: module_definition(module)?,
+            value: module_definition(module, self.ordering)?,
         };
         serde_json::to_value(&definition).map_err(|error| {
             format!(
@@ -57,7 +62,9 @@ impl Emitter for V4Emitter {
     ) -> Result<Value, EmitError> {
         let mut modules: IndexMap<String, AccessControlled<ModuleDefinition>> = IndexMap::new();
         let mut written: HashMap<String, String> = HashMap::new();
-        for (module_path, module_access, module_ir) in module_irs {
+        for (module_path, module_access, module_ir) in
+            in_order(module_irs, self.ordering, |(path, _, _)| path_key(path))
+        {
             let label = module_label(module_path);
             let definition: AccessControlled<ModuleDefinition> =
                 serde_json::from_value(module_ir.clone()).map_err(|error| {
@@ -195,7 +202,7 @@ fn constructor(source: &RConstructor) -> ConstructorDefinition {
     }
 }
 
-fn type_definition(body: &ResolvedBody, params: &[String]) -> TypeDefinition {
+fn type_definition(body: &ResolvedBody, params: &[String], ordering: Ordering) -> TypeDefinition {
     let type_params = params.iter().map(|param| name(param)).collect();
     match body {
         ResolvedBody::Alias(alias) => TypeDefinition::TypeAliasDefinition {
@@ -209,16 +216,24 @@ fn type_definition(body: &ResolvedBody, params: &[String]) -> TypeDefinition {
             type_params,
             constructors: AccessControlled {
                 access: access(*constructor_access),
-                value: constructors.iter().map(constructor).collect(),
+                value: in_order(constructors, ordering, |source| name_key(&source.name))
+                    .into_iter()
+                    .map(constructor)
+                    .collect(),
             },
         },
     }
 }
 
-fn module_definition(module: &ResolvedModule) -> Result<ModuleDefinition, EmitError> {
+fn module_definition(
+    module: &ResolvedModule,
+    ordering: Ordering,
+) -> Result<ModuleDefinition, EmitError> {
     let mut types: IndexMap<String, AccessControlled<Documented<TypeDefinition>>> = IndexMap::new();
     let mut written: HashMap<String, String> = HashMap::new();
-    for declaration in &module.types {
+    for declaration in in_order(&module.types, ordering, |declaration| {
+        name_key(&declaration.name)
+    }) {
         let key = name(&declaration.name).to_canonical_string();
         // An `IndexMap` would replace the earlier declaration silently.
         if let Some(earlier) = written.insert(key.clone(), declaration.name.clone()) {
@@ -235,7 +250,7 @@ fn module_definition(module: &ResolvedModule) -> Result<ModuleDefinition, EmitEr
                 access: access(declaration.access),
                 value: Documented::new(
                     declaration.doc.clone().map(Documentation::new),
-                    type_definition(&declaration.body, &declaration.params),
+                    type_definition(&declaration.body, &declaration.params, ordering),
                 ),
             },
         );

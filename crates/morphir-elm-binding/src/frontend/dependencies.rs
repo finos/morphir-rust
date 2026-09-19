@@ -110,7 +110,7 @@ fn dependency_interface(dependency: &CompileDependency) -> Result<DependencyInte
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::emit::emitter_for;
+    use crate::frontend::emit::{Ordering, emitter_for};
     use crate::resolved::{
         FqName, RConstructor, RField, RType, ResolvedBody, ResolvedModule, ResolvedType,
     };
@@ -227,7 +227,7 @@ mod tests {
     fn a_module_definition_round_trips_through_its_interface_in_both_versions() {
         let module = module();
         for version in ["3", "4"] {
-            let emitter = emitter_for(version).expect("a supported version");
+            let emitter = emitter_for(version, Ordering::Source).expect("a supported version");
             let ir = emitter.emit_module(&module).expect("the module is written");
             let interface = interface_from_module_ir(version, &module.name, &ir)
                 .unwrap_or_else(|error| panic!("v{version}: {error}"));
@@ -293,7 +293,7 @@ mod tests {
     fn a_distribution_becomes_the_dependency_interfaces_it_declares() {
         let module = module();
         for version in ["3", "4"] {
-            let emitter = emitter_for(version).expect("a supported version");
+            let emitter = emitter_for(version, Ordering::Source).expect("a supported version");
             let ir = emitter.emit_module(&module).expect("the module is written");
             let package = vec!["Acme".to_string(), "Lib".to_string()];
             let distribution = emitter

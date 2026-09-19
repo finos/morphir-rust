@@ -215,6 +215,7 @@ fn library_modules(ir: &Value) -> Vec<String> {
 struct ElmWorld {
     documents: Vec<SourceDocument>,
     prelude: Option<Value>,
+    doc_comments: Option<Value>,
     version: String,
     compiled: Option<CompileResult>,
     generated: Option<GenerateResult>,
@@ -229,6 +230,7 @@ impl ElmWorld {
             self.documents.clone(),
             version,
             self.prelude.as_ref(),
+            self.doc_comments.as_ref(),
             self.baseline.clone(),
         ));
     }
@@ -271,6 +273,7 @@ impl ElmWorld {
             vec![document(A_URI, a_source(a)), document(B_URI, b_source(b))],
             "3",
             None,
+            None,
             Some(held.clone()),
         );
         self.baseline = Some(baseline_from(&held, &result));
@@ -284,11 +287,15 @@ fn compile(
     documents: Vec<SourceDocument>,
     ir_version: &str,
     prelude: Option<&Value>,
+    doc_comments: Option<&Value>,
     baseline: Option<CompileBaseline>,
 ) -> CompileResult {
     let mut extra = std::collections::HashMap::new();
     if let Some(prelude) = prelude {
         extra.insert("elmPrelude".to_string(), prelude.clone());
+    }
+    if let Some(doc_comments) = doc_comments {
+        extra.insert("elmDocComments".to_string(), doc_comments.clone());
     }
     let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
     extension
@@ -422,6 +429,11 @@ fn ambiguous_imports(world: &mut ElmWorld) {
 #[given(expr = "the Elm prelude option {string}")]
 fn prelude_option(world: &mut ElmWorld, prelude: String) {
     world.prelude = Some(Value::String(prelude));
+}
+
+#[given(expr = "the Elm doc comment option {string}")]
+fn doc_comment_option(world: &mut ElmWorld, mode: String) {
+    world.doc_comments = Some(Value::String(mode));
 }
 
 // ----------------------------------------------------------------------------
@@ -566,7 +578,13 @@ fn same_distribution(world: &mut ElmWorld) {
         .iter()
         .map(|artifact| document(&artifact.path, &artifact.content))
         .collect();
-    let again = compile(documents, &world.version, None, None);
+    let again = compile(
+        documents,
+        &world.version,
+        None,
+        world.doc_comments.as_ref(),
+        None,
+    );
     assert!(again.success, "{:?}", again.diagnostics);
     assert_eq!(again.ir, world.result().ir);
 }

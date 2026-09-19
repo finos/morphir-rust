@@ -58,6 +58,193 @@ fn compile_as(
         .unwrap()
 }
 
+/// Compiles a v3 package with an exact exposed-module list.
+fn compile_exposing(
+    package_name: &str,
+    exposed: &[&str],
+    documents: Vec<SourceDocument>,
+) -> CompileResult {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents,
+            package: CompilePackage {
+                name: package_name.into(),
+                exposed_modules: Some(exposed.iter().map(|name| name.to_string()).collect()),
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: Default::default(),
+            },
+            baseline: None,
+        })
+        .unwrap()
+}
+
+/// Each module of a v3 distribution by its IR module path, with the access the
+/// document writes for it.
+fn accesses(result: &CompileResult) -> std::collections::BTreeMap<String, String> {
+    assert!(result.success, "{:?}", result.diagnostics);
+    result.ir.as_ref().expect("a distribution")["distribution"][3]["modules"]
+        .as_array()
+        .expect("a module list")
+        .iter()
+        .map(|entry| {
+            let path = entry[0]
+                .as_array()
+                .expect("a module path")
+                .iter()
+                .map(|name| {
+                    name.as_array()
+                        .expect("a name")
+                        .iter()
+                        .map(|word| word.as_str().expect("a word").to_string())
+                        .collect::<Vec<_>>()
+                        .join("-")
+                })
+                .collect::<Vec<_>>()
+                .join(".");
+            let access = entry[1]["access"].as_str().expect("an access").to_string();
+            (path, access)
+        })
+        .collect()
+}
+
+/// Compiles a v3 package with the `elmOrdering` option set (or, for `None`,
+/// left out so the default applies).
+fn compile_ordered(order: Option<&str>, documents: Vec<SourceDocument>) -> CompileResult {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents,
+            package: CompilePackage {
+                name: "My.Pkg".into(),
+                exposed_modules: None,
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: order
+                    .map(|order| ("elmOrdering".to_string(), serde_json::Value::from(order)))
+                    .into_iter()
+                    .collect(),
+            },
+            baseline: None,
+        })
+        .unwrap()
+}
+
+/// The v3 distribution's module paths in the order it writes them, each with
+/// its type names and each custom type's constructor names, all in order.
+fn v3_layout(result: &CompileResult) -> Vec<(String, Vec<String>, Vec<Vec<String>>)> {
+    assert!(result.success, "{:?}", result.diagnostics);
+    let dashed = |name: &serde_json::Value| {
+        name.as_array()
+            .expect("a name")
+            .iter()
+            .map(|word| word.as_str().expect("a word").to_string())
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    result.ir.as_ref().expect("a distribution")["distribution"][3]["modules"]
+        .as_array()
+        .expect("a module list")
+        .iter()
+        .map(|entry| {
+            let path = entry[0]
+                .as_array()
+                .expect("a module path")
+                .iter()
+                .map(dashed)
+                .collect::<Vec<_>>()
+                .join(".");
+            let types = entry[1]["value"]["types"]
+                .as_array()
+                .expect("a type list")
+                .to_vec();
+            let constructors = types
+                .iter()
+                .filter_map(|ty| {
+                    ty[1]["value"]["value"][2]["value"]
+                        .as_array()
+                        .map(|list| list.iter().map(|entry| dashed(&entry[0])).collect())
+                })
+                .collect();
+            (
+                path,
+                types.iter().map(|ty| dashed(&ty[0])).collect(),
+                constructors,
+            )
+        })
+        .collect()
+}
+
+/// Compiles one v3 module with the `elmDocComments` option set (or, for
+/// `None`, left out so the default applies).
+fn compile_with_doc_mode(mode: Option<&str>, text: &str) -> CompileResult {
+    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    extension
+        .frontend()
+        .unwrap()
+        .compile(CompileRequest {
+            language_id: "elm".into(),
+            documents: vec![document("file:///work/Docs.elm", text)],
+            package: CompilePackage {
+                name: "local/example".into(),
+                exposed_modules: None,
+            },
+            dependencies: vec![],
+            options: CompileOptions {
+                types_only: false,
+                ir_version: "3".into(),
+                extra: mode
+                    .map(|mode| ("elmDocComments".to_string(), serde_json::Value::from(mode)))
+                    .into_iter()
+                    .collect(),
+            },
+            baseline: None,
+        })
+        .unwrap()
+}
+
+/// The module doc a v3 distribution's only module carries, and the doc of each
+/// of its types by name.
+fn v3_docs(
+    result: &CompileResult,
+) -> (
+    serde_json::Value,
+    std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    assert!(result.success, "{:?}", result.diagnostics);
+    let module =
+        &result.ir.as_ref().expect("a distribution")["distribution"][3]["modules"][0][1]["value"];
+    let types = module["types"]
+        .as_array()
+        .expect("a type list")
+        .iter()
+        .map(|entry| {
+            let name = entry[0]
+                .as_array()
+                .expect("a name")
+                .iter()
+                .map(|word| word.as_str().expect("a word").to_string())
+                .collect::<Vec<_>>()
+                .join("-");
+            (name, entry[1]["value"]["doc"].clone())
+        })
+        .collect();
+    (module["doc"].clone(), types)
+}
+
 fn codes(result: &CompileResult, code: &str) -> Vec<Diagnostic> {
     result
         .diagnostics
@@ -296,6 +483,567 @@ fn a_classic_distribution_still_writes_no_dependencies() {
     assert_eq!(
         result.ir.as_ref().expect("a distribution")["distribution"][2],
         serde_json::json!([])
+    );
+}
+
+/// The v3 type definition a distribution holds for the single type of its
+/// single module.
+fn only_v3_type_definition(ir: &serde_json::Value) -> serde_json::Value {
+    let modules = &ir["distribution"][3]["modules"];
+    assert_eq!(modules.as_array().map(Vec::len), Some(1), "one module");
+    let types = &modules[0][1]["value"]["types"];
+    assert_eq!(types.as_array().map(Vec::len), Some(1), "one type");
+    types[0][1]["value"]["value"].clone()
+}
+
+/// A function type is a spine of segments, and every segment keeps the type
+/// arguments it was written with. This pins the whole v3 definition against the
+/// one morphir-elm 2.100.0 writes for the very same alias, copied out of its
+/// `morphir-ir.json`: an earlier lowering dropped `List Int` from
+/// `List Int -> List Int` and answered `(Int -> Int) -> List Int` with no
+/// diagnostic at all.
+#[test]
+fn a_higher_order_alias_is_written_the_way_morphir_elm_writes_it() {
+    let source = "module My.Pkg.Aliases exposing (..)\n\n\
+                  type alias AHigherOrder =\n    (Int -> Int) -> List Int -> List Int\n";
+    let result = compile_as(
+        "elm",
+        "My.Pkg",
+        vec![document("file:///work/My/Pkg/Aliases.elm", source)],
+        "3",
+        vec![],
+    );
+
+    assert!(result.success, "{:?}", result.diagnostics);
+    let int = serde_json::json!([
+        "Reference",
+        {},
+        [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]],
+        []
+    ]);
+    let list_int = serde_json::json!([
+        "Reference",
+        {},
+        [[["morphir"], ["s", "d", "k"]], [["list"]], ["list"]],
+        [int]
+    ]);
+    assert_eq!(
+        only_v3_type_definition(result.ir.as_ref().expect("a distribution")),
+        serde_json::json!([
+            "TypeAliasDefinition",
+            [],
+            [
+                "Function",
+                {},
+                ["Function", {}, int, int],
+                ["Function", {}, list_int, list_int]
+            ]
+        ])
+    );
+}
+
+/// `morphir.json` lists exposed modules package-relative, so a package
+/// `My.Pkg` exposes `My.Pkg.Aliases` by writing `Aliases`. Matching the entry
+/// against the full dotted name alone never hit, and every module of every
+/// ordinary package came out `Private` where morphir-elm writes `Public`.
+#[test]
+fn a_package_relative_exposed_module_entry_makes_the_module_public() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Aliases"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Aliases.elm",
+                "module My.Pkg.Aliases exposing (..)\n\ntype alias T = Int\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Other.elm",
+                "module My.Pkg.Other exposing (..)\n\ntype alias U = Int\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("aliases".to_string(), "Public".to_string()),
+            ("other".to_string(), "Private".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// An exposed module whose public surface names a type of an unexposed module
+/// would describe a type nobody outside the package may name, so morphir-elm
+/// publishes the module that owns it. A module nothing reaches into stays
+/// private.
+#[test]
+fn a_module_an_exposed_module_reaches_into_is_published_too() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Aliases"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Aliases.elm",
+                "module My.Pkg.Aliases exposing (..)\n\n\
+                 import My.Pkg.Hidden\n\n\
+                 type alias FromHidden = My.Pkg.Hidden.Secret\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Hidden.elm",
+                "module My.Pkg.Hidden exposing (Secret)\n\ntype alias Secret = { key : String }\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Unreached.elm",
+                "module My.Pkg.Unreached exposing (..)\n\ntype alias Lonely = Int\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("aliases".to_string(), "Public".to_string()),
+            ("hidden".to_string(), "Public".to_string()),
+            ("unreached".to_string(), "Private".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// The promotion is transitive, as morphir-elm's is: the very type that
+/// published a module contributes its own references in turn, so a chain of
+/// unexposed modules is published end to end.
+#[test]
+fn implicit_exposure_follows_the_chain_it_opened() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (..)\n\n\
+                 import My.Pkg.Middle\n\n\
+                 type Request = Request My.Pkg.Middle.Body\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Middle.elm",
+                "module My.Pkg.Middle exposing (Body)\n\n\
+                 import My.Pkg.Deep\n\n\
+                 type alias Body = { tag : My.Pkg.Deep.Tag }\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Deep.elm",
+                "module My.Pkg.Deep exposing (Tag)\n\ntype alias Tag = String\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("deep".to_string(), "Public".to_string()),
+            ("middle".to_string(), "Public".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// Two types of one module open two different modules in turn, and both are
+/// published.
+///
+/// This is where the walk parts company with morphir-elm, which stops at the
+/// module: `Morphir.Elm.IncrementalFrontend` (1250-1252) drops a reference into
+/// an already-published module without following it, so only whichever of
+/// `Hidden.A` and `Hidden.B` it reached first would have its own references
+/// followed and only one of `DeepA` and `DeepB` would come out public — while a
+/// public type still pointed into the other.
+#[test]
+fn every_declaration_that_publishes_a_module_is_followed_not_just_the_first() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (..)\n\n\
+                 import My.Pkg.Hidden\n\n\
+                 type alias First = My.Pkg.Hidden.A\n\n\n\
+                 type alias Second = My.Pkg.Hidden.B\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Hidden.elm",
+                "module My.Pkg.Hidden exposing (A, B)\n\n\
+                 import My.Pkg.DeepA\nimport My.Pkg.DeepB\n\n\n\
+                 type alias A = My.Pkg.DeepA.T\n\n\n\
+                 type alias B = My.Pkg.DeepB.T\n",
+            ),
+            document(
+                "file:///work/My/Pkg/DeepA.elm",
+                "module My.Pkg.DeepA exposing (T)\n\ntype alias T = Int\n",
+            ),
+            document(
+                "file:///work/My/Pkg/DeepB.elm",
+                "module My.Pkg.DeepB exposing (T)\n\ntype alias T = String\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("deep-a".to_string(), "Public".to_string()),
+            ("deep-b".to_string(), "Public".to_string()),
+            ("hidden".to_string(), "Public".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// A type that refers to itself, and a pair that refer to each other, do not
+/// send the walk round for ever: a declaration is followed once.
+///
+/// The cycle is inside one module because that is the only place this frontend
+/// can have one — two modules that referred to each other would have to import
+/// each other, which is refused as `ELM_IMPORT_CYCLE` long before this runs.
+#[test]
+fn a_reference_cycle_inside_a_published_module_terminates() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (..)\n\n\
+                 import My.Pkg.Knot\n\n\
+                 type alias Entry = My.Pkg.Knot.Tree\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Knot.elm",
+                "module My.Pkg.Knot exposing (Tree(..), Odd(..), Even(..))\n\n\
+                 import My.Pkg.Tail\n\n\n\
+                 type Tree = Leaf | Branch Tree Odd\n\n\n\
+                 type Odd = Odd Even\n\n\n\
+                 type Even = Even Odd My.Pkg.Tail.End\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Tail.elm",
+                "module My.Pkg.Tail exposing (End)\n\ntype alias End = Int\n",
+            ),
+        ],
+    );
+
+    // `Tail` is reached only through `Knot.Even`, which is reached only through
+    // `Knot.Odd` — so the cycle has to be walked all the way, once, for it to
+    // be published at all.
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("knot".to_string(), "Public".to_string()),
+            ("tail".to_string(), "Public".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// Only what a module actually publishes counts. A private type's body, and an
+/// opaque custom type's constructor arguments, show a dependent nothing, so
+/// neither publishes the module it names.
+#[test]
+fn a_reference_a_module_does_not_publish_exposes_nothing() {
+    let result = compile_exposing(
+        "My.Pkg",
+        &["Api"],
+        vec![
+            document(
+                "file:///work/My/Pkg/Api.elm",
+                "module My.Pkg.Api exposing (Opaque)\n\n\
+                 import My.Pkg.Inner\n\n\
+                 type Opaque = Opaque My.Pkg.Inner.Hidden\n\n\n\
+                 type alias Private = My.Pkg.Inner.Hidden\n",
+            ),
+            document(
+                "file:///work/My/Pkg/Inner.elm",
+                "module My.Pkg.Inner exposing (Hidden)\n\ntype alias Hidden = Int\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        accesses(&result),
+        [
+            ("api".to_string(), "Public".to_string()),
+            ("inner".to_string(), "Private".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+const DOCS: &str = "module Example exposing (..)\n\n\
+                    {-| Values of several kinds.\n-}\n\n\
+                    import Dict\n\n\n\
+                    {-|    Leading and trailing whitespace in a doc.   \n-}\n\
+                    type alias Padded =\n    Int\n\n\n\
+                    {-| First line.\n\n  - a bullet\n\n-}\n\
+                    type alias Spread =\n    Int\n\n\n\
+                    {-| | Doc with a leading bar.\n-}\n\
+                    type alias Barred =\n    Int\n\n\n\
+                    type alias Undocumented =\n    Int\n";
+
+/// The default mode writes what morphir-elm writes: the text between the
+/// delimiters, with every space and newline of its own kept. An undocumented
+/// type carries the empty string a classic document uses, and a module with no
+/// doc carries `null`.
+#[test]
+fn the_default_doc_comment_mode_keeps_the_text_morphir_elm_keeps() {
+    for mode in [None, Some("morphir-elm")] {
+        let (module_doc, types) = v3_docs(&compile_with_doc_mode(mode, DOCS));
+
+        assert_eq!(module_doc, serde_json::json!(" Values of several kinds."));
+        assert_eq!(
+            types["padded"],
+            serde_json::json!("    Leading and trailing whitespace in a doc.   \n")
+        );
+        // A declaration's doc loses the delimiters and nothing else, so the
+        // blank line in front of `-}` is part of it. A *module* doc loses one
+        // character more — morphir-elm's `String.dropRight 3` — which is why
+        // the module doc above has no trailing newline.
+        assert_eq!(
+            types["spread"],
+            serde_json::json!(" First line.\n\n  - a bullet\n\n")
+        );
+        assert_eq!(
+            types["barred"],
+            serde_json::json!(" | Doc with a leading bar.\n")
+        );
+        assert_eq!(types["undocumented"], serde_json::json!(""));
+    }
+}
+
+/// `trimmed` takes the surrounding whitespace off, which is what this frontend
+/// did before the mode existed.
+#[test]
+fn the_trimmed_doc_comment_mode_takes_the_surrounding_whitespace_off() {
+    let (module_doc, types) = v3_docs(&compile_with_doc_mode(Some("trimmed"), DOCS));
+
+    assert_eq!(module_doc, serde_json::json!("Values of several kinds."));
+    assert_eq!(
+        types["padded"],
+        serde_json::json!("Leading and trailing whitespace in a doc.")
+    );
+    assert_eq!(
+        types["spread"],
+        serde_json::json!("First line.\n\n  - a bullet")
+    );
+    assert_eq!(
+        types["barred"],
+        serde_json::json!("| Doc with a leading bar.")
+    );
+    assert_eq!(types["undocumented"], serde_json::json!(""));
+}
+
+/// An undocumented module carries `null` in either mode.
+#[test]
+fn an_undocumented_module_has_no_doc_in_either_mode() {
+    let source = "module Example exposing (..)\n\ntype alias T =\n    Int\n";
+    for mode in [Some("morphir-elm"), Some("trimmed")] {
+        let (module_doc, types) = v3_docs(&compile_with_doc_mode(mode, source));
+        assert_eq!(module_doc, serde_json::Value::Null, "{mode:?}");
+        assert_eq!(types["t"], serde_json::json!(""), "{mode:?}");
+    }
+}
+
+/// A mode nobody implements is a request this extension cannot act on, and is
+/// refused by name rather than quietly falling back to the default.
+#[test]
+fn an_unknown_doc_comment_mode_is_refused() {
+    let result = compile_with_doc_mode(Some("verbatim"), DOCS);
+
+    assert!(!result.success);
+    let refusals = codes(&result, "ELM_REQUEST");
+    assert_eq!(refusals.len(), 1, "{:?}", result.diagnostics);
+    assert!(
+        refusals[0].message.contains("elmDocComments") && refusals[0].message.contains("verbatim"),
+        "{}",
+        refusals[0].message
+    );
+    assert!(result.ir.is_none());
+}
+
+/// A module's interface is what its dependents can observe, and a doc is not
+/// part of it: editing only a doc comment must not make every dependent
+/// recompile. The doc *is* part of the compile context, though, so switching
+/// modes invalidates the baseline as a whole.
+#[test]
+fn a_doc_only_edit_does_not_change_the_interface_digest() {
+    let before = compile_with_doc_mode(None, DOCS);
+    let after = compile_with_doc_mode(None, &DOCS.replace("First line.", "A different line."));
+
+    assert_ne!(before.ir, after.ir, "the doc text itself did change");
+    assert_eq!(
+        before.module_results[0].interface_digest,
+        after.module_results[0].interface_digest
+    );
+    assert_eq!(
+        before.context_digest, after.context_digest,
+        "the same options are the same context"
+    );
+    assert_ne!(
+        before.context_digest,
+        compile_with_doc_mode(Some("trimmed"), DOCS).context_digest,
+        "a different doc comment mode is a different context"
+    );
+}
+
+/// Two modules whose declarations are deliberately not in alphabetical order,
+/// including a custom type whose constructors are not either.
+fn unsorted_package() -> Vec<SourceDocument> {
+    vec![
+        document(
+            "file:///work/My/Pkg/Shared.elm",
+            "module My.Pkg.Shared exposing (..)\n\n\
+             type alias Money = Int\n\n\n\
+             type Currency = USD | EUR | GBP\n\n\n\
+             type alias Code = String\n",
+        ),
+        document(
+            "file:///work/My/Pkg/Aliases.elm",
+            "module My.Pkg.Aliases exposing (..)\n\n\
+             type alias Zeta = Int\n\n\n\
+             type alias Alpha = Int\n",
+        ),
+    ]
+}
+
+/// The default writes everything in the order the source declares it: modules
+/// in request order, types and constructors as written.
+#[test]
+fn the_default_ordering_is_source_order() {
+    for order in [None, Some("source")] {
+        assert_eq!(
+            v3_layout(&compile_ordered(order, unsorted_package())),
+            vec![
+                (
+                    "shared".to_string(),
+                    vec![
+                        "money".to_string(),
+                        "currency".to_string(),
+                        "code".to_string()
+                    ],
+                    vec![vec![
+                        "u-s-d".to_string(),
+                        "e-u-r".to_string(),
+                        "g-b-p".to_string()
+                    ]]
+                ),
+                (
+                    "aliases".to_string(),
+                    vec!["zeta".to_string(), "alpha".to_string()],
+                    vec![]
+                ),
+            ],
+            "{order:?}"
+        );
+    }
+}
+
+/// `morphir-elm` writes them the way morphir-elm's `Dict`s do: modules, types
+/// and constructors sorted by their key.
+#[test]
+fn the_morphir_elm_ordering_sorts_modules_types_and_constructors() {
+    assert_eq!(
+        v3_layout(&compile_ordered(Some("morphir-elm"), unsorted_package())),
+        vec![
+            (
+                "aliases".to_string(),
+                vec!["alpha".to_string(), "zeta".to_string()],
+                vec![]
+            ),
+            (
+                "shared".to_string(),
+                vec![
+                    "code".to_string(),
+                    "currency".to_string(),
+                    "money".to_string()
+                ],
+                // `["e","u","r"] < ["g","b","p"] < ["u","s","d"]`, which is the
+                // order morphir-elm writes for this very type.
+                vec![vec![
+                    "e-u-r".to_string(),
+                    "g-b-p".to_string(),
+                    "u-s-d".to_string()
+                ]]
+            ),
+        ]
+    );
+}
+
+/// The sort is on the *words* a Morphir name holds, not on a rendered spelling
+/// of it. `LocalDate` is `["local","date"]` and `Locale` is `["locale"]`, so
+/// `Locale` sorts *after* `LocalDate` — `"local" < "locale"` element by
+/// element — where a rendered `"localdate" < "locale"` comparison would agree
+/// by luck, but `ListOf` (`["list","of"]`) against `Listen` (`["listen"]`)
+/// would not: joined, `"listen" < "listof"`; by words, `["list","of"]` comes
+/// first because `"list" < "listen"`.
+#[test]
+fn the_morphir_elm_ordering_sorts_on_words_not_on_a_rendered_name() {
+    let result = compile_ordered(
+        Some("morphir-elm"),
+        vec![document(
+            "file:///work/My/Pkg/Words.elm",
+            "module My.Pkg.Words exposing (..)\n\n\
+             type alias Listen = Int\n\n\n\
+             type alias ListOf = Int\n\n\n\
+             type alias Locale = Int\n\n\n\
+             type alias LocalDate = Int\n",
+        )],
+    );
+
+    assert_eq!(
+        v3_layout(&result)[0].1,
+        vec![
+            "list-of".to_string(),
+            "listen".to_string(),
+            "local-date".to_string(),
+            "locale".to_string(),
+        ],
+        "a rendered-name sort would give listen, list-of, locale, local-date"
+    );
+}
+
+/// An order nobody implements is a request this extension cannot act on, and is
+/// refused by name rather than quietly falling back to the default.
+#[test]
+fn an_unknown_ordering_is_refused() {
+    let result = compile_ordered(Some("alphabetical"), unsorted_package());
+
+    assert!(!result.success);
+    let refusals = codes(&result, "ELM_REQUEST");
+    assert_eq!(refusals.len(), 1, "{:?}", result.diagnostics);
+    assert!(
+        refusals[0].message.contains("elmOrdering") && refusals[0].message.contains("alphabetical"),
+        "{}",
+        refusals[0].message
+    );
+    assert!(result.ir.is_none());
+}
+
+/// The ordering changes the document, so a baseline built under one order is
+/// not reusable by a run compiling under the other.
+#[test]
+fn the_two_orderings_are_two_compile_contexts() {
+    assert_ne!(
+        compile_ordered(None, unsorted_package()).context_digest,
+        compile_ordered(Some("morphir-elm"), unsorted_package()).context_digest
     );
 }
 

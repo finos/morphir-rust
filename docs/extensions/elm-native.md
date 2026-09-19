@@ -77,6 +77,73 @@ A dependency supplied in the compile request wins over a prelude package of the
 same name, so a real `Morphir.SDK` distribution shadows the built-in
 description of it.
 
+## The doc comment option
+
+A `{-| ... -}` comment becomes the `doc` a Morphir document carries. How much of
+it survives is the `elmDocComments` compile option:
+
+- `"morphir-elm"` is the **default**. It writes what morphir-elm writes, byte
+  for byte: the text between the delimiters, with its leading spaces and its
+  interior and trailing newlines kept. `{-| An integer.\n-}` on a type becomes
+  `" An integer.\n"`.
+- `"trimmed"` takes the surrounding whitespace off, so the same comment becomes
+  `"An integer."`.
+
+Any other value is refused with an `ELM_REQUEST` error naming the option. An
+undocumented type carries `""` and an undocumented module carries `null` in
+either mode.
+
+Byte compatibility includes one morphir-elm quirk. A *module* doc comment loses
+one character more than a declaration's does, because
+`Morphir.Elm.ParsedModule.documentation` uses `String.dropRight 3` where
+`Morphir.Elm.IncrementalFrontend` uses `String.dropRight 2` for a declaration.
+In the usual layout — `-}` alone on the last line — that character is the
+newline in front of it, which is why `{-| Shared types.\n-}` on a module becomes
+`" Shared types."` and not `" Shared types.\n"`. `"trimmed"` trims either way
+and so does not reproduce it.
+
+The mode changes the IR, so it is part of the [compile
+context](#the-compile-context): switching it invalidates a baseline whole rather
+than leaving modules that were compiled under the other mode in place. It is
+*not* part of a module's interface, so editing only a doc comment still does not
+recompile that module's dependents.
+
+The Elm backend lays a doc comment out itself (`{-| <text> -}`), so generating
+Elm from a distribution whose docs carry their own whitespace gives that
+whitespace a second layout. A source → IR → source → IR round trip is exact
+under `"trimmed"`; under `"morphir-elm"` the regenerated docs are equivalent but
+not character-identical.
+
+## The ordering option
+
+`elmOrdering` chooses the order the document lists its modules, types and
+constructors in:
+
+- `"source"` is the **default**: everything appears in the order the source
+  declares it. It is the default because it is the better order to read — a
+  reader comparing a document with the Elm it came from finds things where they
+  were written, and a diff between two versions of a package shows the edit
+  rather than a reshuffle.
+- `"morphir-elm"` writes the order morphir-elm writes. morphir-elm holds
+  modules, types and constructors in Elm `Dict`s, so its JSON order is the
+  `Dict`'s key order. Use it when a document has to compare byte for byte
+  against one morphir-elm produced.
+
+Any other value is refused with an `ELM_REQUEST` error naming the option.
+
+The sort is on the *words* a Morphir name holds, never on a rendered spelling of
+it: a key is a `Path` (`List Name`) or a `Name` (`List String`), compared
+element by element with a shorter prefix first. So `ListOf` (`["list","of"]`)
+sorts before `Listen` (`["listen"]`), where comparing the joined spellings would
+put them the other way round.
+
+Record fields and constructor arguments are never reordered. They are positional
+in morphir-elm too — a list, not a `Dict` — so source order already matches.
+
+The order changes the document, so it is part of the [compile
+context](#the-compile-context): switching it invalidates a baseline rather than
+assembling a distribution out of modules emitted under both.
+
 ## Package names and module paths
 
 A Morphir module path is relative to its package, so the package path is
@@ -100,6 +167,51 @@ modules were never named after it pays for that once: `local/example` holding a
 module `Example` generates `src/Local/Example/Example.elm` with
 `module Local.Example.Example` — a different name from the one compiled, which
 then round-trips unchanged.
+
+## Which modules are public
+
+A request states its public modules in `exposedModules`, the way `morphir.json`
+does: **package-relative**, so a package `My.Pkg` exposes `My.Pkg.Aliases` by
+writing `Aliases`. An entry written out in full is understood too, and entries
+are matched on the words a Morphir name keeps, not on the letters typed.
+Omitting `exposedModules` exposes every module; an empty list exposes none.
+
+A module that is not listed is still published when an exposed module reaches
+into it: if a public type of an exposed module names a type of an unexposed one,
+that module becomes public, and so does anything the type that opened it names
+in turn. This is morphir-elm's rule
+(`Morphir.Elm.IncrementalFrontend.collectImplicitlyExposedModules`), and it
+exists because an exposed module may not describe its types in terms nobody
+outside the package can name. Only what a module actually publishes counts: a
+private type's body, and an opaque custom type's constructor arguments, expose
+nothing.
+
+## Differences from morphir-elm
+
+These are deliberate, not gaps. Declaration order is not among them: it is a
+default, and [`elmOrdering`](#the-ordering-option) switches it.
+
+- **Values are skipped.** This frontend compiles type declarations only. Each
+  value declaration is reported as an `ELM_VALUE_SKIPPED` warning and the
+  compile still succeeds, so a distribution written here has no `values`.
+- **Implicit exposure follows every declaration, not every module.** morphir-elm
+  stops walking at the module: a reference into a module it has already
+  published is dropped without being followed
+  (`Morphir.Elm.IncrementalFrontend.elm:1250-1252`). So if an exposed module
+  publishes two types of one private module, only the first one reached has its
+  own references followed, and a module the second names stays private while a
+  public type points into it. This frontend follows every declaration it
+  reaches, which is the only way the result is internally consistent. It can
+  only publish more modules than morphir-elm, never fewer.
+- **An unreachable private module is kept.** morphir-elm drops a module that is
+  neither exposed nor reached from an exposed one (`Repo.removeUnusedModules`).
+  This frontend writes it into the distribution as `Private` instead: the
+  request named it, so the document describes it.
+- **Colliding module paths are refused.** Two Elm module names can write the
+  same IR module path once the package prefix is stripped from each — `Foo` and
+  `My.Foo` under package `My` both become `Foo`. That is reported as an
+  `ELM_REQUEST` error naming both modules and both uris, and the later document
+  fails, rather than one module silently replacing the other in the document.
 
 ## Incremental compilation
 

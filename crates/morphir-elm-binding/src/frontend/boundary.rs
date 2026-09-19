@@ -9,6 +9,8 @@ use morphir_extension_sdk::{CompileRequest, Diagnostic, DiagnosticSeverity};
 use serde::Serialize;
 
 use crate::digest::sha256_hex;
+use crate::frontend::cst_to_ast::{self, DocComments};
+use crate::frontend::emit::{self, Ordering};
 use crate::frontend::resolve::DependencyInterface;
 use crate::names;
 use crate::prelude::{self, Prelude};
@@ -29,6 +31,10 @@ pub struct Validated {
     pub types_only: bool,
     /// The prelude names are resolved against.
     pub prelude: Prelude,
+    /// How a doc comment becomes the doc text the IR carries.
+    pub doc_comments: DocComments,
+    /// The order modules, types and constructors are written in.
+    pub ordering: Ordering,
     /// The package path, one segment per `/`- or `.`-separated part.
     pub package: Vec<String>,
     /// The exact public module list, when the request states one.
@@ -84,6 +90,14 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
     let prelude = prelude::from_option(request.options.extra.get("elmPrelude"))
         .map_err(|reason| request_error(format!("invalid `elmPrelude` option: {reason}")))?;
 
+    let doc_comments = cst_to_ast::doc_comments_from_option(
+        request.options.extra.get("elmDocComments"),
+    )
+    .map_err(|reason| request_error(format!("invalid `elmDocComments` option: {reason}")))?;
+
+    let ordering = emit::ordering_from_option(request.options.extra.get("elmOrdering"))
+        .map_err(|reason| request_error(format!("invalid `elmOrdering` option: {reason}")))?;
+
     let package = package_path(&request.package.name);
     if package.is_empty() {
         return Err(request_error(
@@ -95,6 +109,8 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
         ir_version,
         types_only: request.options.types_only,
         prelude,
+        doc_comments,
+        ordering,
         package,
         exposed: request.package.exposed_modules.clone(),
     })
@@ -102,8 +118,9 @@ pub fn validate(request: &CompileRequest) -> Result<Validated, Diagnostic> {
 
 /// The identity of everything a module's compiled form depends on besides its
 /// own source: the IR version being written, the `typesOnly` flag, the prelude
-/// names resolve against, the package the request compiles under, and the
-/// public interfaces the request's dependency distributions supply.
+/// names resolve against, the doc comment mode and declaration order the IR is
+/// written in, the package the request compiles under, and the public
+/// interfaces the request's dependency distributions supply.
 ///
 /// This is the value a baseline is scoped to. A run is allowed to reuse a
 /// module only when it is compiling under the very same context, because a
@@ -139,6 +156,8 @@ pub fn context_digest(validated: &Validated, dependencies: &[DependencyInterface
         ir_version: &validated.ir_version,
         types_only: validated.types_only,
         prelude_digest: validated.prelude.digest(),
+        doc_comments: validated.doc_comments,
+        ordering: validated.ordering,
         package: &validated.package,
         dependencies,
     };
@@ -153,6 +172,8 @@ struct ContextIdentity<'a> {
     ir_version: &'a str,
     types_only: bool,
     prelude_digest: String,
+    doc_comments: DocComments,
+    ordering: Ordering,
     package: &'a [String],
     dependencies: Vec<DependencyIdentity>,
 }
@@ -211,12 +232,52 @@ pub fn relative_module(package: &[String], module: &[String]) -> Vec<String> {
 }
 
 /// A module is public when the request exposes every module, or names this one.
-pub fn module_access(exposed: Option<&[String]>, dotted_name: &str) -> Access {
-    match exposed {
-        None => Access::Public,
-        Some(names) if names.iter().any(|name| name == dotted_name) => Access::Public,
-        Some(_) => Access::Private,
+///
+/// A request states its exposed modules the way `morphir.json` does: package-
+/// relative, so a package `My.Pkg` holding `My.Pkg.Aliases` lists `Aliases`.
+/// morphir-elm prepends the package name before matching (`Morphir.Elm.Frontend`,
+/// `exposedModuleNames`), and so does this: an entry matches when it spells
+/// either the package-relative path ([`relative_module`]) or the module's full
+/// dotted name, so a request that writes `My.Pkg.Aliases` out in full is
+/// understood too. Matching against the full name alone would make every module
+/// of every package that names its modules the usual way `Private`.
+///
+/// Segments are compared in their [`crate::names`] spelling, as everywhere else
+/// in this crate: two names a Morphir document cannot tell apart are one name.
+pub fn module_access(exposed: Option<&[String]>, package: &[String], module: &[String]) -> Access {
+    // `None` exposes every module; `Some(vec![])` exposes none.
+    let Some(entries) = exposed else {
+        return Access::Public;
+    };
+    let relative = relative_module(package, module);
+    let exposes = |entry: &String| {
+        let entry = module_path(entry);
+        same_path(&entry, &relative) || same_path(&entry, module)
+    };
+    if entries.iter().any(exposes) {
+        Access::Public
+    } else {
+        Access::Private
     }
+}
+
+/// The segments a dotted Elm module name spells.
+fn module_path(name: &str) -> Vec<String> {
+    name.split('.')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether two module paths name the same module, segment by segment, in the
+/// only spelling a Morphir document keeps.
+fn same_path(left: &[String], right: &[String]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| names::type_spelling(left) == names::type_spelling(right))
 }
 
 #[cfg(test)]
@@ -267,12 +328,73 @@ mod tests {
 
     #[test]
     fn an_unlisted_module_is_private_only_when_a_list_is_given() {
-        assert_eq!(module_access(None, "My.Types"), Access::Public);
+        let package = package_path("My");
+        let types = package_path("My.Types");
+        assert_eq!(module_access(None, &package, &types), Access::Public);
         assert_eq!(
-            module_access(Some(&["My.Types".to_string()]), "My.Types"),
+            module_access(Some(&["Types".to_string()]), &package, &types),
             Access::Public
         );
-        assert_eq!(module_access(Some(&[]), "My.Types"), Access::Private);
+        assert_eq!(module_access(Some(&[]), &package, &types), Access::Private);
+    }
+
+    /// `morphir.json` names its exposed modules package-relative, which is the
+    /// spelling morphir-elm prepends the package name to before matching. An
+    /// entry may also be the module's full dotted name.
+    #[test]
+    fn an_exposed_module_is_named_package_relative_or_in_full() {
+        let package = package_path("My.Pkg");
+        let aliases = package_path("My.Pkg.Aliases");
+        let hidden = package_path("My.Pkg.Hidden");
+        let relative = ["Aliases".to_string()];
+        let full = ["My.Pkg.Aliases".to_string()];
+
+        assert_eq!(
+            module_access(Some(&relative), &package, &aliases),
+            Access::Public
+        );
+        assert_eq!(
+            module_access(Some(&relative), &package, &hidden),
+            Access::Private
+        );
+        assert_eq!(
+            module_access(Some(&full), &package, &aliases),
+            Access::Public,
+            "an entry written out in full names the same module"
+        );
+        assert_eq!(
+            module_access(Some(&full), &package, &hidden),
+            Access::Private
+        );
+    }
+
+    /// A module whose name does not start with the package path is its own
+    /// relative path, so the entry that names it is that same path — the shape
+    /// the daemon's fixture package uses.
+    #[test]
+    fn a_module_outside_the_package_prefix_is_exposed_by_its_own_name() {
+        let package = package_path("local/example");
+        let example = package_path("Example");
+        assert_eq!(
+            module_access(Some(&["Example".to_string()]), &package, &example),
+            Access::Public
+        );
+        assert_eq!(
+            module_access(Some(&["Other".to_string()]), &package, &example),
+            Access::Private
+        );
+    }
+
+    /// Entries are matched on the words a Morphir document keeps, not on the
+    /// letters that were typed.
+    #[test]
+    fn an_exposed_module_entry_is_matched_on_its_words() {
+        let package = package_path("My.Pkg");
+        let module = package_path("My.Pkg.Foo_Bar");
+        assert_eq!(
+            module_access(Some(&["FooBar".to_string()]), &package, &module),
+            Access::Public
+        );
     }
 
     /// Everything the identity is meant to cover moves the digest, and nothing
@@ -284,6 +406,8 @@ mod tests {
         let validated = |ir_version: &str, prelude_id: &str, package: &str| Validated {
             ir_version: ir_version.to_string(),
             types_only: false,
+            doc_comments: DocComments::MorphirElm,
+            ordering: Ordering::Source,
             prelude: prelude::from_option(Some(&serde_json::json!(prelude_id)))
                 .expect("a known prelude"),
             package: package_path(package),
@@ -336,6 +460,36 @@ mod tests {
         );
     }
 
+    /// The doc comment mode changes the text the IR carries and the ordering
+    /// changes where each declaration lands, so IR built under one of either
+    /// must not be reused by a run compiling under the other — which means both
+    /// have to move the digest a baseline is scoped to.
+    #[test]
+    fn the_context_digest_covers_the_doc_comment_mode_and_the_ordering() {
+        let validated = |doc_comments, ordering| Validated {
+            ir_version: "3".to_string(),
+            types_only: false,
+            prelude: prelude::from_option(None).expect("the default prelude"),
+            doc_comments,
+            ordering,
+            package: package_path("My"),
+            exposed: None,
+        };
+        let base = context_digest(&validated(DocComments::MorphirElm, Ordering::Source), &[]);
+
+        assert_ne!(
+            base,
+            context_digest(&validated(DocComments::Trimmed, Ordering::Source), &[])
+        );
+        assert_ne!(
+            base,
+            context_digest(
+                &validated(DocComments::MorphirElm, Ordering::MorphirElm),
+                &[]
+            )
+        );
+    }
+
     /// [`DependencyIdentity`] sorts on its whole value, not only on the package
     /// path, so two dependencies that arrived in a different order still hash
     /// the same even when a package-only sort could not have told them apart on
@@ -347,6 +501,8 @@ mod tests {
         let validated = || Validated {
             ir_version: "3".to_string(),
             types_only: false,
+            doc_comments: DocComments::MorphirElm,
+            ordering: Ordering::Source,
             prelude: prelude::from_option(Some(&serde_json::json!("elm-core")))
                 .expect("a known prelude"),
             package: vec!["My".into()],

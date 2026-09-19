@@ -1,6 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "description": "The wasm-bindgen-cli version the workspace-wasm build task installs. It must equal the wasm-bindgen crate version in Cargo.lock.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.mise/tasks/build/workspace-wasm$/"],
+      "matchStrings": ["WASM_BINDGEN_VERSION=\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "wasm-bindgen-cli",
+      "datasourceTemplate": "crate"
+    }
+  ],
   "packageRules": [
     {
       "description": "Group all GitHub Actions updates together",
@@ -24,6 +34,24 @@
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["patch"],
       "groupName": "rust-patch"
+    },
+    {
+      "description": "wasm-bindgen and the crates that must match it move together, in their own PR. The runtime crate is pinned exactly and the workspace-wasm build task installs the same wasm-bindgen-cli version, so a partial update fails the build. Listed after the Cargo groups so it takes precedence over them.",
+      "matchPackageNames": [
+        "wasm-bindgen",
+        "wasm-bindgen-cli",
+        "wasm-bindgen-futures",
+        "wasm-bindgen-macro",
+        "wasm-bindgen-macro-support",
+        "wasm-bindgen-shared",
+        "wasm-bindgen-test",
+        "js-sys",
+        "web-sys"
+      ],
+      "groupName": "wasm-bindgen",
+      "prBodyNotes": [
+        "The `workspace-wasm` build task pins `WASM_BINDGEN_VERSION` to the same release as the `wasm-bindgen` crate and fails if they differ; this group updates both. Check the `Build (workspace discovery WASM)` job: a new wasm-bindgen release can change the generated JS glue that the task greps for."
+      ]
     },
     {
       "description": "Group npm major updates together",

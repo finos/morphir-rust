@@ -1,7 +1,7 @@
 //! Offline draft 2020-12 schema compilation, separate from document rejection.
 
 use crate::strict_json;
-use jsonschema::{Draft, Resource, Retrieve, Uri, Validator};
+use jsonschema::{Draft, Registry, RegistryBuilder, Retrieve, Uri, Validator};
 use serde_json::Value;
 
 /// Which draft metadata artifact to validate.
@@ -20,7 +20,10 @@ pub struct SchemaError(String);
 
 struct Offline;
 impl Retrieve for Offline {
-    fn retrieve(&self, uri: &Uri<&str>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    fn retrieve(
+        &self,
+        uri: &Uri<String>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         Err(format!("external schema retrieval is disabled: {uri}").into())
     }
 }
@@ -37,17 +40,22 @@ impl PackageSchemas {
         if !manifest.is_object() || !lock.is_object() {
             return Err(SchemaError("schemas must be objects".into()));
         }
-        let mut options = jsonschema::options();
-        options
+        let resources = [manifest, lock].into_iter().filter_map(|schema| {
+            schema
+                .get("$id")
+                .and_then(Value::as_str)
+                .map(|id| (id, schema))
+        });
+        let registry = Registry::new()
+            .draft(Draft::Draft202012)
+            .retriever(Offline)
+            .extend(resources)
+            .and_then(RegistryBuilder::prepare)
+            .map_err(|e| SchemaError(e.to_string()))?;
+        let options = jsonschema::options()
             .with_draft(Draft::Draft202012)
-            .with_retriever(Offline);
-        for schema in [manifest, lock] {
-            if let Some(id) = schema.get("$id").and_then(Value::as_str) {
-                let resource = Resource::from_contents(schema.clone())
-                    .map_err(|e| SchemaError(e.to_string()))?;
-                options.with_resource(id, resource);
-            }
-        }
+            .with_retriever(Offline)
+            .with_registry(&registry);
         let manifest = options
             .build(manifest)
             .map_err(|e| SchemaError(e.to_string()))?;

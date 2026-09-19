@@ -45,11 +45,11 @@ keywords = ["morphir", "functional", "domain-modeling", "ir"]
 categories = ["development-tools", "parsers"]
 
 [workspace.dependencies]
-syn = { version = "2.0.119", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "extra-traits"] }
+syn = { version = "3.0.6", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "extra-traits"] }
 quote = { version = "1", default-features = false }
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
-prettyplease = "0.2.37"
-num-bigint = "0.4"
+prettyplease = "0.3.0"
+num-bigint = "0.5"
 # Ruff component crates evolve together; update this group as one unit.
 ruff_python_parser = "=0.0.14"
 ruff_python_ast = "=0.0.14"
@@ -70,7 +70,7 @@ serde-saphyr = { version = "1", default-features = false, features = ["deseriali
 #
 # `error_messages` is what gives a `ScanError` its human-readable text; without it an
 # `invalid_yaml` diagnostic would carry an empty message.
-granit-parser = { version = "=1.2.0", default-features = false, features = ["std", "error_messages"] }
+granit-parser = { version = "=1.3.0", default-features = false, features = ["std", "error_messages"] }
 stacker = "0.1"
 
 # TUI

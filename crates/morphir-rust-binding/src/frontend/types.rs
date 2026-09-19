@@ -14,7 +14,7 @@ pub(super) struct Context<'a> {
 impl Context<'_> {
     pub fn ty(&self, ty: &syn::Type, parameters: &[syn::Ident]) -> Outcome<Type<Attrs>> {
         match ty {
-            syn::Type::BareFn(function)
+            syn::Type::FnPtr(function)
                 if function.unsafety.is_none()
                     && function.abi.is_none()
                     && function.lifetimes.is_none()

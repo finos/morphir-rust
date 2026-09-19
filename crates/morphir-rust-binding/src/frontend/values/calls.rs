@@ -300,8 +300,9 @@ impl Lower<'_, '_> {
         outer: &mut Scope,
     ) -> Outcome<Typed> {
         self.context.source.attributes(&closure.attrs, false)?;
+        // syn 3 records `static` (coroutine) and `use` closures in `modifiers`.
         if closure.asyncness.is_some()
-            || closure.movability.is_some()
+            || closure.modifiers.require_empty().is_err()
             || closure.constness.is_some()
             || closure.lifetimes.is_some()
         {

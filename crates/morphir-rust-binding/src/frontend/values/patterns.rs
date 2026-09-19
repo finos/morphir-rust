@@ -28,7 +28,7 @@ impl Lower<'_, '_> {
         let mut moved = scope.moved.clone();
         for arm in &expression.arms {
             self.context.source.attributes(&arm.attrs, false)?;
-            if arm.guard.is_some() {
+            if matches!(arm.pat, syn::Pat::Guard(_)) {
                 return Err(self.error(arm, "Match guards are unsupported"));
             }
             let mut arm_scope = scope.clone();

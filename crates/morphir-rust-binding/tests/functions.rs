@@ -73,6 +73,11 @@ fn invalid_calls_captures_and_coercions_are_rejected() {
             "fn f(x:i64)->i64{let g=|a:i64,b:i64|a;g(x)}",
             "fn f(g:fn(i64,i64)->i64)->i64{g(1)}",
             "fn f(g:fn(Box<i64>)->i64)->i64{0}",
+            "fn f(x:i64)->i64{let g=static ||x;g()}",
+            "fn f(x:i64)->i64{let g=use ||x;g()}",
+            "fn f(x:i64)->i64{let g=async ||x;g()}",
+            "fn f(x:i64)->i64{let g=const ||x;g()}",
+            "fn f(x:i64)->i64{let g=for<'a> ||x;g()}",
         ] {
             let result = compile(source, version);
             assert!(!result.success, "v{version} accepted {source}");

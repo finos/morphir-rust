@@ -112,7 +112,7 @@ impl Lower<'_, '_> {
         parameters: &BTreeMap<String, CallableShape>,
     ) -> Outcome<CallableShape> {
         match ty {
-            syn::Type::BareFn(f) => Ok(CallableShape::pointer(
+            syn::Type::FnPtr(f) => Ok(CallableShape::pointer(
                 f.inputs
                     .iter()
                     .map(|i| self.source_shape_with(&i.ty, parameters))

@@ -21,7 +21,7 @@ pub(super) fn lower(context: &Context<'_>, function: &syn::ItemFn) -> Outcome<Op
     let signature = &function.sig;
     if signature.asyncness.is_some()
         || signature.constness.is_some()
-        || signature.unsafety.is_some()
+        || !matches!(signature.safety, syn::Safety::Default)
         || signature.abi.is_some()
         || signature.variadic.is_some()
     {

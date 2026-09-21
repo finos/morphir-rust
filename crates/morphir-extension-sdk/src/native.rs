@@ -6,8 +6,8 @@
 use crate::protocol::{ExtensionRequest, ExtensionResponse};
 use crate::{
     __dispatch_backend, __dispatch_frontend, __extension_info, Backend, BackendCapability,
-    CompileRequest, CompileResult, DispatchFn, Extension, ExtensionCapabilities, ExtensionError,
-    ExtensionInfo, ExtensionType, Frontend, FrontendCapability, GenerateRequest, GenerateResult,
+    CompileRequest, CompileResult, Extension, ExtensionCapabilities, ExtensionError, ExtensionInfo,
+    ExtensionType, Frontend, FrontendCapability, GenerateRequest, GenerateResult,
     NativeRoleDispatch, Result, dispatch_request_with_roles, erase_dispatch,
 };
 use std::sync::Arc;
@@ -57,7 +57,9 @@ struct NativeRoles {
 
 impl NativeRoles {
     /// Extension types projected from the registered roles, frontend before
-    /// backend to match what the constructors pass to `with_extension` today.
+    /// backend — the same order `NativeExtensionBuilder::finish` uses when it
+    /// computes `declared_types` from the pending registrations directly.
+    #[cfg(test)]
     fn declared_types(&self) -> Vec<ExtensionType> {
         let mut types = Vec::new();
         if self.frontend.is_some() {
@@ -70,8 +72,8 @@ impl NativeRoles {
     }
 
     /// Protocol dispatchers projected from the registered roles, frontend
-    /// before backend to match what the constructors pass to `with_extension`
-    /// today.
+    /// before backend, consumed by `NativeExtensionBuilder::finish` when it
+    /// builds the protocol handle.
     fn dispatchers(&self) -> Vec<NativeRoleDispatch> {
         let mut dispatchers = Vec::new();
         if let Some(frontend) = &self.frontend {
@@ -103,26 +105,134 @@ pub struct NativeExtension {
     protocol: Arc<dyn NativeProtocol>,
 }
 
+/// Fixtures used only by this crate's doctests. Not part of the public API.
+#[doc(hidden)]
+pub mod doc_fixtures {
+    use crate::{
+        CompileRequest, CompileResult, Extension, ExtensionCapabilities, ExtensionInfo, Frontend,
+        FrontendCapability, Result,
+    };
+
+    /// A minimal frontend extension used to demonstrate [`super::NativeExtension::builder`].
+    #[derive(Default)]
+    pub struct DocFrontend;
+
+    impl Extension for DocFrontend {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo {
+                id: "doc-frontend".into(),
+                name: "Doc frontend".into(),
+                version: "1.0.0".into(),
+                ..ExtensionInfo::default()
+            }
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                frontend: Some(FrontendCapability {
+                    compile: true,
+                    ..FrontendCapability::default()
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Frontend for DocFrontend {
+        fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+            Ok(CompileResult {
+                success: true,
+                ir_version: None,
+                ir: None,
+                diagnostics: vec![],
+                modules: request.package.exposed_modules.unwrap_or_default(),
+                module_results: vec![],
+                context_digest: None,
+            })
+        }
+
+        fn supported_languages() -> Vec<String> {
+            vec![]
+        }
+
+        fn file_extensions() -> Vec<String> {
+            vec![]
+        }
+    }
+}
+
+/// Builder state: no role has been registered yet.
+pub struct Empty;
+/// Builder state: at least one role has been registered.
+pub struct NonEmpty;
+
+struct PendingFrontend {
+    handle: Arc<dyn NativeFrontend>,
+    dispatch: NativeRoleDispatch,
+}
+
+struct PendingBackend {
+    handle: Arc<dyn NativeBackend>,
+    dispatch: NativeRoleDispatch,
+}
+
+/// Accumulates an extension's roles. Consuming, so a stale builder cannot be
+/// mistaken for the finished registration.
+pub struct NativeExtensionBuilder<E, State> {
+    extension: Arc<E>,
+    frontend: Option<PendingFrontend>,
+    backend: Option<PendingBackend>,
+    state: std::marker::PhantomData<State>,
+}
+
 impl NativeExtension {
+    /// Start building an extension from its roles.
+    ///
+    /// Adding a role is how the builder becomes finishable:
+    ///
+    /// ```
+    /// # use morphir_extension_sdk::NativeExtension;
+    /// # use morphir_extension_sdk::doc_fixtures::DocFrontend;
+    /// let extension = NativeExtension::builder(DocFrontend).with_frontend().finish();
+    /// assert!(extension.is_ok());
+    /// ```
+    ///
+    /// An empty builder is legal to hold:
+    ///
+    /// ```
+    /// # use morphir_extension_sdk::NativeExtension;
+    /// # use morphir_extension_sdk::doc_fixtures::DocFrontend;
+    /// let builder = NativeExtension::builder(DocFrontend);
+    /// ```
+    ///
+    /// But it cannot be finished — `finish` does not exist until a role is added:
+    ///
+    /// ```compile_fail
+    /// # use morphir_extension_sdk::NativeExtension;
+    /// # use morphir_extension_sdk::doc_fixtures::DocFrontend;
+    /// let extension = NativeExtension::builder(DocFrontend).finish();
+    /// ```
+    pub fn builder<E>(extension: E) -> NativeExtensionBuilder<E, Empty>
+    where
+        E: Extension + Send + Sync + 'static,
+    {
+        NativeExtensionBuilder {
+            extension: Arc::new(extension),
+            frontend: None,
+            backend: None,
+            state: std::marker::PhantomData,
+        }
+    }
+
     /// Expose an extension that provides both frontend and backend capabilities.
     pub fn frontend_backend<E>(extension: E) -> Result<Self>
     where
         E: Extension + Frontend + Backend + Send + Sync + 'static,
     {
-        let extension = Arc::new(extension);
-        let frontend = Arc::new(FrontendHandle {
-            extension: Arc::clone(&extension),
-        }) as Arc<dyn NativeFrontend>;
-        let backend = Arc::new(BackendHandle {
-            extension: Arc::clone(&extension),
-        }) as Arc<dyn NativeBackend>;
-        Self::with_extension(
-            extension,
-            vec![ExtensionType::Frontend, ExtensionType::Backend],
-            vec![__dispatch_frontend::<E>, __dispatch_backend::<E>],
-            Some(frontend),
-            Some(backend),
-        )
+        Self::builder(extension)
+            .with_frontend()
+            .with_backend()
+            .finish()
     }
 
     /// Expose an extension that provides only a frontend capability.
@@ -130,17 +240,7 @@ impl NativeExtension {
     where
         E: Extension + Frontend + Send + Sync + 'static,
     {
-        let extension = Arc::new(extension);
-        let frontend = Arc::new(FrontendHandle {
-            extension: Arc::clone(&extension),
-        }) as Arc<dyn NativeFrontend>;
-        Self::with_extension(
-            extension,
-            vec![ExtensionType::Frontend],
-            vec![__dispatch_frontend::<E>],
-            Some(frontend),
-            None,
-        )
+        Self::builder(extension).with_frontend().finish()
     }
 
     /// Expose an extension that provides only a backend capability.
@@ -148,98 +248,7 @@ impl NativeExtension {
     where
         E: Extension + Backend + Send + Sync + 'static,
     {
-        let extension = Arc::new(extension);
-        let backend = Arc::new(BackendHandle {
-            extension: Arc::clone(&extension),
-        }) as Arc<dyn NativeBackend>;
-        Self::with_extension(
-            extension,
-            vec![ExtensionType::Backend],
-            vec![__dispatch_backend::<E>],
-            None,
-            Some(backend),
-        )
-    }
-
-    fn with_extension<E>(
-        extension: Arc<E>,
-        declared_types: Vec<ExtensionType>,
-        dispatchers: Vec<DispatchFn<E>>,
-        frontend: Option<Arc<dyn NativeFrontend>>,
-        backend: Option<Arc<dyn NativeBackend>>,
-    ) -> Result<Self>
-    where
-        E: Extension + Send + Sync + 'static,
-    {
-        let info = __extension_info::<E>(&declared_types);
-        let capabilities = E::capabilities();
-        validate_capabilities(&info, &capabilities, &declared_types)?;
-        validate_protocol_metadata(&info, &capabilities)?;
-
-        // Validation passed against the authored aggregate above; only now is
-        // it safe to split it into per-role records and cross-cutting values.
-        let mut frontend = frontend;
-        let mut backend = backend;
-        let mut roles = NativeRoles::default();
-        let validated_types = declared_types.clone();
-        for (role_type, dispatch) in declared_types.into_iter().zip(dispatchers) {
-            let dispatch = erase_dispatch(Arc::clone(&extension), dispatch);
-            match role_type {
-                ExtensionType::Frontend => {
-                    roles.frontend = Some(FrontendRole {
-                        capability: capabilities
-                            .frontend
-                            .clone()
-                            .expect("validate_capabilities confirmed a frontend capability"),
-                        handle: frontend
-                            .take()
-                            .expect("validate_capabilities confirmed a frontend handle"),
-                        dispatch,
-                    });
-                }
-                ExtensionType::Backend => {
-                    roles.backend = Some(BackendRole {
-                        capability: capabilities
-                            .backend
-                            .clone()
-                            .expect("validate_capabilities confirmed a backend capability"),
-                        handle: backend
-                            .take()
-                            .expect("validate_capabilities confirmed a backend handle"),
-                        dispatch,
-                    });
-                }
-                other => unreachable!(
-                    "with_extension only declares frontend/backend roles today, got {other:?}"
-                ),
-            }
-        }
-        debug_assert_eq!(
-            roles.declared_types(),
-            validated_types,
-            "role records must project the same types that were validated"
-        );
-
-        let common = CommonCapabilities {
-            streaming: capabilities.streaming,
-            incremental: capabilities.incremental,
-            cancellation: capabilities.cancellation,
-            progress: capabilities.progress,
-            extra: capabilities.extra.clone(),
-        };
-
-        let protocol = Arc::new(ProtocolHandle {
-            dispatchers: roles.dispatchers(),
-            info: info.clone(),
-            capabilities: capabilities.clone(),
-        });
-
-        Ok(Self {
-            info,
-            roles,
-            common,
-            protocol,
-        })
+        Self::builder(extension).with_backend().finish()
     }
 
     /// Return the extension metadata, including the declared native handles.
@@ -285,6 +294,111 @@ impl NativeExtension {
     /// Return the protocol endpoint.
     pub fn protocol(&self) -> &dyn NativeProtocol {
         self.protocol.as_ref()
+    }
+}
+
+impl<E, State> NativeExtensionBuilder<E, State>
+where
+    E: Extension + Send + Sync + 'static,
+{
+    /// Register this extension's frontend role. Calling it twice replaces the
+    /// earlier registration.
+    pub fn with_frontend(self) -> NativeExtensionBuilder<E, NonEmpty>
+    where
+        E: Frontend,
+    {
+        let handle = Arc::new(FrontendHandle {
+            extension: Arc::clone(&self.extension),
+        }) as Arc<dyn NativeFrontend>;
+        let dispatch = erase_dispatch(Arc::clone(&self.extension), __dispatch_frontend::<E>);
+        NativeExtensionBuilder {
+            extension: self.extension,
+            frontend: Some(PendingFrontend { handle, dispatch }),
+            backend: self.backend,
+            state: std::marker::PhantomData,
+        }
+    }
+
+    /// Register this extension's backend role. Calling it twice replaces the
+    /// earlier registration.
+    pub fn with_backend(self) -> NativeExtensionBuilder<E, NonEmpty>
+    where
+        E: Backend,
+    {
+        let handle = Arc::new(BackendHandle {
+            extension: Arc::clone(&self.extension),
+        }) as Arc<dyn NativeBackend>;
+        let dispatch = erase_dispatch(Arc::clone(&self.extension), __dispatch_backend::<E>);
+        NativeExtensionBuilder {
+            extension: self.extension,
+            frontend: self.frontend,
+            backend: Some(PendingBackend { handle, dispatch }),
+            state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<E> NativeExtensionBuilder<E, NonEmpty>
+where
+    E: Extension + Send + Sync + 'static,
+{
+    /// Validate the authored capabilities against the registered roles and
+    /// materialize the finished extension.
+    pub fn finish(self) -> Result<NativeExtension> {
+        let mut declared_types = Vec::new();
+        if self.frontend.is_some() {
+            declared_types.push(ExtensionType::Frontend);
+        }
+        if self.backend.is_some() {
+            declared_types.push(ExtensionType::Backend);
+        }
+
+        let info = __extension_info::<E>(&declared_types);
+        let capabilities = E::capabilities();
+        validate_capabilities(&info, &capabilities, &declared_types)?;
+        validate_protocol_metadata(&info, &capabilities)?;
+
+        // Validation passed against the authored aggregate above; only now is
+        // it safe to pair each pending registration with its capability.
+        let roles = NativeRoles {
+            frontend: self.frontend.map(|pending| FrontendRole {
+                capability: capabilities
+                    .frontend
+                    .clone()
+                    .expect("validate_capabilities confirmed a frontend capability"),
+                handle: pending.handle,
+                dispatch: pending.dispatch,
+            }),
+            backend: self.backend.map(|pending| BackendRole {
+                capability: capabilities
+                    .backend
+                    .clone()
+                    .expect("validate_capabilities confirmed a backend capability"),
+                handle: pending.handle,
+                dispatch: pending.dispatch,
+            }),
+        };
+
+        let common = CommonCapabilities {
+            streaming: capabilities.streaming,
+            incremental: capabilities.incremental,
+            cancellation: capabilities.cancellation,
+            progress: capabilities.progress,
+            extra: capabilities.extra.clone(),
+        };
+
+        let protocol = Arc::new(ProtocolHandle {
+            dispatchers: roles.dispatchers(),
+            info: info.clone(),
+            capabilities: capabilities.clone(),
+        });
+
+        Ok(NativeExtension {
+            info,
+            roles,
+            common,
+            protocol,
+        })
     }
 }
 

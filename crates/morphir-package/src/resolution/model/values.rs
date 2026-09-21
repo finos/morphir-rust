@@ -152,6 +152,14 @@ pub struct ReleaseId {
     pub(crate) version: StableVersion,
 }
 impl ReleaseId {
+    /// Combine an already validated package path and exact stable version.
+    pub fn new(package_path: PackagePath, version: StableVersion) -> Self {
+        Self {
+            package_path,
+            version,
+        }
+    }
+
     /// The authority-bearing package path.
     pub fn package_path(&self) -> &PackagePath {
         &self.package_path

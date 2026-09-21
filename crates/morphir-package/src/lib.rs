@@ -6,6 +6,7 @@
 
 pub mod digest;
 pub mod library;
+pub mod local_registry;
 pub mod metadata;
 pub mod resolution;
 pub mod schema;

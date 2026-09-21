@@ -41,6 +41,14 @@ class ImpactConsistencyTests(unittest.TestCase):
         self.assertIn(".dev/out/mck/report.html", job)
         self.assertIn("mck-report-${{ matrix.os }}", job)
 
+    def test_native_mck_upload_retains_reports_inside_hidden_dev_directory(self) -> None:
+        job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
+        upload = job.split("      - name: Upload kit report\n", 1)[1]
+        self.assertIn("if: always()", upload)
+        self.assertIn("include-hidden-files: true", upload)
+        for report in ("report.json", "report.html", "legacy-report.json"):
+            self.assertIn(f".dev/out/mck/{report}", upload)
+
     def test_native_mck_is_default_and_legacy_adjudication_is_explicit(self) -> None:
         settings = tomllib.loads((REPOSITORY_ROOT / "mise.toml").read_text())
         self.assertEqual("bun run scripts/check-mck.ts", settings["tasks"]["check:kit"]["run"])

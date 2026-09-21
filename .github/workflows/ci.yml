@@ -204,6 +204,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mck-report-${{ matrix.os }}
+          include-hidden-files: true
           path: |
             .dev/out/mck/report.json
             .dev/out/mck/report.html

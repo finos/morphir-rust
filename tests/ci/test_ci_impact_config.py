@@ -20,7 +20,7 @@ class ImpactConfigTests(unittest.TestCase):
         self.assertEqual(["kit-conformance", "test-extism", "lint-shell", "docs-generated"], names)
         kit = loaded.jobs[0]
         self.assertEqual(frozenset({"morphir-projection"}), kit.crates)
-        self.assertEqual((".config/mck-driver-version",), kit.paths)
+        self.assertEqual((".config/mck-cli.json",), kit.paths)
         self.assertEqual(frozenset(), loaded.jobs[2].crates)
 
     def test_parse_config_rejects_unknown_job_keys(self) -> None:

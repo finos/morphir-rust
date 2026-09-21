@@ -194,11 +194,6 @@ jobs:
       - name: Run the native Morphir Compatibility Kit against the adapter
         run: mise run check:kit
 
-      # Retain frozen migration evidence until the parent cutover review.
-      - name: Run the legacy IR parity gate
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: mise run check:kit-legacy
-
       - name: Upload kit report
         if: always()
         uses: actions/upload-artifact@v7
@@ -208,7 +203,6 @@ jobs:
           path: |
             .dev/out/mck/report.json
             .dev/out/mck/report.html
-            .dev/out/mck/legacy-report.json
 
   lint-shell:
     name: Lint (Shell)

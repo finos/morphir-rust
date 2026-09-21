@@ -35,9 +35,9 @@ class ImpactConsistencyTests(unittest.TestCase):
             self.assertIn(os, job)
         self.assertIn("mise run tools:test", job)
         self.assertIn("mise run check:kit", job)
-        self.assertIn("mise run check:kit-legacy", job)
+        self.assertNotIn("mise run check:kit-legacy", job)
         self.assertNotIn("hashFiles('.config/mck-cli.json')", job)
-        self.assertIn(".dev/out/mck/legacy-report.json", job)
+        self.assertNotIn(".dev/out/mck/legacy-report.json", job)
         self.assertIn(".dev/out/mck/report.html", job)
         self.assertIn("mck-report-${{ matrix.os }}", job)
 
@@ -46,20 +46,16 @@ class ImpactConsistencyTests(unittest.TestCase):
         upload = job.split("      - name: Upload kit report\n", 1)[1]
         self.assertIn("if: always()", upload)
         self.assertIn("include-hidden-files: true", upload)
-        for report in ("report.json", "report.html", "legacy-report.json"):
+        for report in ("report.json", "report.html"):
             self.assertIn(f".dev/out/mck/{report}", upload)
 
-    def test_native_mck_is_default_and_legacy_adjudication_is_explicit(self) -> None:
+    def test_native_mck_is_default_and_legacy_runner_is_retired(self) -> None:
         settings = tomllib.loads((REPOSITORY_ROOT / "mise.toml").read_text())
         self.assertEqual("bun run scripts/check-mck.ts", settings["tasks"]["check:kit"]["run"])
         self.assertEqual(["check:kit"], settings["tasks"]["check:kit-native"]["depends"])
         self.assertFalse((REPOSITORY_ROOT / ".mise/tasks/check/kit").exists())
-        legacy = (REPOSITORY_ROOT / ".mise/tasks/check/kit-legacy").read_text()
-        self.assertIn("REPORT=.dev/out/mck/legacy-report.json", legacy)
-        self.assertIn("--test legacy_report -- --ignored", legacy)
-        report = (REPOSITORY_ROOT / "crates/morphir-mck-adapter/tests/legacy_report.rs").read_text()
-        self.assertIn("#[ignore =", report)
-        self.assertIn('.dev/out/mck/legacy-report.json', report)
+        for retired in (".mise/tasks/check/kit-legacy", ".config/mck-driver-version", "crates/morphir-mck-adapter/tests/legacy_report.rs"):
+            self.assertFalse((REPOSITORY_ROOT / retired).exists(), retired)
 
     @unittest.skipUnless(shutil.which("cargo"), "cargo is not installed")
     def test_rust_bundle_uses_selective_ci_routing(self) -> None:

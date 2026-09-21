@@ -28,7 +28,7 @@ impl NativeMepTransport {
     pub fn new(extension: NativeExtension) -> Self {
         let expected = ExpectedExtension::discovered_with_capabilities(
             extension.info().clone(),
-            extension.capabilities().clone(),
+            extension.capabilities(),
         );
         Self {
             expected,

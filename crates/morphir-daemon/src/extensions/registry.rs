@@ -32,7 +32,7 @@ impl ExtensionRegistry {
     /// Register one in-process provider using its native metadata snapshots.
     pub fn register_builtin(&mut self, extension: NativeExtension) -> Result<()> {
         let info = extension.info().clone();
-        let capabilities = extension.capabilities().clone();
+        let capabilities = extension.capabilities();
         self.register_provider(
             info,
             capabilities,

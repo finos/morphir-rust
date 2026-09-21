@@ -5,10 +5,10 @@
 
 use crate::protocol::{ExtensionRequest, ExtensionResponse};
 use crate::{
-    __dispatch_backend, __dispatch_frontend, __extension_info, Backend, CompileRequest,
-    CompileResult, DispatchFn, Extension, ExtensionCapabilities, ExtensionError, ExtensionInfo,
-    ExtensionType, Frontend, GenerateRequest, GenerateResult, NativeRoleDispatch, Result,
-    dispatch_request_with_roles, erase_dispatch,
+    __dispatch_backend, __dispatch_frontend, __extension_info, Backend, BackendCapability,
+    CompileRequest, CompileResult, DispatchFn, Extension, ExtensionCapabilities, ExtensionError,
+    ExtensionInfo, ExtensionType, Frontend, FrontendCapability, GenerateRequest, GenerateResult,
+    NativeRoleDispatch, Result, dispatch_request_with_roles, erase_dispatch,
 };
 use std::sync::Arc;
 
@@ -30,13 +30,76 @@ pub trait NativeProtocol: Send + Sync {
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse;
 }
 
+/// A registered frontend role: its advertised capability, its typed handle and
+/// its protocol dispatcher, bound together so they cannot disagree.
+#[derive(Clone)]
+struct FrontendRole {
+    capability: FrontendCapability,
+    handle: Arc<dyn NativeFrontend>,
+    dispatch: NativeRoleDispatch,
+}
+
+/// A registered backend role. See [`FrontendRole`].
+#[derive(Clone)]
+struct BackendRole {
+    capability: BackendCapability,
+    handle: Arc<dyn NativeBackend>,
+    dispatch: NativeRoleDispatch,
+}
+
+/// The roles of a constructed extension. A completed [`NativeExtension`] always
+/// has at least one; this type alone does not enforce that.
+#[derive(Clone, Default)]
+struct NativeRoles {
+    frontend: Option<FrontendRole>,
+    backend: Option<BackendRole>,
+}
+
+impl NativeRoles {
+    /// Extension types projected from the registered roles, frontend before
+    /// backend to match what the constructors pass to `with_extension` today.
+    fn declared_types(&self) -> Vec<ExtensionType> {
+        let mut types = Vec::new();
+        if self.frontend.is_some() {
+            types.push(ExtensionType::Frontend);
+        }
+        if self.backend.is_some() {
+            types.push(ExtensionType::Backend);
+        }
+        types
+    }
+
+    /// Protocol dispatchers projected from the registered roles, frontend
+    /// before backend to match what the constructors pass to `with_extension`
+    /// today.
+    fn dispatchers(&self) -> Vec<NativeRoleDispatch> {
+        let mut dispatchers = Vec::new();
+        if let Some(frontend) = &self.frontend {
+            dispatchers.push(frontend.dispatch.clone());
+        }
+        if let Some(backend) = &self.backend {
+            dispatchers.push(backend.dispatch.clone());
+        }
+        dispatchers
+    }
+}
+
+/// Capability values that belong to no single role.
+#[derive(Clone, Default)]
+struct CommonCapabilities {
+    streaming: bool,
+    incremental: bool,
+    cancellation: bool,
+    progress: bool,
+    extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
 /// An extension implementation exposed through native typed and protocol APIs.
 #[derive(Clone)]
 pub struct NativeExtension {
     info: ExtensionInfo,
-    capabilities: ExtensionCapabilities,
-    frontend: Option<Arc<dyn NativeFrontend>>,
-    backend: Option<Arc<dyn NativeBackend>>,
+    roles: NativeRoles,
+    common: CommonCapabilities,
     protocol: Arc<dyn NativeProtocol>,
 }
 
@@ -112,21 +175,69 @@ impl NativeExtension {
         let capabilities = E::capabilities();
         validate_capabilities(&info, &capabilities, &declared_types)?;
         validate_protocol_metadata(&info, &capabilities)?;
-        let dispatchers = dispatchers
-            .into_iter()
-            .map(|dispatch| erase_dispatch(Arc::clone(&extension), dispatch))
-            .collect::<Vec<_>>();
+
+        // Validation passed against the authored aggregate above; only now is
+        // it safe to split it into per-role records and cross-cutting values.
+        let mut frontend = frontend;
+        let mut backend = backend;
+        let mut roles = NativeRoles::default();
+        let validated_types = declared_types.clone();
+        for (role_type, dispatch) in declared_types.into_iter().zip(dispatchers) {
+            let dispatch = erase_dispatch(Arc::clone(&extension), dispatch);
+            match role_type {
+                ExtensionType::Frontend => {
+                    roles.frontend = Some(FrontendRole {
+                        capability: capabilities
+                            .frontend
+                            .clone()
+                            .expect("validate_capabilities confirmed a frontend capability"),
+                        handle: frontend
+                            .take()
+                            .expect("validate_capabilities confirmed a frontend handle"),
+                        dispatch,
+                    });
+                }
+                ExtensionType::Backend => {
+                    roles.backend = Some(BackendRole {
+                        capability: capabilities
+                            .backend
+                            .clone()
+                            .expect("validate_capabilities confirmed a backend capability"),
+                        handle: backend
+                            .take()
+                            .expect("validate_capabilities confirmed a backend handle"),
+                        dispatch,
+                    });
+                }
+                other => unreachable!(
+                    "with_extension only declares frontend/backend roles today, got {other:?}"
+                ),
+            }
+        }
+        debug_assert_eq!(
+            roles.declared_types(),
+            validated_types,
+            "role records must project the same types that were validated"
+        );
+
+        let common = CommonCapabilities {
+            streaming: capabilities.streaming,
+            incremental: capabilities.incremental,
+            cancellation: capabilities.cancellation,
+            progress: capabilities.progress,
+            extra: capabilities.extra.clone(),
+        };
+
         let protocol = Arc::new(ProtocolHandle {
-            dispatchers,
+            dispatchers: roles.dispatchers(),
             info: info.clone(),
             capabilities: capabilities.clone(),
         });
 
         Ok(Self {
             info,
-            capabilities,
-            frontend,
-            backend,
+            roles,
+            common,
             protocol,
         })
     }
@@ -137,18 +248,38 @@ impl NativeExtension {
     }
 
     /// Return the extension's advertised capabilities.
-    pub fn capabilities(&self) -> &ExtensionCapabilities {
-        &self.capabilities
+    pub fn capabilities(&self) -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            frontend: self
+                .roles
+                .frontend
+                .as_ref()
+                .map(|role| role.capability.clone()),
+            backend: self
+                .roles
+                .backend
+                .as_ref()
+                .map(|role| role.capability.clone()),
+            workspace: None,
+            streaming: self.common.streaming,
+            incremental: self.common.incremental,
+            cancellation: self.common.cancellation,
+            progress: self.common.progress,
+            extra: self.common.extra.clone(),
+        }
     }
 
     /// Return the direct frontend handle when the provider exposes one.
     pub fn frontend(&self) -> Option<&dyn NativeFrontend> {
-        self.frontend.as_deref()
+        self.roles
+            .frontend
+            .as_ref()
+            .map(|role| role.handle.as_ref())
     }
 
     /// Return the direct backend handle when the provider exposes one.
     pub fn backend(&self) -> Option<&dyn NativeBackend> {
-        self.backend.as_deref()
+        self.roles.backend.as_ref().map(|role| role.handle.as_ref())
     }
 
     /// Return the protocol endpoint.
@@ -256,14 +387,15 @@ impl NativeProtocol for ProtocolHandle {
 
 #[cfg(test)]
 mod tests {
+    use super::{BackendHandle, BackendRole, FrontendHandle, FrontendRole, NativeRoles};
     use crate::ExtensionError;
     use crate::NativeExtension;
     use crate::protocol::{ExtensionRequest, methods};
     use crate::{
         Artifact, Backend, BackendCapability, CompileOptions, CompilePackage, CompileRequest,
         CompileResult, Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType, Frontend,
-        FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability, Result,
-        SourceDocument, WorkspaceCapability,
+        FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability,
+        NativeRoleDispatch, Result, SourceDocument, WorkspaceCapability,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -746,6 +878,123 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct FullyDecoratedExtension {
+        compile_requests: Arc<Mutex<Vec<CompileRequest>>>,
+    }
+
+    impl Extension for FullyDecoratedExtension {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo {
+                id: "fully-decorated".into(),
+                name: "Fully decorated extension".into(),
+                version: "1.0.0".into(),
+                ..ExtensionInfo::default()
+            }
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                frontend: Some(FrontendCapability {
+                    languages: vec![LanguageCapability {
+                        id: "decorated".into(),
+                        file_extensions: vec![".decorated".into()],
+                    }],
+                    ir_versions: vec!["3".into()],
+                    compile: true,
+                    incremental: false,
+                    fragments: false,
+                }),
+                backend: Some(BackendCapability {
+                    targets: vec!["decorated".into()],
+                    ir_versions: vec!["3".into()],
+                    generate: true,
+                }),
+                workspace: None,
+                streaming: true,
+                incremental: true,
+                cancellation: true,
+                progress: true,
+                extra: [(
+                    "experimental".into(),
+                    serde_json::json!({ "enabled": true }),
+                )]
+                .into_iter()
+                .collect(),
+            }
+        }
+    }
+
+    impl Frontend for FullyDecoratedExtension {
+        fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+            self.compile_requests.lock().unwrap().push(request.clone());
+            FrontendOnly.compile(request)
+        }
+
+        fn supported_languages() -> Vec<String> {
+            vec!["decorated".into()]
+        }
+
+        fn file_extensions() -> Vec<String> {
+            vec![".decorated".into()]
+        }
+    }
+
+    impl Backend for FullyDecoratedExtension {
+        fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
+            BackendOnly.generate(request)
+        }
+
+        fn target_languages() -> Vec<String> {
+            vec!["decorated".into()]
+        }
+    }
+
+    #[test]
+    fn native_roles_project_types_and_dispatchers_frontend_before_backend() {
+        let no_op: NativeRoleDispatch = Arc::new(|_request: &ExtensionRequest| None);
+        let roles = NativeRoles {
+            frontend: Some(FrontendRole {
+                capability: FrontendCapability::default(),
+                handle: Arc::new(FrontendHandle {
+                    extension: Arc::new(FrontendOnly),
+                }),
+                dispatch: no_op.clone(),
+            }),
+            backend: Some(BackendRole {
+                capability: BackendCapability::default(),
+                handle: Arc::new(BackendHandle {
+                    extension: Arc::new(BackendOnly),
+                }),
+                dispatch: no_op,
+            }),
+        };
+
+        assert_eq!(
+            roles.declared_types(),
+            [ExtensionType::Frontend, ExtensionType::Backend]
+        );
+        assert_eq!(roles.dispatchers().len(), 2);
+    }
+
+    #[test]
+    fn native_roles_project_only_the_registered_role() {
+        let no_op: NativeRoleDispatch = Arc::new(|_request: &ExtensionRequest| None);
+        let roles = NativeRoles {
+            frontend: None,
+            backend: Some(BackendRole {
+                capability: BackendCapability::default(),
+                handle: Arc::new(BackendHandle {
+                    extension: Arc::new(BackendOnly),
+                }),
+                dispatch: no_op,
+            }),
+        };
+
+        assert_eq!(roles.declared_types(), [ExtensionType::Backend]);
+        assert_eq!(roles.dispatchers().len(), 1);
+    }
+
     fn compile_request(source: &str) -> CompileRequest {
         CompileRequest {
             language_id: "recording".into(),
@@ -1056,5 +1305,22 @@ mod tests {
                 response.error
             );
         }
+    }
+
+    /// The projected capabilities must equal what the author declared, field for
+    /// field. `capabilities()` stops being a stored copy and becomes a projection
+    /// of the role records, so this proves the projection is lossless — including
+    /// the cross-cutting flags and `extra`, which no role owns.
+    #[test]
+    fn projected_capabilities_round_trip_the_authored_ones() {
+        let authored = FullyDecoratedExtension::capabilities();
+        let native = NativeExtension::frontend_backend(FullyDecoratedExtension::default())
+            .expect("frontend+backend extension is valid");
+        assert_eq!(native.capabilities(), authored);
+        assert_eq!(
+            serde_json::to_value(native.capabilities()).unwrap(),
+            serde_json::to_value(&authored).unwrap(),
+            "the projection must also serialize identically",
+        );
     }
 }

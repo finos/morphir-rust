@@ -106,7 +106,7 @@ pub mod types;
 
 // Re-exports
 pub use error::{ExtensionError, Result};
-pub use native::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol};
+pub use native::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol, NativeWorkspace};
 pub use source::{SourceContextError, SourcePath, SourceRoot};
 pub use traits::{Backend, Extension, Frontend, Transform, Validator, Workspace};
 pub use types::*;

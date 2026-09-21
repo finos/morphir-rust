@@ -1,15 +1,15 @@
 //! Holds a Morphir Compatibility Kit run against the list of cases this binding is allowed to
 //! fail.
 //!
-//! This test does not run the kit — `mise run check:kit` does, and writes its report to
-//! `.dev/out/mck/report.json`. What happens here is the adjudication: the set of case ids with
+//! This test does not run the kit — `mise run check:kit-legacy` does, and writes its report to
+//! `.dev/out/mck/legacy-report.json`. What happens here is the adjudication: the set of case ids with
 //! any failing record has to equal the `cases` array in `allowed-failing.json`, in both
 //! directions. A new failure is a regression; a listed case that has started passing is a stale
 //! entry, and leaving it in would hide the next real failure behind it.
 //!
-//! When the report is absent the test prints a note and passes, so `cargo test --workspace` is
-//! still runnable without a kit driver on the machine. The kit task runs the driver first, so in
-//! CI the report is always there.
+//! This migration-only test is ignored during ordinary Cargo tests. The explicit legacy task
+//! produces a fresh report and invokes this target with `--ignored`. If invoked manually with
+//! no report it prints a note and passes; the task itself requires a report before adjudication.
 //!
 //! The report's shape is `report.schema.json` in the kit (`spec/ir/mck` in finos/morphir),
 //! contract version 1: a `records` array of `{ caseId, irVersion, profile, role, fenceIndex,
@@ -27,8 +27,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Where `mise run check:kit` writes the driver's report, relative to the repository root.
-const REPORT: &str = ".dev/out/mck/report.json";
+/// Where `mise run check:kit-legacy` writes the driver's report, relative to the repository root.
+const REPORT: &str = ".dev/out/mck/legacy-report.json";
 
 /// The list this crate owns: the cases a kit defect is open against.
 const ALLOWED: &str = "allowed-failing.json";
@@ -43,13 +43,14 @@ const PENDING: &str = "pending";
 const UNDECLARED: &str = "not in capabilities";
 
 #[test]
+#[ignore = "legacy migration evidence; run mise run check:kit-legacy"]
 fn the_kit_fails_exactly_the_cases_the_list_allows() {
     let allowed = read_allowed();
 
     let report_path = repository_root().join(REPORT);
     let Ok(text) = std::fs::read_to_string(&report_path) else {
         println!(
-            "no kit report at {}; run `mise run check:kit` to produce one. \
+            "no kit report at {}; run `mise run check:kit-legacy` to produce one. \
              Skipping the adjudication.",
             report_path.display()
         );

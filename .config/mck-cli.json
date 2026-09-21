@@ -1,0 +1,11 @@
+{
+  "version": "0.4.0-beta.2",
+  "sha256": {
+    "aarch64-apple-darwin": "f35f24595e997061f8a939b3b5b412f2dfcebdfac2db76278aedecc30bc105be",
+    "aarch64-unknown-linux-gnu": "8860bb3dc7a815c6f8fe6106fa710408537a674cbbdbaa8850c89f834da94531",
+    "x86_64-pc-windows-msvc": "82da3aea7aa96a75c31c218879dd5fa30bf47f2037b58d8a98e4670e195f3ffa",
+    "x86_64-unknown-linux-gnu": "d88616c3c41b77a490d91006c3c05b0de83df9ff022ee9fcefea6e22cc05946b",
+    "aarch64-pc-windows-msvc": "0ca22b9fc418642e897be365010395edf8597858284dcf67471560e4f824fa41",
+    "x86_64-apple-darwin": "193024660d15ea4e17c75e429bdf689b55c7cae67d9bc966c1563950ffcec8cb"
+  }
+}

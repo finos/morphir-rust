@@ -1,9 +1,9 @@
 #!/bin/sh
-#MISE description="Run the Morphir Compatibility Kit against the adapter and adjudicate the report"
+#MISE description="Run the frozen legacy IR gate for migration evidence"
 
 # The kit is the oracle for what the IR spellings mean: the driver reads its cases, drives this
 # binding's adapter over the JSON-lines testee protocol, and writes one record per fence. This
-# task fetches the driver, runs it, and then hands the report to `tests/report.rs`, which holds
+# task fetches the driver, runs it, and then hands the report to `tests/legacy_report.rs`, which holds
 # the failing cases against `crates/morphir-mck-adapter/allowed-failing.json`.
 #
 # The released driver embeds the kit, so there is no --kit argument. Running against a working
@@ -12,7 +12,7 @@
 set -eu
 
 VERSION=$(cat .config/mck-driver-version)
-REPORT=.dev/out/mck/report.json
+REPORT=.dev/out/mck/legacy-report.json
 BIN_DIR=.dev/bin
 DRIVER="$BIN_DIR/mck-$VERSION"
 
@@ -21,7 +21,7 @@ case "$(uname -s)" in
     Darwin) OS=darwin ;;
     Linux) OS=linux ;;
     *)
-        echo "check:kit runs on Linux and macOS; on Windows run the driver from source with bun." >&2
+        echo "check:kit-legacy runs on Linux and macOS; on Windows run the driver from source with bun." >&2
         exit 1
         ;;
 esac
@@ -104,7 +104,7 @@ fi
 }
 
 echo "Adjudicating the report against allowed-failing.json..." >&2
-cargo test -p morphir-mck-adapter --test report
+cargo test -p morphir-mck-adapter --test legacy_report -- --ignored
 
 if [ "$DRIVER_STATUS" -ne 0 ]; then
     echo "The driver exited $DRIVER_STATUS; every failing case is in allowed-failing.json." >&2

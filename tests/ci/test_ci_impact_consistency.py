@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tomllib
 import unittest
 
 from ci_impact_test_support import *
@@ -12,6 +13,54 @@ CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 
 
 class ImpactConsistencyTests(unittest.TestCase):
+    def test_native_mck_setup_uses_portable_paths_and_only_required_tools(self) -> None:
+        settings = tomllib.loads((REPOSITORY_ROOT / "mise.toml").read_text())
+        self.assertNotIn("PATH", settings["env"])
+        self.assertEqual(["{{config_root}}/.gems/bin"], settings["env"]["_"]["path"])
+        job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
+        self.assertIn("MISE_ENABLE_TOOLS: rust,bun", job)
+        self.assertIn('CARGO_NET_GIT_FETCH_WITH_CLI: "true"', job)
+        self.assertIn("git config --global core.longpaths true", job)
+        self.assertLess(job.index("core.longpaths true"), job.index("uses: jdx/mise-action"))
+        self.assertLess(job.index("core.longpaths true"), job.index("cargo test --locked"))
+        self.assertLess(job.index("CARGO_NET_GIT_FETCH_WITH_CLI"), job.index("    steps:"))
+
+    def test_native_mck_inputs_route_to_cross_platform_conformance(self) -> None:
+        paths = (REPOSITORY_ROOT / ".github/ci-impact.toml").read_text()
+        section = paths.split("[jobs.kit-conformance]", 1)[1].split("[jobs.", 1)[0]
+        for path in (".config/mck-cli.json", "vendor/morphir-mck/**", "scripts/check-mck*", "scripts/released-cli*"):
+            self.assertIn(path, section)
+        job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
+        for os in ("ubuntu-latest", "macos-15", "windows-2025"):
+            self.assertIn(os, job)
+        self.assertIn("mise run tools:test", job)
+        self.assertIn("mise run check:kit", job)
+        self.assertIn("mise run check:kit-legacy", job)
+        self.assertNotIn("hashFiles('.config/mck-cli.json')", job)
+        self.assertIn(".dev/out/mck/legacy-report.json", job)
+        self.assertIn(".dev/out/mck/report.html", job)
+        self.assertIn("mck-report-${{ matrix.os }}", job)
+
+    def test_native_mck_upload_retains_reports_inside_hidden_dev_directory(self) -> None:
+        job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
+        upload = job.split("      - name: Upload kit report\n", 1)[1]
+        self.assertIn("if: always()", upload)
+        self.assertIn("include-hidden-files: true", upload)
+        for report in ("report.json", "report.html", "legacy-report.json"):
+            self.assertIn(f".dev/out/mck/{report}", upload)
+
+    def test_native_mck_is_default_and_legacy_adjudication_is_explicit(self) -> None:
+        settings = tomllib.loads((REPOSITORY_ROOT / "mise.toml").read_text())
+        self.assertEqual("bun run scripts/check-mck.ts", settings["tasks"]["check:kit"]["run"])
+        self.assertEqual(["check:kit"], settings["tasks"]["check:kit-native"]["depends"])
+        self.assertFalse((REPOSITORY_ROOT / ".mise/tasks/check/kit").exists())
+        legacy = (REPOSITORY_ROOT / ".mise/tasks/check/kit-legacy").read_text()
+        self.assertIn("REPORT=.dev/out/mck/legacy-report.json", legacy)
+        self.assertIn("--test legacy_report -- --ignored", legacy)
+        report = (REPOSITORY_ROOT / "crates/morphir-mck-adapter/tests/legacy_report.rs").read_text()
+        self.assertIn("#[ignore =", report)
+        self.assertIn('.dev/out/mck/legacy-report.json', report)
+
     @unittest.skipUnless(shutil.which("cargo"), "cargo is not installed")
     def test_rust_bundle_uses_selective_ci_routing(self) -> None:
         workspace = graph.load_workspace(REPOSITORY_ROOT)

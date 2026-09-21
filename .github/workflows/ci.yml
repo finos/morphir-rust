@@ -113,6 +113,12 @@ jobs:
       - name: Test Python release tooling
         run: python3 -m unittest discover -s tests/ci -v
 
+      - name: Install mise
+        uses: jdx/mise-action@v4
+
+      - name: Check repository TypeScript tooling
+        run: mise run tools:typecheck
+
   lint-rust:
     name: Lint (Rust)
     runs-on: ubuntu-latest
@@ -143,14 +149,26 @@ jobs:
         run: mise run check:lint:rust -- ${{ needs.changes.outputs.cargo_packages }}
 
   kit-conformance:
-    name: Kit conformance
-    runs-on: ubuntu-latest
+    name: Kit conformance (${{ matrix.os }})
+    env:
+      # Avoid unrelated documentation and coverage toolchains on Windows.
+      MISE_ENABLE_TOOLS: rust,bun
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     needs: changes
     if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.job_kit_conformance == 'true') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Enable long Git dependency paths on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
 
       - name: Install mise
         uses: jdx/mise-action@v4
@@ -165,20 +183,32 @@ jobs:
       - name: Test package library and adapter protocols
         run: cargo test --locked -p morphir-package -p morphir-mck-adapter
 
+      - name: Test native CLI acquisition and MCK orchestration
+        run: mise run tools:test
+
       - name: Lint package library and adapter
         run: |
           rustup component add clippy
           cargo clippy --locked -p morphir-package -p morphir-mck-adapter --all-targets -- -D warnings
 
-      - name: Run the Morphir Compatibility Kit against the adapter
+      - name: Run the native Morphir Compatibility Kit against the adapter
         run: mise run check:kit
+
+      # Retain frozen migration evidence until the parent cutover review.
+      - name: Run the legacy IR parity gate
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: mise run check:kit-legacy
 
       - name: Upload kit report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mck-report
-          path: .dev/out/mck/report.json
+          name: mck-report-${{ matrix.os }}
+          include-hidden-files: true
+          path: |
+            .dev/out/mck/report.json
+            .dev/out/mck/report.html
+            .dev/out/mck/legacy-report.json
 
   lint-shell:
     name: Lint (Shell)

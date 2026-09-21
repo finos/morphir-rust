@@ -1,0 +1,144 @@
+{
+	"lockVersion": 1,
+	"suite": "ir",
+	"contract": {
+		"protocol": 1,
+		"report": 1
+	},
+	"driverContract": ">=1, <2",
+	"source": {
+		"kind": "github",
+		"repository": "finos/morphir",
+		"revision": "48977b55ec1c1ccf834837fe1912e01615071d46"
+	},
+	"algorithm": "mck-file-map-sha256/1",
+	"corpusHash": "sha256-0bacb95902e3870a2dadffe7f316d55ed849fe90a3b2fac11060b5b6a76909fa",
+	"snapshotDigest": "sha256-07b32a353c34015ad96c84d02c85af00615aacdb5da4831a448708d051d7acfb",
+	"files": [
+		{
+			"path": "spec/ir/mck/README.md",
+			"sha256": "69cce4e6835c979a16469953c3676928b39b3dec5dd3c3e9e6ee74a04b586aa0",
+			"size": 10588
+		},
+		{
+			"path": "spec/ir/mck/allowed-failing.json",
+			"sha256": "5a418b034e52d2223bad21cd0992aa10b83af8b0231a183269dda79cf77b49a8",
+			"size": 176
+		},
+		{
+			"path": "spec/ir/mck/definitions.md",
+			"sha256": "c1212092c486b1a5af3853ca8298b0d82275786563a50d6fcfef25630f0af606",
+			"size": 21687
+		},
+		{
+			"path": "spec/ir/mck/distributions.md",
+			"sha256": "325958fed22e87393d1bfda11322e115945b2e36598d21770ed8c2ddcd4e68eb",
+			"size": 11268
+		},
+		{
+			"path": "spec/ir/mck/document-tree.md",
+			"sha256": "c4d3c166eac7001e7a1d5ba0852790ffc5f71a4c8a1ee93eea8d3c0cecb34356",
+			"size": 12094
+		},
+		{
+			"path": "spec/ir/mck/documents/complete-example.yaml",
+			"sha256": "bacf818923d2cd3a07e787e7a7001422ff262128f939abe0e1445d86d948c86e",
+			"size": 2495
+		},
+		{
+			"path": "spec/ir/mck/names.md",
+			"sha256": "bcefa7dfcd9c9b278140569d7f7133e52c9fb9a20adcd9dc1f280e9c047b04b2",
+			"size": 2657
+		},
+		{
+			"path": "spec/ir/mck/patterns-and-literals.md",
+			"sha256": "91d652a7349a98ad6d840c2ec69be816f106da84ab04337e654236f3dfc2a6bc",
+			"size": 8946
+		},
+		{
+			"path": "spec/ir/mck/protocol.example.json",
+			"sha256": "da3225a456a974744bf0f8445c1d7ec0ff33c94f3d760e02bd913f2cc3c49446",
+			"size": 2255
+		},
+		{
+			"path": "spec/ir/mck/protocol.schema.json",
+			"sha256": "4e2fe0ac656b54752d5b92bee677a1dc3d43ffff0f0013987ff66d6196683d59",
+			"size": 9684
+		},
+		{
+			"path": "spec/ir/mck/report-draft.example.json",
+			"sha256": "7a193922ce3a558a9eac8a784b762ff0b932d1bf53901cce13d02280ab1fa2db",
+			"size": 1101
+		},
+		{
+			"path": "spec/ir/mck/report-draft.schema.json",
+			"sha256": "8e3ad8e70aa464c298233a69823d8564e90e3bf917153c3cebbd2bf42b490f8d",
+			"size": 7302
+		},
+		{
+			"path": "spec/ir/mck/report.example.json",
+			"sha256": "779de310a8a12a5bc110bb83b393dbeef50b46329d0e5ca4d5d0509289809c95",
+			"size": 1889
+		},
+		{
+			"path": "spec/ir/mck/report.schema.json",
+			"sha256": "38e65fafef5952f3dc049326865b9904fbfa5e9e359d40b6c5b8da1875c00137",
+			"size": 2401
+		},
+		{
+			"path": "spec/ir/mck/types.md",
+			"sha256": "b7ca2605ae95e3f9ffa78de4c1d68820ec5074b45d0dd2111a2052ec1e36bebf",
+			"size": 7014
+		},
+		{
+			"path": "spec/ir/mck/values.md",
+			"sha256": "3872bb416fd1d47103208d92c3e698e3fdd8242023e8cf5347a5a9f5c6624898",
+			"size": 13007
+		},
+		{
+			"path": "spec/ir/mck/versions.md",
+			"sha256": "8b25a2ab521906882beeda1132b7f79dce4ea48919df67a0ee1ae9c1dafdb9cf",
+			"size": 4462
+		},
+		{
+			"path": "spec/mck/mck-kit.lock.example.json",
+			"sha256": "476fc35571a3423e0d200f351928f8ea39fe47c290838be769a7af004bd295ea",
+			"size": 2745
+		},
+		{
+			"path": "spec/mck/mck-kit.lock.schema.json",
+			"sha256": "180ee38485e29aa198e34d4cfa3c98710212fe0a7acbb86145f3093b5fe1bc97",
+			"size": 2730
+		},
+		{
+			"path": "spec/mck/provenance.schema.json",
+			"sha256": "4da91b830afabbee4aed2e0a2f9e865f854d6014109bab01a427c9f8d58eba9c",
+			"size": 1945
+		},
+		{
+			"path": "spec/mck/vocabulary.json",
+			"sha256": "0506381e034428c979b7c7f9c228faadbd2594c12fffe851fa98021dbd67ea26",
+			"size": 8765
+		},
+		{
+			"path": "spec/mck/vocabulary.schema.json",
+			"sha256": "fa25da5ddc0307a962295ab45e05af74206aac22e2bf8db57c93b09944299e7c",
+			"size": 1664
+		},
+		{
+			"path": "website/static/ir/examples/v4/complete-example.json",
+			"sha256": "30fbea9879b377dde11d0a4916b926dba152069e7b24bd43e4cf33cb27fcd979",
+			"size": 4151
+		},
+		{
+			"path": "website/static/schemas/morphir-ir-v4-document-tree-files.json",
+			"sha256": "5e39697eb2ebcbd44ee1ca323a66c579cef40cc1b0221e7c866ea6a95a9692a0",
+			"size": 26287
+		},
+		{
+			"path": "website/static/schemas/morphir-ir-v4.json",
+			"sha256": "38dd8ba14062eb86928acf830b41311fec34558881fff3663a6387bc8b60c155",
+			"size": 136448
+		}
+	]
+}

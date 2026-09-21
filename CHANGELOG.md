@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
 ### Changed
+- **Source-breaking:** `NativeExtension::capabilities()` returns an owned
+  `ExtensionCapabilities` instead of `&ExtensionCapabilities`. Code that binds the
+  result by reference or stores the borrow needs adjusting; code that already
+  cloned it can drop the clone. Serialized output is unchanged, so no extension,
+  daemon or wire consumer is affected — this is a Rust API change only.
+  The method is now a projection of the extension's registered roles rather than
+  a stored copy, which is what lets the capability payload, the `ExtensionType`
+  list and protocol dispatch all derive from one registration instead of being
+  authored separately and reconciled by hand. Native extensions are now built
+  through a consuming builder (`NativeExtension::builder`) whose `finish` exists
+  only once a role has been registered, so an extension with no roles is a
+  compile error; the `frontend_backend`, `frontend_only` and `backend_only`
+  constructors keep their exact signatures and behaviour.
 - Workspace discovery requests state a purpose and discovered projects state an
   origin. `DiscoveryRequest.purpose` is either `manifest-projects` — the default,
   and what discovery has always meant — or `ad-hoc-sources`, which compiles an

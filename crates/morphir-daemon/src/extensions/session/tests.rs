@@ -400,7 +400,7 @@ fn recording_compile_request() -> CompileRequest {
 fn native_transport_locks_exact_discovery_metadata_and_capabilities() {
     let native = NativeExtension::frontend_backend(RecordingExtension::default()).unwrap();
     let native_info = native.info().clone();
-    let native_capabilities = native.capabilities().clone();
+    let native_capabilities = native.capabilities();
     let transport = NativeMepTransport::new(native);
     let expected = transport.expected_extension();
 
@@ -423,7 +423,7 @@ async fn native_transport_runs_the_validated_mep_lifecycle() {
         .unwrap_or_else(|failure| panic!("native initialization failed: {}", failure.error()));
 
     assert_eq!(ready.negotiated().extension().id, native.info().id);
-    assert_eq!(ready.negotiated().capabilities(), native.capabilities());
+    assert_eq!(ready.negotiated().capabilities(), &native.capabilities());
 
     let ready = match ready
         .invoke::<CompileResult>(methods::COMPILE, recording_compile_request())

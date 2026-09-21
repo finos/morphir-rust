@@ -150,6 +150,9 @@ jobs:
 
   kit-conformance:
     name: Kit conformance (${{ matrix.os }})
+    env:
+      # Avoid unrelated documentation and coverage toolchains on Windows.
+      MISE_ENABLE_TOOLS: rust,bun
     strategy:
       fail-fast: false
       matrix:

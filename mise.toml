@@ -13,7 +13,7 @@ ruby = "3.3"
 [env]
 # For Jekyll gems
 GEM_HOME = "{{config_root}}/.gems"
-PATH = "{{config_root}}/.gems/bin:{{env.PATH}}"
+_.path = ["{{config_root}}/.gems/bin"]
 
 [tasks."tools:install"]
 run = "bun install --frozen-lockfile --cwd scripts"

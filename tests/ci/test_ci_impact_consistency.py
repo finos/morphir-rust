@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tomllib
 import unittest
 
 from ci_impact_test_support import *
@@ -12,6 +13,13 @@ CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 
 
 class ImpactConsistencyTests(unittest.TestCase):
+    def test_native_mck_setup_uses_portable_paths_and_only_required_tools(self) -> None:
+        settings = tomllib.loads((REPOSITORY_ROOT / "mise.toml").read_text())
+        self.assertNotIn("PATH", settings["env"])
+        self.assertEqual(["{{config_root}}/.gems/bin"], settings["env"]["_"]["path"])
+        job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
+        self.assertIn("MISE_ENABLE_TOOLS: rust,bun", job)
+
     def test_native_mck_inputs_route_to_cross_platform_conformance(self) -> None:
         paths = (REPOSITORY_ROOT / ".github/ci-impact.toml").read_text()
         section = paths.split("[jobs.kit-conformance]", 1)[1].split("[jobs.", 1)[0]

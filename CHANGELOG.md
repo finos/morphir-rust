@@ -22,6 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
 ### Changed
+- Workspace discovery requests state a purpose and discovered projects state an
+  origin. `DiscoveryRequest.purpose` is either `manifest-projects` — the default,
+  and what discovery has always meant — or `ad-hoc-sources`, which compiles an
+  explicit selection of files whose project identity is synthesized because there
+  is no manifest. A selection carries its own root rather than having one
+  recomputed from its files, because module names are derived relative to that
+  root: `models/domain/customer.gleam` names `domain/customer` with the root and
+  `customer` without it, so two files in different directories could silently
+  collide on one module name. `ProjectSnapshot` gains `origin` (`manifest` or
+  `synthesized`) and an optional `exposedModules`, and `WorkspaceSnapshot.configAnchor`
+  is now nullable, since a synthesized workspace has no manifest to point at.
+  The workspace discovery protocol remains version 1: it is a pre-release draft
+  with no installed base, refined in place rather than versioned forward, so this
+  is a breaking change to the serialized shape without a protocol bump. Requests
+  that omit `purpose` are unaffected. Ad-hoc discovery of an explicit selection
+  against an *existing* manifest is declared but not yet implemented, and is
+  refused with `workspace.purpose.unsupported`.
 - IR conformance checks use the released native `morphir mck` CLI,
   a verified managed kit, and native report adjudication on Linux, macOS and
   Windows. `check:kit` uses the pinned native CLI and vendored snapshot;

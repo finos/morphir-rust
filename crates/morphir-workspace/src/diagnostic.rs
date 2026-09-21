@@ -26,6 +26,24 @@ pub const WORKSPACE_PROTOCOL_UNSUPPORTED: &str = "workspace.protocol.unsupported
 /// Stable diagnostic code for a symlink that a protocol-v1 host did not materialize.
 pub const WORKSPACE_SYMLINK_UNSUPPORTED: &str = "workspace.symlink.unsupported";
 
+/// Stable diagnostic code for a discovery purpose this build does not implement.
+pub const WORKSPACE_PURPOSE_UNSUPPORTED: &str = "workspace.purpose.unsupported";
+
+/// Stable diagnostic code for an ad-hoc source selection with no paths.
+pub const WORKSPACE_SELECTION_EMPTY: &str = "workspace.selection.empty";
+
+/// Stable diagnostic code for an ad-hoc source selection with a repeated path.
+pub const WORKSPACE_SELECTION_DUPLICATE: &str = "workspace.selection.duplicate";
+
+/// Stable diagnostic code for an ad-hoc selected path outside its selection root.
+pub const WORKSPACE_SELECTION_OUTSIDE_ROOT: &str = "workspace.selection.outside-root";
+
+/// Stable diagnostic code for an ad-hoc selected path that is not a file.
+pub const WORKSPACE_SELECTION_INVALID: &str = "workspace.selection.invalid";
+
+/// Stable diagnostic code for an ad-hoc request with an empty language id.
+pub const WORKSPACE_LANGUAGE_ID_EMPTY: &str = "workspace.language-id.empty";
+
 /// The severity of a workspace discovery diagnostic.
 ///
 /// When severity participates in a stable diagnostic ordering key, producers

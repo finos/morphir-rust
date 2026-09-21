@@ -4,7 +4,7 @@ use morphir_config::parse_config;
 use serde_json::Value;
 
 use crate::{
-    FileTree, ProjectSnapshot, ProjectState, RelativePath, WORKSPACE_MEMBER_INVALID,
+    FileTree, ProjectOrigin, ProjectSnapshot, ProjectState, RelativePath, WORKSPACE_MEMBER_INVALID,
     WORKSPACE_PATH_NOT_CONFINED,
     config::{found_adjacent_user_candidates, found_primary_candidates},
 };
@@ -43,9 +43,14 @@ pub(super) fn discover_member(
                 .map(|path| format!("`{}`", path.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let first = paths
+                .first()
+                .expect("multiple candidates means at least one")
+                .clone();
             return Some(error_project(
                 directory,
-                paths.first().cloned(),
+                Some(first.clone()),
+                ProjectOrigin::Manifest { path: first },
                 WORKSPACE_MEMBER_INVALID,
                 format!("multiple member configurations found: {listed}"),
             ));
@@ -57,6 +62,9 @@ pub(super) fn discover_member(
             return Some(error_project(
                 directory,
                 problem.path,
+                ProjectOrigin::Manifest {
+                    path: primary_path.clone(),
+                },
                 WORKSPACE_MEMBER_INVALID,
                 problem.message,
             ));
@@ -68,6 +76,9 @@ pub(super) fn discover_member(
             return Some(error_project(
                 directory,
                 problem.path,
+                ProjectOrigin::Manifest {
+                    path: primary_path.clone(),
+                },
                 WORKSPACE_MEMBER_INVALID,
                 problem.message,
             ));
@@ -88,7 +99,8 @@ pub(super) fn discover_member(
         Err(ProjectDecodeError::Invalid(message)) => {
             return Some(error_project(
                 directory,
-                Some(primary_path),
+                Some(primary_path.clone()),
+                ProjectOrigin::Manifest { path: primary_path },
                 WORKSPACE_MEMBER_INVALID,
                 message,
             ));
@@ -96,7 +108,8 @@ pub(super) fn discover_member(
         Err(ProjectDecodeError::NotConfined(message)) => {
             return Some(error_project(
                 directory,
-                Some(primary_path),
+                Some(primary_path.clone()),
+                ProjectOrigin::Manifest { path: primary_path },
                 WORKSPACE_PATH_NOT_CONFINED,
                 message,
             ));
@@ -110,10 +123,12 @@ pub(super) fn discover_member(
         name: project.name,
         version: project.version,
         relative_path: directory.clone(),
-        config_anchor: Some(primary_path),
+        config_anchor: Some(primary_path.clone()),
         source_directory: project.source_directory,
         state: ProjectState::Unloaded,
         diagnostics: Vec::new(),
+        origin: ProjectOrigin::Manifest { path: primary_path },
+        exposed_modules: None,
     })
 }
 

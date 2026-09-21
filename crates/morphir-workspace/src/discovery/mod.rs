@@ -9,22 +9,22 @@ mod patterns;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use morphir_config::{builtin_defaults, env_config_value, merge_all};
+use morphir_config::{builtin_defaults, merge_all};
 use serde_json::{Map, Value};
 
 use crate::{
-    DiscoveryFailure, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree, ProjectState,
-    RelativePath, WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL,
-    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails,
-    WorkspaceSnapshot, WorkspaceState,
+    DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree,
+    ProjectOrigin, ProjectSnapshot, ProjectSource, ProjectState, RelativePath, SourceSelection,
+    WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_LANGUAGE_ID_EMPTY,
+    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_PURPOSE_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE,
+    WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_OUTSIDE_ROOT,
+    WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
 };
 use decoding::{decode_root_project, decode_workspace};
 use diagnostics::{duplicate_name_diagnostics, failure, sort_diagnostics};
-use layers::{
-    optional_mount_layer, optional_user_layer, required_layer, without_project_or_workspace,
-};
+use layers::{optional_user_layer, required_layer, shared_layers, without_project_or_workspace};
 use members::discover_member;
 use patterns::member_directories;
 
@@ -59,6 +59,7 @@ use patterns::member_directories;
 ///     system_config: None,
 ///     environment: BTreeMap::new(),
 ///     cli_overlay: serde_json::Value::Object(Default::default()),
+///     purpose: Default::default(),
 /// };
 ///
 /// let snapshot = discover(request)
@@ -158,38 +159,33 @@ fn discover_internal(
         reject_unmaterialized_symlinks(tree, "system configuration")?;
     }
 
+    if let DiscoveryPurpose::AdHocSources {
+        project,
+        sources,
+        language_id,
+    } = &request.purpose
+    {
+        return discover_ad_hoc_sources(&request, project, sources, language_id, collector);
+    }
+
     let root = RelativePath::root();
     let workspace_primary = required_layer(&request.development_root, &root, "workspace root")?;
     let workspace_user = optional_user_layer(&request.development_root, &workspace_primary.path)?;
-    let system = optional_mount_layer(request.system_config.as_ref(), "system configuration")?;
-    let global = optional_mount_layer(request.morphir_home.as_ref(), "Morphir Home")?;
+    let shared = shared_layers(&request)?;
     let empty = Value::Object(Map::new());
-    let system_value = system
-        .as_ref()
-        .map(|layer| without_project_or_workspace(&layer.value));
-    let global_value = global
-        .as_ref()
-        .map(|layer| without_project_or_workspace(&layer.value));
     let shared_workspace_user = workspace_user
         .as_ref()
         .map(|layer| without_project_or_workspace(&layer.value));
-    let environment = env_config_value(
-        "MORPHIR",
-        request
-            .environment
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str())),
-    );
     let workspace_effective = merge_all([
         &builtin_defaults(),
-        system_value.as_ref().unwrap_or(&empty),
-        global_value.as_ref().unwrap_or(&empty),
+        shared.system_value.as_ref().unwrap_or(&empty),
+        shared.global_value.as_ref().unwrap_or(&empty),
         &workspace_primary.value,
         workspace_user
             .as_ref()
             .map(|layer| &layer.value)
             .unwrap_or(&empty),
-        &environment,
+        &shared.environment,
         &request.cli_overlay,
     ]);
     let workspace = decode_workspace(&workspace_effective, &workspace_primary.path)?;
@@ -223,11 +219,11 @@ fn discover_internal(
         if let Some(project) = discover_member(
             &request.development_root,
             &directory,
-            system_value.as_ref().unwrap_or(&empty),
-            global_value.as_ref().unwrap_or(&empty),
+            shared.system_value.as_ref().unwrap_or(&empty),
+            shared.global_value.as_ref().unwrap_or(&empty),
             &shared_workspace,
             shared_workspace_user.as_ref().unwrap_or(&empty),
-            &environment,
+            &shared.environment,
             &request.cli_overlay,
             &mut collector,
         ) {
@@ -256,12 +252,192 @@ fn discover_internal(
 
     Ok(WorkspaceSnapshot {
         protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
-        config_anchor: workspace_primary.path,
+        config_anchor: Some(workspace_primary.path),
         name: workspace.name,
         state,
         projects,
         diagnostics,
     })
+}
+
+/// Discovers a single synthesized project from an explicit source selection.
+///
+/// This is the [`DiscoveryPurpose::AdHocSources`] path: there is no manifest
+/// in the tree to anchor on, so no workspace layer is required and no member
+/// scan runs. The selection's root is carried verbatim into
+/// [`ProjectSnapshot::relative_path`] and never recomputed from the selected
+/// paths — see the module-level discussion of why that matters.
+fn discover_ad_hoc_sources(
+    request: &DiscoveryRequest,
+    project: &ProjectSource,
+    sources: &SourceSelection,
+    language_id: &str,
+    collector: Option<&mut dyn EffectiveConfigCollector>,
+) -> Result<WorkspaceSnapshot, DiscoveryFailure> {
+    if let ProjectSource::Manifest { path } = project {
+        return Err(failure(
+            WORKSPACE_PURPOSE_UNSUPPORTED,
+            format!(
+                "ad-hoc discovery from a manifest project source is not supported yet; a provider must synthesize the manifest at `{}` before this can be implemented",
+                path.as_str()
+            ),
+            Some(path.clone()),
+        ));
+    }
+
+    if language_id.is_empty() {
+        return Err(failure(
+            WORKSPACE_LANGUAGE_ID_EMPTY,
+            format!(
+                "ad-hoc selection rooted at `{}` has an empty language id",
+                sources.root.as_str()
+            ),
+            Some(sources.root.clone()),
+        ));
+    }
+
+    validate_ad_hoc_selection(&request.development_root, sources)?;
+
+    let shared = shared_layers(request)?;
+    let empty = Value::Object(Map::new());
+    // A synthesized project is standalone: its configuration comes from
+    // defaults and the environment, never from a manifest the request did
+    // not select. There is no workspace layer here at all.
+    let effective = merge_all([
+        &builtin_defaults(),
+        shared.system_value.as_ref().unwrap_or(&empty),
+        shared.global_value.as_ref().unwrap_or(&empty),
+        &shared.environment,
+        &request.cli_overlay,
+    ]);
+
+    if let Some(collector) = collector {
+        collector.root(&effective);
+        collector.project(&sources.root, &effective);
+    }
+
+    let project = ProjectSnapshot {
+        name: String::new(),
+        version: None,
+        relative_path: sources.root.clone(),
+        config_anchor: None,
+        source_directory: RelativePath::root(),
+        state: ProjectState::Unloaded,
+        diagnostics: Vec::new(),
+        origin: ProjectOrigin::Synthesized {
+            inputs: sources.paths.clone(),
+        },
+        exposed_modules: None,
+    };
+
+    Ok(WorkspaceSnapshot {
+        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        config_anchor: None,
+        name: None,
+        state: WorkspaceState::Open,
+        projects: vec![project],
+        diagnostics: Vec::new(),
+    })
+}
+
+/// Validates an ad-hoc source selection against the tree it selects from.
+///
+/// Checks run cheapest-first: an empty selection and repeated paths are
+/// caller mistakes visible from the request alone, confinement is checked
+/// against the selection's root and paths, and only then does the tree get
+/// consulted to confirm every selected path names a file.
+fn validate_ad_hoc_selection(
+    tree: &FileTree,
+    sources: &SourceSelection,
+) -> Result<(), DiscoveryFailure> {
+    if sources.paths.is_empty() {
+        return Err(failure(
+            WORKSPACE_SELECTION_EMPTY,
+            format!(
+                "ad-hoc selection rooted at `{}` selects no sources",
+                sources.root.as_str()
+            ),
+            Some(sources.root.clone()),
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    for path in &sources.paths {
+        if !seen.insert(path) {
+            return Err(failure(
+                WORKSPACE_SELECTION_DUPLICATE,
+                format!(
+                    "selected path `{}` is repeated in the selection",
+                    path.as_str()
+                ),
+                Some(path.clone()),
+            ));
+        }
+    }
+
+    let outside_root: Vec<RelativePath> = sources
+        .paths
+        .iter()
+        .filter(|path| !path_is_under_root(&sources.root, path))
+        .cloned()
+        .collect();
+    if let Some(first) = outside_root.first() {
+        let listed = outside_root
+            .iter()
+            .map(|path| format!("`{}`", path.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(failure(
+            WORKSPACE_SELECTION_OUTSIDE_ROOT,
+            format!(
+                "selected paths are not under selection root `{}`: {listed}",
+                sources.root.as_str()
+            ),
+            Some(first.clone()),
+        ));
+    }
+
+    let not_files: Vec<RelativePath> = sources
+        .paths
+        .iter()
+        .filter(|path| !tree.contains_file(path))
+        .cloned()
+        .collect();
+    if let Some(first) = not_files.first() {
+        let listed = not_files
+            .iter()
+            .map(|path| format!("`{}`", path.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(failure(
+            WORKSPACE_SELECTION_INVALID,
+            format!("selected paths do not resolve to files: {listed}"),
+            Some(first.clone()),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Returns whether `path` lies strictly beneath `root`, comparing canonical
+/// path segments rather than string prefixes.
+///
+/// A string-prefix check would wrongly accept `models-other/file` under root
+/// `models` (they share the text prefix `models` but are siblings, not
+/// parent and child), and would wrongly reject everything under root `.`
+/// (the mount root has no segments to match against).
+fn path_is_under_root(root: &RelativePath, path: &RelativePath) -> bool {
+    let root_segments = path_segments(root);
+    let path_segments = path_segments(path);
+    path_segments.len() > root_segments.len() && path_segments.starts_with(root_segments.as_slice())
+}
+
+fn path_segments(path: &RelativePath) -> Vec<&str> {
+    if path.as_str() == "." {
+        Vec::new()
+    } else {
+        path.as_str().split('/').collect()
+    }
 }
 
 fn reject_unmaterialized_symlinks(tree: &FileTree, mount: &str) -> Result<(), DiscoveryFailure> {

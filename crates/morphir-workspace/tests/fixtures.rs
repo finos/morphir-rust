@@ -20,6 +20,7 @@ pub(crate) fn fixture_request(name: &str) -> DiscoveryRequest {
         system_config: None,
         environment: BTreeMap::new(),
         cli_overlay: serde_json::Value::Null,
+        purpose: Default::default(),
     }
 }
 

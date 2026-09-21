@@ -4,8 +4,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    DiscoveryFailure, ProjectSnapshot, ProjectState, RelativePath, WORKSPACE_CONFIG_INVALID,
-    WORKSPACE_PATH_NOT_CONFINED,
+    DiscoveryFailure, ProjectOrigin, ProjectSnapshot, ProjectState, RelativePath,
+    WORKSPACE_CONFIG_INVALID, WORKSPACE_PATH_NOT_CONFINED,
 };
 
 use super::diagnostics::failure;
@@ -94,6 +94,10 @@ pub(super) fn decode_root_project(
         source_directory: project.source_directory,
         state: ProjectState::Unloaded,
         diagnostics: Vec::new(),
+        origin: ProjectOrigin::Manifest {
+            path: anchor.clone(),
+        },
+        exposed_modules: None,
     })
 }
 

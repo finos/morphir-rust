@@ -64,6 +64,7 @@ fn fixture_request() -> DiscoveryRequest {
         system_config: None,
         environment: BTreeMap::new(),
         cli_overlay: serde_json::json!({}),
+        purpose: Default::default(),
     }
 }
 

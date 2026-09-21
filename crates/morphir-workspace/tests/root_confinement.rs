@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
 use morphir_workspace::{
-    DiagnosticSeverity, DiscoveryFailure, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree,
-    ProjectSnapshot, ProjectState, RelativePath, RelativePathError, WORKSPACE_CONFIG_AMBIGUOUS,
-    WORKSPACE_CONFIG_INVALID, WORKSPACE_CONFIG_MISSING, WORKSPACE_DISCOVERY_PROTOCOL,
-    WORKSPACE_MEMBER_DUPLICATE_NAME, WORKSPACE_MEMBER_INVALID, WORKSPACE_PATH_NOT_CONFINED,
-    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiagnostic,
-    WorkspaceSnapshot, WorkspaceState,
+    DiagnosticSeverity, DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse,
+    FileEntry, FileTree, ProjectOrigin, ProjectSnapshot, ProjectState, RelativePath,
+    RelativePathError, WORKSPACE_CONFIG_AMBIGUOUS, WORKSPACE_CONFIG_INVALID,
+    WORKSPACE_CONFIG_MISSING, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_MEMBER_DUPLICATE_NAME,
+    WORKSPACE_MEMBER_INVALID, WORKSPACE_PATH_NOT_CONFINED, WORKSPACE_PROTOCOL_UNSUPPORTED,
+    WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiagnostic, WorkspaceSnapshot, WorkspaceState,
 };
 use serde_json::json;
 
@@ -115,6 +115,7 @@ fn request_uses_camel_case_defaults_and_sorted_entries() {
 
     assert!(request.environment.is_empty());
     assert_eq!(request.cli_overlay, serde_json::Value::Null);
+    assert_eq!(request.purpose, DiscoveryPurpose::ManifestProjects);
     assert_eq!(
         serde_json::to_string(&request.development_root).unwrap(),
         r#"{"entries":{"alpha":{"kind":"file","text":"first"},"zeta":{"kind":"directory"}}}"#
@@ -146,7 +147,7 @@ fn snapshot_and_response_wire_shapes_are_stable() {
     };
     let snapshot = WorkspaceSnapshot {
         protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
-        config_anchor: RelativePath::parse("morphir.toml").unwrap(),
+        config_anchor: Some(RelativePath::parse("morphir.toml").unwrap()),
         name: Some("shop".to_owned()),
         state: WorkspaceState::Open,
         projects: vec![ProjectSnapshot {
@@ -157,6 +158,10 @@ fn snapshot_and_response_wire_shapes_are_stable() {
             source_directory: RelativePath::parse("packages/orders/src").unwrap(),
             state: ProjectState::Unloaded,
             diagnostics: vec![diagnostic.clone()],
+            origin: ProjectOrigin::Manifest {
+                path: RelativePath::parse("packages/orders/morphir.toml").unwrap(),
+            },
+            exposed_modules: Vec::new(),
         }],
         diagnostics: vec![diagnostic],
     };

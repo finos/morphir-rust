@@ -31,8 +31,9 @@ pub enum ProjectState {
 pub struct WorkspaceSnapshot {
     /// The protocol version used to produce this snapshot.
     pub protocol_version: u32,
-    /// The workspace configuration path relative to the development root.
-    pub config_anchor: RelativePath,
+    /// The workspace configuration path relative to the development root,
+    /// when one exists.
+    pub config_anchor: Option<RelativePath>,
     /// The configured workspace name, when present.
     pub name: Option<String>,
     /// The overall workspace state.
@@ -77,6 +78,28 @@ pub struct ProjectSnapshot {
     /// Project diagnostics, sorted by project path, path, code, severity, and
     /// message.
     pub diagnostics: Vec<WorkspaceDiagnostic>,
+    /// Where this project came from.
+    pub origin: ProjectOrigin,
+    /// The modules this project exposes, when known.
+    #[serde(default)]
+    pub exposed_modules: Vec<String>,
+}
+
+/// Where a discovered project came from.
+///
+/// `config_anchor` records *which* manifest a project was read from but not
+/// *whether* there was one. A caller applies different configuration rules to
+/// a synthesized project, and inferring that from an absent anchor turns a
+/// policy decision into a missing field.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProjectOrigin {
+    /// Read from the manifest at this path.
+    #[serde(rename_all = "camelCase")]
+    Manifest { path: RelativePath },
+    /// Synthesized from these sources, in the order the request gave them.
+    #[serde(rename_all = "camelCase")]
+    Synthesized { inputs: Vec<RelativePath> },
 }
 
 /// The provider-neutral result of workspace discovery.

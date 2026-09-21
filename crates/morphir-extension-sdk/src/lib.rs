@@ -608,6 +608,7 @@ mod tests {
             system_config: None,
             environment: BTreeMap::new(),
             cli_overlay: serde_json::json!({}),
+            purpose: Default::default(),
         }
     }
 

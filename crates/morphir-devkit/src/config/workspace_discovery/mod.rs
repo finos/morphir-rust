@@ -19,8 +19,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use cap_std::{ambient_authority, fs::Dir};
 use morphir_common::config::MorphirConfig;
 use morphir_workspace::{
-    DiscoveryFailure, DiscoveryRequest, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
-    WorkspaceSnapshot, discover_with_details,
+    DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, RelativePath,
+    WORKSPACE_DISCOVERY_PROTOCOL, WorkspaceSnapshot, discover_with_details,
 };
 use same_file::Handle;
 
@@ -331,6 +331,7 @@ fn bind_workspace_discovery_request_with(
         )?,
         environment: selected_environment(options),
         cli_overlay: serde_json::json!({}),
+        purpose: DiscoveryPurpose::default(),
     };
     Ok((canonical_root, request))
 }

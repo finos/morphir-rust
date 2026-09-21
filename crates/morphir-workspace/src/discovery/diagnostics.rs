@@ -3,13 +3,14 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    DiagnosticSeverity, DiscoveryFailure, ProjectSnapshot, ProjectState, RelativePath,
-    WORKSPACE_MEMBER_DUPLICATE_NAME, WorkspaceDiagnostic,
+    DiagnosticSeverity, DiscoveryFailure, ProjectOrigin, ProjectSnapshot, ProjectState,
+    RelativePath, WORKSPACE_MEMBER_DUPLICATE_NAME, WorkspaceDiagnostic,
 };
 
 pub(super) fn error_project(
     directory: &RelativePath,
     anchor: Option<RelativePath>,
+    origin: ProjectOrigin,
     code: &str,
     message: String,
 ) -> ProjectSnapshot {
@@ -28,6 +29,8 @@ pub(super) fn error_project(
         source_directory: RelativePath::parse("src").expect("default source path is confined"),
         state: ProjectState::Error,
         diagnostics: vec![diagnostic],
+        origin,
+        exposed_modules: Vec::new(),
     }
 }
 

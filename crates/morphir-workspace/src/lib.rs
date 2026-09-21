@@ -14,9 +14,12 @@ pub use diagnostic::{
     WorkspaceDiagnostic,
 };
 pub use discovery::{discover, discover_with_details};
-pub use file_tree::{DiscoveryRequest, FileEntry, FileTree, WORKSPACE_DISCOVERY_PROTOCOL};
+pub use file_tree::{
+    DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectSource, SourceSelection,
+    WORKSPACE_DISCOVERY_PROTOCOL,
+};
 pub use path::{RelativePath, RelativePathError};
 pub use snapshot::{
-    DiscoveryResponse, ProjectSnapshot, ProjectState, WorkspaceDiscoveryDetails, WorkspaceSnapshot,
-    WorkspaceState,
+    DiscoveryResponse, ProjectOrigin, ProjectSnapshot, ProjectState, WorkspaceDiscoveryDetails,
+    WorkspaceSnapshot, WorkspaceState,
 };

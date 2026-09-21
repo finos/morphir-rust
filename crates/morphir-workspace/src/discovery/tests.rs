@@ -57,6 +57,7 @@ fn collection_request() -> DiscoveryRequest {
         system_config: None,
         environment: BTreeMap::new(),
         cli_overlay: json!({}),
+        purpose: Default::default(),
     }
 }
 

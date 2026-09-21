@@ -59,6 +59,7 @@ use patterns::member_directories;
 ///     system_config: None,
 ///     environment: BTreeMap::new(),
 ///     cli_overlay: serde_json::Value::Object(Default::default()),
+///     purpose: Default::default(),
 /// };
 ///
 /// let snapshot = discover(request)
@@ -256,7 +257,7 @@ fn discover_internal(
 
     Ok(WorkspaceSnapshot {
         protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
-        config_anchor: workspace_primary.path,
+        config_anchor: Some(workspace_primary.path),
         name: workspace.name,
         state,
         projects,

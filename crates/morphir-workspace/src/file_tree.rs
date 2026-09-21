@@ -79,4 +79,56 @@ pub struct DiscoveryRequest {
     /// Command-line configuration values overlaid onto discovered configuration.
     #[serde(default)]
     pub cli_overlay: serde_json::Value,
+    /// What this request is asking for.
+    #[serde(default)]
+    pub purpose: DiscoveryPurpose,
+}
+
+/// Which sources a request selects, and the root they are measured from.
+///
+/// The root is carried, never recomputed. Module names are derived relative to
+/// it, and recovering it from the files gets it wrong: a selection of
+/// `models/domain/customer.gleam` has no `src` segment, so a provider guessing
+/// a root falls through to the basename and names the module `customer`
+/// instead of `domain/customer`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSelection {
+    /// The root the selected paths are measured from, relative to the
+    /// development root.
+    pub root: RelativePath,
+    /// The selected sources, relative to the development root, in the order
+    /// the caller gave them.
+    pub paths: Vec<RelativePath>,
+}
+
+/// Where a request's project identity comes from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProjectSource {
+    /// No manifest. Name, version and configuration are synthesized.
+    Synthesized,
+    /// Identity comes from the manifest at this path, relative to the
+    /// development root, while the selection decides the sources.
+    #[serde(rename_all = "camelCase")]
+    Manifest { path: RelativePath },
+}
+
+/// What a discovery request is asking for.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DiscoveryPurpose {
+    /// Find the projects this tree's manifests describe. The default, and what
+    /// discovery has always meant.
+    #[default]
+    ManifestProjects,
+    /// Compile an explicit selection of sources, whose identity comes from
+    /// `project`.
+    #[serde(rename_all = "camelCase")]
+    AdHocSources {
+        project: ProjectSource,
+        sources: SourceSelection,
+        /// The language every selected source is in. One language per set.
+        language_id: String,
+    },
 }

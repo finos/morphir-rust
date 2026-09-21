@@ -191,15 +191,13 @@ jobs:
           rustup component add clippy
           cargo clippy --locked -p morphir-package -p morphir-mck-adapter --all-targets -- -D warnings
 
-      - name: Run the Morphir Compatibility Kit against the adapter
-        if: ${{ matrix.os == 'ubuntu-latest' && hashFiles('.config/mck-cli.json') == '' }}
+      - name: Run the native Morphir Compatibility Kit against the adapter
         run: mise run check:kit
 
-      # The real release pin and managed kit activate this gate together.
-      # Until then Linux retains the production legacy gate above.
-      - name: Run the native Morphir Compatibility Kit against the adapter
-        if: ${{ hashFiles('.config/mck-cli.json') != '' }}
-        run: mise run check:kit-native
+      # Retain frozen migration evidence until the parent cutover review.
+      - name: Run the legacy IR parity gate
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: mise run check:kit-legacy
 
       - name: Upload kit report
         if: always()
@@ -208,8 +206,8 @@ jobs:
           name: mck-report-${{ matrix.os }}
           path: |
             .dev/out/mck/report.json
-            .dev/out/mck/native-report.json
-            .dev/out/mck/native-report.html
+            .dev/out/mck/report.html
+            .dev/out/mck/legacy-report.json
 
   lint-shell:
     name: Lint (Shell)

@@ -35,10 +35,23 @@ class ImpactConsistencyTests(unittest.TestCase):
             self.assertIn(os, job)
         self.assertIn("mise run tools:test", job)
         self.assertIn("mise run check:kit", job)
-        self.assertIn("mise run check:kit-native", job)
-        self.assertIn("matrix.os == 'ubuntu-latest' && hashFiles('.config/mck-cli.json') == ''", job)
-        self.assertIn("hashFiles('.config/mck-cli.json') != ''", job)
+        self.assertIn("mise run check:kit-legacy", job)
+        self.assertNotIn("hashFiles('.config/mck-cli.json')", job)
+        self.assertIn(".dev/out/mck/legacy-report.json", job)
+        self.assertIn(".dev/out/mck/report.html", job)
         self.assertIn("mck-report-${{ matrix.os }}", job)
+
+    def test_native_mck_is_default_and_legacy_adjudication_is_explicit(self) -> None:
+        settings = tomllib.loads((REPOSITORY_ROOT / "mise.toml").read_text())
+        self.assertEqual("bun run scripts/check-mck.ts", settings["tasks"]["check:kit"]["run"])
+        self.assertEqual(["check:kit"], settings["tasks"]["check:kit-native"]["depends"])
+        self.assertFalse((REPOSITORY_ROOT / ".mise/tasks/check/kit").exists())
+        legacy = (REPOSITORY_ROOT / ".mise/tasks/check/kit-legacy").read_text()
+        self.assertIn("REPORT=.dev/out/mck/legacy-report.json", legacy)
+        self.assertIn("--test legacy_report -- --ignored", legacy)
+        report = (REPOSITORY_ROOT / "crates/morphir-mck-adapter/tests/legacy_report.rs").read_text()
+        self.assertIn("#[ignore =", report)
+        self.assertIn('.dev/out/mck/legacy-report.json', report)
 
     @unittest.skipUnless(shutil.which("cargo"), "cargo is not installed")
     def test_rust_bundle_uses_selective_ci_routing(self) -> None:

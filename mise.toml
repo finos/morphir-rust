@@ -26,7 +26,11 @@ run = "bun test scripts"
 depends = ["tools:install"]
 run = "bun run --cwd scripts typecheck"
 
-[tasks."check:kit-native"]
+[tasks."check:kit"]
 description = "Run the native MCK against the Rust adapter with one verified managed kit"
 depends = ["tools:install"]
 run = "bun run scripts/check-mck.ts"
+
+[tasks."check:kit-native"]
+description = "Alias for the native check:kit gate"
+depends = ["check:kit"]

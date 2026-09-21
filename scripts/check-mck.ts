@@ -13,10 +13,10 @@ export function exitCodeOf(result: { exitCode: number; signalCode: NodeJS.Signal
 }
 
 function clearReport(root: string): string {
-  const report = path.join(root, ".dev/out/mck/native-report.json");
+  const report = path.join(root, ".dev/out/mck/report.json");
   mkdirSync(path.dirname(report), { recursive: true });
   rmSync(report, { force: true });
-  rmSync(path.join(root, ".dev/out/mck/native-report.html"), { force: true });
+  rmSync(path.join(root, ".dev/out/mck/report.html"), { force: true });
   return report;
 }
 
@@ -35,7 +35,7 @@ export async function runKit(options: KitOptions, execute: Execute): Promise<voi
   await requireSuccess(["cargo", "build", "--locked", "-p", "morphir-mck-adapter", "--target-dir", path.join(root, "target")]);
   const adapter = path.join(root, "target/debug", process.platform === "win32" ? "mck-adapter-rust.exe" : "mck-adapter-rust");
   const render = () => requireSuccess([cli, "mck", "report", "render", report, "--format", "html",
-    "--output", path.join(root, ".dev/out/mck/native-report.html")]);
+    "--output", path.join(root, ".dev/out/mck/report.html")]);
   try {
     const code = await execute([cli, "mck", "run", "--kit", kit, "--adapter", adapter, "--report", report]);
     if (code !== 0 && code !== 1) throw new Error(`Native MCK exited ${code}, which is not a case verdict`);

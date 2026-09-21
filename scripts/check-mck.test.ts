@@ -10,7 +10,7 @@ function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "mck-task-test-")); roots.push(root);
   const kit = path.join(root, "managed kit"); mkdirSync(kit);
   writeFileSync(path.join(kit, "mck-kit.lock.json"), "{}");
-  const report = path.join(root, ".dev/out/mck/native-report.json"); mkdirSync(path.dirname(report), { recursive: true }); writeFileSync(report, "stale");
+  const report = path.join(root, ".dev/out/mck/report.json"); mkdirSync(path.dirname(report), { recursive: true }); writeFileSync(report, "stale");
   return { root, kit, cli: "native cli.exe", report };
 }
 
@@ -32,7 +32,7 @@ test("removes stale reports before building and uses one explicit kit for every 
   expect(calls.some((args) => args.includes("--test"))).toBe(false);
   const build = calls.find((args) => args[0] === "cargo");
   expect(build?.slice(-2)).toEqual(["--target-dir", path.join(options.root, "target")]);
-  expect(calls.find((args) => args[3] === "render") ?? []).toContain(path.join(options.root, ".dev/out/mck/native-report.html"));
+  expect(calls.find((args) => args[3] === "render") ?? []).toContain(path.join(options.root, ".dev/out/mck/report.html"));
 });
 
 test("run exit one only succeeds when native report adjudication succeeds", async () => {

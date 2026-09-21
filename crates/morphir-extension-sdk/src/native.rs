@@ -5,10 +5,10 @@
 
 use crate::protocol::{ExtensionRequest, ExtensionResponse};
 use crate::{
-    __dispatch_backend, __dispatch_frontend, __dispatch_request_with_metadata, __extension_info,
-    Backend, CompileRequest, CompileResult, DispatchFn, Extension, ExtensionCapabilities,
-    ExtensionError, ExtensionInfo, ExtensionType, Frontend, GenerateRequest, GenerateResult,
-    Result,
+    __dispatch_backend, __dispatch_frontend, __extension_info, Backend, CompileRequest,
+    CompileResult, DispatchFn, Extension, ExtensionCapabilities, ExtensionError, ExtensionInfo,
+    ExtensionType, Frontend, GenerateRequest, GenerateResult, NativeRoleDispatch, Result,
+    dispatch_request_with_roles, erase_dispatch,
 };
 use std::sync::Arc;
 
@@ -112,8 +112,11 @@ impl NativeExtension {
         let capabilities = E::capabilities();
         validate_capabilities(&info, &capabilities, &declared_types)?;
         validate_protocol_metadata(&info, &capabilities)?;
+        let dispatchers = dispatchers
+            .into_iter()
+            .map(|dispatch| erase_dispatch(Arc::clone(&extension), dispatch))
+            .collect::<Vec<_>>();
         let protocol = Arc::new(ProtocolHandle {
-            extension,
             dispatchers,
             info: info.clone(),
             capabilities: capabilities.clone(),
@@ -239,25 +242,15 @@ where
     }
 }
 
-struct ProtocolHandle<E> {
-    extension: Arc<E>,
-    dispatchers: Vec<DispatchFn<E>>,
+struct ProtocolHandle {
+    dispatchers: Vec<NativeRoleDispatch>,
     info: ExtensionInfo,
     capabilities: ExtensionCapabilities,
 }
 
-impl<E> NativeProtocol for ProtocolHandle<E>
-where
-    E: Extension + Send + Sync,
-{
+impl NativeProtocol for ProtocolHandle {
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
-        __dispatch_request_with_metadata(
-            self.extension.as_ref(),
-            &request,
-            &self.dispatchers,
-            &self.info,
-            &self.capabilities,
-        )
+        dispatch_request_with_roles(&request, &self.dispatchers, &self.info, &self.capabilities)
     }
 }
 
@@ -1006,5 +999,62 @@ mod tests {
             serde_json::to_value(initialize.capabilities).unwrap(),
             expected_capabilities
         );
+    }
+
+    /// An unknown method must produce the same JSON-RPC method-not-found error
+    /// after dispatch is erased as before it.
+    #[test]
+    fn unknown_method_is_method_not_found_through_role_dispatch() {
+        let native = NativeExtension::frontend_only(FrontendOnly).expect("FrontendOnly is valid");
+        let response = native.protocol().handle(
+            ExtensionRequest::new("morphir.not.a.method", serde_json::json!({}), 7)
+                .expect("request is well formed"),
+        );
+        let error = response.error.expect("unknown method must be an error");
+        assert_eq!(error.code, -32601);
+        assert!(
+            error.message.contains("morphir.not.a.method"),
+            "the error should name the method, got: {}",
+            error.message
+        );
+    }
+
+    /// Every control method must keep answering from the construction snapshots
+    /// after the native path stops sharing the guest's dispatcher.
+    ///
+    /// `morphir.initialize` needs a well-formed `InitializeParams` payload (unlike
+    /// the other control methods, which ignore `params`), so it gets one here
+    /// instead of the `{}` the other four use.
+    #[test]
+    fn every_control_method_answers_through_the_native_adapter() {
+        let native = NativeExtension::frontend_only(FrontendOnly).expect("FrontendOnly is valid");
+        let initialize_params = serde_json::to_value(crate::protocol::InitializeParams {
+            protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
+            host: crate::protocol::PeerInfo {
+                name: "test-host".into(),
+                version: "1.0.0".into(),
+            },
+        })
+        .expect("initialize params should serialize");
+        for (id, (method, params)) in [
+            (methods::INITIALIZE, initialize_params),
+            (methods::PING, serde_json::json!({})),
+            (methods::INFO, serde_json::json!({})),
+            (methods::CAPABILITIES, serde_json::json!({})),
+            (methods::SHUTDOWN, serde_json::json!({})),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = native.protocol().handle(
+                ExtensionRequest::new(method, params, id as u64 + 1)
+                    .expect("request is well formed"),
+            );
+            assert!(
+                response.error.is_none(),
+                "{method} must succeed, got {:?}",
+                response.error
+            );
+        }
     }
 }

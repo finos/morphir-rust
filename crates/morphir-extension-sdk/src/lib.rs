@@ -246,6 +246,31 @@ pub type DispatchFn<E> = fn(
     &protocol::ExtensionRequest,
 ) -> Option<std::result::Result<serde_json::Value, ExtensionError>>;
 
+/// A role's protocol dispatcher, erased over the extension type.
+///
+/// [`DispatchFn`] takes `&E`, so it cannot be stored beside a type-erased role
+/// handle. Capturing the shared `Arc<E>` in a closure lets one role record own
+/// its handle and its dispatcher together, which is what keeps them from
+/// disagreeing.
+pub(crate) type NativeRoleDispatch = std::sync::Arc<
+    dyn Fn(
+            &protocol::ExtensionRequest,
+        ) -> Option<std::result::Result<serde_json::Value, ExtensionError>>
+        + Send
+        + Sync,
+>;
+
+/// Bind a typed dispatcher to a shared extension instance.
+pub(crate) fn erase_dispatch<E>(
+    extension: std::sync::Arc<E>,
+    dispatch: DispatchFn<E>,
+) -> NativeRoleDispatch
+where
+    E: Send + Sync + 'static,
+{
+    std::sync::Arc::new(move |request| dispatch(extension.as_ref(), request))
+}
+
 /// Return extension metadata aligned with the macro-declared capabilities.
 #[doc(hidden)]
 pub fn __extension_info<E: Extension>(declared_types: &[ExtensionType]) -> ExtensionInfo {
@@ -321,10 +346,24 @@ pub fn __dispatch_request_with<E: Extension>(
     }
 }
 
-fn __dispatch_request_with_metadata<E: Extension>(
-    extension: &E,
+fn dispatch_role_response(
     request: &protocol::ExtensionRequest,
-    dispatchers: &[DispatchFn<E>],
+    dispatchers: &[NativeRoleDispatch],
+) -> protocol::ExtensionResponse {
+    for dispatch in dispatchers {
+        if let Some(result) = dispatch(request) {
+            return dispatch_response(request.id, result);
+        }
+    }
+    protocol::ExtensionResponse::error(
+        request.id,
+        protocol::RpcError::method_not_found(&request.method),
+    )
+}
+
+pub(crate) fn dispatch_request_with_roles(
+    request: &protocol::ExtensionRequest,
+    dispatchers: &[NativeRoleDispatch],
     info: &ExtensionInfo,
     capabilities: &ExtensionCapabilities,
 ) -> protocol::ExtensionResponse {
@@ -336,7 +375,7 @@ fn __dispatch_request_with_metadata<E: Extension>(
         methods::INFO => serde_json::to_value(info).map_err(ExtensionError::from),
         methods::CAPABILITIES => serde_json::to_value(capabilities).map_err(ExtensionError::from),
         methods::SHUTDOWN => Ok(serde_json::json!({})),
-        _ => return dispatch_capability_response(extension, request, dispatchers),
+        _ => return dispatch_role_response(request, dispatchers),
     };
 
     dispatch_response(request.id, result)

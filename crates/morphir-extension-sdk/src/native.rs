@@ -1177,6 +1177,45 @@ mod tests {
         }
     }
 
+    /// A workspace-only extension that records every discovery request it
+    /// receives, mirroring `RecordingExtension`'s `compile_requests`. Used by
+    /// `direct_and_protocol_workspace_dispatch_are_equivalent` to prove that
+    /// the direct handle and the protocol handle dispatch through the same
+    /// registered instance rather than two independently constructed ones.
+    #[derive(Default)]
+    struct RecordingWorkspace {
+        discovery_requests: Arc<Mutex<Vec<morphir_workspace::DiscoveryRequest>>>,
+    }
+
+    impl Extension for RecordingWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Workspace for RecordingWorkspace {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            self.discovery_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
     struct MetadataExtension<const FRONTEND: bool, const BACKEND: bool, const RESERVED_EXTRA: bool>;
 
     impl<const FRONTEND: bool, const BACKEND: bool, const RESERVED_EXTRA: bool> Extension
@@ -1751,6 +1790,44 @@ mod tests {
             .finish();
 
         assert!(result.is_ok());
+    }
+
+    /// Mirrors `direct_and_protocol_frontend_dispatch_are_equivalent`: the same
+    /// `DiscoveryRequest`, sent through `workspace().unwrap().discover(..)` and
+    /// through `protocol().handle(WORKSPACE_DISCOVER)`, must produce the same
+    /// response from one shared provider instance. The recorded request count
+    /// (2, one per call) is what proves "shared" rather than "two providers
+    /// that happen to answer identically."
+    #[test]
+    fn direct_and_protocol_workspace_dispatch_are_equivalent() {
+        let extension = RecordingWorkspace::default();
+        let recorded_requests = extension.discovery_requests.clone();
+        let provider = NativeExtension::builder(extension)
+            .with_workspace()
+            .finish()
+            .unwrap();
+        let request = a_workspace_discovery_request();
+
+        let direct = provider
+            .workspace()
+            .unwrap()
+            .discover(request.clone())
+            .unwrap();
+        let rpc = ExtensionRequest::new(methods::WORKSPACE_DISCOVER, request.clone(), 7).unwrap();
+        let protocol = provider.protocol().handle(rpc);
+        let through_mep: morphir_workspace::DiscoveryResponse =
+            serde_json::from_value(protocol.result.unwrap()).unwrap();
+
+        let direct_result = serde_json::to_value(&direct).unwrap();
+        let protocol_result = serde_json::to_value(&through_mep).unwrap();
+        assert_eq!(direct_result, protocol_result);
+        let recorded_requests = recorded_requests.lock().unwrap();
+        assert_eq!(recorded_requests.len(), 2);
+        assert!(recorded_requests.iter().all(|recorded| {
+            recorded.protocol_version == request.protocol_version
+                && recorded.development_root == request.development_root
+        }));
+        assert_eq!(provider.info().types, [ExtensionType::Workspace]);
     }
 
     #[test]

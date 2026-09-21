@@ -25,8 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IR conformance checks use the released native `morphir mck` CLI,
   a verified managed kit, and native report adjudication on Linux, macOS and
   Windows. `check:kit` uses the pinned native CLI and vendored snapshot;
-  `check:kit-legacy` retains the frozen TypeScript migration evidence separately.
-  Package checks remain unchanged.
+  the temporary `check:kit-legacy` task and legacy report checker are retired.
+  Historical migration evidence remains in the parent; package checks are unchanged.
 - Gleam value compilation preserves list tails, list patterns and block bindings.
   Generation supports scoped destructuring and SDK list construction, preserves
   string escapes and float identity, and rejects unsupported IR instead of

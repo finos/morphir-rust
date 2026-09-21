@@ -11,6 +11,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 class CliReleaseTaskTests(unittest.TestCase):
+    def test_release_and_mck_checks_share_native_cli_acquisition(self) -> None:
+        task = (REPOSITORY_ROOT / ".mise/tasks/test/cli-release").read_text()
+        self.assertIn("scripts/released-cli.ts", task)
+        self.assertNotIn("fetch_cli()", task)
+        self.assertNotIn("sha256_of()", task)
+
     def test_gleam_selection_reaches_bundle_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             bundle = Path(temporary_directory) / "missing-bundle"

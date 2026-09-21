@@ -1,5 +1,7 @@
 [tools]
 rust = "1.98.1"
+# Repository orchestration only; the native MCK CLI and adapter need no JS runtime.
+bun = "1.4.2"
 # Componentizes the example extension in build:wasm.
 wasm-tools = "1.259.0"
 shellcheck = "latest"
@@ -12,3 +14,19 @@ ruby = "3.3"
 # For Jekyll gems
 GEM_HOME = "{{config_root}}/.gems"
 PATH = "{{config_root}}/.gems/bin:{{env.PATH}}"
+
+[tasks."tools:install"]
+run = "bun install --frozen-lockfile --cwd scripts"
+
+[tasks."tools:test"]
+depends = ["tools:install"]
+run = "bun test scripts"
+
+[tasks."tools:typecheck"]
+depends = ["tools:install"]
+run = "bun run --cwd scripts typecheck"
+
+[tasks."check:kit-native"]
+description = "Run the native MCK against the Rust adapter with one verified managed kit"
+depends = ["tools:install"]
+run = "bun run scripts/check-mck.ts"

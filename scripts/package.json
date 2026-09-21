@@ -1,0 +1,8 @@
+{
+  "name": "@morphir-rust/repository-tools",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test", "typecheck": "tsc" },
+  "dependencies": { "fflate": "0.8.3" },
+  "devDependencies": { "@types/bun": "^1.4.0", "typescript": "~7.0.0" }
+}

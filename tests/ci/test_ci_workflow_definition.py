@@ -169,8 +169,10 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         version = (REPOSITORY_ROOT / ".config" / "morphir-cli-version").read_text(encoding="utf-8")
         self.assertRegex(version, r"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$")
         task = (REPOSITORY_ROOT / ".mise" / "tasks" / "test" / "cli-release").read_text(encoding="utf-8")
-        self.assertIn("https://github.com/finos/morphir/releases/download/v$VERSION", task)
-        self.assertIn(".sha256", task)
+        self.assertIn("scripts/released-cli.ts", task)
+        installer = (REPOSITORY_ROOT / "scripts/released-cli.ts").read_text(encoding="utf-8")
+        self.assertIn("https://github.com/finos/morphir/releases/download/v${options.version}", installer)
+        self.assertIn(".sha256", installer)
 
     def test_a_relative_cli_override_survives_the_change_into_the_project(self) -> None:
         """MORPHIR_CLI=target/debug/morphir must still resolve after the task enters its project."""

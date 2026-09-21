@@ -40,3 +40,6 @@
 
 # Generated-source goldens preserve the backend's final blank line.
 crates/morphir-gleam-binding/tests/goldens/*.gleam whitespace=-blank-at-eof
+
+# Native-managed kit hashes are over exact bytes, including on Windows.
+vendor/morphir-mck/** -text

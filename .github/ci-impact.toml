@@ -50,6 +50,9 @@ paths = [
   # The released morphir CLI every bundle is proved through, and the task that does it.
   ".config/morphir-cli-version",
   ".mise/tasks/test/cli-release",
+  "scripts/released-cli*",
+  "scripts/package.json",
+  "scripts/bun.lock",
 ]
 
 [rust]
@@ -66,7 +69,17 @@ paths = [
 
 [jobs.kit-conformance]
 crates = ["morphir-package", "morphir-mck-adapter"]
-paths = [".config/mck-driver-version", ".mise/tasks/check/kit"]
+paths = [
+  ".config/mck-cli.json",
+  ".config/mck-driver-version",
+  ".mise/tasks/check/kit*",
+  "scripts/check-mck*",
+  "scripts/released-cli*",
+  "scripts/package.json",
+  "scripts/bun.lock",
+  "scripts/tsconfig.json",
+  "vendor/morphir-mck/**",
+]
 
 [jobs.workspace-wasm]
 crates = [

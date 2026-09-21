@@ -71,7 +71,6 @@ paths = [
 crates = ["morphir-package", "morphir-mck-adapter"]
 paths = [
   ".config/mck-cli.json",
-  ".config/mck-driver-version",
   ".mise/tasks/check/kit*",
   "scripts/check-mck*",
   "scripts/released-cli*",

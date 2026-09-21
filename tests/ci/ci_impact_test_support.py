@@ -62,7 +62,7 @@ def fake_config_data() -> dict:
         "extensions": {"crates": ["morphir-daemon"]},
         "rust": {"paths": [".mise/tasks/test/unit"]},
         "jobs": {
-            "kit-conformance": {"crates": ["morphir-projection"], "paths": [".config/mck-driver-version"]},
+            "kit-conformance": {"crates": ["morphir-projection"], "paths": [".config/mck-cli.json"]},
             "test-extism": {"crates": ["morphir-daemon", "morphir-avro-extension"], "paths": [".mise/tasks/test/extism"]},
             "lint-shell": {"paths": ["**/*.sh", ".mise/tasks/**"]},
             "docs-generated": {"paths": ["docs/**", "CHANGELOG.md"]},

@@ -21,7 +21,7 @@ pub use crate::traits::{Backend, Extension, Frontend, Transform, Validator, Work
 pub use crate::error::{ExtensionError, Result};
 
 // Re-export native extension adapters.
-pub use crate::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol};
+pub use crate::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol, NativeWorkspace};
 
 // Re-export protocol types
 pub use crate::protocol::{ExtensionRequest, ExtensionResponse, RpcError};
@@ -35,6 +35,19 @@ pub use crate::host::{cache_ir, get_cached_ir, get_config, get_var, get_workspac
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every native adapter is reachable from the prelude. A role whose endpoint
+    /// trait is missing here cannot be named in a trait-object field or a generic
+    /// bound by a consumer that imports only the prelude, even though every other
+    /// adapter can.
+    #[test]
+    fn prelude_exports_every_native_adapter() {
+        let _: Option<&dyn NativeFrontend> = None;
+        let _: Option<&dyn NativeBackend> = None;
+        let _: Option<&dyn NativeWorkspace> = None;
+        let _: Option<&dyn NativeProtocol> = None;
+        let _: Option<NativeExtension> = None;
+    }
 
     #[test]
     fn prelude_exports_the_frontend_and_backend_contracts() {

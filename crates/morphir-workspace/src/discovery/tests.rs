@@ -7,8 +7,11 @@ use super::{
     layers::{MemberConfigLayers, member_effective_config, without_project_or_workspace},
 };
 use crate::{
-    DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
-    WORKSPACE_SYMLINK_UNSUPPORTED,
+    DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectOrigin, ProjectSource,
+    RelativePath, SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PURPOSE_UNSUPPORTED,
+    WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID,
+    WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED, discover,
+    discover_with_details,
 };
 
 #[derive(Default)]
@@ -173,4 +176,298 @@ fn member_merge_inherits_only_shared_root_user_sections() {
     assert_eq!(effective["ir"]["strict_mode"], true);
     assert_eq!(effective["ir"]["format_version"], 3);
     assert_eq!(effective["ir"]["mode"], "member-user");
+}
+
+fn gleam_source(path: &str) -> (RelativePath, FileEntry) {
+    (
+        RelativePath::parse(path).unwrap(),
+        FileEntry::File {
+            text: "pub type Customer {\n  Customer(id: String)\n}\n".to_owned(),
+        },
+    )
+}
+
+fn ad_hoc_request_with_entries(
+    entries: BTreeMap<RelativePath, FileEntry>,
+    project: ProjectSource,
+    sources: SourceSelection,
+) -> DiscoveryRequest {
+    DiscoveryRequest {
+        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        development_root: FileTree { entries },
+        morphir_home: None,
+        system_config: None,
+        environment: BTreeMap::new(),
+        cli_overlay: json!({}),
+        purpose: DiscoveryPurpose::AdHocSources {
+            project,
+            sources,
+            language_id: "gleam".to_owned(),
+        },
+    }
+}
+
+fn ad_hoc_request(paths: Vec<RelativePath>, root: RelativePath) -> DiscoveryRequest {
+    let (source, entry) = gleam_source("models/domain/customer.gleam");
+    ad_hoc_request_with_entries(
+        BTreeMap::from([
+            (RelativePath::root(), FileEntry::Directory),
+            (source, entry),
+        ]),
+        ProjectSource::Synthesized,
+        SourceSelection { root, paths },
+    )
+}
+
+/// A selection with no manifest yields one synthesized project, and the root
+/// the request carried is the one reported. Nested on purpose: a root-level
+/// fixture cannot tell a correct root from a recomputed one.
+#[test]
+fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
+    let path = RelativePath::parse("models/domain/customer.gleam").unwrap();
+    let root = RelativePath::parse("models").unwrap();
+    let request = ad_hoc_request(vec![path.clone()], root.clone());
+
+    let snapshot = discover(request)
+        .into_result()
+        .expect("an ad-hoc selection with no manifest should synthesize a project");
+
+    assert_eq!(snapshot.projects.len(), 1);
+    let project = &snapshot.projects[0];
+    assert_eq!(
+        project.origin,
+        ProjectOrigin::Synthesized { inputs: vec![path] }
+    );
+    assert_eq!(project.relative_path, root);
+    assert_eq!(project.source_directory, RelativePath::root());
+    // The package name and exposed modules are intermediate data, not a final
+    // contract: deriving them means parsing source, which is the provider's
+    // job. A later provider-synthesis step fills these in; this task must not.
+    assert_eq!(project.name, "");
+    assert!(project.exposed_modules.is_empty());
+    assert_eq!(project.config_anchor, None);
+    assert_eq!(project.version, None);
+    assert_eq!(project.state, crate::ProjectState::Unloaded);
+    assert_eq!(snapshot.config_anchor, None);
+}
+
+#[test]
+fn ad_hoc_empty_selection_is_rejected() {
+    let root = RelativePath::parse("models").unwrap();
+    let request = ad_hoc_request(Vec::new(), root);
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_EMPTY);
+    assert!(error.message.contains("models"));
+}
+
+#[test]
+fn ad_hoc_selected_path_naming_a_directory_is_rejected() {
+    let directory = RelativePath::parse("models/domain").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (directory.clone(), FileEntry::Directory),
+    ]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: RelativePath::parse("models").unwrap(),
+            paths: vec![directory.clone()],
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_INVALID);
+    assert!(error.message.contains(directory.as_str()));
+}
+
+#[test]
+fn ad_hoc_selected_path_naming_nothing_is_rejected() {
+    let missing = RelativePath::parse("models/domain/missing.gleam").unwrap();
+    let entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: RelativePath::parse("models").unwrap(),
+            paths: vec![missing.clone()],
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_INVALID);
+    assert!(error.message.contains(missing.as_str()));
+}
+
+/// Decision: duplicate paths in a selection are rejected. The inputs are the
+/// synthesized project's identity, so a repeat is a caller mistake that would
+/// otherwise produce a duplicate module silently.
+#[test]
+fn ad_hoc_duplicate_selected_path_is_rejected() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: RelativePath::parse("models").unwrap(),
+            paths: vec![path.clone(), path.clone()],
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_DUPLICATE);
+    assert!(error.message.contains(path.as_str()));
+}
+
+/// A naive string-prefix confinement check would wave this through: the path
+/// shares the text prefix `models` with the root, but `models-other` is a
+/// sibling directory, not a child of `models`.
+#[test]
+fn ad_hoc_selected_path_sharing_a_string_prefix_with_root_is_rejected() {
+    let (path, entry) = gleam_source("models-other/file.gleam");
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: RelativePath::parse("models").unwrap(),
+            paths: vec![path.clone()],
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_OUTSIDE_ROOT);
+    assert!(error.message.contains(path.as_str()));
+}
+
+/// The mount root `.` legitimately contains every confined path. A
+/// naive check that required a non-empty root prefix would reject the
+/// whole tree; segment comparison must not.
+#[test]
+fn ad_hoc_selection_root_of_dot_contains_every_path() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: RelativePath::root(),
+            paths: vec![path.clone()],
+        },
+    );
+
+    let snapshot = discover(request)
+        .into_result()
+        .expect("a `.` selection root should confine, not reject, every selected path");
+
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].relative_path, RelativePath::root());
+}
+
+/// `ProjectSource::Manifest` is not implemented in this task: providers can't
+/// synthesize a manifest yet. The gap is loud rather than silent.
+#[test]
+fn ad_hoc_manifest_project_source_is_explicitly_unsupported() {
+    let manifest_path = RelativePath::parse("models/morphir.toml").unwrap();
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Manifest {
+            path: manifest_path.clone(),
+        },
+        SourceSelection {
+            root: RelativePath::parse("models").unwrap(),
+            paths: vec![path],
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_PURPOSE_UNSUPPORTED);
+    assert!(error.message.contains("manifest"));
+    assert!(error.message.contains(manifest_path.as_str()));
+}
+
+/// `discover_with_details` must not panic on the ad-hoc path: the collector
+/// needs a root effective config, which the ad-hoc case now supplies by
+/// collecting defaults, environment and the CLI overlay directly, since
+/// there is no workspace layer to collect instead.
+#[test]
+fn ad_hoc_discover_with_details_collects_defaults_and_overlay_without_panicking() {
+    let path = RelativePath::parse("models/domain/customer.gleam").unwrap();
+    let root = RelativePath::parse("models").unwrap();
+    let mut request = ad_hoc_request(vec![path.clone()], root.clone());
+    request.cli_overlay = json!({ "ir": { "mode": "cli-overlay" } });
+
+    let details = discover_with_details(request)
+        .expect("the ad-hoc path must collect a root config, not panic in `finish`");
+
+    assert_eq!(details.root_effective["ir"]["mode"], "cli-overlay");
+    assert_eq!(
+        details.project_effective[&root]["ir"]["mode"],
+        "cli-overlay"
+    );
+    assert_eq!(details.snapshot.projects.len(), 1);
+}
+
+/// The spec's standalone rule: a manifest present in the tree has no effect
+/// on an ad-hoc synthesized request. This is the rule a later change is most
+/// likely to erode, so it is pinned directly.
+#[test]
+fn ad_hoc_ignores_a_manifest_present_in_the_tree() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+        (
+            RelativePath::parse("morphir.toml").unwrap(),
+            FileEntry::File {
+                text: "[workspace]\nmembers = [\"packages/*\"]\n[project]\nname = \"acme/root\"\nsource_directory = \"src\"\n"
+                    .to_owned(),
+            },
+        ),
+    ]);
+    let root = RelativePath::parse("models").unwrap();
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![path.clone()],
+        },
+    );
+
+    let snapshot = discover(request)
+        .into_result()
+        .expect("an ad-hoc request should succeed even with a manifest present in the tree");
+
+    assert_eq!(snapshot.projects.len(), 1);
+    let project = &snapshot.projects[0];
+    assert_eq!(
+        project.origin,
+        ProjectOrigin::Synthesized { inputs: vec![path] }
+    );
+    assert_eq!(project.relative_path, root);
+    assert_eq!(project.name, "");
+    assert_eq!(snapshot.config_anchor, None);
 }

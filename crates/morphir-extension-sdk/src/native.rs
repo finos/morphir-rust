@@ -1,7 +1,8 @@
 //! Native adapters for invoking extension implementations without WASM.
 //!
 //! [`NativeExtension`] makes a single extension instance available through
-//! typed frontend/backend handles and through the Morphir Extension Protocol.
+//! typed frontend/backend/workspace handles and through the Morphir Extension
+//! Protocol.
 
 use crate::protocol::{ExtensionRequest, ExtensionResponse};
 use crate::{
@@ -292,9 +293,9 @@ impl NativeExtension {
     }
 
     /// Return the extension's advertised capabilities, projected from the
-    /// registered roles. This clones the frontend and backend capability
-    /// records plus the `extra` map on every call, so prefer calling it once
-    /// and reusing the result over a hot path.
+    /// registered roles. This clones the frontend, backend, and workspace
+    /// capability records plus the `extra` map on every call, so prefer
+    /// calling it once and reusing the result over a hot path.
     pub fn capabilities(&self) -> ExtensionCapabilities {
         project_capabilities(&self.roles, &self.common)
     }
@@ -515,16 +516,22 @@ fn validate_capabilities(
 
     let has_workspace_handle = declared_types.contains(&ExtensionType::Workspace);
     match (has_workspace_handle, capabilities.workspace.as_ref()) {
-        (true, Some(workspace)) if workspace.discover => Ok(()),
-        (true, _) => Err(ExtensionError::UnsupportedCapability {
-            extension: info.id.clone(),
-            capability: "workspace.discover".into(),
-        }),
-        (false, None) => Ok(()),
-        (false, Some(_)) => Err(ExtensionError::InitFailed(
-            "extension advertises workspace without a native workspace handle".into(),
-        )),
+        (true, Some(workspace)) if workspace.discover => {}
+        (true, _) => {
+            return Err(ExtensionError::UnsupportedCapability {
+                extension: info.id.clone(),
+                capability: "workspace.discover".into(),
+            });
+        }
+        (false, None) => {}
+        (false, Some(_)) => {
+            return Err(ExtensionError::InitFailed(
+                "extension advertises workspace without a native workspace handle".into(),
+            ));
+        }
     }
+
+    Ok(())
 }
 
 fn validate_protocol_metadata(
@@ -909,38 +916,6 @@ mod tests {
         }
     }
 
-    /// A minimal `Workspace` implementation used to exercise `WorkspaceHandle`
-    /// and `WorkspaceRole` directly, the same way
-    /// `native_roles_dispatchers_are_frontend_before_backend` constructs a
-    /// `NativeRoles` directly instead of going through the builder.
-    #[derive(Default)]
-    struct RecordingWorkspaceExtension;
-
-    impl Extension for RecordingWorkspaceExtension {
-        fn info() -> ExtensionInfo {
-            ExtensionInfo::default()
-        }
-
-        fn capabilities() -> ExtensionCapabilities {
-            ExtensionCapabilities {
-                workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
-                    discover: true,
-                }),
-                ..ExtensionCapabilities::default()
-            }
-        }
-    }
-
-    impl Workspace for RecordingWorkspaceExtension {
-        fn discover(
-            &self,
-            request: morphir_workspace::DiscoveryRequest,
-        ) -> Result<morphir_workspace::DiscoveryResponse> {
-            Ok(morphir_workspace::discover(request))
-        }
-    }
-
     fn a_workspace_discovery_request() -> morphir_workspace::DiscoveryRequest {
         use morphir_workspace::{FileEntry, FileTree, RelativePath};
         morphir_workspace::DiscoveryRequest {
@@ -1085,11 +1060,113 @@ mod tests {
         }
     }
 
-    /// A workspace-only extension, built through the builder to prove
-    /// single-role workspace construction — none of the fixtures above do
-    /// this: `RecordingWorkspaceExtension` is driven by hand, and
-    /// `FrontendWithWorkspace`/`BackendWithWorkspace`/`FrontendBackendWithWorkspace`
-    /// advertise a workspace capability without implementing `Workspace`.
+    /// A frontend implementing `Workspace` too, used to prove that
+    /// registering the workspace role *before* `with_frontend` doesn't get
+    /// silently dropped by `with_frontend`'s rebuilt builder literal. IR
+    /// versions are non-empty so `frontend.compile` validation succeeds for
+    /// an unrelated reason doesn't mask the thing under test.
+    #[derive(Default)]
+    struct FrontendAndWorkspace;
+
+    impl Extension for FrontendAndWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                frontend: Some(FrontendCapability {
+                    ir_versions: vec!["3".into()],
+                    compile: true,
+                    ..FrontendCapability::default()
+                }),
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Frontend for FrontendAndWorkspace {
+        fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+            FrontendOnly.compile(request)
+        }
+
+        fn supported_languages() -> Vec<String> {
+            vec![]
+        }
+
+        fn file_extensions() -> Vec<String> {
+            vec![]
+        }
+    }
+
+    impl Workspace for FrontendAndWorkspace {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A backend implementing `Workspace` too, the `with_backend` mirror of
+    /// `FrontendAndWorkspace` — proves the workspace role registered before
+    /// `with_backend` survives its rebuilt builder literal.
+    #[derive(Default)]
+    struct BackendAndWorkspace;
+
+    impl Extension for BackendAndWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                backend: Some(BackendCapability {
+                    ir_versions: vec!["3".into()],
+                    generate: true,
+                    ..BackendCapability::default()
+                }),
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Backend for BackendAndWorkspace {
+        fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
+            BackendOnly.generate(request)
+        }
+
+        fn target_languages() -> Vec<String> {
+            vec![]
+        }
+    }
+
+    impl Workspace for BackendAndWorkspace {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A minimal workspace-only extension: `capabilities()` advertises only a
+    /// `WorkspaceCapability`, and `discover` delegates to
+    /// `morphir_workspace::discover`. Used both hand-driven (to exercise
+    /// `WorkspaceHandle`/`WorkspaceRole` directly, the same way
+    /// `native_roles_dispatchers_are_frontend_before_backend` constructs a
+    /// `NativeRoles` directly) and through the builder, to prove single-role
+    /// workspace construction — unlike
+    /// `FrontendWithWorkspace`/`BackendWithWorkspace`/`FrontendBackendWithWorkspace`,
+    /// which advertise a workspace capability without implementing `Workspace`.
     #[derive(Default)]
     struct WorkspaceOnly;
 
@@ -1441,7 +1518,7 @@ mod tests {
             workspace: Some(WorkspaceRole {
                 capability: WorkspaceCapability::default(),
                 handle: Arc::new(WorkspaceHandle {
-                    extension: Arc::new(RecordingWorkspaceExtension),
+                    extension: Arc::new(WorkspaceOnly),
                 }),
                 dispatch: workspace_marker,
             }),
@@ -1461,13 +1538,11 @@ mod tests {
     #[test]
     fn workspace_handle_forwards_to_the_extension() {
         let handle = WorkspaceHandle {
-            extension: Arc::new(RecordingWorkspaceExtension),
+            extension: Arc::new(WorkspaceOnly),
         };
 
         let request = a_workspace_discovery_request();
-        let direct = RecordingWorkspaceExtension
-            .discover(request.clone())
-            .unwrap();
+        let direct = WorkspaceOnly.discover(request.clone()).unwrap();
         let through_handle = handle.discover(request).unwrap();
 
         assert_eq!(
@@ -1492,7 +1567,7 @@ mod tests {
             workspace: Some(WorkspaceRole {
                 capability: capability.clone(),
                 handle: Arc::new(WorkspaceHandle {
-                    extension: Arc::new(RecordingWorkspaceExtension),
+                    extension: Arc::new(WorkspaceOnly),
                 }),
                 dispatch: Arc::new(|_request: &ExtensionRequest| None),
             }),
@@ -1760,6 +1835,56 @@ mod tests {
                 discover: true,
             })
         );
+    }
+
+    /// A workspace role registered *before* `with_frontend` must survive
+    /// `with_frontend`'s rebuilt `NativeExtensionBuilder` literal — the
+    /// hazard the plan named explicitly: "a setter that drops it would
+    /// silently discard a registered role." Every other workspace
+    /// construction test in this module is workspace-only, so none of them
+    /// puts `with_frontend`'s `workspace: self.workspace` line on a path
+    /// where dropping it would be observable; this one does.
+    ///
+    /// The registration order is workspace-then-frontend, but
+    /// `declared_types` always projects frontend before backend before
+    /// workspace regardless of registration order — that ordering guarantee
+    /// is the second thing this test pins down.
+    #[test]
+    fn workspace_registered_before_frontend_survives_with_frontend() {
+        let extension = NativeExtension::builder(FrontendAndWorkspace)
+            .with_workspace()
+            .with_frontend()
+            .finish()
+            .unwrap();
+
+        assert_eq!(
+            extension.info().types,
+            [ExtensionType::Frontend, ExtensionType::Workspace]
+        );
+        assert!(extension.frontend().is_some());
+        assert!(extension.workspace().is_some());
+        assert!(extension.capabilities().workspace.is_some());
+    }
+
+    /// The `with_backend` mirror of
+    /// `workspace_registered_before_frontend_survives_with_frontend`: a
+    /// workspace role registered before `with_backend` must survive its
+    /// rebuilt builder literal too.
+    #[test]
+    fn workspace_registered_before_backend_survives_with_backend() {
+        let extension = NativeExtension::builder(BackendAndWorkspace)
+            .with_workspace()
+            .with_backend()
+            .finish()
+            .unwrap();
+
+        assert_eq!(
+            extension.info().types,
+            [ExtensionType::Backend, ExtensionType::Workspace]
+        );
+        assert!(extension.backend().is_some());
+        assert!(extension.workspace().is_some());
+        assert!(extension.capabilities().workspace.is_some());
     }
 
     /// Registering a workspace role still requires the advertised capability,

@@ -161,7 +161,7 @@ fn snapshot_and_response_wire_shapes_are_stable() {
             origin: ProjectOrigin::Manifest {
                 path: RelativePath::parse("packages/orders/morphir.toml").unwrap(),
             },
-            exposed_modules: Vec::new(),
+            exposed_modules: None,
         }],
         diagnostics: vec![diagnostic],
     };

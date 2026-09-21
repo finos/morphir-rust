@@ -1,11 +1,11 @@
 //! Configuration layer parsing and precedence.
 
-use morphir_config::{builtin_defaults, merge_all, parse_config};
+use morphir_config::{builtin_defaults, env_config_value, merge_all, parse_config};
 use serde_json::{Map, Value};
 
 use crate::{
-    DiscoveryFailure, FileTree, RelativePath, WORKSPACE_CONFIG_AMBIGUOUS, WORKSPACE_CONFIG_INVALID,
-    WORKSPACE_CONFIG_MISSING,
+    DiscoveryFailure, DiscoveryRequest, FileTree, RelativePath, WORKSPACE_CONFIG_AMBIGUOUS,
+    WORKSPACE_CONFIG_INVALID, WORKSPACE_CONFIG_MISSING,
     config::{found_adjacent_user_candidates, found_primary_candidates},
 };
 
@@ -14,6 +14,43 @@ use super::diagnostics::failure;
 pub(super) struct Layer {
     pub(super) path: RelativePath,
     pub(super) value: Value,
+}
+
+/// The configuration layers every discovery path derives the same way:
+/// the system and Morphir Home mounts (each stripped of `project` and
+/// `workspace` sections, since neither mount may set either), and the
+/// request's environment values.
+///
+/// What each path does with these layers — which `merge_all` list they enter,
+/// alongside which other layers — legitimately differs between the
+/// manifest-projects and ad-hoc-sources paths. Only the derivation is shared.
+pub(super) struct SharedLayers {
+    pub(super) system_value: Option<Value>,
+    pub(super) global_value: Option<Value>,
+    pub(super) environment: Value,
+}
+
+pub(super) fn shared_layers(request: &DiscoveryRequest) -> Result<SharedLayers, DiscoveryFailure> {
+    let system = optional_mount_layer(request.system_config.as_ref(), "system configuration")?;
+    let global = optional_mount_layer(request.morphir_home.as_ref(), "Morphir Home")?;
+    let system_value = system
+        .as_ref()
+        .map(|layer| without_project_or_workspace(&layer.value));
+    let global_value = global
+        .as_ref()
+        .map(|layer| without_project_or_workspace(&layer.value));
+    let environment = env_config_value(
+        "MORPHIR",
+        request
+            .environment
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    Ok(SharedLayers {
+        system_value,
+        global_value,
+        environment,
+    })
 }
 
 pub(super) struct MemberConfigLayers<'a> {

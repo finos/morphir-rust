@@ -30,7 +30,7 @@ pub(super) fn error_project(
         state: ProjectState::Error,
         diagnostics: vec![diagnostic],
         origin,
-        exposed_modules: Vec::new(),
+        exposed_modules: None,
     }
 }
 

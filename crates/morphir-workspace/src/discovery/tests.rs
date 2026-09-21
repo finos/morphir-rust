@@ -8,10 +8,10 @@ use super::{
 };
 use crate::{
     DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectOrigin, ProjectSource,
-    RelativePath, SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PURPOSE_UNSUPPORTED,
-    WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID,
-    WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED, discover,
-    discover_with_details,
+    RelativePath, SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_LANGUAGE_ID_EMPTY,
+    WORKSPACE_PURPOSE_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY,
+    WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED,
+    discover, discover_with_details,
 };
 
 #[derive(Default)]
@@ -222,11 +222,27 @@ fn ad_hoc_request(paths: Vec<RelativePath>, root: RelativePath) -> DiscoveryRequ
 /// A selection with no manifest yields one synthesized project, and the root
 /// the request carried is the one reported. Nested on purpose: a root-level
 /// fixture cannot tell a correct root from a recomputed one.
+///
+/// Two paths, in two different directories, sharing a basename: this is the
+/// plan's own motivating collision example. Recomputing the root from the
+/// files (rather than carrying `sources.root` verbatim) would name both
+/// modules `customer`. The selection root stays `models` and `inputs`
+/// preserves the order the request gave, proving both never happen here.
 #[test]
 fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
-    let path = RelativePath::parse("models/domain/customer.gleam").unwrap();
+    let domain = gleam_source("models/domain/customer.gleam");
+    let party = gleam_source("models/party/customer.gleam");
+    let paths = vec![domain.0.clone(), party.0.clone()];
     let root = RelativePath::parse("models").unwrap();
-    let request = ad_hoc_request(vec![path.clone()], root.clone());
+    let entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory), domain, party]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: paths.clone(),
+        },
+    );
 
     let snapshot = discover(request)
         .into_result()
@@ -234,17 +250,14 @@ fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
 
     assert_eq!(snapshot.projects.len(), 1);
     let project = &snapshot.projects[0];
-    assert_eq!(
-        project.origin,
-        ProjectOrigin::Synthesized { inputs: vec![path] }
-    );
+    assert_eq!(project.origin, ProjectOrigin::Synthesized { inputs: paths });
     assert_eq!(project.relative_path, root);
     assert_eq!(project.source_directory, RelativePath::root());
     // The package name and exposed modules are intermediate data, not a final
     // contract: deriving them means parsing source, which is the provider's
     // job. A later provider-synthesis step fills these in; this task must not.
     assert_eq!(project.name, "");
-    assert!(project.exposed_modules.is_empty());
+    assert_eq!(project.exposed_modules, None);
     assert_eq!(project.config_anchor, None);
     assert_eq!(project.version, None);
     assert_eq!(project.state, crate::ProjectState::Unloaded);
@@ -470,4 +483,90 @@ fn ad_hoc_ignores_a_manifest_present_in_the_tree() {
     assert_eq!(project.relative_path, root);
     assert_eq!(project.name, "");
     assert_eq!(snapshot.config_anchor, None);
+}
+
+/// `discover_with_details` at `sources.root == "."` combines two invariants
+/// each existing test only covers half of: it must not panic collecting a
+/// root config, and `DetailsCollector::finish` must re-insert `"."` into
+/// `project_effective`. That re-insertion matters beyond this crate:
+/// `morphir-daemon`'s `Workspace::from_discovery` calls
+/// `project_configs.remove(&project.relative_path).expect(...)` and panics if
+/// the entry is missing, so a project whose `relative_path` is the mount root
+/// must still have an effective config recorded for it.
+#[test]
+fn ad_hoc_discover_with_details_at_root_reinserts_root_into_project_effective() {
+    let path = RelativePath::parse("models/domain/customer.gleam").unwrap();
+    let root = RelativePath::root();
+    let request = ad_hoc_request(vec![path], root.clone());
+
+    let details = discover_with_details(request)
+        .expect("the ad-hoc path at `.` must collect a root config, not panic in `finish`");
+
+    assert_eq!(details.snapshot.projects.len(), 1);
+    assert_eq!(details.snapshot.projects[0].relative_path, root);
+    assert_eq!(
+        details.project_effective.get(&root),
+        Some(&details.root_effective)
+    );
+}
+
+/// A caller sending `root: "models", paths: ["models"]` is reachable: the
+/// path names the root itself. `path_is_under_root` rejects it because it
+/// requires the path to be strictly deeper than the root, so this never
+/// reaches the file-existence check — the path is a directory, not a file,
+/// and would fail differently there. That ordering is what makes this safe;
+/// pin the diagnostic so a later refactor that reorders the checks is caught.
+#[test]
+fn ad_hoc_selected_path_equal_to_root_is_rejected_by_confinement_not_file_existence() {
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (root.clone(), FileEntry::Directory),
+    ]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![root.clone()],
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_OUTSIDE_ROOT);
+    assert!(error.message.contains(root.as_str()));
+}
+
+/// An empty language id is a caller mistake distinct from an unconfined or
+/// missing path, and gets its own diagnostic rather than surfacing as a
+/// confusing downstream failure.
+#[test]
+fn ad_hoc_empty_language_id_is_rejected() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let mut request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: RelativePath::parse("models").unwrap(),
+            paths: vec![path],
+        },
+    );
+    let DiscoveryPurpose::AdHocSources {
+        language_id: purpose_language_id,
+        ..
+    } = &mut request.purpose
+    else {
+        unreachable!("ad_hoc_request_with_entries always builds an AdHocSources purpose")
+    };
+    purpose_language_id.clear();
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_LANGUAGE_ID_EMPTY);
+    assert!(error.message.contains("models"));
 }

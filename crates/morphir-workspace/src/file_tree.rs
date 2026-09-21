@@ -104,7 +104,7 @@ pub struct SourceSelection {
 
 /// Where a request's project identity comes from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ProjectSource {
     /// No manifest. Name, version and configuration are synthesized.
     Synthesized,
@@ -116,7 +116,7 @@ pub enum ProjectSource {
 
 /// What a discovery request is asking for.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum DiscoveryPurpose {
     /// Find the projects this tree's manifests describe. The default, and what
     /// discovery has always meant.
@@ -129,6 +129,8 @@ pub enum DiscoveryPurpose {
         project: ProjectSource,
         sources: SourceSelection,
         /// The language every selected source is in. One language per set.
+        /// Discovery rejects an empty string; it does not otherwise validate
+        /// the value.
         language_id: String,
     },
 }

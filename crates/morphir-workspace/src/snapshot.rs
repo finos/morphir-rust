@@ -63,7 +63,8 @@ pub struct WorkspaceDiscoveryDetails {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSnapshot {
-    /// The project name.
+    /// The project name. A synthesized project (see [`ProjectOrigin::Synthesized`])
+    /// emits `""` here; a later provider-synthesis step fills it in.
     pub name: String,
     /// The project version, when configured.
     pub version: Option<String>,
@@ -80,9 +81,10 @@ pub struct ProjectSnapshot {
     pub diagnostics: Vec<WorkspaceDiagnostic>,
     /// Where this project came from.
     pub origin: ProjectOrigin,
-    /// The modules this project exposes, when known.
-    #[serde(default)]
-    pub exposed_modules: Vec<String>,
+    /// The modules this project exposes. `None` when not yet determined;
+    /// `Some(vec![])` means the project exposes no modules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposed_modules: Option<Vec<String>>,
 }
 
 /// Where a discovered project came from.
@@ -92,12 +94,14 @@ pub struct ProjectSnapshot {
 /// a synthesized project, and inferring that from an absent anchor turns a
 /// policy decision into a missing field.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ProjectOrigin {
     /// Read from the manifest at this path.
     #[serde(rename_all = "camelCase")]
     Manifest { path: RelativePath },
     /// Synthesized from these sources, in the order the request gave them.
+    /// Development-root-relative, copied verbatim from
+    /// [`SourceSelection::paths`](crate::SourceSelection::paths).
     #[serde(rename_all = "camelCase")]
     Synthesized { inputs: Vec<RelativePath> },
 }

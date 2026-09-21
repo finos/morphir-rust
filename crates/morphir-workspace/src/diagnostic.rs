@@ -41,6 +41,9 @@ pub const WORKSPACE_SELECTION_OUTSIDE_ROOT: &str = "workspace.selection.outside-
 /// Stable diagnostic code for an ad-hoc selected path that is not a file.
 pub const WORKSPACE_SELECTION_INVALID: &str = "workspace.selection.invalid";
 
+/// Stable diagnostic code for an ad-hoc request with an empty language id.
+pub const WORKSPACE_LANGUAGE_ID_EMPTY: &str = "workspace.language-id.empty";
+
 /// The severity of a workspace discovery diagnostic.
 ///
 /// When severity participates in a stable diagnostic ordering key, producers

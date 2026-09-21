@@ -455,5 +455,33 @@
       "message": "no Morphir configuration found at workspace root",
       "path": "."
     } }
+  },
+  {
+    "name": "ad-hoc-synthesized-nested-source",
+    "request": {
+      "protocolVersion": 1,
+      "developmentRoot": { "entries": {
+        "models/domain/customer.gleam": { "kind": "file", "text": "pub type Customer {\n  Customer(id: String)\n}\n" }
+      } },
+      "morphirHome": null,
+      "systemConfig": null,
+      "environment": {},
+      "cliOverlay": {},
+      "purpose": {
+        "kind": "ad-hoc-sources",
+        "project": { "kind": "synthesized" },
+        "sources": { "root": "models", "paths": ["models/domain/customer.gleam"] },
+        "languageId": "gleam"
+      }
+    },
+    "expected": { "status": "success", "snapshot": {
+      "protocolVersion": 1, "configAnchor": null, "name": null, "state": "open",
+      "projects": [{
+        "name": "", "version": null, "relativePath": "models", "configAnchor": null,
+        "origin": { "kind": "synthesized", "inputs": ["models/domain/customer.gleam"] },
+        "sourceDirectory": ".", "state": "unloaded", "diagnostics": []
+      }],
+      "diagnostics": []
+    } }
   }
 ]

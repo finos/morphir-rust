@@ -11,22 +11,20 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use morphir_config::{builtin_defaults, env_config_value, merge_all};
+use morphir_config::{builtin_defaults, merge_all};
 use serde_json::{Map, Value};
 
 use crate::{
     DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree,
     ProjectOrigin, ProjectSnapshot, ProjectSource, ProjectState, RelativePath, SourceSelection,
-    WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED,
-    WORKSPACE_PURPOSE_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY,
-    WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED,
-    WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
+    WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_LANGUAGE_ID_EMPTY,
+    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_PURPOSE_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE,
+    WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_OUTSIDE_ROOT,
+    WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
 };
 use decoding::{decode_root_project, decode_workspace};
 use diagnostics::{duplicate_name_diagnostics, failure, sort_diagnostics};
-use layers::{
-    optional_mount_layer, optional_user_layer, required_layer, without_project_or_workspace,
-};
+use layers::{optional_user_layer, required_layer, shared_layers, without_project_or_workspace};
 use members::discover_member;
 use patterns::member_directories;
 
@@ -162,44 +160,32 @@ fn discover_internal(
     }
 
     if let DiscoveryPurpose::AdHocSources {
-        project, sources, ..
+        project,
+        sources,
+        language_id,
     } = &request.purpose
     {
-        return discover_ad_hoc_sources(&request, project, sources, collector);
+        return discover_ad_hoc_sources(&request, project, sources, language_id, collector);
     }
 
     let root = RelativePath::root();
     let workspace_primary = required_layer(&request.development_root, &root, "workspace root")?;
     let workspace_user = optional_user_layer(&request.development_root, &workspace_primary.path)?;
-    let system = optional_mount_layer(request.system_config.as_ref(), "system configuration")?;
-    let global = optional_mount_layer(request.morphir_home.as_ref(), "Morphir Home")?;
+    let shared = shared_layers(&request)?;
     let empty = Value::Object(Map::new());
-    let system_value = system
-        .as_ref()
-        .map(|layer| without_project_or_workspace(&layer.value));
-    let global_value = global
-        .as_ref()
-        .map(|layer| without_project_or_workspace(&layer.value));
     let shared_workspace_user = workspace_user
         .as_ref()
         .map(|layer| without_project_or_workspace(&layer.value));
-    let environment = env_config_value(
-        "MORPHIR",
-        request
-            .environment
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str())),
-    );
     let workspace_effective = merge_all([
         &builtin_defaults(),
-        system_value.as_ref().unwrap_or(&empty),
-        global_value.as_ref().unwrap_or(&empty),
+        shared.system_value.as_ref().unwrap_or(&empty),
+        shared.global_value.as_ref().unwrap_or(&empty),
         &workspace_primary.value,
         workspace_user
             .as_ref()
             .map(|layer| &layer.value)
             .unwrap_or(&empty),
-        &environment,
+        &shared.environment,
         &request.cli_overlay,
     ]);
     let workspace = decode_workspace(&workspace_effective, &workspace_primary.path)?;
@@ -233,11 +219,11 @@ fn discover_internal(
         if let Some(project) = discover_member(
             &request.development_root,
             &directory,
-            system_value.as_ref().unwrap_or(&empty),
-            global_value.as_ref().unwrap_or(&empty),
+            shared.system_value.as_ref().unwrap_or(&empty),
+            shared.global_value.as_ref().unwrap_or(&empty),
             &shared_workspace,
             shared_workspace_user.as_ref().unwrap_or(&empty),
-            &environment,
+            &shared.environment,
             &request.cli_overlay,
             &mut collector,
         ) {
@@ -285,13 +271,10 @@ fn discover_ad_hoc_sources(
     request: &DiscoveryRequest,
     project: &ProjectSource,
     sources: &SourceSelection,
+    language_id: &str,
     collector: Option<&mut dyn EffectiveConfigCollector>,
 ) -> Result<WorkspaceSnapshot, DiscoveryFailure> {
-    let manifest_path = match project {
-        ProjectSource::Synthesized => None,
-        ProjectSource::Manifest { path } => Some(path),
-    };
-    if let Some(path) = manifest_path {
+    if let ProjectSource::Manifest { path } = project {
         return Err(failure(
             WORKSPACE_PURPOSE_UNSUPPORTED,
             format!(
@@ -302,32 +285,29 @@ fn discover_ad_hoc_sources(
         ));
     }
 
+    if language_id.is_empty() {
+        return Err(failure(
+            WORKSPACE_LANGUAGE_ID_EMPTY,
+            format!(
+                "ad-hoc selection rooted at `{}` has an empty language id",
+                sources.root.as_str()
+            ),
+            Some(sources.root.clone()),
+        ));
+    }
+
     validate_ad_hoc_selection(&request.development_root, sources)?;
 
-    let system = optional_mount_layer(request.system_config.as_ref(), "system configuration")?;
-    let global = optional_mount_layer(request.morphir_home.as_ref(), "Morphir Home")?;
+    let shared = shared_layers(request)?;
     let empty = Value::Object(Map::new());
-    let system_value = system
-        .as_ref()
-        .map(|layer| without_project_or_workspace(&layer.value));
-    let global_value = global
-        .as_ref()
-        .map(|layer| without_project_or_workspace(&layer.value));
-    let environment = env_config_value(
-        "MORPHIR",
-        request
-            .environment
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str())),
-    );
     // A synthesized project is standalone: its configuration comes from
     // defaults and the environment, never from a manifest the request did
     // not select. There is no workspace layer here at all.
     let effective = merge_all([
         &builtin_defaults(),
-        system_value.as_ref().unwrap_or(&empty),
-        global_value.as_ref().unwrap_or(&empty),
-        &environment,
+        shared.system_value.as_ref().unwrap_or(&empty),
+        shared.global_value.as_ref().unwrap_or(&empty),
+        &shared.environment,
         &request.cli_overlay,
     ]);
 
@@ -347,7 +327,7 @@ fn discover_ad_hoc_sources(
         origin: ProjectOrigin::Synthesized {
             inputs: sources.paths.clone(),
         },
-        exposed_modules: Vec::new(),
+        exposed_modules: None,
     };
 
     Ok(WorkspaceSnapshot {
@@ -420,7 +400,7 @@ fn validate_ad_hoc_selection(
     let not_files: Vec<RelativePath> = sources
         .paths
         .iter()
-        .filter(|path| !matches!(tree.entries.get(*path), Some(FileEntry::File { .. })))
+        .filter(|path| !tree.contains_file(path))
         .cloned()
         .collect();
     if let Some(first) = not_files.first() {

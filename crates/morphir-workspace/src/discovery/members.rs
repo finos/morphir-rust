@@ -43,15 +43,14 @@ pub(super) fn discover_member(
                 .map(|path| format!("`{}`", path.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let first = paths
+                .first()
+                .expect("multiple candidates means at least one")
+                .clone();
             return Some(error_project(
                 directory,
-                paths.first().cloned(),
-                ProjectOrigin::Manifest {
-                    path: paths
-                        .first()
-                        .expect("multiple candidates means at least one")
-                        .clone(),
-                },
+                Some(first.clone()),
+                ProjectOrigin::Manifest { path: first },
                 WORKSPACE_MEMBER_INVALID,
                 format!("multiple member configurations found: {listed}"),
             ));
@@ -129,7 +128,7 @@ pub(super) fn discover_member(
         state: ProjectState::Unloaded,
         diagnostics: Vec::new(),
         origin: ProjectOrigin::Manifest { path: primary_path },
-        exposed_modules: Vec::new(),
+        exposed_modules: None,
     })
 }
 

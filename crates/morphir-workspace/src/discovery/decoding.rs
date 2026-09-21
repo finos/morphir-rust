@@ -97,7 +97,7 @@ pub(super) fn decode_root_project(
         origin: ProjectOrigin::Manifest {
             path: anchor.clone(),
         },
-        exposed_modules: Vec::new(),
+        exposed_modules: None,
     })
 }
 

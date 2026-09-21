@@ -153,6 +153,7 @@ jobs:
     env:
       # Avoid unrelated documentation and coverage toolchains on Windows.
       MISE_ENABLE_TOOLS: rust,bun
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -164,6 +165,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Enable long Git dependency paths on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
 
       - name: Install mise
         uses: jdx/mise-action@v4

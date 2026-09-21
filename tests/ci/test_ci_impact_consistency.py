@@ -19,6 +19,11 @@ class ImpactConsistencyTests(unittest.TestCase):
         self.assertEqual(["{{config_root}}/.gems/bin"], settings["env"]["_"]["path"])
         job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
         self.assertIn("MISE_ENABLE_TOOLS: rust,bun", job)
+        self.assertIn('CARGO_NET_GIT_FETCH_WITH_CLI: "true"', job)
+        self.assertIn("git config --global core.longpaths true", job)
+        self.assertLess(job.index("core.longpaths true"), job.index("uses: jdx/mise-action"))
+        self.assertLess(job.index("core.longpaths true"), job.index("cargo test --locked"))
+        self.assertLess(job.index("CARGO_NET_GIT_FETCH_WITH_CLI"), job.index("    steps:"))
 
     def test_native_mck_inputs_route_to_cross_platform_conformance(self) -> None:
         paths = (REPOSITORY_ROOT / ".github/ci-impact.toml").read_text()

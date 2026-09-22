@@ -125,7 +125,7 @@ pub(super) async fn resolve_at(
         &stage.path().join("libraries"),
     )?;
     files::write(stage.path(), "morphir.lock", &bytes)?;
-    backend.authorized()?;
+    backend.accept_operation_time()?;
     files::absent(request.output)?;
     files::promote(&stage.path().join("morphir.lock"), request.output)?;
     if let Err(error) = backend.finish() {

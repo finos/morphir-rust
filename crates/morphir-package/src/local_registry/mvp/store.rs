@@ -165,7 +165,7 @@ impl Backend {
         tx.commit()?;
         Ok(())
     }
-    pub fn authorized(&self) -> Result<(), Error> {
+    pub fn accept_operation_time(&self) -> Result<(), Error> {
         self.check_marker()?;
         let mut db = self
             .db

@@ -129,3 +129,17 @@ pub fn write_threshold_view_versions(
     fs::write(directory.join(format!("{version}.snapshot.json")), snapshot).unwrap();
     fs::write(directory.join(format!("{version}.targets.json")), targets).unwrap();
 }
+
+/// Independently sign a timestamp with separately selected version, link and expiry.
+pub fn timestamp(
+    version: u64,
+    snapshot_version: u64,
+    snapshot: &[u8],
+    expires: &str,
+    seed: u8,
+) -> Vec<u8> {
+    signed(
+        json!({"_type":"timestamp","spec_version":"1.0.36","version":version,"expires":expires,"meta":{"snapshot.json":meta(snapshot,snapshot_version)}}),
+        seed,
+    )
+}

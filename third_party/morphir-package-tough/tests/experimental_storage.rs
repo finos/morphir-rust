@@ -513,3 +513,6 @@ async fn corrupted_retained_signature_or_acceptance_root_fails_before_transport(
         }
     }
 }
+
+#[path = "storage_support/no_update.rs"]
+mod no_update;

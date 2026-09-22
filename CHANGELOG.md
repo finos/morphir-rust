@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Package-local TUF canonicalization preserves Unicode code points in signed
+  fields and key IDs. Valid decomposed strings verify, and normalization changes
+  cannot reuse a signature. Object keys sort by decoded UTF-8 bytes before
+  escaping, so valid signatures with quote-containing keys verify. The tool-update
+  dependency remains unchanged.
 - Native Elm frontend: a function type keeps every segment it was written with.
   tree-sitter-elm leaves a segment untagged when it is a type reference carrying
   arguments, so `List Int -> Bool` lowered to `Bool` and
@@ -68,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Explicit experimental package TUF update outcomes: an admitted equal timestamp
+  returns `NoUpdate` before candidate expiry, snapshot comparison or persistence,
+  preserving committed roots without claiming a fresh complete view or package grant.
 - Experimental TUF retained evidence now carries its exact acceptance root atomically,
   allowing threshold-only root updates without discarding the other role's rollback
   floor or changing the upstream keys-only reset rule.

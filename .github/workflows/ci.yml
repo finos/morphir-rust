@@ -210,7 +210,7 @@ jobs:
         run: |
           rustup component add rustfmt
           cargo fmt --manifest-path third_party/morphir-package-tough/Cargo.toml -- --check
-          cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --lib --test exact_versions --test fixed_time
+          cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --lib --test exact_versions --test fixed_time --test unicode_canonicalization
 
       - name: Test experimental TUF transactional storage
         run: cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --features experimental-storage --test experimental_storage

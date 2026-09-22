@@ -57,13 +57,15 @@ impl TokenBuffer {
     fn read(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Self> {
         let mut bytes = 0;
         // SAFETY: size query has no output buffer and a valid token.
-        unsafe {
-            GetTokenInformation(token, class, ptr::null_mut(), 0, &mut bytes);
-        }
-        if io::Error::last_os_error().raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
+        let status = unsafe { GetTokenInformation(token, class, ptr::null_mut(), 0, &mut bytes) };
+        let error = io::Error::last_os_error();
+        if status != 0
+            || error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
             || bytes == 0
         {
-            return Err(io::Error::other("token size query failed"));
+            return Err(io::Error::other(format!(
+                "token size query failed: class={class}, status={status}, bytes={bytes}, error={error}"
+            )));
         }
         let mut words = vec![0usize; (bytes as usize).div_ceil(size_of::<usize>())];
         // SAFETY: aligned buffer owns at least the requested byte count.
@@ -90,6 +92,63 @@ impl TokenBuffer {
             std::slice::from_raw_parts(self.words.as_ptr().cast::<u8>().add(offset).cast(), count)
         }
     }
+}
+
+fn fixed_elevation(token: HANDLE) -> io::Result<(TOKEN_ELEVATION, TOKEN_ELEVATION_TYPE)> {
+    // These classes have fixed-size outputs. Microsoft's WIL likewise queries them
+    // directly rather than relying on a zero-length size probe.
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut kind: TOKEN_ELEVATION_TYPE = 0;
+    for (class, output, length) in [
+        (
+            TokenElevation,
+            ptr::addr_of_mut!(elevation).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+        ),
+        (
+            TokenElevationType,
+            ptr::addr_of_mut!(kind).cast(),
+            size_of::<TOKEN_ELEVATION_TYPE>() as u32,
+        ),
+    ] {
+        let mut returned = 0;
+        // SAFETY: each output points to its class's correctly sized/aligned local
+        // value, both of which remain live through these synchronous calls.
+        if unsafe { GetTokenInformation(token, class, output, length, &mut returned) } == 0 {
+            return Err(io::Error::other(format!(
+                "fixed token query failed: class={class}, error={}",
+                io::Error::last_os_error()
+            )));
+        }
+        if returned != length {
+            return Err(io::Error::other(format!(
+                "unexpected fixed token output: class={class}, bytes={returned}, expected={length}"
+            )));
+        }
+    }
+    Ok((elevation, kind))
+}
+
+#[test]
+fn fixed_elevation_queries_work_without_standard_user_fixture_setup() {
+    let mut token = ptr::null_mut();
+    // SAFETY: current process pseudo-handle, query-only access and valid output.
+    assert_ne!(
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) },
+        0
+    );
+    // SAFETY: OpenProcessToken succeeded and returned an owned handle.
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let (elevation, kind) = fixed_elevation(token.as_raw_handle()).unwrap();
+    assert!(elevation.TokenIsElevated <= 1);
+    assert!(
+        [
+            TokenElevationTypeDefault,
+            TokenElevationTypeFull,
+            TokenElevationTypeLimited
+        ]
+        .contains(&kind)
+    );
 }
 
 pub fn assert_identity(expected: &str) -> io::Result<()> {
@@ -127,14 +186,11 @@ pub fn assert_identity(expected: &str) -> io::Result<()> {
             enabled_privileges.push(name);
         }
     }
+    let (elevation, elevation_type) = fixed_elevation(raw)?;
     let identity = Identity {
         user: sid_string(user.header::<TOKEN_USER>().User.Sid)?,
-        elevated: TokenBuffer::read(raw, TokenElevation)?
-            .header::<TOKEN_ELEVATION>()
-            .TokenIsElevated
-            != 0,
-        linked_token: *TokenBuffer::read(raw, TokenElevationType)?.header::<TOKEN_ELEVATION_TYPE>()
-            != TokenElevationTypeDefault,
+        elevated: elevation.TokenIsElevated != 0,
+        linked_token: elevation_type != TokenElevationTypeDefault,
         // SAFETY: live query token. Any restricting SID disqualifies this evidence.
         restricted: unsafe { IsTokenRestricted(raw) } != 0,
         groups: groups

@@ -28,9 +28,21 @@ exit 0
 """
 
 # What a released CLI says about a descriptor field it has never heard of.
-UNKNOWN_FIELD_FAILURE = """    echo "Failed to publish extension release: invalid extension release bundle at \\
-$PWD/release.json: unknown field \\`{field}\\`, expected one of \\`schemaVersion\\`, \\`shortId\\`, \\
-\\`extensionId\\`, \\`package\\`, \\`version\\`" >&2
+#
+# Reproduced with the CLI's real layout, not as one long line. miette hard-wraps the diagnostic to
+# the terminal width and prefixes every continuation with a `│` gutter, which routinely splits
+# `unknown field` from the field name it is about:
+#
+#     × Failed to publish extension release: invalid extension release bundle
+#     │ at .../release.json: unknown field
+#     │ `workspaceDiscovery`, expected one of `schemaVersion`, ...
+#
+# A single-line stub passes against a task that only flattens newlines, while the real CI job
+# fails — which is exactly what happened. The wrapping is the part worth pinning.
+UNKNOWN_FIELD_FAILURE = """    echo "Error:   × Failed to publish extension release: invalid extension release bundle" >&2
+    echo "  │ at $PWD/release.json: unknown field" >&2
+    echo "  │ \\`{field}\\`, expected one of \\`schemaVersion\\`, \\`shortId\\`," >&2
+    echo "  │ \\`extensionId\\`, \\`package\\`, \\`version\\` at line 29 column 22" >&2
     exit 1"""
 
 

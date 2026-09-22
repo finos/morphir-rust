@@ -162,8 +162,22 @@ else
     # Serde names the field it could not parse, so the skip needs both halves to line up: the
     # error has to name a field this task already expects to be unparsable, and the descriptor
     # has to really carry it. A non-zero exit whose output matches neither is a genuine failure.
+    #
+    # The CLI renders that error through miette, which hard-wraps it to the terminal width and
+    # prefixes every continuation line with a `│` gutter, so `unknown field` and the field name
+    # routinely land on different lines:
+    #
+    #     × Failed to publish extension release: invalid extension release bundle
+    #     │ at .../release.json: unknown field
+    #     │ `workspaceDiscovery`, expected one of `schemaVersion`, ...
+    #
+    # Flattening newlines alone leaves the gutter sitting between the two halves, so the match has
+    # to erase the decoration as well and squeeze the runs of spaces that wrapping introduces.
+    # Matching the two halves separately instead would be looser than it looks: the field list in
+    # `expected one of` names every field the CLI does know, so a field that is merely *absent*
+    # from an older descriptor could satisfy a split match without the error being about it.
     PUBLISH_REPORT="$WORK/publish.report"
-    cat "$PUBLISH_STDOUT" "$PUBLISH_STDERR" | tr '\n' ' ' >"$PUBLISH_REPORT"
+    cat "$PUBLISH_STDOUT" "$PUBLISH_STDERR" | tr '\n' ' ' | tr '│' ' ' | tr -s ' ' >"$PUBLISH_REPORT"
     SKIPPED_FIELD=
     for field in $TRANSITIONAL_FIELDS; do
         descriptor_carries "$field" || continue

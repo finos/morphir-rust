@@ -44,7 +44,8 @@ what this detector can attest.
   `CREATE`. Explicit initialization reserves the database with `create_new`,
   uses mode 0600 on POSIX, then commits schema, identity and completion marker in
   one transaction. Existing empty, incomplete or corrupt stores are refused.
-  Initialization does not reconstruct grants. Windows ACL qualification is pending.
+  Initialization does not reconstruct grants. The dedicated Windows job below checks
+  ownership and ACLs under its standard user.
 - Every connection requests WAL and FULL, plus `fullfsync=ON` on macOS, and reads
   the effective settings back. Connections use the default native SQLite VFS.
   Exact evidence BLOBs live with their marker/grant rows. `BEGIN IMMEDIATE`
@@ -71,9 +72,10 @@ an accepted no-op. This still needs an APFS/storage-specific persistence argumen
 [SQLite's synchronous documentation](https://www.sqlite.org/pragma.html#pragma_synchronous)
 and [atomic-commit assumptions](https://www.sqlite.org/atomiccommit.html) describe
 its durability dependencies. The probe does not establish persistence of initial
-database/WAL creation and their directory entries. It does not yet kill during
-initialization, inject native VFS `xSync`/`xWrite` failures, or implement protected
-repository revisions, root transitions or authenticated recovery.
+database/WAL creation and their directory entries. The fault and restart probes
+below cover initialization interruption and native VFS `xSync`/`xWrite` failures.
+They do not implement protected repository revisions, root transitions or
+authenticated recovery.
 
 [MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
 documents write-through behavior, including copy/delete flushing. That statement
@@ -150,11 +152,12 @@ functional failure, without establishing a durability guarantee. Cross-compilati
 types only; macOS runs do not execute the Windows-only cases.
 
 Stop qualification if any required native call fails, a winner is overwritten,
-state is silently created/reset, a failed/uncommitted write yields a grant, a
+state is silently created/reset, an I/O-error operation grants usable authority, a
 fresh process loses committed evidence, or any target lacks a documented ordinary
 user persistence guarantee. Unsupported target setup must fail, not skip or become
-a synthetic pass. Additional write/flush fault schedules and concurrent promotion
-obligations must be implemented before a complete provider gate is claimed.
+a synthetic pass. The bounded write/flush schedules below do not cover partial/torn native writes,
+every SQLite operation, concurrent promotion or power loss. Those obligations
+remain before a complete provider gate is claimed.
 
 Passing these probes is insufficient for artifact-bound qualification. Required
 future evidence includes provider source/build identity, exact artifact digest,
@@ -233,3 +236,64 @@ environment, as `candidate-provider-probes-<runner>`. It also retains `rustc -vV
 and an explicit candidate-only scope statement. Upload runs even after test failure;
 pipeline failure is preserved. These development logs are not a qualification
 attestation for a released artifact.
+
+
+## Native SQLite fault schedules and full-tree ordering
+
+`vfs_fault.rs` obtains the current database or WAL file through SQLite's documented
+[`SQLITE_FCNTL_FILE_POINTER` and `SQLITE_FCNTL_JOURNAL_POINTER`](https://sqlite.org/c3ref/file_control.html)
+controls. It intercepts that file's `xWrite`, `xSync` and `xClose` methods, preserving
+its native file allocation, original methods and default VFS. All uninjected I/O,
+locking, shared memory and cleanup calls remain native. The exclusive connection
+borrow and thread-local registration keep the interceptor on one thread; close
+restores the original table before native deallocation. No global VFS replacement
+or production dependency is introduced.
+
+A successful control transaction records the actual write/sync count on the native
+platform. The tests then fail each observed operation in a separate run, returning
+`SQLITE_IOERR_WRITE` or `SQLITE_IOERR_FSYNC` before the selected native call. The
+selected operation and later operations of the same kind continue failing; unrelated
+calls still execute. Every run requires a hit and the exact SQLite extended error.
+The parent kills the writer while its failed connection is still alive and starts
+a new executable reader, preventing connection-close cleanup from standing in for
+crash recovery. The bounded schedules cover WAL grant commits and database
+checkpoints. They do not simulate a partially completed native write, OS reboot or
+lost power. WAL shared memory also survives process death in the OS cache; these
+probes do not model its loss in an OS crash.
+
+The distinction between failure and rollback matters. On local APFS, failure of
+the final WAL `xSync` returns an I/O error, but a new reader can recover the complete
+new transaction. Earlier write failures retain the marker. Tests require an atomic
+old or new marker/grant pair and exact evidence bytes after sync uncertainty. They
+reject a torn pair, and checkpoint failures must preserve the previously committed
+grant data. **Recovered rows are data, not permission to reuse a grant.** An
+operation reporting an I/O error must fail closed. Production recovery still has
+to revalidate and reconcile state and establish successful durability before
+issuing or reusing authority. The tests do not implement that policy.
+
+Initialization uses the existing single SQLite transaction for schema, original
+identity and completion row. A writer is killed after exclusive file reservation,
+before committing that transaction, or after its successful commit. New readers
+reject incomplete state and a second initialization cannot overwrite it. The
+post-commit case recovers an initialized schema with no grants. There is no separate
+authoritative marker file. These checkpoints establish process-visible completion,
+not persistence of the initial database/WAL names and their containing directory.
+Initialization after an uncertain I/O result still requires fail-closed diagnosis
+and durability reconciliation before the completion row can authorize normal use.
+
+`tree_durability.rs` builds a private tree with payload and empty files, empty
+children at two depths and a newly created ancestor. POSIX runs flush each file,
+then directories from leaves through the existing fixture root, promote without
+replacement and flush the changed parent directory. macOS uses the existing
+`F_FULLFSYNC` helper. Windows uses the existing synchronous write-through directory
+creation, write-through files plus file synchronization, and write-through handle
+rename. It adds no unsupported directory-flush no-op or administrator fallback.
+
+The tree tests stop at each operation boundary with an injected error and require
+that later operations do not run. Native destination collisions retain both trees.
+If a POSIX parent flush fails after rename, the API reports failure even though the
+winner is visible; tree presence cannot authorize a grant. Separate killed writers
+and fresh readers check complete staged and promoted trees. These boundary errors
+exercise sequencing and propagation, not device-level failures inside the native
+calls. The test framework's temporary-root creation and its parent directory remain
+outside the persistence boundary. Complete provider qualification is still pending.

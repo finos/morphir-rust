@@ -2,6 +2,7 @@
 
 mod decoding;
 mod diagnostics;
+mod identity;
 mod layers;
 mod members;
 mod patterns;
@@ -18,16 +19,18 @@ use crate::{
     DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree,
     ProjectOrigin, ProjectSnapshot, ProjectSource, ProjectState, RelativePath, SourceSelection,
     WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_LANGUAGE_ID_EMPTY,
-    WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_PURPOSE_UNSUPPORTED,
-    WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID,
-    WORKSPACE_SELECTION_NAME_REQUIRED, WORKSPACE_SELECTION_OUTSIDE_ROOT,
-    WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
+    WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE,
+    WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_NAME_REQUIRED,
+    WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails,
+    WorkspaceSnapshot, WorkspaceState,
 };
 use decoding::{decode_root_project, decode_workspace};
 use diagnostics::{duplicate_name_diagnostics, failure, sort_diagnostics};
 use layers::{optional_user_layer, required_layer, shared_layers, without_project_or_workspace};
 use members::discover_member;
 use patterns::member_directories;
+
+pub use identity::{SourceIdentity, discover_with_identity};
 
 /// Discovers a Morphir workspace from portable, root-confined inputs.
 ///
@@ -261,13 +264,24 @@ fn discover_internal(
     })
 }
 
-/// Discovers a single synthesized project from an explicit source selection.
+/// Discovers the single project an explicit source selection describes.
 ///
-/// This is the [`DiscoveryPurpose::AdHocSources`] path: there is no manifest
-/// in the tree to anchor on, so no workspace layer is required and no member
-/// scan runs. The selection's root is carried verbatim into
-/// [`ProjectSnapshot::relative_path`] and never recomputed from the selected
-/// paths — see the module-level discussion of why that matters.
+/// This is the [`DiscoveryPurpose::AdHocSources`] path: no workspace layer is
+/// required and no member scan runs. The selection's root is carried verbatim
+/// into [`ProjectSnapshot::relative_path`] and never recomputed from the
+/// selected paths — see the module-level discussion of why that matters.
+///
+/// A [`ProjectSource::Manifest`] selection borrows the identity of a manifest
+/// the host already resolved. The host owns configuration precedence, so it
+/// states that identity as the overlay's `project.name`; this function only
+/// confirms the manifest exists and records it as the project's origin. It
+/// never reads the manifest's layers, which would make every provider
+/// re-implement precedence the host has already applied.
+///
+/// Only language-neutral checks run here. Rules that depend on how a source
+/// becomes a module — how many *distinct* sources a selection holds, whether
+/// two of them collide, whether an explicit name satisfies the package
+/// contract — belong to the provider; see [`discover_with_identity`].
 fn discover_ad_hoc_sources(
     request: &DiscoveryRequest,
     project: &ProjectSource,
@@ -275,17 +289,6 @@ fn discover_ad_hoc_sources(
     language_id: &str,
     collector: Option<&mut dyn EffectiveConfigCollector>,
 ) -> Result<WorkspaceSnapshot, DiscoveryFailure> {
-    if let ProjectSource::Manifest { path } = project {
-        return Err(failure(
-            WORKSPACE_PURPOSE_UNSUPPORTED,
-            format!(
-                "ad-hoc discovery from a manifest project source is not supported yet; a provider must synthesize the manifest at `{}` before this can be implemented",
-                path.as_str()
-            ),
-            Some(path.clone()),
-        ));
-    }
-
     if language_id.is_empty() {
         return Err(failure(
             WORKSPACE_LANGUAGE_ID_EMPTY,
@@ -299,13 +302,39 @@ fn discover_ad_hoc_sources(
 
     let name = resolve_synthesized_project_name(&request.cli_overlay, &sources.root)?;
 
-    validate_ad_hoc_selection(&request.development_root, sources, name.as_deref())?;
+    let origin = match project {
+        ProjectSource::Synthesized => ProjectOrigin::Synthesized {
+            inputs: sources.paths.clone(),
+        },
+        ProjectSource::Manifest { path } => {
+            if name.is_none() {
+                return Err(failure(
+                    WORKSPACE_SELECTION_NAME_REQUIRED,
+                    format!(
+                        "ad-hoc selection borrowing manifest `{}` has no explicit name; the host states the manifest's project name as the overlay's `project.name`",
+                        path.as_str()
+                    ),
+                    Some(path.clone()),
+                ));
+            }
+            if !request.development_root.contains_file(path) {
+                return Err(failure(
+                    WORKSPACE_SELECTION_INVALID,
+                    format!("manifest `{}` is not a file in the request", path.as_str()),
+                    Some(path.clone()),
+                ));
+            }
+            ProjectOrigin::Manifest { path: path.clone() }
+        }
+    };
+
+    validate_ad_hoc_selection(&request.development_root, sources)?;
 
     let shared = shared_layers(request)?;
     let empty = Value::Object(Map::new());
-    // A synthesized project is standalone: its configuration comes from
-    // defaults and the environment, never from a manifest the request did
-    // not select. There is no workspace layer here at all.
+    // An ad-hoc project reads no manifest layer: a synthesized one has none,
+    // and a manifest-origin one had its manifest resolved by the host, which
+    // passes the result through the overlay.
     let effective = merge_all([
         &builtin_defaults(),
         shared.system_value.as_ref().unwrap_or(&empty),
@@ -319,17 +348,19 @@ fn discover_ad_hoc_sources(
         collector.project(&sources.root, &effective);
     }
 
+    let config_anchor = match &origin {
+        ProjectOrigin::Manifest { path } => Some(path.clone()),
+        ProjectOrigin::Synthesized { .. } => None,
+    };
     let project = ProjectSnapshot {
         name: name.unwrap_or_default(),
         version: None,
         relative_path: sources.root.clone(),
-        config_anchor: None,
+        config_anchor,
         source_directory: RelativePath::root(),
         state: ProjectState::Unloaded,
         diagnostics: Vec::new(),
-        origin: ProjectOrigin::Synthesized {
-            inputs: sources.paths.clone(),
-        },
+        origin,
         exposed_modules: None,
     };
 
@@ -398,17 +429,12 @@ fn resolve_synthesized_project_name(
 /// Checks run cheapest-first: an empty selection and repeated paths are
 /// caller mistakes visible from the request alone, confinement is checked
 /// against the selection's root and paths, and only then does the tree get
-/// consulted to confirm every selected path names a file. Finally, once the
-/// selection is otherwise well-formed, an unnamed selection is required to
-/// contain exactly one source — there is nothing else to derive a name
-/// from. A named selection is unconstrained. This runs last, and after
-/// duplicate-path rejection in particular, so cardinality is measured on the
-/// canonical selection that reaches it rather than pre-empting the
-/// diagnostic a malformed selection would otherwise get.
+/// consulted to confirm every selected path names a file. How many *distinct*
+/// sources the selection holds is not measured here: that depends on the
+/// language, so the provider checks it (see [`discover_with_identity`]).
 fn validate_ad_hoc_selection(
     tree: &FileTree,
     sources: &SourceSelection,
-    name: Option<&str>,
 ) -> Result<(), DiscoveryFailure> {
     if sources.paths.is_empty() {
         return Err(failure(
@@ -473,18 +499,6 @@ fn validate_ad_hoc_selection(
             WORKSPACE_SELECTION_INVALID,
             format!("selected paths do not resolve to files: {listed}"),
             Some(first.clone()),
-        ));
-    }
-
-    if name.is_none() && sources.paths.len() > 1 {
-        return Err(failure(
-            WORKSPACE_SELECTION_NAME_REQUIRED,
-            format!(
-                "ad-hoc selection rooted at `{}` selects {} sources but has no explicit name; an unnamed synthesized selection must select exactly one source",
-                sources.root.as_str(),
-                sources.paths.len()
-            ),
-            Some(sources.root.clone()),
         ));
     }
 

@@ -16,10 +16,7 @@
 //! selection's root.
 
 use morphir_extension_sdk::prelude::*;
-use morphir_workspace::{
-    DiagnosticSeverity as WorkspaceDiagnosticSeverity, DiscoveryRequest, DiscoveryResponse,
-    ProjectOrigin, ProjectState, RelativePath, WorkspaceDiagnostic, WorkspaceState,
-};
+use morphir_workspace::{DiscoveryRequest, DiscoveryResponse, RelativePath, SourceIdentity};
 
 use crate::{GleamExtension, canonicalize_gleam_module_segments};
 
@@ -30,127 +27,56 @@ const GLEAM_WORKSPACE_INVALID_MODULE_PATH: &str = "gleam.workspace.invalid-modul
 
 impl Workspace for GleamExtension {
     fn discover(&self, request: DiscoveryRequest) -> Result<DiscoveryResponse> {
-        // `morphir_workspace::discover` owns confinement, budgets, ordering
-        // and diagnostics; nothing here reimplements any of that. The
-        // returned snapshot carries paths, not document text, which is all
-        // module-identity synthesis needs.
-        Ok(synthesize_identity(morphir_workspace::discover(request)))
+        // The shared provider-tier rules live in `discover_with_identity`;
+        // this provider supplies only Gleam's path-derived identity, which
+        // needs no source text.
+        Ok(morphir_workspace::discover_with_identity(
+            request,
+            &GleamIdentity,
+        ))
     }
 }
 
-/// Fills whichever of `name` and `exposedModules` a synthesized project is
-/// still missing.
-///
-/// The two fields are completed independently. A name discovery supplied —
-/// explicit, manifest-derived, or otherwise — is never overwritten, since it
-/// came from the caller and is not this provider's to change. Exposure,
-/// though, is derived for any single-source selection discovery left it
-/// unset on, *including* one that arrived with an explicit name: the host's
-/// `--package-name` says what to call the package, not which modules it
-/// publishes, and a single file's exposed module is exactly as derivable
-/// either way. (A *named multi-source* selection is the one case that keeps
-/// an unset `exposedModules`, since there is no single module to name; see
-/// the `debug_assert!` below.) Making exposure depend on the name would mean
-/// the same file advertised
-/// `exposedModules: ["domain/widget"]` unnamed and `null` named, leaving a
-/// consumer unable to tell "no exposure was derived" from "expose
-/// everything".
-///
-/// A manifest-origin project is left entirely alone: everything it could
-/// need already came from its manifest. A discovery failure passes through
-/// unchanged: it is not this function's to reinterpret.
-fn synthesize_identity(response: DiscoveryResponse) -> DiscoveryResponse {
-    let mut snapshot = match response {
-        DiscoveryResponse::Success { snapshot } => snapshot,
-        failure @ DiscoveryResponse::Failure { .. } => return failure,
-    };
+/// Gleam's answer to how a selected source becomes package and module identity.
+struct GleamIdentity;
 
-    for project in &mut snapshot.projects {
-        if !project.name.is_empty() && project.exposed_modules.is_some() {
-            continue;
-        }
-        let ProjectOrigin::Synthesized { inputs } = &project.origin else {
-            continue;
-        };
-        // An *unnamed* ad-hoc selection is only ever a single source:
-        // portable discovery rejects more than one
-        // (`workspace.selection.name-required`) before a snapshot like this
-        // can exist, since there would be nothing to derive a name from. The
-        // `debug_assert!` states that cross-crate invariant where this code
-        // relies on it: were a future change to let an unnamed multi-input
-        // synthesized project through, it would otherwise keep its empty
-        // name all the way to compile and fail there with an
-        // unrelated-looking error, with no test failing first.
-        //
-        // A *named* multi-source selection is allowed, though, and now
-        // reaches here because exposure is derived independently of the
-        // name. There is no single module to expose for it, so it falls out
-        // of the `let else` below with `exposedModules` unset — which means
-        // "expose everything", the only honest answer for a selection whose
-        // modules this provider has not enumerated.
-        debug_assert!(
-            !project.name.is_empty() || inputs.len() == 1,
-            "an unnamed synthesized project should hold exactly one input, found {}",
-            inputs.len()
-        );
-        let [input] = inputs.as_slice() else {
-            continue;
-        };
-
-        match derive_identity(&project.relative_path, input) {
-            Ok((package_name, module_name)) => {
-                if project.name.is_empty() {
-                    project.name = package_name;
-                }
-                if project.exposed_modules.is_none() {
-                    project.exposed_modules = Some(vec![module_name]);
-                }
-            }
-            Err(message) => {
-                project.state = ProjectState::Error;
-                // `ProjectSnapshot::diagnostics` is documented as sorted by
-                // project path, path, code, severity and message. A
-                // synthesized project's diagnostics start empty
-                // (`discover_ad_hoc_sources` never populates them), and this
-                // is the only diagnostic this function ever adds, so a
-                // single push keeps that ordering trivially satisfied. If a
-                // second diagnostic is ever pushed here, re-sort afterward.
-                project.diagnostics.push(WorkspaceDiagnostic {
-                    severity: WorkspaceDiagnosticSeverity::Error,
-                    code: GLEAM_WORKSPACE_INVALID_MODULE_PATH.to_owned(),
-                    message,
-                    path: Some(input.clone()),
-                    project_path: Some(project.relative_path.clone()),
-                });
-            }
-        }
+impl SourceIdentity for GleamIdentity {
+    fn module_name(
+        &self,
+        root: &RelativePath,
+        path: &RelativePath,
+        _text: &str,
+    ) -> std::result::Result<String, (String, String)> {
+        module_path(root, path)
+            .map_err(|message| (GLEAM_WORKSPACE_INVALID_MODULE_PATH.to_owned(), message))
     }
 
-    if snapshot
-        .projects
-        .iter()
-        .any(|project| project.state == ProjectState::Error)
-    {
-        snapshot.state = WorkspaceState::Error;
+    /// The module path under the placeholder `local` scope, with `/` joins
+    /// flattened to `-`, since a package name is a single scoped segment, not
+    /// a nested path.
+    ///
+    /// Two different selections can collide on this name: segment
+    /// canonicalization already maps `_` to `-` per segment, and flattening
+    /// compounds that across segments, so `a/b.gleam` and `a_b.gleam` both
+    /// yield `local/a-b`. Only an unnamed single-source selection is named
+    /// this way, so the collision is between separate invocations, never
+    /// within one snapshot.
+    fn synthesized_package_name(&self, module: &str) -> String {
+        format!("local/{}", module.replace('/', "-"))
     }
 
-    DiscoveryResponse::Success { snapshot }
+    fn check_package_name(&self, name: &str) -> std::result::Result<(), String> {
+        crate::validate_package_name(name).map(|_| ())
+    }
 }
 
-/// Derives a synthesized project's package name and its single exposed
-/// module name from `input`'s path relative to `root`.
+/// Derives a selected source's module path from its path relative to `root`.
 ///
 /// Gleam has no module header, so — unlike Elm's declared-name-then-filename
 /// policy — this always derives from the path: the segments between `root`
 /// and the file, canonicalized the same way a compile-time document URI is
-/// (snake_case segments become kebab-case, joined by `/`). The package name
-/// reuses that module path under the placeholder `local` scope, with `/`
-/// joins flattened to `-`, since a package name is a single scoped segment,
-/// not a nested path.
-fn derive_identity(
-    root: &RelativePath,
-    input: &RelativePath,
-) -> std::result::Result<(String, String), String> {
+/// (snake_case segments become kebab-case, joined by `/`).
+fn module_path(root: &RelativePath, input: &RelativePath) -> std::result::Result<String, String> {
     let mut segments = relative_segments(root, input);
     let file_name = segments
         .last_mut()
@@ -165,20 +91,7 @@ fn derive_identity(
         })?
         .to_owned();
     let refs = segments.iter().map(String::as_str).collect::<Vec<_>>();
-    let module_name = canonicalize_gleam_module_segments(&refs)?.to_string();
-    // Two different selections can collide on this package name: segment
-    // canonicalization already maps `_` to `-` per segment (`a_b` and `a-b`
-    // both canonicalize to `a-b`), and flattening `/` to `-` below compounds
-    // that across segments, so `a/b.gleam` and `a_b.gleam` both yield
-    // `local/a-b`, with different module sets. This never collides *within*
-    // one snapshot — an unnamed selection is always exactly one source, so
-    // there is only ever one derived name here — but two separate discovery
-    // invocations can still produce colliding package identities wherever a
-    // name is later used as a key. Not fixed here: the derivation policy is
-    // settled, and the case is unreachable in the one place this function
-    // runs.
-    let package_name = format!("local/{}", module_name.replace('/', "-"));
-    Ok((package_name, module_name))
+    Ok(canonicalize_gleam_module_segments(&refs)?.to_string())
 }
 
 /// Splits `input`'s wire path into the segments beneath `root`.
@@ -217,8 +130,9 @@ fn relative_segments(root: &RelativePath, input: &RelativePath) -> Vec<String> {
 mod tests {
     use super::*;
     use morphir_workspace::{
-        DiscoveryPurpose, FileEntry, FileTree, ProjectSnapshot, ProjectSource, SourceSelection,
-        WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceSnapshot,
+        DiagnosticSeverity as WorkspaceDiagnosticSeverity, DiscoveryPurpose, FileEntry, FileTree,
+        ProjectSource, ProjectState, SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL,
+        WORKSPACE_PROJECT_NAME_INVALID, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceState,
     };
     use std::collections::BTreeMap;
 
@@ -365,16 +279,10 @@ mod tests {
         );
     }
 
-    /// A *named* selection may hold more than one source — portable
-    /// discovery only constrains cardinality for an unnamed one — and such a
-    /// project now reaches the derivation loop, because exposure is no longer
-    /// gated on the name being empty. It must fall out of the single-input
-    /// guard leaving `exposedModules` unset (meaning "expose everything"),
-    /// not panic on the `debug_assert!` and not invent an exposure list from
-    /// one arbitrary member. Tests run in debug, so a `debug_assert!` written
-    /// on input count alone would fail here.
+    /// A *named* selection may hold more than one source, and exposes every
+    /// module it selects, in selection order.
     #[test]
-    fn a_named_multi_source_selection_derives_no_exposure() {
+    fn a_named_multi_source_selection_exposes_every_module() {
         let root = RelativePath::parse("models").expect("a confined wire path");
         let first =
             RelativePath::parse("models/domain/widget.gleam").expect("a confined wire path");
@@ -422,18 +330,38 @@ mod tests {
         };
         let project = &snapshot.projects[0];
         assert_eq!(project.name, "acme/widgets");
-        assert_eq!(project.exposed_modules, None);
+        assert_eq!(
+            project.exposed_modules,
+            Some(vec!["domain/widget".to_owned(), "domain/gadget".to_owned()])
+        );
         assert_eq!(project.state, ProjectState::Unloaded);
     }
 
-    /// The module name discovery derives for a file, via `derive_identity`.
+    /// An explicit name goes through the same canonical-package contract a
+    /// compile applies, so a name compile would refuse is refused here,
+    /// before a provider is ever asked to compile.
+    #[test]
+    fn an_explicit_name_must_be_a_canonical_package_name() {
+        let mut request = ad_hoc_request("models", "models/domain/widget.gleam");
+        request.cli_overlay = serde_json::json!({ "project": { "name": "Acme/Widgets" } });
+
+        let response = GleamExtension
+            .discover(request)
+            .expect("the typed call itself should not error");
+
+        let DiscoveryResponse::Failure { error } = response else {
+            panic!("expected a discovery failure");
+        };
+        assert_eq!(error.code, WORKSPACE_PROJECT_NAME_INVALID);
+    }
+
+    /// The module name discovery derives for a file, via `module_path`.
     fn discovery_module_name(root: &str, document: &str) -> String {
-        derive_identity(
+        module_path(
             &RelativePath::parse(root).expect("a confined wire path"),
             &RelativePath::parse(document).expect("a confined wire path"),
         )
         .expect("a derivable module path")
-        .1
     }
 
     /// The module name compilation derives for the same file, via
@@ -462,7 +390,7 @@ mod tests {
     }
 
     /// Gleam derives a module path from a document in two independent
-    /// places: `derive_identity` here, which names the module discovery
+    /// places: `module_path` here, which names the module discovery
     /// advertises in `exposedModules`, and `module_name_from_document_uri`
     /// in `lib.rs`, which names the module compilation actually emits. Their
     /// agreement is this provider's central premise — discovery promises a
@@ -523,49 +451,6 @@ mod tests {
             panic!("expected a discovery failure");
         };
         assert_eq!(error.code, WORKSPACE_PROTOCOL_UNSUPPORTED);
-    }
-
-    /// A manifest-backed project is never touched, even if its name happens
-    /// to be empty — nothing in the type system stops that, so the guard
-    /// that checks `origin` before deriving anything is load-bearing, not
-    /// belt-and-braces. This bypasses `GleamExtension::discover` and drives
-    /// `synthesize_identity` directly, since portable discovery itself
-    /// never produces an empty-named manifest project.
-    #[test]
-    fn a_manifest_project_with_an_empty_name_is_not_touched() {
-        let manifest_path = RelativePath::parse("morphir.toml").expect("a confined wire path");
-        let project = ProjectSnapshot {
-            name: String::new(),
-            version: None,
-            relative_path: RelativePath::root(),
-            config_anchor: Some(manifest_path.clone()),
-            source_directory: RelativePath::root(),
-            state: ProjectState::Unloaded,
-            diagnostics: Vec::new(),
-            origin: ProjectOrigin::Manifest {
-                path: manifest_path.clone(),
-            },
-            exposed_modules: None,
-        };
-        let snapshot = WorkspaceSnapshot {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
-            config_anchor: Some(manifest_path),
-            name: None,
-            state: WorkspaceState::Open,
-            projects: vec![project],
-            diagnostics: Vec::new(),
-        };
-
-        let response = synthesize_identity(DiscoveryResponse::Success { snapshot });
-
-        let DiscoveryResponse::Success { snapshot } = response else {
-            panic!("expected a successful discovery response");
-        };
-        let project = &snapshot.projects[0];
-        assert_eq!(project.name, "");
-        assert_eq!(project.exposed_modules, None);
-        assert_eq!(project.state, ProjectState::Unloaded);
-        assert_eq!(snapshot.state, WorkspaceState::Open);
     }
 
     /// A source filename Gleam cannot turn into a valid module segment (a

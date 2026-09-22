@@ -63,6 +63,7 @@ impl Extension for ElmExtension {
                 compile: true,
                 incremental: true,
                 fragments: false,
+                multi_document: true,
             }),
             backend: Some(BackendCapability {
                 targets: vec!["elm".into()],

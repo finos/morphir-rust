@@ -449,6 +449,7 @@ fn expected_capabilities() -> ExtensionCapabilities {
             compile: true,
             incremental: false,
             fragments: false,
+            multi_document: false,
         }),
         backend: Some(expected_backend_capability()),
         ..ExtensionCapabilities::default()

@@ -13,6 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yanked choices, and permits exact frozen yanked nodes. The full graph is verified
   before publishing a new lock; old metadata pins may be stale, and the old lock is
   never rewritten. Exact locked restore now permits yanked nodes.
+- Capability-driven ad-hoc discovery (finos/morphir#917, step 5). Providers
+  complete an explicit source selection through the shared
+  `morphir_workspace::discover_with_identity`, which checks an explicit name
+  against the provider's package contract (`workspace.project-name.invalid`),
+  owns the one-source rule for an unnamed selection, rejects two sources naming
+  one module (`workspace.selection.module-collision`), and exposes every
+  selected module in selection order. A named multi-source selection therefore
+  exposes its modules instead of leaving exposure unset.
+- Ad-hoc discovery serves a selection that borrows a manifest's identity. The
+  host states the name it resolved from the manifest as the overlay's
+  `project.name`; discovery records the manifest as the project's origin and
+  anchor without reading its layers.
+- `FrontendCapability.multiDocument` declares that one compile request may
+  submit more than one document. It defaults to false, so a host refuses a
+  larger source set before invoking a frontend that does not declare it. The
+  native Elm and Gleam frontends declare it.
+- `ResolvedFrontend::supports_workspace_discovery` and `native_workspace`, and
+  `morphir_devkit::capture_source_selection`, which captures an explicit source
+  selection as an ad-hoc discovery request under one root, with canonical,
+  deduplicated, confined, UTF-8 sources and a byte budget, and keeps the text
+  it read for compilation.
 - Explicit local registry metadata refresh with complete current-chain authentication,
   exact timestamp/snapshot envelope digests and protected rollback floors. Refresh
   does not acquire packages, rewrite locks or issue grants; unsupported revocation
@@ -59,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
 ### Changed
+- Portable ad-hoc discovery no longer enforces "an unnamed selection holds
+  exactly one source"; an unnamed multi-source selection reaches the provider
+  with an empty name, and the provider decides what counts as distinct.
+  `ProjectSource::Manifest` is no longer refused with
+  `workspace.purpose.unsupported`.
 - `test:cli-release <id>` degrades to a skip, rather than a failure, when the
   pinned CLI release rejects a release descriptor field that did not exist when
   it was cut — currently `workspaceDiscovery`, which is why the Gleam bundle

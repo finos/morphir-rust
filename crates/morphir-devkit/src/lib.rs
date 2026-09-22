@@ -3,6 +3,10 @@ pub mod extensions;
 pub mod out;
 
 pub use config::{
+    CapturedSelection, CapturedSource, DEFAULT_SOURCE_BYTES, SourceSelectionOptions,
+    capture_source_selection,
+};
+pub use config::{
     ConfigContext, ConfigLayout, ConfigLoadOptions, ConfigPlatform, ConfigSource, ConfigSourceKind,
     ConfigSourceStatus, EffectiveConfig, EnvSelection, ExposeSecret, NativeWorkspaceDiscovery,
     NativeWorkspaceDiscoveryError, SecretReference, SecretResolutionContext, SecretResolutionError,

@@ -9,10 +9,10 @@ use super::{
 use crate::{
     DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectOrigin, ProjectSource,
     RelativePath, SourceSelection, WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL,
-    WORKSPACE_LANGUAGE_ID_EMPTY, WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_PURPOSE_UNSUPPORTED,
-    WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID,
-    WORKSPACE_SELECTION_NAME_REQUIRED, WORKSPACE_SELECTION_OUTSIDE_ROOT,
-    WORKSPACE_SYMLINK_UNSUPPORTED, discover, discover_with_details,
+    WORKSPACE_LANGUAGE_ID_EMPTY, WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_SELECTION_DUPLICATE,
+    WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_NAME_REQUIRED,
+    WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED, discover,
+    discover_with_details,
 };
 
 #[derive(Default)]
@@ -335,11 +335,12 @@ fn an_explicit_package_name_is_stored_trimmed() {
     assert_eq!(snapshot.projects[0].name, "acme/widgets");
 }
 
-/// An unnamed synthesized selection must contain exactly one source, because
-/// there is nothing to derive a name from otherwise. A *named* one may
-/// contain several (proven above).
+/// Portable discovery no longer measures cardinality: how many *distinct*
+/// sources a selection holds depends on the language, so an unnamed
+/// multi-source selection passes through with an empty name for the provider
+/// to judge (`discover_with_identity`).
 #[test]
-fn an_unnamed_synthesized_selection_requires_exactly_one_source() {
+fn an_unnamed_multi_source_selection_is_left_for_the_provider_to_judge() {
     let domain = gleam_source("models/domain/customer.gleam");
     let party = gleam_source("models/party/customer.gleam");
     let paths = vec![domain.0.clone(), party.0.clone()];
@@ -348,16 +349,14 @@ fn an_unnamed_synthesized_selection_requires_exactly_one_source() {
     let request = ad_hoc_request_with_entries(
         entries,
         ProjectSource::Synthesized,
-        SourceSelection {
-            root: root.clone(),
-            paths,
-        },
+        SourceSelection { root, paths },
     );
 
-    let error = discover(request).into_result().unwrap_err();
+    let snapshot = discover(request)
+        .into_result()
+        .expect("portable discovery leaves cardinality to the provider");
 
-    assert_eq!(error.code, WORKSPACE_SELECTION_NAME_REQUIRED);
-    assert!(error.message.contains(root.as_str()));
+    assert_eq!(snapshot.projects[0].name, "");
 }
 
 /// A non-string `cli_overlay.project.name` is a structurally invalid
@@ -543,32 +542,84 @@ fn ad_hoc_selection_root_of_dot_contains_every_path() {
     assert_eq!(snapshot.projects[0].relative_path, RelativePath::root());
 }
 
-/// `ProjectSource::Manifest` is not implemented in this task: providers can't
-/// synthesize a manifest yet. The gap is loud rather than silent.
-#[test]
-fn ad_hoc_manifest_project_source_is_explicitly_unsupported() {
-    let manifest_path = RelativePath::parse("models/morphir.toml").unwrap();
+fn manifest_request(with_manifest: bool, name: Option<&str>) -> DiscoveryRequest {
+    let manifest_path = RelativePath::parse("morphir.toml").unwrap();
     let (path, entry) = gleam_source("models/domain/customer.gleam");
-    let entries = BTreeMap::from([
+    let mut entries = BTreeMap::from([
         (RelativePath::root(), FileEntry::Directory),
         (path.clone(), entry),
     ]);
-    let request = ad_hoc_request_with_entries(
+    if with_manifest {
+        entries.insert(
+            manifest_path.clone(),
+            FileEntry::File {
+                text: "[project]\nname = 'acme/declared'\n".to_owned(),
+            },
+        );
+    }
+    let mut request = ad_hoc_request_with_entries(
         entries,
         ProjectSource::Manifest {
-            path: manifest_path.clone(),
+            path: manifest_path,
         },
         SourceSelection {
             root: RelativePath::parse("models").unwrap(),
             paths: vec![path],
         },
     );
+    if let Some(name) = name {
+        request.cli_overlay = json!({ "project": { "name": name } });
+    }
+    request
+}
 
-    let error = discover(request).into_result().unwrap_err();
+/// A selection borrowing a manifest's identity takes its name from the
+/// overlay, where the host states what it resolved from that manifest, and
+/// records the manifest as the project's origin and anchor. The manifest's own
+/// text is not read: `acme/declared` never reaches the snapshot.
+#[test]
+fn a_manifest_origin_selection_borrows_the_host_resolved_identity() {
+    let snapshot = discover(manifest_request(true, Some("acme/widgets")))
+        .into_result()
+        .expect("a manifest-origin selection should discover");
 
-    assert_eq!(error.code, WORKSPACE_PURPOSE_UNSUPPORTED);
-    assert!(error.message.contains("manifest"));
-    assert!(error.message.contains(manifest_path.as_str()));
+    let project = &snapshot.projects[0];
+    let manifest = RelativePath::parse("morphir.toml").unwrap();
+    assert_eq!(project.name, "acme/widgets");
+    assert_eq!(
+        project.origin,
+        ProjectOrigin::Manifest {
+            path: manifest.clone()
+        }
+    );
+    assert_eq!(project.config_anchor, Some(manifest));
+    assert_eq!(
+        project.relative_path,
+        RelativePath::parse("models").unwrap()
+    );
+    assert_eq!(project.exposed_modules, None);
+}
+
+/// Without a name the host has not stated the manifest's identity, and
+/// discovery will not read one from the manifest itself.
+#[test]
+fn a_manifest_origin_selection_requires_a_host_stated_name() {
+    let error = discover(manifest_request(true, None))
+        .into_result()
+        .unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_NAME_REQUIRED);
+    assert!(error.message.contains("morphir.toml"));
+}
+
+#[test]
+fn a_manifest_origin_selection_requires_the_manifest_to_exist() {
+    let error = discover(manifest_request(false, Some("acme/widgets")))
+        .into_result()
+        .unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_INVALID);
+    assert!(error.message.contains("morphir.toml"));
 }
 
 /// `discover_with_details` must not panic on the ad-hoc path: the collector

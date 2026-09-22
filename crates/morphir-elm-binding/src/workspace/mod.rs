@@ -1,197 +1,74 @@
 //! Provider-owned completion of portable Elm workspace discovery.
 //!
 //! Portable discovery (`morphir_workspace::discover`) is language-neutral: it
-//! cannot know how a source file becomes a module, so a synthesized
-//! project's `name` and `exposedModules` are left empty. This module
-//! delegates discovery to the portable engine — which keeps owning
-//! confinement, budgets, ordering and diagnostics — and only fills the
-//! fields an Elm-specific policy can supply, by post-processing the returned
-//! snapshot.
+//! cannot know how a source file becomes a module, so an ad-hoc project's
+//! `name` and `exposedModules` are left for the provider. The shared
+//! provider-tier rules — package contract, cardinality, collisions — live in
+//! [`morphir_workspace::discover_with_identity`]; this module supplies only the
+//! Elm policy they apply.
 //!
 //! Unlike Gleam, Elm derives module identity primarily from a *declared*
 //! module header inside the source, not from the file's path. Scanning that
 //! header is a separate, purely lexical concern and lives in
-//! [`module_header`]; what remains here is the discovery policy — which
-//! project needs an identity synthesized at all, and how a scanned module
-//! name becomes a package name. The package-name formatting is still a
-//! byte-for-byte port of the CLI's own rule in `prepare_single_file_context`
-//! (`crates/morphir/src/commands/compile.rs` in the parent repository); see
-//! [`module_header`] for the scanner half of that port and why it may not be
-//! swapped for a real Elm parser.
+//! [`module_header`]. The package-name formatting is a byte-for-byte port of
+//! the rule the CLI used to run inline for a standalone single-file compile;
+//! see [`module_header`] for the scanner half of that port and why it may not
+//! be swapped for a real Elm parser.
 
 mod module_header;
 
 use morphir_extension_sdk::prelude::*;
-use morphir_workspace::{
-    DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse, ProjectOrigin, RelativePath,
-};
+use morphir_workspace::{DiscoveryRequest, DiscoveryResponse, RelativePath, SourceIdentity};
 
 use crate::ElmExtension;
+use crate::frontend::boundary::package_path;
 use module_header::{elm_module_name, fallback_elm_module_name};
 
 impl Workspace for ElmExtension {
     fn discover(&self, request: DiscoveryRequest) -> Result<DiscoveryResponse> {
-        // `morphir_workspace::discover` owns confinement, budgets, ordering
-        // and diagnostics; nothing here reimplements any of that. Identity
-        // synthesis below needs the submitted source's *text*, not just its
-        // path, but `request` is about to be consumed by `discover`. Rather
-        // than clone the whole confined tree — every file's complete text —
-        // just to read one file back afterward, the one source this provider
-        // could ever need is already knowable from the request's own
-        // selection before discovery runs: `derive_identity` only ever runs
-        // against a *single-source* `AdHocSources` selection, so that is the
-        // only shape worth capturing text for. A multi-source selection and
-        // a `ManifestProjects` request capture nothing —
-        // `synthesize_identity` never needs text for either.
-        //
-        // Note this keys off the selection's cardinality alone and
-        // deliberately not off whether the request carries a name. A named
-        // single-source selection still reaches `derive_identity`, because
-        // exposure is derived even when the name is supplied; narrowing this
-        // to unnamed selections would silently drop such a compile back to
-        // the filename stem. This mirrors nothing in Gleam's provider
-        // because Gleam never needs source text at all.
-        let candidate = match &request.purpose {
-            DiscoveryPurpose::AdHocSources { sources, .. } => match sources.paths.as_slice() {
-                [only] => request
-                    .development_root
-                    .file_text(only)
-                    .map(|text| (only.clone(), text.to_owned())),
-                _ => None,
-            },
-            DiscoveryPurpose::ManifestProjects => None,
-        };
-        Ok(synthesize_identity(
-            morphir_workspace::discover(request),
-            candidate,
+        Ok(morphir_workspace::discover_with_identity(
+            request,
+            &ElmIdentity,
         ))
     }
 }
 
-/// Fills whichever of `name` and `exposedModules` a synthesized project is
-/// still missing.
-///
-/// The two fields are completed independently. A name discovery supplied —
-/// explicit, manifest-derived, or otherwise — is never overwritten, since it
-/// came from the caller and is not this provider's to change. Exposure,
-/// though, is derived for any single-source selection discovery left it
-/// unset on, *including* one that arrived with an explicit name: the host's
-/// `--package-name` says what to call the package, not which modules it
-/// publishes, and a single file's exposed module is exactly as derivable
-/// either way. (A *named multi-source* selection is the one case that keeps
-/// an unset `exposedModules`, since there is no single module to name; see
-/// the `debug_assert!` below.) Making exposure depend on the name would mean
-/// the same file advertised
-/// `exposedModules: ["Acme.Widget"]` unnamed and `null` named, leaving a
-/// consumer unable to tell "no exposure was derived" from "expose
-/// everything".
-///
-/// A manifest-origin project is left entirely alone: everything it could
-/// need already came from its manifest. A discovery failure passes through
-/// unchanged: it is not this function's to reinterpret.
-///
-/// `candidate` is the one source this provider could ever need to read —
-/// its path and text, captured from the request before `discover` consumed
-/// it — or `None` when the request could never have produced a project
-/// needing derivation. This function does not itself decide which project
-/// (if any) needs synthesis; that is still driven entirely by the returned
-/// snapshot, so `candidate` is matched against the discovered project's own
-/// input path rather than assumed to apply.
-fn synthesize_identity(
-    response: DiscoveryResponse,
-    candidate: Option<(RelativePath, String)>,
-) -> DiscoveryResponse {
-    let mut snapshot = match response {
-        DiscoveryResponse::Success { snapshot } => snapshot,
-        failure @ DiscoveryResponse::Failure { .. } => return failure,
-    };
+/// Elm's answer to how a selected source becomes package and module identity.
+struct ElmIdentity;
 
-    for project in &mut snapshot.projects {
-        if !project.name.is_empty() && project.exposed_modules.is_some() {
-            continue;
-        }
-        let ProjectOrigin::Synthesized { inputs } = &project.origin else {
-            continue;
-        };
-        // An *unnamed* ad-hoc selection is only ever a single source:
-        // portable discovery rejects more than one
-        // (`workspace.selection.name-required`) before a snapshot like this
-        // can exist, since there would be nothing to derive a name from. The
-        // `debug_assert!` states that cross-crate invariant where this code
-        // relies on it: were a future change to let an unnamed multi-input
-        // synthesized project through, it would otherwise keep its empty
-        // name all the way to compile and fail there with an
-        // unrelated-looking error, with no test failing first.
-        //
-        // A *named* multi-source selection is allowed, though, and now
-        // reaches here because exposure is derived independently of the
-        // name. There is no single module to expose for it, so it falls out
-        // of the `let else` below with `exposedModules` unset — which means
-        // "expose everything", the only honest answer for a selection whose
-        // modules this provider has not enumerated. `discover` above
-        // likewise captures no source text for such a selection, so there
-        // would be nothing to read a declared module name from anyway.
-        debug_assert!(
-            !project.name.is_empty() || inputs.len() == 1,
-            "an unnamed synthesized project should hold exactly one input, found {}",
-            inputs.len()
-        );
-        let [input] = inputs.as_slice() else {
-            continue;
-        };
-        // `candidate` was captured from the same request this snapshot was
-        // discovered from, so a mismatch here should not be reachable — the
-        // filter is defensive, not load-bearing. A miss falls back to an
-        // empty string, which `elm_module_name` already treats as "no
-        // declaration" and falls back from, same as `derive_identity`'s
-        // other empty-input cases.
-        let text = candidate
-            .as_ref()
-            .filter(|(path, _)| path == input)
-            .map_or("", |(_, text)| text.as_str());
-
-        let (package_name, module_name) = derive_identity(input, text);
-        if project.name.is_empty() {
-            project.name = package_name;
-        }
-        if project.exposed_modules.is_none() {
-            project.exposed_modules = Some(vec![module_name]);
-        }
+impl SourceIdentity for ElmIdentity {
+    /// The declared module name — including a `port module` or `effect
+    /// module` header, and skipping leading nested block comments — when the
+    /// source has one; otherwise the file's stem as a bare module path;
+    /// otherwise `"Main"`. Every branch produces a name, so Elm never reports
+    /// a source it cannot name.
+    fn module_name(
+        &self,
+        _root: &RelativePath,
+        path: &RelativePath,
+        text: &str,
+    ) -> std::result::Result<String, (String, String)> {
+        Ok(elm_module_name(text).unwrap_or_else(|| fallback_elm_module_name(file_name(path))))
     }
 
-    DiscoveryResponse::Success { snapshot }
-}
+    /// The module name ASCII-lowercased with `.` replaced by `-`, under the
+    /// placeholder `local` scope — deliberately not the per-segment
+    /// `_`-to-`-` canonicalization Gleam uses, since this ports the CLI's own
+    /// simpler rule.
+    fn synthesized_package_name(&self, module: &str) -> String {
+        format!("local/{}", module.to_ascii_lowercase().replace('.', "-"))
+    }
 
-/// Derives a synthesized Elm project's package name and its single exposed
-/// module name from `input`'s declared module header, falling back to its
-/// filename and then to `"Main"`.
-///
-/// This ports, byte-for-byte, the algorithm the CLI used to run inline for a
-/// standalone single-file compile (`elm_module_name`,
-/// `fallback_elm_module_name` — both in [`module_header`] — and the
-/// package-name formatting in `prepare_single_file_context`, all in the
-/// parent repository's
-/// `crates/morphir/src/commands/compile.rs`): the declared module name —
-/// including a `port module` or `effect module` header, and skipping a
-/// leading nested block comment — wins when the source parses; otherwise the
-/// file's stem is tried as a bare module path; otherwise the name is
-/// `"Main"`. The package name is that module name ASCII-lowercased with `.`
-/// replaced by `-`, nested under the placeholder `local` scope — deliberately
-/// not the per-segment `_`-to-`-` canonicalization Gleam's path-derived
-/// identity uses, since this is a port of the CLI's own simpler rule, not a
-/// reuse of Gleam's.
-///
-/// Unlike Gleam's path-derived identity, this never fails: every branch
-/// (declared name, filename fallback, `"Main"`) produces a name, so there is
-/// no analogous "unsynthesizable" diagnostic here.
-fn derive_identity(input: &RelativePath, text: &str) -> (String, String) {
-    let module_name =
-        elm_module_name(text).unwrap_or_else(|| fallback_elm_module_name(file_name(input)));
-    let package_name = format!(
-        "local/{}",
-        module_name.to_ascii_lowercase().replace('.', "-")
-    );
-    (package_name, module_name)
+    /// This frontend accepts both the `local/example` and `My.Package`
+    /// spellings, so its contract is only that the name spells a package
+    /// path at all.
+    fn check_package_name(&self, name: &str) -> std::result::Result<(), String> {
+        if package_path(name).is_empty() {
+            Err("it names no package path segments".into())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// The final `/`-separated segment of `path`'s wire form — the source file's
@@ -206,9 +83,8 @@ fn file_name(path: &RelativePath) -> &str {
 mod tests {
     use super::*;
     use morphir_workspace::{
-        DiscoveryPurpose, FileEntry, FileTree, ProjectSnapshot, ProjectSource, ProjectState,
-        SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED,
-        WorkspaceSnapshot, WorkspaceState,
+        DiscoveryPurpose, FileEntry, FileTree, ProjectSource, ProjectState, SourceSelection,
+        WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceState,
     };
     use std::collections::BTreeMap;
 
@@ -456,16 +332,12 @@ mod tests {
         );
     }
 
-    /// A *named* selection may hold more than one source — portable
-    /// discovery only constrains cardinality for an unnamed one — and such a
-    /// project now reaches the derivation loop, because exposure is no longer
-    /// gated on the name being empty. It must fall out of the single-input
-    /// guard leaving `exposedModules` unset (meaning "expose everything"),
-    /// not panic on the `debug_assert!` and not invent an exposure list from
-    /// one arbitrary member. Tests run in debug, so a `debug_assert!` written
-    /// on input count alone would fail here.
+    /// A *named* selection may hold more than one source, and exposes every
+    /// module it selects, in selection order. An unset `exposedModules` would
+    /// mean "expose everything the frontend found", which says something
+    /// weaker than an explicit selection means.
     #[test]
-    fn a_named_multi_source_selection_derives_no_exposure() {
+    fn a_named_multi_source_selection_exposes_every_module() {
         let root = RelativePath::parse("src").expect("a confined wire path");
         let first = RelativePath::parse("src/Widget.elm").expect("a confined wire path");
         let second = RelativePath::parse("src/Gadget.elm").expect("a confined wire path");
@@ -511,7 +383,10 @@ mod tests {
         };
         let project = &snapshot.projects[0];
         assert_eq!(project.name, "acme/widgets");
-        assert_eq!(project.exposed_modules, None);
+        assert_eq!(
+            project.exposed_modules,
+            Some(vec!["Acme.Widget".to_owned(), "Acme.Gadget".to_owned()])
+        );
         assert_eq!(project.state, ProjectState::Unloaded);
     }
 
@@ -538,45 +413,90 @@ mod tests {
         assert_eq!(error.code, WORKSPACE_PROTOCOL_UNSUPPORTED);
     }
 
-    /// A manifest-backed project is never touched, even if its name happens
-    /// to be empty — nothing in the type system stops that, so the guard
-    /// that checks `origin` before deriving anything is load-bearing, not
-    /// belt-and-braces. This bypasses `ElmExtension::discover` and drives
-    /// `synthesize_identity` directly, since portable discovery itself never
-    /// produces an empty-named manifest project.
+    /// A manifest-projects request is portable discovery's alone: the
+    /// provider adds no identity to a project its manifest already describes.
     #[test]
-    fn a_manifest_project_with_an_empty_name_is_not_touched() {
-        let manifest_path = RelativePath::parse("morphir.toml").expect("a confined wire path");
-        let project = ProjectSnapshot {
-            name: String::new(),
-            version: None,
-            relative_path: RelativePath::root(),
-            config_anchor: Some(manifest_path.clone()),
-            source_directory: RelativePath::root(),
-            state: ProjectState::Unloaded,
-            diagnostics: Vec::new(),
-            origin: ProjectOrigin::Manifest {
-                path: manifest_path.clone(),
-            },
-            exposed_modules: None,
-        };
-        let snapshot = WorkspaceSnapshot {
+    fn a_manifest_projects_request_is_not_touched() {
+        let request = DiscoveryRequest {
             protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
-            config_anchor: Some(manifest_path),
-            name: None,
-            state: WorkspaceState::Open,
-            projects: vec![project],
-            diagnostics: Vec::new(),
+            development_root: FileTree {
+                entries: BTreeMap::from([
+                    (RelativePath::root(), FileEntry::Directory),
+                    (
+                        RelativePath::parse("morphir.toml").expect("a confined wire path"),
+                        FileEntry::File {
+                            text: "[project]\nname = 'acme/widgets'\n".to_owned(),
+                        },
+                    ),
+                ]),
+            },
+            morphir_home: None,
+            system_config: None,
+            environment: BTreeMap::new(),
+            cli_overlay: serde_json::json!({}),
+            purpose: DiscoveryPurpose::ManifestProjects,
         };
-        let response = synthesize_identity(DiscoveryResponse::Success { snapshot }, None);
+
+        let response = ElmExtension
+            .discover(request)
+            .expect("the typed call itself should not error");
 
         let DiscoveryResponse::Success { snapshot } = response else {
             panic!("expected a successful discovery response");
         };
         let project = &snapshot.projects[0];
-        assert_eq!(project.name, "");
+        assert_eq!(project.name, "acme/widgets");
         assert_eq!(project.exposed_modules, None);
-        assert_eq!(project.state, ProjectState::Unloaded);
         assert_eq!(snapshot.state, WorkspaceState::Open);
+    }
+
+    /// An explicit name goes through this provider's package contract, which
+    /// accepts both spellings but not a name spelling no package path.
+    #[test]
+    fn an_explicit_name_must_spell_a_package_path() {
+        let mut request = ad_hoc_request(".", "Widget.elm", "module Acme.Widget exposing (..)\n");
+        request.cli_overlay = serde_json::json!({ "project": { "name": "/./" } });
+
+        let response = ElmExtension
+            .discover(request)
+            .expect("the typed call itself should not error");
+
+        let DiscoveryResponse::Failure { error } = response else {
+            panic!("expected a discovery failure");
+        };
+        assert_eq!(
+            error.code,
+            morphir_workspace::WORKSPACE_PROJECT_NAME_INVALID
+        );
+    }
+
+    /// Two files declaring one module are a collision the provider reports:
+    /// portable discovery sees two different paths and cannot tell.
+    #[test]
+    fn two_files_declaring_one_module_collide() {
+        let mut request = ad_hoc_request(".", "A.elm", "module Acme.Widget exposing (..)\n");
+        let second = RelativePath::parse("B.elm").expect("a confined wire path");
+        request.development_root.entries.insert(
+            second.clone(),
+            FileEntry::File {
+                text: "module Acme.Widget exposing (..)\n".to_owned(),
+            },
+        );
+        request.cli_overlay = serde_json::json!({ "project": { "name": "acme/widgets" } });
+        if let DiscoveryPurpose::AdHocSources { sources, .. } = &mut request.purpose {
+            sources.paths.push(second);
+        }
+
+        let response = ElmExtension
+            .discover(request)
+            .expect("the typed call itself should not error");
+
+        let DiscoveryResponse::Failure { error } = response else {
+            panic!("expected a discovery failure");
+        };
+        assert_eq!(
+            error.code,
+            morphir_workspace::WORKSPACE_SELECTION_MODULE_COLLISION
+        );
     }
 }

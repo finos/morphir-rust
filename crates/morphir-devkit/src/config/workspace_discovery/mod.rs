@@ -3,7 +3,13 @@
 mod aliases;
 mod budget;
 mod mounts;
+mod source_selection;
 mod traversal;
+
+pub use source_selection::{
+    CapturedSelection, CapturedSource, DEFAULT_SOURCE_BYTES, SourceSelectionOptions,
+    capture_source_selection,
+};
 
 #[cfg(test)]
 mod tests;

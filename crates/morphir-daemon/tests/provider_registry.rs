@@ -40,6 +40,7 @@ macro_rules! native_provider {
                         compile: true,
                         incremental: false,
                         fragments: false,
+                        multi_document: false,
                     }),
                     backend: Some(BackendCapability {
                         targets: vec![$target.into()],
@@ -840,4 +841,86 @@ fn capability_metadata_scope_distinguishes_complete_and_persisted_views() {
             .capability_metadata_scope(),
         CapabilityMetadataScope::PersistedFrontendBackend
     );
+}
+
+/// A frontend that also declares workspace discovery, so it can synthesize a
+/// project from an explicit source selection.
+#[derive(Default)]
+struct SynthesizingFrontend;
+
+impl Extension for SynthesizingFrontend {
+    fn info() -> ExtensionInfo {
+        ExtensionInfo {
+            id: "synthesizing".into(),
+            name: "Synthesizing frontend".into(),
+            version: "1.0.0".into(),
+            ..ExtensionInfo::default()
+        }
+    }
+
+    fn capabilities() -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            frontend: ExactFour::capabilities().frontend,
+            workspace: WorkspaceOnlyProvider::capabilities().workspace,
+            ..ExtensionCapabilities::default()
+        }
+    }
+}
+
+impl Frontend for SynthesizingFrontend {
+    fn compile(&self, request: CompileRequest) -> morphir_extension_sdk::Result<CompileResult> {
+        ExactFour.compile(request)
+    }
+
+    fn supported_languages() -> Vec<String> {
+        ExactFour::supported_languages()
+    }
+
+    fn file_extensions() -> Vec<String> {
+        ExactFour::file_extensions()
+    }
+}
+
+impl Workspace for SynthesizingFrontend {
+    fn discover(
+        &self,
+        request: morphir_workspace::DiscoveryRequest,
+    ) -> morphir_extension_sdk::Result<morphir_workspace::DiscoveryResponse> {
+        Ok(morphir_workspace::discover(request))
+    }
+}
+
+#[test]
+fn a_resolved_frontend_reports_whether_it_can_synthesize() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register_builtin(
+            NativeExtension::builder(SynthesizingFrontend)
+                .with_frontend()
+                .with_workspace()
+                .finish()
+                .unwrap(),
+        )
+        .unwrap();
+    registry.register_builtin(native::<AliasFour>()).unwrap();
+    registry
+        .register_installed(process_provider("installed-plain", "plain-lang", "plain"))
+        .unwrap();
+
+    let synthesizing = registry
+        .resolve_frontend("exact-lang", "4", InvocationPolicy::PreferDirect)
+        .unwrap();
+    assert!(synthesizing.supports_workspace_discovery());
+    assert!(synthesizing.native_workspace().is_some());
+
+    let plain_builtin = registry
+        .resolve_frontend("alias-lang", "4", InvocationPolicy::PreferDirect)
+        .unwrap();
+    assert!(!plain_builtin.supports_workspace_discovery());
+    assert!(plain_builtin.native_workspace().is_none());
+
+    let plain_installed = registry
+        .resolve_frontend("plain-lang", "4", InvocationPolicy::PreferDirect)
+        .unwrap();
+    assert!(!plain_installed.supports_workspace_discovery());
 }

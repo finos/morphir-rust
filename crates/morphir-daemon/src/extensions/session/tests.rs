@@ -225,6 +225,7 @@ impl Extension for RecordingExtension {
                 compile: true,
                 incremental: false,
                 fragments: false,
+                multi_document: false,
             }),
             backend: Some(BackendCapability {
                 targets: vec!["recording".into()],
@@ -353,6 +354,7 @@ fn native_frontend_capabilities() -> ExtensionCapabilities {
             compile: true,
             incremental: false,
             fragments: false,
+            multi_document: false,
         }),
         ..ExtensionCapabilities::default()
     }
@@ -1060,6 +1062,7 @@ async fn a_capability_mismatch_names_the_members_that_differ() {
         compile: true,
         incremental: false,
         fragments: false,
+        multi_document: false,
     };
     let mut advertised = persisted.clone();
     advertised.incremental = true;

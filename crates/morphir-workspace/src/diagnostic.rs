@@ -53,6 +53,14 @@ pub const WORKSPACE_PROJECT_NAME_EMPTY: &str = "workspace.project-name.empty";
 /// from.
 pub const WORKSPACE_SELECTION_NAME_REQUIRED: &str = "workspace.selection.name-required";
 
+/// Stable diagnostic code for an explicit project name that the selected
+/// provider's package contract rejects.
+pub const WORKSPACE_PROJECT_NAME_INVALID: &str = "workspace.project-name.invalid";
+
+/// Stable diagnostic code for two selected sources that a provider derives
+/// the same module name from.
+pub const WORKSPACE_SELECTION_MODULE_COLLISION: &str = "workspace.selection.module-collision";
+
 /// The severity of a workspace discovery diagnostic.
 ///
 /// When severity participates in a stable diagnostic ordering key, producers

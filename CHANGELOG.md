@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Scoped local Library update from an untrusted full lock and current authenticated
+  records. The existing resolver fixes the root and unrelated nodes, excludes new
+  yanked choices, and permits exact frozen yanked nodes. The full graph is verified
+  before publishing a new lock; old metadata pins may be stale, and the old lock is
+  never rewritten. Exact locked restore now permits yanked nodes.
 - Explicit local registry metadata refresh with complete current-chain authentication,
   exact timestamp/snapshot envelope digests and protected rollback floors. Refresh
   does not acquire packages, rewrite locks or issue grants; unsupported revocation
@@ -16,8 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic resolver and fresh TUF/publisher authentication. A complete draft.3
   lock is published atomically only after full graph and content verification.
   Yanked candidates are excluded; any observed revocation refuses the MVP operation.
-  Old-lock update and durable revocation transitions remain deferred
-  (finos/morphir#912).
+  Durable revocation transitions remain deferred (finos/morphir#912).
 - Fresh local Library restore MVP with explicit pinned-root provisioning, complete
   exact-lock graph verification, current TUF and publisher authorization, transactional
   SQLite trust state, interruption refusal, and atomic no-replace publication.

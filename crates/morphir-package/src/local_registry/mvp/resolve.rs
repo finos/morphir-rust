@@ -24,6 +24,72 @@ pub struct ResolveRequest<'a> {
     pub output: &'a Path,
 }
 
+/// Scoped update from an untrusted full lock and current authenticated metadata.
+pub struct UpdateRequest<'a> {
+    /// Current caller-supplied fresh-metadata policy.
+    pub policy: &'a [u8],
+    /// Full draft.3 baseline lock; never rewritten.
+    pub lock: &'a [u8],
+    /// Existing non-root paths to update, eligible or exact.
+    pub targets: &'a [resolution::UpdateTarget],
+    /// Caller-controlled immutable or coordinated local registry directory.
+    pub registry: &'a Path,
+    /// Previously initialized protected trust directory.
+    pub state: &'a Path,
+    /// Absent new lock file with an existing parent directory.
+    pub output: &'a Path,
+}
+
+/// Update only the requested old dependency closure. The root and unrelated
+/// releases remain fixed. Historical metadata pins do not authorize this call;
+/// all old immutable records are checked against current authenticated metadata.
+///
+/// ```no_run
+/// use morphir_package::{local_registry::mvp::{update, UpdateRequest},
+///     resolution::{PackagePath, UpdateTarget}};
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let targets = [UpdateTarget::Eligible { package_path: PackagePath::parse("example.com/lib")? }];
+/// update(UpdateRequest { policy: &std::fs::read("trust-policy.json")?,
+///     lock: &std::fs::read("morphir.lock")?, targets: &targets,
+///     registry: "registry".as_ref(), state: "trust".as_ref(),
+///     output: "updated.lock".as_ref() }).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn update(request: UpdateRequest<'_>) -> Result<ResolveReport, Error> {
+    let old = decode_library_lock(request.lock)?;
+    require(
+        old.registries().len() == 1,
+        "MVP requires exactly one lock registry",
+    )?;
+    let root = old.graph().root().clone();
+    execute(
+        ResolveRequest {
+            policy: request.policy,
+            root,
+            registry: request.registry,
+            state: request.state,
+            output: request.output,
+        },
+        Operation::Update {
+            old: &old,
+            targets: request.targets,
+            bytes: request.lock.len(),
+        },
+        jiff::Timestamp::now(),
+    )
+    .await
+}
+
+enum Operation<'a> {
+    Initial,
+    Update {
+        old: &'a LibraryLock,
+        targets: &'a [resolution::UpdateTarget],
+        bytes: usize,
+    },
+}
+
 /// A complete authenticated and content-verified graph with its published lock.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +132,16 @@ pub(super) async fn resolve_at(
     request: ResolveRequest<'_>,
     now: jiff::Timestamp,
 ) -> Result<ResolveReport, Error> {
+    execute(request, Operation::Initial, now).await
+}
+
+async fn execute(
+    request: ResolveRequest<'_>,
+    operation: Operation<'_>,
+    now: jiff::Timestamp,
+) -> Result<ResolveReport, Error> {
     let policy = policy(request.policy)?;
+
     require(
         repository_permits(
             &policy,
@@ -96,12 +171,28 @@ pub(super) async fn resolve_at(
         request.state,
         &policy.repositories()[0],
         now,
-        request.policy.len() + serde_json::to_vec(&request.root)?.len(),
+        request.policy.len()
+            + serde_json::to_vec(&request.root)?.len()
+            + match &operation {
+                Operation::Initial => 0,
+                Operation::Update { bytes, targets, .. } => {
+                    bytes + serde_json::to_vec(targets)?.len()
+                }
+            },
     )?;
     let metadata = fresh::authenticate(&backend, &registry, &policy.repositories()[0]).await?;
     let catalog = catalog::read(&backend, &registry, &policy, metadata.targets())?;
-    let input = catalog.resolution_input(&request.root)?;
-    let graph = match resolution::resolve_library(&serde_json::to_string(&input)?)? {
+    let active = catalog.active();
+    let resolved = match &operation {
+        Operation::Initial => resolution::resolve_library(&serde_json::to_string(
+            &catalog.resolution_input(&request.root)?,
+        )?)?,
+        Operation::Update { old, targets, .. } => resolution::update_library(
+            &serde_json::to_string(&catalog.update_input(old, targets)?)?,
+            &active,
+        )?,
+    };
+    let graph = match resolved {
         ResolutionResult::Resolved(graph) => graph,
         ResolutionResult::Rejected(diagnostic) => {
             return Err(Error::ResolutionRejected(Box::new(diagnostic)));
@@ -116,6 +207,18 @@ pub(super) async fn resolve_at(
     // Validate the complete wire contract rather than serializing LibraryLock's
     // internal representation, which intentionally omits format discriminators.
     let lock = decode_library_lock(&bytes)?;
+    // The solver admitted these exact yanked releases only through its frozen
+    // pins. Preserve that eligibility during content and publisher verification.
+    let frozen = graph
+        .nodes()
+        .iter()
+        .filter(|n| !active.contains(n.release()))
+        .map(|n| n.release().clone())
+        .collect();
+    let selection = match operation {
+        Operation::Initial => verify::Selection::New,
+        Operation::Update { .. } => verify::Selection::ScopedUpdate(&frozen),
+    };
     let packages = verify::graph(
         &backend,
         &registry,
@@ -123,6 +226,7 @@ pub(super) async fn resolve_at(
         &lock,
         metadata.targets(),
         &stage.path().join("libraries"),
+        selection,
     )?;
     files::write(stage.path(), "morphir.lock", &bytes)?;
     backend.accept_operation_time()?;

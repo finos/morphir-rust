@@ -50,3 +50,7 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 [[test]]
 name = "local_registry_refresh_acceptance"
 harness = false
+
+[[test]]
+name = "local_registry_update_acceptance"
+harness = false

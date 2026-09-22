@@ -6,22 +6,78 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct Entry {
     pub reference: ObjectReference,
     pub record: RegistryRecord,
-    status: Status,
+    pub status: Status,
 }
 pub(super) struct Catalog {
     entries: BTreeMap<ReleaseId, Entry>,
 }
 impl Catalog {
     pub fn selected(&self, release: &ReleaseId) -> Result<&Entry, Error> {
+        self.entries.get(release).ok_or(Error::Refused(
+            "published root is unavailable for new selection",
+        ))
+    }
+    pub fn active(&self) -> BTreeSet<ReleaseId> {
         self.entries
-            .get(release)
-            .filter(|e| e.status == Status::Active)
-            .ok_or(Error::Refused(
-                "published root is unavailable for new selection",
-            ))
+            .iter()
+            .filter(|(_, e)| e.status == Status::Active)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+    pub fn update_input(
+        &self,
+        old: &LibraryLock,
+        targets: &[resolution::UpdateTarget],
+    ) -> Result<Value, Error> {
+        for acquisition in old.acquisitions() {
+            let entry = self
+                .entries
+                .get(acquisition.release())
+                .ok_or(Error::Refused("old release absent from current repository"))?;
+            let statement = old
+                .evidence()
+                .iter()
+                .find(|e| e.id() == acquisition.statement())
+                .ok_or(Error::Refused("missing publisher evidence"))?;
+            require(
+                entry.reference == *acquisition.record()
+                    && entry.record.source() == acquisition.source()
+                    && entry.record.statement() == statement.reference(),
+                "old record acquisition mismatch",
+            )?;
+        }
+        let root = self
+            .entries
+            .get(old.graph().root())
+            .ok_or(Error::Refused("old root absent from current repository"))?
+            .record
+            .release_record();
+        let mut catalogs: BTreeMap<&PackagePath, Vec<_>> = BTreeMap::new();
+        for entry in self.entries.values() {
+            let record = entry.record.release_record();
+            let releases = catalogs.entry(record.release().package_path()).or_default();
+            if record.release() != root.release() {
+                releases.push(record);
+            }
+            for dependency in record.dependencies() {
+                catalogs.entry(dependency.package_path()).or_default();
+            }
+        }
+        let catalogs: Vec<_> = catalogs
+            .into_iter()
+            .map(|(path, releases)| json!({"packagePath":path,"releases":releases}))
+            .collect();
+        Ok(
+            json!({"formatVersion":"0.1.0-draft.2","capability":"flat-library","mode":"update","root":root,"catalogs":catalogs,"lock":old.graph(),"targets":targets}),
+        )
     }
     pub fn resolution_input(&self, root: &ReleaseId) -> Result<Value, Error> {
-        let root = self.selected(root)?.record.release_record();
+        let entry = self.selected(root)?;
+        require(
+            entry.status == Status::Active,
+            "published root is unavailable for new selection",
+        )?;
+        let root = entry.record.release_record();
         let mut catalogs: BTreeMap<&PackagePath, Vec<_>> = BTreeMap::new();
         for entry in self.entries.values() {
             let record = entry.record.release_record();
@@ -76,7 +132,7 @@ pub(super) fn read(
             reference.digest(),
             targets,
             &release,
-            false,
+            verify::TargetAuthorization::Declaration,
         )?;
         backend.charge(bytes.len())?;
         let subject = Subject::Object {

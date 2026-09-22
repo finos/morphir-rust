@@ -54,3 +54,16 @@ pub const CONTRACT_VERSION: &str = "0.1.0-draft.2";
 pub fn resolve_library(input: &str) -> Result<ResolutionResult, ResolutionExecutionError> {
     parse::resolve(input)
 }
+
+/// Apply current authenticated release eligibility only after validating the old
+/// graph against the complete immutable record set. The public draft.2 entry
+/// point deliberately does not apply registry status policy.
+pub(crate) fn update_library(
+    input: &str,
+    active: &std::collections::BTreeSet<ReleaseId>,
+) -> Result<ResolutionResult, ResolutionExecutionError> {
+    parse::resolve_with_status(input, Some(active))
+}
+
+#[cfg(test)]
+mod status_tests;

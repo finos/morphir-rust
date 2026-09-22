@@ -104,7 +104,8 @@ provider or qualification attestation. It runs under trusted-directory assumptio
   `sync_all`. This exercises file flushing separately from directory creation.
 - Promotion reopens the stage with those same directory options and calls
   [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
-  with `FileRenameInfo`, a destination parent handle and
+  with `FileRenameInfo`, NULL `RootDirectory`, an absolute destination under the
+  canonical private fixture parent, and
   [`ReplaceIfExists = FALSE`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info).
   An empty or populated destination must survive collision unchanged; the entire
   candidate must remain intact. No copy, overwrite or fallback is attempted.
@@ -130,9 +131,20 @@ documented argument and native fault evidence. Successful mode readback and API
 return values do not fill that gap. The temporary root itself is created by the
 test framework, so its initial creation durability is outside this probe.
 
-The Windows-only tests require native Windows/NTFS to execute. Cross-compilation
-checks bindings and Rust types only; macOS runs do not execute these tests. Until
-native execution is recorded, even their functional behavior is unverified.
+The initial Windows/x86_64 NTFS run passed creation, handle-mode readback and the
+missing-DELETE negative case, but promotion using a non-NULL destination parent
+handle returned error 87, including when no destination existed. Increasing the
+declared buffer to the complete structure plus filename did not change that result
+in [the sizing-only rerun](https://github.com/finos/morphir-rust/actions/runs/35683358190).
+The next controlled candidate uses NULL `RootDirectory` and an absolute destination;
+native results for that form are pending. Source handle modes/access, buffer sizing,
+no-replace behavior and collision assertions remain unchanged. There is no fallback.
+
+Microsoft's [2022 documentation correction](https://github.com/MicrosoftDocs/sdk-api/commit/ada04eef90bc7ebe441ce2ef938867d3a677d57d)
+warned about non-NULL `RootDirectory` behavior, while the current API reference
+permits it. This conflict motivates the measured comparison; it does not establish
+a root cause or a durability guarantee. Cross-compilation checks bindings and Rust
+types only; macOS runs do not execute the Windows-only cases.
 
 Stop qualification if any required native call fails, a winner is overwritten,
 state is silently created/reset, a failed/uncommitted write yields a grant, a

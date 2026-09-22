@@ -151,8 +151,8 @@ impl Directory {
         Ok(())
     }
 
-    fn rename_to(&self, parent: &Self, name: &str) -> io::Result<()> {
-        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+    fn rename_to(&self, destination: &Path) -> io::Result<()> {
+        let wide: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
         // Include the complete native structure, including trailing alignment,
         // plus the variable UTF-16 name required by the rename information contract.
         let bytes = size_of::<FILE_RENAME_INFO>() + wide.len() * 2;
@@ -163,7 +163,7 @@ impl Directory {
         // SAFETY: aligned zeroed buffer large enough for header and entire UTF-16 name.
         // Handles and buffer remain live for the synchronous call; no replacement flag.
         unsafe {
-            (*info).RootDirectory = parent.0.as_raw_handle();
+            (*info).RootDirectory = ptr::null_mut();
             (*info).FileNameLength = ((wide.len() - 1) * 2) as u32;
             (*info).Anonymous.ReplaceIfExists = false;
             ptr::copy_nonoverlapping(
@@ -242,10 +242,13 @@ pub fn stage_tree(root: &Path) {
 }
 
 pub fn promote_tree(root: &Path) -> io::Result<()> {
+    // Only private trusted fixtures use this absolute-path experiment. Canonicalize
+    // the existing parent, since the destination must not exist before promotion.
+    let destination = root.join("ancestors").canonicalize()?.join("winner");
     let root = Directory::root(root)?;
     let parent = root.child("ancestors", FILE_OPEN)?;
     let stage = parent.child("stage", FILE_OPEN)?;
-    stage.rename_to(&parent, "winner")
+    stage.rename_to(&destination)
 }
 
 pub fn assert_tree(root: &Path, name: &str) {
@@ -292,8 +295,14 @@ fn rename_without_delete_access_fails_and_preserves_source() {
         DIRECTORY_ACCESS & !DELETE,
     )
     .unwrap();
+    let destination = root
+        .path()
+        .join("ancestors")
+        .canonicalize()
+        .unwrap()
+        .join("winner");
     assert_eq!(
-        source.rename_to(&parent, "winner").unwrap_err().kind(),
+        source.rename_to(&destination).unwrap_err().kind(),
         io::ErrorKind::PermissionDenied
     );
     assert_tree(root.path(), "ancestors/stage");

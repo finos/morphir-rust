@@ -52,6 +52,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that omit `purpose` are unaffected. Ad-hoc discovery of an explicit selection
   against an *existing* manifest is declared but not yet implemented, and is
   refused with `workspace.purpose.unsupported`.
+  Discovery also accepts an explicit name for a synthesized project, at
+  `cli_overlay.project.name` — the one place a host can supply one. It is read
+  from the overlay directly, never from the effective configuration merged with
+  built-in defaults, shared layers and the environment, because merging any of
+  those in would silently promote a default into a project identity. The value
+  must be a string and is stored trimmed, since it arrives from a command line
+  where surrounding whitespace is a shell artefact nobody can see. Two
+  diagnostic codes come with it: `workspace.project-name.empty` for an override
+  that is present but blank or whitespace-only, and
+  `workspace.selection.name-required` for an unnamed ad-hoc selection of more
+  than one source, which has nothing to derive a name from. A *named* selection
+  stays unconstrained.
+- **Source-breaking:** `CompileRequest.documents: Vec<SourceDocument>` becomes
+  `CompileRequest.sources: SourceSet { root: Option<String>, documents:
+  Vec<SourceDocument> }`. A compilation's source root now travels with the
+  documents it applies to instead of being smuggled through `options.extra`. A
+  module's name is a function of its path relative to that root, so a root kept
+  anywhere else silently renames modules the moment a document set is replaced
+  or combined — the root and the documents are one value and are now typed as
+  one. The legacy `sourceRootUri` and `sourceRoot` option keys are **rejected,
+  not ignored**: at serde deserialization, in the Rust and Python bindings'
+  own per-frontend option allowlists, and at the native handle. A stale caller
+  that keeps sending one now fails loudly rather than silently losing its root
+  and compiling the same files under different module names. Gleam's
+  incremental context digest covers the root explicitly, where it previously
+  covered it only incidentally through `options.extra`, so a baseline built
+  against a different source root is invalidated and recompiled instead of
+  being reused under names it was not built with.
+- **Source-breaking:** the native Elm and Gleam extensions advertise
+  `ExtensionType::Workspace` and serve discovery themselves, synthesizing a
+  single file's package name and exposed module from the source. Registering a
+  workspace role means both must be constructed through
+  `NativeExtension::builder(..)` with a `with_workspace(..)` registration;
+  `frontend_backend()` registers no workspace handle, so every call site that
+  used it needs changing. Each provider delegates to
+  `morphir_workspace::discover` — confinement, budgets, ordering and
+  diagnostics stay portable — and only fills what a language-specific policy
+  can supply. Elm reads the declared `module`, `port module` or `effect module`
+  header, falling back to the file's stem and then to `Main`; this is a
+  byte-for-byte port of the derivation the CLI ran inline for a single-file
+  compile, not a rewrite against Elm's own parser, which accepts and rejects
+  different malformed headers. Gleam has no module header and derives from the
+  path relative to the selection's root, using the same canonicalization
+  compile already applies to a document URI; a path it cannot turn into a valid
+  module name becomes a project-level `gleam.workspace.invalid-module-path`
+  diagnostic rather than a plausible-looking wrong name. A name discovery
+  supplied is never overwritten, and exposed modules are derived whenever
+  discovery left them unset, so an explicit `--package-name` keeps its name and
+  still gets its exposure — the same file cannot advertise one set of exposed
+  modules unnamed and none named.
+- These changes land as a set. The parent `finos/morphir` still derives
+  single-file identity inline and constructs the Elm extension through
+  `frontend_backend()`, and the `morphir-elm` `vnext` TypeScript provider
+  serves the same discovery protocol, so both must land together with the
+  submodule pin bump; a pin bump on its own would leave the parent unable to
+  build and the two providers disagreeing about who synthesizes identity.
 - IR conformance checks use the released native `morphir mck` CLI,
   a verified managed kit, and native report adjudication on Linux, macOS and
   Windows. `check:kit` uses the pinned native CLI and vendored snapshot;

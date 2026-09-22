@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Explicit experimental package TUF update outcomes: an admitted equal timestamp
+  returns `NoUpdate` before candidate expiry, snapshot comparison or persistence,
+  preserving committed roots without claiming a fresh complete view or package grant.
 - Experimental TUF retained evidence now carries its exact acceptance root atomically,
   allowing threshold-only root updates without discarding the other role's rollback
   floor or changing the upstream keys-only reset rule.

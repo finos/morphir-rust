@@ -249,6 +249,17 @@ impl Datastore {
         }
         Ok(())
     }
+    #[cfg(feature = "experimental-storage")]
+    pub(crate) async fn admit_timestamp_no_update(&self, bytes: &[u8]) -> Result<()> {
+        let session = self
+            .experimental
+            .as_ref()
+            .ok_or(error::Error::ExperimentalStorageConfiguration)?;
+        session
+            .admit_timestamp_no_update(bytes)
+            .await
+            .map_err(|source| error::Error::ExperimentalStorage { source })
+    }
     pub(crate) async fn persist_metadata<T: crate::schema::Role>(
         &self,
         file: &str,

@@ -100,6 +100,14 @@ impl Session {
         }
         self.commit(Transition::FinishRootCycle { reset }).await
     }
+    pub(crate) async fn admit_timestamp_no_update(&self, bytes: &[u8]) -> Result<()> {
+        let state = self.state.lock().await;
+        let candidate = RetainedMetadata {
+            bytes: bytes.to_vec(),
+            acceptance_root: state.current_root.clone(),
+        };
+        self.admission.timestamp_no_update(&state, &candidate).await
+    }
     pub(crate) async fn retain(&self, role: MetadataRole, bytes: &[u8]) -> Result<()> {
         let mut state = self.state.lock().await;
         let transition = Transition::Retain {

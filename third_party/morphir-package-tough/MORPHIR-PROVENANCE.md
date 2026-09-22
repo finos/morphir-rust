@@ -217,3 +217,37 @@ none use this formatter to author their expected signatures. All four tests fail
 against the original formatter before the correction. Native CI runs these tests
 on Linux, macOS and Windows. This amendment does not establish complete package
 profile admission, authenticated restore or provider qualification.
+
+## Package timestamp equality outcome
+
+The explicit `RepositoryLoader::load_package` entry point (behind
+`experimental-storage`) returns `PackageLoadOutcome::Updated` or `NoUpdate`.
+The former is candidate TUF loading, not complete package authorization or
+provider/profile qualification. The latter carries no repository, complete-view
+assertion, present-freshness proof or grant. Both require the existing fixed Safe
+time and mandatory transactional Storage/Admission configuration.
+
+After authenticating the fetched timestamp and recognizing a retained timestamp
+that still verifies under the current root, equality ends this update before the
+candidate snapshot-version comparison, candidate expiration check, or timestamp
+persistence. This follows pinned TUF 1.0.36 section 5.4.3.1. Smaller timestamp
+versions still fail rollback checks; greater versions follow the existing flow.
+Already accepted root transitions and their reset context remain committed.
+The default `load` entry point retains its prior behavior.
+
+The required `Admission::timestamp_no_update` has no permissive default. It receives
+exact candidate bytes and their current acceptance root alongside the predecessor
+snapshot, allowing the host's profile quorum and candidate-binding checks to
+reject an otherwise cryptographically valid equal timestamp. It must not commit
+timestamp authority, accepted time or grants. Full candidate-marker admission and
+recovery remain pending host work. A separate retained-view validation is required
+before any cached view supplies fresh package authorization; timestamp equality
+can occur even when a prior update never produced a complete view.
+
+Independent signed tests cover fresh and expired changed equal candidates with
+higher/lower snapshot links, missing replacement snapshot files, admission refusal,
+signature/rollback/expiry errors, normal greater-version updates, retained floors
+that cease verifying under a changed threshold, and unchanged default loading.
+SQLite snapshots prove no timestamp/floor/time writes on `NoUpdate`; root updates
+survive the outcome and an actual fresh-process restart. An incomplete retained
+view also yields only `NoUpdate`, never a usable repository.

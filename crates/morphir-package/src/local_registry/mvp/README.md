@@ -1,4 +1,4 @@
-# Fresh local Library resolution and restore MVP
+# Fresh local Library operations MVP
 
 `initialize` provisions a new directory with an independently supplied exact root
 pin. `restore` accepts one local registry, a fresh-metadata policy and a complete
@@ -27,14 +27,30 @@ Any authenticated revoked record refuses the entire resolve operation, including
 when that release would not be selected. The unresolved-operation marker prevents
 a later active assertion from clearing that observation. This is a deliberately
 stricter MVP limitation while durable revocation transitions remain deferred to
-finos/morphir#912; it is not a production revocation implementation. Initial
-resolve does not implement registry refresh or old-lock update.
+finos/morphir#912; it is not a production revocation implementation. Initial resolve and scoped update are separate operations.
+
+`update` accepts a full old lock and explicit eligible or exact targets. It binds
+that lock's sole registry alias to the caller's policy repository and protected
+state, then checks every old immutable record, source and statement pin against
+current authenticated targets. The old lock's metadata pins are untrusted history
+and need not equal the current chain. This does not authenticate historical
+metadata or provide offline authorization.
+
+The existing resolver validates the entire old graph before deriving update scope.
+The root and nodes outside the targets' old dependency closure remain pinned.
+Only active releases and exact frozen yanked releases enter the candidate set;
+scoped, relaxed and abstract diagnostics use that same set. Eligible targets prefer
+the freshest feasible version and then minimize collateral changes under the
+existing policy. No update-specific solver or dependency algorithm is introduced.
+The full selected graph passes publisher and content verification before a new
+lock is published. The old lock is never overwritten. Exact locked restore permits
+yanked releases so these generated locks remain usable while metadata is fresh.
 
 Each restore runs the guarded TUF update, then reacquires and authenticates the
 complete current metadata chain (including timestamp equality). Locked historical
 metadata pins must match that fresh view exactly. Metadata advancement requires
 refreshed lock evidence; historical evidence verification is deferred. Every
-release needs current namespace permission, an active signed target, an authorized
+release needs current namespace permission, an active or exact-locked yanked signed target, an authorized
 publisher statement, exact hashes and lengths, and a complete valid Library graph.
 Only then is the staged graph exposed at `<output>/<packagePath>/<version>`.
 The destination must be absent and its parent must already exist.

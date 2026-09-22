@@ -7,6 +7,27 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::path::Path;
+/// Eligibility is granted by the operation, never inferred from a cache row.
+#[derive(Clone, Copy)]
+pub(super) enum Selection<'a> {
+    New,
+    ExactLocked,
+    ScopedUpdate(&'a std::collections::BTreeSet<crate::resolution::ReleaseId>),
+}
+impl Selection<'_> {
+    fn permits_yanked(self, release: &crate::resolution::ReleaseId) -> bool {
+        match self {
+            Self::New => false,
+            Self::ExactLocked => true,
+            Self::ScopedUpdate(frozen) => frozen.contains(release),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(super) enum TargetAuthorization<'a> {
+    Declaration,
+    Record(Selection<'a>),
+}
 fn digest(bytes: &[u8]) -> String {
     crate::digest::Digest::of_bytes(bytes).to_string()
 }
@@ -16,7 +37,7 @@ pub(super) fn target(
     pin: &Digest,
     targets: &Value,
     release: &crate::resolution::ReleaseId,
-    record: bool,
+    authorization: TargetAuthorization<'_>,
 ) -> Result<Vec<u8>, Error> {
     let target = targets
         .get(path.as_str())
@@ -32,12 +53,13 @@ pub(super) fn target(
         .as_u64()
         .ok_or(Error::Refused("target length"))?;
     require(length <= 1_048_576, "target resource limit")?;
-    if record {
+    if let TargetAuthorization::Record(selection) = authorization {
         let authority = &target["custom"]["morphir"];
         require(
             authority["formatVersion"] == "0.1.0-draft.3"
                 && authority["kind"] == "LibraryRelease"
-                && authority["status"] == "active"
+                && (authority["status"] == "active"
+                    || (authority["status"] == "yanked" && selection.permits_yanked(release)))
                 && authority["release"] == serde_json::to_value(release)?,
             "release is not active in fresh repository",
         )?;
@@ -72,6 +94,7 @@ pub(super) fn graph(
     lock: &LibraryLock,
     targets: &Value,
     stage: &Path,
+    selection: Selection<'_>,
 ) -> Result<Vec<RestoredPackage>, Error> {
     let schemas = PackageSchemas::compile(
         &serde_json::from_str(include_str!("schemas/library-manifest.schema.json"))?,
@@ -115,7 +138,7 @@ pub(super) fn graph(
             acquisition.record().digest(),
             targets,
             release,
-            true,
+            TargetAuthorization::Record(selection),
         )?;
         backend.charge(record_bytes.len())?;
         let record = decode_registry_record(&record_bytes, &Subject::from(&subject))?;
@@ -136,7 +159,7 @@ pub(super) fn graph(
             statement.reference().digest(),
             targets,
             release,
-            false,
+            TargetAuthorization::Declaration,
         )?;
         backend.charge(statement_bytes.len())?;
         let subject = ObjectSubject {
@@ -273,7 +296,7 @@ mod tests {
                 &Digest::parse(&digest).unwrap(),
                 &targets,
                 &release,
-                false
+                TargetAuthorization::Declaration
             )
             .is_err()
         );

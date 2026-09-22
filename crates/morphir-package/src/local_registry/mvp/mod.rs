@@ -1,4 +1,5 @@
-//! Freshly authenticated local-directory resolution, restore and metadata refresh. This MVP requires an explicit
+//! Freshly authenticated local-directory resolution, scoped update, restore and metadata refresh.
+//! This MVP requires an explicit
 //! bootstrap, one registry and caller-controlled roots. Resolve and restore require an absent destination.
 //! Interrupted or failed operations require manual intervention; never delete
 //! established trust state to bypass a refusal. No continued-use grant is issued.
@@ -8,7 +9,7 @@ mod fresh;
 mod refresh;
 pub use refresh::{RefreshReport, RefreshRequest, refresh};
 mod resolve;
-pub use resolve::{ResolveReport, ResolveRequest, resolve};
+pub use resolve::{ResolveReport, ResolveRequest, UpdateRequest, resolve, update};
 mod store;
 mod verify;
 use super::*;
@@ -207,6 +208,7 @@ async fn restore_at(
         &lock,
         fresh.targets(),
         stage.path(),
+        verify::Selection::ExactLocked,
     )?;
     backend.accept_operation_time()?;
     // The provider contract requires callers to coordinate writers to the output root.

@@ -8,6 +8,13 @@ use super::wire::{DocumentError, parse_document};
 use super::{diagnostics, search, update};
 
 pub(super) fn resolve(input: &str) -> Result<ResolutionResult, ResolutionExecutionError> {
+    resolve_with_status(input, None)
+}
+
+pub(super) fn resolve_with_status(
+    input: &str,
+    active: Option<&std::collections::BTreeSet<super::model::ReleaseId>>,
+) -> Result<ResolutionResult, ResolutionExecutionError> {
     let document = match parse_document(input) {
         Ok(document) => document,
         Err(DocumentError::Malformed) => {
@@ -68,6 +75,24 @@ pub(super) fn resolve(input: &str) -> Result<ResolutionResult, ResolutionExecuti
                 ResolutionDiagnostic::InvalidInput { violations },
             ));
         }
+        let policy = update::policy(&input, &old, true);
+        if let Some(active) = active {
+            let eligible = |release: &super::model::ReleaseId| {
+                active.contains(release) || policy.pins.get(release.package_path()) == Some(release)
+            };
+            for catalog in &mut input.catalogs {
+                catalog
+                    .value
+                    .releases
+                    .retain(|record| eligible(record.release()));
+                catalog
+                    .records
+                    .retain(|record| eligible(record.value.release()));
+            }
+            input
+                .releases
+                .retain(|record| eligible(record.value.release()));
+        }
         let reachable_catalogs = match search::complete_catalog_paths(&input) {
             Ok(paths) => paths,
             Err(missing) => {
@@ -76,7 +101,6 @@ pub(super) fn resolve(input: &str) -> Result<ResolutionResult, ResolutionExecuti
                 ));
             }
         };
-        let policy = update::policy(&input, &old, true);
         let graphs = search::supported(&input, &policy, &mut budget)?;
         if let Some(graph) = update::choose(graphs, &input, &old) {
             return Ok(ResolutionResult::Resolved(graph));

@@ -36,14 +36,19 @@ impl Workspace for ElmExtension {
         // than clone the whole confined tree — every file's complete text —
         // just to read one file back afterward, the one source this provider
         // could ever need is already knowable from the request's own
-        // selection before discovery runs: only an unnamed, single-path
-        // `AdHocSources` selection can ever reach `derive_identity` at all
-        // (portable discovery both requires and enforces exactly that
-        // cardinality for an unnamed selection), so a named selection, a
-        // multi-source selection, and a `ManifestProjects` request all
-        // capture nothing here — `synthesize_identity` never needs text for
-        // those. This mirrors nothing in Gleam's provider because Gleam
-        // never needs source text at all.
+        // selection before discovery runs: `derive_identity` only ever runs
+        // against a *single-source* `AdHocSources` selection, so that is the
+        // only shape worth capturing text for. A multi-source selection and
+        // a `ManifestProjects` request capture nothing —
+        // `synthesize_identity` never needs text for either.
+        //
+        // Note this keys off the selection's cardinality alone and
+        // deliberately not off whether the request carries a name. A named
+        // single-source selection still reaches `derive_identity`, because
+        // exposure is derived even when the name is supplied; narrowing this
+        // to unnamed selections would silently drop such a compile back to
+        // the filename stem. This mirrors nothing in Gleam's provider
+        // because Gleam never needs source text at all.
         let candidate = match &request.purpose {
             DiscoveryPurpose::AdHocSources { sources, .. } => match sources.paths.as_slice() {
                 [only] => request
@@ -67,11 +72,14 @@ impl Workspace for ElmExtension {
 /// The two fields are completed independently. A name discovery supplied —
 /// explicit, manifest-derived, or otherwise — is never overwritten, since it
 /// came from the caller and is not this provider's to change. Exposure,
-/// though, is derived whenever discovery left it unset, *including* for a
-/// project that arrived with an explicit name: the host's `--package-name`
-/// says what to call the package, not which modules it publishes, and a
-/// single file's exposed module is exactly as derivable either way. Making
-/// exposure depend on the name would mean the same file advertised
+/// though, is derived for any single-source selection discovery left it
+/// unset on, *including* one that arrived with an explicit name: the host's
+/// `--package-name` says what to call the package, not which modules it
+/// publishes, and a single file's exposed module is exactly as derivable
+/// either way. (A *named multi-source* selection is the one case that keeps
+/// an unset `exposedModules`, since there is no single module to name; see
+/// the `debug_assert!` below.) Making exposure depend on the name would mean
+/// the same file advertised
 /// `exposedModules: ["Acme.Widget"]` unnamed and `null` named, leaving a
 /// consumer unable to tell "no exposure was derived" from "expose
 /// everything".

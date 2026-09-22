@@ -44,11 +44,14 @@ impl Workspace for GleamExtension {
 /// The two fields are completed independently. A name discovery supplied —
 /// explicit, manifest-derived, or otherwise — is never overwritten, since it
 /// came from the caller and is not this provider's to change. Exposure,
-/// though, is derived whenever discovery left it unset, *including* for a
-/// project that arrived with an explicit name: the host's `--package-name`
-/// says what to call the package, not which modules it publishes, and a
-/// single file's exposed module is exactly as derivable either way. Making
-/// exposure depend on the name would mean the same file advertised
+/// though, is derived for any single-source selection discovery left it
+/// unset on, *including* one that arrived with an explicit name: the host's
+/// `--package-name` says what to call the package, not which modules it
+/// publishes, and a single file's exposed module is exactly as derivable
+/// either way. (A *named multi-source* selection is the one case that keeps
+/// an unset `exposedModules`, since there is no single module to name; see
+/// the `debug_assert!` below.) Making exposure depend on the name would mean
+/// the same file advertised
 /// `exposedModules: ["domain/widget"]` unnamed and `null` named, leaving a
 /// consumer unable to tell "no exposure was derived" from "expose
 /// everything".

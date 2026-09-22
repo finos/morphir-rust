@@ -98,10 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compile already applies to a document URI; a path it cannot turn into a valid
   module name becomes a project-level `gleam.workspace.invalid-module-path`
   diagnostic rather than a plausible-looking wrong name. A name discovery
-  supplied is never overwritten, and exposed modules are derived whenever
-  discovery left them unset, so an explicit `--package-name` keeps its name and
-  still gets its exposure — the same file cannot advertise one set of exposed
-  modules unnamed and none named.
+  supplied is never overwritten, and exposed modules are derived for any
+  single-source selection that left them unset, so an explicit
+  `--package-name` keeps its name and still gets its exposure — the same file
+  cannot advertise one set of exposed modules unnamed and none named. A named
+  selection of *several* sources keeps `exposedModules` unset, meaning "expose
+  everything": nothing can construct that shape yet, and enumerating such a
+  set's modules waits for capability-driven source collection.
 - These changes land as a set. The parent `finos/morphir` still derives
   single-file identity inline and constructs the Elm extension through
   `frontend_backend()`, and the `morphir-elm` `vnext` TypeScript provider

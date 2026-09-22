@@ -26,7 +26,7 @@ pub(crate) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)
     }
     for (key, value) in &request.options.extra {
         let valid = match key.as_str() {
-            "outputDir" | "sourceRootUri" => value.is_string(),
+            "outputDir" => value.is_string(),
             "emitParseStage" | "emitParseStageFatal" => value.is_boolean(),
             _ => false,
         };

@@ -129,7 +129,10 @@ fn validates_request_and_cli_context() {
         assert!(!compile("pub struct X;", version).success);
     }
     let mut req = request("pub struct X;", "3");
-    req.options.extra = serde_json::from_value(json!({"outputDir":"out", "sourceRootUri":"file:///src", "sourceRoot":"src", "emitParseStage":false, "emitParseStageFatal":false})).unwrap();
+    req.options.extra = serde_json::from_value(
+        json!({"outputDir":"out", "emitParseStage":false, "emitParseStageFatal":false}),
+    )
+    .unwrap();
     assert!(RustExtension.compile(req.clone()).unwrap().success);
     req.options
         .extra
@@ -143,6 +146,23 @@ fn validates_request_and_cli_context() {
     req.options.extra.clear();
     req.sources.documents.push(req.sources.documents[0].clone());
     assert!(!RustExtension.compile(req).unwrap().success);
+}
+
+/// The Rust frontend never read `sourceRootUri`/`sourceRoot` for anything - it
+/// compiles exactly one document and derives the module name from its URI,
+/// not from a root - so this was always a recognized-but-unused option, not
+/// root resolution. Now that the legacy keys are rejected rather than
+/// ignored, a Rust request carrying either one is rejected too.
+#[test]
+fn legacy_source_root_options_are_rejected_not_ignored() {
+    for key in ["sourceRootUri", "sourceRoot"] {
+        let mut req = request("pub struct X;", "3");
+        req.options
+            .extra
+            .insert(key.into(), Value::String("file:///src".into()));
+        let result = RustExtension.compile(req).unwrap();
+        assert!(!result.success, "{key} must be rejected, not ignored");
+    }
 }
 #[test]
 fn source_locations_use_utf16_columns() {

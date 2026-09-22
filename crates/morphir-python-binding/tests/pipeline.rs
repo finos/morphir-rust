@@ -127,7 +127,6 @@ fn accepts_cli_context_but_rejects_required_parse_stage_output() {
     let mut request = a_request(include_str!("fixtures/models.py"));
     request.options.extra = [
         ("outputDir".into(), json!("ignored/output")),
-        ("sourceRootUri".into(), json!("file:///project/src")),
         ("emitParseStage".into(), json!(true)),
         ("emitParseStageFatal".into(), json!(false)),
     ]
@@ -141,6 +140,23 @@ fn accepts_cli_context_but_rejects_required_parse_stage_output() {
         .extra
         .insert("emitParseStageFatal".into(), json!(true));
     assert!(!PythonExtension.compile(request).unwrap().success);
+}
+
+/// `sourceRootUri` used to sit in this same "accepted CLI context" bag
+/// alongside `outputDir`/`emitParseStage*`, but it was never merely vendor
+/// noise here: for a Python request it is (or was) the actual root
+/// `source_paths()` resolves against. Now that the legacy key is rejected
+/// rather than ignored, a request carrying it is rejected too - a caller that
+/// wants a root sets `sources.root` (covered in `tests/modules.rs`) instead.
+#[test]
+fn legacy_source_root_uri_option_is_rejected_not_ignored() {
+    let mut request = a_request(include_str!("fixtures/models.py"));
+    request
+        .options
+        .extra
+        .insert("sourceRootUri".into(), json!("file:///project/src"));
+    let result = PythonExtension.compile(request).unwrap();
+    assert!(!result.success, "{:?}", result.diagnostics);
 }
 
 #[test]

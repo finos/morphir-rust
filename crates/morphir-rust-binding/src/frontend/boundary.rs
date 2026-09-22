@@ -107,7 +107,7 @@ pub(super) fn validate(request: &CompileRequest) -> Outcome<Settings> {
     }
     for (key, value) in &request.options.extra {
         let valid = match key.as_str() {
-            "outputDir" | "sourceRootUri" | "sourceRoot" => value.is_string(),
+            "outputDir" => value.is_string(),
             "emitParseStage" | "emitParseStageFatal" => value.is_boolean(),
             _ => {
                 return Err(error(

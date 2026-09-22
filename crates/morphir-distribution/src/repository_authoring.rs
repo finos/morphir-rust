@@ -195,6 +195,15 @@ struct ReleaseBundleDescriptor {
     /// a descriptor for a frontend that is not incremental is unchanged.
     #[serde(default)]
     incremental: bool,
+    /// Whether the extension serves workspace discovery for its own language.
+    ///
+    /// A host compares the capability kinds in the published record against
+    /// the ones the guest reports at initialization and stops the session when
+    /// they differ, so an extension that answers discovery has to declare it
+    /// here. Written only when true, so a descriptor for an extension that
+    /// does not serve discovery is unchanged.
+    #[serde(default)]
+    workspace_discovery: bool,
     ir_versions: Vec<String>,
     artifact: ArtifactFilename,
     sha256: Sha256Digest,
@@ -313,6 +322,16 @@ impl ReleaseBundleDescriptor {
                 "release bundle must declare frontend languages or backend targets",
             ));
         }
+        // Discovery synthesis turns a source path into a module identity, so
+        // it needs the frontend languages that name those sources. Refusing
+        // here keeps a published record from advertising a capability kind
+        // that nothing in the bundle can honour.
+        if self.workspace_discovery && self.languages.is_none() {
+            return Err(invalid_bundle(
+                root.join("release.json"),
+                "release bundle workspaceDiscovery requires frontend languages",
+            ));
+        }
         if self
             .git_commit
             .as_ref()
@@ -377,6 +396,11 @@ impl ReleaseBundleDescriptor {
                 "irVersions": self.ir_versions,
                 "generate": true
             });
+        }
+        // Workspace carries no record of its own: the capability kind is the
+        // whole declaration, and the protocol versions come from the guest.
+        if self.workspace_discovery {
+            capabilities.push("workspace");
         }
         record["capabilities"] = serde_json::json!(capabilities);
         serde_json::from_value(record)

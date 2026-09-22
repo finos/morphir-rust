@@ -6,6 +6,7 @@ use morphir_distribution::{
     activate_installed, list_installed, read_extension_lock, uninstall_extension,
     write_extension_lock,
 };
+use morphir_extension_sdk::ExtensionType;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Barrier, mpsc};
@@ -798,6 +799,71 @@ fn installed_frontend_metadata_roundtrips_and_activates_offline() {
     assert_eq!(activated_backend.targets, ["gleam"]);
     assert_eq!(activated_backend.ir_versions, ["4"]);
     assert!(activated_backend.generate);
+}
+
+/// A host reads the capability kinds from the installed record before it
+/// starts the guest and refuses the session when the guest then reports a
+/// different set. The index's `workspace` capability is the only way a
+/// discovery provider's kind reaches that record — it carries no record of
+/// its own — so it has to survive installation and offline activation.
+#[test]
+fn an_installed_workspace_capability_reaches_the_activated_extension_kinds() {
+    let root = tempfile::tempdir().unwrap();
+    let index = root.path().join("index");
+    let source = index.join("artifacts/morphir_elm_binding.wasm");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::create_dir_all(index.join("extensions")).unwrap();
+    fs::write(&source, b"discovery provider wasm").unwrap();
+    let digest = Sha256Digest::of_bytes(&fs::read(&source).unwrap());
+    let record = serde_json::json!({
+        "schemaVersion": "1.0",
+        "id": "morphir-elm-native",
+        "name": "Morphir Elm (native)",
+        "version": "0.2.0",
+        "channels": ["stable"],
+        "mepVersions": ["0.1"],
+        "capabilities": ["frontend", "backend", "workspace"],
+        "frontend": {
+            "languages": [{"id": "elm", "fileExtensions": [".elm"]}],
+            "irVersions": ["3", "4"],
+            "incremental": true
+        },
+        "backend": { "targets": ["elm"], "irVersions": ["3", "4"] },
+        "artifacts": [{
+            "runtime": "wasm",
+            "source": { "kind": "local-file", "path": "artifacts/morphir_elm_binding.wasm" },
+            "sha256": digest,
+            "filename": "morphir_elm_binding.wasm"
+        }]
+    });
+    fs::write(
+        index.join("extensions/morphir-elm-native.jsonl"),
+        format!("{record}\n"),
+    )
+    .unwrap();
+    let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
+    let id = ExtensionId::parse("morphir-elm-native").unwrap();
+    let selected = LocalIndex::open(&index)
+        .unwrap()
+        .resolve(
+            &id,
+            Selection::Channel(Channel::Stable),
+            &Platform::current(),
+        )
+        .unwrap();
+
+    ExtensionInstaller::new(&home).install(selected).unwrap();
+    fs::remove_dir_all(&index).unwrap();
+    let activated = activate_installed(&home, &id).unwrap();
+
+    assert_eq!(
+        activated.extension_info().types,
+        vec![
+            ExtensionType::Frontend,
+            ExtensionType::Backend,
+            ExtensionType::Workspace
+        ]
+    );
 }
 
 #[test]

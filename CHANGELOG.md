@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A packaged extension can declare that it serves workspace discovery. The
+  native Elm and Gleam extensions now report `Workspace` among their capability
+  kinds at initialization, but the published bundle manifest inferred
+  capabilities only from `languages` and `targets`, so a host that read the
+  installed record before starting the guest saw a different set and refused the
+  session with "capability kinds changed". The extension registry gains
+  `workspace_discovery`, which reaches the release descriptor as
+  `workspaceDiscovery` and the published record as the `workspace` capability.
+  It is distinct from `release_with_workspace`, which is about release cadence,
+  and is refused on an entry with no frontend languages, since discovery
+  synthesis has no sources to derive module identity from.
 - Native Elm frontend: a function type keeps every segment it was written with.
   tree-sitter-elm leaves a segment untagged when it is a type reference carrying
   arguments, so `List Int -> Bool` lowered to `Bool` and

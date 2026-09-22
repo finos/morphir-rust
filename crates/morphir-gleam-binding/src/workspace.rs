@@ -38,12 +38,24 @@ impl Workspace for GleamExtension {
     }
 }
 
-/// Fills `name` and `exposedModules` on a synthesized project whose name
-/// discovery left empty. A project that already has a name — explicit,
-/// manifest-derived, or otherwise — is untouched, since a name discovery
-/// filled in came from the caller and is not this provider's to change. A
-/// discovery failure passes through unchanged: it is not this function's to
-/// reinterpret.
+/// Fills whichever of `name` and `exposedModules` a synthesized project is
+/// still missing.
+///
+/// The two fields are completed independently. A name discovery supplied —
+/// explicit, manifest-derived, or otherwise — is never overwritten, since it
+/// came from the caller and is not this provider's to change. Exposure,
+/// though, is derived whenever discovery left it unset, *including* for a
+/// project that arrived with an explicit name: the host's `--package-name`
+/// says what to call the package, not which modules it publishes, and a
+/// single file's exposed module is exactly as derivable either way. Making
+/// exposure depend on the name would mean the same file advertised
+/// `exposedModules: ["domain/widget"]` unnamed and `null` named, leaving a
+/// consumer unable to tell "no exposure was derived" from "expose
+/// everything".
+///
+/// A manifest-origin project is left entirely alone: everything it could
+/// need already came from its manifest. A discovery failure passes through
+/// unchanged: it is not this function's to reinterpret.
 fn synthesize_identity(response: DiscoveryResponse) -> DiscoveryResponse {
     let mut snapshot = match response {
         DiscoveryResponse::Success { snapshot } => snapshot,
@@ -51,24 +63,45 @@ fn synthesize_identity(response: DiscoveryResponse) -> DiscoveryResponse {
     };
 
     for project in &mut snapshot.projects {
-        if !project.name.is_empty() {
+        if !project.name.is_empty() && project.exposed_modules.is_some() {
             continue;
         }
         let ProjectOrigin::Synthesized { inputs } = &project.origin else {
             continue;
         };
-        // An unnamed ad-hoc selection is only ever a single source: portable
-        // discovery rejects more than one (`workspace.selection.name-required`)
-        // before a snapshot like this can exist. Nothing else to derive a
-        // name from.
+        // An *unnamed* ad-hoc selection is only ever a single source:
+        // portable discovery rejects more than one
+        // (`workspace.selection.name-required`) before a snapshot like this
+        // can exist, since there would be nothing to derive a name from. The
+        // `debug_assert!` states that cross-crate invariant where this code
+        // relies on it: were a future change to let an unnamed multi-input
+        // synthesized project through, it would otherwise keep its empty
+        // name all the way to compile and fail there with an
+        // unrelated-looking error, with no test failing first.
+        //
+        // A *named* multi-source selection is allowed, though, and now
+        // reaches here because exposure is derived independently of the
+        // name. There is no single module to expose for it, so it falls out
+        // of the `let else` below with `exposedModules` unset — which means
+        // "expose everything", the only honest answer for a selection whose
+        // modules this provider has not enumerated.
+        debug_assert!(
+            !project.name.is_empty() || inputs.len() == 1,
+            "an unnamed synthesized project should hold exactly one input, found {}",
+            inputs.len()
+        );
         let [input] = inputs.as_slice() else {
             continue;
         };
 
         match derive_identity(&project.relative_path, input) {
             Ok((package_name, module_name)) => {
-                project.name = package_name;
-                project.exposed_modules = Some(vec![module_name]);
+                if project.name.is_empty() {
+                    project.name = package_name;
+                }
+                if project.exposed_modules.is_none() {
+                    project.exposed_modules = Some(vec![module_name]);
+                }
             }
             Err(message) => {
                 project.state = ProjectState::Error;
@@ -247,10 +280,16 @@ mod tests {
         assert_eq!(project.exposed_modules, Some(vec!["widget".to_owned()]));
     }
 
-    /// An explicitly named synthesized project is left exactly as discovery
-    /// produced it — the name came from the caller, not from this provider.
+    /// An explicit name survives untouched — it came from the caller, not
+    /// from this provider — but exposure is still derived, because the two
+    /// fields answer different questions. `--package-name` says what to call
+    /// the package; it says nothing about which modules the package
+    /// publishes, and the single submitted file's module path is exactly as
+    /// derivable named as unnamed. Pinned so that the same file cannot
+    /// advertise `["domain/widget"]` unnamed and `null` named, which would
+    /// make an unrelated flag change the shape of the response.
     #[test]
-    fn an_explicitly_named_synthesized_project_is_not_touched() {
+    fn an_explicit_name_survives_but_exposure_is_still_derived() {
         let mut request = ad_hoc_request("models", "models/domain/widget.gleam");
         request.cli_overlay = serde_json::json!({ "project": { "name": "acme/widgets" } });
 
@@ -263,7 +302,108 @@ mod tests {
         };
         let project = &snapshot.projects[0];
         assert_eq!(project.name, "acme/widgets");
+        assert_eq!(
+            project.exposed_modules,
+            Some(vec!["domain/widget".to_owned()])
+        );
+        assert_eq!(project.state, ProjectState::Unloaded);
+    }
+
+    /// Deriving exposure for an explicitly named project means an
+    /// unsynthesizable module path now fails for that project too, where a
+    /// name previously short-circuited the whole derivation and let it pass
+    /// silently. That is the intended consequence, not a regression: exposure
+    /// genuinely requires a valid Gleam module path, the diagnostic is the
+    /// same one the identical file gets without a name, and the alternative —
+    /// reporting success and then failing at compile with
+    /// `INVALID_MODULE_URI` — hides the problem until later. Unlike Elm,
+    /// whose derivation cannot fail, Gleam's can, so only this provider has a
+    /// case to pin here.
+    #[test]
+    fn an_explicit_name_does_not_excuse_an_unsynthesizable_module_path() {
+        let mut request = ad_hoc_request("models", "models/order-processing.gleam");
+        request.cli_overlay = serde_json::json!({ "project": { "name": "acme/orders" } });
+
+        let response = GleamExtension
+            .discover(request)
+            .expect("the typed call itself should not error");
+
+        let DiscoveryResponse::Success { snapshot } = response else {
+            panic!("expected a successful discovery response");
+        };
+        assert_eq!(snapshot.state, WorkspaceState::Error);
+        let project = &snapshot.projects[0];
+        // The caller's name is still not this provider's to rewrite, even on
+        // the failure path.
+        assert_eq!(project.name, "acme/orders");
         assert_eq!(project.exposed_modules, None);
+        assert_eq!(project.state, ProjectState::Error);
+        assert_eq!(project.diagnostics.len(), 1);
+        assert_eq!(
+            project.diagnostics[0].code,
+            GLEAM_WORKSPACE_INVALID_MODULE_PATH
+        );
+    }
+
+    /// A *named* selection may hold more than one source — portable
+    /// discovery only constrains cardinality for an unnamed one — and such a
+    /// project now reaches the derivation loop, because exposure is no longer
+    /// gated on the name being empty. It must fall out of the single-input
+    /// guard leaving `exposedModules` unset (meaning "expose everything"),
+    /// not panic on the `debug_assert!` and not invent an exposure list from
+    /// one arbitrary member. Tests run in debug, so a `debug_assert!` written
+    /// on input count alone would fail here.
+    #[test]
+    fn a_named_multi_source_selection_derives_no_exposure() {
+        let root = RelativePath::parse("models").expect("a confined wire path");
+        let first =
+            RelativePath::parse("models/domain/widget.gleam").expect("a confined wire path");
+        let second =
+            RelativePath::parse("models/domain/gadget.gleam").expect("a confined wire path");
+        let request = DiscoveryRequest {
+            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            development_root: FileTree {
+                entries: BTreeMap::from([
+                    (RelativePath::root(), FileEntry::Directory),
+                    (
+                        first.clone(),
+                        FileEntry::File {
+                            text: String::new(),
+                        },
+                    ),
+                    (
+                        second.clone(),
+                        FileEntry::File {
+                            text: String::new(),
+                        },
+                    ),
+                ]),
+            },
+            morphir_home: None,
+            system_config: None,
+            environment: BTreeMap::new(),
+            cli_overlay: serde_json::json!({ "project": { "name": "acme/widgets" } }),
+            purpose: DiscoveryPurpose::AdHocSources {
+                project: ProjectSource::Synthesized,
+                sources: SourceSelection {
+                    root,
+                    paths: vec![first, second],
+                },
+                language_id: "gleam".to_owned(),
+            },
+        };
+
+        let response = GleamExtension
+            .discover(request)
+            .expect("discovery of a valid named ad-hoc selection should succeed");
+
+        let DiscoveryResponse::Success { snapshot } = response else {
+            panic!("expected a successful discovery response");
+        };
+        let project = &snapshot.projects[0];
+        assert_eq!(project.name, "acme/widgets");
+        assert_eq!(project.exposed_modules, None);
+        assert_eq!(project.state, ProjectState::Unloaded);
     }
 
     /// A discovery failure is passed through unchanged, never reinterpreted.

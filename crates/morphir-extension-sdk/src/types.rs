@@ -256,9 +256,29 @@ pub struct CompileDependency {
     pub distribution: serde_json::Value,
 }
 
+/// Legacy options-bag keys that used to carry a compilation's source root.
+///
+/// A stale caller that keeps sending one of these would otherwise lose its
+/// root silently and get different module names for the same files, so they
+/// are rejected rather than ignored. See [`SourceSet::root`].
+const LEGACY_SOURCE_ROOT_KEYS: [&str; 2] = ["sourceRootUri", "sourceRoot"];
+
+pub(crate) fn reject_legacy_source_root_keys(
+    extra: &HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(key) = extra
+        .keys()
+        .find(|key| LEGACY_SOURCE_ROOT_KEYS.contains(&key.as_str()))
+    {
+        return Err(format!(
+            "'{key}' is no longer a compile option; supply the root as sources.root"
+        ));
+    }
+    Ok(())
+}
+
 /// Options that control frontend compilation.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CompileOptions {
     /// Emit type information without value bodies when supported.
     pub types_only: bool,
@@ -266,8 +286,10 @@ pub struct CompileOptions {
     pub ir_version: String,
     /// Frontend-specific compilation options.
     ///
-    /// Keys that duplicate `typesOnly` or `irVersion` are rejected during serialization.
-    #[serde(default, flatten)]
+    /// Keys that duplicate `typesOnly` or `irVersion`, or either legacy source
+    /// root key (`sourceRootUri`, `sourceRoot`), are rejected during
+    /// serialization. The legacy keys are also rejected during
+    /// deserialization: see [`SourceSet::root`].
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -276,7 +298,7 @@ impl Serialize for CompileOptions {
     where
         S: serde::Serializer,
     {
-        const RESERVED_KEYS: [&str; 2] = ["typesOnly", "irVersion"];
+        const RESERVED_KEYS: [&str; 4] = ["typesOnly", "irVersion", "sourceRootUri", "sourceRoot"];
         if let Some(key) = self
             .extra
             .keys()
@@ -297,14 +319,56 @@ impl Serialize for CompileOptions {
     }
 }
 
+impl<'de> Deserialize<'de> for CompileOptions {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompileOptionsWire {
+            types_only: bool,
+            ir_version: String,
+            #[serde(default, flatten)]
+            extra: HashMap<String, serde_json::Value>,
+        }
+
+        let wire = CompileOptionsWire::deserialize(deserializer)?;
+        reject_legacy_source_root_keys(&wire.extra).map_err(serde::de::Error::custom)?;
+        Ok(CompileOptions {
+            types_only: wire.types_only,
+            ir_version: wire.ir_version,
+            extra: wire.extra,
+        })
+    }
+}
+
+/// The documents a compilation submits, together with the root their module
+/// identities are derived against.
+///
+/// The root belongs to the set rather than to the request: replacing or
+/// combining document sets while a root sits elsewhere silently renames
+/// modules, because a module's name is a function of its path relative to the
+/// root.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSet {
+    /// The root module identities resolve against, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// The documents to compile.
+    pub documents: Vec<SourceDocument>,
+}
+
 /// Request to compile source documents into Morphir IR.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompileRequest {
     /// Language identifier shared by the submitted documents.
     pub language_id: String,
-    /// Source documents to compile.
-    pub documents: Vec<SourceDocument>,
+    /// Source documents to compile, together with the root their module
+    /// identities are derived against.
+    pub sources: SourceSet,
     /// Package metadata for the compilation unit.
     pub package: CompilePackage,
     /// Package distributions available to the compilation.
@@ -614,12 +678,14 @@ mod tests {
     fn compile_request_matches_mep_0_1() {
         let expected = serde_json::json!({
             "languageId": "elm",
-            "documents": [{
-                "uri": "file:///work/Example.elm",
-                "languageId": "elm",
-                "version": 1,
-                "text": "module Example exposing (add)\n"
-            }],
+            "sources": {
+                "documents": [{
+                    "uri": "file:///work/Example.elm",
+                    "languageId": "elm",
+                    "version": 1,
+                    "text": "module Example exposing (add)\n"
+                }]
+            },
             "package": {
                 "name": "local/example",
                 "exposedModules": ["Example"]
@@ -632,12 +698,15 @@ mod tests {
         });
         let request = CompileRequest {
             language_id: "elm".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///work/Example.elm".into(),
-                language_id: "elm".into(),
-                version: 1,
-                text: "module Example exposing (add)\n".into(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///work/Example.elm".into(),
+                    language_id: "elm".into(),
+                    version: 1,
+                    text: "module Example exposing (add)\n".into(),
+                }],
+            },
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: Some(vec!["Example".into()]),
@@ -660,7 +729,9 @@ mod tests {
     fn compile_request_serializes_dependencies_and_vendor_options() {
         let expected = serde_json::json!({
             "languageId": "elm",
-            "documents": [],
+            "sources": {
+                "documents": []
+            },
             "package": {
                 "name": "local/example",
                 "exposedModules": []
@@ -678,7 +749,7 @@ mod tests {
         });
         let request = CompileRequest {
             language_id: "elm".into(),
-            documents: vec![],
+            sources: SourceSet::default(),
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: Some(vec![]),
@@ -726,6 +797,85 @@ mod tests {
 
         let error = serde_json::to_value(options).unwrap_err();
         assert!(error.to_string().contains("reserved compile option key"));
+    }
+
+    /// A root supplied through the old options bag is an error, not a silently
+    /// ignored key. A stale caller that kept sending `sourceRootUri` would
+    /// otherwise lose its root and get different module names for the same files.
+    #[test]
+    fn a_legacy_source_root_uri_option_is_rejected() {
+        let error = serde_json::from_value::<CompileOptions>(serde_json::json!({
+            "typesOnly": false,
+            "irVersion": "4",
+            "sourceRootUri": "file:///project/src",
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRootUri"), "{error}");
+
+        // Rejected even when a valid root already travels with the documents:
+        // the legacy key is not a fallback for a missing `sources.root`.
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "elm",
+            "sources": {"root": "file:///project/src", "documents": []},
+            "package": {"name": "local/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRootUri": "file:///project/src",
+            },
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRootUri"), "{error}");
+    }
+
+    /// The Gleam-local fallback key is rejected too.
+    #[test]
+    fn a_legacy_source_root_option_is_rejected() {
+        let error = serde_json::from_value::<CompileOptions>(serde_json::json!({
+            "typesOnly": false,
+            "irVersion": "4",
+            "sourceRoot": "src",
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRoot"), "{error}");
+
+        // Rejected even when a valid root already travels with the documents.
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "gleam",
+            "sources": {"root": "file:///project/src", "documents": []},
+            "package": {"name": "local/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRoot": "src",
+            },
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRoot"), "{error}");
+    }
+
+    /// The root travels with the documents it applies to.
+    #[test]
+    fn a_source_set_carries_its_root() {
+        let sources: SourceSet = serde_json::from_value(serde_json::json!({
+            "root": "file:///project/src",
+            "documents": [{
+                "uri": "file:///project/src/domain/models.py",
+                "languageId": "python",
+                "version": 1,
+                "text": ""
+            }]
+        }))
+        .unwrap();
+        assert_eq!(sources.root.as_deref(), Some("file:///project/src"));
+        assert_eq!(sources.documents.len(), 1);
+
+        // The root is optional: a set with no root deserializes with `None`.
+        let rootless: SourceSet = serde_json::from_value(serde_json::json!({
+            "documents": []
+        }))
+        .unwrap();
+        assert_eq!(rootless.root, None);
     }
 
     #[test]
@@ -972,7 +1122,7 @@ mod incremental_tests {
     fn request_without_baseline_serializes_as_before() {
         let request = CompileRequest {
             language_id: "elm".into(),
-            documents: vec![],
+            sources: SourceSet::default(),
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: None,

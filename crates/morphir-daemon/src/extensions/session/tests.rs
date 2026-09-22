@@ -9,7 +9,7 @@ use morphir_extension_sdk::{
     Backend, BackendCapability, CompileOptions, CompilePackage, CompileRequest, CompileResult,
     Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType, Frontend, FrontendCapability,
     GenerateRequest, GenerateResult, LanguageCapability, NativeExtension, SourceDocument,
-    Workspace, WorkspaceCapability,
+    SourceSet, Workspace, WorkspaceCapability,
 };
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -183,7 +183,7 @@ pub(super) fn params() -> InitializeParams {
 fn compile_params(ir_version: &str) -> serde_json::Value {
     serde_json::json!({
         "languageId": "elm",
-        "documents": [],
+        "sources": {"documents": []},
         "package": {"name": "example/package", "exposedModules": []},
         "dependencies": [],
         "options": {"typesOnly": false, "irVersion": ir_version}
@@ -376,12 +376,15 @@ fn successful_recording_compile_result(request: CompileRequest) -> CompileResult
 fn recording_compile_request() -> CompileRequest {
     CompileRequest {
         language_id: "recording".into(),
-        documents: vec![SourceDocument {
-            uri: "file:///workspace/Example.recording".into(),
-            language_id: "recording".into(),
-            version: 1,
-            text: "module Example".into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "file:///workspace/Example.recording".into(),
+                language_id: "recording".into(),
+                version: 1,
+                text: "module Example".into(),
+            }],
+        },
         package: CompilePackage {
             name: "local/example".into(),
             exposed_modules: Some(vec!["Example".into()]),
@@ -435,7 +438,10 @@ async fn native_transport_runs_the_validated_mep_lifecycle() {
             assert_eq!(result.modules, ["Example"]);
             let compile_requests = compile_requests.lock().unwrap();
             assert_eq!(compile_requests.len(), 1);
-            assert_eq!(compile_requests[0].documents[0].text, "module Example");
+            assert_eq!(
+                compile_requests[0].sources.documents[0].text,
+                "module Example"
+            );
             ready
         }
         InvokeOutcome::Rejected(_, error) => panic!("native compile was rejected: {error}"),

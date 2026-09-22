@@ -5,14 +5,17 @@
 //! let request: CompileRequest = serde_json::from_value(serde_json::json!({
 //!     "languageId": "python",
 //!     "package": {"name": "acme/example", "exposedModules": ["domain.models"]},
-//!     "documents": [{"uri": "file:///project/src/domain/models.py", "languageId": "python",
-//!                    "version": 1, "text": ""}],
-//!     "options": {"sourceRootUri": "file:///project/src", "irVersion": "4", "typesOnly": false}
+//!     "sources": {
+//!         "root": "file:///project/src",
+//!         "documents": [{"uri": "file:///project/src/domain/models.py", "languageId": "python",
+//!                        "version": 1, "text": ""}]
+//!     },
+//!     "options": {"irVersion": "4", "typesOnly": false}
 //! })).unwrap();
 //! assert_eq!(request.source_paths().unwrap()[0].as_str(), "domain/models.py");
 //! ```
 
-use crate::{CompileOptions, CompileRequest};
+use crate::{CompileRequest, SourceSet};
 use percent_encoding::percent_decode_str;
 use std::collections::BTreeSet;
 use url::Url;
@@ -53,18 +56,10 @@ impl SourcePath {
     }
 }
 
-impl CompileOptions {
-    /// Validate the existing `sourceRootUri` wire option.
-    pub fn source_root(&self) -> Result<Option<SourceRoot>, SourceContextError> {
-        self.extra
-            .get("sourceRootUri")
-            .map(|value| {
-                let value = value
-                    .as_str()
-                    .ok_or_else(|| SourceContextError("sourceRootUri must be a string".into()))?;
-                SourceRoot::parse(value)
-            })
-            .transpose()
+impl SourceSet {
+    /// Validate the root, if one was supplied.
+    pub fn root(&self) -> Result<Option<SourceRoot>, SourceContextError> {
+        self.root.as_deref().map(SourceRoot::parse).transpose()
     }
 }
 
@@ -75,9 +70,10 @@ impl CompileRequest {
     /// a root; one absolute document without a root retains the legacy basename
     /// behavior. Original document URIs remain unchanged for diagnostics.
     pub fn source_paths(&self) -> Result<Vec<SourcePath>, SourceContextError> {
-        let root = self.options.source_root()?;
+        let root = self.sources.root()?;
         let mut seen = BTreeSet::new();
-        self.documents
+        self.sources
+            .documents
             .iter()
             .map(|document| {
                 let normalized = normalize(&document.uri)?;
@@ -94,7 +90,7 @@ impl CompileRequest {
                                         "Source document is outside sourceRootUri".into(),
                                     )
                                 })?,
-                            None if self.documents.len() == 1 => {
+                            None if self.sources.documents.len() == 1 => {
                                 normalized.rsplit('/').next().unwrap_or("")
                             }
                             None => return Err(SourceContextError(

@@ -184,7 +184,10 @@ fn initialize(plugin: &mut Plugin) {
 fn request(documents: Vec<SourceDocument>, version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "elm".into(),
-        documents,
+        sources: SourceSet {
+            root: None,
+            documents,
+        },
         package: CompilePackage {
             name: "local/example".into(),
             exposed_modules: Some(vec!["Example".into()]),

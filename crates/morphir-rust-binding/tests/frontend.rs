@@ -1,5 +1,6 @@
 use morphir_extension_sdk::{
     CompileOptions, CompilePackage, CompileRequest, CompileResult, Frontend, SourceDocument,
+    SourceSet,
 };
 use morphir_rust_binding::RustExtension;
 use serde_json::{Value, json};
@@ -7,12 +8,15 @@ use serde_json::{Value, json};
 fn request(source: &str, version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "rust".into(),
-        documents: vec![SourceDocument {
-            uri: "file:///src/models.rs".into(),
-            language_id: "rust".into(),
-            text: source.into(),
-            ..Default::default()
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "file:///src/models.rs".into(),
+                language_id: "rust".into(),
+                text: source.into(),
+                ..Default::default()
+            }],
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: Some(vec!["Models".into()]),
@@ -137,7 +141,7 @@ fn validates_request_and_cli_context() {
         .insert("outputDir".into(), Value::Bool(true));
     assert!(!RustExtension.compile(req.clone()).unwrap().success);
     req.options.extra.clear();
-    req.documents.push(req.documents[0].clone());
+    req.sources.documents.push(req.sources.documents[0].clone());
     assert!(!RustExtension.compile(req).unwrap().success);
 }
 #[test]
@@ -176,7 +180,7 @@ fn request_rejects_languages_dependencies_invalid_packages_and_exposed_modules()
     req.language_id = "elm".into();
     assert!(!RustExtension.compile(req).unwrap().success);
     let mut req = request("pub struct X;", "3");
-    req.documents[0].language_id = "elm".into();
+    req.sources.documents[0].language_id = "elm".into();
     assert!(!RustExtension.compile(req).unwrap().success);
     let mut req = request("pub struct X;", "3");
     req.dependencies.push(Default::default());
@@ -243,7 +247,7 @@ fn raw_identifiers_resolve_to_the_same_rust_type_name() {
 fn module_file_names_must_have_a_representable_morphir_name() {
     for stem in ["__", "模型"] {
         let mut req = request("pub struct X;", "3");
-        req.documents[0].uri = format!("file:///src/{stem}.rs");
+        req.sources.documents[0].uri = format!("file:///src/{stem}.rs");
         req.package.exposed_modules = Some(vec![]);
         assert!(!RustExtension.compile(req).unwrap().success);
     }

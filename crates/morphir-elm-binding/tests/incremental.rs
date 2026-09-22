@@ -50,7 +50,10 @@ fn compile_with(
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: None,
@@ -535,7 +538,10 @@ fn a_baseline_from_a_different_package_is_ignored() {
             .unwrap()
             .compile(CompileRequest {
                 language_id: "elm".into(),
-                documents: both(A, B),
+                sources: SourceSet {
+                    root: None,
+                    documents: both(A, B),
+                },
                 package: CompilePackage {
                     name: package.into(),
                     exposed_modules: None,
@@ -595,7 +601,10 @@ fn acme_lib(source: &str) -> CompileDependency {
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents: vec![document(DEP_URI, source)],
+            sources: SourceSet {
+                root: None,
+                documents: vec![document(DEP_URI, source)],
+            },
             package: CompilePackage {
                 name: "Acme.Lib".into(),
                 exposed_modules: None,

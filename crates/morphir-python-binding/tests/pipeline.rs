@@ -9,12 +9,15 @@ use serde_json::json;
 fn a_request(source: &str) -> CompileRequest {
     CompileRequest {
         language_id: "python".into(),
-        documents: vec![SourceDocument {
-            uri: "models.py".into(),
-            language_id: "python".into(),
-            version: 1,
-            text: source.into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "models.py".into(),
+                language_id: "python".into(),
+                version: 1,
+                text: source.into(),
+            }],
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: Some(vec!["Models".into()]),

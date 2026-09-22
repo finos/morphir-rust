@@ -75,12 +75,15 @@ async fn installed_compilation(version: &str) {
     }
     let request = CompileRequest {
         language_id: "gleam".into(),
-        documents: vec![SourceDocument {
-            uri: "file:///src/model.gleam".into(),
-            language_id: "gleam".into(),
-            version: 1,
-            text: "pub type Amount = Int\npub type Color { Red Blue }\n".into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "file:///src/model.gleam".into(),
+                language_id: "gleam".into(),
+                version: 1,
+                text: "pub type Amount = Int\npub type Color { Red Blue }\n".into(),
+            }],
+        },
         package: CompilePackage {
             name: "sample".into(),
             exposed_modules: None,

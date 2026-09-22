@@ -20,12 +20,15 @@ fn compile(version: &str, source: &str) -> CompileResult {
     let result = GleamExtension
         .compile(CompileRequest {
             language_id: "gleam".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///src/unions.gleam".into(),
-                language_id: "gleam".into(),
-                version: 1,
-                text: source.into(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///src/unions.gleam".into(),
+                    language_id: "gleam".into(),
+                    version: 1,
+                    text: source.into(),
+                }],
+            },
             package: CompilePackage {
                 name: "example/unions".into(),
                 exposed_modules: None,

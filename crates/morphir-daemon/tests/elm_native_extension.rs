@@ -77,12 +77,15 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
     }
     let request = |uri: &str, text: &str| CompileRequest {
         language_id: "elm".into(),
-        documents: vec![SourceDocument {
-            uri: uri.into(),
-            language_id: "elm".into(),
-            version: 1,
-            text: text.into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: uri.into(),
+                language_id: "elm".into(),
+                version: 1,
+                text: text.into(),
+            }],
+        },
         package: CompilePackage {
             name: "local/example".into(),
             exposed_modules: Some(vec!["Example".into()]),

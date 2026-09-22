@@ -215,11 +215,11 @@ fn execute(source: &str, consumer: &str) {
 #[test]
 fn named_field_patterns_execute_after_flattening_in_both_versions() {
     use morphir_extension_sdk::{
-        CompileOptions, CompilePackage, CompileRequest, Frontend, SourceDocument,
+        CompileOptions, CompilePackage, CompileRequest, Frontend, SourceDocument, SourceSet,
     };
     for version in ["3", "4"] {
         let compiled=RustExtension.compile(CompileRequest {
-            language_id:"rust".into(),documents:vec![SourceDocument { uri:"models.rs".into(),language_id:"rust".into(),text:"pub enum Choice { Full { left: i64, right: bool }, Empty } pub fn select(x: Choice) -> i64 { match x { Choice::Full { right: true, left } => left, Choice::Full { left, .. } => left, Choice::Empty => 0 } }".into(),..Default::default() }],
+            language_id:"rust".into(),sources:SourceSet { root: None, documents:vec![SourceDocument { uri:"models.rs".into(),language_id:"rust".into(),text:"pub enum Choice { Full { left: i64, right: bool }, Empty } pub fn select(x: Choice) -> i64 { match x { Choice::Full { right: true, left } => left, Choice::Full { left, .. } => left, Choice::Empty => 0 } }".into(),..Default::default() }] },
             package:CompilePackage { name:"acme/example".into(), exposed_modules:Some(vec!["Models".into()]) },options:CompileOptions { types_only:false,ir_version:version.into(),..Default::default() },..Default::default()
         }).unwrap();
         assert!(compiled.success, "{:?}", compiled.diagnostics);

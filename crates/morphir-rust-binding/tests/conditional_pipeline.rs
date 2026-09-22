@@ -14,12 +14,15 @@ fn conditional_functions_execute_through_both_ir_versions_and_native_mep() {
         let extension = NativeExtension::frontend_backend(RustExtension).unwrap();
         let request = CompileRequest {
             language_id: "rust".into(),
-            documents: vec![SourceDocument {
-                uri: "models.rs".into(),
-                language_id: "rust".into(),
-                version: 1,
-                text: conditional::SOURCE.into(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "models.rs".into(),
+                    language_id: "rust".into(),
+                    version: 1,
+                    text: conditional::SOURCE.into(),
+                }],
+            },
             package: CompilePackage {
                 name: "acme/example".into(),
                 exposed_modules: Some(vec!["Models".into()]),

@@ -560,6 +560,13 @@ where
     E: Frontend + Send + Sync,
 {
     fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+        // This handle lets a host call a native extension without going
+        // through the protocol's `serde` boundary, so the legacy source-root
+        // keys are not rejected by deserialization here. Reject them
+        // explicitly to keep this path equivalent to the protocol path
+        // rather than a quieter way around it.
+        crate::types::reject_legacy_source_root_keys(&request.options.extra)
+            .map_err(ExtensionError::InvalidParams)?;
         self.extension.compile(request)
     }
 }
@@ -618,7 +625,7 @@ mod tests {
         Artifact, Backend, BackendCapability, CompileOptions, CompilePackage, CompileRequest,
         CompileResult, Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType, Frontend,
         FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability,
-        NativeRoleDispatch, Result, SourceDocument, Workspace, WorkspaceCapability,
+        NativeRoleDispatch, Result, SourceDocument, SourceSet, Workspace, WorkspaceCapability,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -669,7 +676,7 @@ mod tests {
             Ok(CompileResult {
                 success: true,
                 ir_version: Some(request.options.ir_version),
-                ir: Some(serde_json::json!({ "typed": request.documents[0].text })),
+                ir: Some(serde_json::json!({ "typed": request.sources.documents[0].text })),
                 diagnostics: vec![],
                 modules: request.package.exposed_modules.unwrap_or_default(),
                 module_results: vec![],
@@ -1629,12 +1636,15 @@ mod tests {
     fn compile_request(source: &str) -> CompileRequest {
         CompileRequest {
             language_id: "recording".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///workspace/Example.recording".into(),
-                language_id: "recording".into(),
-                version: 1,
-                text: source.into(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///workspace/Example.recording".into(),
+                    language_id: "recording".into(),
+                    version: 1,
+                    text: source.into(),
+                }],
+            },
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: Some(vec!["Example".into()]),
@@ -1672,7 +1682,7 @@ mod tests {
         assert_eq!(recorded_requests.len(), 2);
         assert!(recorded_requests.iter().all(|recorded| {
             recorded.language_id == request.language_id
-                && recorded.documents[0].text == request.documents[0].text
+                && recorded.sources.documents[0].text == request.sources.documents[0].text
                 && recorded.package.exposed_modules == request.package.exposed_modules
                 && recorded.options.ir_version == request.options.ir_version
         }));

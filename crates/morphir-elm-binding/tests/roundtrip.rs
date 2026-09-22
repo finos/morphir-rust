@@ -70,7 +70,10 @@ fn compile_as(
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: package_name.into(),
                 exposed_modules: None,

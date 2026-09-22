@@ -303,7 +303,10 @@ fn compile(
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: "My".into(),
                 exposed_modules: None,

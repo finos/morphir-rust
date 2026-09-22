@@ -4,12 +4,15 @@ use morphir_gleam_binding::GleamExtension;
 fn request(body: &str, version: &str, types_only: bool) -> CompileRequest {
     CompileRequest {
         language_id: "gleam".into(),
-        documents: vec![SourceDocument {
-            uri: "file:///workspace/src/main.gleam".into(),
-            language_id: "gleam".into(),
-            version: 1,
-            text: format!("pub type Model = Int\npub fn run(value) {{ {body} }}"),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "file:///workspace/src/main.gleam".into(),
+                language_id: "gleam".into(),
+                version: 1,
+                text: format!("pub type Model = Int\npub fn run(value) {{ {body} }}"),
+            }],
+        },
         package: CompilePackage {
             name: "example/package".into(),
             exposed_modules: None,

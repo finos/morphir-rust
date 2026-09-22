@@ -22,12 +22,15 @@ fn main() -> Result<()> {
     };
     let request = CompileRequest {
         language_id: "python".into(),
-        documents: vec![SourceDocument {
-            uri,
-            language_id: "python".into(),
-            version: 1,
-            text,
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri,
+                language_id: "python".into(),
+                version: 1,
+                text,
+            }],
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: None,

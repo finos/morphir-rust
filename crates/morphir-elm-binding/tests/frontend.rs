@@ -42,7 +42,10 @@ fn compile_as(
         .unwrap()
         .compile(CompileRequest {
             language_id: language_id.into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: package_name.into(),
                 exposed_modules: None,
@@ -70,7 +73,10 @@ fn compile_exposing(
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: package_name.into(),
                 exposed_modules: Some(exposed.iter().map(|name| name.to_string()).collect()),
@@ -124,7 +130,10 @@ fn compile_ordered(order: Option<&str>, documents: Vec<SourceDocument>) -> Compi
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: "My.Pkg".into(),
                 exposed_modules: None,
@@ -197,7 +206,10 @@ fn compile_with_doc_mode(mode: Option<&str>, text: &str) -> CompileResult {
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents: vec![document("file:///work/Docs.elm", text)],
+            sources: SourceSet {
+                root: None,
+                documents: vec![document("file:///work/Docs.elm", text)],
+            },
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: None,

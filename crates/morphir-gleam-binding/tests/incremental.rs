@@ -1,7 +1,7 @@
 //! Incremental compilation through the public frontend contract.
 use morphir_extension_sdk::{
     BaselineModule, CompileBaseline, CompileOptions, CompilePackage, CompileRequest, CompileResult,
-    Frontend, ModuleResult, ModuleStatus, SourceDocument,
+    Frontend, ModuleResult, ModuleStatus, SourceDocument, SourceSet,
 };
 use morphir_gleam_binding::GleamExtension;
 
@@ -17,7 +17,10 @@ fn request(a: &str, b: Option<&str>) -> CompileRequest {
     }
     CompileRequest {
         language_id: "gleam".into(),
-        documents,
+        sources: SourceSet {
+            root: None,
+            documents,
+        },
         package: CompilePackage {
             name: "sample".into(),
             exposed_modules: None,
@@ -291,10 +294,33 @@ fn changed_ir_version_prevents_baseline_reuse() {
     assert_eq!(module(&result, "a").status, ModuleStatus::Compiled);
 }
 
+/// The root is part of the compile context, even though it never touched a
+/// document's own source digest. A baseline built under one root must not be
+/// reused under a different root: the same relative document identities can
+/// resolve to different module names depending on the root, so reusing IR
+/// resolved under the old root would be silently wrong, not merely stale.
+#[test]
+fn a_baseline_from_a_different_root_is_ignored() {
+    let (first, baseline) = first();
+    assert_eq!(first.modules, ["a", "b"]);
+    let mut request = request(A, Some(B));
+    request.baseline = Some(baseline);
+    // `first()` compiled with no root at all; this run supplies one that
+    // still resolves the very same documents to the very same module names,
+    // so nothing about the *documents* changed - only the declared root did.
+    request.sources.root = Some("file:///work/src".into());
+    let result = compile(request);
+    assert!(result.success, "{:?}", result.diagnostics);
+    assert_eq!(result.modules, ["a", "b"]);
+    assert_ne!(result.context_digest, first.context_digest);
+    assert_eq!(module(&result, "a").status, ModuleStatus::Compiled);
+    assert_eq!(module(&result, "b").status, ModuleStatus::Compiled);
+}
+
 #[test]
 fn nested_module_paths_are_recorded_as_dependencies() {
     let mut request = request("import domain/model\npub type Alias = model.Number\n", None);
-    request.documents.push(document("domain/model", B));
+    request.sources.documents.push(document("domain/model", B));
     let first = compile(request.clone());
     assert!(first.success, "{:?}", first.diagnostics);
     assert_eq!(module(&first, "a").depends_on, vec!["domain/model"]);
@@ -320,6 +346,7 @@ fn changed_source_recompiles_only_the_changed_module() {
 fn an_unrelated_module_still_compiles_when_another_fails() {
     let mut request = request(A, Some(B_BROKEN));
     request
+        .sources
         .documents
         .push(document("unrelated", "pub type Name = String\n"));
     let result = compile(request);

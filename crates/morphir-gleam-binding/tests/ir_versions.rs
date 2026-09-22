@@ -5,12 +5,15 @@ use serde_json::json;
 fn request(version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "gleam".into(),
-        documents: vec![SourceDocument {
-            uri: "file:///src/model.gleam".into(),
-            language_id: "gleam".into(),
-            version: 1,
-            text: "pub type Status { Active Closed }".into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "file:///src/model.gleam".into(),
+                language_id: "gleam".into(),
+                version: 1,
+                text: "pub type Status { Active Closed }".into(),
+            }],
+        },
         package: CompilePackage {
             name: "example/model".into(),
             exposed_modules: None,
@@ -56,7 +59,7 @@ fn compiles_and_generates_both_supported_ir_releases() {
 fn types_only_omits_values_with_an_explicit_diagnostic() {
     let mut input = request("4.0.0");
     input.options.types_only = true;
-    input.documents[0]
+    input.sources.documents[0]
         .text
         .push_str("\npub fn hello() { \"world\" }");
     let compiled = GleamExtension.compile(input).unwrap();
@@ -87,8 +90,8 @@ fn dependencies_from_both_ir_versions_resolve_when_compiling_either_version() {
         let dependency = GleamExtension.compile(input).unwrap().ir.unwrap();
         for output_version in ["3", "4"] {
             let mut input = request(output_version);
-            input.documents[0].uri = "file:///src/consumer.gleam".into();
-            input.documents[0].text =
+            input.sources.documents[0].uri = "file:///src/consumer.gleam".into();
+            input.sources.documents[0].text =
                 "import model\npub type Wrapper { Wrapper(model.Status) }".into();
             input.dependencies.push(CompileDependency {
                 package_name: "example/dependency".into(),

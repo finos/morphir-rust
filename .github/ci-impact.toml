@@ -70,6 +70,7 @@ paths = [
 [jobs.kit-conformance]
 crates = ["morphir-package", "morphir-mck-adapter"]
 paths = [
+  ".github/scripts/test_windows_standard_user_provider.ps1",
   ".config/mck-cli.json",
   ".mise/tasks/check/kit*",
   "scripts/check-mck*",

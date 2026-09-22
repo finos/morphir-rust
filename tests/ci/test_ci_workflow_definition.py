@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import json
+import shutil
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +15,7 @@ import unittest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
+WINDOWS_PROVIDER_SCRIPT = REPOSITORY_ROOT / ".github/scripts/test_windows_standard_user_provider.ps1"
 
 
 def extract_job_blocks(workflow: str) -> dict[str, str]:
@@ -35,6 +38,7 @@ GATED_JOBS = {
     "docs": "job_rust",
     "coverage": "job_rust",
     "kit-conformance": "job_kit_conformance",
+    "provider-windows-standard-user": "job_kit_conformance",
     "workspace-wasm": "job_workspace_wasm",
     "test-native-extension": "job_test_native_extension",
     "test-daemon-extension": "job_test_daemon_extension",
@@ -52,6 +56,7 @@ RUST_CACHE_GROUPS = {
         "test-unit",
         "docs",
         "kit-conformance",
+        "provider-windows-standard-user",
         "workspace-wasm",
         "test-native-extension",
         "test-daemon-extension",
@@ -82,6 +87,69 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("  workflow_dispatch:\n    inputs:\n      full:", header)
         self.assertIn('  pull_request:\n    branches: ["main"]\n', header)
         self.assertNotIn("labeled", header)
+
+    def test_windows_provider_jobs_enable_long_git_dependency_paths(self) -> None:
+        for name in ("kit-conformance", "provider-windows-standard-user"):
+            with self.subTest(job=name):
+                job = self.jobs[name]
+                self.assertIn('CARGO_NET_GIT_FETCH_WITH_CLI: "true"', job)
+                self.assertIn("run: git config --global core.longpaths true", job)
+                self.assertLess(
+                    job.index("git config --global core.longpaths true"),
+                    job.index("cargo test --locked" if name == "kit-conformance" else "run: ./.github/scripts/test_windows_standard_user_provider.ps1"),
+                )
+
+    def test_windows_provider_job_invokes_standalone_powershell_script(self) -> None:
+        job = self.jobs["provider-windows-standard-user"]
+        self.assertIn("shell: pwsh", job)
+        self.assertIn("PROBE_TARGET: ${{ matrix.target }}", job)
+        self.assertIn("PROBE_ARCH: ${{ matrix.arch }}", job)
+        self.assertIn("run: ./.github/scripts/test_windows_standard_user_provider.ps1", job)
+        self.assertNotIn("New-LocalUser", job)
+        script = WINDOWS_PROVIDER_SCRIPT.read_text(encoding="utf-8")
+        for guard in (
+            "-Credential $credential -LoadUserProfile",
+            "--include-ignored --nocapture --test-threads=1",
+            "required ordinary-user case or complete unfiltered test run was not observed",
+            "if ($process.ExitCode -ne 0)",
+            "} finally {", "Remove-LocalUser", "Remove-CimInstance", "$secret.Dispose()",
+            "if ($cleanupErrors.Count) { throw",
+        ):
+            self.assertIn(guard, script)
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell subprocess is unavailable")
+    def test_provider_child_environment_is_explicit_and_drops_inherited_values(self) -> None:
+        source = WINDOWS_PROVIDER_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("  $childEnvironment =")
+        end = source.index("  # Fresh local logon", start)
+        environment_setup = textwrap.dedent(source[start:end])
+        self.assertNotIn("-UseNewEnvironment -Environment", source)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            script = Path(temporary_directory) / "environment-test.ps1"
+            output = Path(temporary_directory) / "child.json"
+            script.write_text(
+                """$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$env:MORPHIR_INHERITED_SENTINEL = 'must-not-reach-child'
+$env:PROBE_ARCH = 'native-fixture'
+$scratch = [pscustomobject]@{ FullName = 'private-scratch' }
+$account = [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'expected-user' } }
+$setupSid = 'setup-user'
+""" + environment_setup + """
+$code = '@{sentinel=$env:MORPHIR_INHERITED_SENTINEL; mode=$env:MORPHIR_PROVIDER_STANDARD_USER; user=$env:MORPHIR_PROVIDER_EXPECTED_SID; setup=$env:MORPHIR_PROVIDER_SETUP_SID; arch=$env:MORPHIR_PROVIDER_EXPECTED_ARCH; temp=$env:TEMP; tmp=$env:TMP} | ConvertTo-Json -Compress'
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+$process = Start-Process -FilePath (Get-Process -Id $PID).Path -Environment $childEnvironment -ArgumentList "-NoProfile -NonInteractive -EncodedCommand $encoded" -Wait -PassThru -RedirectStandardOutput $args[0]
+if ($process.ExitCode -ne 0) { throw 'environment fixture subprocess failed' }
+""", encoding="utf-8")
+            subprocess.run(
+                ["pwsh", "-NoProfile", "-NonInteractive", "-File", str(script), str(output)],
+                check=True, capture_output=True, text=True,
+            )
+            actual = json.loads(output.read_text(encoding="utf-8-sig"))
+            self.assertEqual(actual, {
+                "sentinel": None, "mode": "1", "user": "expected-user", "setup": "setup-user",
+                "arch": "native-fixture", "temp": "private-scratch", "tmp": "private-scratch",
+            })
 
     def test_concurrency_cancels_only_off_main(self) -> None:
         header = self.workflow.split("jobs:\n", 1)[0]

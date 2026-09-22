@@ -271,7 +271,7 @@ pub fn assert_tree(root: &Path, name: &str) {
 
 #[test]
 fn create_refuses_existing_directory_without_touching_contents() {
-    let root = tempfile::tempdir().unwrap();
+    let root = super::probe_tempdir().unwrap();
     let handle = Directory::root(root.path()).unwrap();
     handle.child("existing", FILE_CREATE).unwrap();
     fs::write(root.path().join("existing/preserved"), b"unchanged").unwrap();
@@ -284,7 +284,7 @@ fn create_refuses_existing_directory_without_touching_contents() {
 
 #[test]
 fn rename_without_delete_access_fails_and_preserves_source() {
-    let root = tempfile::tempdir().unwrap();
+    let root = super::probe_tempdir().unwrap();
     stage_tree(root.path());
     let handle = Directory::root(root.path()).unwrap();
     let parent = handle.child("ancestors", FILE_OPEN).unwrap();

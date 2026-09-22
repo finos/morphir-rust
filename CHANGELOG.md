@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The candidate remains a development dependency while authenticated package
   restore is implemented. The tool-update TUF dependency is unchanged.
   Tracks finos/morphir#852, PKG-3.
+- Windows-only package provider candidate probes for write-through directory
+  creation, exclusive handle-based promotion and process restart. They record
+  token elevation and leave whole-tree durability and standard-user qualification
+  explicitly pending.
 - Native, in-process extensions can serve workspace discovery. A new
   `NativeWorkspace` endpoint joins `NativeFrontend` and `NativeBackend`, and an
   extension implementing `Workspace` registers it through

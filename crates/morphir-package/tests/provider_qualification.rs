@@ -2,6 +2,10 @@
 #[path = "provider_support/filesystem.rs"]
 mod filesystem;
 
+#[cfg(windows)]
+#[path = "provider_support/windows_write_through.rs"]
+mod windows_write_through;
+
 use std::fs;
 
 #[test]
@@ -220,4 +224,61 @@ fn promotion_refuses_even_an_empty_existing_directory() {
     assert!(filesystem::promote(&source, &destination).is_err());
     assert_eq!(fs::read(source.join("payload")).unwrap(), b"candidate");
     assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_write_through_preserves_empty_directories_and_ancestors() {
+    let root = tempfile::tempdir().unwrap();
+    windows_write_through::stage_tree(root.path());
+    windows_write_through::assert_tree(root.path(), "ancestors/stage");
+    windows_write_through::promote_tree(root.path()).unwrap();
+    assert!(!root.path().join("ancestors/stage").exists());
+    windows_write_through::assert_tree(root.path(), "ancestors/winner");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_write_through_collision_preserves_both_trees() {
+    for occupied in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        windows_write_through::stage_tree(root.path());
+        let winner = root.path().join("ancestors/winner");
+        fs::create_dir(&winner).unwrap();
+        if occupied {
+            fs::write(winner.join("previous"), b"existing winner").unwrap();
+        }
+        let error = windows_write_through::promote_tree(root.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        windows_write_through::assert_tree(root.path(), "ancestors/stage");
+        assert_eq!(
+            fs::read_dir(&winner).unwrap().count(),
+            usize::from(occupied)
+        );
+        if occupied {
+            assert_eq!(
+                fs::read(winner.join("previous")).unwrap(),
+                b"existing winner"
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_write_through_tree_survives_writer_death_and_fresh_reader() {
+    for phase in ["windows-staged", "windows-promoted"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut child = process::ChildProbe::start(phase, root.path());
+        child.kill_and_wait();
+        let mut reader = process::ChildProbe::start(
+            if phase == "windows-staged" {
+                "windows-read-stage"
+            } else {
+                "windows-read-winner"
+            },
+            root.path(),
+        );
+        reader.expect_success();
+    }
 }

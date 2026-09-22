@@ -72,6 +72,13 @@ fn synthesize_identity(response: DiscoveryResponse) -> DiscoveryResponse {
             }
             Err(message) => {
                 project.state = ProjectState::Error;
+                // `ProjectSnapshot::diagnostics` is documented as sorted by
+                // project path, path, code, severity and message. A
+                // synthesized project's diagnostics start empty
+                // (`discover_ad_hoc_sources` never populates them), and this
+                // is the only diagnostic this function ever adds, so a
+                // single push keeps that ordering trivially satisfied. If a
+                // second diagnostic is ever pushed here, re-sort afterward.
                 project.diagnostics.push(WorkspaceDiagnostic {
                     severity: WorkspaceDiagnosticSeverity::Error,
                     code: GLEAM_WORKSPACE_INVALID_MODULE_PATH.to_owned(),
@@ -123,6 +130,17 @@ fn derive_identity(
         .to_owned();
     let refs = segments.iter().map(String::as_str).collect::<Vec<_>>();
     let module_name = canonicalize_gleam_module_segments(&refs)?.to_string();
+    // Two different selections can collide on this package name: segment
+    // canonicalization already maps `_` to `-` per segment (`a_b` and `a-b`
+    // both canonicalize to `a-b`), and flattening `/` to `-` below compounds
+    // that across segments, so `a/b.gleam` and `a_b.gleam` both yield
+    // `local/a-b`, with different module sets. This never collides *within*
+    // one snapshot — an unnamed selection is always exactly one source, so
+    // there is only ever one derived name here — but two separate discovery
+    // invocations can still produce colliding package identities wherever a
+    // name is later used as a key. Not fixed here: the derivation policy is
+    // settled, and the case is unreachable in the one place this function
+    // runs.
     let package_name = format!("local/{}", module_name.replace('/', "-"));
     Ok((package_name, module_name))
 }
@@ -146,8 +164,8 @@ fn relative_segments(root: &RelativePath, input: &RelativePath) -> Vec<String> {
 mod tests {
     use super::*;
     use morphir_workspace::{
-        DiscoveryPurpose, FileEntry, FileTree, ProjectSource, SourceSelection,
-        WORKSPACE_DISCOVERY_PROTOCOL,
+        DiscoveryPurpose, FileEntry, FileTree, ProjectSnapshot, ProjectSource, SourceSelection,
+        WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -249,6 +267,9 @@ mod tests {
     }
 
     /// A discovery failure is passed through unchanged, never reinterpreted.
+    /// Asserting the variant alone would also pass a provider that rewrote
+    /// the failure's code or message while keeping it a `Failure`, so this
+    /// pins the exact code `morphir_workspace::discover` produces.
     #[test]
     fn a_discovery_failure_passes_through_unchanged() {
         let mut request = ad_hoc_request("models", "models/domain/widget.gleam");
@@ -258,12 +279,60 @@ mod tests {
             .discover(request)
             .expect("the typed call itself should not error");
 
-        assert!(matches!(response, DiscoveryResponse::Failure { .. }));
+        let DiscoveryResponse::Failure { error } = response else {
+            panic!("expected a discovery failure");
+        };
+        assert_eq!(error.code, WORKSPACE_PROTOCOL_UNSUPPORTED);
+    }
+
+    /// A manifest-backed project is never touched, even if its name happens
+    /// to be empty — nothing in the type system stops that, so the guard
+    /// that checks `origin` before deriving anything is load-bearing, not
+    /// belt-and-braces. This bypasses `GleamExtension::discover` and drives
+    /// `synthesize_identity` directly, since portable discovery itself
+    /// never produces an empty-named manifest project.
+    #[test]
+    fn a_manifest_project_with_an_empty_name_is_not_touched() {
+        let manifest_path = RelativePath::parse("morphir.toml").expect("a confined wire path");
+        let project = ProjectSnapshot {
+            name: String::new(),
+            version: None,
+            relative_path: RelativePath::root(),
+            config_anchor: Some(manifest_path.clone()),
+            source_directory: RelativePath::root(),
+            state: ProjectState::Unloaded,
+            diagnostics: Vec::new(),
+            origin: ProjectOrigin::Manifest {
+                path: manifest_path.clone(),
+            },
+            exposed_modules: None,
+        };
+        let snapshot = WorkspaceSnapshot {
+            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            config_anchor: Some(manifest_path),
+            name: None,
+            state: WorkspaceState::Open,
+            projects: vec![project],
+            diagnostics: Vec::new(),
+        };
+
+        let response = synthesize_identity(DiscoveryResponse::Success { snapshot });
+
+        let DiscoveryResponse::Success { snapshot } = response else {
+            panic!("expected a successful discovery response");
+        };
+        let project = &snapshot.projects[0];
+        assert_eq!(project.name, "");
+        assert_eq!(project.exposed_modules, None);
+        assert_eq!(project.state, ProjectState::Unloaded);
+        assert_eq!(snapshot.state, WorkspaceState::Open);
     }
 
     /// A source filename Gleam cannot turn into a valid module segment (a
     /// literal hyphen) is a project-level diagnostic, not a silently wrong
-    /// name and not a panic.
+    /// name and not a panic. Every diagnostic field is asserted, not just
+    /// the code, since an unchecked `path`/`projectPath` would let a
+    /// diagnostic that points at the wrong file pass unnoticed.
     #[test]
     fn an_unsynthesizable_module_path_is_a_project_diagnostic_not_a_panic() {
         let request = ad_hoc_request("models", "models/order-processing.gleam");
@@ -278,10 +347,21 @@ mod tests {
         assert_eq!(snapshot.state, WorkspaceState::Error);
         let project = &snapshot.projects[0];
         assert_eq!(project.name, "");
+        assert_eq!(project.exposed_modules, None);
         assert_eq!(project.state, ProjectState::Error);
+        assert_eq!(project.diagnostics.len(), 1);
+        let diagnostic = &project.diagnostics[0];
+        assert_eq!(diagnostic.code, GLEAM_WORKSPACE_INVALID_MODULE_PATH);
+        assert_eq!(diagnostic.severity, WorkspaceDiagnosticSeverity::Error);
         assert_eq!(
-            project.diagnostics[0].code,
-            GLEAM_WORKSPACE_INVALID_MODULE_PATH
+            diagnostic.path,
+            Some(
+                RelativePath::parse("models/order-processing.gleam").expect("a confined wire path")
+            )
+        );
+        assert_eq!(
+            diagnostic.project_path,
+            Some(RelativePath::parse("models").expect("a confined wire path"))
         );
     }
 }

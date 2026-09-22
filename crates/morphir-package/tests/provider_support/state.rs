@@ -3,6 +3,12 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fs::OpenOptions, path::Path};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const EVIDENCE: &[u8] = b"exact signed bytes\0\xff\n";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Initialization {
+    Reserved,
+    BeforeCommit,
+    AfterCommit,
+}
 pub struct Store {
     pub connection: Connection,
 }
@@ -20,6 +26,12 @@ impl Store {
         Self::configured(connection)
     }
     pub fn initialize(path: &Path) -> Result<Self> {
+        Self::initialize_observed(path, |_| {})
+    }
+    pub fn initialize_observed(
+        path: &Path,
+        mut observe: impl FnMut(Initialization),
+    ) -> Result<Self> {
         // SQLite OPEN_CREATE is not exclusive. Reserve the file with the OS first.
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -30,6 +42,7 @@ impl Store {
         }
         let reserved = options.open(path)?;
         reserved.sync_all()?;
+        observe(Initialization::Reserved);
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         let mut store = Self::configured(connection)?;
         let transaction = store
@@ -42,7 +55,9 @@ impl Store {
             "INSERT INTO provisioning VALUES (1,1,?1)",
             [b"original identity".as_slice()],
         )?;
+        observe(Initialization::BeforeCommit);
         transaction.commit()?;
+        observe(Initialization::AfterCommit);
         store.assert_settings();
         Ok(store)
     }

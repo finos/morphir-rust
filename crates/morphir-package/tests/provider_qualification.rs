@@ -309,3 +309,10 @@ fn windows_write_through_tree_survives_writer_death_and_fresh_reader() {
         reader.expect_success();
     }
 }
+
+#[path = "provider_support/durability.rs"]
+mod durability;
+#[path = "provider_support/tree_durability.rs"]
+mod tree_durability;
+#[path = "provider_support/vfs_fault.rs"]
+mod vfs_fault;

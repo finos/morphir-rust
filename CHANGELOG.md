@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Host-supplied fixed operation time for the experimental package-local TUF
+  candidate, shared by metadata authentication and target reads. Expiration is
+  enforced at exact equality, and fixed time cannot disable expiration checks.
+  Durable package storage and accepted-time semantics remain pending under
+  finos/morphir#852, PKG-3.
 - Package-local TUF qualification groundwork with exact positive-integer metadata
   versions, signed boundary and process-restart tests, and native CI coverage.
   The candidate remains a development dependency while authenticated package

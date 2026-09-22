@@ -22,6 +22,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub enum Error {
+    /// A fixed current-operation time cannot disable expiration checks.
+    #[snafu(display("Fixed operation time requires safe expiration enforcement"))]
+    FixedTimeRequiresExpirationEnforcement,
+
     #[snafu(display("Unable to canonicalize path '{}': {}", path.display(), source))]
     AbsolutePath {
         path: PathBuf,

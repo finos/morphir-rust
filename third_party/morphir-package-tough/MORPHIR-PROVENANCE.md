@@ -30,8 +30,8 @@ number with `serde_json/arbitrary_precision`; no float or string substitution is
 used. `serde_json/raw_value` is enabled for the token boundary.
 
 Signature algorithms, verification and upstream update ordering are unchanged.
-This adaptation does not yet supply the package profile's clock, durable storage,
-raw-key quorum or assurance-provider integration. Passing these tests is not
+This adaptation supplies the fixed host-clock hook described below. It does not
+yet supply durable storage, raw-key quorum or assurance-provider integration. Passing these tests is not
 qualification of a production package restore operation.
 
 ## Test maintenance
@@ -81,4 +81,35 @@ cargo fmt --manifest-path third_party/morphir-package-tough/Cargo.toml --all --c
   and the version invariants.
 
 All other copied source and upstream test files are unchanged. In particular,
-`src/schema/verify.rs`, `src/sign.rs` and `src/datastore.rs` are unchanged.
+`src/schema/verify.rs` and `src/sign.rs` are unchanged. The narrowly adapted
+`src/datastore.rs` time source is described below.
+
+## Fixed operation clock
+
+`RepositoryLoader::fixed_time(jiff::Timestamp)` accepts the trusted host's time
+captured before a bounded current operation. The loader's datastore reuses that
+value for authentication, every target read and the existing known-time rollback
+check. Without the override, ambient system-clock sampling is unchanged.
+Combining fixed time with `ExpirationEnforcement::Unsafe` is rejected before
+loading or changing the datastore, regardless of builder order. This API is not
+exposed as a package-controlled setting or CLI option; callers must begin a new
+operation with a new loader and time.
+
+The shared role expiration comparison changes from `time <= expires` to
+`time < expires`. The former accepted equality during metadata loading while
+upstream target reads already rejected it. A failing equality regression with
+original signed metadata reproduced the inconsistency. The strict comparison
+matches the pinned TUF specification's requirement that expiration be higher
+than the fixed operation start time. All other default expiration behavior is
+retained.
+
+`tests/fixed_time.rs` covers before/equal/after expiration, repeated top-level and
+delegated target reads, known-time recording and rollback at both load/read, and
+rejection of fixed-time/unsafe combinations in either builder order. A unit test
+checks exact boundaries for all four role types. These tests use original signed
+fixtures; they do not re-sign modified timestamps through the library under test.
+
+The datastore still has upstream write ordering and durability limitations. Its
+existing known-time record is not a package accepted-time floor. This clock-only
+hook does not qualify a production provider or supply the pending transactional
+storage/recovery integration.

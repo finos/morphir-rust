@@ -179,6 +179,7 @@ pub struct RepositoryLoader<'a> {
     limits: Option<Limits>,
     datastore: Option<PathBuf>,
     expiration_enforcement: Option<ExpirationEnforcement>,
+    fixed_time: Option<JiffTimestamp>,
 }
 
 impl<'a> RepositoryLoader<'a> {
@@ -200,6 +201,7 @@ impl<'a> RepositoryLoader<'a> {
             limits: None,
             datastore: None,
             expiration_enforcement: None,
+            fixed_time: None,
         }
     }
 
@@ -232,6 +234,42 @@ impl<'a> RepositoryLoader<'a> {
     #[must_use]
     pub fn datastore<P: Into<PathBuf>>(mut self, datastore: P) -> Self {
         self.datastore = Some(datastore.into());
+        self
+    }
+
+    /// Use one host-supplied time for this bounded operation and its target reads.
+    ///
+    /// The trusted host must capture the time before beginning authentication. Do not
+    /// take this value from package content or an untrusted caller. The returned
+    /// repository belongs to this operation: start a new load with a fresh time for
+    /// a subsequent operation instead of retaining this repository indefinitely.
+    ///
+    /// Expiration remains enforced, including at exact equality. Combining this
+    /// setting with [`ExpirationEnforcement::Unsafe`] is rejected by [`Self::load`]
+    /// regardless of builder order. The existing time rollback check uses this same
+    /// value. Without this setting, system-clock sampling retains upstream behavior.
+    /// This clock hook does not provide durable package state or accepted-time semantics.
+    ///
+    /// ```
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+    /// # let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    /// #     .join("tests/data/expired-repository");
+    /// # let root = std::fs::read(base.join("metadata/1.root.json")).unwrap();
+    /// let operation_time = "1998-12-31T23:59:59Z".parse().unwrap();
+    /// let repository = tough::RepositoryLoader::new(
+    ///     &root,
+    ///     url::Url::from_directory_path(base.join("metadata")).unwrap(),
+    ///     url::Url::from_directory_path(base.join("targets")).unwrap(),
+    /// )
+    /// .fixed_time(operation_time)
+    /// .load()
+    /// .await?;
+    /// # Ok::<(), tough::error::Error>(())
+    /// # }).unwrap();
+    /// ```
+    #[must_use]
+    pub fn fixed_time(mut self, time: JiffTimestamp) -> Self {
+        self.fixed_time = Some(time);
         self
     }
 
@@ -332,12 +370,16 @@ pub struct Repository {
 impl Repository {
     /// Load and verify TUF repository metadata using a [`RepositoryLoader`] for the settings.
     async fn load(loader: RepositoryLoader<'_>) -> Result<Self> {
-        let datastore = Datastore::new(loader.datastore)?;
+        let expiration_enforcement = loader.expiration_enforcement.unwrap_or_default();
+        ensure!(
+            loader.fixed_time.is_none() || expiration_enforcement == ExpirationEnforcement::Safe,
+            error::FixedTimeRequiresExpirationEnforcementSnafu
+        );
+        let datastore = Datastore::new(loader.datastore, loader.fixed_time)?;
         let transport = loader
             .transport
             .unwrap_or_else(|| Box::new(DefaultTransport::new()));
         let limits = loader.limits.unwrap_or_default();
-        let expiration_enforcement = loader.expiration_enforcement.unwrap_or_default();
         let metadata_base_url = parse_url(loader.metadata_base_url)?;
         let targets_base_url = parse_url(loader.targets_base_url)?;
         let update_start = datastore.system_time().await?;
@@ -664,7 +706,7 @@ pub(crate) fn encode_filename<S: AsRef<str>>(name: S) -> String {
 /// be higher than the fixed update start time.
 fn check_expired<T: Role>(update_start: &JiffTimestamp, role: &T) -> Result<()> {
     ensure!(
-        *update_start <= role.expires(),
+        *update_start < role.expires(),
         error::ExpiredMetadataSnafu { role: T::TYPE }
     );
     Ok(())
@@ -1571,5 +1613,43 @@ mod tests {
         let expected = "%F0%9F%8D%BA%2F30";
         let actual = encode_filename(input);
         assert_eq!(expected, actual);
+    }
+}
+
+#[cfg(test)]
+mod fixed_time_boundaries {
+    use super::check_expired;
+    use crate::schema::{Role, Root, Signed, Snapshot, Targets, Timestamp};
+    use jiff::SignedDuration;
+
+    fn assert_expiration_boundary<T: Role>(role: &T) {
+        let expires = role.expires();
+        assert!(check_expired(&(expires - SignedDuration::from_nanos(1)), role).is_ok());
+        assert!(check_expired(&expires, role).is_err());
+        assert!(check_expired(&(expires + SignedDuration::from_nanos(1)), role).is_err());
+    }
+
+    #[test]
+    fn every_role_expires_at_equality() {
+        let root: Signed<Root> = serde_json::from_str(include_str!(
+            "../tests/data/expired-repository/metadata/1.root.json"
+        ))
+        .unwrap();
+        let timestamp: Signed<Timestamp> = serde_json::from_str(include_str!(
+            "../tests/data/expired-repository/metadata/timestamp.json"
+        ))
+        .unwrap();
+        let snapshot: Signed<Snapshot> = serde_json::from_str(include_str!(
+            "../tests/data/expired-repository/metadata/1589485578.snapshot.json"
+        ))
+        .unwrap();
+        let targets: Signed<Targets> = serde_json::from_str(include_str!(
+            "../tests/data/expired-repository/metadata/1589485578.targets.json"
+        ))
+        .unwrap();
+        assert_expiration_boundary(&root.signed);
+        assert_expiration_boundary(&timestamp.signed);
+        assert_expiration_boundary(&snapshot.signed);
+        assert_expiration_boundary(&targets.signed);
     }
 }

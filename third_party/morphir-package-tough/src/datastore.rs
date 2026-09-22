@@ -19,16 +19,19 @@ pub(crate) struct Datastore {
     path_lock: Arc<RwLock<DatastorePath>>,
     /// A lock to treat the `system_time` function as a critical section.
     time_lock: Arc<Mutex<()>>,
+    /// A host-supplied operation time; absent means sample the system clock.
+    fixed_time: Option<Timestamp>,
 }
 
 impl Datastore {
-    pub(crate) fn new(path: Option<PathBuf>) -> Result<Self> {
+    pub(crate) fn new(path: Option<PathBuf>, fixed_time: Option<Timestamp>) -> Result<Self> {
         Ok(Self {
             path_lock: Arc::new(RwLock::new(match path {
                 None => DatastorePath::TempDir(TempDir::new().context(error::DatastoreInitSnafu)?),
                 Some(p) => DatastorePath::Path(p),
             })),
             time_lock: Arc::new(Mutex::new(())),
+            fixed_time,
         })
     }
 
@@ -83,8 +86,9 @@ impl Datastore {
         }
     }
 
-    /// Ensures that system time has not stepped backward since it was last sampled. This function
-    /// is protected by a lock guard to ensure thread safety.
+    /// Checks the selected operation/system time against the existing rollback record.
+    /// This retains upstream persistence semantics; it is not an accepted-time store.
+    /// The time check and write are protected by the existing lock guard.
     pub(crate) async fn system_time(&self) -> Result<Timestamp> {
         // Treat this function as a critical section. This lock is not used for anything else.
         let lock = self.time_lock.lock().await;
@@ -96,8 +100,8 @@ impl Datastore {
             .await?
             .map(|b| serde_json::from_slice::<Timestamp>(&b));
 
-        // Get 'current' system time
-        let sys_time = Timestamp::now();
+        // The fixed operation time is reused on every check; otherwise sample the clock.
+        let sys_time = self.fixed_time.unwrap_or_else(Timestamp::now);
 
         if let Some(Ok(latest_known_time)) = poss_latest_known_time {
             // Make sure the sampled system time did not go back in time

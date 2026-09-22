@@ -169,6 +169,78 @@ fn file_stem(file_name: &str) -> &str {
 mod tests {
     use super::*;
 
+    /// An unterminated block comment consumes the rest of the source, so
+    /// `skip_elm_trivia` runs out of input with a non-zero nesting depth and
+    /// reports no declaration rather than guessing at one. The caller falls
+    /// back to the filename, which is the historical behaviour: a source this
+    /// malformed will fail to compile anyway, and inventing a module name
+    /// from a half-scanned header would name the package after whatever text
+    /// happened to follow the comment opener.
+    #[test]
+    fn an_unterminated_block_comment_yields_no_declaration() {
+        assert_eq!(
+            elm_module_name("{- module Acme.Widget exposing (..)\n"),
+            None
+        );
+    }
+
+    /// A nested comment left unterminated is the same case one level deeper.
+    /// Note this pins the *contract* -- no declaration -- and cannot pin the
+    /// depth bookkeeping behind it: see
+    /// `an_unterminated_comment_is_distinguishable_from_exhausted_trivia`
+    /// below for why that needs `skip_elm_trivia` tested directly.
+    #[test]
+    fn an_unterminated_nested_block_comment_yields_no_declaration() {
+        assert_eq!(
+            elm_module_name("{- outer {- inner -}\nmodule Acme.Widget exposing (..)\n"),
+            None
+        );
+    }
+
+    /// `skip_elm_trivia` reports an unterminated block comment as `None`
+    /// rather than as trivia that happened to reach the end of the source.
+    ///
+    /// This needs asserting here, directly, because the distinction is
+    /// invisible through `elm_module_name`: dropping the depth check makes
+    /// the scanner return `Some(source.len())` instead, and the caller then
+    /// looks for `module` at the end of the source, fails, and reports no
+    /// declaration either way. The two unterminated-comment tests above
+    /// therefore pass against both versions. Only the trivia scanner's own
+    /// return value separates "the source ended mid-comment" from "the source
+    /// is all trivia", which is the difference a future caller that wants to
+    /// diagnose a malformed comment would depend on.
+    #[test]
+    fn an_unterminated_comment_is_distinguishable_from_exhausted_trivia() {
+        assert_eq!(skip_elm_trivia("{- unterminated", 0), None);
+        assert_eq!(skip_elm_trivia("{- outer {- inner -}", 0), None);
+        // A source that really is all trivia still reports its end.
+        let all_trivia = "  -- just a comment\n{- and a block -}\n";
+        assert_eq!(skip_elm_trivia(all_trivia, 0), Some(all_trivia.len()));
+    }
+
+    /// A byte order mark is trivia, not the start of a declaration. Editors
+    /// on Windows write one routinely, and a scanner that treated it as the
+    /// first character of the source would find no `module` keyword at offset
+    /// zero and fall back to the filename for every such file.
+    #[test]
+    fn a_byte_order_mark_before_the_declaration_is_skipped() {
+        assert_eq!(
+            elm_module_name("\u{feff}module Acme.Widget exposing (..)\n"),
+            Some("Acme.Widget".to_owned())
+        );
+    }
+
+    /// `port` is only a declaration prefix when `module` actually follows it.
+    /// A bare `port` declaration -- ordinary Elm, appearing in a port
+    /// module's body -- must not be mistaken for a header.
+    #[test]
+    fn a_port_declaration_without_module_yields_no_declaration() {
+        assert_eq!(
+            elm_module_name("port sendMessage : String -> Cmd msg\n"),
+            None
+        );
+    }
+
     /// The ordinary case: a plain `module` header yields the dot-separated
     /// module path exactly as written, with no case folding — only the
     /// package name derived from it in [`super`] is lowercased.

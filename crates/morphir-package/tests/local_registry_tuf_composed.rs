@@ -316,3 +316,89 @@ async fn equal_timestamp_discards_changed_link_even_when_candidate_has_expired()
         assert_eq!(state.state.accepted_time, None);
     }
 }
+
+fn write_versioned_view(directory: &std::path::Path, version: u64, snapshot_seed: u8) {
+    let mut targets = signed_body(&package_targets());
+    targets["version"] = json!(version);
+    let targets = sign(targets, &[(17, key(17))]);
+    let mut snapshot = signed_body(&fixtures::snapshot(&targets, snapshot_seed));
+    snapshot["version"] = json!(version);
+    snapshot["meta"]["targets.json"]["version"] = json!(version);
+    let snapshot = sign(snapshot, &[(snapshot_seed, key(snapshot_seed))]);
+    let mut timestamp = signed_body(&fixtures::timestamp(&snapshot, 17));
+    timestamp["version"] = json!(version);
+    timestamp["meta"]["snapshot.json"]["version"] = json!(version);
+    let timestamp = sign(timestamp, &[(17, key(17))]);
+    for (name, bytes) in [
+        (format!("{version}.targets.json"), targets),
+        (format!("{version}.snapshot.json"), snapshot),
+        ("timestamp.json".into(), timestamp),
+    ] {
+        std::fs::write(directory.join(name), bytes).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn snapshot_key_rotation_resets_both_floors_while_unchanged_keys_preserve_them() {
+    for rotate in [true, false] {
+        let (backend, guard) = backend::setup();
+        let guard = Arc::new(guard);
+        let directory = tempfile::tempdir().unwrap();
+        write_versioned_view(directory.path(), 2, 17);
+        assert!(matches!(
+            load(guard.clone(), directory.path(), ObservedFiles::default())
+                .await
+                .unwrap(),
+            PackageLoadOutcome::Updated(_)
+        ));
+        let original = backend.0.lock().unwrap().state.clone();
+        let next_root = if rotate {
+            let mut body = root_body(2, &[(17, key(17)), (18, key(18))], 1);
+            for role in ["root", "timestamp", "targets"] {
+                body["roles"][role]["keyids"] = json!([id(&key(17))]);
+            }
+            body["roles"]["snapshot"]["keyids"] = json!([id(&key(18))]);
+            sign(body, &[(17, key(17))])
+        } else {
+            root(2, 17)
+        };
+        std::fs::write(directory.path().join("2.root.json"), &next_root).unwrap();
+        // Stop after root-cycle persistence to inspect the exact atomic reset.
+        std::fs::write(
+            directory.path().join("timestamp.json"),
+            b"invalid later metadata",
+        )
+        .unwrap();
+        assert!(
+            load(guard.clone(), directory.path(), ObservedFiles::default())
+                .await
+                .is_err()
+        );
+        {
+            let state = backend.0.lock().unwrap();
+            assert_eq!(state.state.current_root, next_root);
+            assert!(state.state.reset_baseline.is_none());
+            for role in [MetadataRole::Timestamp, MetadataRole::Snapshot] {
+                assert_eq!(
+                    state.state.metadata.contains_key(&role),
+                    !rotate,
+                    "{role:?} rotate={rotate}"
+                );
+            }
+            assert_eq!(
+                state.state.metadata[&MetadataRole::Targets].bytes,
+                original.metadata[&MetadataRole::Targets].bytes
+            );
+        }
+        write_versioned_view(directory.path(), 1, if rotate { 18 } else { 17 });
+        let outcome = load(guard, directory.path(), ObservedFiles::default()).await;
+        if rotate {
+            assert!(matches!(outcome.unwrap(), PackageLoadOutcome::Updated(_)));
+        } else {
+            assert!(
+                matches!(outcome,Err(MetadataLoadError::Update(error)) if matches!(*error,package_tough::error::Error::OlderMetadata{role:package_tough::schema::RoleType::Timestamp,..}))
+            );
+        }
+        assert_eq!(backend.0.lock().unwrap().state.accepted_time, None);
+    }
+}

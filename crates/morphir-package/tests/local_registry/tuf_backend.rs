@@ -1,7 +1,7 @@
 use super::fixtures::*;
 use async_trait::async_trait;
 use morphir_package::local_registry::{tuf::*, *};
-use package_tough::experimental_storage::{Revision, Snapshot, Transition};
+use package_tough::experimental_storage::{MetadataRole, Reset, Revision, Snapshot, Transition};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
@@ -50,7 +50,11 @@ impl AdmissionBackend for Backend {
                 state.root_chain.push(root.clone());
                 state.state.reset_baseline = Some(baseline.clone());
             }
-            Transition::FinishRootCycle { .. } => {
+            Transition::FinishRootCycle { reset } => {
+                if *reset == Reset::TimestampAndSnapshot {
+                    state.state.metadata.remove(&MetadataRole::Timestamp);
+                    state.state.metadata.remove(&MetadataRole::Snapshot);
+                }
                 state.state.reset_baseline = None;
             }
         }

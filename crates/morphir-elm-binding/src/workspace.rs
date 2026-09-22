@@ -22,7 +22,7 @@
 
 use morphir_extension_sdk::prelude::*;
 use morphir_workspace::{
-    DiscoveryRequest, DiscoveryResponse, FileTree, ProjectOrigin, RelativePath,
+    DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse, ProjectOrigin, RelativePath,
 };
 
 use crate::ElmExtension;
@@ -32,12 +32,31 @@ impl Workspace for ElmExtension {
         // `morphir_workspace::discover` owns confinement, budgets, ordering
         // and diagnostics; nothing here reimplements any of that. Identity
         // synthesis below needs the submitted source's *text*, not just its
-        // path, so the file tree is cloned before `discover` consumes the
-        // request.
-        let development_root = request.development_root.clone();
+        // path, but `request` is about to be consumed by `discover`. Rather
+        // than clone the whole confined tree — every file's complete text —
+        // just to read one file back afterward, the one source this provider
+        // could ever need is already knowable from the request's own
+        // selection before discovery runs: only an unnamed, single-path
+        // `AdHocSources` selection can ever reach `derive_identity` at all
+        // (portable discovery both requires and enforces exactly that
+        // cardinality for an unnamed selection), so a named selection, a
+        // multi-source selection, and a `ManifestProjects` request all
+        // capture nothing here — `synthesize_identity` never needs text for
+        // those. This mirrors nothing in Gleam's provider because Gleam
+        // never needs source text at all.
+        let candidate = match &request.purpose {
+            DiscoveryPurpose::AdHocSources { sources, .. } => match sources.paths.as_slice() {
+                [only] => request
+                    .development_root
+                    .file_text(only)
+                    .map(|text| (only.clone(), text.to_owned())),
+                _ => None,
+            },
+            DiscoveryPurpose::ManifestProjects => None,
+        };
         Ok(synthesize_identity(
             morphir_workspace::discover(request),
-            &development_root,
+            candidate,
         ))
     }
 }
@@ -49,13 +68,16 @@ impl Workspace for ElmExtension {
 /// discovery failure passes through unchanged: it is not this function's to
 /// reinterpret.
 ///
-/// `development_root` is the request's file tree, carried alongside the
-/// response since [`morphir_workspace::discover`] only returns paths, never
-/// document text, and deriving an Elm module name needs the declared header
-/// inside the source.
+/// `candidate` is the one source this provider could ever need to read —
+/// its path and text, captured from the request before `discover` consumed
+/// it — or `None` when the request could never have produced a project
+/// needing derivation. This function does not itself decide which project
+/// (if any) needs synthesis; that is still driven entirely by the returned
+/// snapshot, so `candidate` is matched against the discovered project's own
+/// input path rather than assumed to apply.
 fn synthesize_identity(
     response: DiscoveryResponse,
-    development_root: &FileTree,
+    candidate: Option<(RelativePath, String)>,
 ) -> DiscoveryResponse {
     let mut snapshot = match response {
         DiscoveryResponse::Success { snapshot } => snapshot,
@@ -76,12 +98,16 @@ fn synthesize_identity(
         let [input] = inputs.as_slice() else {
             continue;
         };
-        // `validate_ad_hoc_selection` already confirmed `input` names a text
-        // file in this same tree before a `Success` snapshot could exist, so
-        // this is never actually missing; the fallback to an empty string
-        // only guards against that invariant changing out from under this
-        // function, not a real gap.
-        let text = development_root.file_text(input).unwrap_or_default();
+        // `candidate` was captured from the same request this snapshot was
+        // discovered from, so a mismatch here should not be reachable — the
+        // filter is defensive, not load-bearing. A miss falls back to an
+        // empty string, which `elm_module_name` already treats as "no
+        // declaration" and falls back from, same as `derive_identity`'s
+        // other empty-input cases.
+        let text = candidate
+            .as_ref()
+            .filter(|(path, _)| path == input)
+            .map_or("", |(_, text)| text.as_str());
 
         let (package_name, module_name) = derive_identity(input, text);
         project.name = package_name;
@@ -279,9 +305,9 @@ fn file_stem(file_name: &str) -> &str {
 mod tests {
     use super::*;
     use morphir_workspace::{
-        DiscoveryPurpose, FileEntry, ProjectSnapshot, ProjectSource, ProjectState, SourceSelection,
-        WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceSnapshot,
-        WorkspaceState,
+        DiscoveryPurpose, FileEntry, FileTree, ProjectSnapshot, ProjectSource, ProjectState,
+        SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED,
+        WorkspaceSnapshot, WorkspaceState,
     };
     use std::collections::BTreeMap;
 
@@ -573,12 +599,7 @@ mod tests {
             projects: vec![project],
             diagnostics: Vec::new(),
         };
-        let development_root = FileTree {
-            entries: BTreeMap::new(),
-        };
-
-        let response =
-            synthesize_identity(DiscoveryResponse::Success { snapshot }, &development_root);
+        let response = synthesize_identity(DiscoveryResponse::Success { snapshot }, None);
 
         let DiscoveryResponse::Success { snapshot } = response else {
             panic!("expected a successful discovery response");

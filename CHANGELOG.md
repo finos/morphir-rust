@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
 ### Changed
+- `test:cli-release <id>` degrades to a skip, rather than a failure, when the
+  pinned CLI release rejects a release descriptor field that did not exist when
+  it was cut — currently `workspaceDiscovery`, which is why the Gleam bundle
+  could not be published through 0.4.0-beta.3. The skip needs the publish error
+  to name a field listed as transitional in the task *and* the descriptor to
+  carry it; every other publish failure still fails the job, and the task says
+  on stderr when a listed field publishes cleanly and the entry can go.
 - **Source-breaking:** `NativeExtension::capabilities()` returns an owned
   `ExtensionCapabilities` instead of `&ExtensionCapabilities`. Code that binds the
   result by reference or stores the borrow needs adjusting; code that already

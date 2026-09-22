@@ -40,7 +40,7 @@ fn wasm_compiles_and_generates_functions_and_lambdas_in_both_versions() {
     for version in ["3", "4"] {
         let mut request = a_type_model(version);
         request.options.types_only = false;
-        request.documents[0].text = functions::SOURCE.into();
+        request.sources.documents[0].text = functions::SOURCE.into();
         let native = RustExtension.compile(request.clone()).unwrap();
         assert!(native.success, "{:?}", native.diagnostics);
         let compiled: CompileResult = serde_json::from_value(result(
@@ -78,7 +78,7 @@ fn wasm_compiles_and_generates_functions_and_lambdas_in_both_versions() {
         ] {
             let mut request = a_type_model(version);
             request.options.types_only = false;
-            request.documents[0].text = source.into();
+            request.sources.documents[0].text = source.into();
             let native = RustExtension.compile(request.clone()).unwrap();
             assert!(!native.success, "accepted {source}");
             assert!(native.ir.is_none());
@@ -103,7 +103,7 @@ fn wasm_compiles_and_generates_pattern_functions_in_both_versions() {
     for version in ["3", "4"] {
         let mut request = a_type_model(version);
         request.options.types_only = false;
-        request.documents[0].text = pattern::SOURCE.into();
+        request.sources.documents[0].text = pattern::SOURCE.into();
         let native = RustExtension.compile(request.clone()).unwrap();
         assert!(native.success, "{:?}", native.diagnostics);
         let compiled: CompileResult = serde_json::from_value(result(
@@ -139,7 +139,7 @@ fn wasm_compiles_and_generates_pattern_functions_in_both_versions() {
         ] {
             let mut request = a_type_model(version);
             request.options.types_only = false;
-            request.documents[0].text = source.into();
+            request.sources.documents[0].text = source.into();
             let native = RustExtension.compile(request.clone()).unwrap();
             assert!(!native.success, "accepted {source}");
             assert!(native.ir.is_none());
@@ -164,7 +164,7 @@ fn wasm_compiles_and_generates_conditional_functions_in_both_versions() {
     for version in ["3", "4"] {
         let mut request = a_type_model(version);
         request.options.types_only = false;
-        request.documents[0].text = conditional::SOURCE.into();
+        request.sources.documents[0].text = conditional::SOURCE.into();
         let native = RustExtension.compile(request.clone()).unwrap();
         assert!(native.success, "{:?}", native.diagnostics);
         let compiled: CompileResult = serde_json::from_value(result(
@@ -266,14 +266,17 @@ fn initialize(plugin: &mut Plugin) {
 fn a_type_model(version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "rust".into(),
-        documents: vec![SourceDocument {
-            uri: "models.rs".into(),
-            language_id: "rust".into(),
-            version: 1,
-            text: "pub struct Person { pub name: String, pub age: i64 }\n\
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "models.rs".into(),
+                language_id: "rust".into(),
+                version: 1,
+                text: "pub struct Person { pub name: String, pub age: i64 }\n\
                 pub enum Decision { Pending, Accepted(Person) }"
-                .into(),
-        }],
+                    .into(),
+            }],
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: Some(vec!["Models".into()]),
@@ -295,7 +298,7 @@ fn wasm_compiles_v4_binding_declarations_like_native() {
     initialize(&mut plugin);
     let mut request = a_type_model("4");
     request.options.types_only = false;
-    request.documents[0].text = r#"
+    request.sources.documents[0].text = r#"
         pub struct Id(pub i64);
         #[morphir::native(hint = "comparison")]
         pub fn same(a: Id, b: Id) -> bool { panic!("not executed") }

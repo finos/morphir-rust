@@ -8,10 +8,11 @@ use super::{
 };
 use crate::{
     DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectOrigin, ProjectSource,
-    RelativePath, SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_LANGUAGE_ID_EMPTY,
-    WORKSPACE_PURPOSE_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY,
-    WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED,
-    discover, discover_with_details,
+    RelativePath, SourceSelection, WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL,
+    WORKSPACE_LANGUAGE_ID_EMPTY, WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_PURPOSE_UNSUPPORTED,
+    WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID,
+    WORKSPACE_SELECTION_NAME_REQUIRED, WORKSPACE_SELECTION_OUTSIDE_ROOT,
+    WORKSPACE_SYMLINK_UNSUPPORTED, discover, discover_with_details,
 };
 
 #[derive(Default)]
@@ -228,6 +229,10 @@ fn ad_hoc_request(paths: Vec<RelativePath>, root: RelativePath) -> DiscoveryRequ
 /// files (rather than carrying `sources.root` verbatim) would name both
 /// modules `customer`. The selection root stays `models` and `inputs`
 /// preserves the order the request gave, proving both never happen here.
+///
+/// Multi-source, so this now requires an explicit overlay name (see the
+/// single-source cardinality rule below); the asserted name is exactly the
+/// overlay value, never anything derived from the paths.
 #[test]
 fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
     let domain = gleam_source("models/domain/customer.gleam");
@@ -235,7 +240,7 @@ fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
     let paths = vec![domain.0.clone(), party.0.clone()];
     let root = RelativePath::parse("models").unwrap();
     let entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory), domain, party]);
-    let request = ad_hoc_request_with_entries(
+    let mut request = ad_hoc_request_with_entries(
         entries,
         ProjectSource::Synthesized,
         SourceSelection {
@@ -243,6 +248,7 @@ fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
             paths: paths.clone(),
         },
     );
+    request.cli_overlay = json!({ "project": { "name": "acme/models" } });
 
     let snapshot = discover(request)
         .into_result()
@@ -253,15 +259,159 @@ fn ad_hoc_sources_without_a_manifest_yield_a_synthesized_project() {
     assert_eq!(project.origin, ProjectOrigin::Synthesized { inputs: paths });
     assert_eq!(project.relative_path, root);
     assert_eq!(project.source_directory, RelativePath::root());
-    // The package name and exposed modules are intermediate data, not a final
-    // contract: deriving them means parsing source, which is the provider's
-    // job. A later provider-synthesis step fills these in; this task must not.
-    assert_eq!(project.name, "");
+    // The exposed modules are intermediate data, not a final contract:
+    // deriving them means parsing source, which is the provider's job. A
+    // later provider-synthesis step fills these in; this task must not.
+    assert_eq!(project.name, "acme/models");
     assert_eq!(project.exposed_modules, None);
     assert_eq!(project.config_anchor, None);
     assert_eq!(project.version, None);
     assert_eq!(project.state, crate::ProjectState::Unloaded);
     assert_eq!(snapshot.config_anchor, None);
+}
+
+/// An explicit `cli_overlay.project.name` reaches the synthesized snapshot
+/// unchanged. Without this, discovery writes an empty name unconditionally
+/// and a provider cannot tell "no name was given" from "a name was given and
+/// lost on the way here".
+#[test]
+fn an_explicit_package_name_reaches_the_synthesized_snapshot() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let mut request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![path],
+        },
+    );
+    request.cli_overlay = json!({ "project": { "name": "acme/orders" } });
+
+    let snapshot = discover(request)
+        .into_result()
+        .expect("an explicit overlay name should synthesize successfully");
+
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].name, "acme/orders");
+}
+
+/// Surrounding whitespace on an explicit `cli_overlay.project.name` is
+/// stripped before the name is stored, so `"  acme/widgets  "` and
+/// `"acme/widgets"` name one package rather than two. The overlay's origin is
+/// a command line, where a leading or trailing space is a shell artefact
+/// rather than something an author wrote and can see; the CLI trims today, so
+/// storing the raw string here would lose trimming that shipped behaviour
+/// already has once the flag is routed through discovery. This pins the
+/// stored value, not just the emptiness check, which reads the trimmed form
+/// either way.
+#[test]
+fn an_explicit_package_name_is_stored_trimmed() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let mut request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![path],
+        },
+    );
+    request.cli_overlay = json!({ "project": { "name": "  acme/widgets  " } });
+
+    let snapshot = discover(request)
+        .into_result()
+        .expect("an explicit overlay name should synthesize successfully");
+
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].name, "acme/widgets");
+}
+
+/// An unnamed synthesized selection must contain exactly one source, because
+/// there is nothing to derive a name from otherwise. A *named* one may
+/// contain several (proven above).
+#[test]
+fn an_unnamed_synthesized_selection_requires_exactly_one_source() {
+    let domain = gleam_source("models/domain/customer.gleam");
+    let party = gleam_source("models/party/customer.gleam");
+    let paths = vec![domain.0.clone(), party.0.clone()];
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory), domain, party]);
+    let request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths,
+        },
+    );
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_SELECTION_NAME_REQUIRED);
+    assert!(error.message.contains(root.as_str()));
+}
+
+/// A non-string `cli_overlay.project.name` is a structurally invalid
+/// override, not an absent one: it must not be silently treated as "no name
+/// was given" and fall through to the cardinality rule.
+#[test]
+fn ad_hoc_overlay_project_name_must_be_a_string() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let mut request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![path],
+        },
+    );
+    request.cli_overlay = json!({ "project": { "name": 42 } });
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_CONFIG_INVALID);
+    assert!(error.message.contains("project.name"));
+}
+
+/// A whitespace-only `cli_overlay.project.name` is rejected outright rather
+/// than treated as "no name was given": an override this visibly broken
+/// deserves a loud diagnostic, not a silent fallback to the single-source
+/// cardinality rule.
+#[test]
+fn ad_hoc_overlay_project_name_whitespace_only_is_rejected() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let mut request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![path],
+        },
+    );
+    request.cli_overlay = json!({ "project": { "name": "   " } });
+
+    let error = discover(request).into_result().unwrap_err();
+
+    assert_eq!(error.code, WORKSPACE_PROJECT_NAME_EMPTY);
 }
 
 #[test]

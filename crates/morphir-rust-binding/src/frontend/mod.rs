@@ -19,7 +19,7 @@ use source::Source;
 
 pub(crate) fn compile(request: &CompileRequest) -> Outcome<CompileResult> {
     let settings = boundary::validate(request)?;
-    let source = Source(&request.documents[0]);
+    let source = Source(&request.sources.documents[0]);
     let file = syn::parse_file(&source.0.text)
         .map_err(|e| source.error(e.span(), "RS_SYNTAX", e.to_string()))?;
     let doc = source.attributes(&file.attrs, false)?;

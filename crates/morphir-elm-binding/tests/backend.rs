@@ -144,7 +144,12 @@ fn v4_ir() -> Value {
 // ----------------------------------------------------------------------------
 
 fn generate(ir: Value, target: &str) -> GenerateResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .backend()
         .unwrap()
@@ -438,7 +443,12 @@ fn a_module_with_no_public_types_exposes_everything() {
 /// An unknown prelude is a bad request, not a generation failure.
 #[test]
 fn rejects_an_unknown_prelude() {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let result = extension
         .backend()
         .unwrap()

@@ -16,6 +16,7 @@ mod incremental;
 pub mod roundtrip;
 mod version;
 pub mod vfs;
+mod workspace;
 
 // Parsing does not require entropy. Fail explicitly if another upstream path requests it.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -37,7 +38,11 @@ impl Extension for GleamExtension {
             name: "Morphir Gleam".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some("Gleam language support for Morphir".into()),
-            types: vec![ExtensionType::Frontend, ExtensionType::Backend],
+            types: vec![
+                ExtensionType::Frontend,
+                ExtensionType::Backend,
+                ExtensionType::Workspace,
+            ],
             author: Some("FINOS".into()),
             license: Some("Apache-2.0".into()),
             homepage: Some("https://github.com/finos/morphir-rust".into()),
@@ -61,6 +66,10 @@ impl Extension for GleamExtension {
                 targets: vec!["gleam".into()],
                 ir_versions: vec!["3".into(), "4".into()],
                 generate: true,
+            }),
+            workspace: Some(WorkspaceCapability {
+                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                discover: true,
             }),
             incremental: true,
             ..Default::default()
@@ -184,6 +193,7 @@ fn validate_request_semantics(request: &CompileRequest) -> Option<Diagnostic> {
         ));
     }
     if let Some(document) = request
+        .sources
         .documents
         .iter()
         .find(|document| document.language_id != "gleam")
@@ -553,7 +563,7 @@ impl Backend for GleamExtension {
 }
 
 // Export the extension
-morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);
+morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend, workspace);
 
 #[cfg(test)]
 mod tests {
@@ -586,12 +596,15 @@ mod tests {
         (
             CompileRequest {
                 language_id: "gleam".into(),
-                documents: vec![SourceDocument {
-                    uri: uri.into(),
-                    language_id: "gleam".into(),
-                    version: 1,
-                    text: text.into(),
-                }],
+                sources: SourceSet {
+                    root: None,
+                    documents: vec![SourceDocument {
+                        uri: uri.into(),
+                        language_id: "gleam".into(),
+                        version: 1,
+                        text: text.into(),
+                    }],
+                },
                 package: CompilePackage {
                     name: "example/package".into(),
                     exposed_modules: None,
@@ -686,6 +699,13 @@ mod tests {
                 "targets": ["gleam"],
                 "irVersions": ["3", "4"],
                 "generate": true
+            })
+        );
+        assert_eq!(
+            capabilities["workspace"],
+            serde_json::json!({
+                "protocolVersions": [1],
+                "discover": true
             })
         );
     }
@@ -1194,7 +1214,7 @@ mod tests {
     #[test]
     fn empty_document_list_returns_an_empty_v4_ir_collection() {
         let (mut request, _output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents.clear();
+        request.sources.documents.clear();
 
         let result = GleamExtension
             .compile(request)
@@ -1210,7 +1230,7 @@ mod tests {
     fn empty_compile_skips_fatal_parse_stage_emission_and_filesystem_work() {
         let (mut request, root) = compile_request("file:///unused.gleam", "", IR_VERSION);
         let output_dir = root.path().join("not-created");
-        request.documents.clear();
+        request.sources.documents.clear();
         request.options.extra.insert(
             "outputDir".into(),
             serde_json::json!(output_dir.to_string_lossy()),
@@ -1236,7 +1256,7 @@ mod tests {
     #[test]
     fn multi_document_compile_returns_one_typed_distribution_with_distinct_nested_modules() {
         let (mut request, _output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document(
                 "file:///workspace/src/alpha/main.gleam",
                 "pub fn alpha() { 1 }",
@@ -1261,14 +1281,11 @@ mod tests {
     #[test]
     fn source_root_uri_preserves_nested_module_paths() {
         let (mut request, _output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![document(
+        request.sources.documents = vec![document(
             "file:///workspace/lib/domain/customer.gleam?rev=1#selection",
             "",
         )];
-        request.options.extra.insert(
-            "sourceRootUri".into(),
-            serde_json::json!("file:///workspace/lib"),
-        );
+        request.sources.root = Some("file:///workspace/lib".into());
 
         let result = GleamExtension
             .compile(request)
@@ -1295,10 +1312,7 @@ mod tests {
             ),
         ] {
             let (mut request, output_dir) = compile_request(document_uri, "", IR_VERSION);
-            request
-                .options
-                .extra
-                .insert("sourceRootUri".into(), serde_json::json!(source_root));
+            request.sources.root = Some(source_root.into());
 
             let result = GleamExtension
                 .compile(request)
@@ -1321,10 +1335,7 @@ mod tests {
             ("file:///C:/workspace/src", r"D:\workspace\src\main.gleam"),
         ] {
             let (mut request, output_dir) = compile_request(document_uri, "", IR_VERSION);
-            request
-                .options
-                .extra
-                .insert("sourceRootUri".into(), serde_json::json!(source_root));
+            request.sources.root = Some(source_root.into());
 
             let result = GleamExtension
                 .compile(request)
@@ -1361,10 +1372,7 @@ mod tests {
             ),
         ] {
             let (mut request, _output_dir) = compile_request(document_uri, "", IR_VERSION);
-            request
-                .options
-                .extra
-                .insert("sourceRootUri".into(), serde_json::json!(source_root));
+            request.sources.root = Some(source_root.into());
 
             let result = GleamExtension
                 .compile(request)
@@ -1381,7 +1389,7 @@ mod tests {
     #[test]
     fn uri_and_path_forms_derive_safe_module_names() {
         let (mut request, _output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document("file:///workspace/src/file.gleam?rev=1#part", ""),
             document("https://example.test/project/src/remote.gleam#part", ""),
             document(r"C:\workspace\src\windows.gleam", ""),
@@ -1436,7 +1444,7 @@ mod tests {
     #[test]
     fn module_collisions_after_name_canonicalization_are_rejected() {
         let (mut request, output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document("file:///workspace/src/order_processing.gleam", ""),
             document("file:///workspace/src/order__processing.gleam", ""),
         ];
@@ -1481,7 +1489,7 @@ mod tests {
     #[test]
     fn duplicate_derived_module_names_fail_atomically() {
         let (mut request, output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document("file:///one/src/main.gleam", "pub fn one() { 1 }"),
             document("file:///two/src/main.gleam", "pub fn two() { 2 }"),
         ];
@@ -1497,7 +1505,7 @@ mod tests {
     #[test]
     fn mixed_valid_and_invalid_documents_fail_without_partial_output() {
         let (mut request, output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document("file:///workspace/src/valid.gleam", "pub fn valid() { 1 }"),
             document("file:///workspace/src/invalid.gleam", "pub fn invalid("),
         ];
@@ -1537,7 +1545,7 @@ mod tests {
 
         let (mut wrong_document_language, output_dir) =
             compile_request("file:///workspace/src/main.gleam", "", IR_VERSION);
-        wrong_document_language.documents[0].language_id = "elm".into();
+        wrong_document_language.sources.documents[0].language_id = "elm".into();
         assert_typed_failure(&GleamExtension.compile(wrong_document_language).unwrap());
         assert_directory_empty(&output_dir);
 
@@ -1553,6 +1561,7 @@ mod tests {
         let (mut request, _output_dir) =
             compile_request("file:///workspace/src/public.gleam", "", IR_VERSION);
         request
+            .sources
             .documents
             .push(document("file:///workspace/src/private.gleam", ""));
         request.package.exposed_modules = Some(vec!["public".into()]);
@@ -1709,7 +1718,7 @@ mod tests {
             .extra
             .insert("emitParseStageFatal".into(), serde_json::json!(true));
         let mut second_request = first_request.clone();
-        second_request.documents[0].text = "pub fn updated() { 2 }".into();
+        second_request.sources.documents[0].text = "pub fn updated() { 2 }".into();
         std::fs::create_dir(output_dir.path().join("parse")).unwrap();
         std::fs::write(output_dir.path().join("parse/unrelated.json"), "unrelated").unwrap();
         let output_file = output_dir.path().join("parse/main.json");
@@ -1786,7 +1795,7 @@ mod tests {
     #[test]
     fn fatal_multi_document_parse_stage_failure_leaves_prior_outputs_unchanged() {
         let (mut request, output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document(
                 "file:///workspace/src/first.gleam",
                 "pub fn changed() { 1 }",
@@ -1839,7 +1848,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let (mut request, output_dir) = compile_request("file:///unused.gleam", "", IR_VERSION);
-        request.documents = vec![
+        request.sources.documents = vec![
             document(
                 "file:///workspace/src/first.gleam",
                 "pub fn changed() { 1 }",

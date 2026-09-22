@@ -44,13 +44,21 @@ fn compile_with(
     if let Some(prelude) = prelude {
         extra.insert("elmPrelude".to_string(), serde_json::json!(prelude));
     }
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: None,
@@ -528,14 +536,22 @@ fn ir_package_path(result: &CompileResult) -> Vec<String> {
 /// were resolved under the old one.
 #[test]
 fn a_baseline_from_a_different_package_is_ignored() {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let compile_pkg = |package: &str, baseline: Option<CompileBaseline>| {
         extension
             .frontend()
             .unwrap()
             .compile(CompileRequest {
                 language_id: "elm".into(),
-                documents: both(A, B),
+                sources: SourceSet {
+                    root: None,
+                    documents: both(A, B),
+                },
                 package: CompilePackage {
                     name: package.into(),
                     exposed_modules: None,
@@ -589,13 +605,21 @@ const A_ON_DEP: &str =
 /// The dependency package `Acme.Lib`, compiled by this very frontend, so that
 /// the two runs differ in nothing but the distribution supplied to them.
 fn acme_lib(source: &str) -> CompileDependency {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let result = extension
         .frontend()
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents: vec![document(DEP_URI, source)],
+            sources: SourceSet {
+                root: None,
+                documents: vec![document(DEP_URI, source)],
+            },
             package: CompilePackage {
                 name: "Acme.Lib".into(),
                 exposed_modules: None,

@@ -18,8 +18,8 @@ const INVALID: &str = include_str!("fixtures/morphir-elm-extension/Invalid.elm")
 async fn packaged_elm_native_installs_and_compiles_offline() {
     use morphir_common::home::MorphirHome;
     use morphir_distribution::{
-        Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex, Platform,
-        Selection, activate_installed,
+        Capability, Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex,
+        Platform, Selection, activate_installed,
     };
     let bundle = std::env::var_os("MORPHIR_ELM_NATIVE_BUNDLE")
         .expect("build the Elm native release bundle first");
@@ -28,6 +28,17 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
     let publication = repository.publish(bundle).unwrap();
     assert!(publication.release().frontend().is_some());
     assert!(publication.release().backend().is_some());
+    // The guest reports Workspace among its capability kinds at
+    // initialization. Discovery has no record of its own, so the bundle
+    // manifest's capability list is the only place the kind can come from; if
+    // it were missing, negotiation below would stop on "capability kinds
+    // changed" rather than anything the compile assertions would catch.
+    assert!(
+        publication
+            .release()
+            .capabilities()
+            .contains(&Capability::Workspace)
+    );
     let id = ExtensionId::parse("morphir-elm-native").unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
     let selected = LocalIndex::open(repository.root())
@@ -77,12 +88,15 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
     }
     let request = |uri: &str, text: &str| CompileRequest {
         language_id: "elm".into(),
-        documents: vec![SourceDocument {
-            uri: uri.into(),
-            language_id: "elm".into(),
-            version: 1,
-            text: text.into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: uri.into(),
+                language_id: "elm".into(),
+                version: 1,
+                text: text.into(),
+            }],
+        },
         package: CompilePackage {
             name: "local/example".into(),
             exposed_modules: Some(vec!["Example".into()]),

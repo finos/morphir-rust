@@ -339,7 +339,10 @@ fn classic_v3_library_generates_aliases_through_core_migration() {
 fn public_frontend_backend_roundtrip_preserves_type_definitions() {
     let request = |documents| CompileRequest {
         language_id: "gleam".into(),
-        documents,
+        sources: SourceSet {
+            root: None,
+            documents,
+        },
         package: CompilePackage {
             name: "example/package".into(),
             exposed_modules: None,
@@ -417,12 +420,15 @@ fn closed_record_aliases_become_labelled_custom_types() {
     let compiled = GleamExtension
         .compile(CompileRequest {
             language_id: "gleam".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///workspace/src/domain/customer_records.gleam".into(),
-                language_id: "gleam".into(),
-                version: 1,
-                text: code.clone(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///workspace/src/domain/customer_records.gleam".into(),
+                    language_id: "gleam".into(),
+                    version: 1,
+                    text: code.clone(),
+                }],
+            },
             package: CompilePackage {
                 name: "example/package".into(),
                 exposed_modules: None,
@@ -648,7 +654,10 @@ fn reserved_module_segments_survive_generation_and_recompilation() {
         let result = GleamExtension
             .compile(CompileRequest {
                 language_id: "gleam".into(),
-                documents,
+                sources: SourceSet {
+                    root: None,
+                    documents,
+                },
                 package: CompilePackage {
                     name: "example/keywords".into(),
                     exposed_modules: None,

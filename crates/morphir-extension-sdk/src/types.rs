@@ -256,9 +256,138 @@ pub struct CompileDependency {
     pub distribution: serde_json::Value,
 }
 
+/// Legacy options-bag keys that used to carry a compilation's source root.
+///
+/// A caller that sends one of these *alongside* the current `sources` envelope
+/// would otherwise lose its root silently and get different module names for
+/// the same files, so there they are rejected rather than ignored. They are
+/// only meaningful as part of the legacy envelope described on
+/// [`SourceEnvelope`]. See [`SourceSet::root`].
+const LEGACY_SOURCE_ROOT_KEYS: [&str; 2] = ["sourceRootUri", "sourceRoot"];
+
+pub(crate) fn reject_legacy_source_root_keys(
+    extra: &HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(key) = extra
+        .keys()
+        .find(|key| LEGACY_SOURCE_ROOT_KEYS.contains(&key.as_str()))
+    {
+        return Err(format!(
+            "'{key}' is no longer a compile option; supply the root as sources.root"
+        ));
+    }
+    Ok(())
+}
+
+/// Which envelope a compile request stated its sources in.
+///
+/// # Transitional — delete the legacy variant
+///
+/// The current envelope is [`CompileRequest::sources`]: a [`SourceSet`] that
+/// carries the documents *and* the root their module identities resolve
+/// against. Hosts released before that change send the documents at the
+/// request's top level and the root as one of [`LEGACY_SOURCE_ROOT_KEYS`] in
+/// the options bag. This enum exists only so those hosts keep working until a
+/// morphir release ships a host that speaks `sources`.
+///
+/// Deleting it then means deleting this enum, [`take_legacy_source_root`],
+/// `CompileOptionsWire` and the `legacy_compile_envelope_tests` module, after
+/// which [`CompileRequest`] derives `Deserialize` again.
+/// [`LEGACY_SOURCE_ROOT_KEYS`] and [`reject_legacy_source_root_keys`] stay:
+/// once nothing accepts the legacy envelope, the keys are simply wrong
+/// everywhere, which is what those two already say.
+///
+/// A request is *wholly* one envelope or *wholly* the other, never a mixture.
+/// Both envelopes name a source root, and a request that supplied two of them
+/// would have no honest answer for which one module names resolve against —
+/// the exact silent renaming that moving the root into [`SourceSet`] exists to
+/// prevent. So a modern request keeps hard-rejecting the legacy option keys,
+/// and a request carrying both `sources` and a top-level `documents` is
+/// refused rather than resolved by a precedence rule.
+///
+/// This is deliberately not a `#[serde(untagged)]` enum: an untagged enum
+/// reports a failure to match as "data did not match any variant", which
+/// cannot distinguish "you sent both envelopes" from "you sent neither" or
+/// from a malformed document inside one of them. The two optional fields are
+/// deserialized separately and the choice between them is made — and
+/// diagnosed — here.
+enum SourceEnvelope {
+    /// The current envelope: documents and root travel together.
+    Modern(SourceSet),
+    /// The pre-`sources` envelope: documents at the top level, with the root,
+    /// if any, in the options bag.
+    Legacy(Vec<SourceDocument>),
+}
+
+impl SourceEnvelope {
+    /// Message for a request that states its sources both ways at once.
+    const MIXED: &'static str = "a compile request carries both 'sources' and a legacy top-level \
+                                 'documents'; they are two different envelopes, each naming its \
+                                 own source root, so which root module names resolve against is \
+                                 ambiguous — send 'sources' alone";
+
+    /// Reduce the envelope to the one shape the rest of the SDK knows about.
+    ///
+    /// The legacy root key is *moved* out of `extra`, not copied: no consumer
+    /// downstream of deserialization ever learns that a legacy request
+    /// existed, and `CompileOptions`' serializer — which still refuses a
+    /// legacy key in `extra` — can re-emit the normalized request.
+    fn normalize(
+        self,
+        extra: &mut HashMap<String, serde_json::Value>,
+    ) -> Result<SourceSet, String> {
+        match self {
+            Self::Modern(sources) => {
+                reject_legacy_source_root_keys(extra)?;
+                Ok(sources)
+            }
+            Self::Legacy(documents) => Ok(SourceSet {
+                root: take_legacy_source_root(extra)?,
+                documents,
+            }),
+        }
+    }
+}
+
+/// Remove the legacy envelope's source root from an options bag.
+///
+/// `null` reads as "no root", matching how `"root": null` deserializes on
+/// [`SourceSet`], rather than as the type error the pre-`sources` accessor
+/// raised. Any other non-string value is a type error, as it was then.
+///
+/// Both legacy keys are accepted because both were tolerated before: the SDK
+/// read the root from `sourceRootUri`, while `sourceRoot` was allowed through
+/// per-frontend option allowlists. A request carrying both is fine while they
+/// agree and an error when they do not — two disagreeing roots are the same
+/// ambiguity a mixed envelope is refused for.
+fn take_legacy_source_root(
+    extra: &mut HashMap<String, serde_json::Value>,
+) -> Result<Option<String>, String> {
+    let mut found: Option<(&str, Option<String>)> = None;
+    for key in LEGACY_SOURCE_ROOT_KEYS {
+        let Some(value) = extra.remove(key) else {
+            continue;
+        };
+        let root = match value {
+            serde_json::Value::String(root) => Some(root),
+            serde_json::Value::Null => None,
+            _ => return Err(format!("'{key}' must be a string")),
+        };
+        match &found {
+            Some((first, first_root)) if *first_root != root => {
+                return Err(format!(
+                    "a legacy compile request supplies both '{first}' and '{key}', and they name \
+                     different source roots; module names resolve against exactly one root"
+                ));
+            }
+            _ => found = Some((key, root)),
+        }
+    }
+    Ok(found.and_then(|(_, root)| root))
+}
+
 /// Options that control frontend compilation.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CompileOptions {
     /// Emit type information without value bodies when supported.
     pub types_only: bool,
@@ -266,8 +395,16 @@ pub struct CompileOptions {
     pub ir_version: String,
     /// Frontend-specific compilation options.
     ///
-    /// Keys that duplicate `typesOnly` or `irVersion` are rejected during serialization.
-    #[serde(default, flatten)]
+    /// Keys that duplicate `typesOnly` or `irVersion`, or either legacy source
+    /// root key (`sourceRootUri`, `sourceRoot`), are rejected during
+    /// serialization: a root belongs in [`SourceSet::root`], and this SDK
+    /// never writes the legacy envelope.
+    ///
+    /// Deserializing options *on their own* rejects the legacy keys too, since
+    /// options outside a request carry no envelope that could make them legal.
+    /// Within a request the envelope decides: a request in the transitional
+    /// legacy envelope states its root with one of those keys, and it is moved
+    /// into [`SourceSet::root`] before any of this is populated.
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -276,7 +413,7 @@ impl Serialize for CompileOptions {
     where
         S: serde::Serializer,
     {
-        const RESERVED_KEYS: [&str; 2] = ["typesOnly", "irVersion"];
+        const RESERVED_KEYS: [&str; 4] = ["typesOnly", "irVersion", "sourceRootUri", "sourceRoot"];
         if let Some(key) = self
             .extra
             .keys()
@@ -297,14 +434,76 @@ impl Serialize for CompileOptions {
     }
 }
 
-/// Request to compile source documents into Morphir IR.
+/// The options bag exactly as it arrives, before any envelope rule is applied.
+///
+/// [`CompileOptions`]' own `Deserialize` rejects the legacy source-root keys,
+/// which is right for options deserialized on their own but wrong inside a
+/// legacy request, where the root key is the request's root. A
+/// [`CompileRequest`] therefore deserializes this helper and applies the rule
+/// its envelope calls for. It can be folded back into
+/// `CompileOptions::deserialize` once the legacy envelope goes.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompileOptionsWire {
+    types_only: bool,
+    ir_version: String,
+    #[serde(default, flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for CompileOptions {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = CompileOptionsWire::deserialize(deserializer)?;
+        reject_legacy_source_root_keys(&wire.extra).map_err(serde::de::Error::custom)?;
+        Ok(CompileOptions {
+            types_only: wire.types_only,
+            ir_version: wire.ir_version,
+            extra: wire.extra,
+        })
+    }
+}
+
+/// The documents a compilation submits, together with the root their module
+/// identities are derived against.
+///
+/// The root belongs to the set rather than to the request: replacing or
+/// combining document sets while a root sits elsewhere silently renames
+/// modules, because a module's name is a function of its path relative to the
+/// root.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSet {
+    /// The root module identities resolve against, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// The documents to compile.
+    pub documents: Vec<SourceDocument>,
+}
+
+/// Request to compile source documents into Morphir IR.
+///
+/// Serialization always writes the current envelope: `sources` carrying the
+/// documents and their root. Deserialization also accepts, transitionally, the
+/// envelope hosts released before `sources` send — top-level `documents` with
+/// the root in `options.extra` — and normalizes it into this shape. A request
+/// is wholly one or wholly the other; stating both is an error. See
+/// `SourceEnvelope` in this module for the rule and for what to delete when
+/// the legacy envelope goes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompileRequest {
     /// Language identifier shared by the submitted documents.
     pub language_id: String,
-    /// Source documents to compile.
-    pub documents: Vec<SourceDocument>,
+    /// Source documents to compile, together with the root their module
+    /// identities are derived against.
+    ///
+    /// A legacy request states the same thing as a top-level `documents` list
+    /// plus a root in `options.extra`; it is normalized into this field during
+    /// deserialization, so nothing downstream sees the difference.
+    pub sources: SourceSet,
     /// Package metadata for the compilation unit.
     pub package: CompilePackage,
     /// Package distributions available to the compilation.
@@ -315,6 +514,65 @@ pub struct CompileRequest {
     /// Baseline from a prior compilation, for incremental frontends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<CompileBaseline>,
+}
+
+impl<'de> Deserialize<'de> for CompileRequest {
+    /// Accept either envelope and produce the one request shape.
+    ///
+    /// This is a hand-written impl only because of the legacy envelope; it is
+    /// otherwise exactly what `#[derive(Deserialize)]` produced, down to the
+    /// missing-field error naming `sources` for a request that states no
+    /// sources at all. Deleting `SourceEnvelope` restores the derive.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompileRequestWire {
+            language_id: String,
+            #[serde(default)]
+            sources: Option<SourceSet>,
+            /// The legacy envelope's documents. Absent from every request a
+            /// current host writes.
+            #[serde(default)]
+            documents: Option<Vec<SourceDocument>>,
+            package: CompilePackage,
+            #[serde(default)]
+            dependencies: Vec<CompileDependency>,
+            options: CompileOptionsWire,
+            #[serde(default)]
+            baseline: Option<CompileBaseline>,
+        }
+
+        let wire = CompileRequestWire::deserialize(deserializer)?;
+        let envelope = match (wire.sources, wire.documents) {
+            (Some(_), Some(_)) => {
+                return Err(serde::de::Error::custom(SourceEnvelope::MIXED));
+            }
+            (Some(sources), None) => SourceEnvelope::Modern(sources),
+            (None, Some(documents)) => SourceEnvelope::Legacy(documents),
+            (None, None) => return Err(serde::de::Error::missing_field("sources")),
+        };
+
+        let mut extra = wire.options.extra;
+        let sources = envelope
+            .normalize(&mut extra)
+            .map_err(serde::de::Error::custom)?;
+
+        Ok(CompileRequest {
+            language_id: wire.language_id,
+            sources,
+            package: wire.package,
+            dependencies: wire.dependencies,
+            options: CompileOptions {
+                types_only: wire.options.types_only,
+                ir_version: wire.options.ir_version,
+                extra,
+            },
+            baseline: wire.baseline,
+        })
+    }
 }
 
 /// Result of compilation
@@ -614,12 +872,14 @@ mod tests {
     fn compile_request_matches_mep_0_1() {
         let expected = serde_json::json!({
             "languageId": "elm",
-            "documents": [{
-                "uri": "file:///work/Example.elm",
-                "languageId": "elm",
-                "version": 1,
-                "text": "module Example exposing (add)\n"
-            }],
+            "sources": {
+                "documents": [{
+                    "uri": "file:///work/Example.elm",
+                    "languageId": "elm",
+                    "version": 1,
+                    "text": "module Example exposing (add)\n"
+                }]
+            },
             "package": {
                 "name": "local/example",
                 "exposedModules": ["Example"]
@@ -632,12 +892,15 @@ mod tests {
         });
         let request = CompileRequest {
             language_id: "elm".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///work/Example.elm".into(),
-                language_id: "elm".into(),
-                version: 1,
-                text: "module Example exposing (add)\n".into(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///work/Example.elm".into(),
+                    language_id: "elm".into(),
+                    version: 1,
+                    text: "module Example exposing (add)\n".into(),
+                }],
+            },
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: Some(vec!["Example".into()]),
@@ -660,7 +923,9 @@ mod tests {
     fn compile_request_serializes_dependencies_and_vendor_options() {
         let expected = serde_json::json!({
             "languageId": "elm",
-            "documents": [],
+            "sources": {
+                "documents": []
+            },
             "package": {
                 "name": "local/example",
                 "exposedModules": []
@@ -678,7 +943,7 @@ mod tests {
         });
         let request = CompileRequest {
             language_id: "elm".into(),
-            documents: vec![],
+            sources: SourceSet::default(),
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: Some(vec![]),
@@ -726,6 +991,103 @@ mod tests {
 
         let error = serde_json::to_value(options).unwrap_err();
         assert!(error.to_string().contains("reserved compile option key"));
+    }
+
+    /// A root supplied through the old options bag alongside the current
+    /// `sources` envelope is an error, not a silently ignored key: the request
+    /// would then state a root twice and the two could disagree. Options
+    /// deserialized on their own have no envelope that could make the key
+    /// legal, so they reject it too. The one place it is accepted is the
+    /// legacy envelope — see `legacy_compile_envelope_tests`.
+    #[test]
+    fn a_legacy_source_root_uri_option_is_rejected() {
+        let error = serde_json::from_value::<CompileOptions>(serde_json::json!({
+            "typesOnly": false,
+            "irVersion": "4",
+            "sourceRootUri": "file:///project/src",
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRootUri"), "{error}");
+
+        // Rejected even when a valid root already travels with the documents:
+        // the legacy key is not a fallback for a missing `sources.root`.
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "elm",
+            "sources": {"root": "file:///project/src", "documents": []},
+            "package": {"name": "local/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRootUri": "file:///project/src",
+            },
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRootUri"), "{error}");
+    }
+
+    /// The Gleam-local fallback key is rejected too.
+    #[test]
+    fn a_legacy_source_root_option_is_rejected() {
+        let error = serde_json::from_value::<CompileOptions>(serde_json::json!({
+            "typesOnly": false,
+            "irVersion": "4",
+            "sourceRoot": "src",
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRoot"), "{error}");
+
+        // Rejected even when a valid root already travels with the documents.
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "gleam",
+            "sources": {"root": "file:///project/src", "documents": []},
+            "package": {"name": "local/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRoot": "src",
+            },
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("sourceRoot"), "{error}");
+    }
+
+    /// The root travels with the documents it applies to.
+    #[test]
+    fn a_source_set_carries_its_root() {
+        let sources: SourceSet = serde_json::from_value(serde_json::json!({
+            "root": "file:///project/src",
+            "documents": [{
+                "uri": "file:///project/src/domain/models.py",
+                "languageId": "python",
+                "version": 1,
+                "text": ""
+            }]
+        }))
+        .unwrap();
+        assert_eq!(sources.root.as_deref(), Some("file:///project/src"));
+        assert_eq!(sources.documents.len(), 1);
+
+        // The root is optional: a set with no root deserializes with `None`.
+        let rootless: SourceSet = serde_json::from_value(serde_json::json!({
+            "documents": []
+        }))
+        .unwrap();
+        assert_eq!(rootless.root, None);
+    }
+
+    /// Before the root was typed, `CompileOptions::source_root()` rejected an
+    /// explicit `"sourceRootUri": null` with "must be a string" — a type
+    /// error. `root` is now `Option<String>`, so `"root": null` deserializes
+    /// as ordinary serde practice for an absent option, not a type error.
+    /// Pinning this so the change is a recorded decision, not an accident.
+    #[test]
+    fn an_explicit_null_root_deserializes_as_no_root() {
+        let sources: SourceSet = serde_json::from_value(serde_json::json!({
+            "root": null,
+            "documents": []
+        }))
+        .unwrap();
+        assert_eq!(sources.root, None);
     }
 
     #[test]
@@ -972,7 +1334,7 @@ mod incremental_tests {
     fn request_without_baseline_serializes_as_before() {
         let request = CompileRequest {
             language_id: "elm".into(),
-            documents: vec![],
+            sources: SourceSet::default(),
             package: CompilePackage {
                 name: "local/example".into(),
                 exposed_modules: None,
@@ -1087,5 +1449,262 @@ mod incremental_tests {
         let json = serde_json::json!({"success": false, "diagnostics": [], "modules": []});
         let result: CompileResult = serde_json::from_value(json).unwrap();
         assert!(result.module_results.is_empty());
+    }
+}
+
+/// The transitional legacy compile envelope: top-level `documents` with the
+/// root in the options bag, as hosts released before [`CompileRequest::sources`]
+/// send it.
+///
+/// This whole module is deleted together with [`SourceEnvelope::Legacy`] once a
+/// released host speaks `sources`. Until then these tests pin the property the
+/// design turns on: a request is wholly legacy or wholly modern, and the two
+/// envelopes can never be mixed into one request that names its root twice.
+#[cfg(test)]
+mod legacy_compile_envelope_tests {
+    use super::*;
+
+    fn a_document() -> serde_json::Value {
+        serde_json::json!({
+            "uri": "file:///project/src/domain/models.py",
+            "languageId": "python",
+            "version": 1,
+            "text": "",
+        })
+    }
+
+    /// The legacy envelope is a different *spelling* of the same request, not
+    /// a different request: both parse to one identical `CompileRequest`.
+    #[test]
+    fn a_legacy_request_parses_to_exactly_the_modern_request() {
+        let legacy: CompileRequest = serde_json::from_value(serde_json::json!({
+            "languageId": "python",
+            "documents": [a_document()],
+            "package": {"name": "acme/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRootUri": "file:///project/src",
+                "outputDir": "compiled",
+            },
+        }))
+        .expect("a host released before `sources` keeps working");
+
+        let modern: CompileRequest = serde_json::from_value(serde_json::json!({
+            "languageId": "python",
+            "sources": {
+                "root": "file:///project/src",
+                "documents": [a_document()],
+            },
+            "package": {"name": "acme/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "outputDir": "compiled",
+            },
+        }))
+        .expect("the current envelope parses");
+
+        assert_eq!(legacy, modern);
+    }
+
+    /// Normalization *moves* the root: no frontend, option allowlist or
+    /// serializer downstream ever sees a legacy key, so none of them needs to
+    /// know the legacy envelope exists. The normalized request also
+    /// re-serializes, which it could not if the key had been left in `extra` —
+    /// `CompileOptions`' serializer still refuses one there.
+    #[test]
+    fn the_legacy_root_key_does_not_survive_normalization() {
+        for key in LEGACY_SOURCE_ROOT_KEYS {
+            let request: CompileRequest = serde_json::from_value(serde_json::json!({
+                "languageId": "python",
+                "documents": [a_document()],
+                "package": {"name": "acme/example"},
+                "options": {"typesOnly": false, "irVersion": "4", key: "file:///project/src"},
+            }))
+            .unwrap_or_else(|error| panic!("'{key}' names the legacy root: {error}"));
+
+            assert_eq!(request.sources.root.as_deref(), Some("file:///project/src"));
+            assert!(request.options.extra.is_empty(), "'{key}' stayed in extra");
+            assert_eq!(
+                serde_json::to_value(&request).unwrap()["sources"]["root"],
+                serde_json::json!("file:///project/src"),
+            );
+        }
+    }
+
+    /// A legacy host that sends no root at all is a rootless compilation, not
+    /// an error: single-document compiles never needed one.
+    #[test]
+    fn a_legacy_request_without_a_root_has_no_root() {
+        let request: CompileRequest = serde_json::from_value(serde_json::json!({
+            "languageId": "python",
+            "documents": [a_document()],
+            "package": {"name": "acme/example"},
+            "options": {"typesOnly": false, "irVersion": "4"},
+        }))
+        .expect("the legacy root key was always optional");
+
+        assert_eq!(request.sources.root, None);
+        assert_eq!(request.sources.documents.len(), 1);
+    }
+
+    /// Mixing the envelopes is the failure this design exists to prevent: two
+    /// source roots, no honest answer for which one module names resolve
+    /// against. It is refused rather than settled by a precedence rule, and
+    /// the error says why.
+    #[test]
+    fn a_request_stating_both_envelopes_is_rejected() {
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "python",
+            "sources": {"root": "file:///project/src", "documents": []},
+            "documents": [a_document()],
+            "package": {"name": "acme/example"},
+            "options": {"typesOnly": false, "irVersion": "4"},
+        }))
+        .expect_err("a request is wholly legacy or wholly modern");
+
+        let error = error.to_string();
+        assert!(error.contains("both 'sources'"), "{error}");
+        assert!(error.contains("documents"), "{error}");
+        assert!(error.contains("ambiguous"), "{error}");
+    }
+
+    /// Accepting the legacy envelope did not make the legacy key legal in a
+    /// *modern* request; that rejection is unchanged, message and all.
+    #[test]
+    fn a_modern_request_still_rejects_a_legacy_root_key() {
+        for key in LEGACY_SOURCE_ROOT_KEYS {
+            let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+                "languageId": "python",
+                "sources": {"root": "file:///project/src", "documents": []},
+                "package": {"name": "acme/example"},
+                "options": {"typesOnly": false, "irVersion": "4", key: "file:///elsewhere"},
+            }))
+            .expect_err("a modern request names its root once, in sources.root")
+            .to_string();
+
+            assert!(
+                error.contains(&format!(
+                    "'{key}' is no longer a compile option; supply the root as sources.root"
+                )),
+                "{error}"
+            );
+        }
+    }
+
+    /// A request that states no sources at all fails the way it always did,
+    /// naming the field a caller is expected to send.
+    #[test]
+    fn a_request_with_neither_envelope_reports_the_missing_field() {
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "python",
+            "package": {"name": "acme/example"},
+            "options": {"typesOnly": false, "irVersion": "4"},
+        }))
+        .expect_err("sources is required");
+
+        assert!(
+            error.to_string().contains("missing field `sources`"),
+            "{error}"
+        );
+    }
+
+    /// Both legacy keys in one request agree or the request is refused: two
+    /// roots that disagree are the same ambiguity as two envelopes.
+    #[test]
+    fn two_legacy_root_keys_must_agree() {
+        let request: CompileRequest = serde_json::from_value(serde_json::json!({
+            "languageId": "gleam",
+            "documents": [],
+            "package": {"name": "acme/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRootUri": "file:///project/src",
+                "sourceRoot": "file:///project/src",
+            },
+        }))
+        .expect("keys that say the same thing say one thing");
+        assert_eq!(request.sources.root.as_deref(), Some("file:///project/src"));
+
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "gleam",
+            "documents": [],
+            "package": {"name": "acme/example"},
+            "options": {
+                "typesOnly": false,
+                "irVersion": "4",
+                "sourceRootUri": "file:///project/src",
+                "sourceRoot": "file:///project/lib",
+            },
+        }))
+        .expect_err("disagreeing roots have no resolution");
+        assert!(
+            error.to_string().contains("different source roots"),
+            "{error}"
+        );
+    }
+
+    /// `null` reads as "no root", the way `sources.root` does. Anything else
+    /// is a type error rather than a root nobody can use.
+    #[test]
+    fn a_legacy_root_key_must_be_a_string_or_null() {
+        let request: CompileRequest = serde_json::from_value(serde_json::json!({
+            "languageId": "python",
+            "documents": [],
+            "package": {"name": "acme/example"},
+            "options": {"typesOnly": false, "irVersion": "4", "sourceRootUri": null},
+        }))
+        .expect("an absent option may be spelled null");
+        assert_eq!(request.sources.root, None);
+
+        let error = serde_json::from_value::<CompileRequest>(serde_json::json!({
+            "languageId": "python",
+            "documents": [],
+            "package": {"name": "acme/example"},
+            "options": {"typesOnly": false, "irVersion": "4", "sourceRootUri": ["src"]},
+        }))
+        .expect_err("a root is a single location");
+        assert!(
+            error
+                .to_string()
+                .contains("'sourceRootUri' must be a string"),
+            "{error}"
+        );
+    }
+
+    /// The legacy envelope carries everything else a request carries; only
+    /// where the documents and the root sit differs.
+    #[test]
+    fn a_legacy_request_keeps_its_dependencies_and_baseline() {
+        let request: CompileRequest = serde_json::from_value(serde_json::json!({
+            "languageId": "python",
+            "documents": [a_document()],
+            "package": {"name": "acme/example", "exposedModules": ["domain.models"]},
+            "dependencies": [{
+                "packageName": "morphir/sdk",
+                "irVersion": "4",
+                "distribution": {"modules": {}},
+            }],
+            "options": {"typesOnly": true, "irVersion": "4", "sourceRootUri": "file:///project/src"},
+            "baseline": {"modules": [], "contextDigest": "sha256:aa"},
+        }))
+        .expect("a legacy request is a whole request");
+
+        assert_eq!(request.dependencies.len(), 1);
+        assert_eq!(
+            request
+                .baseline
+                .expect("baseline")
+                .context_digest
+                .as_deref(),
+            Some("sha256:aa")
+        );
+        assert!(request.options.types_only);
+        assert_eq!(
+            request.package.exposed_modules.as_deref(),
+            Some(&["domain.models".to_string()][..])
+        );
     }
 }

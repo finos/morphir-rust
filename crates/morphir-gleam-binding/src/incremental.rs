@@ -90,6 +90,7 @@ pub(crate) fn context_digest(
         "language": request.language_id,
         "irVersion": request.options.ir_version,
         "typesOnly": request.options.types_only,
+        "root": request.sources.root,
         "options": options,
         "dependencies": dependencies,
     }))

@@ -15,13 +15,19 @@ pub(super) struct Settings {
 }
 
 pub(super) fn validate(request: &CompileRequest) -> Outcome<Settings> {
-    if request.language_id != "rust" || request.documents.iter().any(|d| d.language_id != "rust") {
+    if request.language_id != "rust"
+        || request
+            .sources
+            .documents
+            .iter()
+            .any(|d| d.language_id != "rust")
+    {
         return Err(error(
             "RS_LANGUAGE",
             "The Rust frontend requires languageId rust",
         ));
     }
-    if request.documents.len() != 1 {
+    if request.sources.documents.len() != 1 {
         return Err(error(
             "RS_DOCUMENTS",
             "Exactly one Rust document is supported",
@@ -56,7 +62,7 @@ pub(super) fn validate(request: &CompileRequest) -> Outcome<Settings> {
             .map(|n| Name::new(n.words()))
             .collect(),
     );
-    let uri = &request.documents[0].uri;
+    let uri = &request.sources.documents[0].uri;
     let stem = uri
         .rsplit('/')
         .next()
@@ -101,7 +107,7 @@ pub(super) fn validate(request: &CompileRequest) -> Outcome<Settings> {
     }
     for (key, value) in &request.options.extra {
         let valid = match key.as_str() {
-            "outputDir" | "sourceRootUri" | "sourceRoot" => value.is_string(),
+            "outputDir" => value.is_string(),
             "emitParseStage" | "emitParseStageFatal" => value.is_boolean(),
             _ => {
                 return Err(error(

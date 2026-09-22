@@ -55,13 +55,8 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                 ));
             }
         };
-    let root = request
-        .options
-        .extra
-        .get("sourceRootUri")
-        .or_else(|| request.options.extra.get("sourceRoot"))
-        .and_then(|v| v.as_str());
-    let prepared = match crate::prepare_documents(&request.documents, root) {
+    let root = request.sources.root.as_deref();
+    let prepared = match crate::prepare_documents(&request.sources.documents, root) {
         Ok(documents) => documents,
         Err(errors) => return Ok(failed_compile(errors)),
     };

@@ -27,7 +27,10 @@ impl TestDriver {
         PythonExtension
             .compile(CompileRequest {
                 language_id: "python".into(),
-                documents,
+                sources: SourceSet {
+                    root: None,
+                    documents,
+                },
                 package: CompilePackage {
                     name: "acme/example".into(),
                     exposed_modules: None,

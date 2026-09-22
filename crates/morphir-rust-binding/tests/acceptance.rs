@@ -36,12 +36,15 @@ impl TestDriver {
                 .unwrap()
                 .compile(CompileRequest {
                     language_id: "rust".into(),
-                    documents: vec![SourceDocument {
-                        uri: "models.rs".into(),
-                        language_id: "rust".into(),
-                        version: 1,
-                        text: self.source.clone(),
-                    }],
+                    sources: SourceSet {
+                        root: None,
+                        documents: vec![SourceDocument {
+                            uri: "models.rs".into(),
+                            language_id: "rust".into(),
+                            version: 1,
+                            text: self.source.clone(),
+                        }],
+                    },
                     package: CompilePackage {
                         name: "acme/example".into(),
                         exposed_modules: Some(vec!["Models".into()]),

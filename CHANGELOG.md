@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A packaged extension can declare that it serves workspace discovery. The
+  native Elm and Gleam extensions now report `Workspace` among their capability
+  kinds at initialization, but the published bundle manifest inferred
+  capabilities only from `languages` and `targets`, so a host that read the
+  installed record before starting the guest saw a different set and refused the
+  session with "capability kinds changed". The extension registry gains
+  `workspace_discovery`, which reaches the release descriptor as
+  `workspaceDiscovery` and the published record as the `workspace` capability.
+  It is distinct from `release_with_workspace`, which is about release cadence,
+  and is refused on an entry with no frontend languages, since discovery
+  synthesis has no sources to derive module identity from.
 - Package-local TUF canonicalization preserves Unicode code points in signed
   fields and key IDs. Valid decomposed strings verify, and normalization changes
   cannot reuse a signature. Object keys sort by decoded UTF-8 bytes before
@@ -27,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
 ### Changed
+- `test:cli-release <id>` degrades to a skip, rather than a failure, when the
+  pinned CLI release rejects a release descriptor field that did not exist when
+  it was cut — currently `workspaceDiscovery`, which is why the Gleam bundle
+  could not be published through 0.4.0-beta.3. The skip needs the publish error
+  to name a field listed as transitional in the task *and* the descriptor to
+  carry it; every other publish failure still fails the job, and the task says
+  on stderr when a listed field publishes cleanly and the entry can go.
 - **Source-breaking:** `NativeExtension::capabilities()` returns an owned
   `ExtensionCapabilities` instead of `&ExtensionCapabilities`. Code that binds the
   result by reference or stores the borrow needs adjusting; code that already
@@ -57,6 +75,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that omit `purpose` are unaffected. Ad-hoc discovery of an explicit selection
   against an *existing* manifest is declared but not yet implemented, and is
   refused with `workspace.purpose.unsupported`.
+  Discovery also accepts an explicit name for a synthesized project, at
+  `cli_overlay.project.name` — the one place a host can supply one. It is read
+  from the overlay directly, never from the effective configuration merged with
+  built-in defaults, shared layers and the environment, because merging any of
+  those in would silently promote a default into a project identity. The value
+  must be a string and is stored trimmed, since it arrives from a command line
+  where surrounding whitespace is a shell artefact nobody can see. Two
+  diagnostic codes come with it: `workspace.project-name.empty` for an override
+  that is present but blank or whitespace-only, and
+  `workspace.selection.name-required` for an unnamed ad-hoc selection of more
+  than one source, which has nothing to derive a name from. A *named* selection
+  stays unconstrained.
+- **Source-breaking:** `CompileRequest.documents: Vec<SourceDocument>` becomes
+  `CompileRequest.sources: SourceSet { root: Option<String>, documents:
+  Vec<SourceDocument> }`. A compilation's source root now travels with the
+  documents it applies to instead of being smuggled through `options.extra`. A
+  module's name is a function of its path relative to that root, so a root kept
+  anywhere else silently renames modules the moment a document set is replaced
+  or combined — the root and the documents are one value and are now typed as
+  one. A request states its sources one way or the other and never both. A
+  request carrying `sources` is the current shape, and the legacy
+  `sourceRootUri` and `sourceRoot` option keys are **rejected, not ignored**
+  there — at serde deserialization, in the Rust and Python bindings' own
+  per-frontend option allowlists, and at the native handle — so a caller that
+  sends a root twice fails loudly rather than silently compiling the same files
+  under different module names. **Transitionally**, the pre-`sources` envelope
+  is still accepted: a request carrying top-level `documents`, optionally with
+  a legacy root key in `options.extra`, is normalized into
+  `sources { root, documents }` during deserialization, and the root key is
+  moved out of the options bag so nothing downstream sees it. Hosts released
+  before this change therefore keep working. A request carrying **both**
+  `sources` and top-level `documents` is an error naming the ambiguity, as are
+  two legacy root keys that disagree: each envelope names its own root, and
+  which one module names resolve against would have no honest answer. The
+  legacy envelope is scheduled for removal once a morphir release ships a host
+  that speaks `sources`; see `SourceEnvelope` in `morphir-extension-sdk` for
+  what goes with it. Gleam's
+  incremental context digest covers the root explicitly, where it previously
+  covered it only incidentally through `options.extra`, so a baseline built
+  against a different source root is invalidated and recompiled instead of
+  being reused under names it was not built with.
+- **Source-breaking:** the native Elm and Gleam extensions advertise
+  `ExtensionType::Workspace` and serve discovery themselves, synthesizing a
+  single file's package name and exposed module from the source. Registering a
+  workspace role means both must be constructed through
+  `NativeExtension::builder(..)` with a `with_workspace(..)` registration;
+  `frontend_backend()` registers no workspace handle, so every call site that
+  used it needs changing. Each provider delegates to
+  `morphir_workspace::discover` — confinement, budgets, ordering and
+  diagnostics stay portable — and only fills what a language-specific policy
+  can supply. Elm reads the declared `module`, `port module` or `effect module`
+  header, falling back to the file's stem and then to `Main`; this is a
+  byte-for-byte port of the derivation the CLI ran inline for a single-file
+  compile, not a rewrite against Elm's own parser, which accepts and rejects
+  different malformed headers. Gleam has no module header and derives from the
+  path relative to the selection's root, using the same canonicalization
+  compile already applies to a document URI; a path it cannot turn into a valid
+  module name becomes a project-level `gleam.workspace.invalid-module-path`
+  diagnostic rather than a plausible-looking wrong name. A name discovery
+  supplied is never overwritten, and exposed modules are derived for any
+  single-source selection that left them unset, so an explicit
+  `--package-name` keeps its name and still gets its exposure — the same file
+  cannot advertise one set of exposed modules unnamed and none named. A named
+  selection of *several* sources keeps `exposedModules` unset, meaning "expose
+  everything": nothing can construct that shape yet, and enumerating such a
+  set's modules waits for capability-driven source collection.
+- These changes land as a set. The parent `finos/morphir` still derives
+  single-file identity inline and constructs the Elm extension through
+  `frontend_backend()`, and the `morphir-elm` `vnext` TypeScript provider
+  serves the same discovery protocol, so both must land together with the
+  submodule pin bump; a pin bump on its own would leave the parent unable to
+  build and the two providers disagreeing about who synthesizes identity.
 - IR conformance checks use the released native `morphir mck` CLI,
   a verified managed kit, and native report adjudication on Linux, macOS and
   Windows. `check:kit` uses the pinned native CLI and vendored snapshot;

@@ -5,15 +5,18 @@ use serde_json::{Value, json};
 fn request(sources: &[(&str, &str)]) -> CompileRequest {
     CompileRequest {
         language_id: "python".into(),
-        documents: sources
-            .iter()
-            .map(|(uri, text)| SourceDocument {
-                uri: (*uri).into(),
-                language_id: "python".into(),
-                version: 1,
-                text: (*text).into(),
-            })
-            .collect(),
+        sources: SourceSet {
+            root: None,
+            documents: sources
+                .iter()
+                .map(|(uri, text)| SourceDocument {
+                    uri: (*uri).into(),
+                    language_id: "python".into(),
+                    version: 1,
+                    text: (*text).into(),
+                })
+                .collect(),
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: None,
@@ -37,7 +40,7 @@ fn compile(request: CompileRequest) -> Value {
 fn roundtrip(request: CompileRequest) -> (Value, Vec<Artifact>) {
     let ir = compile(request.clone());
     let mut reversed = request;
-    reversed.documents.reverse();
+    reversed.sources.documents.reverse();
     assert_eq!(
         ir,
         compile(reversed),
@@ -85,7 +88,7 @@ fn private_modules_are_available_inside_the_package_and_survive_generation() {
         })
         .unwrap();
     assert!(generated.success, "{:?}", generated.diagnostics);
-    input.documents = generated
+    input.sources.documents = generated
         .artifacts
         .iter()
         .map(|artifact| SourceDocument {
@@ -142,10 +145,7 @@ fn nested_modules_resolve_absolute_relative_and_qualified_imports() {
             "import domain.models\nfrom domain import rules as rule\nfrom dataclasses import dataclass\n@dataclass(frozen=True)\nclass App:\n    home: domain.models.Address\n    holder: rule.Holder\n",
         ),
     ]);
-    input
-        .options
-        .extra
-        .insert("sourceRootUri".into(), json!("file:///project/src"));
+    input.sources.root = Some("file:///project/src".into());
     input.package.exposed_modules = Some(vec![
         "App".into(),
         "Domain.Models".into(),
@@ -229,10 +229,7 @@ fn rejects_invalid_module_graphs_without_partial_ir() {
 #[test]
 fn rejects_sources_outside_root_and_unknown_exposed_modules() {
     let mut input = request(&[("file:///other/models.py", TYPES)]);
-    input
-        .options
-        .extra
-        .insert("sourceRootUri".into(), json!("file:///project"));
+    input.sources.root = Some("file:///project".into());
     assert!(!PythonExtension.compile(input).unwrap().success);
     let mut input = request(&[("models.py", TYPES), ("rules.py", "")]);
     input.package.exposed_modules = Some(vec!["Missing".into()]);
@@ -360,10 +357,7 @@ fn document_uri_metadata_and_percent_encoding_do_not_change_module_identity() {
             "from .models import Pair\ndef origin() -> Pair:\n    return (0, '')\n",
         ),
     ]);
-    input
-        .options
-        .extra
-        .insert("sourceRootUri".into(), json!("file:///my%20project/src/"));
+    input.sources.root = Some("file:///my%20project/src/".into());
     roundtrip(input);
     for uri in [
         "file://other/project/src/models.py",
@@ -373,10 +367,7 @@ fn document_uri_metadata_and_percent_encoding_do_not_change_module_identity() {
         "file:///project/src/domain%5Cmodels.py",
     ] {
         let mut input = request(&[(uri, TYPES)]);
-        input
-            .options
-            .extra
-            .insert("sourceRootUri".into(), json!("file:///project/src"));
+        input.sources.root = Some("file:///project/src".into());
         assert!(
             !PythonExtension.compile(input).unwrap().success,
             "accepted {uri}"

@@ -10,8 +10,9 @@ pub use crate::types::{
     CompileOptions, CompilePackage, CompileRequest, CompileResult, Diagnostic, DiagnosticSeverity,
     ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability, GenerateRequest,
     GenerateResult, LanguageCapability, ModuleResult, ModuleStatus, RelatedInformation,
-    ResourceLimits, SourceDocument, SourceLocation, SourcePosition, SourceRange, TransformRequest,
-    TransformResult, ValidateRequest, ValidateResult, WorkspaceCapability, WorkspaceInfo,
+    ResourceLimits, SourceDocument, SourceLocation, SourcePosition, SourceRange, SourceSet,
+    TransformRequest, TransformResult, ValidateRequest, ValidateResult, WorkspaceCapability,
+    WorkspaceInfo,
 };
 
 // Re-export traits
@@ -60,5 +61,6 @@ mod tests {
         let _: Option<SourceDocument> = None;
         let _: Option<SourcePosition> = None;
         let _: Option<SourceRange> = None;
+        let _: Option<SourceSet> = None;
     }
 }

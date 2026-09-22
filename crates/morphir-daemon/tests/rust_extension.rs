@@ -161,12 +161,15 @@ async fn packaged_rust_installs_and_executes_offline_in_both_ir_versions() {
 fn compile_request(source: &str, version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "rust".into(),
-        documents: vec![SourceDocument {
-            uri: "models.rs".into(),
-            language_id: "rust".into(),
-            version: 1,
-            text: source.into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "models.rs".into(),
+                language_id: "rust".into(),
+                version: 1,
+                text: source.into(),
+            }],
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: Some(vec!["Models".into()]),

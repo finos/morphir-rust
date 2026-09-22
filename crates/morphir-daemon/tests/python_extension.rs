@@ -92,7 +92,10 @@ async fn packaged_roundtrip(version: &str) {
     );
     let request = |documents| CompileRequest {
         language_id: "python".into(),
-        documents,
+        sources: SourceSet {
+            root: None,
+            documents,
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: None,
@@ -195,12 +198,15 @@ impl PythonExtensionDriver {
                 methods::COMPILE,
                 CompileRequest {
                     language_id: "python".into(),
-                    documents: vec![SourceDocument {
-                        uri: "models.py".into(),
-                        language_id: "python".into(),
-                        text,
-                        version: 1,
-                    }],
+                    sources: SourceSet {
+                        root: None,
+                        documents: vec![SourceDocument {
+                            uri: "models.py".into(),
+                            language_id: "python".into(),
+                            text,
+                            version: 1,
+                        }],
+                    },
                     package: CompilePackage {
                         name: "acme/example".into(),
                         exposed_modules: None,

@@ -8,12 +8,15 @@ fn compile(source: &str) -> CompileResult {
     GleamExtension
         .compile(CompileRequest {
             language_id: "gleam".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///src/main.gleam".into(),
-                language_id: "gleam".into(),
-                version: 1,
-                text: source.into(),
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///src/main.gleam".into(),
+                    language_id: "gleam".into(),
+                    version: 1,
+                    text: source.into(),
+                }],
+            },
             package: CompilePackage {
                 name: "example/structural".into(),
                 exposed_modules: None,

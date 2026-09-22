@@ -8,7 +8,9 @@
 mod support;
 
 use morphir_daemon::extensions::ProcessLaunch;
-use morphir_extension_sdk::{CompileOptions, CompilePackage, CompileRequest, SourceDocument};
+use morphir_extension_sdk::{
+    CompileOptions, CompilePackage, CompileRequest, SourceDocument, SourceSet,
+};
 use std::path::PathBuf;
 
 fn extension_path() -> PathBuf {
@@ -24,12 +26,15 @@ fn fixture_directory() -> PathBuf {
 fn an_elm_request(uri: &str, text: &str) -> CompileRequest {
     CompileRequest {
         language_id: "elm".into(),
-        documents: vec![SourceDocument {
-            uri: uri.into(),
-            language_id: "elm".into(),
-            version: 1,
-            text: text.into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: uri.into(),
+                language_id: "elm".into(),
+                version: 1,
+                text: text.into(),
+            }],
+        },
         package: CompilePackage {
             name: "local/example".into(),
             exposed_modules: Some(vec!["Example".into()]),

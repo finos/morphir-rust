@@ -6,24 +6,27 @@ fn main() -> Result<()> {
     let extension = NativeExtension::frontend_backend(PythonExtension)?;
     let request = CompileRequest {
         language_id: "python".into(),
-        documents: vec![
-            SourceDocument {
-                uri: "models.py".into(),
-                language_id: "python".into(),
-                version: 1,
-                text: format!(
-                    "{}\n{}",
-                    include_str!("../tests/fixtures/models.py"),
-                    include_str!("../tests/fixtures/tuples.py")
-                ),
-            },
-            SourceDocument {
-                uri: "rules.py".into(),
-                language_id: "python".into(),
-                version: 1,
-                text: include_str!("../tests/fixtures/modules/rules.py").into(),
-            },
-        ],
+        sources: SourceSet {
+            root: None,
+            documents: vec![
+                SourceDocument {
+                    uri: "models.py".into(),
+                    language_id: "python".into(),
+                    version: 1,
+                    text: format!(
+                        "{}\n{}",
+                        include_str!("../tests/fixtures/models.py"),
+                        include_str!("../tests/fixtures/tuples.py")
+                    ),
+                },
+                SourceDocument {
+                    uri: "rules.py".into(),
+                    language_id: "python".into(),
+                    version: 1,
+                    text: include_str!("../tests/fixtures/modules/rules.py").into(),
+                },
+            ],
+        },
         package: CompilePackage {
             name: "acme/example".into(),
             exposed_modules: None,

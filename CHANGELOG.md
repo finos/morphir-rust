@@ -127,6 +127,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Experimental TUF retained evidence now carries its exact acceptance root atomically,
+  allowing threshold-only root updates without discarding the other role's rollback
+  floor or changing the upstream keys-only reset rule.
+- Development-only package TUF storage port behind `experimental-storage`: exact
+  evidence retention, transactional root/reset transitions, predecessor checks,
+  and read-only accepted-time floors. SQLite process-restart probes exercise the
+  candidate; production quorum, candidate-marker admission and provider
+  qualification remain pending.
+- Host-supplied fixed operation time for the experimental package-local TUF
+  candidate, shared by metadata authentication and target reads. Expiration is
+  enforced at exact equality, and fixed time cannot disable expiration checks.
+  Durable package storage and accepted-time semantics remain pending under
+  finos/morphir#852, PKG-3.
+- Package-local TUF qualification groundwork with exact positive-integer metadata
+  versions, signed boundary and process-restart tests, and native CI coverage.
+  The candidate remains a development dependency while authenticated package
+  restore is implemented. The tool-update TUF dependency is unchanged.
+  Tracks finos/morphir#852, PKG-3.
+- Windows-only package provider candidate probes for write-through directory
+  creation, exclusive handle-based promotion and process restart. They record
+  token elevation and leave whole-tree durability and standard-user qualification
+  explicitly pending.
 - Native, in-process extensions can serve workspace discovery. A new
   `NativeWorkspace` endpoint joins `NativeFrontend` and `NativeBackend`, and an
   extension implementing `Workspace` registers it through

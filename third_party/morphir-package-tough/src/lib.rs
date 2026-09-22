@@ -32,6 +32,7 @@
 )]
 
 mod cache;
+mod canonical;
 mod datastore;
 pub mod editor;
 pub mod error;

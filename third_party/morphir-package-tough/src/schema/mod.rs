@@ -11,6 +11,7 @@ mod ser;
 mod spki;
 mod verify;
 
+use crate::canonical::CanonicalFormatter;
 use crate::schema::decoded::{Decoded, Hex};
 pub use crate::schema::error::{Error, Result};
 use crate::schema::iter::KeysIter;
@@ -21,7 +22,6 @@ use crate::{encode_filename, TargetName};
 use aws_lc_rs::digest::{digest, Context, SHA256};
 use globset::{Glob, GlobMatcher};
 use hex::ToHex;
-use olpc_cjson::CanonicalFormatter;
 use serde::de::Error as SerdeDeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;

@@ -2,11 +2,11 @@
 
 //! Handles cryptographic keys and their serialization in TUF metadata files.
 
+use crate::canonical::CanonicalFormatter;
 use crate::schema::decoded::{Decoded, EcdsaFlex, Hex, RsaPem};
 use crate::schema::error::{self, Result};
 use aws_lc_rs::digest::{digest, SHA256};
 use aws_lc_rs::signature::VerificationAlgorithm;
-use olpc_cjson::CanonicalFormatter;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::ResultExt;

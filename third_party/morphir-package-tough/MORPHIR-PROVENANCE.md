@@ -182,3 +182,38 @@ three-platform provider qualification. Run the optional suite with:
 ```sh
 cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --features experimental-storage
 ```
+
+## Approved Unicode-preserving canonicalization amendment
+
+The maintainer approved this bounded correction after independent Ed25519 probes
+showed that NFC normalization rejected valid decomposed Unicode and accepted a
+composed-to-decomposed signed-field change without resigning. The package trust
+profile permits Unicode and explicitly forbids normalization, including in signed
+unknown fields.
+
+`src/canonical/` is adapted from the `olpc-cjson` 0.1.4 crate archive, SHA-256
+`696183c9b5fe81a7715d074fd632e8bd46f4ccc0231a3ed7fc580a80de5f7083`.
+Its MIT OR Apache-2.0 license texts are byte-identical to this directory's retained
+LICENSE-MIT and LICENSE-APACHE. Original copyright headers remain. The source and
+five original unit tests were split into a private module and test file; the test
+derive uses the existing serde re-export. Crate-only example/import documentation
+was adapted for private-module use. Clippy's two equivalent `Error::other`
+constructor suggestions were applied without changing the error kind or text.
+
+The only formatter behavior change is writing a string fragment's UTF-8 bytes
+without calling NFC normalization. Sorting, quote/backslash escaping, literal
+ASCII controls, exact integer handling and float rejection are retained. Every
+package-local formatter call, including role verification, editor signing and
+key IDs, uses this module. The registry `olpc-cjson` dependency is test-only for
+the inherited ASCII raw-metadata regression fixtures. It is not used by this
+package's runtime. There is no global dependency patch. Existing
+registry Tough and tool-update behavior are unchanged.
+
+Four independent integration tests cover all four signed roles, unknown Unicode
+keys/values, canonically equivalent but distinct keys, unresigned normalization
+tampering, key IDs, controls/escaping and a large exact signed unknown integer.
+Fixtures use a separate Ed25519 signer and fixed canonical-byte expectations;
+none use this formatter to author their expected signatures. All four tests failed
+against the original formatter before the correction. Native CI runs these tests
+on Linux, macOS and Windows. This amendment does not establish complete package
+profile admission, authenticated restore or provider qualification.

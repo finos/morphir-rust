@@ -113,6 +113,21 @@ fn multiple_absolute_documents_require_a_root_but_single_document_compatibility_
     assert!(input.source_paths().is_err());
 }
 
+/// The rootless rule is `documents.len() == 1`, not "at most one absolute
+/// document": with no root, one absolute document *beside* a relative one is
+/// still a multi-document request and still errors, exactly like two
+/// absolute documents would.
+#[test]
+fn an_absolute_document_beside_a_relative_one_requires_a_root() {
+    let mut input = request(json!("file:///project/src"), &["models.py"]);
+    input.sources.root = None;
+    input.sources.documents.push(SourceDocument {
+        uri: "file:///project/src/rules.py".into(),
+        ..input.sources.documents[0].clone()
+    });
+    assert!(input.source_paths().is_err());
+}
+
 #[test]
 fn exposure_distinguishes_omission_from_an_empty_public_module_list() {
     let mut input = request(json!("file:///project/src"), &["models.py"]);

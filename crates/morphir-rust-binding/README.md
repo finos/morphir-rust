@@ -76,9 +76,11 @@ partial IR. Source diagnostics carry URI and zero-based UTF-16 positions.
 `irVersion` accepts `3`, `4` and compatible exact release spellings according to
 the core support table. Output uses the baseline format and reports `3` or `4`.
 Unsupported major/minor versions fail. CLI context options `outputDir`,
-`sourceRootUri`, `sourceRoot`, `emitParseStage`, `emitParseStageFatal` are validated.
-Parse-stage output is unavailable: a request warns or fails when marked fatal.
-Unknown options fail.
+`emitParseStage`, `emitParseStageFatal` are validated. Parse-stage output is
+unavailable: a request warns or fails when marked fatal. Unknown options fail.
+The Rust frontend compiles exactly one document and never reads `sources.root`,
+so `sourceRootUri` and `sourceRoot` in the options bag are rejected like any
+other unknown option, not silently accepted.
 
 ## Conditional functions in IR v3 and v4
 

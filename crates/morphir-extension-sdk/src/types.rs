@@ -878,6 +878,21 @@ mod tests {
         assert_eq!(rootless.root, None);
     }
 
+    /// Before the root was typed, `CompileOptions::source_root()` rejected an
+    /// explicit `"sourceRootUri": null` with "must be a string" — a type
+    /// error. `root` is now `Option<String>`, so `"root": null` deserializes
+    /// as ordinary serde practice for an absent option, not a type error.
+    /// Pinning this so the change is a recorded decision, not an accident.
+    #[test]
+    fn an_explicit_null_root_deserializes_as_no_root() {
+        let sources: SourceSet = serde_json::from_value(serde_json::json!({
+            "root": null,
+            "documents": []
+        }))
+        .unwrap();
+        assert_eq!(sources.root, None);
+    }
+
     #[test]
     fn compile_result_matches_mep_0_1() {
         let expected = serde_json::json!({

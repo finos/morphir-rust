@@ -34,7 +34,7 @@ impl SourceRoot {
     pub fn parse(value: &str) -> Result<Self, SourceContextError> {
         let value = normalize(value)?;
         if !absolute(&value) {
-            return Err(SourceContextError("sourceRootUri must be absolute".into()));
+            return Err(SourceContextError("sources.root must be absolute".into()));
         }
         Ok(Self(value))
     }
@@ -77,30 +77,29 @@ impl CompileRequest {
             .iter()
             .map(|document| {
                 let normalized = normalize(&document.uri)?;
-                let relative =
-                    if absolute(&normalized) {
-                        match &root {
-                            Some(root) => normalized
-                                .strip_prefix(&format!(
-                                    "{}/",
-                                    root.as_str().strip_suffix('/').unwrap_or(root.as_str())
-                                ))
-                                .ok_or_else(|| {
-                                    SourceContextError(
-                                        "Source document is outside sourceRootUri".into(),
-                                    )
-                                })?,
-                            None if self.sources.documents.len() == 1 => {
-                                normalized.rsplit('/').next().unwrap_or("")
-                            }
-                            None => return Err(SourceContextError(
-                                "Absolute source URIs require sourceRootUri for multiple modules"
-                                    .into(),
-                            )),
+                let relative = if absolute(&normalized) {
+                    match &root {
+                        Some(root) => normalized
+                            .strip_prefix(&format!(
+                                "{}/",
+                                root.as_str().strip_suffix('/').unwrap_or(root.as_str())
+                            ))
+                            .ok_or_else(|| {
+                                SourceContextError("Source document is outside sources.root".into())
+                            })?,
+                        None if self.sources.documents.len() == 1 => {
+                            normalized.rsplit('/').next().unwrap_or("")
                         }
-                    } else {
-                        &normalized
-                    };
+                        None => {
+                            return Err(SourceContextError(
+                                "Absolute source URIs require sources.root for multiple modules"
+                                    .into(),
+                            ));
+                        }
+                    }
+                } else {
+                    &normalized
+                };
                 if relative.is_empty() || relative.split('/').any(str::is_empty) {
                     return Err(SourceContextError(
                         "Source document must identify a nonempty relative file path".into(),

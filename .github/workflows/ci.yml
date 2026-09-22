@@ -148,6 +148,54 @@ jobs:
       - name: Lint with Clippy
         run: mise run check:lint:rust -- ${{ needs.changes.outputs.cargo_packages }}
 
+  provider-windows-standard-user:
+    name: Ordinary-user provider candidate (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.job_kit_conformance == 'true') }}
+    env:
+      MISE_ENABLE_TOOLS: rust
+      CARGO_TERM_COLOR: never
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            arch: aarch64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Enable long Git dependency paths on Windows
+        run: git config --global core.longpaths true
+      - name: Install Rust through mise
+        uses: jdx/mise-action@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Build and execute under a separate standard-user account
+        shell: pwsh
+        env:
+          PROBE_TARGET: ${{ matrix.target }}
+          PROBE_ARCH: ${{ matrix.arch }}
+        run: ./.github/scripts/test_windows_standard_user_provider.ps1
+      - name: Upload ordinary-user candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ordinary-user-provider-${{ matrix.arch }}
+          include-hidden-files: true
+          if-no-files-found: error
+          path: .dev/out/ordinary-user/
+
   kit-conformance:
     name: Kit conformance (${{ matrix.os }})
     env:
@@ -589,6 +637,7 @@ jobs:
       - test-release-workflow
       - lint-rust
       - kit-conformance
+      - provider-windows-standard-user
       - lint-shell
       - lint-yaml
       - docs-generated

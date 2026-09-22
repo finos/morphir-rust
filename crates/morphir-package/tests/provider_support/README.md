@@ -164,6 +164,64 @@ artifact to avoid a self-referential hash.
 
 ## Local development observation
 
+### Separate standard-user Windows execution
+
+The `provider-windows-standard-user` CI job invokes
+[the Windows evidence script](../../../../.github/scripts/test_windows_standard_user_provider.ps1),
+which builds this same test executable for
+`windows-2025` x64 and `windows-11-arm` ARM64. Its ephemeral setup creates a fresh
+local account belonging only to Users, a private scratch directory owned by that
+account, and an executable directory the account can read/execute but cannot write.
+Setup reads back ownership and the protected scratch DACL. The only allowed ACL
+principals are the test account, SYSTEM and the setup account. Tests create their
+own temporary directories underneath that scratch directory.
+
+The job uses a real credentialed local logon through
+[Start-Process](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process),
+not a restricted administrator token or network-only credentials. The explicit
+child environment removes inherited runner variables before adding the probe's
+required values. It omits `-UseNewEnvironment`: the
+[PowerShell credentialed launch implementation](https://github.com/PowerShell/PowerShell/blob/v7.6.3/src/Microsoft.PowerShell.Commands.Management/commands/management/Process.cs#L2531-L2567)
+discards the supplied environment when that switch is present. Provisioning and
+cleanup run as CI setup; provider operations run as the new account. The password
+stays in setup memory and is never logged or written to an artifact. A `finally`
+block removes the profile, account and sandbox and disposes the secure password;
+cleanup failures fail the job. Runner cancellation also destroys the ephemeral VM.
+
+`ordinary_user_identity_and_state_acl_are_observed` is ignored in a normal run
+because it requires this setup. The dedicated job runs **all** probes with
+`--include-ignored`, `MORPHIR_PROVIDER_STANDARD_USER=1`, and expected user/setup
+SIDs and architecture. Missing setup is an error. Every fixture creation and each
+real child-process probe checks the actual token and fixture ACL. The dedicated
+case also inspects the live SQLite database, WAL and SHM file owners/ACLs. It
+reads back the current executable and its containing directory: both must be owned
+by the setup account and grant the test user exactly read/execute access. CI
+requires the named case to report success and an unfiltered, zero-ignored passing
+test summary.
+
+Native observations use `GetTokenInformation`, `IsTokenRestricted`,
+`IsWow64Process2` and `GetNamedSecurityInfoW`. They require the exact expected user
+SID, no elevation or linked/restricted token, no Administrators group SID even if
+deny-only, and no enabled privilege outside the ordinary-user allowlist. They
+reject emulation and check both executable and native machine architecture.
+Fixture owners must match the user, the user must have FullControl, and every ACL
+entry must name an allowed principal. Null DACLs, unexpected ACE forms, missing
+rights and other principals fail. These checks do not trust environment usernames
+or runner labels as identity evidence.
+
+Artifacts contain setup SIDs/ACLs, actual token groups and privilege attributes,
+native architecture, filesystem detection, executable SHA-256 and complete test
+output. The digest verifies the copied test executable, not a released provider.
+The first native standard-user runs at `6fa8541` passed all 25 tests, including
+the mandatory identity/state-ACL case, on both
+[x64](https://github.com/finos/morphir-rust/actions/runs/35687230573/job/106616653736)
+and [ARM64](https://github.com/finos/morphir-rust/actions/runs/35687230573/job/106616653680).
+Both observed local NTFS, matching native machine architecture, the expected user
+SID without elevation or a linked/restricted token, and only
+`SeChangeNotifyPrivilege` enabled.
+This is functional permissions evidence, with no new power-loss, initialization
+durability or production qualification claim.
+
 On macOS 26.6.2 build 25G83, aarch64, Rust 1.98.1 and detected local APFS, the
 16-test probe passes, including native file/directory `F_FULLFSYNC` and real
 process death/restart. Linux and Windows execution results are not supplied by

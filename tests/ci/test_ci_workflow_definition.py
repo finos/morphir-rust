@@ -85,6 +85,17 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
         self.assertIn('  pull_request:\n    branches: ["main"]\n', header)
         self.assertNotIn("labeled", header)
 
+    def test_windows_provider_jobs_enable_long_git_dependency_paths(self) -> None:
+        for name in ("kit-conformance", "provider-windows-standard-user"):
+            with self.subTest(job=name):
+                job = self.jobs[name]
+                self.assertIn('CARGO_NET_GIT_FETCH_WITH_CLI: "true"', job)
+                self.assertIn("run: git config --global core.longpaths true", job)
+                self.assertLess(
+                    job.index("git config --global core.longpaths true"),
+                    job.index("cargo test --locked"),
+                )
+
     def test_concurrency_cancels_only_off_main(self) -> None:
         header = self.workflow.split("jobs:\n", 1)[0]
         self.assertIn("  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}", header)

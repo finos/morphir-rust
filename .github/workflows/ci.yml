@@ -157,6 +157,7 @@ jobs:
     env:
       MISE_ENABLE_TOOLS: rust
       CARGO_TERM_COLOR: never
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +171,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+      - name: Enable long Git dependency paths on Windows
+        run: git config --global core.longpaths true
       - name: Install Rust through mise
         uses: jdx/mise-action@v4
       - name: Cache Rust dependencies

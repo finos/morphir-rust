@@ -2,7 +2,7 @@
 
 use crate::package::positive_integer_id;
 use anyhow::{Context, Result, bail, ensure};
-use morphir_package::{local_registry::mvp, strict_json};
+use morphir_package::{digest::Digest, local_registry::mvp, strict_json};
 use package_tough::{error, schema};
 use serde::Deserialize;
 use serde_json::json;
@@ -249,6 +249,14 @@ async fn restore(files: BTreeMap<String, Vec<u8>>) -> Result<serde_json::Value> 
                 output.is_dir(),
                 "restore did not publish an output directory"
             );
+            let output_files = inventory(&output)?
+                .into_iter()
+                .filter_map(|(path, bytes)| {
+                    bytes.map(
+                        |bytes| json!({"path":path,"sha256":Digest::of_bytes(&bytes).to_string()}),
+                    )
+                })
+                .collect::<Vec<_>>();
             let mut restored = report.packages;
             restored.sort_by(|left, right| {
                 left.release
@@ -271,13 +279,13 @@ async fn restore(files: BTreeMap<String, Vec<u8>>) -> Result<serde_json::Value> 
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(
-                json!({"outcome":"restored","packages":packages,"output":"present","lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
+                json!({"outcome":"restored","packages":packages,"outputFiles":output_files,"output":"present","lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
             )
         }
         Err(error) if timestamp_signature_failure(&error) => {
             ensure!(!output.exists(), "refused restore published output");
             Ok(
-                json!({"outcome":"refused","category":"metadata-authentication","output":"absent","lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
+                json!({"outcome":"refused","category":"metadata-authentication","reason":"timestamp-signature-threshold","output":"absent","lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
             )
         }
         Err(error) => bail!("package MVP restore failed: {error:#}"),

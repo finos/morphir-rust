@@ -81,7 +81,9 @@ The `package-mvp` selector advertises draft.3 `local-library-mvp:0.1.0-draft.1`
 restore. The driver sends only the 15 signed input files as lowercase hex. The
 adapter stages those inputs in a temporary directory, runs the production
 initialization and restore APIs, and returns observed packages and input
-preservation. Expected results remain in the parent repository's MCK corpus.
+preservation with the hashes of every published regular file. A verified
+timestamp signature threshold failure has a specific refusal reason. Expected
+results remain in the parent repository's MCK corpus.
 
 ```sh
 mise exec -- cargo test --locked -p morphir-package -p morphir-mck-adapter

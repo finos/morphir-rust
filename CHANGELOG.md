@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Draft.3 `mck-adapter-rust package-mvp` mode runs the signed local Library
   restore pilot through the production package APIs. It admits the bounded
-  15-file input set, reports published packages and unchanged inputs, and
-  recognizes a verified timestamp signature failure as a distinct refusal.
+  15-file input set, reports published packages, output file hashes and
+  unchanged inputs, and identifies a verified timestamp signature threshold
+  failure as a distinct refusal.
 - Scoped local Library update from an untrusted full lock and current authenticated
   records. The existing resolver fixes the root and unrelated nodes, excludes new
   yanked choices, and permits exact frozen yanked nodes. The full graph is verified

@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Package-local TUF qualification groundwork with exact positive-integer metadata
+  versions, signed boundary and process-restart tests, and native CI coverage.
+  The candidate remains a development dependency while authenticated package
+  restore is implemented. The tool-update TUF dependency is unchanged.
+  Tracks finos/morphir#852, PKG-3.
 - Native, in-process extensions can serve workspace discovery. A new
   `NativeWorkspace` endpoint joins `NativeFrontend` and `NativeBackend`, and an
   extension implementing `Workspace` registers it through

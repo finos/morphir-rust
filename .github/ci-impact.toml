@@ -78,6 +78,7 @@ paths = [
   "scripts/bun.lock",
   "scripts/tsconfig.json",
   "vendor/morphir-mck/**",
+  "third_party/morphir-package-tough/**",
 ]
 
 [jobs.workspace-wasm]

@@ -82,6 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconciliation frontend and backend receive, which changes error precedence: an
   extension invalid in both a frontend and a workspace way now reports the frontend
   error. No extension that constructed before fails now.
+- Draft.3 local-registry groundwork in `morphir-package`: bounded lossless byte
+  decoding, typed lock/record/policy validation, publisher signature evidence and
+  explicit synchronous/asynchronous assurance preflight. Signature verification
+  preserves the existing strict Noble acceptance rules using maintained Zebra and
+  Dalek primitives. These helpers do not implement authenticated restore, TUF
+  refresh, or filesystem providers. Tracks finos/morphir#852, PKG-2.
 - Native Elm frontend: a module an exposed module reaches into is published too,
   transitively, as morphir-elm's `collectImplicitlyExposedModules` does — an
   exposed module may not describe its public types in terms nobody outside the

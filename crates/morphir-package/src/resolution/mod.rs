@@ -14,6 +14,8 @@ mod update;
 mod validate;
 mod wire;
 
+pub(crate) use order::normalize_graph;
+
 pub use model::{
     Binding, Catalog, ChangedPin, IrPackageName, LockedGraph, LockedNode, MissingItem, PackagePath,
     ReleaseId, ReleaseRecord, RequiredCapability, Requirement, ResolutionDiagnostic,

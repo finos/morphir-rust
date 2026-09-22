@@ -14,3 +14,7 @@ serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
 sha2 = "0.11"
 jsonschema = { version = "0.56", default-features = false }
 thiserror.workspace = true
+# Preserve Noble zip215:false: canonical points, non-small-order A, cofactored equation.
+ed25519-zebra = { version = "4.2", default-features = false, features = ["std"] }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc"] }
+base64 = "0.22"

@@ -16,6 +16,7 @@ mod incremental;
 pub mod roundtrip;
 mod version;
 pub mod vfs;
+mod workspace;
 
 // Parsing does not require entropy. Fail explicitly if another upstream path requests it.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -37,7 +38,11 @@ impl Extension for GleamExtension {
             name: "Morphir Gleam".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some("Gleam language support for Morphir".into()),
-            types: vec![ExtensionType::Frontend, ExtensionType::Backend],
+            types: vec![
+                ExtensionType::Frontend,
+                ExtensionType::Backend,
+                ExtensionType::Workspace,
+            ],
             author: Some("FINOS".into()),
             license: Some("Apache-2.0".into()),
             homepage: Some("https://github.com/finos/morphir-rust".into()),
@@ -61,6 +66,10 @@ impl Extension for GleamExtension {
                 targets: vec!["gleam".into()],
                 ir_versions: vec!["3".into(), "4".into()],
                 generate: true,
+            }),
+            workspace: Some(WorkspaceCapability {
+                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                discover: true,
             }),
             incremental: true,
             ..Default::default()
@@ -554,7 +563,7 @@ impl Backend for GleamExtension {
 }
 
 // Export the extension
-morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend);
+morphir_extension_sdk::export_extension!(GleamExtension, frontend, backend, workspace);
 
 #[cfg(test)]
 mod tests {
@@ -690,6 +699,13 @@ mod tests {
                 "targets": ["gleam"],
                 "irVersions": ["3", "4"],
                 "generate": true
+            })
+        );
+        assert_eq!(
+            capabilities["workspace"],
+            serde_json::json!({
+                "protocolVersions": [1],
+                "discover": true
             })
         );
     }

@@ -2,14 +2,22 @@ use morphir_extension_sdk::{CompileRequest, SourceDocument};
 use serde_json::json;
 
 fn request(root: serde_json::Value, uris: &[&str]) -> CompileRequest {
+    try_request(root, uris).unwrap()
+}
+
+/// `root` is typed (`Option<String>`), so a root of the wrong JSON type is
+/// now rejected at deserialization rather than reaching `source_paths()`.
+fn try_request(root: serde_json::Value, uris: &[&str]) -> serde_json::Result<CompileRequest> {
     serde_json::from_value(json!({
         "languageId": "python", "package": {"name": "acme/example"},
-        "documents": uris.iter().map(|uri| SourceDocument {
-            uri: (*uri).into(), language_id: "python".into(), version: 1, text: String::new(),
-        }).collect::<Vec<_>>(),
-        "options": {"typesOnly": false, "irVersion": "4", "sourceRootUri": root},
+        "sources": {
+            "root": root,
+            "documents": uris.iter().map(|uri| SourceDocument {
+                uri: (*uri).into(), language_id: "python".into(), version: 1, text: String::new(),
+            }).collect::<Vec<_>>(),
+        },
+        "options": {"typesOnly": false, "irVersion": "4"},
     }))
-    .unwrap()
 }
 
 #[test]
@@ -31,8 +39,11 @@ fn source_context_preserves_relative_identity_and_ignores_revision_metadata() {
 
 #[test]
 fn invalid_roots_escape_paths_and_duplicate_document_identities_are_rejected() {
+    // A root of the wrong JSON type never reaches `source_paths()`: `sources.root`
+    // is typed, so it is rejected at deserialization instead.
+    assert!(try_request(json!(123), &["models.py"]).is_err());
+
     for input in [
-        request(json!(123), &["models.py"]),
         request(json!("src"), &["models.py"]),
         request(
             json!("file:///project/src"),
@@ -93,11 +104,26 @@ fn multiple_absolute_documents_require_a_root_but_single_document_compatibility_
         json!("file:///project/src"),
         &["file:///project/src/domain/models.py"],
     );
-    input.options.extra.remove("sourceRootUri");
+    input.sources.root = None;
     assert_eq!(input.source_paths().unwrap()[0].as_str(), "models.py");
-    input.documents.push(SourceDocument {
+    input.sources.documents.push(SourceDocument {
         uri: "file:///project/src/rules.py".into(),
-        ..input.documents[0].clone()
+        ..input.sources.documents[0].clone()
+    });
+    assert!(input.source_paths().is_err());
+}
+
+/// The rootless rule is `documents.len() == 1`, not "at most one absolute
+/// document": with no root, one absolute document *beside* a relative one is
+/// still a multi-document request and still errors, exactly like two
+/// absolute documents would.
+#[test]
+fn an_absolute_document_beside_a_relative_one_requires_a_root() {
+    let mut input = request(json!("file:///project/src"), &["models.py"]);
+    input.sources.root = None;
+    input.sources.documents.push(SourceDocument {
+        uri: "file:///project/src/rules.py".into(),
+        ..input.sources.documents[0].clone()
     });
     assert!(input.source_paths().is_err());
 }

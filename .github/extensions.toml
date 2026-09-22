@@ -28,6 +28,7 @@ mep_versions = ["0.1"]
 targets = ["elm"]
 languages = [{ id = "elm", file_extensions = [".elm"] }]
 incremental = true
+workspace_discovery = true
 ir_versions = ["3", "4"]
 release_with_workspace = true
 
@@ -51,6 +52,7 @@ mep_versions = ["0.1"]
 targets = ["gleam"]
 languages = [{ id = "gleam", file_extensions = [".gleam"] }]
 incremental = true
+workspace_discovery = true
 ir_versions = ["3", "4"]
 release_with_workspace = true
 

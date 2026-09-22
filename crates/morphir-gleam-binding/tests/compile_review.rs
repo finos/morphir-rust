@@ -5,15 +5,18 @@ use std::collections::HashMap;
 fn request(version: &str, modules: &[(&str, &str)]) -> CompileRequest {
     CompileRequest {
         language_id: "gleam".into(),
-        documents: modules
-            .iter()
-            .map(|(name, source)| SourceDocument {
-                uri: format!("file:///workspace/src/{name}.gleam"),
-                language_id: "gleam".into(),
-                version: 1,
-                text: (*source).into(),
-            })
-            .collect(),
+        sources: SourceSet {
+            root: None,
+            documents: modules
+                .iter()
+                .map(|(name, source)| SourceDocument {
+                    uri: format!("file:///workspace/src/{name}.gleam"),
+                    language_id: "gleam".into(),
+                    version: 1,
+                    text: (*source).into(),
+                })
+                .collect(),
+        },
         package: CompilePackage {
             name: "example/package".into(),
             exposed_modules: None,

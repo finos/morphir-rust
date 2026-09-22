@@ -20,6 +20,57 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         self.assertEqual([{"id": "gleam", "fileExtensions": [".gleam"]}], descriptor["languages"])
         self.assertEqual(["3", "4"], descriptor["irVersions"])
         self.assertTrue(descriptor["incremental"])
+        self.assertTrue(descriptor["workspaceDiscovery"])
+
+    def test_discovery_providers_package_and_verify_the_same_descriptor(self) -> None:
+        """The packager and the release asset check derive descriptors separately.
+
+        Asset selection compares the downloaded descriptor against its own
+        registry-derived expectation key for key and rejects any field it did
+        not expect, so a workspace declaration that only one of the two knows
+        about would fail the release rather than the bundle job.
+        """
+        from package_extension_test_support import descriptor_bytes
+
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+
+        for short_id, package, version in (
+            ("elm-native", "morphir-elm-binding", "0.2.0"),
+            ("gleam", "morphir-gleam-binding", "0.2.0"),
+        ):
+            with self.subTest(short_id=short_id):
+                extension = registry["extensions"][short_id]
+                artifact_name = f"{extension['artifact']}-{version}.wasm"
+                release = extension_release.resolve_release(
+                    f"extension/{short_id}/v{version}", registry, "0.2.0", {package: version}
+                )
+                self.assertEqual([short_id], release.short_ids)
+
+                packaged = json.loads(descriptor_bytes(
+                    short_id, extension, version, artifact_name, "0" * 64, RELEASE_COMMIT,
+                ))
+                verified = select_extension_assets.expected_descriptor(
+                    short_id, extension, version, artifact_name, "0" * 64, RELEASE_COMMIT,
+                )
+
+                self.assertTrue(packaged["workspaceDiscovery"])
+                self.assertEqual(verified, packaged)
+
+    def test_a_backend_only_entry_cannot_claim_workspace_discovery(self) -> None:
+        """Both descriptor producers refuse it, so neither can drift open."""
+        from package_extension_test_support import PackageError, descriptor_bytes
+
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        avro = {**registry["extensions"]["avro"], "workspace_discovery": True}
+        self.assertNotIn("languages", avro)
+        arguments = ("avro", avro, "0.1.0", "morphir-avro-extension-0.1.0.wasm", "0" * 64)
+
+        with self.assertRaisesRegex(PackageError, "workspace_discovery"):
+            descriptor_bytes(*arguments, RELEASE_COMMIT)
+        with self.assertRaisesRegex(
+            select_extension_assets.AssetError, "workspace_discovery"
+        ):
+            select_extension_assets.expected_descriptor(*arguments, RELEASE_COMMIT)
 
     def test_rust_tag_preserves_frontend_backend_and_both_ir_versions(self) -> None:
         from package_extension_test_support import descriptor_bytes

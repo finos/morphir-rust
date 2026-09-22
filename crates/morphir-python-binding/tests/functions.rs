@@ -4,12 +4,15 @@ use morphir_python_binding::PythonExtension;
 fn request(version: &str, source: &str) -> CompileRequest {
     CompileRequest {
         language_id: "python".into(),
-        documents: vec![SourceDocument {
-            uri: "functions.py".into(),
-            language_id: "python".into(),
-            text: source.into(),
-            ..Default::default()
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "functions.py".into(),
+                language_id: "python".into(),
+                text: source.into(),
+                ..Default::default()
+            }],
+        },
         package: CompilePackage {
             name: "acme/functions".into(),
             ..Default::default()
@@ -29,7 +32,7 @@ const FUNCTIONS: &str = include_str!("fixtures/functions.py");
 fn functions_calls_and_captured_lambdas_roundtrip_in_both_ir_versions() {
     for version in ["3", "4"] {
         let mut input = request(version, FUNCTIONS);
-        input.documents.push(SourceDocument {
+        input.sources.documents.push(SourceDocument {
             uri: "consumer.py".into(), language_id: "python".into(),
             text: "from typing import Callable as Fn\nfrom functions import identity as ident, apply\ndef use(value: int) -> int:\n    return apply(ident, value)\ndef make(value: int) -> Fn[[int], int]:\n    return lambda ignored: ident(value)\n".into(),
             ..Default::default()
@@ -52,7 +55,7 @@ fn functions_calls_and_captured_lambdas_roundtrip_in_both_ir_versions() {
                 .iter()
                 .any(|a| a.content.contains("lambda"))
         );
-        input.documents = generated
+        input.sources.documents = generated
             .artifacts
             .into_iter()
             .map(|artifact| SourceDocument {
@@ -328,7 +331,7 @@ fn generated_python_executes_functions_and_closures() {
         .expect("set MORPHIR_TEST_PYTHON to a Python 3.12+ executable");
     for version in ["3", "4"] {
         let mut input = request(version, FUNCTIONS);
-        input.documents.push(SourceDocument { uri: "consumer.py".into(), language_id: "python".into(), text: "from functions import apply, identity\ndef use(value: int) -> int:\n    return apply(identity, value)\n".into(), ..Default::default() });
+        input.sources.documents.push(SourceDocument { uri: "consumer.py".into(), language_id: "python".into(), text: "from functions import apply, identity\ndef use(value: int) -> int:\n    return apply(identity, value)\n".into(), ..Default::default() });
         let compiled = PythonExtension.compile(input).unwrap();
         assert!(compiled.success, "{:?}", compiled.diagnostics);
         let generated = generate(compiled.ir.unwrap());

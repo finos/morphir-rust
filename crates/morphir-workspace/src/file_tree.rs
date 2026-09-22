@@ -77,6 +77,15 @@ pub struct DiscoveryRequest {
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     /// Command-line configuration values overlaid onto discovered configuration.
+    ///
+    /// For [`DiscoveryPurpose::AdHocSources`], `project.name` here is the
+    /// *only* place an explicit project name can come from: a host that wants
+    /// to name a synthesized project puts it at `cli_overlay.project.name`.
+    /// Portable discovery reads that exact path directly, never the merged
+    /// effective configuration, so a default from built-in defaults, a shared
+    /// system/global layer or the environment can never be mistaken for an
+    /// explicit override. When absent, the synthesized project has no name
+    /// and discovery requires its selection to contain exactly one source.
     #[serde(default)]
     pub cli_overlay: serde_json::Value,
     /// What this request is asking for.

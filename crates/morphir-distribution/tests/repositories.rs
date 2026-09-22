@@ -1,8 +1,9 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    CURRENT_RELEASE_SCHEMA_VERSION, Channel, DistributionError, ExtensionId, ExtensionRepositories,
-    ExtensionSearchQuery, LocalExtensionRepository, Platform, PublicationStatus,
-    RepositoryEndpoint, RepositoryName, RepositoryState, Selection, Sha256Digest,
+    CURRENT_RELEASE_SCHEMA_VERSION, Capability, Channel, DistributionError, ExtensionId,
+    ExtensionRepositories, ExtensionSearchQuery, LocalExtensionRepository, Platform,
+    PublicationStatus, RepositoryEndpoint, RepositoryName, RepositoryState, Selection,
+    Sha256Digest,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -404,6 +405,68 @@ fn publishing_carries_the_frontend_incremental_flag_into_the_release_record() {
             expected
         );
     }
+}
+
+/// A guest that answers discovery reports `Workspace` among its capability
+/// kinds at initialization, and a host refuses the session when those kinds
+/// disagree with the record it read before starting the guest. So the
+/// descriptor's declaration has to reach the published record; absent means
+/// the extension does not serve discovery.
+#[test]
+fn publishing_carries_workspace_discovery_into_the_release_record() {
+    for (declared, expected) in [
+        (Some(serde_json::json!(true)), true),
+        (Some(serde_json::json!(false)), false),
+        (None, false),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+        let bundle = release_bundle(root.path(), "morphir-elm-native", "0.1.0", b"elm wasm");
+        let path = bundle.join("release.json");
+        let mut descriptor: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        descriptor["languages"] = serde_json::json!([{ "id": "elm", "fileExtensions": [".elm"] }]);
+        if let Some(declared) = declared {
+            descriptor["workspaceDiscovery"] = declared;
+        }
+        fs::write(&path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+
+        let published = repository.publish(&bundle).unwrap();
+        assert_eq!(
+            published
+                .release()
+                .capabilities()
+                .contains(&Capability::Workspace),
+            expected
+        );
+        // The declaration adds a capability kind; it does not disturb the
+        // frontend and backend records the descriptor already implied.
+        assert!(published.release().frontend().is_some());
+        assert!(published.release().backend().is_some());
+    }
+}
+
+/// Discovery synthesis turns a source path into a module identity, so a bundle
+/// with no frontend languages cannot serve it. Refusing here keeps a published
+/// record from advertising a capability kind no guest in it can honour.
+#[test]
+fn publishing_rejects_workspace_discovery_without_frontend_languages() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+    let bundle = release_bundle(root.path(), "morphir-avro", "0.1.0", b"avro wasm");
+    let path = bundle.join("release.json");
+    let mut descriptor: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    descriptor["workspaceDiscovery"] = serde_json::json!(true);
+    fs::write(&path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+
+    assert!(repository.publish(&bundle).is_err());
+    assert_eq!(
+        fs::read_dir(repository.root().join("extensions"))
+            .unwrap()
+            .count(),
+        0
+    );
 }
 
 #[test]

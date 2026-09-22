@@ -64,13 +64,21 @@ fn compile_as(
     documents: Vec<SourceDocument>,
     ir_version: &str,
 ) -> CompileResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let result = extension
         .frontend()
         .unwrap()
         .compile(CompileRequest {
             language_id: "elm".into(),
-            documents,
+            sources: SourceSet {
+                root: None,
+                documents,
+            },
             package: CompilePackage {
                 name: package_name.into(),
                 exposed_modules: None,
@@ -91,7 +99,12 @@ fn compile_as(
 }
 
 fn generate(ir: Value) -> GenerateResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let result = extension
         .backend()
         .unwrap()

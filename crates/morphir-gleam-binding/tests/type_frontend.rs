@@ -228,15 +228,18 @@ fn compile_sources(sources: &[(&str, &str)]) -> morphir_extension_sdk::CompileRe
     GleamExtension
         .compile(CompileRequest {
             language_id: "gleam".into(),
-            documents: sources
-                .iter()
-                .map(|(name, text)| SourceDocument {
-                    uri: format!("file:///src/{name}.gleam"),
-                    language_id: "gleam".into(),
-                    version: 1,
-                    text: (*text).into(),
-                })
-                .collect(),
+            sources: SourceSet {
+                root: None,
+                documents: sources
+                    .iter()
+                    .map(|(name, text)| SourceDocument {
+                        uri: format!("file:///src/{name}.gleam"),
+                        language_id: "gleam".into(),
+                        version: 1,
+                        text: (*text).into(),
+                    })
+                    .collect(),
+            },
             package: CompilePackage {
                 name: "demo".into(),
                 exposed_modules: None,

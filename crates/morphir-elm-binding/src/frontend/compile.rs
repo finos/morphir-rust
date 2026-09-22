@@ -318,11 +318,11 @@ fn read_documents(
     baseline: &HashMap<String, BaselineModule>,
     docs: cst_to_ast::DocComments,
 ) -> (Vec<Document>, Vec<Diagnostic>, Vec<Headerless>) {
-    let mut documents: Vec<Document> = Vec::with_capacity(request.documents.len());
+    let mut documents: Vec<Document> = Vec::with_capacity(request.sources.documents.len());
     let mut skipped = Vec::new();
     let mut headerless: Vec<Headerless> = Vec::new();
 
-    for source_document in &request.documents {
+    for source_document in &request.sources.documents {
         let uri = source_document.uri.as_str();
         let text = source_document.text.as_str();
         let parsed = parse::parse(text);

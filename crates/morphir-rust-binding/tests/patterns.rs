@@ -1,5 +1,6 @@
 use morphir_extension_sdk::{
     CompileOptions, CompilePackage, CompileRequest, CompileResult, Frontend, SourceDocument,
+    SourceSet,
 };
 use morphir_rust_binding::RustExtension;
 
@@ -7,12 +8,15 @@ fn compile(source: &str, version: &str, types_only: bool) -> CompileResult {
     RustExtension
         .compile(CompileRequest {
             language_id: "rust".into(),
-            documents: vec![SourceDocument {
-                uri: "file:///src/models.rs".into(),
-                language_id: "rust".into(),
-                text: source.into(),
-                ..Default::default()
-            }],
+            sources: SourceSet {
+                root: None,
+                documents: vec![SourceDocument {
+                    uri: "file:///src/models.rs".into(),
+                    language_id: "rust".into(),
+                    text: source.into(),
+                    ..Default::default()
+                }],
+            },
             package: CompilePackage {
                 name: "acme/example".into(),
                 exposed_modules: Some(vec!["Models".into()]),

@@ -70,12 +70,15 @@
 //!
 //! let request = CompileRequest {
 //!     language_id: "my-lang".into(),
-//!     documents: vec![SourceDocument {
-//!         uri: "file:///workspace/Example.ml".into(),
-//!         language_id: "my-lang".into(),
-//!         version: 1,
-//!         text: "module Example".into(),
-//!     }],
+//!     sources: SourceSet {
+//!         root: None,
+//!         documents: vec![SourceDocument {
+//!             uri: "file:///workspace/Example.ml".into(),
+//!             language_id: "my-lang".into(),
+//!             version: 1,
+//!             text: "module Example".into(),
+//!         }],
+//!     },
 //!     package: CompilePackage {
 //!         name: "local/example".into(),
 //!         exposed_modules: Some(vec!["Example".into()]),

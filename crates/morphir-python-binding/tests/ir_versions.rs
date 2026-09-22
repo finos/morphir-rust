@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 fn a_request(version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "python".into(),
-        documents: vec![
+        sources: SourceSet {
+            root: None,
+            documents: vec![
             SourceDocument {
                 uri: "domain/models.py".into(), language_id: "python".into(), version: 1,
                 text: concat!(
@@ -30,7 +32,8 @@ fn a_request(version: &str) -> CompileRequest {
                     "    else:\n        return (point, 'positive')\n",
                 ).into(),
             },
-        ],
+            ],
+        },
         package: CompilePackage { name: "acme/example".into(), exposed_modules: Some(vec!["domain.rules".into()]) },
         dependencies: vec![],
         options: CompileOptions { ir_version: version.into(), types_only: false, ..Default::default() },
@@ -86,7 +89,7 @@ fn both_versions_preserve_imports_privacy_tuples_and_conditionals() {
         let generated = generate(ir.clone());
         assert!(generated.success, "{:?}", generated.diagnostics);
         assert_eq!(generated.artifacts.len(), 2);
-        request.documents = generated
+        request.sources.documents = generated
             .artifacts
             .into_iter()
             .map(|artifact| SourceDocument {
@@ -170,13 +173,13 @@ fn v3_parameter_annotations_accept_an_expanded_tuple_alias() {
 fn v3_integer_range_is_checked_without_affecting_v4() {
     for number in ["-9223372036854775808", "9223372036854775807"] {
         let mut request = a_request("3");
-        request.documents[1].text = format!("def number() -> int:\n    return {number}\n");
+        request.sources.documents[1].text = format!("def number() -> int:\n    return {number}\n");
         let result = generate(compile(request));
         assert!(result.success, "{:?}", result.diagnostics);
     }
     for number in ["9223372036854775808", "-9223372036854775809"] {
         let mut request = a_request("3");
-        request.documents[1].text = format!("def number() -> int:\n    return {number}\n");
+        request.sources.documents[1].text = format!("def number() -> int:\n    return {number}\n");
         let result = PythonExtension.compile(request.clone()).unwrap();
         assert!(!result.success);
         assert!(result.ir.is_none());
@@ -236,9 +239,9 @@ fn v3_rejects_duplicate_names_documentation_and_untyped_function_bodies() {
 #[test]
 fn classic_names_cannot_silently_change_the_python_model() {
     let mut request = a_request("4");
-    request.documents.truncate(1);
+    request.sources.documents.truncate(1);
     request.package.exposed_modules = None;
-    request.documents[0].text =
+    request.sources.documents[0].text =
         "from dataclasses import dataclass\n@dataclass(frozen=True)\nclass Record:\n    a_b: int\n"
             .into();
     let expected = generate(compile(request.clone()));

@@ -122,6 +122,7 @@ def descriptor_bytes(
 ) -> bytes:
     languages = frontend_languages(extension) if "languages" in extension else None
     incremental = frontend_incremental(short_id, extension, languages is not None)
+    workspace = workspace_discovery(short_id, extension, languages is not None)
     targets = extension.get("targets", [])
     if targets != [] or languages is None:
         targets = require_string_list(extension, "targets")
@@ -142,6 +143,8 @@ def descriptor_bytes(
         descriptor["languages"] = languages
         if incremental:
             descriptor["incremental"] = True
+    if workspace:
+        descriptor["workspaceDiscovery"] = True
     if "name" in extension:
         descriptor["name"] = require_string(extension, "name")
     if git_commit is not None:
@@ -170,6 +173,37 @@ def frontend_incremental(
     if value and not has_frontend:
         raise PackageError(
             f"extension {short_id} declares incremental without frontend languages"
+        )
+    return value
+
+
+def workspace_discovery(
+    short_id: str, extension: dict[str, Any], has_frontend: bool
+) -> bool:
+    """Whether the extension serves workspace discovery for its own language.
+
+    A host reads the capability kinds from the installed record before it
+    starts the guest and refuses the session when the guest then reports a
+    different set, so an extension that answers discovery has to say so here
+    too. It is written only when true, so an extension that does not serve
+    discovery keeps the descriptor it always had.
+
+    Discovery synthesis is a language policy layered on portable discovery —
+    it turns a source path into a module identity — so it needs the frontend
+    languages that name the sources. An entry that declares it without them
+    is refused rather than published as a capability nothing can honour.
+
+    Distinct from the registry's `release_with_workspace`, which says only
+    that the extension releases alongside the Cargo workspace.
+    """
+    value = extension.get("workspace_discovery", False)
+    if not isinstance(value, bool):
+        raise PackageError(
+            f"extension {short_id} registry field workspace_discovery must be a boolean"
+        )
+    if value and not has_frontend:
+        raise PackageError(
+            f"extension {short_id} declares workspace_discovery without frontend languages"
         )
     return value
 

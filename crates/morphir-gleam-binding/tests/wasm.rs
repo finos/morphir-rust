@@ -67,7 +67,7 @@ fn guest_compile_generate_and_incremental_match_native_for_both_versions() {
                 .all(|module| module.status == ModuleStatus::Unchanged)
         );
         assert_eq!(first.ir, reused.ir);
-        request.documents[1].text = "pub type Number = Float\n".into();
+        request.sources.documents[1].text = "pub type Number = Float\n".into();
         let changed = same_compilation(&mut guest, &request);
         assert!(
             changed
@@ -122,8 +122,8 @@ fn guest_official_parser_and_diagnostics_match_native() {
     ] {
         let mut request = request("4");
         request.options.types_only = false;
-        request.documents.truncate(1);
-        request.documents[0].text = source.into();
+        request.sources.documents.truncate(1);
+        request.sources.documents[0].text = source.into();
         let native = GleamExtension.compile(request.clone()).unwrap();
         assert_eq!(
             native.success, succeeds,
@@ -179,21 +179,24 @@ fn baseline(result: &CompileResult) -> CompileBaseline {
 fn request(version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "gleam".into(),
-        documents: [
-            (
-                "model",
-                "import numbers\npub type Amount = numbers.Number\npub type Outcome(a) { Pending Success(value: a, amount: Amount) Failed(String) Retry(Outcome(a)) }\n",
-            ),
-            ("numbers", "pub type Number = Int\n"),
-        ]
-        .into_iter()
-        .map(|(name, source)| SourceDocument {
-            uri: format!("file:///src/{name}.gleam"),
-            language_id: "gleam".into(),
-            version: 1,
-            text: source.into(),
-        })
-        .collect(),
+        sources: SourceSet {
+            root: None,
+            documents: [
+                (
+                    "model",
+                    "import numbers\npub type Amount = numbers.Number\npub type Outcome(a) { Pending Success(value: a, amount: Amount) Failed(String) Retry(Outcome(a)) }\n",
+                ),
+                ("numbers", "pub type Number = Int\n"),
+            ]
+            .into_iter()
+            .map(|(name, source)| SourceDocument {
+                uri: format!("file:///src/{name}.gleam"),
+                language_id: "gleam".into(),
+                version: 1,
+                text: source.into(),
+            })
+            .collect(),
+        },
         package: CompilePackage {
             name: "sample".into(),
             exposed_modules: None,
@@ -270,8 +273,8 @@ fn guest_structural_values_match_native_and_the_golden() {
     initialize(&mut guest);
     let mut request = request("4");
     request.options.types_only = false;
-    request.documents.truncate(1);
-    request.documents[0].text = include_str!("fixtures/structural_values.gleam").into();
+    request.sources.documents.truncate(1);
+    request.sources.documents[0].text = include_str!("fixtures/structural_values.gleam").into();
     let compiled = same_compilation(&mut guest, &request);
     let generate = GenerateRequest {
         ir: compiled.ir.unwrap(),

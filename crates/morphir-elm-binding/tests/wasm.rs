@@ -169,7 +169,11 @@ fn initialize(plugin: &mut Plugin) {
     assert_eq!(initialized.extension.id, "morphir-elm-native");
     assert_eq!(
         initialized.extension.types,
-        vec![ExtensionType::Frontend, ExtensionType::Backend]
+        vec![
+            ExtensionType::Frontend,
+            ExtensionType::Backend,
+            ExtensionType::Workspace,
+        ]
     );
     let frontend = initialized.capabilities.frontend.unwrap();
     assert_eq!(frontend.ir_versions, ["3", "4"]);
@@ -179,12 +183,21 @@ fn initialize(plugin: &mut Plugin) {
         initialized.capabilities.backend.unwrap().ir_versions,
         ["3", "4"]
     );
+    let workspace = initialized.capabilities.workspace.unwrap();
+    assert_eq!(
+        workspace.protocol_versions,
+        vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL]
+    );
+    assert!(workspace.discover);
 }
 
 fn request(documents: Vec<SourceDocument>, version: &str) -> CompileRequest {
     CompileRequest {
         language_id: "elm".into(),
-        documents,
+        sources: SourceSet {
+            root: None,
+            documents,
+        },
         package: CompilePackage {
             name: "local/example".into(),
             exposed_modules: Some(vec!["Example".into()]),

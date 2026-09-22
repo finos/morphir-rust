@@ -99,6 +99,29 @@ def frontend_incremental(
     return value
 
 
+def workspace_discovery(
+    short_id: str, extension: Mapping[str, Any], has_frontend: bool
+) -> bool:
+    """Read the registry's workspace discovery flag, for every entry that has one.
+
+    Reading it outside the frontend branch is what keeps an entry that cannot
+    synthesize module identity from carrying a capability nothing can honour,
+    and a non-boolean from passing through unexamined. This is the registry's
+    `workspace_discovery`, not `release_with_workspace`, which only says the
+    extension releases alongside the Cargo workspace.
+    """
+    value = extension.get("workspace_discovery", False)
+    if not isinstance(value, bool):
+        raise AssetError(
+            f"extension {short_id} registry field workspace_discovery must be a boolean"
+        )
+    if value and not has_frontend:
+        raise AssetError(
+            f"extension {short_id} declares workspace_discovery without frontend languages"
+        )
+    return value
+
+
 def expected_descriptor(
     short_id: str,
     extension: Mapping[str, Any],
@@ -109,6 +132,7 @@ def expected_descriptor(
 ) -> dict[str, Any]:
     """Build the tag- and registry-derived descriptor fields."""
     incremental = frontend_incremental(short_id, extension, "languages" in extension)
+    workspace = workspace_discovery(short_id, extension, "languages" in extension)
     expected: dict[str, Any] = {
         "schemaVersion": 1,
         "shortId": short_id,
@@ -131,6 +155,10 @@ def expected_descriptor(
         # the descriptor fields it always had.
         if incremental:
             expected["incremental"] = True
+    # Written only when true, for the same reason: an extension that does not
+    # serve discovery keeps the descriptor fields it always had.
+    if workspace:
+        expected["workspaceDiscovery"] = True
     if "name" in extension:
         expected["name"] = extension.get("name")
     expected["gitCommit"] = expected_commit

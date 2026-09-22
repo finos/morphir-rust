@@ -11,7 +11,7 @@ use ruff_text_size::Ranged;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)> {
-    if request.documents.is_empty() {
+    if request.sources.documents.is_empty() {
         return Err(error("PY001", "Expected at least one Python source module"));
     }
     let package =
@@ -23,6 +23,7 @@ pub(super) fn compile(request: &CompileRequest) -> Outcome<(IRFile, Vec<String>)
         .source_paths()
         .map_err(|e| error("PY001", e.to_string()))?;
     let parsed = request
+        .sources
         .documents
         .iter()
         .zip(&paths)

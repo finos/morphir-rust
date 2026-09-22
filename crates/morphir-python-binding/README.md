@@ -175,7 +175,7 @@ The standard imports `dataclasses.dataclass`, `__future__.annotations`, and
 classes must stay in the same module as its alias.
 
 Relative document paths are relative to the source root. For multiple absolute
-paths or file URIs, set the MEP option `sourceRootUri`; the CLI does this when
+paths or file URIs, set `sources.root`; the CLI does this when
 compiling a directory. URI queries and fragments do not affect module identity;
 percent-encoded path segments are decoded before validating module names.
 Dot segments and encoded path separators are rejected. Absolute documents outside that root, module paths that
@@ -483,7 +483,7 @@ whose false path reaches the end of the function without a return, and
 Compile functions with `typesOnly=false`. A request containing functions with
 `typesOnly=true` returns a diagnostic; bodies are never silently dropped. ADT-only
 sources accept either value. `irVersion` accepts `3`, `3.0.0`, `4` or `4.0.0`. The CLI's
-`outputDir` string option is accepted as context; `sourceRootUri` determines
+`outputDir` string option is accepted as context; `sources.root` determines
 module paths for absolute document URIs. Neither grants filesystem access.
 `emitParseStage=true` produces warning `PY006`; combining it
 with `emitParseStageFatal=true` fails. Other options are rejected.

@@ -3,7 +3,12 @@
 //! ```
 //! use morphir_extension_sdk::{Extension, NativeExtension};
 //! use morphir_elm_binding::ElmExtension;
-//! let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+//! let extension = NativeExtension::builder(ElmExtension)
+//!     .with_frontend()
+//!     .with_backend()
+//!     .with_workspace()
+//!     .finish()
+//!     .unwrap();
 //! assert_eq!(ElmExtension::info().id, "morphir-elm-native");
 //! ```
 #![warn(missing_docs)]
@@ -17,6 +22,7 @@ pub mod names;
 pub mod prelude;
 pub mod resolved;
 pub mod span;
+mod workspace;
 
 use morphir_extension_sdk::prelude::*;
 
@@ -33,7 +39,11 @@ impl Extension for ElmExtension {
             id: EXTENSION_ID.into(),
             name: "Morphir Elm (native)".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            types: vec![ExtensionType::Frontend, ExtensionType::Backend],
+            types: vec![
+                ExtensionType::Frontend,
+                ExtensionType::Backend,
+                ExtensionType::Workspace,
+            ],
             description: Some(
                 "Elm type declarations for Morphir IR 3 and 4, with incremental compilation".into(),
             ),
@@ -58,6 +68,10 @@ impl Extension for ElmExtension {
                 targets: vec!["elm".into()],
                 ir_versions: vec!["3".into(), "4".into()],
                 generate: true,
+            }),
+            workspace: Some(WorkspaceCapability {
+                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                discover: true,
             }),
             incremental: true,
             ..Default::default()
@@ -97,5 +111,5 @@ impl Backend for ElmExtension {
 mod guest {
     use super::ElmExtension;
 
-    morphir_extension_sdk::export_extension!(ElmExtension, frontend, backend);
+    morphir_extension_sdk::export_extension!(ElmExtension, frontend, backend, workspace);
 }

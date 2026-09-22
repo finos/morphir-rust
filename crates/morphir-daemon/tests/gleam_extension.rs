@@ -19,8 +19,8 @@ async fn packaged_gleam_installs_compiles_generates_and_reuses_offline() {
 async fn installed_compilation(version: &str) {
     use morphir_common::home::MorphirHome;
     use morphir_distribution::{
-        Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex, Platform,
-        Selection, activate_installed,
+        Capability, Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex,
+        Platform, Selection, activate_installed,
     };
     let bundle =
         std::env::var_os("MORPHIR_GLEAM_BUNDLE").expect("build the Gleam release bundle first");
@@ -29,6 +29,17 @@ async fn installed_compilation(version: &str) {
     let publication = repository.publish(bundle).unwrap();
     assert!(publication.release().frontend().is_some());
     assert!(publication.release().backend().is_some());
+    // The guest reports Workspace among its capability kinds at
+    // initialization. Discovery has no record of its own, so the bundle
+    // manifest's capability list is the only place the kind can come from; if
+    // it were missing, negotiation below would stop on "capability kinds
+    // changed" rather than anything the compile assertions would catch.
+    assert!(
+        publication
+            .release()
+            .capabilities()
+            .contains(&Capability::Workspace)
+    );
     let id = ExtensionId::parse("morphir-gleam").unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
     let selected = LocalIndex::open(repository.root())
@@ -75,12 +86,15 @@ async fn installed_compilation(version: &str) {
     }
     let request = CompileRequest {
         language_id: "gleam".into(),
-        documents: vec![SourceDocument {
-            uri: "file:///src/model.gleam".into(),
-            language_id: "gleam".into(),
-            version: 1,
-            text: "pub type Amount = Int\npub type Color { Red Blue }\n".into(),
-        }],
+        sources: SourceSet {
+            root: None,
+            documents: vec![SourceDocument {
+                uri: "file:///src/model.gleam".into(),
+                language_id: "gleam".into(),
+                version: 1,
+                text: "pub type Amount = Int\npub type Color { Red Blue }\n".into(),
+            }],
+        },
         package: CompilePackage {
             name: "sample".into(),
             exposed_modules: None,

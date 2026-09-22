@@ -15,6 +15,7 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 morphir-core = { path = "../morphir-core" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+morphir-workspace = { path = "../morphir-workspace" }
 tree-sitter = "0.27"
 tree-sitter-language = "0.1"
 serde = { version = "1", features = ["derive"] }

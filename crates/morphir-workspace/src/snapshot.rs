@@ -63,8 +63,11 @@ pub struct WorkspaceDiscoveryDetails {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSnapshot {
-    /// The project name. A synthesized project (see [`ProjectOrigin::Synthesized`])
-    /// emits `""` here; a later provider-synthesis step fills it in.
+    /// The project name. A synthesized project (see
+    /// [`ProjectOrigin::Synthesized`]) carries the explicit name from
+    /// `DiscoveryRequest::cli_overlay`'s `project.name`, when the request
+    /// supplied one; otherwise it emits `""` here; a later provider-synthesis
+    /// step fills it in.
     pub name: String,
     /// The project version, when configured.
     pub version: Option<String>,

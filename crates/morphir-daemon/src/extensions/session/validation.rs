@@ -561,7 +561,7 @@ mod tests {
     fn compile_request(ir_version: &str) -> serde_json::Value {
         serde_json::json!({
             "languageId": "elm",
-            "documents": [],
+            "sources": {"documents": []},
             "package": {"name": "example/package", "exposedModules": []},
             "dependencies": [],
             "options": {"typesOnly": false, "irVersion": ir_version}

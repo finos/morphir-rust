@@ -93,6 +93,71 @@ class PackageExtensionTests(unittest.TestCase):
         self.assertIn("avro", str(refusal.exception))
         self.assertIn("incremental", str(refusal.exception))
 
+    def test_the_discovery_providers_reach_the_release_descriptor(self) -> None:
+        """A packaged bundle has to say the guest answers discovery.
+
+        The host compares the capability kinds in the installed record against
+        the ones the guest reports at initialization; if the bundle is silent
+        about workspace, negotiation stops with "capability kinds changed".
+        """
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+
+        for short_id in ("elm-native", "gleam"):
+            with self.subTest(short_id=short_id):
+                extension = registry["extensions"][short_id]
+                self.assertIs(True, extension["workspace_discovery"])
+
+                descriptor = self._descriptor(short_id, extension)
+
+                self.assertIs(True, descriptor["workspaceDiscovery"])
+
+    def test_an_extension_without_the_flag_writes_no_workspace_key(self) -> None:
+        """The flag is written only when true, so older descriptors are unchanged."""
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        python = registry["extensions"]["python"]
+        self.assertNotIn("workspace_discovery", python)
+
+        descriptor = self._descriptor("python", python)
+
+        self.assertNotIn("workspaceDiscovery", descriptor)
+
+    def test_rejects_workspace_discovery_without_a_frontend(self) -> None:
+        """Discovery synthesis needs the languages that name the sources."""
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        avro = dict(registry["extensions"]["avro"])
+        self.assertNotIn("languages", avro)
+        avro["workspace_discovery"] = True
+
+        with self.assertRaises(PackageError) as refusal:
+            self._descriptor("avro", avro)
+
+        self.assertIn("avro", str(refusal.exception))
+        self.assertIn("workspace_discovery", str(refusal.exception))
+
+    def test_rejects_a_non_boolean_workspace_discovery_flag(self) -> None:
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        elm = dict(registry["extensions"]["elm-native"])
+        elm["workspace_discovery"] = "yes"
+
+        with self.assertRaises(PackageError) as refusal:
+            self._descriptor("elm-native", elm)
+
+        self.assertIn("boolean", str(refusal.exception))
+
+    def test_release_cadence_does_not_imply_the_workspace_capability(self) -> None:
+        """`release_with_workspace` is about release cadence, not discovery.
+
+        Every registered entry sets it, so reading it as a capability would
+        declare workspace for extensions that cannot serve discovery.
+        """
+        registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
+        avro = registry["extensions"]["avro"]
+        self.assertIs(True, avro["release_with_workspace"])
+
+        descriptor = self._descriptor("avro", avro)
+
+        self.assertNotIn("workspaceDiscovery", descriptor)
+
     def test_rejects_a_non_boolean_incremental_flag(self) -> None:
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         elm = dict(registry["extensions"]["elm-native"])

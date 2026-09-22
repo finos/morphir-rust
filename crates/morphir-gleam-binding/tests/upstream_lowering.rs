@@ -5,7 +5,10 @@ use std::collections::HashMap;
 fn request(source: &str, version: &str, types_only: bool) -> CompileRequest {
     CompileRequest {
         language_id: "gleam".into(),
-        documents: vec![document("main", source)],
+        sources: SourceSet {
+            root: None,
+            documents: vec![document("main", source)],
+        },
         package: CompilePackage {
             name: "example/package".into(),
             exposed_modules: None,
@@ -141,13 +144,14 @@ fn unused_value_imports_are_retained_but_uses_require_value_resolution() {
         false,
     );
     unused
+        .sources
         .documents
         .push(document("other", "pub fn answer() { 42 }"));
     let result = GleamExtension.compile(unused.clone()).unwrap();
     assert!(result.success, "{:?}", result.diagnostics);
     for expression in ["imported()", "other.answer()"] {
         let mut used = unused.clone();
-        used.documents[0]
+        used.sources.documents[0]
             .text
             .push_str(&format!("\npub fn run() {{ {expression} }}"));
         let result = GleamExtension.compile(used).unwrap();
@@ -163,7 +167,7 @@ fn unused_value_imports_are_retained_but_uses_require_value_resolution() {
         );
     }
     let mut types_only = unused;
-    types_only.documents[0]
+    types_only.sources.documents[0]
         .text
         .push_str("\npub fn run() { imported() }");
     types_only.options.types_only = true;
@@ -178,6 +182,7 @@ fn local_parameters_shadow_imported_values_without_false_diagnostics() {
         false,
     );
     compile
+        .sources
         .documents
         .push(document("other", "pub fn answer() { 42 }"));
     let result = GleamExtension.compile(compile).unwrap();
@@ -205,6 +210,7 @@ fn imported_module_access_cannot_hide_behind_a_non_record_parameter() {
         false,
     );
     compile
+        .sources
         .documents
         .push(document("other", "pub fn answer() { 42 }"));
     let result = GleamExtension.compile(compile).unwrap();
@@ -227,6 +233,7 @@ fn imported_constructor_qualifiers_are_not_local_variable_bindings() {
         false,
     );
     compile
+        .sources
         .documents
         .push(document("other", "pub type Value { Value }"));
     let result = GleamExtension.compile(compile).unwrap();

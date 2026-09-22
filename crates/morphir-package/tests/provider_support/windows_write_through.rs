@@ -2,7 +2,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
-    mem::{offset_of, size_of},
+    mem::size_of,
     os::windows::{
         ffi::OsStrExt,
         fs::OpenOptionsExt,
@@ -153,7 +153,9 @@ impl Directory {
 
     fn rename_to(&self, parent: &Self, name: &str) -> io::Result<()> {
         let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
-        let bytes = offset_of!(FILE_RENAME_INFO, FileName) + wide.len() * 2;
+        // Include the complete native structure, including trailing alignment,
+        // plus the variable UTF-16 name required by the rename information contract.
+        let bytes = size_of::<FILE_RENAME_INFO>() + wide.len() * 2;
         // FILE_RENAME_INFO elements guarantee native alignment and enough trailing storage.
         let mut buffer =
             vec![FILE_RENAME_INFO::default(); bytes.div_ceil(size_of::<FILE_RENAME_INFO>())];

@@ -181,7 +181,27 @@ jobs:
           cache-on-failure: true
 
       - name: Test package library and adapter protocols
-        run: cargo test --locked -p morphir-package -p morphir-mck-adapter
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set -o pipefail
+          mkdir -p .dev/out/provider-candidate
+          printf '%s\n' \
+            'Candidate-provider probe evidence only; no production qualification or power-loss durability claim.' \
+            > .dev/out/provider-candidate/scope.txt
+          rustc -vV > .dev/out/provider-candidate/rustc.txt
+          cargo test --locked -p morphir-package -p morphir-mck-adapter \
+            -- --nocapture --test-threads=1 2>&1 | tee .dev/out/provider-candidate/native-package-tests.log
+
+      - name: Upload candidate-provider probe evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: candidate-provider-probes-${{ matrix.os }}
+          include-hidden-files: true
+          if-no-files-found: error
+          path: .dev/out/provider-candidate/
 
       - name: Test native CLI acquisition and MCK orchestration
         run: mise run tools:test

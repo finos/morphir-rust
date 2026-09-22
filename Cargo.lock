@@ -4635,12 +4635,17 @@ dependencies = [
  "base64 0.22.1",
  "curve25519-dalek",
  "ed25519-zebra",
+ "fs2",
  "jsonschema",
+ "libc",
  "morphir-core",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.20",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

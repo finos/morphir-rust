@@ -359,6 +359,16 @@ fn discover_ad_hoc_sources(
 /// visibly broken deserves a loud diagnostic naming the exact problem,
 /// rather than silently falling through to the single-source cardinality
 /// rule and failing (or not) for an unrelated reason.
+///
+/// A name that survives that check is stored *trimmed*, not as written.
+/// Surrounding whitespace on a project identity is never meaningful, and
+/// this value's origin is a command line — `morphir compile --package-name`
+/// — where a stray space is a shell artefact, not something an author can
+/// see and re-edit the way they can a line of manifest text. The CLI
+/// already trims before it gets here, so storing the raw string would make
+/// routing the flag through discovery *lose* trimming that shipped
+/// behaviour has today, and would let `"acme/widgets "` and `"acme/widgets"`
+/// name two different packages.
 fn resolve_synthesized_project_name(
     cli_overlay: &Value,
     context: &RelativePath,
@@ -380,7 +390,7 @@ fn resolve_synthesized_project_name(
             Some(context.clone()),
         ));
     }
-    Ok(Some(name.to_owned()))
+    Ok(Some(name.trim().to_owned()))
 }
 
 /// Validates an ad-hoc source selection against the tree it selects from.

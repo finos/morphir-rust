@@ -300,6 +300,41 @@ fn an_explicit_package_name_reaches_the_synthesized_snapshot() {
     assert_eq!(snapshot.projects[0].name, "acme/orders");
 }
 
+/// Surrounding whitespace on an explicit `cli_overlay.project.name` is
+/// stripped before the name is stored, so `"  acme/widgets  "` and
+/// `"acme/widgets"` name one package rather than two. The overlay's origin is
+/// a command line, where a leading or trailing space is a shell artefact
+/// rather than something an author wrote and can see; the CLI trims today, so
+/// storing the raw string here would lose trimming that shipped behaviour
+/// already has once the flag is routed through discovery. This pins the
+/// stored value, not just the emptiness check, which reads the trimmed form
+/// either way.
+#[test]
+fn an_explicit_package_name_is_stored_trimmed() {
+    let (path, entry) = gleam_source("models/domain/customer.gleam");
+    let root = RelativePath::parse("models").unwrap();
+    let entries = BTreeMap::from([
+        (RelativePath::root(), FileEntry::Directory),
+        (path.clone(), entry),
+    ]);
+    let mut request = ad_hoc_request_with_entries(
+        entries,
+        ProjectSource::Synthesized,
+        SourceSelection {
+            root: root.clone(),
+            paths: vec![path],
+        },
+    );
+    request.cli_overlay = json!({ "project": { "name": "  acme/widgets  " } });
+
+    let snapshot = discover(request)
+        .into_result()
+        .expect("an explicit overlay name should synthesize successfully");
+
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].name, "acme/widgets");
+}
+
 /// An unnamed synthesized selection must contain exactly one source, because
 /// there is nothing to derive a name from otherwise. A *named* one may
 /// contain several (proven above).

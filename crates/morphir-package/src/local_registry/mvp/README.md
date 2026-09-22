@@ -1,9 +1,34 @@
-# Fresh local Library restore MVP
+# Fresh local Library resolution and restore MVP
 
 `initialize` provisions a new directory with an independently supplied exact root
 pin. `restore` accepts one local registry, a fresh-metadata policy and a complete
 lock. Both policy and lock retain the existing draft.3 wire format. Reports name
 `local-library-mvp`, version `0.1.0-draft.1`; this is not a filesystem qualification.
+
+`resolve` takes a fixed published `ReleaseId`, one local registry and initialized
+trust state. It authenticates the current target view, rejects malformed,
+duplicate or conflicting records and checks record/statement associations before
+filtering candidates. Active releases in authorized namespaces enter the unchanged
+draft.2 resolver; yanked releases cannot enter a new graph. The selected graph
+passes the same publisher, bundle and complete Library checks as restore before
+the runtime atomically publishes a new full draft.3 lock file. The host does not
+write the lock. Existing files and symlinks are refused; its parent must exist.
+Resolve's report includes the normalized graph and verified releases, with their
+future restore directory names. Resolve does not publish package directories.
+
+Lock generation is deterministic: registry alias `local`, metadata evidence IDs
+`root`, `snapshot`, `targets`, `timestamp`, and `statement-N` IDs assigned in
+lexical release order. Acquisitions follow that order, evidence sorts by ID, and
+the graph retains the resolver's root-first order. The artifact contains explicit
+draft.3 discriminators, pretty JSON and a final LF, and passes strict full-lock
+decoding before publication. A generated lock can be consumed by `restore`.
+
+Any authenticated revoked record refuses the entire resolve operation, including
+when that release would not be selected. The unresolved-operation marker prevents
+a later active assertion from clearing that observation. This is a deliberately
+stricter MVP limitation while durable revocation transitions remain deferred to
+finos/morphir#912; it is not a production revocation implementation. Initial
+resolve does not implement registry refresh or old-lock update.
 
 Each restore runs the guarded TUF update, then reacquires and authenticates the
 complete current metadata chain (including timestamp equality). Locked historical
@@ -24,7 +49,7 @@ policy/root/record/statement/manifest 1 MiB, lock/targets 16 MiB, aggregate meta
 Caller-controlled trust/output roots and an immutable or coordinated registry are
 required. SQLite transactions with synchronous FULL and a process-held filesystem
 lock protect trust transitions. An external flushed operation marker precedes any
-mutation; **every failed or interrupted restore leaves it in place** and subsequent
+mutation; **every operation failing after its marker is created leaves it in place** and subsequent
 operations refuse it. A consistency seal detects missing or changed store rows;
 it is not package authentication. Initialization never replaces an existing state
 directory, even if its database is missing. Manual intervention is required after

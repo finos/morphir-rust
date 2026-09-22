@@ -1,103 +1,16 @@
 use super::{Error, RestoredPackage, files, require, store::Backend};
 use crate::{
     library::{LibraryInput, VerifiedLibrarySet},
-    local_registry::{tuf::*, *},
+    local_registry::*,
     metadata::NormalizedMetadata,
     schema::PackageSchemas,
 };
-use package_tough::experimental_storage::MetadataRole;
 use serde_json::{Value, json};
 use std::path::Path;
-/// A fresh complete view, even when Tough stopped at timestamp equality.
-/// Reacquisition plus exact retained evidence, current-key quorum, links and expiry
-/// are all required; no deserialized row alone authorizes a package.
-pub(super) async fn fresh_targets(
-    backend: &Backend,
-    registry: &Path,
-    lock: &LibraryLock,
-) -> Result<Value, Error> {
-    let snapshot = backend.read().await?;
-    let root = decode_profile(&snapshot.state.current_root, TufRole::Root)?;
-    expires(&root, backend.binding.fixed_time)?;
-    let mut chain = Vec::new();
-    for (role, name) in [
-        (TufRole::Timestamp, MetadataRole::Timestamp),
-        (TufRole::Snapshot, MetadataRole::Snapshot),
-        (TufRole::Targets, MetadataRole::Targets),
-    ] {
-        let retained = snapshot
-            .state
-            .metadata
-            .get(&name)
-            .ok_or(Error::Refused("incomplete retained metadata"))?;
-        let decoded = decode_profile(&retained.bytes, role)?;
-        let version = decoded.document()["signed"]["version"]
-            .as_u64()
-            .ok_or(Error::Refused("metadata version"))?;
-        let path = match role {
-            TufRole::Timestamp => "metadata/timestamp.json".into(),
-            TufRole::Snapshot => format!("metadata/{version}.snapshot.json"),
-            TufRole::Targets => format!("metadata/{version}.targets.json"),
-            _ => unreachable!(),
-        };
-        let bytes = files::read(
-            registry,
-            &path,
-            if role == TufRole::Targets {
-                16_777_216
-            } else {
-                1_048_576
-            },
-        )?;
-        require(
-            bytes == retained.bytes,
-            "fresh metadata differs from retained view",
-        )?;
-        backend
-            .record(snapshot.state.revision, CandidateEvidence { role, bytes })
-            .await?;
-        verify_quorum(&root, &decoded)?;
-        expires(&decoded, backend.binding.fixed_time)?;
-        chain.push(decoded);
-    }
-    verify_link(&chain[0], &chain[1])?;
-    verify_link(&chain[1], &chain[2])?;
-    for evidence in lock
-        .evidence()
-        .iter()
-        .filter(|e| e.kind() != EvidenceKind::ReleaseStatement)
-    {
-        let (metadata, role) = match evidence.kind() {
-            EvidenceKind::TufRoot => (&root, "root"),
-            EvidenceKind::TufTimestamp => (&chain[0], "timestamp"),
-            EvidenceKind::TufSnapshot => (&chain[1], "snapshot"),
-            EvidenceKind::TufTargets => (&chain[2], "targets"),
-            EvidenceKind::ReleaseStatement => unreachable!(),
-        };
-        let path = format!(
-            "metadata/{}.{role}.json",
-            metadata.document()["signed"]["version"]
-        );
-        require(
-            evidence.reference().digest().as_str() == digest(metadata.bytes())
-                && evidence.reference().path().as_str() == path,
-            "historical evidence unsupported by MVP; refresh lock metadata pins",
-        )?;
-    }
-    Ok(chain.pop().unwrap().document()["signed"]["targets"].clone())
-}
-fn expires(metadata: &ProfileMetadata, now: jiff::Timestamp) -> Result<(), Error> {
-    let time: jiff::Timestamp = metadata.document()["signed"]["expires"]
-        .as_str()
-        .ok_or(Error::Refused("metadata expiry"))?
-        .parse()
-        .map_err(|_| Error::Refused("metadata expiry"))?;
-    require(time > now, "expired repository metadata")
-}
 fn digest(bytes: &[u8]) -> String {
     crate::digest::Digest::of_bytes(bytes).to_string()
 }
-fn target(
+pub(super) fn target(
     registry: &Path,
     path: &RegistryPath,
     pin: &Digest,

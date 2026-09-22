@@ -4637,6 +4637,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
+ "cucumber",
  "curve25519-dalek",
  "ed25519-zebra",
  "fs2",

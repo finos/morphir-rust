@@ -32,6 +32,11 @@ tempfile = "3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+cucumber = "0.23"
+
+[[test]]
+name = "local_registry_resolve_acceptance"
+harness = false
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,8 +1,11 @@
-//! Freshly authenticated local-directory restore. This MVP requires an explicit
+//! Freshly authenticated local-directory resolution and restore. This MVP requires an explicit
 //! bootstrap, one registry, an absent destination, and caller-controlled roots.
 //! Interrupted or failed operations require manual intervention; never delete
 //! established trust state to bypass a refusal. No continued-use grant is issued.
 mod files;
+mod fresh;
+mod resolve;
+pub use resolve::{ResolveReport, ResolveRequest, resolve};
 mod store;
 mod verify;
 use super::*;
@@ -68,10 +71,10 @@ pub struct RestoreReport {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Unsupported request or violated invariant.
-    #[error("fresh restore refused: {0}")]
+    #[error("local Library operation refused: {0}")]
     Refused(&'static str),
     /// Local I/O failure. A remaining operation marker requires intervention.
-    #[error("fresh restore I/O: {0}")]
+    #[error("local Library operation I/O: {0}")]
     Io(#[from] std::io::Error),
     /// Protected database failure.
     #[error("protected trust state: {0}")]
@@ -94,6 +97,12 @@ pub enum Error {
     /// Built-in package schema failure.
     #[error(transparent)]
     Schema(#[from] crate::schema::SchemaError),
+    /// The unchanged pure resolver rejected the authenticated candidate set.
+    #[error("resolution rejected: {0:?}")]
+    ResolutionRejected(Box<crate::resolution::ResolutionDiagnostic>),
+    /// The bounded pure resolver could not complete its operation.
+    #[error(transparent)]
+    Resolution(#[from] crate::resolution::ResolutionExecutionError),
 }
 pub(super) fn require(value: bool, message: &'static str) -> Result<(), Error> {
     if value {
@@ -178,22 +187,8 @@ async fn restore_at(
         now,
         request.policy.len() + request.lock.len(),
     )?;
-    let guard = std::sync::Arc::new(tuf::ProfileAdmission::new(
-        policy.repositories()[0].clone(),
-        backend.binding.clone(),
-        backend.clone(),
-    )?);
-    let base = url::Url::from_directory_path(registry.join("metadata"))
-        .map_err(|_| Error::Refused("metadata path"))?;
-    guard
-        .load_metadata(
-            Box::new(files::LocalTransport {
-                root: registry.clone(),
-            }),
-            base,
-        )
-        .await?;
-    let targets = verify::fresh_targets(&backend, &registry, &lock).await?;
+    let fresh = fresh::authenticate(&backend, &registry, &policy.repositories()[0]).await?;
+    fresh.check_lock_pins(&lock)?;
     let parent = request
         .output
         .parent()
@@ -202,7 +197,14 @@ async fn restore_at(
     let stage = tempfile::Builder::new()
         .prefix(".morphir-restore-")
         .tempdir_in(parent)?;
-    let packages = verify::graph(&backend, &registry, &policy, &lock, &targets, stage.path())?;
+    let packages = verify::graph(
+        &backend,
+        &registry,
+        &policy,
+        &lock,
+        fresh.targets(),
+        stage.path(),
+    )?;
     backend.authorized()?;
     // The provider contract requires callers to coordinate writers to the output root.
     files::absent(request.output)?;

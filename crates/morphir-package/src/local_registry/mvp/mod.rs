@@ -136,6 +136,27 @@ pub fn initialize(request: InitializeRequest<'_>) -> Result<InitializeReport, Er
 }
 /// Authenticate fresh metadata and publishers, verify the entire locked graph,
 /// and publish once into an absent output. Every invocation reauthorizes use.
+///
+/// ```no_run
+/// use morphir_package::local_registry::mvp::{
+///     initialize, restore, InitializeRequest, RestoreRequest,
+/// };
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let policy = std::fs::read("trust-policy.json")?;
+/// let root = std::fs::read("root.json")?;
+/// let lock = std::fs::read("morphir.lock")?;
+/// initialize(InitializeRequest {
+///     policy: &policy, root: &root, state: "trust".as_ref(),
+/// })?;
+/// std::fs::create_dir_all("consumer")?;
+/// let report = restore(RestoreRequest {
+///     policy: &policy, lock: &lock, registry: "registry".as_ref(),
+///     state: "trust".as_ref(), output: "consumer/libraries".as_ref(),
+/// }).await?;
+/// assert!(!report.packages.is_empty());
+/// # Ok(())
+/// # }
+/// ```
 pub async fn restore(request: RestoreRequest<'_>) -> Result<RestoreReport, Error> {
     restore_at(request, jiff::Timestamp::now()).await
 }

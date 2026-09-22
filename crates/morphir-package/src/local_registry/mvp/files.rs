@@ -82,8 +82,16 @@ impl Transport for LocalTransport {
             let path = url
                 .to_file_path()
                 .map_err(|_| Error::Refused("local files only"))?;
+            // Windows canonicalization yields an extended prefix (\\?\C:\),
+            // whereas file URLs decode to the ordinary drive/UNC spelling.
+            // Normalize the comparison root through the same URL conversion;
+            // retain the original canonical root for all filesystem reads.
+            let comparison_root = url::Url::from_directory_path(&self.root)
+                .map_err(|_| Error::Refused("registry path cannot be a file URL"))?
+                .to_file_path()
+                .map_err(|_| Error::Refused("local files only"))?;
             let relative = path
-                .strip_prefix(&self.root)
+                .strip_prefix(&comparison_root)
                 .map_err(|_| Error::Refused("metadata escaped registry"))?;
             let name = relative.to_str().ok_or(Error::Refused("non-UTF8 path"))?;
             #[cfg(windows)]
@@ -221,6 +229,27 @@ pub(super) fn promote(source: &Path, destination: &Path) -> Result<(), Error> {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn canonical_windows_registry_preserves_missing_root_transport_status() {
+        use package_tough::Transport;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("metadata")).unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let url = url::Url::from_directory_path(&root)
+            .unwrap()
+            .join("metadata/2.root.json")
+            .unwrap();
+        let error = super::LocalTransport { root }
+            .fetch(url)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.kind(),
+            package_tough::TransportErrorKind::FileNotFound
+        );
+    }
     #[test]
     fn promotion_never_overwrites_even_an_empty_competing_directory() {
         let dir = tempfile::tempdir().unwrap();

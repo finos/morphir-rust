@@ -9,16 +9,17 @@
 //! snapshot.
 //!
 //! Unlike Gleam, Elm derives module identity primarily from a *declared*
-//! module header inside the source, not from the file's path. This module
-//! ports — byte-for-byte, not merely "equivalently" — the algorithm the CLI
-//! used to run inline for a standalone single-file compile:
-//! `elm_module_name`, `fallback_elm_module_name` and the package-name
-//! formatting in `prepare_single_file_context`
-//! (`crates/morphir/src/commands/compile.rs` in the parent repository).
-//! Reimplementing this with Elm's own compiler parser is not automatically
-//! equivalent — the parent's scanner accepts and rejects different inputs
-//! than a real parser would, especially for malformed headers and the
-//! fallback cases — so this is a direct port, not a rewrite.
+//! module header inside the source, not from the file's path. Scanning that
+//! header is a separate, purely lexical concern and lives in
+//! [`module_header`]; what remains here is the discovery policy — which
+//! project needs an identity synthesized at all, and how a scanned module
+//! name becomes a package name. The package-name formatting is still a
+//! byte-for-byte port of the CLI's own rule in `prepare_single_file_context`
+//! (`crates/morphir/src/commands/compile.rs` in the parent repository); see
+//! [`module_header`] for the scanner half of that port and why it may not be
+//! swapped for a real Elm parser.
+
+mod module_header;
 
 use morphir_extension_sdk::prelude::*;
 use morphir_workspace::{
@@ -26,6 +27,7 @@ use morphir_workspace::{
 };
 
 use crate::ElmExtension;
+use module_header::{elm_module_name, fallback_elm_module_name};
 
 impl Workspace for ElmExtension {
     fn discover(&self, request: DiscoveryRequest) -> Result<DiscoveryResponse> {
@@ -166,8 +168,9 @@ fn synthesize_identity(
 ///
 /// This ports, byte-for-byte, the algorithm the CLI used to run inline for a
 /// standalone single-file compile (`elm_module_name`,
-/// `fallback_elm_module_name`, and the package-name formatting in
-/// `prepare_single_file_context`, all in the parent repository's
+/// `fallback_elm_module_name` — both in [`module_header`] — and the
+/// package-name formatting in `prepare_single_file_context`, all in the
+/// parent repository's
 /// `crates/morphir/src/commands/compile.rs`): the declared module name —
 /// including a `port module` or `effect module` header, and skipping a
 /// leading nested block comment — wins when the source parses; otherwise the
@@ -197,151 +200,6 @@ fn file_name(path: &RelativePath) -> &str {
     path.as_str()
         .rsplit_once('/')
         .map_or(path.as_str(), |(_, name)| name)
-}
-
-/// Parses a declared Elm module name — `module`, `port module`, or `effect
-/// module`, skipping one leading run of trivia including a nested block
-/// comment — returning `None` when the source has no such declaration.
-///
-/// Ported from `elm_module_name` (parent `compile.rs:185`), with `Option`
-/// replacing the parent's `Result<_, CliError>`: this provider never
-/// surfaces the parse failure, since every caller falls back to a
-/// filename-or-`"Main"` name instead of reporting it.
-fn elm_module_name(source: &str) -> Option<String> {
-    let mut offset = skip_elm_trivia(source, 0)?;
-
-    let declaration_kind = if let Some(end) = elm_keyword_end(source, offset, "port") {
-        offset = skip_elm_trivia(source, end)?;
-        "port"
-    } else if let Some(end) = elm_keyword_end(source, offset, "effect") {
-        offset = skip_elm_trivia(source, end)?;
-        "effect"
-    } else {
-        "module"
-    };
-
-    let module_end = elm_keyword_end(source, offset, "module")?;
-    offset = skip_elm_trivia(source, module_end)?;
-
-    let (module_name, module_end) = elm_module_path(source, offset)?;
-    offset = skip_elm_trivia(source, module_end)?;
-    let required_suffix = if declaration_kind == "effect" {
-        "where"
-    } else {
-        "exposing"
-    };
-    elm_keyword_end(source, offset, required_suffix)?;
-
-    Some(module_name)
-}
-
-/// Ported verbatim from `skip_elm_trivia` (parent `compile.rs:233`): advances
-/// past whitespace, a BOM, `--` line comments and nested `{- -}` block
-/// comments, returning `None` for an unterminated block comment.
-fn skip_elm_trivia(source: &str, start: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    let mut offset = start;
-    while offset < bytes.len() {
-        if source[offset..].starts_with('\u{feff}') {
-            offset += '\u{feff}'.len_utf8();
-        } else if bytes[offset].is_ascii_whitespace() {
-            offset += 1;
-        } else if source[offset..].starts_with("--") {
-            offset = source[offset + 2..]
-                .find('\n')
-                .map_or(bytes.len(), |line_end| offset + 2 + line_end + 1);
-        } else if source[offset..].starts_with("{-") {
-            let mut depth = 1_u32;
-            offset += 2;
-            while offset < bytes.len() && depth > 0 {
-                if source[offset..].starts_with("{-") {
-                    depth += 1;
-                    offset += 2;
-                } else if source[offset..].starts_with("-}") {
-                    depth -= 1;
-                    offset += 2;
-                } else {
-                    offset += source[offset..].chars().next()?.len_utf8();
-                }
-            }
-            if depth != 0 {
-                return None;
-            }
-        } else {
-            break;
-        }
-    }
-    Some(offset)
-}
-
-/// Ported verbatim from `elm_keyword_end` (parent `compile.rs:269`): matches
-/// `keyword` at `offset` as a whole identifier, not merely a prefix.
-fn elm_keyword_end(source: &str, offset: usize, keyword: &str) -> Option<usize> {
-    let end = offset.checked_add(keyword.len())?;
-    if !source.get(offset..)?.starts_with(keyword)
-        || source[end..]
-            .chars()
-            .next()
-            .is_some_and(is_elm_identifier_character)
-    {
-        return None;
-    }
-    Some(end)
-}
-
-/// Ported verbatim from `is_elm_identifier_character` (parent `compile.rs:282`).
-fn is_elm_identifier_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || character == '_'
-}
-
-/// Ported verbatim from `elm_module_path` (parent `compile.rs:286`): a
-/// dot-separated run of segments, each starting with an ASCII uppercase
-/// letter.
-fn elm_module_path(source: &str, start: usize) -> Option<(String, usize)> {
-    let mut offset = start;
-    let mut segments = Vec::new();
-    loop {
-        let first = source[offset..].chars().next()?;
-        if !first.is_ascii_uppercase() {
-            return None;
-        }
-        let segment_start = offset;
-        offset += first.len_utf8();
-        while let Some(character) = source[offset..].chars().next() {
-            if !is_elm_identifier_character(character) {
-                break;
-            }
-            offset += character.len_utf8();
-        }
-        segments.push(&source[segment_start..offset]);
-        if !source[offset..].starts_with('.') {
-            break;
-        }
-        offset += 1;
-    }
-    Some((segments.join("."), offset))
-}
-
-/// Ported from `fallback_elm_module_name` (parent `compile.rs:366`), taking a
-/// bare filename instead of a filesystem `Path` since discovery only ever
-/// hands this a wire-relative path segment, not a real filesystem path.
-fn fallback_elm_module_name(file_name: &str) -> String {
-    let stem = file_stem(file_name);
-    elm_module_path(stem, 0)
-        .filter(|(_, end)| *end == stem.len())
-        .map(|(module_name, _)| module_name)
-        .unwrap_or_else(|| "Main".to_owned())
-}
-
-/// The portion of `file_name` before its final `.`, matching
-/// `std::path::Path::file_stem`'s documented rule: a name that starts with
-/// `.` and has no other `.` has no extension, so the whole name is the stem.
-fn file_stem(file_name: &str) -> &str {
-    match file_name.rfind('.') {
-        Some(0) => file_name,
-        Some(index) => &file_name[..index],
-        None => file_name,
-    }
 }
 
 #[cfg(test)]

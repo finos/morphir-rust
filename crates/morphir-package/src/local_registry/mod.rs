@@ -13,6 +13,8 @@ mod metadata;
 mod policy;
 mod publisher;
 mod shape;
+/// Strict package TUF profile and authenticated evidence admission.
+pub mod tuf;
 
 pub use diagnostics::*;
 pub use domain::*;

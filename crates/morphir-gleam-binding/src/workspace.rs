@@ -179,6 +179,23 @@ fn derive_identity(
 }
 
 /// Splits `input`'s wire path into the segments beneath `root`.
+///
+/// This strips by segment *count*, not by matching the root's segments, and
+/// so differs from the compile-time derivation in one place:
+/// `module_name_from_document_uri` (`lib.rs`) *errors* when a document is
+/// outside the configured source root, whereas this would silently drop the
+/// first `n` segments of an unrelated path and hand back a wrong-but-valid
+/// module name.
+///
+/// That difference is unreachable rather than harmless, and what makes it
+/// unreachable lives in another crate: `validate_ad_hoc_selection`
+/// (`morphir-workspace`, `src/discovery/mod.rs`) rejects any selected path
+/// not under the selection's root with `workspace.selection.outside-root`
+/// before a provider ever sees the selection, so every `input` reaching here
+/// is a path whose leading segments really are `root`'s. Nothing in this
+/// crate's types states that dependency, which is why it is written down
+/// here: if that check is ever relaxed or reordered, this function needs to
+/// start matching segments and failing, not counting them.
 fn relative_segments(root: &RelativePath, input: &RelativePath) -> Vec<String> {
     let skip = if root.as_str() == "." {
         0
@@ -404,6 +421,86 @@ mod tests {
         assert_eq!(project.name, "acme/widgets");
         assert_eq!(project.exposed_modules, None);
         assert_eq!(project.state, ProjectState::Unloaded);
+    }
+
+    /// The module name discovery derives for a file, via `derive_identity`.
+    fn discovery_module_name(root: &str, document: &str) -> String {
+        derive_identity(
+            &RelativePath::parse(root).expect("a confined wire path"),
+            &RelativePath::parse(document).expect("a confined wire path"),
+        )
+        .expect("a derivable module path")
+        .1
+    }
+
+    /// The module name compilation derives for the same file, via
+    /// `module_name_from_document_uri`.
+    ///
+    /// Compile works in absolute paths and URIs where discovery works in
+    /// root-relative wire paths, so the two are put on the same footing by
+    /// rooting the wire pair under one development root — which is exactly
+    /// what the host does when it turns a discovered selection into a
+    /// `CompileRequest`. A `.` selection root becomes the development root
+    /// itself.
+    fn compile_module_name(root: &str, document: &str) -> String {
+        const DEVELOPMENT_ROOT: &str = "/work/project";
+        let source_root = if root == "." {
+            DEVELOPMENT_ROOT.to_owned()
+        } else {
+            format!("{DEVELOPMENT_ROOT}/{root}")
+        };
+        let source_root = crate::parsed_path(&source_root).expect("a parseable source root");
+        crate::module_name_from_document_uri(
+            &format!("{DEVELOPMENT_ROOT}/{document}"),
+            Some(&source_root),
+        )
+        .expect("a derivable module path")
+        .to_string()
+    }
+
+    /// Gleam derives a module path from a document in two independent
+    /// places: `derive_identity` here, which names the module discovery
+    /// advertises in `exposedModules`, and `module_name_from_document_uri`
+    /// in `lib.rs`, which names the module compilation actually emits. Their
+    /// agreement is this provider's central premise — discovery promises a
+    /// module that compilation must then produce — and nothing else runs
+    /// both over one logical file. Were they to drift, discovery would
+    /// advertise one name, compilation would emit another, and the only
+    /// symptom would be `MISSING_EXPOSED_MODULE` at compile time, with no
+    /// test failing first.
+    ///
+    /// Deliberately not deduplicated into one function: the two serve
+    /// different layers and one errors (outside-root documents) where the
+    /// other cannot. Constraining them with a test is the chosen way to keep
+    /// them honest. The expected value is asserted as well as the equality,
+    /// so a change that moves both derivations together still fails here.
+    ///
+    /// The nested case is what makes this meaningful — with no directory
+    /// between root and file there is nothing for either root-stripping rule
+    /// to get wrong — and the snake_case case pins that both run the same
+    /// segment canonicalization.
+    #[test]
+    fn both_gleam_module_derivations_agree_on_the_same_document() {
+        for (root, document, expected) in [
+            ("models", "models/domain/widget.gleam", "domain/widget"),
+            (".", "widget.gleam", "widget"),
+            (
+                "models",
+                "models/data_model/order_processing.gleam",
+                "data-model/order-processing",
+            ),
+        ] {
+            let discovery = discovery_module_name(root, document);
+            let compile = compile_module_name(root, document);
+            assert_eq!(
+                discovery, compile,
+                "discovery and compile disagree on the module name for `{document}` under root `{root}`"
+            );
+            assert_eq!(
+                discovery, expected,
+                "unexpected module name for `{document}` under root `{root}`"
+            );
+        }
     }
 
     /// A discovery failure is passed through unchanged, never reinterpreted.

@@ -92,7 +92,7 @@ pub struct LibraryLock {
     evidence: Vec<LibraryEvidence>,
 }
 impl LibraryLock {
-    /// Structurally closed graph, retaining input order.
+    /// Structurally closed graph in canonical resolution order.
     pub fn graph(&self) -> &LockedGraph {
         &self.graph
     }
@@ -185,7 +185,12 @@ pub fn decode_library_lock(bytes: &[u8]) -> Result<LibraryLock, Diagnostic> {
     }
     structure::closure(&lock, &mut s);
     s.finish(Phase::Structure)?;
-    Ok(lock)
+    // Diagnostics refer to the original wire positions. Normalize only once all
+    // validation has succeeded, before exposing the LockedGraph domain value.
+    Ok(LibraryLock {
+        graph: crate::resolution::normalize_graph(lock.graph),
+        ..lock
+    })
 }
 fn bounds(doc: &JsonNode) -> Result<(), Diagnostic> {
     let fail = |r, n| resource(&Subject::Lock, Phase::Decode, r, n);

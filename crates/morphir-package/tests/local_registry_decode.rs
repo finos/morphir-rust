@@ -557,3 +557,73 @@ fn number_tokens_in_capabilities_are_invalid_types_without_derived_identity_erro
             .all(|w| w["rule"] == "invalid-type")
     );
 }
+
+#[test]
+fn decoded_graph_is_normalized_only_after_wire_order_diagnostics() {
+    let mut input = mothers::lock();
+    let template = input["graph"]["nodes"][0].clone();
+    let mut nodes = ["beta", "alpha"]
+        .map(|name| {
+            let mut node = template.clone();
+            node["release"]["packagePath"] = json!(format!("example.com/finance/{name}"));
+            node["irPackageName"] = json!(name);
+            node
+        })
+        .to_vec();
+    let mut root = template;
+    root["bindings"] = json!(
+        nodes
+            .iter()
+            .map(|node| json!({
+                "irPackageName": node["irPackageName"], "target": node["release"]
+            }))
+            .collect::<Vec<_>>()
+    );
+    nodes.push(root);
+    input["graph"]["nodes"] = json!(nodes);
+    let acquisition = input["acquisitions"][0].clone();
+    input["acquisitions"] = json!(
+        nodes
+            .iter()
+            .map(|node| {
+                let mut acquisition = acquisition.clone();
+                acquisition["release"] = node["release"].clone();
+                acquisition["record"]["path"] = json!(format!(
+                    "records/{}.json",
+                    node["irPackageName"].as_str().unwrap()
+                ));
+                acquisition
+            })
+            .collect::<Vec<_>>()
+    );
+
+    let decoded = decode(input.clone()).unwrap();
+    let graph = decoded.graph();
+    assert_eq!(graph.nodes()[0].release(), graph.root());
+    assert_eq!(
+        graph
+            .nodes()
+            .iter()
+            .map(|node| node.ir_package_name().as_str())
+            .collect::<Vec<_>>(),
+        ["root", "alpha", "beta"]
+    );
+    assert_eq!(
+        graph.nodes()[0]
+            .bindings()
+            .iter()
+            .map(|binding| binding.ir_package_name().as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+
+    input["graph"]["nodes"][2]["bindings"][0]["target"]["version"] = json!("2.0.0");
+    let rejected = wire(decode(input).unwrap_err());
+    assert_eq!(
+        rejected["witnesses"],
+        json!([
+            {"kind":"violation", "subject":{"kind":"lock"}, "pointer":"/graph/nodes/0/release", "rule":"unreachable-node"},
+            {"kind":"violation", "subject":{"kind":"lock"}, "pointer":"/graph/nodes/2/bindings/0/target", "rule":"dangling-binding"}
+        ])
+    );
+}

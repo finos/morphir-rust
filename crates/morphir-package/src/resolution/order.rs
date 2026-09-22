@@ -22,7 +22,7 @@ pub(super) fn graph(left: &LockedGraph, right: &LockedGraph) -> Ordering {
         .unwrap_or_else(|| left_releases.len().cmp(&right_releases.len()))
 }
 
-pub(super) fn normalize_graph(mut graph: LockedGraph) -> LockedGraph {
+pub(crate) fn normalize_graph(mut graph: LockedGraph) -> LockedGraph {
     for node in &mut graph.nodes {
         node.bindings
             .sort_by(|left, right| left.ir_package_name.cmp(&right.ir_package_name));

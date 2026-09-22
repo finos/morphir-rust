@@ -10,6 +10,8 @@ mod domain;
 mod json;
 mod lock;
 mod metadata;
+/// Freshly authenticated local-directory MVP restore.
+pub mod mvp;
 mod policy;
 mod publisher;
 mod shape;

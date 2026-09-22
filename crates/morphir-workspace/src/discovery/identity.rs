@@ -192,10 +192,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        FileEntry, FileTree, ProjectOrigin, ProjectSource, SourceSelection,
-        WORKSPACE_DISCOVERY_PROTOCOL,
-    };
+    use crate::{FileEntry, FileTree, ProjectOrigin, ProjectSource, SourceSelection};
 
     /// Names a module for the file's stem, uppercased; refuses a stem holding
     /// `-`; accepts only lowercase package names.
@@ -252,7 +249,7 @@ mod tests {
             );
         }
         DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: crate::workspace_discovery_protocol(),
             development_root: FileTree { entries },
             morphir_home: None,
             system_config: None,

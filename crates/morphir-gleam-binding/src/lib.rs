@@ -69,7 +69,7 @@ impl Extension for GleamExtension {
                 generate: true,
             }),
             workspace: Some(WorkspaceCapability {
-                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             }),
             incremental: true,
@@ -706,7 +706,7 @@ mod tests {
         assert_eq!(
             capabilities["workspace"],
             serde_json::json!({
-                "protocolVersions": [1],
+                "protocolVersions": ["0.1.0-draft.1"],
                 "discover": true
             })
         );

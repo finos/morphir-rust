@@ -186,7 +186,7 @@ fn initialize(plugin: &mut Plugin) {
     let workspace = initialized.capabilities.workspace.unwrap();
     assert_eq!(
         workspace.protocol_versions,
-        vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL]
+        vec![morphir_workspace::workspace_discovery_protocol()]
     );
     assert!(workspace.discover);
 }

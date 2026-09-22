@@ -80,6 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowing models such as `morphir/ir/type_` to compile and regenerate correctly.
 
 ### Changed
+- The workspace discovery protocol version is a SemVer string, `0.1.0-draft.1`, in
+  place of the integer `1`, following the default contract versioning scheme
+  (finos/morphir#921). `DiscoveryRequest.protocolVersion`,
+  `WorkspaceSnapshot.protocolVersion` and `WorkspaceCapability.protocolVersions`
+  carry `semver::Version`, and `speaks_workspace_discovery_protocol` accepts the
+  draft only exactly. `WORKSPACE_DISCOVERY_PROTOCOL` is now the version string, and
+  `workspace_discovery_protocol()` returns it as a `Version`. The protocol is
+  pre-release, so this is a refinement in place: no reader keeps the integer.
 - Portable ad-hoc discovery no longer enforces "an unnamed selection holds
   exactly one source"; an unnamed multi-source selection reaches the provider
   with an empty name, and the provider decides what counts as distinct.

@@ -94,7 +94,7 @@ pub trait Transform: Extension {
 ///     fn capabilities() -> ExtensionCapabilities {
 ///         ExtensionCapabilities {
 ///             workspace: Some(WorkspaceCapability {
-///                 protocol_versions: vec![WORKSPACE_DISCOVERY_PROTOCOL],
+///                 protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
 ///                 discover: true,
 ///             }),
 ///             ..ExtensionCapabilities::default()

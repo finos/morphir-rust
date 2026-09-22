@@ -25,8 +25,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use cap_std::{ambient_authority, fs::Dir};
 use morphir_common::config::MorphirConfig;
 use morphir_workspace::{
-    DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, RelativePath,
-    WORKSPACE_DISCOVERY_PROTOCOL, WorkspaceSnapshot, discover_with_details,
+    DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, RelativePath, WorkspaceSnapshot,
+    discover_with_details,
 };
 use same_file::Handle;
 
@@ -321,7 +321,7 @@ fn bind_workspace_discovery_request_with(
     apply_user_override_selection(&mut development_root, &options.user_override, &mut payload)?;
 
     let request = DiscoveryRequest {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: morphir_workspace::workspace_discovery_protocol(),
         development_root,
         morphir_home: selected_mount(
             &options.global,

@@ -9,7 +9,7 @@ use crate::extensions::protocol::{
     ExtensionRequest, InitializeParams, InitializeResult, error_codes, methods,
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
-use morphir_workspace::{DiscoveryRequest, WORKSPACE_DISCOVERY_PROTOCOL};
+use morphir_workspace::{DiscoveryRequest, speaks_workspace_discovery_protocol};
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
@@ -75,7 +75,11 @@ impl NegotiatedSession {
                         .workspace
                         .as_ref()
                         .is_some_and(|workspace| {
-                            workspace.discover && workspace.protocol_versions.contains(&1)
+                            workspace.discover
+                                && workspace
+                                    .protocol_versions
+                                    .iter()
+                                    .any(speaks_workspace_discovery_protocol)
                         })
             }
             _ => true,
@@ -92,7 +96,7 @@ impl NegotiatedSession {
         serde_json::from_value::<DiscoveryRequest>(params.clone())
             .ok()
             .is_some_and(|request| {
-                request.protocol_version == WORKSPACE_DISCOVERY_PROTOCOL
+                speaks_workspace_discovery_protocol(&request.protocol_version)
                     && workspace
                         .protocol_versions
                         .contains(&request.protocol_version)

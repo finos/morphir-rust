@@ -71,7 +71,7 @@ impl Extension for ElmExtension {
                 generate: true,
             }),
             workspace: Some(WorkspaceCapability {
-                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             }),
             incremental: true,

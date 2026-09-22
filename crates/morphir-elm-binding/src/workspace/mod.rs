@@ -84,7 +84,7 @@ mod tests {
     use super::*;
     use morphir_workspace::{
         DiscoveryPurpose, FileEntry, FileTree, ProjectSource, ProjectState, SourceSelection,
-        WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceState,
+        WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceState,
     };
     use std::collections::BTreeMap;
 
@@ -92,7 +92,7 @@ mod tests {
         let root = RelativePath::parse(root).expect("a confined wire path");
         let source = RelativePath::parse(path).expect("a confined wire path");
         DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),
@@ -342,7 +342,7 @@ mod tests {
         let first = RelativePath::parse("src/Widget.elm").expect("a confined wire path");
         let second = RelativePath::parse("src/Gadget.elm").expect("a confined wire path");
         let request = DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),
@@ -401,7 +401,7 @@ mod tests {
             "Widget.elm",
             "module Acme.Widget exposing (Size)\n\n\ntype alias Size =\n    Int\n",
         );
-        request.protocol_version = 999;
+        request.protocol_version = morphir_workspace::Version::new(999, 0, 0);
 
         let response = ElmExtension
             .discover(request)
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn a_manifest_projects_request_is_not_touched() {
         let request = DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),

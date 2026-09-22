@@ -5,6 +5,7 @@ mod diagnostic;
 mod discovery;
 mod file_tree;
 mod path;
+mod protocol;
 mod snapshot;
 
 pub use diagnostic::{
@@ -19,9 +20,12 @@ pub use diagnostic::{
 pub use discovery::{SourceIdentity, discover, discover_with_details, discover_with_identity};
 pub use file_tree::{
     DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectSource, SourceSelection,
-    WORKSPACE_DISCOVERY_PROTOCOL,
 };
 pub use path::{RelativePath, RelativePathError};
+pub use protocol::{
+    WORKSPACE_DISCOVERY_PROTOCOL, speaks_workspace_discovery_protocol, workspace_discovery_protocol,
+};
+pub use semver::Version;
 pub use snapshot::{
     DiscoveryResponse, ProjectOrigin, ProjectSnapshot, ProjectState, WorkspaceDiscoveryDetails,
     WorkspaceSnapshot, WorkspaceState,

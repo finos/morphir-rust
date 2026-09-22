@@ -2,9 +2,7 @@
 
 use std::{collections::BTreeMap, fs, path::Path};
 
-use morphir_workspace::{
-    DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
-};
+use morphir_workspace::{DiscoveryRequest, FileEntry, FileTree, RelativePath};
 
 pub(crate) fn fixture_request(name: &str) -> DiscoveryRequest {
     let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -14,7 +12,7 @@ pub(crate) fn fixture_request(name: &str) -> DiscoveryRequest {
     walk_fixture(&fixture_root, &fixture_root, &mut entries).unwrap();
 
     DiscoveryRequest {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: morphir_workspace::workspace_discovery_protocol(),
         development_root: FileTree { entries },
         morphir_home: None,
         system_config: None,

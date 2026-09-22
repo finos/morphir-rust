@@ -30,7 +30,7 @@ pub enum ProjectState {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceSnapshot {
     /// The protocol version used to produce this snapshot.
-    pub protocol_version: u32,
+    pub protocol_version: semver::Version,
     /// The workspace configuration path relative to the development root,
     /// when one exists.
     pub config_anchor: Option<RelativePath>,

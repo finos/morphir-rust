@@ -41,8 +41,8 @@ pub use identity::{SourceIdentity, discover_with_identity};
 /// use std::collections::BTreeMap;
 ///
 /// use morphir_workspace::{
-///     DiscoveryRequest, FileEntry, FileTree, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
-///     discover,
+///     DiscoveryRequest, FileEntry, FileTree, RelativePath, discover,
+///     workspace_discovery_protocol,
 /// };
 ///
 /// let development_root = FileTree {
@@ -57,7 +57,7 @@ pub use identity::{SourceIdentity, discover_with_identity};
 ///     ]),
 /// };
 /// let request = DiscoveryRequest {
-///     protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+///     protocol_version: workspace_discovery_protocol(),
 ///     development_root,
 ///     morphir_home: None,
 ///     system_config: None,
@@ -138,7 +138,7 @@ fn discover_internal(
     request: DiscoveryRequest,
     mut collector: Option<&mut dyn EffectiveConfigCollector>,
 ) -> Result<WorkspaceSnapshot, DiscoveryFailure> {
-    if request.protocol_version != WORKSPACE_DISCOVERY_PROTOCOL {
+    if !crate::speaks_workspace_discovery_protocol(&request.protocol_version) {
         return Err(failure(
             WORKSPACE_PROTOCOL_UNSUPPORTED,
             format!(
@@ -255,7 +255,7 @@ fn discover_internal(
     };
 
     Ok(WorkspaceSnapshot {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: crate::workspace_discovery_protocol(),
         config_anchor: Some(workspace_primary.path),
         name: workspace.name,
         state,
@@ -365,7 +365,7 @@ fn discover_ad_hoc_sources(
     };
 
     Ok(WorkspaceSnapshot {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: crate::workspace_discovery_protocol(),
         config_anchor: None,
         name: None,
         state: WorkspaceState::Open,

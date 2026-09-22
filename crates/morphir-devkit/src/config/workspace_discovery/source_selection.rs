@@ -15,7 +15,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use morphir_workspace::{
     DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectSource, RelativePath,
-    SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL,
+    SourceSelection,
 };
 
 /// The default request-wide limit on captured source bytes, matching the
@@ -207,7 +207,7 @@ pub fn capture_source_selection(options: &SourceSelectionOptions<'_>) -> Result<
         None => ProjectSource::Synthesized,
     };
     let request = DiscoveryRequest {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: morphir_workspace::workspace_discovery_protocol(),
         development_root: FileTree { entries },
         morphir_home: None,
         system_config: None,

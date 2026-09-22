@@ -8,9 +8,9 @@ use super::{
 };
 use crate::{
     DiscoveryPurpose, DiscoveryRequest, FileEntry, FileTree, ProjectOrigin, ProjectSource,
-    RelativePath, SourceSelection, WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL,
-    WORKSPACE_LANGUAGE_ID_EMPTY, WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_SELECTION_DUPLICATE,
-    WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_NAME_REQUIRED,
+    RelativePath, SourceSelection, WORKSPACE_CONFIG_INVALID, WORKSPACE_LANGUAGE_ID_EMPTY,
+    WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY,
+    WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_NAME_REQUIRED,
     WORKSPACE_SELECTION_OUTSIDE_ROOT, WORKSPACE_SYMLINK_UNSUPPORTED, discover,
     discover_with_details,
 };
@@ -33,7 +33,7 @@ impl EffectiveConfigCollector for CountingCollector {
 
 fn collection_request() -> DiscoveryRequest {
     DiscoveryRequest {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: crate::workspace_discovery_protocol(),
         development_root: FileTree {
             entries: BTreeMap::from([
                 (RelativePath::root(), FileEntry::Directory),
@@ -194,7 +194,7 @@ fn ad_hoc_request_with_entries(
     sources: SourceSelection,
 ) -> DiscoveryRequest {
     DiscoveryRequest {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: crate::workspace_discovery_protocol(),
         development_root: FileTree { entries },
         morphir_home: None,
         system_config: None,

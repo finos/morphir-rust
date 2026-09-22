@@ -254,7 +254,7 @@ mod runtime_mother {
                 "fragments": false
             },
             "workspace": {
-                "protocolVersions": [1],
+                "protocolVersions": ["0.1.0-draft.1"],
                 "discover": true
             }
         })

@@ -118,7 +118,7 @@ pub struct BackendCapability {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceCapability {
     /// Portable workspace discovery protocol versions accepted by the extension.
-    pub protocol_versions: Vec<u32>,
+    pub protocol_versions: Vec<morphir_workspace::Version>,
     /// Whether the extension accepts workspace discovery requests.
     pub discover: bool,
 }

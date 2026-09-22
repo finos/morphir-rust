@@ -547,7 +547,7 @@ pub(in crate::extensions) fn validate_negotiation(
 mod tests {
     use super::*;
 
-    fn workspace_request(protocol_version: u32) -> serde_json::Value {
+    fn workspace_request(protocol_version: &str) -> serde_json::Value {
         serde_json::json!({
             "protocolVersion": protocol_version,
             "developmentRoot": {"entries": {}},
@@ -592,10 +592,10 @@ mod tests {
     fn rejects_malformed_workspace_discovery_results() {
         let error = validate_method_result(
             methods::WORKSPACE_DISCOVER,
-            &workspace_request(1),
+            &workspace_request("0.1.0-draft.1"),
             serde_json::json!({
                 "status": "success",
-                "snapshot": {"protocolVersion": 1}
+                "snapshot": {"protocolVersion": "0.1.0-draft.1"}
             }),
         )
         .expect_err("workspace discovery results must match the shared protocol");
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(
             validate_method_result(
                 methods::WORKSPACE_DISCOVER,
-                &workspace_request(1),
+                &workspace_request("0.1.0-draft.1"),
                 value.clone()
             )
             .expect("a typed workspace failure is a valid discovery result"),
@@ -629,11 +629,11 @@ mod tests {
     fn rejects_workspace_snapshots_using_a_different_protocol_version() {
         let error = validate_method_result(
             methods::WORKSPACE_DISCOVER,
-            &workspace_request(1),
+            &workspace_request("0.1.0-draft.1"),
             serde_json::json!({
                 "status": "success",
                 "snapshot": {
-                    "protocolVersion": 2,
+                    "protocolVersion": "0.1.0-draft.2",
                     "configAnchor": "morphir.toml",
                     "name": null,
                     "state": "open",
@@ -647,7 +647,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("did not match requested protocol version 1"),
+                .contains("did not match requested protocol version 0.1.0-draft.1"),
             "{error}"
         );
     }
@@ -798,7 +798,7 @@ mod tests {
         let value = serde_json::json!({
             "status": "success",
             "snapshot": {
-                "protocolVersion": 1,
+                "protocolVersion": "0.1.0-draft.1",
                 "configAnchor": "morphir.toml",
                 "name": null,
                 "state": "open",
@@ -815,9 +815,13 @@ mod tests {
         let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
         let validation_tx = order_tx.clone();
         let validation = tokio::spawn(async move {
-            validate_method_result_async(methods::WORKSPACE_DISCOVER, workspace_request(1), value)
-                .await
-                .expect("large workspace result should validate");
+            validate_method_result_async(
+                methods::WORKSPACE_DISCOVER,
+                workspace_request("0.1.0-draft.1"),
+                value,
+            )
+            .await
+            .expect("large workspace result should validate");
             validation_tx.send("validation").unwrap();
         });
         tokio::spawn(async move {

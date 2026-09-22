@@ -189,7 +189,7 @@ impl Extension for WorkspaceOnlyProvider {
     fn capabilities() -> ExtensionCapabilities {
         ExtensionCapabilities {
             workspace: Some(WorkspaceCapability {
-                protocol_versions: vec![1],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             }),
             ..ExtensionCapabilities::default()
@@ -414,7 +414,7 @@ fn register_builtin_admits_a_workspace_only_provider_and_retains_its_capabilitie
     assert_eq!(
         workspace_only.capabilities().workspace,
         Some(WorkspaceCapability {
-            protocol_versions: vec![1],
+            protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
             discover: true,
         })
     );

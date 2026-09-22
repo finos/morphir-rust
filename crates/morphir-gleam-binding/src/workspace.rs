@@ -131,8 +131,8 @@ mod tests {
     use super::*;
     use morphir_workspace::{
         DiagnosticSeverity as WorkspaceDiagnosticSeverity, DiscoveryPurpose, FileEntry, FileTree,
-        ProjectSource, ProjectState, SourceSelection, WORKSPACE_DISCOVERY_PROTOCOL,
-        WORKSPACE_PROJECT_NAME_INVALID, WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceState,
+        ProjectSource, ProjectState, SourceSelection, WORKSPACE_PROJECT_NAME_INVALID,
+        WORKSPACE_PROTOCOL_UNSUPPORTED, WorkspaceState,
     };
     use std::collections::BTreeMap;
 
@@ -140,7 +140,7 @@ mod tests {
         let root = RelativePath::parse(root).expect("a confined wire path");
         let source = RelativePath::parse(path).expect("a confined wire path");
         DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),
@@ -289,7 +289,7 @@ mod tests {
         let second =
             RelativePath::parse("models/domain/gadget.gleam").expect("a confined wire path");
         let request = DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn a_discovery_failure_passes_through_unchanged() {
         let mut request = ad_hoc_request("models", "models/domain/widget.gleam");
-        request.protocol_version = 999;
+        request.protocol_version = morphir_workspace::Version::new(999, 0, 0);
 
         let response = GleamExtension
             .discover(request)

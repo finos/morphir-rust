@@ -245,7 +245,8 @@ impl ResolvedFrontend {
                     workspace.discover
                         && workspace
                             .protocol_versions
-                            .contains(&morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL)
+                            .iter()
+                            .any(morphir_workspace::speaks_workspace_discovery_protocol)
                 }),
             CapabilityMetadataScope::PersistedFrontendBackend => self
                 .provider

@@ -90,7 +90,7 @@ fn discovery_details_reuse_the_exact_pass_and_expose_effective_configs() {
 #[test]
 fn root_project_can_come_from_an_adjacent_user_override() {
     let request: DiscoveryRequest = serde_json::from_value(json!({
-        "protocolVersion": 1,
+        "protocolVersion": "0.1.0-draft.1",
         "developmentRoot": { "entries": {
             "morphir.toml": {
                 "kind": "file",
@@ -210,7 +210,7 @@ fn invalid_config_in_an_explicit_optional_mount_is_fatal() {
 #[test]
 fn unsupported_protocol_is_rejected_before_discovery() {
     let mut request = request_with_home(None);
-    request.protocol_version += 1;
+    request.protocol_version = morphir_workspace::Version::new(9, 0, 0);
 
     assert_eq!(
         discover(request).into_result().unwrap_err().code,
@@ -267,7 +267,7 @@ fn confined_invalid_member_glob_has_stable_member_invalid_code() {
 
 fn request_with_home(home_entries: Option<Value>) -> DiscoveryRequest {
     serde_json::from_value(json!({
-        "protocolVersion": 1,
+        "protocolVersion": "0.1.0-draft.1",
         "developmentRoot": { "entries": {
             "morphir.toml": {
                 "kind": "file",
@@ -284,7 +284,7 @@ fn request_with_home(home_entries: Option<Value>) -> DiscoveryRequest {
 
 fn request_with_root_config(text: &str) -> DiscoveryRequest {
     serde_json::from_value(json!({
-        "protocolVersion": 1,
+        "protocolVersion": "0.1.0-draft.1",
         "developmentRoot": { "entries": {
             "morphir.toml": { "kind": "file", "text": text }
         } },

@@ -22,6 +22,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub enum Error {
+    /// Experimental storage requires fixed Safe time and no directory datastore.
+    #[cfg(feature = "experimental-storage")]
+    #[snafu(display("Experimental storage requires fixed time and no directory datastore"))]
+    ExperimentalStorageConfiguration,
+    /// The experimental host storage or admission failed.
+    #[cfg(feature = "experimental-storage")]
+    #[snafu(display("Experimental storage: {source}"))]
+    ExperimentalStorage {
+        source: crate::experimental_storage::Error,
+    },
+
     /// A fixed current-operation time cannot disable expiration checks.
     #[snafu(display("Fixed operation time requires safe expiration enforcement"))]
     FixedTimeRequiresExpirationEnforcement,

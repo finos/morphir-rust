@@ -21,6 +21,8 @@ pub(crate) struct Datastore {
     time_lock: Arc<Mutex<()>>,
     /// A host-supplied operation time; absent means sample the system clock.
     fixed_time: Option<Timestamp>,
+    #[cfg(feature = "experimental-storage")]
+    experimental: Option<Arc<crate::experimental_storage::Session>>,
 }
 
 impl Datastore {
@@ -32,6 +34,8 @@ impl Datastore {
             })),
             time_lock: Arc::new(Mutex::new(())),
             fixed_time,
+            #[cfg(feature = "experimental-storage")]
+            experimental: None,
         })
     }
 
@@ -48,6 +52,14 @@ impl Datastore {
     /// TODO: [provide a thread safe interface](https://github.com/awslabs/tough/issues/602)
     ///
     pub(crate) async fn bytes(&self, file: &str) -> Result<Option<Vec<u8>>> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            return session
+                .bytes(file)
+                .await
+                .map_err(|source| error::Error::ExperimentalStorage { source });
+        }
+
         let lock = &self.read().await;
         let path = lock.path().join(file);
         match tokio::fs::read(&path).await {
@@ -61,6 +73,12 @@ impl Datastore {
 
     /// Writes a JSON metadata file in the datastore. This function is thread safe.
     pub(crate) async fn create<T: Serialize>(&self, file: &str, value: &T) -> Result<()> {
+        #[cfg(feature = "experimental-storage")]
+        if self.is_experimental() {
+            return Err(error::Error::ExperimentalStorage {
+                source: crate::experimental_storage::Error::Corrupt("untyped storage mutation"),
+            });
+        }
         let lock = &self.write().await;
         let path = lock.path().join(file);
         let bytes = serde_json::to_vec(value).with_context(|_| error::DatastoreSerializeSnafu {
@@ -74,6 +92,12 @@ impl Datastore {
 
     /// Deletes a file from the datastore. This function is thread safe.
     pub(crate) async fn remove(&self, file: &str) -> Result<()> {
+        #[cfg(feature = "experimental-storage")]
+        if self.is_experimental() {
+            return Err(error::Error::ExperimentalStorage {
+                source: crate::experimental_storage::Error::Corrupt("untyped storage mutation"),
+            });
+        }
         let lock = self.write().await;
         let path = lock.path().join(file);
         debug!("removing '{}'", path.display());
@@ -90,6 +114,14 @@ impl Datastore {
     /// This retains upstream persistence semantics; it is not an accepted-time store.
     /// The time check and write are protected by the existing lock guard.
     pub(crate) async fn system_time(&self) -> Result<Timestamp> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            return session
+                .time()
+                .await
+                .map_err(|source| error::Error::ExperimentalStorage { source });
+        }
+
         // Treat this function as a critical section. This lock is not used for anything else.
         let lock = self.time_lock.lock().await;
 
@@ -141,5 +173,111 @@ impl DatastorePath {
             DatastorePath::Path(p) => p,
             DatastorePath::TempDir(t) => t.path(),
         }
+    }
+}
+
+impl Datastore {
+    #[cfg(feature = "experimental-storage")]
+    pub(crate) fn experimental(
+        session: crate::experimental_storage::Session,
+        fixed_time: Option<Timestamp>,
+    ) -> Self {
+        Self {
+            path_lock: Arc::new(RwLock::new(DatastorePath::Path(PathBuf::new()))),
+            time_lock: Arc::new(Mutex::new(())),
+            fixed_time,
+            experimental: Some(Arc::new(session)),
+        }
+    }
+    pub(crate) fn is_experimental(&self) -> bool {
+        #[cfg(feature = "experimental-storage")]
+        {
+            self.experimental.is_some()
+        }
+        #[cfg(not(feature = "experimental-storage"))]
+        {
+            false
+        }
+    }
+    pub(crate) async fn current_root(&self, fallback: &[u8]) -> Vec<u8> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            return session.root().await;
+        }
+        fallback.to_vec()
+    }
+    pub(crate) async fn root_cycle_baseline(&self, fallback: &[u8]) -> Vec<u8> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            return session.baseline().await;
+        }
+        fallback.to_vec()
+    }
+    pub(crate) async fn persist_root(
+        &self,
+        bytes: &[u8],
+        root: &crate::schema::Signed<crate::schema::Root>,
+    ) -> Result<()> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            return session
+                .advance_root(bytes)
+                .await
+                .map_err(|source| error::Error::ExperimentalStorage { source });
+        }
+        let _ = bytes;
+        self.remove("root.json").await?;
+        self.create("root.json", root).await
+    }
+    pub(crate) async fn finish_root_cycle(&self, reset: bool) -> Result<()> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            use crate::experimental_storage::Reset;
+            return session
+                .finish(if reset {
+                    Reset::TimestampAndSnapshot
+                } else {
+                    Reset::Preserve
+                })
+                .await
+                .map_err(|source| error::Error::ExperimentalStorage { source });
+        }
+        if reset {
+            let timestamp = self.remove("timestamp.json").await;
+            let snapshot = self.remove("snapshot.json").await;
+            timestamp.and(snapshot)?;
+        }
+        Ok(())
+    }
+    pub(crate) async fn persist_metadata<T: crate::schema::Role>(
+        &self,
+        file: &str,
+        bytes: &[u8],
+        metadata: &crate::schema::Signed<T>,
+        delegated: Option<&str>,
+    ) -> Result<()> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some(session) = &self.experimental {
+            use crate::{experimental_storage::MetadataRole, schema::RoleType};
+            let role = match (T::TYPE, delegated) {
+                (RoleType::Timestamp, None) => MetadataRole::Timestamp,
+                (RoleType::Snapshot, None) => MetadataRole::Snapshot,
+                (RoleType::Targets, None) => MetadataRole::Targets,
+                (RoleType::Targets, Some(name)) => MetadataRole::Delegated(name.to_owned()),
+                _ => {
+                    return Err(error::Error::ExperimentalStorage {
+                        source: crate::experimental_storage::Error::Corrupt(
+                            "invalid retained metadata role",
+                        ),
+                    })
+                }
+            };
+            return session
+                .retain(role, bytes)
+                .await
+                .map_err(|source| error::Error::ExperimentalStorage { source });
+        }
+        let _ = (bytes, delegated);
+        self.create(file, metadata).await
     }
 }

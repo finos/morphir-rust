@@ -33,6 +33,7 @@ repository = "https://github.com/awslabs/tough"
 resolver = "2"
 
 [features]
+experimental-storage = []
 fips = [
     "aws-lc-rs/fips",
     "rustls/fips",
@@ -226,3 +227,20 @@ path = "tests/exact_versions.rs"
 [[test]]
 name = "fixed_time"
 path = "tests/fixed_time.rs"
+
+[[test]]
+name = "experimental_storage"
+path = "tests/experimental_storage.rs"
+required-features = ["experimental-storage"]
+
+[dev-dependencies.rusqlite]
+version = "=0.40.2"
+features = ["bundled"]
+
+[dev-dependencies.ed25519-zebra]
+version = "4.2"
+default-features = false
+features = ["std"]
+
+[dev-dependencies.sha2]
+version = "0.11"

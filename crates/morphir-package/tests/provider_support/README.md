@@ -136,14 +136,17 @@ missing-DELETE negative case, but promotion using a non-NULL destination parent
 handle returned error 87, including when no destination existed. Increasing the
 declared buffer to the complete structure plus filename did not change that result
 in [the sizing-only rerun](https://github.com/finos/morphir-rust/actions/runs/35683358190).
-The next controlled candidate uses NULL `RootDirectory` and an absolute destination;
-native results for that form are pending. Source handle modes/access, buffer sizing,
-no-replace behavior and collision assertions remain unchanged. There is no fallback.
+The controlled candidate using NULL `RootDirectory` and an absolute destination
+passed all 19 Windows provider tests in
+[the native comparison run](https://github.com/finos/morphir-rust/actions/runs/35683729042/job/106606133842).
+Source handle modes/access, buffer sizing, no-replace behavior and collision
+assertions were unchanged. There is no fallback. This NTFS/x86_64 run used an
+elevated token; it does not establish standard-user or power-loss qualification.
 
 Microsoft's [2022 documentation correction](https://github.com/MicrosoftDocs/sdk-api/commit/ada04eef90bc7ebe441ce2ef938867d3a677d57d)
 warned about non-NULL `RootDirectory` behavior, while the current API reference
-permits it. This conflict motivates the measured comparison; it does not establish
-a root cause or a durability guarantee. Cross-compilation checks bindings and Rust
+permits it. The measured comparison identifies the relative-root call form as the
+functional failure, without establishing a durability guarantee. Cross-compilation checks bindings and Rust
 types only; macOS runs do not execute the Windows-only cases.
 
 Stop qualification if any required native call fails, a winner is overwritten,

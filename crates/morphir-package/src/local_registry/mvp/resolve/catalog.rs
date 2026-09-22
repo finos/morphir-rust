@@ -1,13 +1,8 @@
+use super::super::declarations::{Status, custom, reference};
 use super::*;
-use crate::resolution::{PackagePath, StableVersion};
+use crate::resolution::PackagePath;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Status {
-    Active,
-    Yanked,
-    Revoked,
-}
 pub(super) struct Entry {
     pub reference: ObjectReference,
     pub record: RegistryRecord,
@@ -48,50 +43,6 @@ impl Catalog {
     }
 }
 
-fn release(value: &Value) -> Result<ReleaseId, Error> {
-    let object = value
-        .as_object()
-        .ok_or(Error::Refused("target custom release"))?;
-    require(object.len() == 2, "target custom release")?;
-    let package = object
-        .get("packagePath")
-        .and_then(Value::as_str)
-        .ok_or(Error::Refused("target custom release"))?;
-    let version = object
-        .get("version")
-        .and_then(Value::as_str)
-        .ok_or(Error::Refused("target custom release"))?;
-    Ok(ReleaseId::new(
-        PackagePath::parse(package).map_err(|_| Error::Refused("target custom release"))?,
-        StableVersion::parse(version).map_err(|_| Error::Refused("target custom release"))?,
-    ))
-}
-fn custom(target: &Value, kind: &str, fields: usize) -> Result<ReleaseId, Error> {
-    let authority = target["custom"]["morphir"]
-        .as_object()
-        .ok_or(Error::Refused("target custom metadata"))?;
-    require(
-        authority.len() == fields
-            && authority.get("formatVersion") == Some(&json!("0.1.0-draft.3"))
-            && authority.get("kind") == Some(&json!(kind)),
-        "target custom metadata",
-    )?;
-    release(
-        authority
-            .get("release")
-            .ok_or(Error::Refused("target custom release"))?,
-    )
-}
-fn reference(path: &str, target: &Value) -> Result<ObjectReference, Error> {
-    let path = RegistryPath::parse(path).map_err(|_| Error::Refused("unsafe target path"))?;
-    let hash = target["hashes"]["sha256"]
-        .as_str()
-        .ok_or(Error::Refused("target hash"))?;
-    let digest =
-        Digest::parse(&format!("sha256:{hash}")).map_err(|_| Error::Refused("target hash"))?;
-    Ok(ObjectReference { path, digest })
-}
-
 /// Validate the entire bounded package target view before filtering candidates.
 /// TUF extension fields outside custom.morphir remain untouched.
 pub(super) fn read(
@@ -118,12 +69,7 @@ pub(super) fn read(
         )?;
         require(entries.len() < 4096, "catalog release limit")?;
         let release = custom(target, "LibraryRelease", 4)?;
-        let status = match target["custom"]["morphir"]["status"].as_str() {
-            Some("active") => Status::Active,
-            Some("yanked") => Status::Yanked,
-            Some("revoked") => Status::Revoked,
-            _ => return Err(Error::Refused("unsupported target custom status")),
-        };
+        let status = Status::parse(target)?;
         let bytes = verify::target(
             registry,
             reference.path(),

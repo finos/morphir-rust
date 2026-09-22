@@ -12,6 +12,13 @@ pub(super) struct FreshMetadata {
     targets: ProfileMetadata,
 }
 impl FreshMetadata {
+    pub fn timestamp_digest(&self) -> Digest {
+        Digest::parse(&digest(self.timestamp.bytes())).expect("SHA-256 digest")
+    }
+    pub fn snapshot_digest(&self) -> Digest {
+        Digest::parse(&digest(self.snapshot.bytes())).expect("SHA-256 digest")
+    }
+
     pub fn targets(&self) -> &Value {
         &self.targets.document()["signed"]["targets"]
     }

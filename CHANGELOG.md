@@ -8,11 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Explicit local registry metadata refresh with complete current-chain authentication,
+  exact timestamp/snapshot envelope digests and protected rollback floors. Refresh
+  does not acquire packages, rewrite locks or issue grants; unsupported revocation
+  transitions fail closed and require manual intervention.
 - Initial local Library resolution from a fixed published root, using the existing
   deterministic resolver and fresh TUF/publisher authentication. A complete draft.3
   lock is published atomically only after full graph and content verification.
   Yanked candidates are excluded; any observed revocation refuses the MVP operation.
-  Registry refresh, old-lock update and durable revocation transitions remain deferred
+  Old-lock update and durable revocation transitions remain deferred
   (finos/morphir#912).
 - Fresh local Library restore MVP with explicit pinned-root provisioning, complete
   exact-lock graph verification, current TUF and publisher authorization, transactional

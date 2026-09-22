@@ -1,9 +1,12 @@
-//! Freshly authenticated local-directory resolution and restore. This MVP requires an explicit
-//! bootstrap, one registry, an absent destination, and caller-controlled roots.
+//! Freshly authenticated local-directory resolution, restore and metadata refresh. This MVP requires an explicit
+//! bootstrap, one registry and caller-controlled roots. Resolve and restore require an absent destination.
 //! Interrupted or failed operations require manual intervention; never delete
 //! established trust state to bypass a refusal. No continued-use grant is issued.
+mod declarations;
 mod files;
 mod fresh;
+mod refresh;
+pub use refresh::{RefreshReport, RefreshRequest, refresh};
 mod resolve;
 pub use resolve::{ResolveReport, ResolveRequest, resolve};
 mod store;
@@ -205,7 +208,7 @@ async fn restore_at(
         fresh.targets(),
         stage.path(),
     )?;
-    backend.authorized()?;
+    backend.accept_operation_time()?;
     // The provider contract requires callers to coordinate writers to the output root.
     files::absent(request.output)?;
     files::promote(stage.path(), request.output)?;

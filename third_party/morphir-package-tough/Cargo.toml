@@ -222,3 +222,7 @@ version = "0.4"
 [[test]]
 name = "exact_versions"
 path = "tests/exact_versions.rs"
+
+[[test]]
+name = "fixed_time"
+path = "tests/fixed_time.rs"

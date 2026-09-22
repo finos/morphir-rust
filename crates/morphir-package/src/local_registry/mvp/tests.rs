@@ -278,3 +278,105 @@ async fn empty_extra_bundle_directory_refuses_publication() {
 async fn restore(request: RestoreRequest<'_>) -> Result<super::RestoreReport, super::Error> {
     super::restore_at(request, "2027-01-01T00:00:00Z".parse().unwrap()).await
 }
+
+#[tokio::test]
+async fn tampered_timestamp_and_expired_replay_refuse_with_specific_diagnostics() {
+    let (dir, policy, lock) = initialized();
+    let registry = dir.path().join("registry");
+    copy_tree(&fixture().join("registry"), &registry);
+    let timestamp = registry.join("metadata/timestamp.json");
+    let original = fs::read(&timestamp).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    value["signatures"][0]["sig"] = serde_json::json!("00".repeat(64));
+    fs::write(timestamp, serde_json::to_vec(&value).unwrap()).unwrap();
+    let error = restore(RestoreRequest {
+        policy: &policy,
+        lock: &lock,
+        registry: &registry,
+        state: &dir.path().join("trust"),
+        output: &dir.path().join("out"),
+    })
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("Signature threshold"), "{error}");
+    let (dir, policy, lock) = initialized();
+    let state = dir.path().join("trust");
+    restore(RestoreRequest {
+        policy: &policy,
+        lock: &lock,
+        registry: &fixture().join("registry"),
+        state: &state,
+        output: &dir.path().join("first"),
+    })
+    .await
+    .unwrap();
+    let error = super::restore_at(
+        RestoreRequest {
+            policy: &policy,
+            lock: &lock,
+            registry: &fixture().join("registry"),
+            state: &state,
+            output: &dir.path().join("expired"),
+        },
+        "2029-01-01T00:00:00Z".parse().unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("expired"), "{error}");
+    assert!(!dir.path().join("expired").exists());
+}
+
+#[tokio::test]
+async fn failed_database_write_leaves_restart_refusal() {
+    let (dir, policy, lock) = initialized();
+    let state = dir.path().join("trust");
+    let db = rusqlite::Connection::open(state.join("trust.sqlite")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_write BEFORE UPDATE ON state BEGIN SELECT RAISE(FAIL, 'injected write failure'); END;").unwrap();
+    drop(db);
+    let error = restore(RestoreRequest {
+        policy: &policy,
+        lock: &lock,
+        registry: &fixture().join("registry"),
+        state: &state,
+        output: &dir.path().join("out"),
+    })
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("injected write failure"),
+        "{error}"
+    );
+    assert!(state.join("operation").exists());
+    assert!(!dir.path().join("out").exists());
+    let db = rusqlite::Connection::open(state.join("trust.sqlite")).unwrap();
+    db.execute_batch("DROP TRIGGER fail_write").unwrap();
+    drop(db);
+    let error = restore(RestoreRequest {
+        policy: &policy,
+        lock: &lock,
+        registry: &fixture().join("registry"),
+        state: &state,
+        output: &dir.path().join("out"),
+    })
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("unresolved prior operation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn independently_started_operations_have_distinct_backend_identities() {
+    let (a, policy, _) = initialized();
+    let (b, _, _) = initialized();
+    let policy = super::policy(&policy).unwrap();
+    let now = "2027-01-01T00:00:00Z".parse().unwrap();
+    let a =
+        super::store::Backend::begin(&a.path().join("trust"), &policy.repositories()[0], now, 0)
+            .unwrap();
+    let b =
+        super::store::Backend::begin(&b.path().join("trust"), &policy.repositories()[0], now, 0)
+            .unwrap();
+    assert_ne!(a.binding.id, b.binding.id);
+}

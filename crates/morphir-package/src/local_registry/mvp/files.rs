@@ -87,8 +87,10 @@ impl Transport for LocalTransport {
                 .map_err(|_| Error::Refused("metadata escaped registry"))?;
             let name = relative.to_str().ok_or(Error::Refused("non-UTF8 path"))?;
             #[cfg(windows)]
-            let name = name.replace('\\', "/");
-            read(&self.root, name.as_ref(), 16_777_216)
+            let normalized = name.replace('\\', "/");
+            #[cfg(windows)]
+            let name = normalized.as_str();
+            read(&self.root, name, 16_777_216)
         })();
         match result {
             Ok(bytes) => Ok(Box::pin(futures::stream::once(async {
@@ -185,7 +187,30 @@ pub(super) fn promote(source: &Path, destination: &Path) -> Result<(), Error> {
     }
     #[cfg(windows)]
     {
-        fs::rename(source, destination)?;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        require(
+            !source[..source.len() - 1].contains(&0)
+                && !destination[..destination.len() - 1].contains(&0),
+            "invalid output path",
+        )?;
+        // SAFETY: terminated UTF-16 strings remain live. No REPLACE_EXISTING flag is supplied.
+        if unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
         Ok(())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

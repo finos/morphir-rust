@@ -47,7 +47,7 @@ pub(super) fn initialize(path: &Path, policy: &PolicyRepository, root: &[u8]) ->
     db.execute("INSERT INTO roots VALUES(1,?1)", [root])?;
     seal::write(&db)?;
     db.execute_batch("COMMIT")?;
-    File::open(path.join("trust.sqlite"))?.sync_all()?;
+    flush_database(path)?;
     Ok(())
 }
 #[derive(Debug)]
@@ -98,7 +98,18 @@ impl Backend {
         )?;
         require(charged <= BUDGET, "metadata budget")?;
         // An exclusive filesystem marker precedes every transaction, and remains on ALL errors.
-        let marker = format!("{}:{}:{}", identity, revision, time).into_bytes();
+        let nonce = tempfile::Builder::new()
+            .prefix(".operation-")
+            .rand_bytes(32)
+            .tempfile_in(&path)?;
+        let marker = format!(
+            "{}:{}:{}:{}",
+            identity,
+            revision,
+            time,
+            nonce.path().file_name().unwrap().to_string_lossy()
+        )
+        .into_bytes();
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -168,7 +179,7 @@ impl Backend {
         )?;
         seal::write(&tx)?;
         tx.commit()?;
-        File::open(self.path.join("trust.sqlite"))?.sync_all()?;
+        flush_database(&self.path)?;
         Ok(())
     }
     pub fn finish(&self) -> Result<(), Error> {
@@ -387,6 +398,16 @@ impl AdmissionBackend for Backend {
         })()
         .map_err(port)
     }
+}
+fn flush_database(path: &Path) -> Result<(), Error> {
+    // FlushFileBuffers on Windows needs a writable handle. Keep the same explicit
+    // supported file-flush boundary on every platform; SQLite has committed first.
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path.join("trust.sqlite"))?
+        .sync_all()?;
+    Ok(())
 }
 // Detect missing or accidentally altered rows before they can erase rollback
 // floors. This is consistency evidence, never a replacement for authentication.

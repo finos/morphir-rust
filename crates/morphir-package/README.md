@@ -67,17 +67,51 @@ Graphs or diagnostic witness paths above 512 selected releases, or requests
 that exceed 100,000 aggregate search and witness work units, return
 `ResolutionExecutionError`. The resolver never reports resource exhaustion as
 unsatisfiable. This crate does not implement a registry, archive extractor,
-installer, full `morphir.lock` writer, signature verification or public
+installer, full `morphir.lock` writer or public
 specification compatibility checks.
 
 The separate `morphir-mck-adapter` executable selects integrity operations with
 `--suite package` and resolution with
 `--suite package --contract 0.1.0-draft.2`. It handles wire validation and
 framing only. Corpus loading, fixed expectations, comparisons and reporting stay
-in the shared TypeScript MCK driver. Running it without arguments, or with
+in the shared Rust `morphir mck` driver. Running it without arguments, or with
 `--suite ir`, keeps IR protocol v1.
 
 ```sh
 mise exec -- cargo test --locked -p morphir-package -p morphir-mck-adapter
 mise exec -- cargo clippy --locked -p morphir-package -p morphir-mck-adapter --all-targets -- -D warnings
 ```
+
+## Package TUF admission (PKG-3 development)
+
+`local_registry::tuf` supplies the production metadata admission layer for the
+approved package profile. `ProfileAdmission::load_metadata` wires strict bounded
+acquisition, fixed trusted time, protected storage and transition admission into
+the package-local Tough workflow. The tool-update dependency is unchanged.
+
+Admission checks the four top-level roles, specification and algorithm profile,
+duplicate decoded JSON members, exact integers, metadata limits, distinct raw
+Ed25519-key quorum, required SHA256 and advertised SHA512, exact envelope lengths
+and versions, and forward root continuity from the trusted policy bootstrap.
+The shared 256 MiB metadata budget is checked as chunks arrive, includes other
+operation inputs reported by the protected inventory, and counts exact retries
+once. Original envelope bytes are retained. Unknown signed fields remain signed.
+An equal timestamp returns `NoUpdate` before expiry/link fetches; it does not
+create fresh authority or replace the retained timestamp.
+
+A host must implement `AdmissionBackend` over an explicitly initialized protected
+store and keep process access serialized. Each operation requires an existing
+durable marker binding its repository, initial root, predecessor revision and
+fixed time. Evidence must be durably recorded before the loader receives it;
+transitions recheck that evidence and the evolving predecessor. Retained roles
+must authenticate under a root in the provisioned forward chain. Any backend
+error invalidates the in-process admission session, including when uncertain new
+rows happen to be visible afterward. Restart recovery must independently
+reconcile the store before constructing another session.
+
+The backend used in admission tests is deliberately in-memory and test-only.
+This slice does not deliver the production SQLite store, historical restore,
+recovery/revocation rules, target package-view validation, publisher authorization,
+package installation or grant reuse. Internal admission errors are not a new wire
+report format. Native filesystem/SQLite candidate probes remain separate evidence;
+this module does not claim a qualified provider or completed PKG-3.

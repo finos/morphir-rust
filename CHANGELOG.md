@@ -167,6 +167,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write and synchronization failures, test interrupted initialization, and exercise
   full-tree flush/promotion ordering with fresh-process recovery. I/O-error recovery
   explicitly preserves commit uncertainty; these tests do not qualify a provider.
+- Package TUF metadata admission with strict bounded ingress, distinct raw-key
+  quorum, exact metadata links, policy-anchored retained roots and mandatory
+  durable operation context. Backend errors invalidate the session even when
+  uncertain rows are visible. This is a PKG-3 integration layer; production
+  protected storage, recovery and package authorization remain separate work.
 - Explicit experimental package TUF update outcomes: an admitted equal timestamp
   returns `NoUpdate` before candidate expiry, snapshot comparison or persistence,
   preserving committed roots without claiming a fresh complete view or package grant.

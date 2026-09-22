@@ -4634,10 +4634,14 @@ dependencies = [
 name = "morphir-package"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
+ "bytes",
  "curve25519-dalek",
  "ed25519-zebra",
  "fs2",
+ "futures",
+ "jiff",
  "jsonschema",
  "libc",
  "morphir-core",

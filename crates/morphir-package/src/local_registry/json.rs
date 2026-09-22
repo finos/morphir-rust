@@ -21,7 +21,7 @@ pub enum JsonDomain {
     Tuf(TufRole),
 }
 /// Supported TUF metadata role, for syntax interpretation only.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TufRole {
     /// Root metadata.
     Root,

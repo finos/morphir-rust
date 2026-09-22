@@ -31,7 +31,7 @@ used. `serde_json/raw_value` is enabled for the token boundary.
 
 Signature algorithms, verification and upstream update ordering are unchanged.
 This adaptation supplies the fixed host-clock hook described below. It does not
-yet supply durable storage, raw-key quorum or assurance-provider integration. Passing these tests is not
+yet supply a production durable store, raw-key quorum or assurance-provider integration. Passing these tests is not
 qualification of a production package restore operation.
 
 ## Test maintenance
@@ -82,7 +82,7 @@ cargo fmt --manifest-path third_party/morphir-package-tough/Cargo.toml --all --c
 
 All other copied source and upstream test files are unchanged. In particular,
 `src/schema/verify.rs` and `src/sign.rs` are unchanged. The narrowly adapted
-`src/datastore.rs` time source is described below.
+`src/datastore.rs` time source and optional experimental routing are described below.
 
 ## Fixed operation clock
 
@@ -113,3 +113,72 @@ The datastore still has upstream write ordering and durability limitations. Its
 existing known-time record is not a package accepted-time floor. This clock-only
 hook does not qualify a production provider or supply the pending transactional
 storage/recovery integration.
+
+## Experimental transactional storage port
+
+The non-default `experimental-storage` feature is a development-only integration
+candidate. The CLI and `morphir-package` do not enable it for production. Its
+SQLite implementation, independent signer and restart harness are test-only dev
+dependencies. There is no package authorization or accepted-time mutation API.
+
+`RepositoryLoader::experimental_storage` requires explicit `Storage` and
+`Admission` implementations, fixed Safe time, and no directory datastore.
+`Admission` has no default implementation: it must admit the predecessor/candidate
+evidence before metadata transport and check every transition before commit.
+The tests explicitly use a storage-probe-only guard. This guard does **not**
+implement the missing profile quorum or durable candidate-marker protocol.
+
+The storage snapshot supplies the authoritative current root and original
+provisioning. Every accepted root transition carries exact fetched bytes and the
+original root-cycle baseline in one transaction. At the existing final-root
+expiry/reset point, `FinishRootCycle` atomically resets timestamp/snapshot together
+when required and clears the baseline. Restart therefore cannot forget a pending
+reset by comparing the new root with itself. Timestamp/snapshot floors commit at
+the existing upstream acceptance points; a later target failure retains them.
+All role transitions atomically carry their exact acceptance root and original
+signed envelope bytes, including
+whitespace, rather than a parsed object's serialization. Root continuity and
+provisioning remain separately retained.
+
+The experimental session checks retained encoding, root self-signatures and
+retained top-level role signatures under their acceptance root. A later root may
+change a role threshold without changing its keys: valid old evidence remains
+readable, and the unchanged upstream current-root signature gate decides whether
+it supplies a rollback floor. The keys-only reset rule is unchanged. Invalid
+existing bytes fail
+closed rather than becoming optional cache misses. These checks do **not** prove
+consistency of an arbitrary valid-looking protected snapshot. The `Storage` host
+must validate provisioning, complete root continuity, required record presence
+and reset context, anchoring every acceptance root to that authenticated chain;
+the `Admission` host must bind admitted evidence and enforce
+profile raw-key quorum before authority commits. Those production integrations
+remain pending. Delegated-role evidence also requires host validation of its
+parent delegation chain; an acceptance root alone does not authorize it. The
+accepted successful-authorization time is read-only: earlier
+fixed time fails, while failed loads, successful TUF loads and target reads cannot
+advance that floor.
+
+The default upstream directory path keeps its previous behavior. Only the
+experimental path uses authoritative snapshots, typed transitions, CAS revision
+checks, exact-byte persistence and strict protected-state corruption errors.
+The patched hook points are `src/lib.rs` role acceptance/root reset, and
+`src/datastore.rs` routing; `src/experimental_storage/` defines the host contract
+and session. `src/error.rs` carries experimental failures. Crypto is unchanged.
+
+Tests use SQLite WAL/FULL (plus macOS fullfsync), independent Ed25519 signatures,
+and real child-process kills before and after root and reset commits. Restart
+with changed timestamp/snapshot keys clears the pending old-key floors and accepts
+the correctly authorized replacement view. Failure injection preserves predecessor
+transactions; two processes cannot commit the same predecessor twice. Independent
+threshold-only fixtures compare both storage paths, preserve the unchanged role
+floor when only one threshold increases, and resume in a fresh process after root
+advancement with old role evidence. Corrupt signatures or acceptance roots fail
+before transport. The SQLite test schema stores each role envelope and acceptance
+root in the same row and transaction; it has no stable schema/migration promise.
+These are
+local transaction/hook probes, not power-loss, initialization-durability or
+three-platform provider qualification. Run the optional suite with:
+
+```sh
+cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --features experimental-storage
+```

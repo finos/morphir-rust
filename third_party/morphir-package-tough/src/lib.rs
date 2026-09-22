@@ -35,6 +35,8 @@ mod cache;
 mod datastore;
 pub mod editor;
 pub mod error;
+#[cfg(feature = "experimental-storage")]
+pub mod experimental_storage;
 mod fetch;
 #[cfg(feature = "http")]
 pub mod http;
@@ -180,6 +182,11 @@ pub struct RepositoryLoader<'a> {
     datastore: Option<PathBuf>,
     expiration_enforcement: Option<ExpirationEnforcement>,
     fixed_time: Option<JiffTimestamp>,
+    #[cfg(feature = "experimental-storage")]
+    experimental_storage: Option<(
+        std::sync::Arc<dyn experimental_storage::Storage>,
+        std::sync::Arc<dyn experimental_storage::Admission>,
+    )>,
 }
 
 impl<'a> RepositoryLoader<'a> {
@@ -202,6 +209,8 @@ impl<'a> RepositoryLoader<'a> {
             datastore: None,
             expiration_enforcement: None,
             fixed_time: None,
+            #[cfg(feature = "experimental-storage")]
+            experimental_storage: None,
         }
     }
 
@@ -271,6 +280,57 @@ impl<'a> RepositoryLoader<'a> {
     pub fn fixed_time(mut self, time: JiffTimestamp) -> Self {
         self.fixed_time = Some(time);
         self
+    }
+
+    /// Select the development-only transactional storage port and required admission.
+    ///
+    /// This is not a qualified package security provider. The host must supply fixed
+    /// safe time and implement profile quorum and durable candidate-marker admission.
+    /// A directory datastore cannot be selected with this port. The provided root
+    /// must match the store's original provisioning; its current root is authoritative.
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use tough::experimental_storage::{Admission, Storage};
+    /// # fn configure<'a>(loader: tough::RepositoryLoader<'a>, storage: Arc<dyn Storage>,
+    /// #     admission: Arc<dyn Admission>) -> tough::RepositoryLoader<'a> {
+    /// loader
+    ///     .fixed_time("2026-01-01T00:00:00Z".parse().unwrap())
+    ///     .experimental_storage(storage, admission)
+    /// # }
+    /// ```
+    #[cfg(feature = "experimental-storage")]
+    #[must_use]
+    pub fn experimental_storage(
+        mut self,
+        storage: std::sync::Arc<dyn experimental_storage::Storage>,
+        admission: std::sync::Arc<dyn experimental_storage::Admission>,
+    ) -> Self {
+        self.experimental_storage = Some((storage, admission));
+        self
+    }
+
+    async fn prepare_datastore(&self) -> Result<Datastore> {
+        #[cfg(feature = "experimental-storage")]
+        if let Some((storage, admission)) = &self.experimental_storage {
+            ensure!(
+                self.datastore.is_none(),
+                error::ExperimentalStorageConfigurationSnafu
+            );
+            let fixed_time = self
+                .fixed_time
+                .ok_or(error::Error::ExperimentalStorageConfiguration)?;
+            let session = experimental_storage::Session::open(
+                storage.clone(),
+                admission.clone(),
+                self.root,
+                fixed_time,
+            )
+            .await
+            .map_err(|source| error::Error::ExperimentalStorage { source })?;
+            return Ok(Datastore::experimental(session, self.fixed_time));
+        }
+        Datastore::new(self.datastore.clone(), self.fixed_time)
     }
 
     /// Set the [`ExpirationEnforcement`].
@@ -375,7 +435,9 @@ impl Repository {
             loader.fixed_time.is_none() || expiration_enforcement == ExpirationEnforcement::Safe,
             error::FixedTimeRequiresExpirationEnforcementSnafu
         );
-        let datastore = Datastore::new(loader.datastore, loader.fixed_time)?;
+        let datastore = loader.prepare_datastore().await?;
+        let current_root = datastore.current_root(loader.root).await;
+
         let transport = loader
             .transport
             .unwrap_or_else(|| Box::new(DefaultTransport::new()));
@@ -387,7 +449,7 @@ impl Repository {
         // 0. Load the trusted root metadata file + 1. Update the root metadata file
         let root = load_root(
             transport.as_ref(),
-            loader.root,
+            &current_root,
             &datastore,
             limits.max_root_size,
             limits.max_root_updates,
@@ -743,6 +805,7 @@ async fn load_root<R: AsRef<[u8]>>(
     //    shipped with the package manager or software updater using an out-of-band process. Note
     //    that the expiration of the trusted root metadata file does not matter, because we will
     //    attempt to update it in the next step.
+    let baseline_bytes = datastore.root_cycle_baseline(root.as_ref()).await;
     let mut root: Signed<Root> =
         serde_json::from_slice(root.as_ref()).context(error::ParseTrustedMetadataSnafu)?;
     root.signed
@@ -752,13 +815,16 @@ async fn load_root<R: AsRef<[u8]>>(
     // Used in step 5.3
     let mut root_updates = 0_u64;
 
+    let baseline: Signed<Root> =
+        serde_json::from_slice(&baseline_bytes).context(error::ParseTrustedMetadataSnafu)?;
+
     // Used in step 1.9
-    let original_timestamp_keys = root
+    let original_timestamp_keys = baseline
         .signed
         .keys(RoleType::Timestamp)
         .cloned()
         .collect::<Vec<_>>();
-    let original_snapshot_keys = root
+    let original_snapshot_keys = baseline
         .signed
         .keys(RoleType::Snapshot)
         .cloned()
@@ -853,8 +919,7 @@ async fn load_root<R: AsRef<[u8]>>(
 
                 // 5.3.8. Persist root metadata. The client MUST write the file to non-volatile storage
                 // as FILENAME.EXT (e.g. root.json).
-                datastore.remove("root.json").await?;
-                datastore.create("root.json", &root).await?;
+                datastore.persist_root(&data, &root).await?;
 
                 // 5.3.9. Repeat 5.3.2 through 5.3.9.
                 continue;
@@ -862,8 +927,10 @@ async fn load_root<R: AsRef<[u8]>>(
         }
     }
 
-    datastore.remove("root.json").await?;
-    datastore.create("root.json", &root).await?;
+    if !datastore.is_experimental() {
+        datastore.remove("root.json").await?;
+        datastore.create("root.json", &root).await?;
+    }
 
     // TUF v1.0.16, 5.2.9. Check for a freeze attack. The expiration timestamp in the trusted root
     // metadata file MUST be higher than the fixed update start time. If the trusted root metadata
@@ -879,17 +946,13 @@ async fn load_root<R: AsRef<[u8]>>(
     //   happens when attackers arbitrarily increase the version numbers of: (1) the timestamp
     //   metadata, (2) the snapshot metadata, and / or (3) the targets, or a delegated targets,
     //   metadata file in the snapshot metadata.
-    if original_timestamp_keys
+    let reset_required = original_timestamp_keys
         .iter()
         .ne(root.signed.keys(RoleType::Timestamp))
         || original_snapshot_keys
             .iter()
-            .ne(root.signed.keys(RoleType::Snapshot))
-    {
-        let r1 = datastore.remove("timestamp.json").await;
-        let r2 = datastore.remove("snapshot.json").await;
-        r1.and(r2)?;
-    }
+            .ne(root.signed.keys(RoleType::Snapshot));
+    datastore.finish_root_cycle(reset_required).await?;
 
     // 1.10. Set whether consistent snapshots are used as per the trusted root metadata file (see
     //   Section 4.3).
@@ -1017,7 +1080,9 @@ async fn load_timestamp(
     }
 
     // Now that everything seems okay, write the timestamp file to the datastore.
-    datastore.create("timestamp.json", &timestamp).await?;
+    datastore
+        .persist_metadata("timestamp.json", &data, &timestamp, None)
+        .await?;
 
     Ok(timestamp)
 }
@@ -1211,7 +1276,9 @@ async fn load_snapshot(
     }
 
     // Now that everything seems okay, write the snapshot file to the datastore.
-    datastore.create("snapshot.json", &snapshot).await?;
+    datastore
+        .persist_metadata("snapshot.json", &data, &snapshot, None)
+        .await?;
 
     Ok(snapshot)
 }
@@ -1321,7 +1388,9 @@ async fn load_targets(
     }
 
     // Now that everything seems okay, write the targets file to the datastore.
-    datastore.create("targets.json", &targets).await?;
+    datastore
+        .persist_metadata("targets.json", &data, &targets, None)
+        .await?;
 
     // 4.5. Perform a preorder depth-first search for metadata about the desired target, beginning
     //   with the top-level targets role.
@@ -1455,7 +1524,9 @@ async fn load_delegations(
             check_expired(update_start, &role.signed)?;
         }
 
-        datastore.create(&path, &role).await?;
+        datastore
+            .persist_metadata(&path, &data, &role, Some(&delegated_role.name))
+            .await?;
         delegated_roles.insert(delegated_role.name.clone(), Some(role));
     }
     // load all roles delegated by this role

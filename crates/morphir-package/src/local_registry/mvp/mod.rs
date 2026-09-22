@@ -71,10 +71,10 @@ pub struct RestoreReport {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Unsupported request or violated invariant.
-    #[error("fresh restore refused: {0}")]
+    #[error("local Library operation refused: {0}")]
     Refused(&'static str),
     /// Local I/O failure. A remaining operation marker requires intervention.
-    #[error("fresh restore I/O: {0}")]
+    #[error("local Library operation I/O: {0}")]
     Io(#[from] std::io::Error),
     /// Protected database failure.
     #[error("protected trust state: {0}")]

@@ -107,7 +107,10 @@ pub(super) async fn resolve_at(
             return Err(Error::ResolutionRejected(Box::new(diagnostic)));
         }
     };
-    let document = lock_document(&graph, &catalog, metadata.evidence())?;
+    let mut document = lock_document(&graph, &catalog, metadata.evidence())?;
+    // Host dependencies may enable serde_json/preserve_order. Artifact bytes
+    // must not depend on Cargo feature unification or object insertion order.
+    document.sort_all_objects();
     let mut bytes = serde_json::to_vec_pretty(&document)?;
     bytes.push(b'\n');
     // Validate the complete wire contract rather than serializing LibraryLock's

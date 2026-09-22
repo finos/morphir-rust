@@ -4668,7 +4668,6 @@ dependencies = [
  "hex",
  "jiff",
  "log",
- "olpc-cjson",
  "pem",
  "percent-encoding",
  "rustls",

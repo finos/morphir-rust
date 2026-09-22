@@ -1,6 +1,6 @@
 use super::error::{self, Result};
 use super::{Delegations, Role, RoleType, Root, Signed, Targets};
-use olpc_cjson::CanonicalFormatter;
+use crate::canonical::CanonicalFormatter;
 use serde::Serialize;
 use snafu::{ensure, OptionExt, ResultExt};
 use std::collections::HashSet;

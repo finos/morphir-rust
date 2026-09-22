@@ -32,6 +32,7 @@
 )]
 
 mod cache;
+mod canonical;
 mod datastore;
 pub mod editor;
 pub mod error;
@@ -49,6 +50,15 @@ mod transport;
 mod urlpath;
 
 use crate::datastore::Datastore;
+use std::ops::ControlFlow;
+
+#[derive(Debug, Clone, Copy)]
+enum TimestampPolicy {
+    Upstream,
+    #[cfg(feature = "experimental-storage")]
+    Package,
+}
+
 use crate::error::Result;
 use crate::fetch::{fetch_max_size, fetch_sha256};
 /// An HTTP transport that includes retries.
@@ -216,7 +226,12 @@ impl<'a> RepositoryLoader<'a> {
 
     /// Load and verify TUF repository metadata.
     pub async fn load(self) -> Result<Repository> {
-        Repository::load(self).await
+        match Repository::load(self, TimestampPolicy::Upstream).await? {
+            ControlFlow::Continue(repository) => Ok(repository),
+            ControlFlow::Break(()) => {
+                unreachable!("upstream loading does not stop at timestamp equality")
+            }
+        }
     }
 
     /// Set the transport. If no transport has been set, [`DefaultTransport`] will be used.
@@ -224,6 +239,43 @@ impl<'a> RepositoryLoader<'a> {
     pub fn transport<T: Transport + Send + Sync + 'static>(mut self, transport: T) -> Self {
         self.transport = Some(Box::new(transport));
         self
+    }
+
+    /// Run the experimental package TUF update workflow with an explicit no-update outcome.
+    ///
+    /// Requires the transactional storage/admission port and fixed safe time. An
+    /// authenticated equal-version timestamp ends the update before snapshot checks,
+    /// expiration checking of that candidate, or timestamp persistence. Already
+    /// committed roots and their reset transitions remain committed.
+    ///
+    /// `NoUpdate` carries no repository: it does not establish a complete fresh view,
+    /// package authorization, a grant, or profile/provider qualification. Hosts must
+    /// separately validate any retained view before using it for current authorization.
+    /// Other callers retain upstream behavior through [`Self::load`].
+    ///
+    /// ```no_run
+    /// # use tough::experimental_storage::PackageLoadOutcome;
+    /// # async fn update(loader: tough::RepositoryLoader<'_>) -> Result<(), tough::error::Error> {
+    /// // The host configured fixed time, protected storage and required admission.
+    /// match loader.load_package().await? {
+    ///     PackageLoadOutcome::Updated(repository) => { let _ = repository.targets(); }
+    ///     PackageLoadOutcome::NoUpdate => { /* no new view or freshness claim */ }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "experimental-storage")]
+    pub async fn load_package(self) -> Result<experimental_storage::PackageLoadOutcome> {
+        ensure!(
+            self.experimental_storage.is_some(),
+            error::ExperimentalStorageConfigurationSnafu
+        );
+        match Repository::load(self, TimestampPolicy::Package).await? {
+            ControlFlow::Continue(repository) => Ok(
+                experimental_storage::PackageLoadOutcome::Updated(Box::new(repository)),
+            ),
+            ControlFlow::Break(()) => Ok(experimental_storage::PackageLoadOutcome::NoUpdate),
+        }
     }
 
     /// Set a the repository [`Limits`].
@@ -429,7 +481,10 @@ pub struct Repository {
 
 impl Repository {
     /// Load and verify TUF repository metadata using a [`RepositoryLoader`] for the settings.
-    async fn load(loader: RepositoryLoader<'_>) -> Result<Self> {
+    async fn load(
+        loader: RepositoryLoader<'_>,
+        timestamp_policy: TimestampPolicy,
+    ) -> Result<ControlFlow<(), Self>> {
         let expiration_enforcement = loader.expiration_enforcement.unwrap_or_default();
         ensure!(
             loader.fixed_time.is_none() || expiration_enforcement == ExpirationEnforcement::Safe,
@@ -460,7 +515,7 @@ impl Repository {
         .await?;
 
         // 2. Download the timestamp metadata file
-        let timestamp = load_timestamp(
+        let timestamp = match load_timestamp(
             transport.as_ref(),
             &root,
             &datastore,
@@ -468,8 +523,13 @@ impl Repository {
             &metadata_base_url,
             expiration_enforcement,
             &update_start,
+            timestamp_policy,
         )
-        .await?;
+        .await?
+        {
+            ControlFlow::Continue(timestamp) => timestamp,
+            ControlFlow::Break(()) => return Ok(ControlFlow::Break(())),
+        };
 
         // 3. Download the snapshot metadata file
         let snapshot = load_snapshot(
@@ -506,7 +566,7 @@ impl Repository {
         let (earliest_expiration, earliest_expiration_role) =
             expires_iter.iter().min_by_key(|tup| tup.0).unwrap();
 
-        Ok(Self {
+        Ok(ControlFlow::Continue(Self {
             transport,
             consistent_snapshot: root.signed.consistent_snapshot,
             datastore,
@@ -521,7 +581,7 @@ impl Repository {
             targets_base_url,
             expiration_enforcement,
             delegated_metadata_bytes,
-        })
+        }))
     }
 
     /// Returns the list of targets present in the repository.
@@ -964,6 +1024,7 @@ async fn load_root<R: AsRef<[u8]>>(
 }
 
 /// Step 2 of the client application, which loads the timestamp metadata file.
+#[expect(clippy::too_many_arguments)]
 async fn load_timestamp(
     transport: &dyn Transport,
     root: &Signed<Root>,
@@ -972,7 +1033,8 @@ async fn load_timestamp(
     metadata_base_url: &Url,
     expiration_enforcement: ExpirationEnforcement,
     update_start: &JiffTimestamp,
-) -> Result<Signed<Timestamp>> {
+    timestamp_policy: TimestampPolicy,
+) -> Result<ControlFlow<(), Signed<Timestamp>>> {
     // 2. Download the timestamp metadata file, up to Y number of bytes (because the size is
     //    unknown.) The value for Y is set by the authors of the application using TUF. For
     //    example, Y may be tens of kilobytes. The filename used to download the timestamp metadata
@@ -1044,6 +1106,18 @@ async fn load_timestamp(
                     new_version: timestamp.signed.version.clone()
                 }
             );
+            // TUF 1.0.36: equality discards the candidate and normally ends the
+            // update before comparing its snapshot link or checking its expiry.
+            match timestamp_policy {
+                #[cfg(feature = "experimental-storage")]
+                TimestampPolicy::Package
+                    if old_timestamp.signed.version == timestamp.signed.version =>
+                {
+                    datastore.admit_timestamp_no_update(&data).await?;
+                    return Ok(ControlFlow::Break(()));
+                }
+                _ => {}
+            }
             // 4.6 trusted timestamp meta must have one entry, snapshot.json
             ensure!(
                 old_timestamp.signed.meta.len() == 1,
@@ -1084,7 +1158,7 @@ async fn load_timestamp(
         .persist_metadata("timestamp.json", &data, &timestamp, None)
         .await?;
 
-    Ok(timestamp)
+    Ok(ControlFlow::Continue(timestamp))
 }
 
 /// Step 3 of the client application, which loads the snapshot metadata file.

@@ -6,6 +6,7 @@
 //! Provides the `SignedDelegatedTargets` object which represents the output of `TargetsEditor` after
 //! signing, ready to be written to disk.
 
+use crate::canonical::CanonicalFormatter;
 use crate::error::{self, Result};
 use crate::io::{is_file, DigestAdapter};
 use crate::key_source::KeySource;
@@ -17,7 +18,6 @@ use async_trait::async_trait;
 use aws_lc_rs::digest::{digest, SHA256, SHA256_OUTPUT_LEN};
 use aws_lc_rs::rand::SecureRandom;
 use futures::TryStreamExt;
-use olpc_cjson::CanonicalFormatter;
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_fromstr_from_deserialize;
 use snafu::{ensure, OptionExt, ResultExt};

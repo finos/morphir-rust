@@ -232,6 +232,13 @@ impl Admission for ProbeAdmission {
             Ok(())
         }
     }
+    async fn timestamp_no_update(&self, _: &Snapshot, _: &RetainedMetadata) -> Result<()> {
+        if self.reject_transition {
+            Err(Error::Admission)
+        } else {
+            Ok(())
+        }
+    }
     async fn transition(&self, _: &Snapshot, _: &Transition) -> Result<()> {
         if self.reject_transition {
             Err(Error::Admission)

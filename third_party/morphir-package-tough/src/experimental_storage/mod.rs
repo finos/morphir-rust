@@ -12,7 +12,18 @@ use std::{collections::BTreeMap, fmt};
 mod session;
 pub(crate) use session::Session;
 
+/// Outcome of the experimental package TUF update, not package authorization.
+#[derive(Debug)]
+pub enum PackageLoadOutcome {
+    /// TUF loaded a complete view; the host still owes the package profile checks.
+    Updated(Box<crate::Repository>),
+    /// An admitted equal-version timestamp ended the update. This establishes no
+    /// fresh complete view or grant, even when a prior view exists in storage.
+    NoUpdate,
+}
+
 /// A storage revision, distinct from a signed metadata version.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Revision(pub u64);
 
@@ -155,4 +166,13 @@ pub trait Admission: fmt::Debug + Send + Sync {
     /// Before any authority transition, require applicable profile checks, including
     /// distinct-raw-key root thresholds and binding to the admitted candidate evidence.
     async fn transition(&self, predecessor: &Snapshot, transition: &Transition) -> Result<()>;
+    /// Admit an authenticated equal-version timestamp before emitting `NoUpdate`.
+    /// Require profile quorum and binding to the host's admitted candidate evidence.
+    /// This check must not commit timestamp authority, accepted time or grants.
+    /// Full durable candidate-marker admission remains a host obligation.
+    async fn timestamp_no_update(
+        &self,
+        predecessor: &Snapshot,
+        candidate: &RetainedMetadata,
+    ) -> Result<()>;
 }

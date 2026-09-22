@@ -126,9 +126,6 @@ features = ["serde"]
 [dependencies.log]
 version = "0.4"
 
-[dependencies.olpc-cjson]
-version = "0.1"
-
 [dependencies.pem]
 version = "3"
 
@@ -209,6 +206,9 @@ version = "0.16"
 [dev-dependencies.maplit]
 version = "1"
 
+[dev-dependencies.olpc-cjson]
+version = "=0.1.4"
+
 [dev-dependencies.tokio]
 version = "1"
 features = [
@@ -244,3 +244,7 @@ features = ["std"]
 
 [dev-dependencies.sha2]
 version = "0.11"
+
+[[test]]
+name = "unicode_canonicalization"
+path = "tests/unicode_canonicalization.rs"

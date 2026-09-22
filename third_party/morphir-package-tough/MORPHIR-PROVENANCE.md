@@ -182,3 +182,81 @@ three-platform provider qualification. Run the optional suite with:
 ```sh
 cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --features experimental-storage
 ```
+
+## Approved Unicode-preserving canonicalization amendment
+
+The maintainer approved this bounded correction after independent Ed25519 probes
+showed that NFC normalization rejected valid decomposed Unicode and accepted a
+composed-to-decomposed signed-field change without resigning. The package trust
+profile permits Unicode and explicitly forbids normalization, including in signed
+unknown fields.
+
+`src/canonical/` is adapted from the `olpc-cjson` 0.1.4 crate archive, SHA-256
+`696183c9b5fe81a7715d074fd632e8bd46f4ccc0231a3ed7fc580a80de5f7083`.
+Its MIT OR Apache-2.0 license texts are byte-identical to this directory's retained
+LICENSE-MIT and LICENSE-APACHE. Original copyright headers remain. The source and
+five original unit tests were split into a private module and test file; the test
+derive uses the existing serde re-export. Crate-only example/import documentation
+was adapted for private-module use. Clippy's two equivalent `Error::other`
+constructor suggestions were applied without changing the error kind or text.
+
+The formatter writes a string fragment's UTF-8 bytes without NFC normalization.
+A separately approved bounded correction sorts object members by decoded UTF-8
+key bytes before emitting their escaped representation. The inherited formatter
+sorted escaped bytes, incorrectly placing `A` before a quote key and rejecting
+independently signed reference-order metadata. A bounded inverse of the formatter's
+quote/backslash escaping supplies only the sort key; literal controls never pass
+through a JSON parser. Empty, prefix and numeric map keys retain string ordering.
+Quote/backslash escaping, literal ASCII controls, exact integer handling and float
+rejection are retained. Every
+package-local formatter call, including role verification, editor signing and
+key IDs, uses this module. The registry `olpc-cjson` dependency is test-only for
+the inherited ASCII raw-metadata regression fixtures. It is not used by this
+package's runtime. There is no global dependency patch. Existing
+registry Tough and tool-update behavior are unchanged.
+
+Independent integration tests cover all four signed roles, unknown Unicode
+keys/values, canonically equivalent but distinct keys, unresigned normalization
+tampering, key IDs, controls/escaping and a large exact signed unknown integer.
+Fixtures use a separate Ed25519 signer and fixed canonical-byte expectations;
+none use this formatter to author their expected signatures. The original four tests failed
+against the original formatter before the Unicode correction. Additional fixed-byte,
+independent signature and key-ID regressions failed before the decoded-key sorting
+correction; they include nested quote/backslash/control and distinct Unicode keys.
+Native CI runs these tests
+on Linux, macOS and Windows. This amendment does not establish complete package
+profile admission, authenticated restore or provider qualification.
+
+## Package timestamp equality outcome
+
+The explicit `RepositoryLoader::load_package` entry point (behind
+`experimental-storage`) returns `PackageLoadOutcome::Updated` or `NoUpdate`.
+The former is candidate TUF loading, not complete package authorization or
+provider/profile qualification. The latter carries no repository, complete-view
+assertion, present-freshness proof or grant. Both require the existing fixed Safe
+time and mandatory transactional Storage/Admission configuration.
+
+After authenticating the fetched timestamp and recognizing a retained timestamp
+that still verifies under the current root, equality ends this update before the
+candidate snapshot-version comparison, candidate expiration check, or timestamp
+persistence. This follows pinned TUF 1.0.36 section 5.4.3.1. Smaller timestamp
+versions still fail rollback checks; greater versions follow the existing flow.
+Already accepted root transitions and their reset context remain committed.
+The default `load` entry point retains its prior behavior.
+
+The required `Admission::timestamp_no_update` has no permissive default. It receives
+exact candidate bytes and their current acceptance root alongside the predecessor
+snapshot, allowing the host's profile quorum and candidate-binding checks to
+reject an otherwise cryptographically valid equal timestamp. It must not commit
+timestamp authority, accepted time or grants. Full candidate-marker admission and
+recovery remain pending host work. A separate retained-view validation is required
+before any cached view supplies fresh package authorization; timestamp equality
+can occur even when a prior update never produced a complete view.
+
+Independent signed tests cover fresh and expired changed equal candidates with
+higher/lower snapshot links, missing replacement snapshot files, admission refusal,
+signature/rollback/expiry errors, normal greater-version updates, retained floors
+that cease verifying under a changed threshold, and unchanged default loading.
+SQLite snapshots prove no timestamp/floor/time writes on `NoUpdate`; root updates
+survive the outcome and an actual fresh-process restart. An incomplete retained
+view also yields only `NoUpdate`, never a usable repository.

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Fresh local Library restore MVP with explicit pinned-root provisioning, complete
+  exact-lock graph verification, current TUF and publisher authorization, transactional
+  SQLite trust state, interruption refusal, and atomic no-replace publication.
+  Historical authorization, automatic recovery and power-loss qualification remain
+  outside this prerelease capability (finos/morphir#912).
+
 ### Fixed
 - Package-local TUF canonicalization preserves Unicode code points in signed
   fields and key IDs. Valid decomposed strings verify, and normalization changes

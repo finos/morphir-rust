@@ -25,9 +25,23 @@ fn sign(body: Value, seed: u8, keyid: &str) -> Vec<u8> {
 fn authority() -> Signed<Root> {
     serde_json::from_slice(&fixtures::root(1, 18)).unwrap()
 }
+
+#[test]
+fn independently_signed_decoded_key_order_verifies() {
+    let root = authority();
+    let keyid =
+        hex::encode(root.signed.roles[&tough::schema::RoleType::Targets].keyids[0].as_ref());
+    let (_, _, targets) = fixtures::view(1, 18);
+    let mut document: Value = serde_json::from_slice(&targets).unwrap();
+    document["signed"]["extension"] = json!({"A":1,"\"": {"A":1,"\"":2,"\\":3,"_":4}});
+    let signed: Signed<Targets> =
+        serde_json::from_slice(&sign(document["signed"].clone(), 18, &keyid)).unwrap();
+    root.signed.verify_role(&signed).unwrap();
+}
 fn check_role<T: Role + DeserializeOwned>(wire: &[u8], seed: u8, keyid: &str) {
     let mut document: Value = serde_json::from_slice(wire).unwrap();
-    document["signed"]["extension"] = json!({"e\u{301}":"A\u{30a}", "é":"distinct"});
+    document["signed"]["extension"] =
+        json!({"e\u{301}":"A\u{30a}", "é":"distinct", "\"": {"A":1,"\"":2,"\\":3,"_":4}});
     document["signed"]["large"] =
         serde_json::from_str("184467440737095516160000000000000000000").unwrap();
     let body = document["signed"].clone();
@@ -76,7 +90,8 @@ fn key_ids_preserve_unicode_in_unknown_fields() {
         .next()
         .unwrap()
         .clone();
-    key["extension"] = json!({"e\u{301}":"A\u{30a}","é":"distinct"});
+    key["extension"] =
+        json!({"e\u{301}":"A\u{30a}","é":"distinct", "\"": {"A":1,"\"":2,"\\":3,"_":4}});
     let expected = Sha256::digest(canonical_fixture(&key));
     let decoded: Key = serde_json::from_slice(&canonical_fixture(&key)).unwrap();
     assert_eq!(decoded.key_id().unwrap().as_ref(), expected.as_slice());

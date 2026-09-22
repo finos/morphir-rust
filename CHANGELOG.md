@@ -10,7 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Package-local TUF canonicalization preserves Unicode code points in signed
   fields and key IDs. Valid decomposed strings verify, and normalization changes
-  cannot reuse a signature. The tool-update dependency remains unchanged.
+  cannot reuse a signature. Object keys sort by decoded UTF-8 bytes before
+  escaping, so valid signatures with quote-containing keys verify. The tool-update
+  dependency remains unchanged.
 - Native Elm frontend: a function type keeps every segment it was written with.
   tree-sitter-elm leaves a segment untagged when it is a type reference carrying
   arguments, so `List Int -> Bool` lowered to `Bool` and

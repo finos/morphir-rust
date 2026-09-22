@@ -62,10 +62,38 @@ pub struct CanonicalFormatter {
 /// ```
 #[derive(Debug, Default)]
 struct Object {
-    obj: BTreeMap<Vec<u8>, Vec<u8>>,
+    obj: BTreeMap<Vec<u8>, ObjectEntry>,
     next_key: Vec<u8>,
     next_value: Vec<u8>,
     key_done: bool,
+}
+
+#[derive(Debug)]
+struct ObjectEntry {
+    encoded_key: Vec<u8>,
+    value: Vec<u8>,
+}
+
+/// Undo only this formatter's two escapes, retaining literal controls and UTF-8.
+/// Canonical strings are not necessarily JSON, so a JSON parser cannot do this.
+fn decoded_key(encoded: &[u8]) -> Result<Vec<u8>> {
+    let inner = encoded
+        .strip_prefix(b"\"")
+        .and_then(|key| key.strip_suffix(b"\""))
+        .ok_or_else(|| Error::other("canonical object key is not a string"))?;
+    let mut decoded = Vec::with_capacity(inner.len());
+    let mut bytes = inner.iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte == b'\\' {
+            match bytes.next() {
+                Some(escaped @ (b'\\' | b'"')) => decoded.push(escaped),
+                _ => return Err(Error::other("invalid canonical object key escape")),
+            }
+        } else {
+            decoded.push(byte);
+        }
+    }
+    Ok(decoded)
 }
 
 impl CanonicalFormatter {
@@ -221,13 +249,13 @@ impl Formatter for CanonicalFormatter {
         let mut writer = self.writer(writer);
         let mut first = true;
 
-        for (key, value) in object.obj {
+        for entry in object.obj.into_values() {
             CompactFormatter.begin_object_key(&mut writer, first)?;
-            writer.write_all(&key)?;
+            writer.write_all(&entry.encoded_key)?;
             CompactFormatter.end_object_key(&mut writer)?;
 
             CompactFormatter.begin_object_value(&mut writer)?;
-            writer.write_all(&value)?;
+            writer.write_all(&entry.value)?;
             CompactFormatter.end_object_value(&mut writer)?;
 
             first = false;
@@ -256,7 +284,14 @@ impl Formatter for CanonicalFormatter {
         let object = self.obj_mut()?;
         let key = std::mem::take(&mut object.next_key);
         let value = std::mem::take(&mut object.next_value);
-        object.obj.insert(key, value);
+        // UTF-8 byte ordering agrees with Unicode scalar ordering for valid keys.
+        object.obj.insert(
+            decoded_key(&key)?,
+            ObjectEntry {
+                encoded_key: key,
+                value,
+            },
+        );
         Ok(())
     }
 

@@ -200,21 +200,30 @@ derive uses the existing serde re-export. Crate-only example/import documentatio
 was adapted for private-module use. Clippy's two equivalent `Error::other`
 constructor suggestions were applied without changing the error kind or text.
 
-The only formatter behavior change is writing a string fragment's UTF-8 bytes
-without calling NFC normalization. Sorting, quote/backslash escaping, literal
-ASCII controls, exact integer handling and float rejection are retained. Every
+The formatter writes a string fragment's UTF-8 bytes without NFC normalization.
+A separately approved bounded correction sorts object members by decoded UTF-8
+key bytes before emitting their escaped representation. The inherited formatter
+sorted escaped bytes, incorrectly placing `A` before a quote key and rejecting
+independently signed reference-order metadata. A bounded inverse of the formatter's
+quote/backslash escaping supplies only the sort key; literal controls never pass
+through a JSON parser. Empty, prefix and numeric map keys retain string ordering.
+Quote/backslash escaping, literal ASCII controls, exact integer handling and float
+rejection are retained. Every
 package-local formatter call, including role verification, editor signing and
 key IDs, uses this module. The registry `olpc-cjson` dependency is test-only for
 the inherited ASCII raw-metadata regression fixtures. It is not used by this
 package's runtime. There is no global dependency patch. Existing
 registry Tough and tool-update behavior are unchanged.
 
-Four independent integration tests cover all four signed roles, unknown Unicode
+Independent integration tests cover all four signed roles, unknown Unicode
 keys/values, canonically equivalent but distinct keys, unresigned normalization
 tampering, key IDs, controls/escaping and a large exact signed unknown integer.
 Fixtures use a separate Ed25519 signer and fixed canonical-byte expectations;
-none use this formatter to author their expected signatures. All four tests failed
-against the original formatter before the correction. Native CI runs these tests
+none use this formatter to author their expected signatures. The original four tests failed
+against the original formatter before the Unicode correction. Additional fixed-byte,
+independent signature and key-ID regressions failed before the decoded-key sorting
+correction; they include nested quote/backslash/control and distinct Unicode keys.
+Native CI runs these tests
 on Linux, macOS and Windows. This amendment does not establish complete package
 profile admission, authenticated restore or provider qualification.
 

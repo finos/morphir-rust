@@ -18,6 +18,31 @@ macro_rules! encode {
         };
     }
 
+#[test]
+fn decoded_keys_are_sorted_before_escaping_at_every_depth() -> Result<()> {
+    assert_eq!(
+        encode!({"_":4,"\\":3,"A":2,"\"": {"é":6,"e\u{301}":5,"_":4,"\\":3,"A":2,"\"":1,"\0":0},"\0":0})?,
+        "{\"\0\":0,\"\\\"\":{\"\0\":0,\"\\\"\":1,\"A\":2,\"\\\\\":3,\"_\":4,\"e\u{301}\":5,\"é\":6},\"A\":2,\"\\\\\":3,\"_\":4}".as_bytes()
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_prefix_and_numeric_map_keys_retain_string_order() -> Result<()> {
+    assert_eq!(
+        encode!({"a":4,"\\":3,"\"a":2,"\"":1,"":0})?,
+        br#"{"":0,"\"":1,"\"a":2,"\\":3,"a":4}"#
+    );
+    let value = std::collections::BTreeMap::from([(2, "two"), (10, "ten"), (-1, "negative")]);
+    let mut buf = Vec::new();
+    value.serialize(&mut Serializer::with_formatter(
+        &mut buf,
+        CanonicalFormatter::new(),
+    ))?;
+    assert_eq!(buf, br#"{"-1":"negative","10":"ten","2":"two"}"#);
+    Ok(())
+}
+
 /// These smoke tests come from securesystemslib, the library used by the TUF reference
 /// implementation.
 ///

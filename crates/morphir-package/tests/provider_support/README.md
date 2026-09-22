@@ -210,7 +210,13 @@ or runner labels as identity evidence.
 Artifacts contain setup SIDs/ACLs, actual token groups and privilege attributes,
 native architecture, filesystem detection, executable SHA-256 and complete test
 output. The digest verifies the copied test executable, not a released provider.
-Native standard-user results remain pending until these jobs execute successfully.
+The first native standard-user runs at `6fa8541` passed all 25 tests, including
+the mandatory identity/state-ACL case, on both
+[x64](https://github.com/finos/morphir-rust/actions/runs/35687230573/job/106616653736)
+and [ARM64](https://github.com/finos/morphir-rust/actions/runs/35687230573/job/106616653680).
+Both observed local NTFS, matching native machine architecture, the expected user
+SID without elevation or a linked/restricted token, and only
+`SeChangeNotifyPrivilege` enabled.
 This is functional permissions evidence, with no new power-loss, initialization
 durability or production qualification claim.
 

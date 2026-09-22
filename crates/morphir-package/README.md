@@ -77,6 +77,12 @@ framing only. Corpus loading, fixed expectations, comparisons and reporting stay
 in the shared Rust `morphir mck` driver. Running it without arguments, or with
 `--suite ir`, keeps IR protocol v1.
 
+The `package-mvp` selector advertises draft.3 `local-library-mvp:0.1.0-draft.1`
+restore. The driver sends only the 15 signed input files as lowercase hex. The
+adapter stages those inputs in a temporary directory, runs the production
+initialization and restore APIs, and returns observed packages and input
+preservation. Expected results remain in the parent repository's MCK corpus.
+
 ```sh
 mise exec -- cargo test --locked -p morphir-package -p morphir-mck-adapter
 mise exec -- cargo clippy --locked -p morphir-package -p morphir-mck-adapter --all-targets -- -D warnings

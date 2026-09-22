@@ -17,6 +17,7 @@ const PROFILE: &str = "local-library-mvp:0.1.0-draft.1";
 const CONTRACT: &str = "0.1.0-draft.3";
 const MAX_FILE: usize = 16_777_216;
 const MAX_TOTAL: usize = 33_554_432;
+const MAX_REQUEST_LINE: usize = 2 * MAX_TOTAL + 65_536;
 
 #[derive(Deserialize)]
 #[serde(tag = "op", deny_unknown_fields)]
@@ -41,13 +42,26 @@ struct WireFile {
 
 /// Drive the bounded local Library MVP adapter through actual package APIs.
 /// An invalid protocol or unclassified production error stops the process.
-pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
+///
+/// ```
+/// use morphir_mck_adapter::package_mvp::run;
+/// use serde_json::Value;
+/// use std::io::Cursor;
+///
+/// let input = b"{\"id\":1,\"op\":\"capabilities\"}\n{\"id\":2,\"op\":\"exit\"}\n";
+/// let mut output = Vec::new();
+/// run(Cursor::new(input), &mut output)?;
+/// let reply: Value = serde_json::from_slice(output.split(|byte| *byte == b'\n').next().unwrap())?;
+/// assert_eq!(reply["contractVersion"], "0.1.0-draft.3");
+/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library"]));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     let mut requests = 0usize;
-    for line in reader.lines() {
-        let line = line?;
+    while let Some(line) = read_bounded_line(&mut reader, MAX_REQUEST_LINE)? {
         if line.trim().is_empty() {
             continue;
         }
@@ -81,6 +95,19 @@ pub fn run(reader: impl BufRead, mut writer: impl Write) -> Result<()> {
     }
     ensure!(requests > 0, "package MVP protocol input was empty");
     Ok(())
+}
+
+fn read_bounded_line(reader: &mut impl BufRead, max_bytes: usize) -> Result<Option<String>> {
+    let mut bytes = Vec::new();
+    let limit = u64::try_from(max_bytes)?
+        .checked_add(1)
+        .context("request line limit overflow")?;
+    let count = std::io::Read::take(reader, limit).read_until(b'\n', &mut bytes)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    ensure!(bytes.len() <= max_bytes, "package MVP request line limit");
+    Ok(Some(String::from_utf8(bytes)?))
 }
 
 fn admit_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
@@ -330,4 +357,27 @@ fn inventory(root: &Path) -> Result<BTreeMap<String, Option<Vec<u8>>>> {
     let mut found = BTreeMap::new();
     visit(root, root, &mut found)?;
     Ok(found)
+}
+
+#[cfg(test)]
+mod bounded_input_tests {
+    use super::read_bounded_line;
+    use std::io::Cursor;
+
+    #[test]
+    fn rejects_an_oversized_line_before_parsing_and_accepts_the_next_line() {
+        let mut input = Cursor::new(b"123456789\n{}\n");
+        assert!(read_bounded_line(&mut input, 8).is_err());
+
+        let mut input = Cursor::new(b"12345678\n{}\n");
+        assert_eq!(
+            read_bounded_line(&mut input, 9).unwrap(),
+            Some("12345678\n".into())
+        );
+        assert_eq!(
+            read_bounded_line(&mut input, 9).unwrap(),
+            Some("{}\n".into())
+        );
+        assert_eq!(read_bounded_line(&mut input, 9).unwrap(), None);
+    }
 }

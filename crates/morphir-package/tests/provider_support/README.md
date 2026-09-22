@@ -83,6 +83,72 @@ restart evidence still require native qualification. Administrator volume flushi
 is not an acceptable fallback. No Windows qualification claim follows from these
 tests passing.
 
+## Windows directory write-through candidate
+
+The separate Windows-only `windows_write_through.rs` helper probes a stronger
+candidate than the existing `MoveFileExW` test. It is test code, with no production
+provider or qualification attestation. It runs under trusted-directory assumptions.
+
+- It opens the existing temporary root and creates each new ancestor and empty
+  directory through user-mode
+  [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile).
+  It requests `FILE_DIRECTORY_FILE | FILE_WRITE_THROUGH |
+  FILE_SYNCHRONOUS_IO_NONALERT`. Child names are relative to the parent handle;
+  `FILE_CREATE` rejects existing entries. The probe reads `FileModeInformation`
+  back and requires write-through and synchronous mode on each handle.
+- Directory access is `DELETE | SYNCHRONIZE | FILE_LIST_DIRECTORY |
+  FILE_TRAVERSE | FILE_READ_ATTRIBUTES`. The helper never requests backup intent,
+  adjusts privileges, uses TxF, opens a volume or flushes a volume. A negative
+  test omits `DELETE` and requires promotion to fail without changing either name.
+- Payload and empty files use `create_new`, `FILE_FLAG_WRITE_THROUGH`, and
+  `sync_all`. This exercises file flushing separately from directory creation.
+- Promotion reopens the stage with those same directory options and calls
+  [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
+  with `FileRenameInfo`, NULL `RootDirectory`, an absolute destination under the
+  canonical private fixture parent, and
+  [`ReplaceIfExists = FALSE`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info).
+  An empty or populated destination must survive collision unchanged; the entire
+  candidate must remain intact. No copy, overwrite or fallback is attempted.
+- A child builds a tree containing empty directories at two depths, an empty file
+  and payload bytes. The parent kills it after staging or promotion and launches
+  a fresh reader to inspect both names and exact contents. Handles have closed
+  before the readiness boundary. This tests process restart after completed calls,
+  not interruption inside a native operation, OS reboot or power failure.
+
+Each writer records the actual filesystem, requested access/options and
+`TokenElevation`. A successful run under an elevated token is not ordinary-user
+evidence. Native execution under a standard user remains required, including the
+ownership and ACL setup, on both supported Windows architectures. Even a
+non-elevated token observation alone is not a complete privilege/ACL audit.
+
+The [CreateFileW caching contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew#caching-behavior)
+describes NTFS metadata flushing for write-through requests, including rename.
+`NtCreateFile` explicitly allows write-through directory creation. These documents
+justify testing this candidate, but do not by themselves prove a durable whole-tree
+protocol: persistence of newly created empty directories and all ancestor entries,
+ordering across handles, and the storage device's flush guarantees still need a
+documented argument and native fault evidence. Successful mode readback and API
+return values do not fill that gap. The temporary root itself is created by the
+test framework, so its initial creation durability is outside this probe.
+
+The initial Windows/x86_64 NTFS run passed creation, handle-mode readback and the
+missing-DELETE negative case, but promotion using a non-NULL destination parent
+handle returned error 87, including when no destination existed. Increasing the
+declared buffer to the complete structure plus filename did not change that result
+in [the sizing-only rerun](https://github.com/finos/morphir-rust/actions/runs/35683358190).
+The controlled candidate using NULL `RootDirectory` and an absolute destination
+passed all 19 Windows provider tests in
+[the native comparison run](https://github.com/finos/morphir-rust/actions/runs/35683729042/job/106606133842).
+Source handle modes/access, buffer sizing, no-replace behavior and collision
+assertions were unchanged. There is no fallback. This NTFS/x86_64 run used an
+elevated token; it does not establish standard-user or power-loss qualification.
+
+Microsoft's [2022 documentation correction](https://github.com/MicrosoftDocs/sdk-api/commit/ada04eef90bc7ebe441ce2ef938867d3a677d57d)
+warned about non-NULL `RootDirectory` behavior, while the current API reference
+permits it. The measured comparison identifies the relative-root call form as the
+functional failure, without establishing a durability guarantee. Cross-compilation checks bindings and Rust
+types only; macOS runs do not execute the Windows-only cases.
+
 Stop qualification if any required native call fails, a winner is overwritten,
 state is silently created/reset, a failed/uncommitted write yields a grant, a
 fresh process loses committed evidence, or any target lacks a documented ordinary

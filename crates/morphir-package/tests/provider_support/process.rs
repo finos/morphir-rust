@@ -84,6 +84,36 @@ fn hold() -> ! {
 }
 pub fn run_child(mode: &str, root: &Path) {
     match mode {
+        #[cfg(windows)]
+        "windows-staged" | "windows-promoted" => {
+            super::windows_write_through::stage_tree(root);
+            if mode == "windows-promoted" {
+                super::windows_write_through::promote_tree(root).unwrap();
+            }
+            hold();
+        }
+        #[cfg(windows)]
+        "windows-read-stage" | "windows-read-winner" => {
+            let promoted = mode == "windows-read-winner";
+            super::windows_write_through::assert_tree(
+                root,
+                if promoted {
+                    "ancestors/winner"
+                } else {
+                    "ancestors/stage"
+                },
+            );
+            assert!(
+                !root
+                    .join(if promoted {
+                        "ancestors/stage"
+                    } else {
+                        "ancestors/winner"
+                    })
+                    .exists()
+            );
+            ready();
+        }
         "lock" => {
             let file = lock_file(root).unwrap();
             fs2::FileExt::lock_exclusive(&file).unwrap();

@@ -135,18 +135,26 @@ expiry/reset point, `FinishRootCycle` atomically resets timestamp/snapshot toget
 when required and clears the baseline. Restart therefore cannot forget a pending
 reset by comparing the new root with itself. Timestamp/snapshot floors commit at
 the existing upstream acceptance points; a later target failure retains them.
-All role transitions carry their original signed envelope bytes, including
+All role transitions atomically carry their exact acceptance root and original
+signed envelope bytes, including
 whitespace, rather than a parsed object's serialization. Root continuity and
 provisioning remain separately retained.
 
 The experimental session checks retained encoding, root self-signatures and
-rollback-role signatures when those roles are read. Invalid existing bytes fail
+retained top-level role signatures under their acceptance root. A later root may
+change a role threshold without changing its keys: valid old evidence remains
+readable, and the unchanged upstream current-root signature gate decides whether
+it supplies a rollback floor. The keys-only reset rule is unchanged. Invalid
+existing bytes fail
 closed rather than becoming optional cache misses. These checks do **not** prove
 consistency of an arbitrary valid-looking protected snapshot. The `Storage` host
 must validate provisioning, complete root continuity, required record presence
-and reset context; the `Admission` host must bind admitted evidence and enforce
+and reset context, anchoring every acceptance root to that authenticated chain;
+the `Admission` host must bind admitted evidence and enforce
 profile raw-key quorum before authority commits. Those production integrations
-remain pending. The accepted successful-authorization time is read-only: earlier
+remain pending. Delegated-role evidence also requires host validation of its
+parent delegation chain; an acceptance root alone does not authorize it. The
+accepted successful-authorization time is read-only: earlier
 fixed time fails, while failed loads, successful TUF loads and target reads cannot
 advance that floor.
 
@@ -161,7 +169,13 @@ Tests use SQLite WAL/FULL (plus macOS fullfsync), independent Ed25519 signatures
 and real child-process kills before and after root and reset commits. Restart
 with changed timestamp/snapshot keys clears the pending old-key floors and accepts
 the correctly authorized replacement view. Failure injection preserves predecessor
-transactions; two processes cannot commit the same predecessor twice. These are
+transactions; two processes cannot commit the same predecessor twice. Independent
+threshold-only fixtures compare both storage paths, preserve the unchanged role
+floor when only one threshold increases, and resume in a fresh process after root
+advancement with old role evidence. Corrupt signatures or acceptance roots fail
+before transport. The SQLite test schema stores each role envelope and acceptance
+root in the same row and transaction; it has no stable schema/migration promise.
+These are
 local transaction/hook probes, not power-loss, initialization-durability or
 three-platform provider qualification. Run the optional suite with:
 

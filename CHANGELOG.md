@@ -68,6 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Experimental TUF retained evidence now carries its exact acceptance root atomically,
+  allowing threshold-only root updates without discarding the other role's rollback
+  floor or changing the upstream keys-only reset rule.
 - Development-only package TUF storage port behind `experimental-storage`: exact
   evidence retention, transactional root/reset transitions, predecessor checks,
   and read-only accepted-time floors. SQLite process-restart probes exercise the

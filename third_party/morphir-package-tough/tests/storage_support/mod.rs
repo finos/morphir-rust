@@ -9,7 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use tough::experimental_storage::{
-    Admission, Error, MetadataRole, Reset, Result, Revision, Snapshot, Storage, Transition,
+    Admission, Error, MetadataRole, Reset, Result, RetainedMetadata, Revision, Snapshot, Storage,
+    Transition,
 };
 
 #[derive(Debug)]
@@ -35,7 +36,7 @@ impl Sqlite {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        tx.execute_batch("CREATE TABLE state(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, provisioned BLOB NOT NULL, root BLOB NOT NULL, baseline BLOB, accepted TEXT); CREATE TABLE metadata(role TEXT PRIMARY KEY, bytes BLOB NOT NULL); CREATE TABLE roots(sequence INTEGER PRIMARY KEY, bytes BLOB NOT NULL);").unwrap();
+        tx.execute_batch("CREATE TABLE state(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, provisioned BLOB NOT NULL, root BLOB NOT NULL, baseline BLOB, accepted TEXT); CREATE TABLE metadata(role TEXT PRIMARY KEY, bytes BLOB NOT NULL, acceptance_root BLOB NOT NULL); CREATE TABLE roots(sequence INTEGER PRIMARY KEY, bytes BLOB NOT NULL);").unwrap();
         tx.execute("INSERT INTO state VALUES(1,0,?1,?1,NULL,NULL)", [root])
             .unwrap();
         tx.execute("INSERT INTO roots VALUES(0,?1)", [root])
@@ -81,17 +82,32 @@ impl Storage for Sqlite {
             .map(|value| value.parse().map_err(|_| Error::Corrupt("accepted time")))
             .transpose()?;
         let mut metadata = BTreeMap::new();
-        let mut query = tx.prepare("SELECT role,bytes FROM metadata").map_err(sql)?;
+        let mut query = tx
+            .prepare("SELECT role,bytes,acceptance_root FROM metadata")
+            .map_err(sql)?;
         for row in query
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
             })
             .map_err(sql)?
         {
-            let (role, bytes) = row.map_err(sql)?;
+            let (role, bytes, acceptance_root) = row.map_err(sql)?;
             let role: MetadataRole =
                 serde_json::from_str(&role).map_err(|_| Error::Corrupt("role identity"))?;
-            if metadata.insert(role, bytes).is_some() {
+            if metadata
+                .insert(
+                    role,
+                    RetainedMetadata {
+                        bytes,
+                        acceptance_root,
+                    },
+                )
+                .is_some()
+            {
                 return Err(Error::Corrupt("duplicate metadata role"));
             }
         }
@@ -151,10 +167,14 @@ impl Storage for Sqlite {
                 tx.execute("UPDATE state SET baseline=NULL WHERE id=1", [])
                     .map_err(sql)?;
             }
-            Transition::Retain { role, bytes } => {
+            Transition::Retain { role, metadata } => {
                 tx.execute(
-                    "INSERT OR REPLACE INTO metadata VALUES(?1,?2)",
-                    rusqlite::params![serde_json::to_string(role).unwrap(), bytes],
+                    "INSERT OR REPLACE INTO metadata VALUES(?1,?2,?3)",
+                    rusqlite::params![
+                        serde_json::to_string(role).unwrap(),
+                        metadata.bytes,
+                        metadata.acceptance_root
+                    ],
                 )
                 .map_err(sql)?;
             }

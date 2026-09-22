@@ -29,6 +29,16 @@ pub enum MetadataRole {
     Delegated(String),
 }
 
+/// Exact retained role evidence and the authority under which it was accepted.
+/// The host must anchor this root in the provisioned repository's retained chain.
+#[derive(Debug, Clone)]
+pub struct RetainedMetadata {
+    /// Original signed envelope bytes.
+    pub bytes: Vec<u8>,
+    /// Exact authenticated root at acceptance, not necessarily today's root.
+    pub acceptance_root: Vec<u8>,
+}
+
 /// One consistent read of an explicitly provisioned protected store.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -41,7 +51,7 @@ pub struct Snapshot {
     /// Exact root at the beginning of an unfinished root-update cycle.
     pub reset_baseline: Option<Vec<u8>>,
     /// Existing rollback metadata and retained target evidence.
-    pub metadata: BTreeMap<MetadataRole, Vec<u8>>,
+    pub metadata: BTreeMap<MetadataRole, RetainedMetadata>,
     /// Last successful fresh package authorization, read-only in this port.
     pub accepted_time: Option<Timestamp>,
 }
@@ -75,8 +85,8 @@ pub enum Transition {
     Retain {
         /// Logical role.
         role: MetadataRole,
-        /// Exact fetched signed envelope.
-        bytes: Vec<u8>,
+        /// Exact envelope and its acceptance authority, committed atomically.
+        metadata: RetainedMetadata,
     },
 }
 
@@ -125,7 +135,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub trait Storage: fmt::Debug + Send + Sync {
     /// Read all fields from one consistent transaction; report corruption as error.
     /// The host must validate retained provisioning, root continuity, reset context
-    /// and required record presence. Session checks of encoding and self-signatures
+    /// and required record presence. Every retained role acceptance root must be
+    /// anchored in this repository's authenticated root chain. Encoding and signature checks
     /// do not establish consistency of an arbitrary protected snapshot.
     async fn snapshot(&self) -> Result<Snapshot>;
     /// Commit only if `expected` still matches; return the committed successor revision.

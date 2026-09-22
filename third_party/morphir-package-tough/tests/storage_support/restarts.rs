@@ -80,16 +80,19 @@ async fn process_kill_exposes_atomic_root_and_reset_context_then_restart_finishe
             assert!(!state.metadata.contains_key(&MetadataRole::Timestamp));
             assert!(!state.metadata.contains_key(&MetadataRole::Snapshot));
         } else {
-            assert_eq!(state.metadata[&MetadataRole::Timestamp], timestamp);
-            assert_eq!(state.metadata[&MetadataRole::Snapshot], snapshot);
+            assert_eq!(state.metadata[&MetadataRole::Timestamp].bytes, timestamp);
+            assert_eq!(state.metadata[&MetadataRole::Snapshot].bytes, snapshot);
         }
         assert!(child(&store, &fixture).status().unwrap().success());
         let recovered = store.snapshot().await.unwrap();
         assert_eq!(recovered.current_root, fixtures::root(2, 18));
         assert!(recovered.reset_baseline.is_none());
         let (timestamp, snapshot, _) = fixtures::view(1, 18);
-        assert_eq!(recovered.metadata[&MetadataRole::Timestamp], timestamp);
-        assert_eq!(recovered.metadata[&MetadataRole::Snapshot], snapshot);
+        assert_eq!(
+            recovered.metadata[&MetadataRole::Timestamp].bytes,
+            timestamp
+        );
+        assert_eq!(recovered.metadata[&MetadataRole::Snapshot].bytes, snapshot);
     }
 }
 
@@ -107,8 +110,8 @@ async fn failed_root_or_reset_commit_does_not_publish_partial_success() {
             .unwrap()
             .success());
         let state = store.snapshot().await.unwrap();
-        assert_eq!(state.metadata[&MetadataRole::Timestamp], timestamp);
-        assert_eq!(state.metadata[&MetadataRole::Snapshot], snapshot);
+        assert_eq!(state.metadata[&MetadataRole::Timestamp].bytes, timestamp);
+        assert_eq!(state.metadata[&MetadataRole::Snapshot].bytes, snapshot);
         if phase == "root" {
             assert_eq!(state.revision, Revision(0));
             assert_eq!(state.current_root, fixtures::root(1, 17));
@@ -172,4 +175,62 @@ async fn separate_processes_cannot_commit_the_same_predecessor_twice() {
     let state = store.snapshot().await.unwrap();
     assert_eq!(state.revision, Revision(1));
     assert_eq!(state.current_root, fixtures::root(2, 18));
+}
+
+#[tokio::test]
+async fn threshold_update_restarts_using_each_roles_retained_acceptance_root() {
+    for failure_phase in ["finish", "metadata"] {
+        let directory = TempDir::new().unwrap();
+        let fixture = directory.path().join("fixture");
+        fs::create_dir(&fixture).unwrap();
+        let root = fixtures::threshold_root(1, 1);
+        fs::write(fixture.join("1.root.json"), &root).unwrap();
+        fixtures::write_threshold_view(&fixture, 10, &[18]);
+        let store = Arc::new(Sqlite::initialize(
+            &directory.path().join("state.db"),
+            &root,
+        ));
+        load(
+            store.clone(),
+            &fixture,
+            ProbeAdmission::permit_for_storage_probe_only(),
+            "2026-01-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        fs::write(fixture.join("2.root.json"), fixtures::threshold_root(2, 2)).unwrap();
+        fixtures::write_threshold_view(&fixture, 11, &[18, 19]);
+        // Fail after root advancement, either before finishing its cycle or while
+        // replacing role evidence. Both exact old bytes and authority must survive.
+        let before = store.snapshot().await.unwrap();
+        assert!(child(&store, &fixture)
+            .env("MORPHIR_TUF_PROBE_FAIL", failure_phase)
+            .env("MORPHIR_TUF_PROBE_EXPECT_ERROR", "1")
+            .status()
+            .unwrap()
+            .success());
+        let interrupted = store.snapshot().await.unwrap();
+        assert_eq!(interrupted.current_root, fixtures::threshold_root(2, 2));
+        for role in [MetadataRole::Timestamp, MetadataRole::Snapshot] {
+            assert_eq!(interrupted.metadata[&role].acceptance_root, root);
+            assert_eq!(
+                interrupted.metadata[&role].bytes,
+                before.metadata[&role].bytes
+            );
+        }
+        // Resumption must use the retained current root, not redownload its body.
+        fs::remove_file(fixture.join("2.root.json")).unwrap();
+        assert!(child(&store, &fixture).status().unwrap().success());
+        let recovered = store.snapshot().await.unwrap();
+        assert!(recovered.reset_baseline.is_none());
+        for role in [MetadataRole::Timestamp, MetadataRole::Snapshot] {
+            assert_eq!(
+                recovered.metadata[&role].acceptance_root,
+                fixtures::threshold_root(2, 2)
+            );
+            let document: serde_json::Value =
+                serde_json::from_slice(&recovered.metadata[&role].bytes).unwrap();
+            assert_eq!(document["signed"]["version"], 11);
+        }
+    }
 }

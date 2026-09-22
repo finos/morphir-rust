@@ -1,4 +1,6 @@
-use super::{Admission, Error, MetadataRole, Reset, Result, Snapshot, Storage, Transition};
+use super::{
+    Admission, Error, MetadataRole, Reset, Result, RetainedMetadata, Snapshot, Storage, Transition,
+};
 use crate::schema::{Root, Signed, Snapshot as TufSnapshot, Targets, Timestamp as TufTimestamp};
 use jiff::Timestamp;
 use std::sync::Arc;
@@ -58,25 +60,13 @@ impl Session {
             "snapshot.json" => MetadataRole::Snapshot,
             _ => return Err(Error::Corrupt("unexpected retained-role read")),
         };
-        let bytes = state.metadata.get(&role).cloned();
-        if let Some(bytes) = &bytes {
-            let root = parse_root(&state.current_root)?;
-            let valid = match role {
-                MetadataRole::Timestamp => root
-                    .signed
-                    .verify_role(&parse::<Signed<TufTimestamp>>(bytes)?)
-                    .is_ok(),
-                MetadataRole::Snapshot => root
-                    .signed
-                    .verify_role(&parse::<Signed<TufSnapshot>>(bytes)?)
-                    .is_ok(),
-                _ => false,
-            };
-            if !valid {
-                return Err(Error::Corrupt("retained rollback metadata signature"));
-            }
+        // Validate protected evidence under its acceptance authority. The unchanged
+        // loader then decides whether it is usable under the current root's rules.
+        let metadata = state.metadata.get(&role);
+        if let Some(metadata) = metadata {
+            validate_metadata(&role, metadata)?;
         }
-        Ok(bytes)
+        Ok(metadata.map(|metadata| metadata.bytes.clone()))
     }
     pub(crate) async fn time(&self) -> Result<Timestamp> {
         let state = self.state.lock().await;
@@ -111,15 +101,22 @@ impl Session {
         self.commit(Transition::FinishRootCycle { reset }).await
     }
     pub(crate) async fn retain(&self, role: MetadataRole, bytes: &[u8]) -> Result<()> {
-        self.commit(Transition::Retain {
+        let mut state = self.state.lock().await;
+        let transition = Transition::Retain {
             role,
-            bytes: bytes.to_vec(),
-        })
-        .await
+            metadata: RetainedMetadata {
+                bytes: bytes.to_vec(),
+                acceptance_root: state.current_root.clone(),
+            },
+        };
+        self.commit_locked(&mut state, transition).await
     }
     async fn commit(&self, transition: Transition) -> Result<()> {
         let mut state = self.state.lock().await;
-        self.admission.transition(&state, &transition).await?;
+        self.commit_locked(&mut state, transition).await
+    }
+    async fn commit_locked(&self, state: &mut Snapshot, transition: Transition) -> Result<()> {
+        self.admission.transition(state, &transition).await?;
         let revision = self.storage.commit(state.revision, &transition).await?;
         let persisted = self.storage.snapshot().await?;
         if persisted.revision != revision {
@@ -146,18 +143,37 @@ fn validate(state: &Snapshot) -> Result<()> {
     if let Some(baseline) = &state.reset_baseline {
         parse_root(baseline)?;
     }
-    for (role, bytes) in &state.metadata {
-        match role {
-            MetadataRole::Timestamp => {
-                parse::<Signed<TufTimestamp>>(bytes)?;
-            }
-            MetadataRole::Snapshot => {
-                parse::<Signed<TufSnapshot>>(bytes)?;
-            }
-            MetadataRole::Targets | MetadataRole::Delegated(_) => {
-                parse::<Signed<Targets>>(bytes)?;
-            }
+    for (role, metadata) in &state.metadata {
+        validate_metadata(role, metadata)?;
+    }
+    Ok(())
+}
+fn validate_metadata(role: &MetadataRole, metadata: &RetainedMetadata) -> Result<()> {
+    let root = parse_root(&metadata.acceptance_root)?;
+    let valid = match role {
+        MetadataRole::Timestamp => root
+            .signed
+            .verify_role(&parse::<Signed<TufTimestamp>>(&metadata.bytes)?)
+            .is_ok(),
+        MetadataRole::Snapshot => root
+            .signed
+            .verify_role(&parse::<Signed<TufSnapshot>>(&metadata.bytes)?)
+            .is_ok(),
+        MetadataRole::Targets => root
+            .signed
+            .verify_role(&parse::<Signed<Targets>>(&metadata.bytes)?)
+            .is_ok(),
+        // Delegated evidence needs its parent delegation chain, a host admission
+        // obligation. This record's root alone does not authorize delegated keys.
+        MetadataRole::Delegated(_) => {
+            parse::<Signed<Targets>>(&metadata.bytes)?;
+            true
         }
+    };
+    if !valid {
+        return Err(Error::Corrupt(
+            "retained metadata signature under acceptance authority",
+        ));
     }
     Ok(())
 }

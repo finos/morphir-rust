@@ -63,3 +63,69 @@ pub fn create(directory: &Path) {
     fs::write(directory.join("2.root.json"), root(2, 18)).unwrap();
     write_view(directory, 1);
 }
+
+fn signed_many(body: Value, seeds: &[u8]) -> Vec<u8> {
+    let canonical = bytes(&body);
+    let signatures = seeds
+        .iter()
+        .map(|seed| {
+            let signature = SigningKey::from([*seed; 32]).sign(&canonical);
+            json!({"keyid":id(*seed),"sig":hex::encode(signature.to_bytes())})
+        })
+        .collect::<Vec<_>>();
+    let mut output = b"\n ".to_vec();
+    output.extend(bytes(&json!({"signed":body,"signatures":signatures})));
+    output.push(b'\n');
+    output
+}
+
+/// Root changes only the online timestamp/snapshot threshold, keeping both keys.
+pub fn threshold_root(version: u64, threshold: u64) -> Vec<u8> {
+    role_threshold_root(version, threshold, threshold)
+}
+
+pub fn role_threshold_root(
+    version: u64,
+    timestamp_threshold: u64,
+    snapshot_threshold: u64,
+) -> Vec<u8> {
+    let root_role = json!({"keyids":[id(17)],"threshold":1});
+    let timestamp = json!({"keyids":[id(18),id(19)],"threshold":timestamp_threshold});
+    let snapshot = json!({"keyids":[id(18),id(19)],"threshold":snapshot_threshold});
+    let targets = json!({"keyids":[id(18)],"threshold":1});
+    let mut keys = serde_json::Map::new();
+    for seed in [17, 18, 19] {
+        keys.insert(id(seed), key(seed));
+    }
+    signed_many(
+        json!({"_type":"root","spec_version":"1.0.36","version":version,"expires":"2100-01-01T00:00:00Z","consistent_snapshot":true,"keys":keys,"roles":{"root":root_role,"timestamp":timestamp,"snapshot":snapshot,"targets":targets}}),
+        &[17],
+    )
+}
+
+pub fn write_threshold_view(directory: &Path, version: u64, signers: &[u8]) {
+    write_threshold_view_versions(directory, version, version, signers);
+}
+
+pub fn write_threshold_view_versions(
+    directory: &Path,
+    timestamp_version: u64,
+    version: u64,
+    signers: &[u8],
+) {
+    let targets = signed_many(
+        json!({"_type":"targets","spec_version":"1.0.36","version":version,"expires":"2100-01-01T00:00:00Z","targets":{}}),
+        &[18],
+    );
+    let snapshot = signed_many(
+        json!({"_type":"snapshot","spec_version":"1.0.36","version":version,"expires":"2100-01-01T00:00:00Z","meta":{"targets.json":meta(&targets,version)}}),
+        signers,
+    );
+    let timestamp = signed_many(
+        json!({"_type":"timestamp","spec_version":"1.0.36","version":timestamp_version,"expires":"2100-01-01T00:00:00Z","meta":{"snapshot.json":meta(&snapshot,version)}}),
+        signers,
+    );
+    fs::write(directory.join("timestamp.json"), timestamp).unwrap();
+    fs::write(directory.join(format!("{version}.snapshot.json")), snapshot).unwrap();
+    fs::write(directory.join(format!("{version}.targets.json")), targets).unwrap();
+}

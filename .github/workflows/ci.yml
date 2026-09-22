@@ -208,6 +208,7 @@ jobs:
 
       - name: Test package-local TUF version boundaries
         run: |
+          rustup component add rustfmt
           cargo fmt --manifest-path third_party/morphir-package-tough/Cargo.toml -- --check
           cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --lib --test exact_versions
 

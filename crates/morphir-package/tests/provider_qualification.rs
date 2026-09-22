@@ -2,15 +2,40 @@
 #[path = "provider_support/filesystem.rs"]
 mod filesystem;
 
+#[path = "provider_support/ordinary_user.rs"]
+mod ordinary_user;
+
 #[cfg(windows)]
 #[path = "provider_support/windows_write_through.rs"]
 mod windows_write_through;
 
 use std::fs;
 
+fn probe_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let directory = tempfile::tempdir()?;
+    #[cfg(windows)]
+    ordinary_user::assert_if_requested(directory.path());
+    Ok(directory)
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires an explicitly provisioned standard-user CI account and private scratch directory"]
+fn ordinary_user_identity_and_state_acl_are_observed() {
+    ordinary_user::assert_executable_boundary();
+    let root = probe_tempdir().unwrap();
+    ordinary_user::assert_required(root.path());
+    let path = root.path().join("state.sqlite");
+    let store = state::Store::initialize(&path).unwrap();
+    store.assert_settings();
+    for name in ["state.sqlite", "state.sqlite-wal", "state.sqlite-shm"] {
+        ordinary_user::assert_required(&root.path().join(name));
+    }
+}
+
 #[test]
 fn detects_the_actual_required_local_filesystem() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let environment = filesystem::environment(root.path()).unwrap();
     eprintln!("candidate environment: {environment:?}");
     assert_eq!(environment.os, std::env::consts::OS);
@@ -23,7 +48,7 @@ fn detects_the_actual_required_local_filesystem() {
 
 #[test]
 fn promotion_never_overwrites_an_existing_winner() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let source = root.path().join("stage");
     let destination = root.path().join("winner");
     fs::create_dir(&source).unwrap();
@@ -39,7 +64,7 @@ fn promotion_never_overwrites_an_existing_winner() {
 
 #[test]
 fn rejects_static_hardlinks_before_reading() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let original = root.path().join("original");
     fs::write(&original, b"bytes").unwrap();
     assert!(filesystem::regular_single_link(&original).unwrap());
@@ -54,7 +79,7 @@ fn rejects_symlinks_fifo_and_device_without_opening_them() {
         ffi::CString,
         os::unix::{ffi::OsStrExt, fs::symlink},
     };
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let link = root.path().join("link");
     symlink("missing", &link).unwrap();
     assert!(!filesystem::regular_single_link(&link).unwrap());
@@ -69,7 +94,7 @@ fn rejects_symlinks_fifo_and_device_without_opening_them() {
 #[cfg(windows)]
 #[test]
 fn rejects_directory_junction_without_following_it() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let target = root.path().join("target");
     let link = root.path().join("junction");
     fs::create_dir(&target).unwrap();
@@ -93,7 +118,7 @@ mod state;
 
 #[test]
 fn held_lock_excludes_a_peer_and_releases_after_real_child_death() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let mut child = process::ChildProbe::start("lock", root.path());
     let lock = process::lock_file(root.path()).unwrap();
     let contention = fs2::FileExt::try_lock_exclusive(&lock).unwrap_err();
@@ -108,7 +133,7 @@ fn held_lock_excludes_a_peer_and_releases_after_real_child_death() {
 
 #[test]
 fn state_requires_explicit_complete_non_overwriting_initialization() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let path = root.path().join("state.sqlite");
     assert!(state::Store::open(&path).is_err());
     assert!(!path.exists());
@@ -132,7 +157,7 @@ fn state_requires_explicit_complete_non_overwriting_initialization() {
 #[test]
 fn killed_transactions_keep_marker_and_grant_atomic_across_fresh_processes() {
     for phase in ["before-commit", "after-commit"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir().unwrap();
         drop(state::Store::initialize(&root.path().join("state.sqlite")).unwrap());
         let mut child = process::ChildProbe::start(phase, root.path());
         child.kill_and_wait();
@@ -156,13 +181,15 @@ fn provider_child() {
         return;
     };
     let root = std::path::PathBuf::from(std::env::var_os("MORPHIR_PROVIDER_ROOT").unwrap());
+    #[cfg(windows)]
+    ordinary_user::assert_if_requested(&root);
     process::run_child(&mode, &root);
 }
 
 #[cfg(unix)]
 #[test]
 fn native_file_and_directory_flushes_succeed() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let path = root.path().join("file");
     fs::write(&path, b"persist these bytes").unwrap();
     filesystem::flush(&fs::OpenOptions::new().write(true).open(path).unwrap()).unwrap();
@@ -181,7 +208,7 @@ fn native_flush_errors_propagate() {
 
 #[test]
 fn sqlite_rejects_incomplete_provisioning_schema() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let path = root.path().join("state.sqlite");
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection.execute_batch("CREATE TABLE provisioning(id INTEGER PRIMARY KEY, complete INTEGER, identity BLOB); INSERT INTO provisioning VALUES(1,0,X'00');").unwrap();
@@ -192,7 +219,7 @@ fn sqlite_rejects_incomplete_provisioning_schema() {
 
 #[test]
 fn failed_transaction_cannot_publish_a_grant() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let path = root.path().join("state.sqlite");
     let mut store = state::Store::initialize(&path).unwrap();
     store.commit_marker().unwrap();
@@ -204,7 +231,7 @@ fn failed_transaction_cannot_publish_a_grant() {
 
 #[test]
 fn sqlite_full_write_failure_keeps_the_committed_marker() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let mut store = state::Store::initialize(&root.path().join("state.sqlite")).unwrap();
     store.commit_marker().unwrap();
     state::fail_full_write(&mut store);
@@ -215,7 +242,7 @@ fn sqlite_full_write_failure_keeps_the_committed_marker() {
 
 #[test]
 fn promotion_refuses_even_an_empty_existing_directory() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     let source = root.path().join("stage");
     let destination = root.path().join("empty-winner");
     fs::create_dir(&source).unwrap();
@@ -229,7 +256,7 @@ fn promotion_refuses_even_an_empty_existing_directory() {
 #[cfg(windows)]
 #[test]
 fn windows_write_through_preserves_empty_directories_and_ancestors() {
-    let root = tempfile::tempdir().unwrap();
+    let root = probe_tempdir().unwrap();
     windows_write_through::stage_tree(root.path());
     windows_write_through::assert_tree(root.path(), "ancestors/stage");
     windows_write_through::promote_tree(root.path()).unwrap();
@@ -241,7 +268,7 @@ fn windows_write_through_preserves_empty_directories_and_ancestors() {
 #[test]
 fn windows_write_through_collision_preserves_both_trees() {
     for occupied in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir().unwrap();
         windows_write_through::stage_tree(root.path());
         let winner = root.path().join("ancestors/winner");
         fs::create_dir(&winner).unwrap();
@@ -268,7 +295,7 @@ fn windows_write_through_collision_preserves_both_trees() {
 #[test]
 fn windows_write_through_tree_survives_writer_death_and_fresh_reader() {
     for phase in ["windows-staged", "windows-promoted"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir().unwrap();
         let mut child = process::ChildProbe::start(phase, root.path());
         child.kill_and_wait();
         let mut reader = process::ChildProbe::start(

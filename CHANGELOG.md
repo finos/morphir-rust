@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enforced at exact equality, and fixed time cannot disable expiration checks.
   Durable package storage and accepted-time semantics remain pending under
   finos/morphir#852, PKG-3.
+- Windows provider candidate CI runs under a separate standard-user account on
+  x64 and ARM64, checking native token identity and private fixture ownership/ACLs.
+  This adds functional permission probes, not production qualification.
 - Package-local TUF qualification groundwork with exact positive-integer metadata
   versions, signed boundary and process-restart tests, and native CI coverage.
   The candidate remains a development dependency while authenticated package

@@ -19,10 +19,15 @@ ed25519-zebra = { version = "4.2", default-features = false, features = ["std"] 
 curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc"] }
 base64 = "0.22"
 
-[dev-dependencies]
-package_tough = { package = "morphir-package-tough", path = "../../third_party/morphir-package-tough", default-features = false }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+package_tough = { package = "morphir-package-tough", path = "../../third_party/morphir-package-tough", default-features = false, features = ["experimental-storage"] }
+async-trait = "0.1"
+jiff = "0.2"
+bytes = "1"
+futures = "0.3"
 url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 fs2 = "0.4"
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 tempfile = "3"

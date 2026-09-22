@@ -206,6 +206,15 @@ jobs:
       - name: Test native CLI acquisition and MCK orchestration
         run: mise run tools:test
 
+      - name: Test package-local TUF version boundaries
+        run: |
+          cargo fmt --manifest-path third_party/morphir-package-tough/Cargo.toml -- --check
+          cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --lib --test exact_versions
+
+      - name: Test package-local TUF upstream regressions
+        if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path third_party/morphir-package-tough/Cargo.toml --tests
+
       - name: Lint package library and adapter
         run: |
           rustup component add clippy

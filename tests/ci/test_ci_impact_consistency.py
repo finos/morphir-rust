@@ -28,7 +28,7 @@ class ImpactConsistencyTests(unittest.TestCase):
     def test_native_mck_inputs_route_to_cross_platform_conformance(self) -> None:
         paths = (REPOSITORY_ROOT / ".github/ci-impact.toml").read_text()
         section = paths.split("[jobs.kit-conformance]", 1)[1].split("[jobs.", 1)[0]
-        for path in (".config/mck-cli.json", "vendor/morphir-mck/**", "scripts/check-mck*", "scripts/released-cli*"):
+        for path in (".config/mck-cli.json", "vendor/morphir-mck/**", "third_party/morphir-package-tough/**", "scripts/check-mck*", "scripts/released-cli*"):
             self.assertIn(path, section)
         job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
         for os in ("ubuntu-latest", "macos-15", "windows-2025"):

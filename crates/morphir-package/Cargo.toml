@@ -20,6 +20,9 @@ curve25519-dalek = { version = "4.1", default-features = false, features = ["all
 base64 = "0.22"
 
 [dev-dependencies]
+package_tough = { package = "morphir-package-tough", path = "../../third_party/morphir-package-tough", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+url = "2"
 fs2 = "0.4"
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 tempfile = "3"

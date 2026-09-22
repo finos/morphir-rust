@@ -2,6 +2,7 @@
 members = [
     "crates/*",
 ]
+exclude = ["third_party/morphir-package-tough"]
 resolver = "2"
 
 # Don't build examples by default (morphir-ext-example needs wasm32 target)

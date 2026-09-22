@@ -166,7 +166,9 @@ artifact to avoid a self-referential hash.
 
 ### Separate standard-user Windows execution
 
-The `provider-windows-standard-user` CI job builds this same test executable for
+The `provider-windows-standard-user` CI job invokes
+[the Windows evidence script](../../../../.github/scripts/test_windows_standard_user_provider.ps1),
+which builds this same test executable for
 `windows-2025` x64 and `windows-11-arm` ARM64. Its ephemeral setup creates a fresh
 local account belonging only to Users, a private scratch directory owned by that
 account, and an executable directory the account can read/execute but cannot write.

@@ -41,6 +41,16 @@ class ImpactConsistencyTests(unittest.TestCase):
         self.assertIn(".dev/out/mck/report.html", job)
         self.assertIn("mck-report-${{ matrix.os }}", job)
 
+    def test_windows_provider_script_alone_runs_native_evidence_jobs(self) -> None:
+        plan = classify.plan_changes(
+            [".github/scripts/test_windows_standard_user_provider.ps1"],
+            self.impact, graph.workspace_from_metadata(fake_metadata()), self.extensions,
+        )
+        self.assertFalse(plan.all)
+        self.assertTrue(plan.jobs["kit-conformance"])
+        job = self.workflow.split("  provider-windows-standard-user:\n", 1)[1].split("  kit-conformance:\n", 1)[0]
+        self.assertIn("needs.changes.outputs.job_kit_conformance == 'true'", job)
+
     def test_native_mck_upload_retains_reports_inside_hidden_dev_directory(self) -> None:
         job = self.workflow.split("  kit-conformance:\n", 1)[1].split("  lint-shell:\n", 1)[0]
         upload = job.split("      - name: Upload kit report\n", 1)[1]

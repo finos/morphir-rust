@@ -15,6 +15,7 @@ import unittest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
+WINDOWS_PROVIDER_SCRIPT = REPOSITORY_ROOT / ".github/scripts/test_windows_standard_user_provider.ps1"
 
 
 def extract_job_blocks(workflow: str) -> dict[str, str]:
@@ -95,16 +96,34 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
                 self.assertIn("run: git config --global core.longpaths true", job)
                 self.assertLess(
                     job.index("git config --global core.longpaths true"),
-                    job.index("cargo test --locked"),
+                    job.index("cargo test --locked" if name == "kit-conformance" else "run: ./.github/scripts/test_windows_standard_user_provider.ps1"),
                 )
+
+    def test_windows_provider_job_invokes_standalone_powershell_script(self) -> None:
+        job = self.jobs["provider-windows-standard-user"]
+        self.assertIn("shell: pwsh", job)
+        self.assertIn("PROBE_TARGET: ${{ matrix.target }}", job)
+        self.assertIn("PROBE_ARCH: ${{ matrix.arch }}", job)
+        self.assertIn("run: ./.github/scripts/test_windows_standard_user_provider.ps1", job)
+        self.assertNotIn("New-LocalUser", job)
+        script = WINDOWS_PROVIDER_SCRIPT.read_text(encoding="utf-8")
+        for guard in (
+            "-Credential $credential -LoadUserProfile",
+            "--include-ignored --nocapture --test-threads=1",
+            "required ordinary-user case or complete unfiltered test run was not observed",
+            "if ($process.ExitCode -ne 0)",
+            "} finally {", "Remove-LocalUser", "Remove-CimInstance", "$secret.Dispose()",
+            "if ($cleanupErrors.Count) { throw",
+        ):
+            self.assertIn(guard, script)
 
     @unittest.skipUnless(shutil.which("pwsh"), "PowerShell subprocess is unavailable")
     def test_provider_child_environment_is_explicit_and_drops_inherited_values(self) -> None:
-        job = self.jobs["provider-windows-standard-user"]
-        start = job.index("            $childEnvironment =")
-        end = job.index("            # Fresh local logon", start)
-        environment_setup = textwrap.dedent(job[start:end])
-        self.assertNotIn("-UseNewEnvironment -Environment", job)
+        source = WINDOWS_PROVIDER_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("  $childEnvironment =")
+        end = source.index("  # Fresh local logon", start)
+        environment_setup = textwrap.dedent(source[start:end])
+        self.assertNotIn("-UseNewEnvironment -Environment", source)
         with tempfile.TemporaryDirectory() as temporary_directory:
             script = Path(temporary_directory) / "environment-test.ps1"
             output = Path(temporary_directory) / "child.json"

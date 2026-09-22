@@ -176,7 +176,11 @@ own temporary directories underneath that scratch directory.
 
 The job uses a real credentialed local logon through
 [Start-Process](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process),
-not a restricted administrator token or network-only credentials. Provisioning and
+not a restricted administrator token or network-only credentials. The explicit
+child environment removes inherited runner variables before adding the probe's
+required values. It omits `-UseNewEnvironment`: the
+[PowerShell credentialed launch implementation](https://github.com/PowerShell/PowerShell/blob/v7.6.3/src/Microsoft.PowerShell.Commands.Management/commands/management/Process.cs#L2531-L2567)
+discards the supplied environment when that switch is present. Provisioning and
 cleanup run as CI setup; provider operations run as the new account. The password
 stays in setup memory and is never logged or written to an artifact. A `finally`
 block removes the profile, account and sandbox and disposes the secure password;

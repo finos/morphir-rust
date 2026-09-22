@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import json
+import shutil
 import os
 from pathlib import Path
 import subprocess
@@ -95,6 +97,40 @@ class CiWorkflowDefinitionTests(unittest.TestCase):
                     job.index("git config --global core.longpaths true"),
                     job.index("cargo test --locked"),
                 )
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell subprocess is unavailable")
+    def test_provider_child_environment_is_explicit_and_drops_inherited_values(self) -> None:
+        job = self.jobs["provider-windows-standard-user"]
+        start = job.index("            $childEnvironment =")
+        end = job.index("            # Fresh local logon", start)
+        environment_setup = textwrap.dedent(job[start:end])
+        self.assertNotIn("-UseNewEnvironment -Environment", job)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            script = Path(temporary_directory) / "environment-test.ps1"
+            output = Path(temporary_directory) / "child.json"
+            script.write_text(
+                """$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$env:MORPHIR_INHERITED_SENTINEL = 'must-not-reach-child'
+$env:PROBE_ARCH = 'native-fixture'
+$scratch = [pscustomobject]@{ FullName = 'private-scratch' }
+$account = [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'expected-user' } }
+$setupSid = 'setup-user'
+""" + environment_setup + """
+$code = '@{sentinel=$env:MORPHIR_INHERITED_SENTINEL; mode=$env:MORPHIR_PROVIDER_STANDARD_USER; user=$env:MORPHIR_PROVIDER_EXPECTED_SID; setup=$env:MORPHIR_PROVIDER_SETUP_SID; arch=$env:MORPHIR_PROVIDER_EXPECTED_ARCH; temp=$env:TEMP; tmp=$env:TMP} | ConvertTo-Json -Compress'
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+$process = Start-Process -FilePath (Get-Process -Id $PID).Path -Environment $childEnvironment -ArgumentList "-NoProfile -NonInteractive -EncodedCommand $encoded" -Wait -PassThru -RedirectStandardOutput $args[0]
+if ($process.ExitCode -ne 0) { throw 'environment fixture subprocess failed' }
+""", encoding="utf-8")
+            subprocess.run(
+                ["pwsh", "-NoProfile", "-NonInteractive", "-File", str(script), str(output)],
+                check=True, capture_output=True, text=True,
+            )
+            actual = json.loads(output.read_text(encoding="utf-8-sig"))
+            self.assertEqual(actual, {
+                "sentinel": None, "mode": "1", "user": "expected-user", "setup": "setup-user",
+                "arch": "native-fixture", "temp": "private-scratch", "tmp": "private-scratch",
+            })
 
     def test_concurrency_cancels_only_off_main(self) -> None:
         header = self.workflow.split("jobs:\n", 1)[0]

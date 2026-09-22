@@ -193,6 +193,7 @@ jobs:
           New-Item -ItemType Directory -Path $evidence -Force | Out-Null
           'Functional ordinary-user candidate evidence only; no power-loss or production qualification claim.' |
             Set-Content (Join-Path $evidence 'scope.txt')
+          $PSVersionTable.PSVersion.ToString() | Set-Content (Join-Path $evidence 'powershell-version.txt')
           rustc -vV | Set-Content (Join-Path $evidence 'rustc.txt')
           if ($LASTEXITCODE -ne 0) { throw 'rustc identity failed' }
           rustup target add $env:PROBE_TARGET
@@ -263,15 +264,24 @@ jobs:
             if ($copiedHash -ne $originalHash) { throw 'probe executable copy changed' }
             $copiedHash | Set-Content (Join-Path $evidence 'executable-sha256.txt')
             $credential = [PSCredential]::new("$env:COMPUTERNAME\$accountName", $secret)
-            $childEnvironment = @{
+            # Start-Process discards -Environment with credentialed -UseNewEnvironment.
+            # Explicit null entries remove inherited runner values before our allowlist.
+            $childEnvironment = @{}
+            foreach ($name in [Environment]::GetEnvironmentVariables().Keys) {
+              $childEnvironment[$name] = $null
+            }
+            $probeEnvironment = @{
               TEMP = $scratch.FullName; TMP = $scratch.FullName
               PATH = "$env:SystemRoot\System32"; SystemRoot = $env:SystemRoot
               MORPHIR_PROVIDER_STANDARD_USER = '1'; MORPHIR_PROVIDER_EXPECTED_SID = $account.SID.Value
               MORPHIR_PROVIDER_SETUP_SID = $setupSid; MORPHIR_PROVIDER_EXPECTED_ARCH = $env:PROBE_ARCH
             }
+            foreach ($entry in $probeEnvironment.GetEnumerator()) {
+              $childEnvironment[$entry.Key] = $entry.Value
+            }
             # Fresh local logon, not a filtered admin token or network-only credentials.
             $process = Start-Process -FilePath $executable -Credential $credential -LoadUserProfile `
-              -WorkingDirectory $sandbox -UseNewEnvironment -Environment $childEnvironment `
+              -WorkingDirectory $sandbox -Environment $childEnvironment `
               -ArgumentList '--include-ignored --nocapture --test-threads=1' -Wait -PassThru `
               -RedirectStandardOutput (Join-Path $evidence 'stdout.log') `
               -RedirectStandardError (Join-Path $evidence 'stderr.log')

@@ -163,6 +163,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Candidate package-provider durability probes inject native SQLite WAL/checkpoint
+  write and synchronization failures, test interrupted initialization, and exercise
+  full-tree flush/promotion ordering with fresh-process recovery. I/O-error recovery
+  explicitly preserves commit uncertainty; these tests do not qualify a provider.
 - Explicit experimental package TUF update outcomes: an admitted equal timestamp
   returns `NoUpdate` before candidate expiry, snapshot comparison or persistence,
   preserving committed roots without claiming a fresh complete view or package grant.

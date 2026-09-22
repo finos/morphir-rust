@@ -72,11 +72,11 @@ pub fn lock_file(root: &Path) -> io::Result<File> {
         .truncate(false)
         .open(root.join("repository.lock"))
 }
-fn ready() {
+pub(super) fn ready() {
     println!("PROVIDER_READY");
     io::stdout().flush().unwrap();
 }
-fn hold() -> ! {
+pub(super) fn hold() -> ! {
     ready();
     loop {
         std::thread::park();
@@ -84,6 +84,7 @@ fn hold() -> ! {
 }
 pub fn run_child(mode: &str, root: &Path) {
     match mode {
+        mode if mode.starts_with("tree-") => super::tree_durability::run_child(mode, root),
         #[cfg(windows)]
         "windows-staged" | "windows-promoted" => {
             super::windows_write_through::stage_tree(root);
@@ -114,6 +115,9 @@ pub fn run_child(mode: &str, root: &Path) {
             );
             ready();
         }
+        mode if mode.starts_with("wal-") || mode.starts_with("checkpoint-") => {
+            super::durability::fail_native_operation(root, mode);
+        }
         "lock" => {
             let file = lock_file(root).unwrap();
             fs2::FileExt::lock_exclusive(&file).unwrap();
@@ -139,6 +143,48 @@ pub fn run_child(mode: &str, root: &Path) {
                 transaction.commit().unwrap();
             }
             hold();
+        }
+        "init-reserved" | "init-before-commit" | "init-after-commit" => {
+            let selected = match mode {
+                "init-reserved" => state::Initialization::Reserved,
+                "init-before-commit" => state::Initialization::BeforeCommit,
+                _ => state::Initialization::AfterCommit,
+            };
+            state::Store::initialize_observed(&root.join("state.sqlite"), |phase| {
+                if phase == selected {
+                    hold();
+                }
+            })
+            .unwrap();
+            panic!("initialization checkpoint was not reached");
+        }
+        "read-uninitialized" => {
+            let path = root.join("state.sqlite");
+            assert!(path.exists());
+            assert!(state::Store::open(&path).is_err());
+            let bytes = std::fs::read(&path).unwrap();
+            assert!(state::Store::initialize(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            ready();
+        }
+        "read-initialized" => {
+            let store = state::Store::open(&root.join("state.sqlite")).unwrap();
+            assert_eq!(store.snapshot().unwrap(), (0, 0));
+            store.assert_settings();
+            ready();
+        }
+        "read-atomic" => {
+            let store = state::Store::open(&root.join("state.sqlite")).unwrap();
+            let snapshot = store.snapshot().unwrap();
+            assert!(
+                matches!(snapshot, (1, 0) | (0, 1)),
+                "torn state: {snapshot:?}"
+            );
+            store.assert_evidence(snapshot == (0, 1));
+            eprintln!(
+                "uncertain transaction fresh-reader outcome: {snapshot:?}; rows are data, not reusable authority"
+            );
+            ready();
         }
         "read-marker" | "read-grant" => {
             let store = state::Store::open(&root.join("state.sqlite")).unwrap();

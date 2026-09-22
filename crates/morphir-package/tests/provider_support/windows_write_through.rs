@@ -241,6 +241,19 @@ pub fn stage_tree(root: &Path) {
     }
 }
 
+/// Create one private fixture directory through the existing write-through protocol.
+pub fn create_directory(path: &Path) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("missing directory parent"))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::other("invalid fixture directory name"))?;
+    Directory::root(parent)?.child(name, FILE_CREATE)?;
+    Ok(())
+}
+
 pub fn promote_tree(root: &Path) -> io::Result<()> {
     // Only private trusted fixtures use this absolute-path experiment. Canonicalize
     // the existing parent, since the destination must not exist before promotion.

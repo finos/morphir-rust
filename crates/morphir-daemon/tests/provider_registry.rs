@@ -10,7 +10,7 @@ use morphir_extension_sdk::protocol::{InitializeParams, PeerInfo};
 use morphir_extension_sdk::{
     Backend, BackendCapability, CompileRequest, CompileResult, Extension, ExtensionCapabilities,
     ExtensionInfo, Frontend, FrontendCapability, GenerateRequest, GenerateResult,
-    LanguageCapability, NativeExtension,
+    LanguageCapability, NativeExtension, Workspace, WorkspaceCapability,
 };
 use std::fs;
 
@@ -166,6 +166,50 @@ where
     E: Extension + Frontend + Backend + Send + Sync + Default + 'static,
 {
     NativeExtension::frontend_backend(E::default()).unwrap()
+}
+
+/// A workspace-only provider, with no frontend or backend capability at all.
+/// Used to prove `register_builtin` admits it: `normalize_advertised_releases`
+/// (the empty-IR-version rejection) only runs when `capabilities.frontend` or
+/// `capabilities.backend` is `Some`, so a workspace-only provider never hits it.
+#[derive(Default)]
+struct WorkspaceOnlyProvider;
+
+impl Extension for WorkspaceOnlyProvider {
+    fn info() -> ExtensionInfo {
+        ExtensionInfo {
+            id: "workspace-only".into(),
+            name: "Workspace only".into(),
+            version: "1.0.0".into(),
+            ..ExtensionInfo::default()
+        }
+    }
+
+    fn capabilities() -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            workspace: Some(WorkspaceCapability {
+                protocol_versions: vec![1],
+                discover: true,
+            }),
+            ..ExtensionCapabilities::default()
+        }
+    }
+}
+
+impl Workspace for WorkspaceOnlyProvider {
+    fn discover(
+        &self,
+        request: morphir_workspace::DiscoveryRequest,
+    ) -> morphir_extension_sdk::Result<morphir_workspace::DiscoveryResponse> {
+        Ok(morphir_workspace::discover(request))
+    }
+}
+
+fn native_workspace_only() -> NativeExtension {
+    NativeExtension::builder(WorkspaceOnlyProvider)
+        .with_workspace()
+        .finish()
+        .unwrap()
 }
 
 #[derive(Clone, Copy)]
@@ -354,6 +398,27 @@ fn registration_rejects_malformed_whitespace_and_unsupported_advertised_ir_versi
         error.contains("must advertise at least one frontend IR version"),
         "{error}"
     );
+}
+
+#[test]
+fn register_builtin_admits_a_workspace_only_provider_and_retains_its_capabilities() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register_builtin(native_workspace_only()).unwrap();
+
+    let listed = registry.providers();
+    let workspace_only = listed
+        .iter()
+        .find(|provider| provider.info().id == "workspace-only")
+        .expect("workspace-only provider should be listed after registration");
+    assert_eq!(
+        workspace_only.capabilities().workspace,
+        Some(WorkspaceCapability {
+            protocol_versions: vec![1],
+            discover: true,
+        })
+    );
+    assert!(workspace_only.capabilities().frontend.is_none());
+    assert!(workspace_only.capabilities().backend.is_none());
 }
 
 #[test]

@@ -1,14 +1,16 @@
 //! Native adapters for invoking extension implementations without WASM.
 //!
 //! [`NativeExtension`] makes a single extension instance available through
-//! typed frontend/backend handles and through the Morphir Extension Protocol.
+//! typed frontend/backend/workspace handles and through the Morphir Extension
+//! Protocol.
 
 use crate::protocol::{ExtensionRequest, ExtensionResponse};
 use crate::{
-    __dispatch_backend, __dispatch_frontend, __extension_info, Backend, BackendCapability,
-    CompileRequest, CompileResult, Extension, ExtensionCapabilities, ExtensionError, ExtensionInfo,
-    ExtensionType, Frontend, FrontendCapability, GenerateRequest, GenerateResult,
-    NativeRoleDispatch, Result, dispatch_request_with_roles, erase_dispatch,
+    __dispatch_backend, __dispatch_frontend, __dispatch_workspace, __extension_info, Backend,
+    BackendCapability, CompileRequest, CompileResult, Extension, ExtensionCapabilities,
+    ExtensionError, ExtensionInfo, ExtensionType, Frontend, FrontendCapability, GenerateRequest,
+    GenerateResult, NativeRoleDispatch, Result, Workspace, WorkspaceCapability,
+    dispatch_request_with_roles, erase_dispatch,
 };
 use std::sync::Arc;
 
@@ -22,6 +24,15 @@ pub trait NativeFrontend: Send + Sync {
 pub trait NativeBackend: Send + Sync {
     /// Generate a typed request without serializing through the protocol.
     fn generate(&self, request: GenerateRequest) -> Result<GenerateResult>;
+}
+
+/// A typed native workspace endpoint.
+pub trait NativeWorkspace: Send + Sync {
+    /// Discover a workspace without serializing through the protocol.
+    fn discover(
+        &self,
+        request: morphir_workspace::DiscoveryRequest,
+    ) -> Result<morphir_workspace::DiscoveryResponse>;
 }
 
 /// A native Morphir Extension Protocol endpoint.
@@ -47,6 +58,14 @@ struct BackendRole {
     dispatch: NativeRoleDispatch,
 }
 
+/// A registered workspace role. See [`FrontendRole`].
+#[derive(Clone)]
+struct WorkspaceRole {
+    capability: WorkspaceCapability,
+    handle: Arc<dyn NativeWorkspace>,
+    dispatch: NativeRoleDispatch,
+}
+
 /// The roles of a constructed extension. A completed [`NativeExtension`] always
 /// has at least one; this type alone does not enforce that, so it never
 /// derives `Default` — that state is one a finished extension never has.
@@ -54,12 +73,13 @@ struct BackendRole {
 struct NativeRoles {
     frontend: Option<FrontendRole>,
     backend: Option<BackendRole>,
+    workspace: Option<WorkspaceRole>,
 }
 
 impl NativeRoles {
     /// Protocol dispatchers projected from the registered roles, frontend
-    /// before backend, consumed by `NativeExtensionBuilder::finish` when it
-    /// builds the protocol handle.
+    /// before backend before workspace, consumed by `NativeExtensionBuilder::finish`
+    /// when it builds the protocol handle.
     fn dispatchers(&self) -> Vec<NativeRoleDispatch> {
         let mut dispatchers = Vec::new();
         if let Some(frontend) = &self.frontend {
@@ -67,6 +87,9 @@ impl NativeRoles {
         }
         if let Some(backend) = &self.backend {
             dispatchers.push(backend.dispatch.clone());
+        }
+        if let Some(workspace) = &self.workspace {
+            dispatchers.push(workspace.dispatch.clone());
         }
         dispatchers
     }
@@ -93,7 +116,7 @@ fn project_capabilities(roles: &NativeRoles, common: &CommonCapabilities) -> Ext
     ExtensionCapabilities {
         frontend: roles.frontend.as_ref().map(|role| role.capability.clone()),
         backend: roles.backend.as_ref().map(|role| role.capability.clone()),
-        workspace: None,
+        workspace: roles.workspace.as_ref().map(|role| role.capability.clone()),
         streaming: common.streaming,
         incremental: common.incremental,
         cancellation: common.cancellation,
@@ -182,12 +205,18 @@ struct PendingBackend {
     dispatch: NativeRoleDispatch,
 }
 
+struct PendingWorkspace {
+    handle: Arc<dyn NativeWorkspace>,
+    dispatch: NativeRoleDispatch,
+}
+
 /// Accumulates an extension's roles. Consuming, so a stale builder cannot be
 /// mistaken for the finished registration.
 pub struct NativeExtensionBuilder<E, State> {
     extension: Arc<E>,
     frontend: Option<PendingFrontend>,
     backend: Option<PendingBackend>,
+    workspace: Option<PendingWorkspace>,
     state: std::marker::PhantomData<State>,
 }
 
@@ -226,6 +255,7 @@ impl NativeExtension {
             extension: Arc::new(extension),
             frontend: None,
             backend: None,
+            workspace: None,
             state: std::marker::PhantomData,
         }
     }
@@ -263,9 +293,9 @@ impl NativeExtension {
     }
 
     /// Return the extension's advertised capabilities, projected from the
-    /// registered roles. This clones the frontend and backend capability
-    /// records plus the `extra` map on every call, so prefer calling it once
-    /// and reusing the result over a hot path.
+    /// registered roles. This clones the frontend, backend, and workspace
+    /// capability records plus the `extra` map on every call, so prefer
+    /// calling it once and reusing the result over a hot path.
     pub fn capabilities(&self) -> ExtensionCapabilities {
         project_capabilities(&self.roles, &self.common)
     }
@@ -281,6 +311,14 @@ impl NativeExtension {
     /// Return the direct backend handle when the provider exposes one.
     pub fn backend(&self) -> Option<&dyn NativeBackend> {
         self.roles.backend.as_ref().map(|role| role.handle.as_ref())
+    }
+
+    /// Return the direct workspace handle when the provider exposes one.
+    pub fn workspace(&self) -> Option<&dyn NativeWorkspace> {
+        self.roles
+            .workspace
+            .as_ref()
+            .map(|role| role.handle.as_ref())
     }
 
     /// Return the protocol endpoint.
@@ -307,6 +345,7 @@ where
             extension: self.extension,
             frontend: Some(PendingFrontend { handle, dispatch }),
             backend: self.backend,
+            workspace: self.workspace,
             state: std::marker::PhantomData,
         }
     }
@@ -325,14 +364,34 @@ where
             extension: self.extension,
             frontend: self.frontend,
             backend: Some(PendingBackend { handle, dispatch }),
+            workspace: self.workspace,
+            state: std::marker::PhantomData,
+        }
+    }
+
+    /// Register this extension's workspace role. Calling it twice replaces the
+    /// earlier registration.
+    pub fn with_workspace(self) -> NativeExtensionBuilder<E, NonEmpty>
+    where
+        E: Workspace,
+    {
+        let handle = Arc::new(WorkspaceHandle {
+            extension: Arc::clone(&self.extension),
+        }) as Arc<dyn NativeWorkspace>;
+        let dispatch = erase_dispatch(Arc::clone(&self.extension), __dispatch_workspace::<E>);
+        NativeExtensionBuilder {
+            extension: self.extension,
+            frontend: self.frontend,
+            backend: self.backend,
+            workspace: Some(PendingWorkspace { handle, dispatch }),
             state: std::marker::PhantomData,
         }
     }
 
     /// Extension types projected from the pending registrations, frontend
-    /// before backend. This is needed before a [`NativeRoles`] exists — it
-    /// feeds `__extension_info::<E>()` and `validate_capabilities`, and roles
-    /// are only materialized after validation passes.
+    /// before backend before workspace. This is needed before a [`NativeRoles`]
+    /// exists — it feeds `__extension_info::<E>()` and `validate_capabilities`,
+    /// and roles are only materialized after validation passes.
     fn declared_types(&self) -> Vec<ExtensionType> {
         let mut types = Vec::new();
         if self.frontend.is_some() {
@@ -340,6 +399,9 @@ where
         }
         if self.backend.is_some() {
             types.push(ExtensionType::Backend);
+        }
+        if self.workspace.is_some() {
+            types.push(ExtensionType::Workspace);
         }
         types
     }
@@ -378,6 +440,14 @@ where
                 handle: pending.handle,
                 dispatch: pending.dispatch,
             }),
+            workspace: self.workspace.map(|pending| WorkspaceRole {
+                capability: capabilities
+                    .workspace
+                    .clone()
+                    .expect("validate_capabilities confirmed a workspace capability"),
+                handle: pending.handle,
+                dispatch: pending.dispatch,
+            }),
         };
 
         let common = CommonCapabilities {
@@ -410,12 +480,6 @@ fn validate_capabilities(
     capabilities: &ExtensionCapabilities,
     declared_types: &[ExtensionType],
 ) -> Result<()> {
-    if capabilities.workspace.is_some() {
-        return Err(ExtensionError::InitFailed(
-            "extension advertises workspace without a native workspace handle".into(),
-        ));
-    }
-
     let has_frontend_handle = declared_types.contains(&ExtensionType::Frontend);
     match (has_frontend_handle, capabilities.frontend.as_ref()) {
         (true, Some(frontend)) if frontend.compile => {}
@@ -435,16 +499,39 @@ fn validate_capabilities(
 
     let has_backend_handle = declared_types.contains(&ExtensionType::Backend);
     match (has_backend_handle, capabilities.backend.as_ref()) {
-        (true, Some(backend)) if backend.generate => Ok(()),
-        (true, _) => Err(ExtensionError::UnsupportedCapability {
-            extension: info.id.clone(),
-            capability: "backend.generate".into(),
-        }),
-        (false, None) => Ok(()),
-        (false, Some(_)) => Err(ExtensionError::InitFailed(
-            "extension advertises backend without a native backend handle".into(),
-        )),
+        (true, Some(backend)) if backend.generate => {}
+        (true, _) => {
+            return Err(ExtensionError::UnsupportedCapability {
+                extension: info.id.clone(),
+                capability: "backend.generate".into(),
+            });
+        }
+        (false, None) => {}
+        (false, Some(_)) => {
+            return Err(ExtensionError::InitFailed(
+                "extension advertises backend without a native backend handle".into(),
+            ));
+        }
     }
+
+    let has_workspace_handle = declared_types.contains(&ExtensionType::Workspace);
+    match (has_workspace_handle, capabilities.workspace.as_ref()) {
+        (true, Some(workspace)) if workspace.discover => {}
+        (true, _) => {
+            return Err(ExtensionError::UnsupportedCapability {
+                extension: info.id.clone(),
+                capability: "workspace.discover".into(),
+            });
+        }
+        (false, None) => {}
+        (false, Some(_)) => {
+            return Err(ExtensionError::InitFailed(
+                "extension advertises workspace without a native workspace handle".into(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_protocol_metadata(
@@ -490,6 +577,22 @@ where
     }
 }
 
+struct WorkspaceHandle<E> {
+    extension: Arc<E>,
+}
+
+impl<E> NativeWorkspace for WorkspaceHandle<E>
+where
+    E: Workspace + Send + Sync,
+{
+    fn discover(
+        &self,
+        request: morphir_workspace::DiscoveryRequest,
+    ) -> Result<morphir_workspace::DiscoveryResponse> {
+        self.extension.discover(request)
+    }
+}
+
 struct ProtocolHandle {
     dispatchers: Vec<NativeRoleDispatch>,
     info: ExtensionInfo,
@@ -504,7 +607,10 @@ impl NativeProtocol for ProtocolHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendHandle, BackendRole, FrontendHandle, FrontendRole, NativeRoles};
+    use super::{
+        BackendHandle, BackendRole, CommonCapabilities, FrontendHandle, FrontendRole, NativeRoles,
+        NativeWorkspace, WorkspaceHandle, WorkspaceRole, project_capabilities,
+    };
     use crate::ExtensionError;
     use crate::NativeExtension;
     use crate::protocol::{ExtensionRequest, methods};
@@ -512,7 +618,7 @@ mod tests {
         Artifact, Backend, BackendCapability, CompileOptions, CompilePackage, CompileRequest,
         CompileResult, Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType, Frontend,
         FrontendCapability, GenerateRequest, GenerateResult, LanguageCapability,
-        NativeRoleDispatch, Result, SourceDocument, WorkspaceCapability,
+        NativeRoleDispatch, Result, SourceDocument, Workspace, WorkspaceCapability,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -810,6 +916,29 @@ mod tests {
         }
     }
 
+    fn a_workspace_discovery_request() -> morphir_workspace::DiscoveryRequest {
+        use morphir_workspace::{FileEntry, FileTree, RelativePath};
+        morphir_workspace::DiscoveryRequest {
+            protocol_version: 1,
+            development_root: FileTree {
+                entries: std::collections::BTreeMap::from([
+                    (RelativePath::root(), FileEntry::Directory),
+                    (
+                        RelativePath::parse("morphir.toml").unwrap(),
+                        FileEntry::File {
+                            text: "[project]\nname = \"acme/orders\"\n".into(),
+                        },
+                    ),
+                ]),
+            },
+            morphir_home: None,
+            system_config: None,
+            environment: std::collections::BTreeMap::new(),
+            cli_overlay: serde_json::json!({}),
+            purpose: Default::default(),
+        }
+    }
+
     #[derive(Default)]
     struct FrontendWithWorkspace;
 
@@ -928,6 +1057,239 @@ mod tests {
 
         fn target_languages() -> Vec<String> {
             vec![]
+        }
+    }
+
+    /// A frontend implementing `Workspace` too, used to prove that
+    /// registering the workspace role *before* `with_frontend` doesn't get
+    /// silently dropped by `with_frontend`'s rebuilt builder literal. IR
+    /// versions are non-empty so `frontend.compile` validation succeeds for
+    /// an unrelated reason doesn't mask the thing under test.
+    #[derive(Default)]
+    struct FrontendAndWorkspace;
+
+    impl Extension for FrontendAndWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                frontend: Some(FrontendCapability {
+                    ir_versions: vec!["3".into()],
+                    compile: true,
+                    ..FrontendCapability::default()
+                }),
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Frontend for FrontendAndWorkspace {
+        fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+            FrontendOnly.compile(request)
+        }
+
+        fn supported_languages() -> Vec<String> {
+            vec![]
+        }
+
+        fn file_extensions() -> Vec<String> {
+            vec![]
+        }
+    }
+
+    impl Workspace for FrontendAndWorkspace {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A backend implementing `Workspace` too, the `with_backend` mirror of
+    /// `FrontendAndWorkspace` — proves the workspace role registered before
+    /// `with_backend` survives its rebuilt builder literal.
+    #[derive(Default)]
+    struct BackendAndWorkspace;
+
+    impl Extension for BackendAndWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                backend: Some(BackendCapability {
+                    ir_versions: vec!["3".into()],
+                    generate: true,
+                    ..BackendCapability::default()
+                }),
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Backend for BackendAndWorkspace {
+        fn generate(&self, request: GenerateRequest) -> Result<GenerateResult> {
+            BackendOnly.generate(request)
+        }
+
+        fn target_languages() -> Vec<String> {
+            vec![]
+        }
+    }
+
+    impl Workspace for BackendAndWorkspace {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A minimal workspace-only extension: `capabilities()` advertises only a
+    /// `WorkspaceCapability`, and `discover` delegates to
+    /// `morphir_workspace::discover`. Used both hand-driven (to exercise
+    /// `WorkspaceHandle`/`WorkspaceRole` directly, the same way
+    /// `native_roles_dispatchers_are_frontend_before_backend` constructs a
+    /// `NativeRoles` directly) and through the builder, to prove single-role
+    /// workspace construction — unlike
+    /// `FrontendWithWorkspace`/`BackendWithWorkspace`/`FrontendBackendWithWorkspace`,
+    /// which advertise a workspace capability without implementing `Workspace`.
+    #[derive(Default)]
+    struct WorkspaceOnly;
+
+    impl Extension for WorkspaceOnly {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Workspace for WorkspaceOnly {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A workspace handle is registered, but the authored capabilities carry
+    /// no workspace record at all — the `(true, None)` arm of the workspace
+    /// reconciliation, mirroring how a registered frontend without an
+    /// advertised `FrontendCapability` is rejected.
+    #[derive(Default)]
+    struct WorkspaceWithoutAdvertisedCapability;
+
+    impl Extension for WorkspaceWithoutAdvertisedCapability {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities::default()
+        }
+    }
+
+    impl Workspace for WorkspaceWithoutAdvertisedCapability {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A workspace protocol version no real host advertises. Construction
+    /// must still succeed: `validate_capabilities` only reconciles capability
+    /// presence and `discover: true`, never `protocol_versions` — host
+    /// compatibility is the daemon's concern at invocation time
+    /// (`controller.rs:71-99`), not the extension's at construction time.
+    #[derive(Default)]
+    struct WorkspaceWithIncompatibleProtocolVersion;
+
+    impl Extension for WorkspaceWithIncompatibleProtocolVersion {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![9999],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Workspace for WorkspaceWithIncompatibleProtocolVersion {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            Ok(morphir_workspace::discover(request))
+        }
+    }
+
+    /// A workspace-only extension that records every discovery request it
+    /// receives, mirroring `RecordingExtension`'s `compile_requests`. Used by
+    /// `direct_and_protocol_workspace_dispatch_are_equivalent` to prove that
+    /// the direct handle and the protocol handle dispatch through the same
+    /// registered instance rather than two independently constructed ones.
+    #[derive(Default)]
+    struct RecordingWorkspace {
+        discovery_requests: Arc<Mutex<Vec<morphir_workspace::DiscoveryRequest>>>,
+    }
+
+    impl Extension for RecordingWorkspace {
+        fn info() -> ExtensionInfo {
+            ExtensionInfo::default()
+        }
+
+        fn capabilities() -> ExtensionCapabilities {
+            ExtensionCapabilities {
+                workspace: Some(WorkspaceCapability {
+                    protocol_versions: vec![1],
+                    discover: true,
+                }),
+                ..ExtensionCapabilities::default()
+            }
+        }
+    }
+
+    impl Workspace for RecordingWorkspace {
+        fn discover(
+            &self,
+            request: morphir_workspace::DiscoveryRequest,
+        ) -> Result<morphir_workspace::DiscoveryResponse> {
+            self.discovery_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(morphir_workspace::discover(request))
         }
     }
 
@@ -1092,6 +1454,7 @@ mod tests {
                 }),
                 dispatch: backend_marker,
             }),
+            workspace: None,
         };
 
         let dispatchers = roles.dispatchers();
@@ -1119,9 +1482,107 @@ mod tests {
                 }),
                 dispatch: no_op,
             }),
+            workspace: None,
         };
 
         assert_eq!(roles.dispatchers().len(), 1);
+    }
+
+    /// `NativeRoles::dispatchers` must order the workspace dispatcher last,
+    /// after frontend and backend. Same distinct-payload technique as
+    /// `native_roles_dispatchers_are_frontend_before_backend`, extended to all
+    /// three roles.
+    #[test]
+    fn native_roles_dispatchers_put_workspace_last() {
+        let frontend_marker: NativeRoleDispatch =
+            Arc::new(|_request: &ExtensionRequest| Some(Ok(serde_json::json!("frontend"))));
+        let backend_marker: NativeRoleDispatch =
+            Arc::new(|_request: &ExtensionRequest| Some(Ok(serde_json::json!("backend"))));
+        let workspace_marker: NativeRoleDispatch =
+            Arc::new(|_request: &ExtensionRequest| Some(Ok(serde_json::json!("workspace"))));
+        let roles = NativeRoles {
+            frontend: Some(FrontendRole {
+                capability: FrontendCapability::default(),
+                handle: Arc::new(FrontendHandle {
+                    extension: Arc::new(FrontendOnly),
+                }),
+                dispatch: frontend_marker,
+            }),
+            backend: Some(BackendRole {
+                capability: BackendCapability::default(),
+                handle: Arc::new(BackendHandle {
+                    extension: Arc::new(BackendOnly),
+                }),
+                dispatch: backend_marker,
+            }),
+            workspace: Some(WorkspaceRole {
+                capability: WorkspaceCapability::default(),
+                handle: Arc::new(WorkspaceHandle {
+                    extension: Arc::new(WorkspaceOnly),
+                }),
+                dispatch: workspace_marker,
+            }),
+        };
+
+        let dispatchers = roles.dispatchers();
+        assert_eq!(dispatchers.len(), 3);
+        let probe = ExtensionRequest::new("probe", serde_json::json!({}), 1).unwrap();
+        let third = dispatchers[2](&probe)
+            .expect("dispatcher at index 2 should answer")
+            .expect("dispatcher at index 2 should succeed");
+        assert_eq!(third, serde_json::json!("workspace"));
+    }
+
+    /// `WorkspaceHandle` must forward `discover` to the wrapped extension
+    /// unchanged, mirroring `FrontendHandle`/`BackendHandle`.
+    #[test]
+    fn workspace_handle_forwards_to_the_extension() {
+        let handle = WorkspaceHandle {
+            extension: Arc::new(WorkspaceOnly),
+        };
+
+        let request = a_workspace_discovery_request();
+        let direct = WorkspaceOnly.discover(request.clone()).unwrap();
+        let through_handle = handle.discover(request).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(&direct).unwrap(),
+            serde_json::to_value(&through_handle).unwrap(),
+        );
+    }
+
+    /// `project_capabilities` must include a registered workspace role's
+    /// capability. Before this fix the field was hard-coded to `None`, which
+    /// was correct only because no workspace role could be constructed; this
+    /// proves the projection is wired now that a role can carry one.
+    #[test]
+    fn project_capabilities_includes_a_registered_workspace_capability() {
+        let capability = WorkspaceCapability {
+            protocol_versions: vec![1],
+            discover: true,
+        };
+        let roles = NativeRoles {
+            frontend: None,
+            backend: None,
+            workspace: Some(WorkspaceRole {
+                capability: capability.clone(),
+                handle: Arc::new(WorkspaceHandle {
+                    extension: Arc::new(WorkspaceOnly),
+                }),
+                dispatch: Arc::new(|_request: &ExtensionRequest| None),
+            }),
+        };
+        let common = CommonCapabilities {
+            streaming: false,
+            incremental: false,
+            cancellation: false,
+            progress: false,
+            extra: Default::default(),
+        };
+
+        let projected = project_capabilities(&roles, &common);
+
+        assert_eq!(projected.workspace, Some(capability));
     }
 
     /// `NativeExtensionBuilder::declared_types` is the single place that
@@ -1353,6 +1814,145 @@ mod tests {
                     if message == "extension advertises workspace without a native workspace handle"
             ));
         }
+    }
+
+    /// A workspace-bearing extension builds, and its capability survives the
+    /// projection. Before this change `validate_capabilities` rejected it
+    /// unconditionally, regardless of whether a handle existed.
+    #[test]
+    fn a_workspace_extension_builds_and_projects_its_capability() {
+        let extension = NativeExtension::builder(WorkspaceOnly)
+            .with_workspace()
+            .finish()
+            .expect("a workspace-only extension with a registered handle is valid");
+
+        assert!(extension.workspace().is_some());
+        assert_eq!(extension.info().types, [ExtensionType::Workspace]);
+        assert_eq!(
+            extension.capabilities().workspace,
+            Some(WorkspaceCapability {
+                protocol_versions: vec![1],
+                discover: true,
+            })
+        );
+    }
+
+    /// A workspace role registered *before* `with_frontend` must survive
+    /// `with_frontend`'s rebuilt `NativeExtensionBuilder` literal — the
+    /// hazard the plan named explicitly: "a setter that drops it would
+    /// silently discard a registered role." Every other workspace
+    /// construction test in this module is workspace-only, so none of them
+    /// puts `with_frontend`'s `workspace: self.workspace` line on a path
+    /// where dropping it would be observable; this one does.
+    ///
+    /// The registration order is workspace-then-frontend, but
+    /// `declared_types` always projects frontend before backend before
+    /// workspace regardless of registration order — that ordering guarantee
+    /// is the second thing this test pins down.
+    #[test]
+    fn workspace_registered_before_frontend_survives_with_frontend() {
+        let extension = NativeExtension::builder(FrontendAndWorkspace)
+            .with_workspace()
+            .with_frontend()
+            .finish()
+            .unwrap();
+
+        assert_eq!(
+            extension.info().types,
+            [ExtensionType::Frontend, ExtensionType::Workspace]
+        );
+        assert!(extension.frontend().is_some());
+        assert!(extension.workspace().is_some());
+        assert!(extension.capabilities().workspace.is_some());
+    }
+
+    /// The `with_backend` mirror of
+    /// `workspace_registered_before_frontend_survives_with_frontend`: a
+    /// workspace role registered before `with_backend` must survive its
+    /// rebuilt builder literal too.
+    #[test]
+    fn workspace_registered_before_backend_survives_with_backend() {
+        let extension = NativeExtension::builder(BackendAndWorkspace)
+            .with_workspace()
+            .with_backend()
+            .finish()
+            .unwrap();
+
+        assert_eq!(
+            extension.info().types,
+            [ExtensionType::Backend, ExtensionType::Workspace]
+        );
+        assert!(extension.backend().is_some());
+        assert!(extension.workspace().is_some());
+        assert!(extension.capabilities().workspace.is_some());
+    }
+
+    /// Registering a workspace role still requires the advertised capability,
+    /// exactly as a frontend without `FrontendCapability` is rejected.
+    #[test]
+    fn a_registered_workspace_without_an_advertised_capability_is_rejected() {
+        let result = NativeExtension::builder(WorkspaceWithoutAdvertisedCapability)
+            .with_workspace()
+            .finish();
+
+        assert!(matches!(
+            result,
+            Err(ExtensionError::UnsupportedCapability { capability, .. })
+                if capability == "workspace.discover"
+        ));
+    }
+
+    /// A workspace protocol version this host cannot speak is still a
+    /// construction-time non-issue: `validate_capabilities` reconciles only
+    /// capability presence and `discover: true`. Host compatibility is the
+    /// daemon's concern at invocation time (`controller.rs:71-99`), so an
+    /// extension whose workspace protocol is incompatible with this host must
+    /// still construct as a usable extension.
+    #[test]
+    fn a_workspace_extension_with_an_incompatible_protocol_version_still_constructs() {
+        let result = NativeExtension::builder(WorkspaceWithIncompatibleProtocolVersion)
+            .with_workspace()
+            .finish();
+
+        assert!(result.is_ok());
+    }
+
+    /// Mirrors `direct_and_protocol_frontend_dispatch_are_equivalent`: the same
+    /// `DiscoveryRequest`, sent through `workspace().unwrap().discover(..)` and
+    /// through `protocol().handle(WORKSPACE_DISCOVER)`, must produce the same
+    /// response from one shared provider instance. The recorded request count
+    /// (2, one per call) is what proves "shared" rather than "two providers
+    /// that happen to answer identically."
+    #[test]
+    fn direct_and_protocol_workspace_dispatch_are_equivalent() {
+        let extension = RecordingWorkspace::default();
+        let recorded_requests = extension.discovery_requests.clone();
+        let provider = NativeExtension::builder(extension)
+            .with_workspace()
+            .finish()
+            .unwrap();
+        let request = a_workspace_discovery_request();
+
+        let direct = provider
+            .workspace()
+            .unwrap()
+            .discover(request.clone())
+            .unwrap();
+        let rpc = ExtensionRequest::new(methods::WORKSPACE_DISCOVER, request.clone(), 7).unwrap();
+        let protocol = provider.protocol().handle(rpc);
+        let through_mep: morphir_workspace::DiscoveryResponse =
+            serde_json::from_value(protocol.result.unwrap()).unwrap();
+
+        let direct_result = serde_json::to_value(&direct).unwrap();
+        let protocol_result = serde_json::to_value(&through_mep).unwrap();
+        assert_eq!(direct_result, protocol_result);
+        let recorded_requests = recorded_requests.lock().unwrap();
+        assert_eq!(recorded_requests.len(), 2);
+        assert!(recorded_requests.iter().all(|recorded| {
+            recorded.protocol_version == request.protocol_version
+                && recorded.development_root == request.development_root
+        }));
+        assert_eq!(provider.info().types, [ExtensionType::Workspace]);
     }
 
     #[test]

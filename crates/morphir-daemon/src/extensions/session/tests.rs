@@ -9,7 +9,7 @@ use morphir_extension_sdk::{
     Backend, BackendCapability, CompileOptions, CompilePackage, CompileRequest, CompileResult,
     Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType, Frontend, FrontendCapability,
     GenerateRequest, GenerateResult, LanguageCapability, NativeExtension, SourceDocument,
-    WorkspaceCapability,
+    Workspace, WorkspaceCapability,
 };
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -529,6 +529,119 @@ async fn native_transport_reports_protocol_worker_panics_as_indeterminate() {
             panic!("a panicking native compile was rejected: {error}")
         }
     }
+}
+
+/// A workspace-only native extension, built the way `with_workspace()` is
+/// documented to be used (`NativeExtension::builder(x).with_workspace().finish()`),
+/// exercised through a real native session below rather than a scripted
+/// transport.
+struct RecordingWorkspaceExtension;
+
+impl Extension for RecordingWorkspaceExtension {
+    fn info() -> ExtensionInfo {
+        ExtensionInfo {
+            id: "recording-workspace-native".into(),
+            name: "Recording workspace native extension".into(),
+            version: "1.0.0".into(),
+            ..ExtensionInfo::default()
+        }
+    }
+
+    fn capabilities() -> ExtensionCapabilities {
+        ExtensionCapabilities {
+            workspace: Some(WorkspaceCapability {
+                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                discover: true,
+            }),
+            ..ExtensionCapabilities::default()
+        }
+    }
+}
+
+impl Workspace for RecordingWorkspaceExtension {
+    fn discover(
+        &self,
+        request: morphir_workspace::DiscoveryRequest,
+    ) -> morphir_extension_sdk::Result<morphir_workspace::DiscoveryResponse> {
+        Ok(morphir_workspace::discover(request))
+    }
+}
+
+fn native_workspace_discovery_request() -> morphir_workspace::DiscoveryRequest {
+    use morphir_workspace::{FileEntry, FileTree, RelativePath};
+    morphir_workspace::DiscoveryRequest {
+        protocol_version: morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL,
+        development_root: FileTree {
+            entries: std::collections::BTreeMap::from([
+                (RelativePath::root(), FileEntry::Directory),
+                (
+                    RelativePath::parse("morphir.toml").unwrap(),
+                    FileEntry::File {
+                        text: "[project]\nname = \"acme/orders\"\n".into(),
+                    },
+                ),
+            ]),
+        },
+        morphir_home: None,
+        system_config: None,
+        environment: std::collections::BTreeMap::new(),
+        cli_overlay: serde_json::json!({}),
+        purpose: Default::default(),
+    }
+}
+
+/// The round trip the role-registration spec asks for: a workspace-bearing
+/// `NativeExtension`, connected through a real `NativeMepSession`, negotiated
+/// and invoked for `morphir.workspace.discover`, producing a genuine
+/// `DiscoveryResponse` rather than a scripted one. `NativeMepSession::connect`
+/// takes the `NativeExtension` directly — the provider registry is never
+/// consulted on this path.
+#[tokio::test]
+async fn native_transport_runs_workspace_discovery_through_a_real_session() {
+    let native = NativeExtension::builder(RecordingWorkspaceExtension)
+        .with_workspace()
+        .finish()
+        .unwrap();
+    let ready = NativeMepSession::connect(native.clone())
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("native initialization failed: {}", failure.error()));
+
+    assert_eq!(ready.negotiated().extension().id, native.info().id);
+    assert!(
+        ready
+            .negotiated()
+            .extension()
+            .types
+            .contains(&ExtensionType::Workspace)
+    );
+    assert_eq!(ready.negotiated().capabilities(), &native.capabilities());
+
+    let ready = match ready
+        .invoke::<morphir_workspace::DiscoveryResponse>(
+            methods::WORKSPACE_DISCOVER,
+            native_workspace_discovery_request(),
+        )
+        .await
+    {
+        InvokeOutcome::Success(ready, response) => {
+            let snapshot = response
+                .into_result()
+                .expect("the workspace fixture should discover a project");
+            assert_eq!(snapshot.projects.len(), 1);
+            assert_eq!(snapshot.projects[0].name, "acme/orders");
+            ready
+        }
+        InvokeOutcome::Rejected(_, error) => panic!("workspace discovery was rejected: {error}"),
+        InvokeOutcome::Failed(failure) => {
+            panic!("workspace discovery failed: {}", failure.error())
+        }
+    };
+
+    let _stopped = ready
+        .shutdown()
+        .await
+        .unwrap_or_else(|failure| panic!("native shutdown failed: {}", failure.error()));
 }
 
 #[tokio::test]

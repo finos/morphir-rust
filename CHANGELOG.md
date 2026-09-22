@@ -68,6 +68,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects incomplete source, and invalidates previous incremental baselines.
 
 ### Added
+- Native, in-process extensions can serve workspace discovery. A new
+  `NativeWorkspace` endpoint joins `NativeFrontend` and `NativeBackend`, and an
+  extension implementing `Workspace` registers it through
+  `NativeExtension::builder(..).with_workspace().finish()`. Previously any native
+  extension advertising a `WorkspaceCapability` was rejected outright — the
+  capability was reachable only from a WASM guest — so this is what lets a native
+  provider participate in the synthesized-project compile path. `NativeWorkspace`
+  is exported from the crate root and the prelude alongside the other adapters.
+  Construction validates capability presence and `discover`, leaving protocol-version
+  compatibility to the daemon, which already gates it per invocation. Workspace
+  validation also moves from an unconditional rejection to the same presence
+  reconciliation frontend and backend receive, which changes error precedence: an
+  extension invalid in both a frontend and a workspace way now reports the frontend
+  error. No extension that constructed before fails now.
 - Native Elm frontend: a module an exposed module reaches into is published too,
   transitively, as morphir-elm's `collectImplicitlyExposedModules` does — an
   exposed module may not describe its public types in terms nobody outside the

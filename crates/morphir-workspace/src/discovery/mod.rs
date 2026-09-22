@@ -18,8 +18,9 @@ use crate::{
     DiscoveryFailure, DiscoveryPurpose, DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree,
     ProjectOrigin, ProjectSnapshot, ProjectSource, ProjectState, RelativePath, SourceSelection,
     WORKSPACE_CONFIG_INVALID, WORKSPACE_DISCOVERY_PROTOCOL, WORKSPACE_LANGUAGE_ID_EMPTY,
-    WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_PURPOSE_UNSUPPORTED, WORKSPACE_SELECTION_DUPLICATE,
-    WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID, WORKSPACE_SELECTION_OUTSIDE_ROOT,
+    WORKSPACE_PROJECT_NAME_EMPTY, WORKSPACE_PROTOCOL_UNSUPPORTED, WORKSPACE_PURPOSE_UNSUPPORTED,
+    WORKSPACE_SELECTION_DUPLICATE, WORKSPACE_SELECTION_EMPTY, WORKSPACE_SELECTION_INVALID,
+    WORKSPACE_SELECTION_NAME_REQUIRED, WORKSPACE_SELECTION_OUTSIDE_ROOT,
     WORKSPACE_SYMLINK_UNSUPPORTED, WorkspaceDiscoveryDetails, WorkspaceSnapshot, WorkspaceState,
 };
 use decoding::{decode_root_project, decode_workspace};
@@ -296,7 +297,9 @@ fn discover_ad_hoc_sources(
         ));
     }
 
-    validate_ad_hoc_selection(&request.development_root, sources)?;
+    let name = resolve_synthesized_project_name(&request.cli_overlay, &sources.root)?;
+
+    validate_ad_hoc_selection(&request.development_root, sources, name.as_deref())?;
 
     let shared = shared_layers(request)?;
     let empty = Value::Object(Map::new());
@@ -317,7 +320,7 @@ fn discover_ad_hoc_sources(
     }
 
     let project = ProjectSnapshot {
-        name: String::new(),
+        name: name.unwrap_or_default(),
         version: None,
         relative_path: sources.root.clone(),
         config_anchor: None,
@@ -340,15 +343,62 @@ fn discover_ad_hoc_sources(
     })
 }
 
+/// Reads and validates an explicit project name override from the CLI
+/// overlay, at `project.name`.
+///
+/// Only an explicit overlay value counts as a supplied name. This reads
+/// `request.cli_overlay` directly — never the effective configuration merged
+/// from built-in defaults, shared system/global layers or the environment —
+/// because merging any of those in would silently turn a default into a
+/// project identity, which is worse than refusing to name the project at
+/// all.
+///
+/// Policy for the value once present: it must be a JSON string, and it must
+/// not be empty or whitespace-only. Whitespace-only is rejected rather than
+/// silently treated as "no name was given", because an override this
+/// visibly broken deserves a loud diagnostic naming the exact problem,
+/// rather than silently falling through to the single-source cardinality
+/// rule and failing (or not) for an unrelated reason.
+fn resolve_synthesized_project_name(
+    cli_overlay: &Value,
+    context: &RelativePath,
+) -> Result<Option<String>, DiscoveryFailure> {
+    let Some(name_value) = cli_overlay.pointer("/project/name") else {
+        return Ok(None);
+    };
+    let Some(name) = name_value.as_str() else {
+        return Err(failure(
+            WORKSPACE_CONFIG_INVALID,
+            format!("CLI overlay `project.name` must be a string, found `{name_value}`"),
+            Some(context.clone()),
+        ));
+    };
+    if name.trim().is_empty() {
+        return Err(failure(
+            WORKSPACE_PROJECT_NAME_EMPTY,
+            "CLI overlay `project.name` must not be empty or whitespace-only".to_owned(),
+            Some(context.clone()),
+        ));
+    }
+    Ok(Some(name.to_owned()))
+}
+
 /// Validates an ad-hoc source selection against the tree it selects from.
 ///
 /// Checks run cheapest-first: an empty selection and repeated paths are
 /// caller mistakes visible from the request alone, confinement is checked
 /// against the selection's root and paths, and only then does the tree get
-/// consulted to confirm every selected path names a file.
+/// consulted to confirm every selected path names a file. Finally, once the
+/// selection is otherwise well-formed, an unnamed selection is required to
+/// contain exactly one source — there is nothing else to derive a name
+/// from. A named selection is unconstrained. This runs last, and after
+/// duplicate-path rejection in particular, so cardinality is measured on the
+/// canonical selection that reaches it rather than pre-empting the
+/// diagnostic a malformed selection would otherwise get.
 fn validate_ad_hoc_selection(
     tree: &FileTree,
     sources: &SourceSelection,
+    name: Option<&str>,
 ) -> Result<(), DiscoveryFailure> {
     if sources.paths.is_empty() {
         return Err(failure(
@@ -413,6 +463,18 @@ fn validate_ad_hoc_selection(
             WORKSPACE_SELECTION_INVALID,
             format!("selected paths do not resolve to files: {listed}"),
             Some(first.clone()),
+        ));
+    }
+
+    if name.is_none() && sources.paths.len() > 1 {
+        return Err(failure(
+            WORKSPACE_SELECTION_NAME_REQUIRED,
+            format!(
+                "ad-hoc selection rooted at `{}` selects {} sources but has no explicit name; an unnamed synthesized selection must select exactly one source",
+                sources.root.as_str(),
+                sources.paths.len()
+            ),
+            Some(sources.root.clone()),
         ));
     }
 

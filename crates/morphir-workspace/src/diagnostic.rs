@@ -44,6 +44,15 @@ pub const WORKSPACE_SELECTION_INVALID: &str = "workspace.selection.invalid";
 /// Stable diagnostic code for an ad-hoc request with an empty language id.
 pub const WORKSPACE_LANGUAGE_ID_EMPTY: &str = "workspace.language-id.empty";
 
+/// Stable diagnostic code for an explicit CLI overlay project name that is
+/// empty or whitespace-only.
+pub const WORKSPACE_PROJECT_NAME_EMPTY: &str = "workspace.project-name.empty";
+
+/// Stable diagnostic code for an unnamed ad-hoc selection that selects more
+/// than one source, and therefore has nothing a provider could derive a name
+/// from.
+pub const WORKSPACE_SELECTION_NAME_REQUIRED: &str = "workspace.selection.name-required";
+
 /// The severity of a workspace discovery diagnostic.
 ///
 /// When severity participates in a stable diagnostic ordering key, producers

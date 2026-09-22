@@ -297,7 +297,12 @@ fn compile(
     if let Some(doc_comments) = doc_comments {
         extra.insert("elmDocComments".to_string(), doc_comments.clone());
     }
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
@@ -452,7 +457,12 @@ fn compile_it(world: &mut ElmWorld, version: String) {
 fn generate_elm(world: &mut ElmWorld) {
     let result = world.result();
     assert!(result.success, "{:?}", result.diagnostics);
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let generated = extension
         .backend()
         .unwrap()

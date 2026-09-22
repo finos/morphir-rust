@@ -4487,6 +4487,7 @@ dependencies = [
  "indexmap",
  "morphir-core",
  "morphir-extension-sdk",
+ "morphir-workspace",
  "pretty",
  "regex-lite",
  "serde",

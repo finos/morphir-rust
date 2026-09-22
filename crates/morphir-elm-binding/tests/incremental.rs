@@ -44,7 +44,12 @@ fn compile_with(
     if let Some(prelude) = prelude {
         extra.insert("elmPrelude".to_string(), serde_json::json!(prelude));
     }
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
@@ -531,7 +536,12 @@ fn ir_package_path(result: &CompileResult) -> Vec<String> {
 /// were resolved under the old one.
 #[test]
 fn a_baseline_from_a_different_package_is_ignored() {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let compile_pkg = |package: &str, baseline: Option<CompileBaseline>| {
         extension
             .frontend()
@@ -595,7 +605,12 @@ const A_ON_DEP: &str =
 /// The dependency package `Acme.Lib`, compiled by this very frontend, so that
 /// the two runs differ in nothing but the distribution supplied to them.
 fn acme_lib(source: &str) -> CompileDependency {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let result = extension
         .frontend()
         .unwrap()

@@ -36,7 +36,12 @@ fn compile_as(
     ir_version: &str,
     dependencies: Vec<CompileDependency>,
 ) -> CompileResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
@@ -67,7 +72,12 @@ fn compile_exposing(
     exposed: &[&str],
     documents: Vec<SourceDocument>,
 ) -> CompileResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
@@ -124,7 +134,12 @@ fn accesses(result: &CompileResult) -> std::collections::BTreeMap<String, String
 /// Compiles a v3 package with the `elmOrdering` option set (or, for `None`,
 /// left out so the default applies).
 fn compile_ordered(order: Option<&str>, documents: Vec<SourceDocument>) -> CompileResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
@@ -200,7 +215,12 @@ fn v3_layout(result: &CompileResult) -> Vec<(String, Vec<String>, Vec<Vec<String
 /// Compiles one v3 module with the `elmDocComments` option set (or, for
 /// `None`, left out so the default applies).
 fn compile_with_doc_mode(mode: Option<&str>, text: &str) -> CompileResult {
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     extension
         .frontend()
         .unwrap()
@@ -1259,10 +1279,18 @@ fn two_modules_that_collide_once_the_package_is_stripped_are_refused() {
 }
 
 #[test]
-fn the_extension_advertises_the_elm_frontend_and_backend() {
+fn the_extension_advertises_the_elm_frontend_backend_and_workspace() {
     let info = ElmExtension::info();
     assert_eq!(info.id, "morphir-elm-native");
     assert_eq!(info.name, "Morphir Elm (native)");
+    assert_eq!(
+        info.types,
+        vec![
+            ExtensionType::Frontend,
+            ExtensionType::Backend,
+            ExtensionType::Workspace,
+        ]
+    );
 
     let capabilities = ElmExtension::capabilities();
     let frontend = capabilities.frontend.expect("a frontend capability");
@@ -1275,6 +1303,13 @@ fn the_extension_advertises_the_elm_frontend_and_backend() {
     let backend = capabilities.backend.expect("a backend capability");
     assert_eq!(backend.targets, vec!["elm"]);
     assert!(backend.generate);
+
+    let workspace = capabilities.workspace.expect("a workspace capability");
+    assert_eq!(
+        workspace.protocol_versions,
+        vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL]
+    );
+    assert!(workspace.discover);
 }
 
 /// The frontend and the backend meet: what this extension compiles, it
@@ -1297,7 +1332,12 @@ fn the_distribution_the_frontend_writes_generates_elm_again() {
         vec![],
     );
     assert!(compiled.success, "{:?}", compiled.diagnostics);
-    let extension = NativeExtension::frontend_backend(ElmExtension).unwrap();
+    let extension = NativeExtension::builder(ElmExtension)
+        .with_frontend()
+        .with_backend()
+        .with_workspace()
+        .finish()
+        .unwrap();
     let result = extension
         .backend()
         .unwrap()

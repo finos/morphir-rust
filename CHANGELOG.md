@@ -82,11 +82,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module's name is a function of its path relative to that root, so a root kept
   anywhere else silently renames modules the moment a document set is replaced
   or combined — the root and the documents are one value and are now typed as
-  one. The legacy `sourceRootUri` and `sourceRoot` option keys are **rejected,
-  not ignored**: at serde deserialization, in the Rust and Python bindings'
-  own per-frontend option allowlists, and at the native handle. A stale caller
-  that keeps sending one now fails loudly rather than silently losing its root
-  and compiling the same files under different module names. Gleam's
+  one. A request states its sources one way or the other and never both. A
+  request carrying `sources` is the current shape, and the legacy
+  `sourceRootUri` and `sourceRoot` option keys are **rejected, not ignored**
+  there — at serde deserialization, in the Rust and Python bindings' own
+  per-frontend option allowlists, and at the native handle — so a caller that
+  sends a root twice fails loudly rather than silently compiling the same files
+  under different module names. **Transitionally**, the pre-`sources` envelope
+  is still accepted: a request carrying top-level `documents`, optionally with
+  a legacy root key in `options.extra`, is normalized into
+  `sources { root, documents }` during deserialization, and the root key is
+  moved out of the options bag so nothing downstream sees it. Hosts released
+  before this change therefore keep working. A request carrying **both**
+  `sources` and top-level `documents` is an error naming the ambiguity, as are
+  two legacy root keys that disagree: each envelope names its own root, and
+  which one module names resolve against would have no honest answer. The
+  legacy envelope is scheduled for removal once a morphir release ships a host
+  that speaks `sources`; see `SourceEnvelope` in `morphir-extension-sdk` for
+  what goes with it. Gleam's
   incremental context digest covers the root explicitly, where it previously
   covered it only incidentally through `options.extra`, so a baseline built
   against a different source root is invalidated and recompiled instead of

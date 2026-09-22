@@ -565,6 +565,14 @@ where
         // keys are not rejected by deserialization here. Reject them
         // explicitly to keep this path equivalent to the protocol path
         // rather than a quieter way around it.
+        //
+        // This stays strict while the wire boundary transitionally accepts the
+        // legacy envelope (see `types::SourceEnvelope`). That leniency exists
+        // for hosts that were released before `CompileRequest.sources` and can
+        // only speak the old shape. An in-process caller has no such problem:
+        // it builds a `CompileRequest` in Rust against this very crate, so it
+        // already has `sources.root` and a legacy key in `options.extra` can
+        // only be a mistake — and one that would leave the root stated twice.
         crate::types::reject_legacy_source_root_keys(&request.options.extra)
             .map_err(ExtensionError::InvalidParams)?;
         self.extension.compile(request)

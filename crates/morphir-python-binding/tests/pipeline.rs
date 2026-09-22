@@ -148,6 +148,10 @@ fn accepts_cli_context_but_rejects_required_parse_stage_output() {
 /// `source_paths()` resolves against. Now that the legacy key is rejected
 /// rather than ignored, a request carrying it is rejected too - a caller that
 /// wants a root sets `sources.root` (covered in `tests/modules.rs`) instead.
+///
+/// This request is built in Rust, so it is a modern request by construction
+/// and the key is simply wrong in it. The one place the key is still honoured
+/// is the transitional legacy *wire* envelope, exercised below.
 #[test]
 fn legacy_source_root_uri_option_is_rejected_not_ignored() {
     let mut request = a_request(include_str!("fixtures/models.py"));
@@ -157,6 +161,55 @@ fn legacy_source_root_uri_option_is_rejected_not_ignored() {
         .insert("sourceRootUri".into(), json!("file:///project/src"));
     let result = PythonExtension.compile(request).unwrap();
     assert!(!result.success, "{:?}", result.diagnostics);
+}
+
+/// The request a morphir CLI released before `CompileRequest.sources` sends,
+/// verbatim: documents at the top level, the root and the CLI context in the
+/// options bag. CI's `test:cli-release` gate drives a packaged bundle with the
+/// *released* CLI, so a bundle that refused this shape could never be released
+/// - the host that speaks `sources` ships in the release this branch unblocks.
+///
+/// Delete this test with the legacy envelope (see `SourceEnvelope` in the
+/// SDK). It goes through `protocol().handle` rather than `compile` because the
+/// envelope is a wire concern: by the time a frontend sees the request there
+/// is only one shape left.
+#[test]
+fn a_release_era_legacy_compile_request_still_compiles() {
+    let extension = NativeExtension::frontend_backend(PythonExtension).unwrap();
+    let response = extension.protocol().handle(
+        ExtensionRequest::new(
+            methods::COMPILE,
+            json!({
+                "languageId": "python",
+                "documents": [{
+                    "uri": "file:///project/src/models.py",
+                    "languageId": "python",
+                    "version": 1,
+                    "text": include_str!("fixtures/models.py"),
+                }],
+                "package": {"name": "acme/example", "exposedModules": ["Models"]},
+                "dependencies": [],
+                "options": {
+                    "typesOnly": true,
+                    "irVersion": "4",
+                    "outputDir": "compiled",
+                    "sourceRootUri": "file:///project/src",
+                    "emitParseStage": false,
+                    "emitParseStageFatal": false,
+                },
+            }),
+            1,
+        )
+        .unwrap(),
+    );
+
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let compiled: CompileResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert!(compiled.success, "{:?}", compiled.diagnostics);
+    // The root was applied, not dropped: dropping it would name the module
+    // after the bare file and the document would resolve to the same name for
+    // any directory it sat in.
+    assert_eq!(compiled.modules, ["models"]);
 }
 
 #[test]

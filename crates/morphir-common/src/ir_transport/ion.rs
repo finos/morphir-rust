@@ -112,7 +112,7 @@ impl IrCodec for IonCodec {
     ) -> Result<(), TransportDiagnostic> {
         match semantic::collect(source, options.version())? {
             semantic::SemanticFile::ClassicV3(distribution) => {
-                write_empty_v3_library(distribution, writer)
+                write_v3_library(distribution, writer)
             }
             semantic::SemanticFile::V4(_) => Err(IonCodec::error(
                 "morphir::ir::ion::encode_unsupported",
@@ -123,7 +123,7 @@ impl IrCodec for IonCodec {
     }
 }
 
-fn write_empty_v3_library(
+fn write_v3_library(
     distribution: classic::Distribution,
     writer: &mut dyn Write,
 ) -> Result<(), TransportDiagnostic> {
@@ -139,11 +139,11 @@ fn write_empty_v3_library(
     }
     let classic::DistributionBody::Library(package, dependencies, definition) =
         distribution.distribution;
-    if !dependencies.is_empty() || !definition.modules.is_empty() {
+    if !dependencies.is_empty() {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_node",
             Stage::Encoding,
-            "the Ion writer encodes an empty v3 library",
+            "the Ion writer does not encode dependencies yet",
         ));
     }
     let header = Element::from(ion_rs::ion_struct! {
@@ -155,7 +155,13 @@ fn write_empty_v3_library(
     .with_annotations(["morphir"]);
     let footer =
         Element::from(ion_rs::Struct::builder().build()).with_annotations(["morphir_footer"]);
-    let text: String = ion_rs::ion_seq![header, footer]
+    let mut sequence = ion_rs::Sequence::builder().push(header);
+    for module in &definition.modules {
+        sequence = sequence.push(module_element(module)?);
+    }
+    let text: String = sequence
+        .push(footer)
+        .build()
         .encode_as(ion_rs::v1_0::Text.with_format(ion_rs::TextFormat::Pretty))
         .map_err(|error| {
             IonCodec::error(
@@ -183,10 +189,37 @@ fn write_empty_v3_library(
     Ok(())
 }
 
+fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic> {
+    let definition = &module.definition.value;
+    if !definition.types.is_empty() || !definition.values.is_empty() {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Encoding,
+            "the Ion writer does not encode module types or values yet",
+        ));
+    }
+    let access = match module.definition.access {
+        classic::Access::Public => "public",
+        classic::Access::Private => "private",
+    };
+    let mut builder = ion_rs::Struct::builder().with_field("name", canonical_package(&module.path));
+    if let Some(doc) = definition.doc.as_deref().filter(|doc| !doc.is_empty()) {
+        builder = builder.with_field("doc", doc);
+    }
+    Ok(Element::from(builder.build()).with_annotations([access, "def", "module"]))
+}
+
 fn canonical_package(path: &classic::Path) -> String {
     path.segments
         .iter()
-        .map(ToString::to_string)
+        .map(|name| {
+            let words = name
+                .words
+                .iter()
+                .copied()
+                .map(morphir_core::naming::resolve);
+            morphir_core::naming::Name::from_words(words).to_canonical_string()
+        })
         .collect::<Vec<_>>()
         .join("/")
 }

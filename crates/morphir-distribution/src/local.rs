@@ -82,12 +82,13 @@ impl LocalIndex {
         &self.root
     }
 
-    /// Read the requested history and resolve one exact platform artifact.
+    /// Read the requested history and resolve one artifact compatible with the caller's host.
     pub fn resolve(
         &self,
         extension_id: &ExtensionId,
         selection: Selection,
         platform: &Platform,
+        host: &semver::Version,
     ) -> Result<ResolvedArtifact> {
         let history_path = self
             .root
@@ -111,7 +112,7 @@ impl LocalIndex {
                 line: 1,
             });
         }
-        let resolved = resolve(&history, &selection, platform)?;
+        let resolved = resolve(&history, &selection, platform, host)?;
         Ok(ResolvedArtifact {
             release: resolved.release().clone(),
             artifact: resolved.artifact().clone(),
@@ -135,6 +136,12 @@ pub struct ResolvedArtifact {
 }
 
 impl ResolvedArtifact {
+    /// Check both release and selected artifact requirements for this host.
+    pub fn check_host(&self, host: &semver::Version) -> Result<()> {
+        self.release.check_host(host)?;
+        self.artifact.check_host(host)
+    }
+
     /// Return the exact selected release.
     pub fn release(&self) -> &ReleaseRecord {
         &self.release

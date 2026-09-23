@@ -227,6 +227,14 @@ struct ArtifactRecordWire {
 }
 
 impl ArtifactRecord {
+    /// Check the artifact statement against the caller's host version.
+    pub fn check_host(&self, host: &Version) -> Result<()> {
+        if let Some(statement) = self.statement() {
+            statement.check_host(host)?;
+        }
+        Ok(())
+    }
+
     /// Return the supplied statement or the declaration converted from release metadata.
     pub fn statement(&self) -> Option<&CapabilityStatement> {
         self.statement.statement()

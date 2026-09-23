@@ -29,6 +29,8 @@ struct InstalledExtensionWire {
     statement: StatementRecord,
     #[serde(default)]
     critical: Vec<String>,
+    #[serde(default)]
+    requires: Option<Value>,
 }
 
 const INSTALLED_PATHS: &[&str] = &[
@@ -52,6 +54,8 @@ const INSTALLED_PATHS: &[&str] = &[
     "statement",
     "statementSource",
     "critical",
+    "requires",
+    "requires.host",
 ];
 
 impl<'de> Deserialize<'de> for InstalledExtension {
@@ -61,7 +65,7 @@ impl<'de> Deserialize<'de> for InstalledExtension {
         let mut value = Value::deserialize(deserializer)?;
         let mut paths = INSTALLED_PATHS.to_vec();
         paths.extend_from_slice(CAPABILITY_PATHS);
-        validate_members(&value, &paths, false).map_err(D::Error::custom)?;
+        validate_members(&value, &paths, true).map_err(D::Error::custom)?;
         if let Some(statement) = value.get("statement").cloned() {
             let object = value
                 .as_object_mut()
@@ -96,6 +100,7 @@ impl<'de> Deserialize<'de> for InstalledExtension {
             executable: wire.executable,
             statement: wire.statement,
             critical: wire.critical,
+            requires: wire.requires,
         };
         let mut capabilities = serde_json::Map::new();
         if let Some(frontend) = &installed.frontend {

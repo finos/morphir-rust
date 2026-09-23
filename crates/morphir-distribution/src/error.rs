@@ -6,6 +6,10 @@ use std::path::PathBuf;
 /// A failure to parse, resolve, verify, or persist an extension artifact.
 #[derive(Debug, thiserror::Error)]
 pub enum DistributionError {
+    /// The caller's host version does not satisfy the extension requirements.
+    #[error(transparent)]
+    HostRequirement(#[from] morphir_extension_sdk::statement::HostRequirementError),
+
     /// A domain value did not satisfy its portable representation.
     #[error("invalid {kind} {value:?}: {reason}")]
     InvalidValue {

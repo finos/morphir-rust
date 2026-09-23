@@ -13,7 +13,7 @@ use serde_json::Value;
 pub(crate) fn validate_members(
     value: &Value,
     known_paths: &[&str],
-    check_host: bool,
+    validate_requires: bool,
 ) -> Result<(), String> {
     let critical: Vec<String> = value.get("critical").map_or_else(
         || Ok(Vec::new()),
@@ -30,21 +30,12 @@ pub(crate) fn validate_members(
             return Err(format!("unknown critical member '{path}'"));
         }
     }
-    if check_host && let Some(requires) = value.get("requires") {
-        let requirements: StatementRequirements =
+    if validate_requires && let Some(requires) = value.get("requires") {
+        let _: StatementRequirements =
             serde_json::from_value(requires.clone()).map_err(|error| error.to_string())?;
         if requires.get("host").is_some() && !critical.iter().any(|path| path == "requires.host") {
             return Err("requires.host must be listed in critical".into());
         }
-        let mut statement =
-            CapabilityStatement::from_session(vec![], Default::default(), Default::default());
-        statement.requires = Some(requirements);
-        statement
-            .check_host(
-                &semver::Version::parse(env!("CARGO_PKG_VERSION"))
-                    .expect("crate version is SemVer"),
-            )
-            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -77,4 +68,17 @@ pub(crate) fn read_platform<'de, D: serde::Deserializer<'de>>(
     value
         .map(|value| crate::Platform::new(value.os, value.arch).map_err(serde::de::Error::custom))
         .transpose()
+}
+
+/// Check requirements already validated by a distribution document reader.
+pub(crate) fn check_requirements(
+    requires: Option<&Value>,
+    host: &semver::Version,
+) -> crate::Result<()> {
+    let mut statement =
+        CapabilityStatement::from_session(vec![], Default::default(), Default::default());
+    statement.requires = requires.map(|value| {
+        serde_json::from_value(value.clone()).expect("reader validated host requirements")
+    });
+    statement.check_host(host).map_err(Into::into)
 }

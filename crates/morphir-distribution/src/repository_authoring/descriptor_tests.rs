@@ -71,12 +71,11 @@ fn descriptor_rejects_unknown_critical_by_name() {
 }
 
 #[test]
-fn descriptor_enforces_host_requirements() {
+fn descriptor_parses_host_requirements_without_comparing_versions() {
     let mut value = a_legacy_descriptor();
     value["requires"] = json!({"host": [">=999.0.0"]});
     value["critical"] = json!(["requires.host"]);
-    let error = serde_json::from_value::<ReleaseBundleDescriptor>(value).unwrap_err();
-    assert!(error.to_string().contains("requires.host"), "{error}");
+    assert!(serde_json::from_value::<ReleaseBundleDescriptor>(value).is_ok());
 }
 
 #[test]
@@ -156,7 +155,7 @@ fn descriptor_accepts_supported_versions_only() {
 }
 
 #[test]
-fn descriptor_requires_host_to_be_critical_and_all_comparators_to_match() {
+fn descriptor_validates_host_comparators_without_comparing_versions() {
     let mut value = a_v2_descriptor();
     value["requires"] = json!({"host": [">=0.1.0", "<999.0.0"]});
     let error = serde_json::from_value::<ReleaseBundleDescriptor>(value.clone()).unwrap_err();
@@ -169,7 +168,7 @@ fn descriptor_requires_host_to_be_critical_and_all_comparators_to_match() {
     value["critical"] = json!(["requires.host"]);
     serde_json::from_value::<ReleaseBundleDescriptor>(value.clone()).unwrap();
     value["requires"]["host"] = json!([">=0.1.0", "<0.2.0"]);
-    assert!(serde_json::from_value::<ReleaseBundleDescriptor>(value).is_err());
+    assert!(serde_json::from_value::<ReleaseBundleDescriptor>(value).is_ok());
 }
 
 #[test]

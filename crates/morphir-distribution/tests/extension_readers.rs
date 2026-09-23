@@ -134,8 +134,7 @@ fn index_checks_host_comparators_and_requires_critical() {
     value["critical"] = json!(["requires.host"]);
     assert!(serde_json::from_value::<ReleaseRecord>(value.clone()).is_ok());
     value["requires"]["host"] = json!([">=999.0.0"]);
-    let error = serde_json::from_value::<ReleaseRecord>(value.clone()).unwrap_err();
-    assert!(error.to_string().contains(">=999.0.0"));
+    assert!(serde_json::from_value::<ReleaseRecord>(value.clone()).is_ok());
     value["requires"]["host"] = json!([">=0.1.0, <1.0.0"]);
     assert!(serde_json::from_value::<ReleaseRecord>(value.clone()).is_err());
     value["requires"]["host"] = json!([">=0.1.0"]);
@@ -258,18 +257,13 @@ fn statement_only_records_need_no_flat_capability_metadata() {
 }
 
 #[test]
-fn supplied_statements_check_their_own_host_requirements() {
+fn supplied_statements_parse_without_comparing_host_requirements() {
     let mut value = an_old_release();
     let mut statement = a_statement();
     statement["requires"] = json!({"host":[">=999.0.0"]});
     statement["critical"] = json!(["requires.host"]);
     value["artifacts"][0]["statement"] = statement;
-    assert!(
-        serde_json::from_value::<ReleaseRecord>(value)
-            .unwrap_err()
-            .to_string()
-            .contains("requires.host")
-    );
+    assert!(serde_json::from_value::<ReleaseRecord>(value).is_ok());
 }
 
 #[test]
@@ -296,6 +290,7 @@ fn installing_a_statement_only_index_record_keeps_the_selected_statement() {
             &ExtensionId::parse("sample").unwrap(),
             Selection::Exact(semver::Version::new(1, 0, 0)),
             &Platform::current(),
+            &"0.4.0".parse().unwrap(),
         )
         .unwrap();
     let home = morphir_common::home::MorphirHome::resolve_from(
@@ -303,7 +298,9 @@ fn installing_a_statement_only_index_record_keeps_the_selected_statement() {
         None,
     )
     .unwrap();
-    let installed = ExtensionInstaller::new(&home).install(selected).unwrap();
+    let installed = ExtensionInstaller::new(&home)
+        .install(selected, &"0.4.0".parse().unwrap())
+        .unwrap();
     assert_eq!(installed.statement().capabilities["backend"]["future"], 42);
     assert_eq!(
         serde_json::to_value(installed).unwrap()["statement"],

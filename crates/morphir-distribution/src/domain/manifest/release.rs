@@ -51,6 +51,14 @@ struct ReleaseRecordWire {
 }
 
 impl ReleaseRecord {
+    pub(crate) fn check_host(&self, host: &Version) -> Result<()> {
+        crate::extension_format::check_requirements(self.requires.as_ref(), host)
+    }
+
+    pub(crate) fn requires(&self) -> Option<&serde_json::Value> {
+        self.requires.as_ref()
+    }
+
     /// Return the index record schema version.
     pub fn schema_version(&self) -> ExtensionSchemaVersion {
         self.schema_version.clone()

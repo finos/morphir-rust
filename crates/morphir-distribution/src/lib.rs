@@ -14,12 +14,14 @@
 //! # fn install() -> Result<(), Box<dyn std::error::Error>> {
 //! let home = MorphirHome::resolve()?;
 //! let id = ExtensionId::parse("morphir-elm")?;
+//! let host = "0.4.0".parse()?;
 //! let selected = LocalIndex::open("./controlled-index")?.resolve(
 //!     &id,
 //!     Selection::Channel(Channel::Stable),
 //!     &Platform::current(),
+//!     &host,
 //! )?;
-//! ExtensionInstaller::new(&home).install(selected)?;
+//! ExtensionInstaller::new(&home).install(selected, &host)?;
 //!
 //! // Activation is offline and rehashes the installed bytes.
 //! let artifact = activate_installed(&home, &id)?;

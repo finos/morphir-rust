@@ -186,6 +186,8 @@ impl LocalExtensionRepository {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacyReleaseBundleDescriptor {
+    #[serde(default)]
+    requires: Option<serde_json::Value>,
     #[serde(flatten)]
     statement_record: crate::extension_format::StatementRecord,
     short_id: String,
@@ -401,6 +403,12 @@ impl LegacyReleaseBundleDescriptor {
             capabilities.push("workspace");
         }
         record["capabilities"] = serde_json::json!(capabilities);
+        if let Some(requires) = &self.requires {
+            record["requires"] = requires.clone();
+            if requires.get("host").is_some() {
+                record["critical"] = serde_json::json!(["requires.host"]);
+            }
+        }
         if let Some(fields) = serde_json::to_value(&self.statement_record)
             .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))?
             .as_object()

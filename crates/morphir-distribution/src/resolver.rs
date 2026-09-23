@@ -16,6 +16,12 @@ pub struct ResolvedRelease {
 }
 
 impl ResolvedRelease {
+    /// Check both release and selected artifact requirements for this host.
+    pub fn check_host(&self, host: &semver::Version) -> Result<()> {
+        self.release.check_host(host)?;
+        self.artifact.check_host(host)
+    }
+
     /// Return the exact selected release record.
     pub fn release(&self) -> &ReleaseRecord {
         &self.release
@@ -33,10 +39,12 @@ impl ResolvedRelease {
 }
 
 /// Select the highest compatible exact release and one platform artifact.
+/// Refuse if its requirements are not met by the caller's host version.
 pub fn resolve(
     history: &ExtensionHistory,
     selection: &Selection,
     platform: &Platform,
+    host: &semver::Version,
 ) -> Result<ResolvedRelease> {
     let matching_selection = history
         .releases()
@@ -69,6 +77,8 @@ pub fn resolve(
         match artifacts.as_slice() {
             [] => continue,
             [artifact] => {
+                release.check_host(host)?;
+                artifact.check_host(host)?;
                 return Ok(ResolvedRelease {
                     release: release.clone(),
                     artifact: (*artifact).clone(),

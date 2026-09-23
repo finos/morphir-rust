@@ -178,6 +178,7 @@ impl DistributionMother {
                 id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap()
     }
@@ -309,6 +310,7 @@ fn local_index_rejects_source_traversal_and_symlink_escape() {
                 &mother.id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .is_err()
     );
@@ -538,7 +540,7 @@ fn lock_is_exact_and_catalog_registration_accepts_only_verified_artifacts() {
 fn schema_1_0_frontend_metadata_is_present_exactly_when_declared() {
     let mother = DistributionMother::a_local_process_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
 
     assert!(installed.frontend().is_some());
@@ -560,7 +562,7 @@ fn schema_1_0_backend_metadata_is_present_exactly_when_declared() {
         b"legacy backend bytes",
     );
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected_for(&id))
+        .install(mother.selected_for(&id), &"0.4.0".parse().unwrap())
         .unwrap();
     assert!(
         installed
@@ -618,7 +620,7 @@ fn schema_1_0_backend_metadata_is_present_exactly_when_declared() {
 fn installed_wasm_persists_runtime_metadata_and_activates_offline() {
     let mother = DistributionMother::a_local_wasm_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let expected_canonical_path =
         fs::canonicalize(mother.home.root().join(installed.store_path())).unwrap();
@@ -717,7 +719,7 @@ fn installed_frontend_metadata_roundtrips_and_activates_offline() {
     );
 
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(selected)
+        .install(selected, &"0.4.0".parse().unwrap())
         .unwrap();
     let frontend = installed.frontend().unwrap();
     assert_eq!(frontend.languages()[0].file_extensions(), [".gleam", ".g"]);
@@ -849,10 +851,13 @@ fn an_installed_workspace_capability_reaches_the_activated_extension_kinds() {
             &id,
             Selection::Channel(Channel::Stable),
             &Platform::current(),
+            &"0.4.0".parse().unwrap(),
         )
         .unwrap();
 
-    ExtensionInstaller::new(&home).install(selected).unwrap();
+    ExtensionInstaller::new(&home)
+        .install(selected, &"0.4.0".parse().unwrap())
+        .unwrap();
     fs::remove_dir_all(&index).unwrap();
     let activated = activate_installed(&home, &id).unwrap();
 
@@ -870,7 +875,7 @@ fn an_installed_workspace_capability_reaches_the_activated_extension_kinds() {
 fn integer_extension_lock_schema_version_is_invalid_state() {
     let mother = DistributionMother::a_local_process_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
     let mut lock: serde_json::Value =
@@ -888,7 +893,7 @@ fn integer_extension_lock_schema_version_is_invalid_state() {
 fn integer_catalog_schema_version_is_invalid_state() {
     let mother = DistributionMother::a_local_process_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let catalog_path = mother.home.extensions_catalog_file();
     let mut catalog: serde_json::Value =
@@ -907,7 +912,7 @@ fn unsupported_extension_lock_schema_versions_report_the_supported_range() {
     for version in ["1.1", "2.0"] {
         let mother = DistributionMother::a_local_process_artifact();
         ExtensionInstaller::new(&mother.home)
-            .install(mother.selected())
+            .install(mother.selected(), &"0.4.0".parse().unwrap())
             .unwrap();
         let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
         let mut lock: serde_json::Value =
@@ -928,7 +933,7 @@ fn unsupported_catalog_schema_versions_report_the_supported_range() {
     for version in ["1.1", "2.0"] {
         let mother = DistributionMother::a_local_process_artifact();
         ExtensionInstaller::new(&mother.home)
-            .install(mother.selected())
+            .install(mother.selected(), &"0.4.0".parse().unwrap())
             .unwrap();
         let catalog_path = mother.home.extensions_catalog_file();
         let mut catalog: serde_json::Value =
@@ -969,7 +974,7 @@ fn assert_unsupported_extension_state_schema(
 fn current_lock_rejects_omitted_frontend_metadata() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother
         .home
@@ -994,7 +999,7 @@ fn current_lock_rejects_omitted_frontend_metadata() {
 fn current_catalog_rejects_omitted_frontend_metadata() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let catalog_path = mother.home.extensions_catalog_file();
     let mut catalog: serde_json::Value =
@@ -1022,7 +1027,7 @@ fn current_catalog_rejects_omitted_frontend_metadata() {
 fn current_lock_rejects_omitted_backend_metadata() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother
         .home
@@ -1047,7 +1052,7 @@ fn current_lock_rejects_omitted_backend_metadata() {
 fn current_catalog_rejects_omitted_backend_metadata() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let catalog_path = mother.home.extensions_catalog_file();
     let mut catalog: serde_json::Value =
@@ -1079,7 +1084,7 @@ fn current_catalog_rejects_omitted_backend_metadata() {
 fn current_lock_rejects_backend_metadata_without_the_backend_capability() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother
         .home
@@ -1103,7 +1108,7 @@ fn current_lock_rejects_backend_metadata_without_the_backend_capability() {
 fn current_catalog_rejects_frontend_metadata_without_the_frontend_capability() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let catalog_path = mother.home.extensions_catalog_file();
     let mut catalog: serde_json::Value =
@@ -1124,7 +1129,7 @@ fn current_catalog_rejects_frontend_metadata_without_the_frontend_capability() {
 fn frontend_lock_catalog_mismatch_is_rejected_by_listing_and_activation() {
     let mother = DistributionMother::a_local_frontend_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother
         .home
@@ -1149,7 +1154,7 @@ fn frontend_lock_catalog_mismatch_is_rejected_by_listing_and_activation() {
 fn installed_wasm_rejects_tampered_bytes() {
     let mother = DistributionMother::a_local_wasm_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let path = mother.home.root().join(installed.store_path());
     fs::write(&path, b"tampered wasm bytes").unwrap();
@@ -1163,7 +1168,7 @@ fn installed_wasm_rejects_tampered_bytes() {
 fn installed_wasm_rejects_oversized_bytes_before_buffering() {
     let mother = DistributionMother::a_local_wasm_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let path = mother.home.root().join(installed.store_path());
     let oversized = 256 * 1024 * 1024 + 1;
@@ -1203,7 +1208,7 @@ fn installer_rejects_oversized_extension_without_publishing_state() {
         .unwrap();
 
     let error = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap_err();
 
     match error {
@@ -1233,7 +1238,7 @@ fn installer_rejects_oversized_extension_without_publishing_state() {
 fn installed_wasm_rejects_backend_lock_catalog_mismatch() {
     let mother = DistributionMother::a_local_wasm_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother.home.extensions_locks_dir().join("morphir-avro.json");
     let mut lock: serde_json::Value =
@@ -1256,7 +1261,7 @@ fn installed_wasm_rejects_symlink_escape_and_executable_mode() {
 
     let escaped = DistributionMother::a_local_wasm_artifact();
     let installed = ExtensionInstaller::new(&escaped.home)
-        .install(escaped.selected())
+        .install(escaped.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let path = escaped.home.root().join(installed.store_path());
     let outside = escaped.root.path().join("outside.wasm");
@@ -1268,7 +1273,7 @@ fn installed_wasm_rejects_symlink_escape_and_executable_mode() {
 
     let executable = DistributionMother::a_local_wasm_artifact();
     let installed = ExtensionInstaller::new(&executable.home)
-        .install(executable.selected())
+        .install(executable.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let path = executable.home.root().join(installed.store_path());
     let mut permissions = fs::metadata(&path).unwrap().permissions();
@@ -1291,7 +1296,7 @@ fn installed_wasm_rejects_process_only_state() {
     ] {
         let mother = DistributionMother::a_local_wasm_artifact();
         ExtensionInstaller::new(&mother.home)
-            .install(mother.selected())
+            .install(mother.selected(), &"0.4.0".parse().unwrap())
             .unwrap();
         let lock_path = mother.home.extensions_locks_dir().join("morphir-avro.json");
         let catalog_path = mother.home.extensions_catalog_file();
@@ -1317,7 +1322,7 @@ fn installed_wasm_rejects_process_only_state() {
 fn installer_orders_materialization_lock_then_catalog() {
     let mother = DistributionMother::a_local_process_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
 
     assert_eq!(installed.version().to_string(), "3.2.1");
@@ -1378,7 +1383,7 @@ fn concurrent_catalog_transactions_preserve_both_entries() {
 fn atomic_listing_returns_validated_entries_with_their_requested_selections() {
     let mother = DistributionMother::a_local_process_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
 
     let snapshots = list_installed(&mother.home).unwrap();
@@ -1395,7 +1400,7 @@ fn atomic_listing_returns_validated_entries_with_their_requested_selections() {
 fn atomic_listing_rejects_a_corrupted_catalog_and_lock_pair() {
     let mother = DistributionMother::a_local_process_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
     let mut lock: serde_json::Value =
@@ -1415,7 +1420,7 @@ fn atomic_listing_rejects_a_corrupted_catalog_and_lock_pair() {
 fn uninstall_removes_the_catalog_entry_and_exact_lock() {
     let mother = DistributionMother::a_local_process_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
 
     let removed = uninstall_extension(&mother.home, &mother.id).unwrap();
@@ -1440,7 +1445,7 @@ fn uninstall_removes_the_catalog_entry_and_exact_lock() {
 fn uninstall_leaves_content_addressed_artifact_bytes_untouched() {
     let mother = DistributionMother::a_local_process_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let artifact = mother.home.root().join(installed.store_path());
     let expected = fs::read(&artifact).unwrap();
@@ -1473,7 +1478,7 @@ fn source_tampering_never_creates_a_lock_or_active_catalog_entry() {
     .unwrap();
 
     let error = ExtensionInstaller::new(&mother.home)
-        .install(selected)
+        .install(selected, &"0.4.0".parse().unwrap())
         .unwrap_err();
     assert!(error.to_string().contains("digest mismatch"));
     assert!(!mother.home.extensions_catalog_file().exists());
@@ -1490,7 +1495,7 @@ fn source_tampering_never_creates_a_lock_or_active_catalog_entry() {
 fn activation_is_offline_and_reverifies_installed_content() {
     let mother = DistributionMother::a_local_process_artifact();
     let installed = ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     fs::remove_dir_all(&mother.index).unwrap();
 
@@ -1532,7 +1537,7 @@ fn activation_is_offline_and_reverifies_installed_content() {
 fn activation_rejects_tampered_locked_launch_metadata() {
     let mother = DistributionMother::a_local_process_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
     let original: serde_json::Value =
@@ -1559,7 +1564,7 @@ fn activation_rejects_tampered_locked_launch_metadata() {
 fn activation_and_listing_reject_consistently_unsupported_installed_mep_versions() {
     let mother = DistributionMother::a_local_process_artifact();
     ExtensionInstaller::new(&mother.home)
-        .install(mother.selected())
+        .install(mother.selected(), &"0.4.0".parse().unwrap())
         .unwrap();
     let lock_path = mother.home.extensions_locks_dir().join("morphir-elm.json");
     let mut lock: serde_json::Value =

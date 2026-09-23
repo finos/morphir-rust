@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot reports; Gleam keeps its names unchanged.
 
 ### Fixed
+- Extension resolution and installation check `requires.host` against an explicit
+  caller-supplied host version. Parsing validates requirements without comparing
+  them to the distribution crate version.
 - `morphir_core::ir::classic::Name::from_str` no longer panics when a
   non-ASCII character comes before a word (for example `éa`). It used
   character counts as byte offsets.

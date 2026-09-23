@@ -49,9 +49,12 @@ async fn packaged_rust_installs_and_executes_offline_in_both_ir_versions() {
             &id,
             Selection::Channel(Channel::Stable),
             &Platform::current(),
+            &"0.4.0".parse().unwrap(),
         )
         .unwrap();
-    ExtensionInstaller::new(&home).install(selected).unwrap();
+    ExtensionInstaller::new(&home)
+        .install(selected, &"0.4.0".parse().unwrap())
+        .unwrap();
     // Activation must use the installed artifact after the repository is gone.
     std::fs::remove_dir_all(repository.root()).unwrap();
     let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())

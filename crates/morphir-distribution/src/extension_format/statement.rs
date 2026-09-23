@@ -45,12 +45,6 @@ impl<'de> Deserialize<'de> for PreservedStatement {
                 "requires.host must be listed in critical",
             ));
         }
-        parsed
-            .check_host(
-                &semver::Version::parse(env!("CARGO_PKG_VERSION"))
-                    .expect("crate version is SemVer"),
-            )
-            .map_err(serde::de::Error::custom)?;
         Ok(Self { wire, parsed })
     }
 }
@@ -61,11 +55,11 @@ impl<'de> Deserialize<'de> for PreservedStatement {
 #[serde(rename_all = "camelCase")]
 pub struct StatementRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    statement: Option<PreservedStatement>,
+    statement: Option<Box<PreservedStatement>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     statement_source: Option<StatementProvenance>,
     #[serde(skip)]
-    legacy: Option<PreservedStatement>,
+    legacy: Option<Box<PreservedStatement>>,
 }
 
 impl StatementRecord {
@@ -84,10 +78,10 @@ impl StatementRecord {
 
     pub(crate) fn supply_legacy(&mut self, statement: CapabilityStatement) {
         if self.statement.is_none() {
-            self.legacy = Some(PreservedStatement {
+            self.legacy = Some(Box::new(PreservedStatement {
                 wire: serde_json::to_value(&statement).expect("statement serializes"),
                 parsed: statement,
-            });
+            }));
             self.statement_source = None;
         }
     }

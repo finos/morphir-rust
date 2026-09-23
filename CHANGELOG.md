@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The package MVP adapter also executes initial exact-root resolve, producing
+  a full authenticated lock or a typed refusal. It checks unchanged inputs and
+  an absent or preserved output on failure; the shared runner compares the
+  published lock digest with its independently frozen golden.
 - Draft.3 `mck-adapter-rust package-mvp` mode runs all 15 signed fresh-restore
   cases through the production package APIs. It admits bounded input files and
   an input-only environment descriptor, reports published packages or narrowly

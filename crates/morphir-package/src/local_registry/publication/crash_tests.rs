@@ -197,3 +197,93 @@ fn final_flush_failure_returns_uncertain_and_never_rolls_back() {
     assert!(matches!(result, Err(Error::CommitOutcomeUncertain)));
     assert!(base.join("registry/metadata/timestamp.json").exists());
 }
+
+thread_local! {
+    static RESERVED_GATE: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+pub(super) fn after_reservation() {
+    RESERVED_GATE.with(|gate| {
+        if let Some(gate) = gate.borrow().as_ref() {
+            gate();
+        }
+    });
+}
+#[test]
+fn shared_registry_serializes_threads_with_distinct_reserved_versions() {
+    use std::{
+        sync::{Arc, mpsc},
+        time::Duration,
+    };
+    let (_temp, base, policy, key) = setup();
+    let registry =
+        Arc::new(Registry::open(&base.join("registry"), &base.join("state"), &policy).unwrap());
+    let first_library = library_version("1.0.0");
+    let first_signed = first_library.sign(&key).unwrap();
+    let first_draft = registry
+        .prepare(
+            &first_library,
+            first_signed.record_bytes(),
+            first_signed.envelope_bytes(),
+            "2098-01-01T00:00:00Z",
+        )
+        .unwrap();
+    let first_proposal = first_draft.sign(&key, &key, &key).unwrap();
+    let second_library = library_version("1.1.0");
+    let second_signed = second_library.sign(&key).unwrap();
+    let second_draft = registry
+        .prepare(
+            &second_library,
+            second_signed.record_bytes(),
+            second_signed.envelope_bytes(),
+            "2098-01-01T00:00:00Z",
+        )
+        .unwrap();
+    let mut wire = serde_json::to_value(second_draft).unwrap();
+    wire["targets"]["version"] = json!(3);
+    wire["snapshot_version"] = json!(3);
+    wire["timestamp_version"] = json!(3);
+    let second_draft: Draft = serde_json::from_value(wire).unwrap();
+    let second_proposal = second_draft.sign(&key, &key, &key).unwrap();
+    let (reserved_tx, reserved_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let first_registry = registry.clone();
+    let first = std::thread::spawn(move || {
+        RESERVED_GATE.with(|gate| {
+            *gate.borrow_mut() = Some(Box::new(move || {
+                reserved_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            }))
+        });
+        first_registry.publish(
+            &first_library,
+            first_signed.record_bytes(),
+            first_signed.envelope_bytes(),
+            first_draft.predecessor(),
+            &first_proposal,
+        )
+    });
+    reserved_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let second = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result = registry.publish(
+            &second_library,
+            second_signed.record_bytes(),
+            second_signed.envelope_bytes(),
+            second_draft.predecessor(),
+            &second_proposal,
+        );
+        result_tx.send(result).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let early = result_rx.recv_timeout(Duration::from_millis(500));
+    release_tx.send(()).unwrap();
+    assert_eq!(first.join().unwrap().unwrap().outcome, Outcome::Committed);
+    let result = early.unwrap_or_else(|_| result_rx.recv_timeout(Duration::from_secs(10)).unwrap());
+    second.join().unwrap();
+    assert!(
+        matches!(result, Err(Error::Conflict { .. })),
+        "second writer must observe changed predecessor: {result:?}"
+    );
+}

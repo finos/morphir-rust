@@ -22,6 +22,7 @@ pub struct Registry {
     pub(super) policy: TrustPolicy,
     pub(super) authority: ProfileMetadata,
     _lock: File,
+    operation: std::sync::Mutex<()>,
 }
 pub(super) struct View {
     pub(super) predecessor: Predecessor,
@@ -88,6 +89,7 @@ impl Registry {
             policy,
             authority,
             _lock: lock,
+            operation: std::sync::Mutex::new(()),
         };
         registry.floors()?;
         registry.current(jiff::Timestamp::now())?;
@@ -101,6 +103,10 @@ impl Registry {
         envelope: &[u8],
         expires: &str,
     ) -> Result<Draft, Error> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| Error::Invalid("publisher operation poisoned"))?;
         let record_model = verify::release(library, record, envelope, &self.policy)?;
         let now = jiff::Timestamp::now();
         let expires_time = expires
@@ -148,6 +154,10 @@ impl Registry {
         predecessor: &Predecessor,
         proposal: &Proposal,
     ) -> Result<PublicationResult, Error> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| Error::Invalid("publisher operation poisoned"))?;
         let record_model = verify::release(library, record, envelope, &self.policy)?;
         let now = jiff::Timestamp::now();
         let view = self.current(now)?;
@@ -194,6 +204,8 @@ impl Registry {
         )?;
         #[cfg(test)]
         super::checkpoint(super::FaultPoint::Reserved)?;
+        #[cfg(test)]
+        super::crash_tests::after_reservation();
         self.install_bundle(library, &transaction)?;
         let staging = self.root.child(".staging")?;
         let stage_name = format!("objects-{transaction}");

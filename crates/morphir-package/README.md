@@ -140,7 +140,8 @@ On macOS, `local_registry::publication::Registry` provides `initialize`, `open`,
 `prepare`, and `publish`. Initialize absent registry and private-state directories
 with an explicitly pinned, signed bootstrap root and trust policy. Both directory
 parents must already exist on local APFS. Open holds an exclusive OS lock on the
-anchored registry directory inode until the handle is dropped. Configured roots
+anchored registry directory inode until the handle is dropped. An operation mutex
+serializes threads sharing one handle; a poisoned operation refuses reuse. Configured roots
 resolve once; descendants use anchored no-follow operations, and regular files
 must have exactly one hard link. The private state binds both directory identities
 to the bootstrap root; do not copy, delete, or reconstruct it from public metadata.

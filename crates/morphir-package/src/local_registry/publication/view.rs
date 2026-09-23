@@ -188,12 +188,7 @@ impl Registry {
             }
             let manifest = bundle.read("manifest.json", 1_048_576)?;
             let ir = bundle.read("ir.json", 64 * 1024 * 1024)?;
-            content_total = content_total
-                .checked_add(ir.len())
-                .ok_or(Error::Invalid("content budget"))?;
-            if content_total > 256 * 1024 * 1024 {
-                return Err(Error::Invalid("content budget"));
-            }
+            content_total = charge_content(content_total, manifest.len(), ir.len())?;
             let library = AuthoredLibrary::from_bundle(&manifest, &ir)
                 .map_err(|_| Error::Invalid("invalid established Library"))?;
             verify::release(&library, &bytes, &envelope, &self.policy)?;
@@ -202,5 +197,28 @@ impl Registry {
             return Err(Error::Invalid("orphan or unsupported target"));
         }
         Ok(())
+    }
+}
+
+fn charge_content(total: usize, manifest: usize, ir: usize) -> Result<usize, Error> {
+    let total = total
+        .checked_add(manifest)
+        .and_then(|total| total.checked_add(ir))
+        .ok_or(Error::Invalid("content budget"))?;
+    if total > 256 * 1024 * 1024 {
+        return Err(Error::Invalid("content budget"));
+    }
+    Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn manifest_bytes_count_towards_inclusive_aggregate_content_limit() {
+        let limit = 256 * 1024 * 1024;
+        assert_eq!(charge_content(limit - 1024, 1023, 1).unwrap(), limit);
+        assert!(charge_content(limit - 1024, 1024, 1).is_err());
+        assert!(charge_content(usize::MAX, 1, 0).is_err());
     }
 }

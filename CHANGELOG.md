@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Dependency-free classic V4 Library authoring and explicit Ed25519 release/TUF
+  signing adapters. Authoring derives exact content digests and validates the
+  complete Library before producing public artifacts; signing does not grant
+  publication authority.
+
 ### Changed
 - The built-in Elm workspace provider reports an explicit ad-hoc package name
   in its normal form (finos/morphir#917). It splits the name on `/` and `.`,

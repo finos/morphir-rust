@@ -188,6 +188,310 @@ fn package_specification(
             .collect::<Result<_>>()?,
     })
 }
+
+type ClassicValue = c::Value<c::Attrs, c::Type<c::Attrs>>;
+
+fn value_type(value: &v::ValueAttributes) -> Result<Type> {
+    tpe(value
+        .inferred_type
+        .as_deref()
+        .ok_or("IR v3 requires an inferred type on every value")?)
+}
+
+fn literal(value: &v::Literal) -> Result<c::Literal> {
+    Ok(match value {
+        v::Literal::Bool(v) => c::Literal::Bool(*v),
+        v::Literal::Char(v) => c::Literal::Char(*v),
+        v::Literal::String(v) => c::Literal::String(v.clone()),
+        v::Literal::Integer(v) => c::Literal::WholeNumber(
+            v.to_string()
+                .parse()
+                .map_err(|_| format!("Integer {v} is outside IR v3 range"))?,
+        ),
+        v::Literal::Float(v) => {
+            c::Literal::Float(v.lexeme().parse().map_err(|_| "Invalid IR v3 float")?)
+        }
+        v::Literal::Decimal(v) => c::Literal::Decimal(v.clone()),
+        v::Literal::Document(_) => {
+            return Err("Document literals cannot be represented in IR v3".into());
+        }
+    })
+}
+
+fn pattern(value: &v::Pattern) -> Result<c::Pattern<Type>> {
+    Ok(match value {
+        v::Pattern::WildcardPattern(attrs) => c::Pattern::Wildcard(value_type(attrs)?),
+        v::Pattern::AsPattern(attrs, inner, name_) => {
+            c::Pattern::As(value_type(attrs)?, Box::new(pattern(inner)?), name(name_)?)
+        }
+        v::Pattern::TuplePattern(attrs, elements) => c::Pattern::Tuple(
+            value_type(attrs)?,
+            elements.iter().map(pattern).collect::<Result<_>>()?,
+        ),
+        v::Pattern::ConstructorPattern(attrs, name_, args) => c::Pattern::Constructor(
+            value_type(attrs)?,
+            fqname(name_)?,
+            args.iter().map(pattern).collect::<Result<_>>()?,
+        ),
+        v::Pattern::EmptyListPattern(attrs) => c::Pattern::EmptyList(value_type(attrs)?),
+        v::Pattern::HeadTailPattern(attrs, head, tail) => c::Pattern::HeadTail(
+            value_type(attrs)?,
+            Box::new(pattern(head)?),
+            Box::new(pattern(tail)?),
+        ),
+        v::Pattern::LiteralPattern(attrs, lit) => {
+            c::Pattern::Literal(value_type(attrs)?, literal(lit)?)
+        }
+        v::Pattern::UnitPattern(attrs) => c::Pattern::Unit(value_type(attrs)?),
+    })
+}
+
+fn expression(value: &v::Value) -> Result<ClassicValue> {
+    Ok(match value {
+        v::Value::Literal(attrs, lit) => c::Value::Literal(value_type(attrs)?, literal(lit)?),
+        v::Value::Constructor(attrs, name_) => {
+            c::Value::Constructor(value_type(attrs)?, fqname(name_)?)
+        }
+        v::Value::Variable(attrs, name_) => c::Value::Variable(value_type(attrs)?, name(name_)?),
+        v::Value::Reference(attrs, name_) => {
+            c::Value::Reference(value_type(attrs)?, fqname(name_)?)
+        }
+        v::Value::Apply(attrs, function, argument) => c::Value::Apply(
+            value_type(attrs)?,
+            Box::new(expression(function)?),
+            Box::new(expression(argument)?),
+        ),
+        v::Value::PatternMatch(attrs, subject, cases) => c::Value::PatternMatch(
+            value_type(attrs)?,
+            Box::new(expression(subject)?),
+            cases
+                .iter()
+                .map(|v::PatternCase(pattern_, body)| Ok((pattern(pattern_)?, expression(body)?)))
+                .collect::<Result<_>>()?,
+        ),
+        _ => return Err("Value form is not yet representable in IR v3".into()),
+    })
+}
+
+fn value_definition(value: &v::ValueDefinition) -> Result<c::ValueDefinition<c::Attrs, Type>> {
+    let body = match &value.body {
+        v::ValueBody::Expression(body) => expression(body)?,
+        _ => return Err("Only expression definitions can be represented in IR v3".into()),
+    };
+    Ok(c::ValueDefinition {
+        input_types: value
+            .input_types
+            .iter()
+            .map(|(n, ty)| {
+                let ty = tpe(ty)?;
+                Ok(c::value::ValueArgument {
+                    name: key(n)?,
+                    annotation: ty.clone(),
+                    ty,
+                })
+            })
+            .collect::<Result<_>>()?,
+        output_type: tpe(value
+            .output_type
+            .as_ref()
+            .ok_or("IR v3 requires a value output type")?)?,
+        body,
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod value_tests {
+    use super::*;
+    use morphir_core::ir::v4::ValueAttributes;
+
+    fn integer_type() -> v::Type {
+        v::Type::Reference(
+            Default::default(),
+            naming::FQName {
+                package_path: naming::PackageName::parse("morphir/SDK").into(),
+                module_path: naming::ModuleName::parse("basics").into(),
+                local_name: naming::Name::from("int"),
+            },
+            vec![],
+        )
+    }
+
+    fn attributes(ty: v::Type) -> ValueAttributes {
+        ValueAttributes {
+            inferred_type: Some(Box::new(ty)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn writer_preserves_typed_application() {
+        let integer = integer_type();
+        let function = v::Value::Variable(
+            attributes(v::Type::Function(
+                Default::default(),
+                Box::new(integer.clone()),
+                Box::new(integer.clone()),
+            )),
+            naming::Name::from("identity"),
+        );
+        let argument =
+            v::Value::Literal(attributes(integer.clone()), v::Literal::Integer(2.into()));
+        let written = expression(&v::Value::Apply(
+            attributes(integer.clone()),
+            Box::new(function),
+            Box::new(argument),
+        ))
+        .unwrap();
+        assert!(matches!(written, c::Value::Apply(_, function, argument)
+            if matches!(*function, c::Value::Variable(_, _))
+                && matches!(*argument, c::Value::Literal(_, c::Literal::WholeNumber(2)))));
+    }
+
+    #[test]
+    fn writer_preserves_typed_empty_list_case() {
+        let integer = integer_type();
+        let list_type = v::Type::Reference(
+            Default::default(),
+            naming::FQName {
+                package_path: naming::PackageName::parse("morphir/SDK").into(),
+                module_path: naming::ModuleName::parse("list").into(),
+                local_name: naming::Name::from("list"),
+            },
+            vec![integer.clone()],
+        );
+        let subject =
+            v::Value::Variable(attributes(list_type.clone()), naming::Name::from("items"));
+        let pattern = v::Pattern::EmptyListPattern(attributes(list_type));
+        let value = v::Value::PatternMatch(
+            attributes(integer.clone()),
+            Box::new(subject),
+            vec![v::PatternCase(
+                pattern,
+                v::Value::Literal(attributes(integer), v::Literal::Integer(0.into())),
+            )],
+        );
+        let written = expression(&value).unwrap();
+        assert!(matches!(written, c::Value::PatternMatch(_, _, cases)
+            if matches!(&cases[0].0, c::Pattern::EmptyList(_))));
+    }
+
+    #[test]
+    fn writer_preserves_head_tail_pattern_and_named_constructor() {
+        let integer = integer_type();
+        let list_type = v::Type::Reference(
+            Default::default(),
+            naming::FQName {
+                package_path: naming::PackageName::parse("morphir/SDK").into(),
+                module_path: naming::ModuleName::parse("list").into(),
+                local_name: naming::Name::from("list"),
+            },
+            vec![integer.clone()],
+        );
+        let constructor = naming::FQName {
+            package_path: naming::PackageName::parse("example/arity").into(),
+            module_path: naming::ModuleName::parse("validation/arity").into(),
+            local_name: naming::Name::from("valid"),
+        };
+        let value = v::Value::PatternMatch(
+            attributes(integer.clone()),
+            Box::new(v::Value::Variable(
+                attributes(list_type.clone()),
+                naming::Name::from("items"),
+            )),
+            vec![v::PatternCase(
+                v::Pattern::HeadTailPattern(
+                    attributes(list_type),
+                    Box::new(v::Pattern::WildcardPattern(attributes(integer.clone()))),
+                    Box::new(v::Pattern::AsPattern(
+                        attributes(integer.clone()),
+                        Box::new(v::Pattern::WildcardPattern(attributes(integer.clone()))),
+                        naming::Name::from("rest"),
+                    )),
+                ),
+                v::Value::Constructor(attributes(integer), constructor),
+            )],
+        );
+        let written = expression(&value).unwrap();
+        assert!(matches!(written, c::Value::PatternMatch(_, _, cases)
+            if matches!(&cases[0].0, c::Pattern::HeadTail(_, _, _))
+                && matches!(&cases[0].1, c::Value::Constructor(_, _))));
+    }
+
+    #[test]
+    fn writer_emits_complete_v3_value_definition() {
+        let integer = integer_type();
+        let definition = v::ValueDefinition {
+            input_types: [("input".into(), integer.clone())].into(),
+            output_type: Some(integer.clone()),
+            body: v::ValueBody::Expression(v::Value::Variable(
+                attributes(integer),
+                naming::Name::from("input"),
+            )),
+        };
+        let module = v::ModuleDefinition {
+            types: Default::default(),
+            values: [(
+                "identity".into(),
+                v::AccessControlled {
+                    access: v::Access::Public,
+                    value: v::Documented::new(None, definition),
+                },
+            )]
+            .into(),
+            doc: None,
+        };
+        let file = v::IRFile {
+            format_version: Default::default(),
+            distribution: v::Distribution::Library(v::LibraryContent {
+                package_name: naming::PackageName::parse("example/arity"),
+                dependencies: Default::default(),
+                def: v::PackageDefinition {
+                    modules: [(
+                        "main".into(),
+                        v::AccessControlled {
+                            access: v::Access::Public,
+                            value: module,
+                        },
+                    )]
+                    .into(),
+                },
+            }),
+        };
+        let written = encode(&file).unwrap();
+        let c::DistributionBody::Library(_, _, package) = written.distribution;
+        let values = &package.modules[0].definition.value.values;
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].1.value.value.input_types.len(), 1);
+        assert!(matches!(
+            values[0].1.value.value.body,
+            c::Value::Variable(_, _)
+        ));
+    }
+
+    #[test]
+    fn writer_preserves_inferred_type_on_v3_integer_literal() {
+        let value = v::Value::Literal(
+            ValueAttributes {
+                inferred_type: Some(Box::new(integer_type())),
+                ..Default::default()
+            },
+            v::Literal::Integer(1.into()),
+        );
+        let written = expression(&value).unwrap();
+        assert_eq!(
+            written,
+            c::Value::Literal(tpe(&integer_type()).unwrap(), c::Literal::WholeNumber(1))
+        );
+    }
+
+    #[test]
+    fn writer_rejects_missing_inferred_type() {
+        let value = v::Value::Literal(Default::default(), v::Literal::Integer(1.into()));
+        assert!(expression(&value).is_err());
+    }
+}
+
 pub(super) fn encode(ir: &v::IRFile) -> Result<c::Distribution> {
     let v::Distribution::Library(library) = &ir.distribution else {
         return Err("Gleam IR v3 requires a Library".into());
@@ -197,12 +501,6 @@ pub(super) fn encode(ir: &v::IRFile) -> Result<c::Distribution> {
         .modules
         .iter()
         .map(|(module_name, module)| {
-            if !module.value.values.is_empty() {
-                return Err(
-                    "IR v3 value lowering requires inferred types; use IR v4 for Gleam functions"
-                        .into(),
-                );
-            }
             Ok(c::ModuleEntry {
                 path: path_key(module_name)?,
                 definition: c::AccessControlled {
@@ -225,7 +523,23 @@ pub(super) fn encode(ir: &v::IRFile) -> Result<c::Distribution> {
                                 ))
                             })
                             .collect::<Result<_>>()?,
-                        values: vec![],
+                        values: module
+                            .value
+                            .values
+                            .iter()
+                            .map(|(n, item)| {
+                                Ok((
+                                    key(n)?,
+                                    c::AccessControlled {
+                                        access: access(item.access),
+                                        value: c::Documented::new(
+                                            docs(&item.value.doc),
+                                            value_definition(&item.value.value)?,
+                                        ),
+                                    },
+                                ))
+                            })
+                            .collect::<Result<_>>()?,
                         doc: module.value.doc.as_ref().map(|d| d.text().to_owned()),
                     },
                 },

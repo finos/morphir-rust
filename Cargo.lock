@@ -4580,6 +4580,7 @@ dependencies = [
  "extism-pdk",
  "getrandom 0.2.17",
  "gleam-core",
+ "im",
  "indexmap",
  "morphir-common",
  "morphir-core",

@@ -2,7 +2,11 @@
 
 use crate::package::positive_integer_id;
 use anyhow::{Context, Result, bail, ensure};
-use morphir_package::{digest::Digest, local_registry::mvp, strict_json};
+use morphir_package::{
+    digest::Digest,
+    local_registry::{Code, Phase, mvp, tuf},
+    strict_json,
+};
 use package_tough::{error, schema};
 use serde::Deserialize;
 use serde_json::json;
@@ -18,6 +22,7 @@ const CONTRACT: &str = "0.1.0-draft.3";
 const MAX_FILE: usize = 16_777_216;
 const MAX_TOTAL: usize = 33_554_432;
 const MAX_REQUEST_LINE: usize = 2 * MAX_TOTAL + 65_536;
+const EXTRA_BUNDLE_INPUT: &str = "registry/bundles/5922bc8860f6cd008b9cda341be7f3a776ea332e63261392e94c17e19a647886/undeclared.txt";
 
 #[derive(Deserialize)]
 #[serde(tag = "op", deny_unknown_fields)]
@@ -27,6 +32,8 @@ enum Request {
     #[serde(rename = "restore-local-library")]
     RestoreLocalLibrary {
         profile: String,
+        #[serde(default)]
+        environment: Environment,
         files: Vec<WireFile>,
     },
     #[serde(rename = "exit")]
@@ -38,6 +45,34 @@ enum Request {
 struct WireFile {
     path: String,
     hex: String,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Environment {
+    #[serde(default)]
+    trust_state: TrustState,
+    #[serde(default)]
+    output: OutputSetup,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum TrustState {
+    #[default]
+    Initialized,
+    Uninitialized,
+    MissingDatabase,
+    CorruptDatabase,
+    UnresolvedOperation,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum OutputSetup {
+    #[default]
+    Absent,
+    Sentinel,
 }
 
 /// Drive the bounded local Library MVP adapter through actual package APIs.
@@ -79,10 +114,14 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
                 "profiles":[PROFILE],"operations":["restore-local-library"]
             }),
-            Request::RestoreLocalLibrary { profile, files } => {
+            Request::RestoreLocalLibrary {
+                profile,
+                environment,
+                files,
+            } => {
                 ensure!(profile == PROFILE, "unsupported package MVP profile");
                 let files = admit_files(files)?;
-                runtime.block_on(restore(files))?
+                runtime.block_on(restore(files, environment))?
             }
             Request::Exit {} => break,
         };
@@ -112,8 +151,8 @@ fn read_bounded_line(reader: &mut impl BufRead, max_bytes: usize) -> Result<Opti
 
 fn admit_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
     ensure!(
-        files.len() == 15,
-        "package MVP requires exactly 15 input files"
+        (15..=16).contains(&files.len()),
+        "package MVP requires 15 or 16 input files"
     );
     let mut found = BTreeMap::new();
     let mut total = 0usize;
@@ -165,9 +204,9 @@ fn admit_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
     }
     ensure!(
         bundles.len() == 2
-            && bundles.values().all(|files| files.len() == 2
-                && files.contains("ir.json")
-                && files.contains("manifest.json")),
+            && bundles.values().all(|files| files.contains("ir.json")
+                && files.contains("manifest.json")
+                && (files.len() == 2 || (files.len() == 3 && files.contains("undeclared.txt")))),
         "package MVP requires two complete bundles"
     );
     ensure!(
@@ -178,6 +217,9 @@ fn admit_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
 }
 
 fn allowed_path(path: &str) -> bool {
+    if path == EXTRA_BUNDLE_INPUT || path == "initialization-policy.json" {
+        return true;
+    }
     if matches!(
         path,
         "trust-policy.json"
@@ -233,7 +275,10 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-async fn restore(files: BTreeMap<String, Vec<u8>>) -> Result<serde_json::Value> {
+async fn restore(
+    files: BTreeMap<String, Vec<u8>>,
+    environment: Environment,
+) -> Result<serde_json::Value> {
     let directory = tempfile::tempdir()?;
     let root = directory.path();
     for (name, bytes) in &files {
@@ -246,16 +291,33 @@ async fn restore(files: BTreeMap<String, Vec<u8>>) -> Result<serde_json::Value> 
     let lock = root.join("morphir.lock");
     let before_lock = fs::read(&lock)?;
     let policy = files.get("trust-policy.json").context("missing policy")?;
+    let initialization_policy = files.get("initialization-policy.json").unwrap_or(policy);
     let bootstrap = files
         .get("registry/metadata/1.root.json")
         .context("missing root")?;
     let state = root.join("trust");
     let output = root.join("output");
-    mvp::initialize(mvp::InitializeRequest {
-        policy,
-        root: bootstrap,
-        state: &state,
-    })?;
+    if environment.trust_state != TrustState::Uninitialized {
+        mvp::initialize(mvp::InitializeRequest {
+            policy: initialization_policy,
+            root: bootstrap,
+            state: &state,
+        })?;
+    }
+    match environment.trust_state {
+        TrustState::MissingDatabase => fs::remove_file(state.join("trust.sqlite"))?,
+        TrustState::CorruptDatabase => {
+            fs::write(state.join("trust.sqlite"), b"not a SQLite database\n")?
+        }
+        TrustState::UnresolvedOperation => {
+            fs::write(state.join("operation"), b"unresolved prior operation\n")?
+        }
+        TrustState::Initialized | TrustState::Uninitialized => {}
+    }
+    if environment.output == OutputSetup::Sentinel {
+        fs::create_dir_all(&output)?;
+        fs::write(output.join("sentinel.txt"), b"unrelated consumer content\n")?;
+    }
     let result = mvp::restore(mvp::RestoreRequest {
         policy,
         lock: &before_lock,
@@ -309,13 +371,93 @@ async fn restore(files: BTreeMap<String, Vec<u8>>) -> Result<serde_json::Value> 
                 json!({"outcome":"restored","packages":packages,"outputFiles":output_files,"output":"present","lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
             )
         }
-        Err(error) if timestamp_signature_failure(&error) => {
-            ensure!(!output.exists(), "refused restore published output");
+        Err(error) => {
+            let (category, reason) = classify_refusal(&error)
+                .ok_or_else(|| anyhow::anyhow!("package MVP restore failed: {error:#}"))?;
+            let (output_state, output_files) = if environment.output == OutputSetup::Sentinel {
+                let present = inventory(&output)?;
+                ensure!(
+                    present.len() == 1 && present.contains_key("sentinel.txt"),
+                    "refused restore changed occupied output"
+                );
+                ensure!(
+                    fs::read(output.join("sentinel.txt"))? == b"unrelated consumer content\n",
+                    "refused restore changed sentinel bytes"
+                );
+                (
+                    "preserved-sentinel",
+                    vec![
+                        json!({"path":"sentinel.txt","sha256":Digest::of_bytes(b"unrelated consumer content\n").to_string()}),
+                    ],
+                )
+            } else {
+                ensure!(!output.exists(), "refused restore published output");
+                ("absent", Vec::new())
+            };
             Ok(
-                json!({"outcome":"refused","category":"metadata-authentication","reason":"timestamp-signature-threshold","output":"absent","lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
+                json!({"outcome":"refused","category":category,"reason":reason,"output":output_state,"outputFiles":output_files,"lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged}),
             )
         }
-        Err(error) => bail!("package MVP restore failed: {error:#}"),
+    }
+}
+
+fn classify_refusal(error: &mvp::Error) -> Option<(&'static str, &'static str)> {
+    match error {
+        e if timestamp_signature_failure(e) => {
+            Some(("metadata-authentication", "timestamp-signature-threshold"))
+        }
+        mvp::Error::Refused("trust state is uninitialized or missing") => {
+            Some(("trust-state", "uninitialized"))
+        }
+        mvp::Error::Refused("trust state database is missing") => {
+            Some(("trust-state", "missing-established-database"))
+        }
+        mvp::Error::Refused("unresolved prior operation; manual intervention required") => {
+            Some(("trust-state", "unresolved-operation"))
+        }
+        mvp::Error::Refused("destination already exists") => {
+            Some(("output-conflict", "destination-exists"))
+        }
+        mvp::Error::Refused("content digest mismatch") => {
+            Some(("package-integrity", "content-digest-mismatch"))
+        }
+        mvp::Error::Refused("bundle inventory differs from manifest") => {
+            Some(("package-integrity", "bundle-inventory-mismatch"))
+        }
+        mvp::Error::Refused(
+            "historical evidence unsupported by MVP; refresh lock metadata pins",
+        ) => Some(("unsupported-policy", "historical-evidence-unsupported")),
+        mvp::Error::Refused("MVP requires fresh-metadata policy") => {
+            Some(("unsupported-policy", "historical-authorization-unsupported"))
+        }
+        mvp::Error::Document(diagnostic)
+            if diagnostic.code == Code::SignatureInvalid
+                && diagnostic.phase == Phase::Authorization =>
+        {
+            Some(("publisher-authorization", "publisher-signature-invalid"))
+        }
+        mvp::Error::Document(diagnostic)
+            if diagnostic.code == Code::UnsafePath && diagnostic.phase == Phase::Shape =>
+        {
+            Some(("invalid-input", "unsafe-acquisition-path"))
+        }
+        mvp::Error::Metadata(tuf::MetadataLoadError::Update(source))
+            if matches!(
+                source.as_ref(),
+                error::Error::ExpiredMetadata {
+                    role: schema::RoleType::Timestamp,
+                    ..
+                }
+            ) =>
+        {
+            Some(("metadata-authentication", "timestamp-expired"))
+        }
+        mvp::Error::State(source)
+            if source.sqlite_error_code() == Some(rusqlite::ErrorCode::NotADatabase) =>
+        {
+            Some(("trust-state", "corrupt-established-database"))
+        }
+        _ => None,
     }
 }
 

@@ -78,12 +78,13 @@ in the shared Rust `morphir mck` driver. Running it without arguments, or with
 `--suite ir`, keeps IR protocol v1.
 
 The `package-mvp` selector advertises draft.3 `local-library-mvp:0.1.0-draft.1`
-restore. The driver sends only the 15 signed input files as lowercase hex. The
-adapter stages those inputs in a temporary directory, runs the production
-initialization and restore APIs, and returns observed packages and input
-preservation with the hashes of every published regular file. A verified
-timestamp signature threshold failure has a specific refusal reason. Expected
-results remain in the parent repository's MCK corpus.
+restore. The driver sends 15 digest-bound fresh-restore cases as lowercase-hex
+files with a bounded input-only environment descriptor. The adapter stages
+those inputs in a temporary directory, runs the production initialization and
+restore APIs, and returns observed packages or narrowly classified refusals.
+It verifies unchanged inputs and hashes every published regular file or
+preserved output sentinel. Expected results remain in the parent repository's
+MCK corpus.
 
 ```sh
 mise exec -- cargo test --locked -p morphir-package -p morphir-mck-adapter

@@ -48,6 +48,11 @@ impl FormatId {
         Self("yaml".to_owned())
     }
 
+    /// Return the built-in Ion format identifier.
+    pub fn ion() -> Self {
+        Self("ion".to_owned())
+    }
+
     /// Return the identifier text.
     pub fn as_str(&self) -> &str {
         &self.0

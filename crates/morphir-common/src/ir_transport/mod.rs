@@ -3,6 +3,7 @@
 mod codec;
 mod diagnostic;
 mod document_tree;
+mod ion;
 mod json;
 mod migration;
 mod options;
@@ -18,6 +19,7 @@ pub use document_tree::{
     DocumentTreeSink, DocumentTreeSource, discover_document_tree_format, read_document_tree,
     read_document_tree_with_options, write_document_tree, write_document_tree_with_options,
 };
+pub use ion::IonCodec;
 pub use json::JsonCodec;
 pub use migration::{ClassicToV4, MigrationReportHandle};
 pub use options::{

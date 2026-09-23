@@ -28,6 +28,8 @@ morphir-core = { path = "../morphir-core" }
 morphir-workspace = { path = "../morphir-workspace" }
 glob = "0.3"
 indexmap = { version = "2", features = ["serde"] }
+ion-rs = "1.0.1"
+semver = "1"
 nbformat = "~3.0.0"
 uuid = { version = "1.0", features = ["v4"] }
 vfs = { workspace = true }

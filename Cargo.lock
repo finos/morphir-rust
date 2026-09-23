@@ -4571,6 +4571,7 @@ name = "morphir-gleam-binding"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "cap-fs-ext 4.0.3",
  "cap-std 4.0.3",
  "chrono",
@@ -4580,6 +4581,7 @@ dependencies = [
  "extism-pdk",
  "getrandom 0.2.17",
  "gleam-core",
+ "im",
  "indexmap",
  "morphir-common",
  "morphir-core",
@@ -4588,6 +4590,7 @@ dependencies = [
  "num-bigint 0.5.1",
  "percent-encoding",
  "pretty",
+ "rmp-serde",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4747,6 +4750,9 @@ dependencies = [
 [[package]]
 name = "morphir-runtime"
 version = "0.2.0"
+dependencies = [
+ "morphir-core",
+]
 
 [[package]]
 name = "morphir-rust-binding"

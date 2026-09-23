@@ -49,13 +49,13 @@ fn unsupported_valid_syntax_has_a_source_located_lowering_diagnostic() {
 }
 
 #[test]
-fn unsupported_values_do_not_prevent_types_only_or_ir3_output() {
-    for (version, types_only) in [("4", true), ("3", false)] {
+fn unsupported_values_are_skipped_only_in_types_only_output() {
+    for version in ["4", "3"] {
         let result = GleamExtension
             .compile(request(
                 "pub type Model = Int\npub fn run() { todo }",
                 version,
-                types_only,
+                true,
             ))
             .unwrap();
         assert!(result.success, "{:?}", result.diagnostics);
@@ -67,6 +67,24 @@ fn unsupported_values_do_not_prevent_types_only_or_ir3_output() {
                 .any(|d| d.code.as_deref() == Some("GLEAM_VALUE_SKIPPED"))
         );
     }
+    assert_v3_value_rejected(
+        "pub type Model = Int\npub fn run() { todo }",
+        "GLEAM_TYPED_ANALYSIS",
+    );
+}
+
+fn assert_v3_value_rejected(source: &str, code: &str) {
+    let result = GleamExtension.compile(request(source, "3", false)).unwrap();
+    assert!(!result.success, "{:?}", result.diagnostics);
+    assert!(result.ir.is_none());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.as_deref() == Some(code)),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -121,9 +139,9 @@ fn labelled_function_declarations_fail_instead_of_discarding_external_labels() {
         .expect("explicit labelled declaration limitation");
     assert!(diagnostic.message.contains("labelled function parameters"));
     assert_eq!(diagnostic.location.as_ref().unwrap().range.start.line, 1);
-    for (version, types_only) in [("4", true), ("3", false)] {
+    for version in ["4", "3"] {
         let result = GleamExtension
-            .compile(request(source, version, types_only))
+            .compile(request(source, version, true))
             .unwrap();
         assert!(result.success, "{:?}", result.diagnostics);
         assert!(result.ir.is_some());
@@ -134,6 +152,7 @@ fn labelled_function_declarations_fail_instead_of_discarding_external_labels() {
                 .any(|d| d.code.as_deref() == Some("GLEAM_VALUE_SKIPPED"))
         );
     }
+    assert_v3_value_rejected(source, "GLEAM_UNSUPPORTED_VALUE");
 }
 
 #[test]
@@ -271,9 +290,9 @@ fn constants_requiring_inference_or_function_kind_are_explicitly_unsupported() {
             .expect("explicit constant limitation");
         assert!(diagnostic.message.contains("constant"));
         assert_eq!(diagnostic.location.as_ref().unwrap().range.start.line, 2);
-        for (version, types_only) in [("4", true), ("3", false)] {
+        for version in ["4", "3"] {
             let result = GleamExtension
-                .compile(request(&source, version, types_only))
+                .compile(request(&source, version, true))
                 .unwrap();
             assert!(result.success, "{:?}", result.diagnostics);
             assert!(
@@ -283,6 +302,7 @@ fn constants_requiring_inference_or_function_kind_are_explicitly_unsupported() {
                     .any(|d| d.code.as_deref() == Some("GLEAM_VALUE_SKIPPED"))
             );
         }
+        assert_v3_value_rejected(&source, "GLEAM_UNSUPPORTED_VALUE");
     }
 }
 
@@ -307,11 +327,12 @@ fn new_constant_forms_do_not_inherit_legacy_function_lowering_shortcuts() {
             "{:?}",
             result.diagnostics
         );
-        for (version, types_only) in [("4", true), ("3", false)] {
+        for version in ["4", "3"] {
             let result = GleamExtension
-                .compile(request(&source, version, types_only))
+                .compile(request(&source, version, true))
                 .unwrap();
             assert!(result.success, "{:?}", result.diagnostics);
         }
+        assert_v3_value_rejected(&source, "GLEAM_UNSUPPORTED_VALUE");
     }
 }

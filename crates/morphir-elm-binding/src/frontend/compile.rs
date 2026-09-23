@@ -598,6 +598,7 @@ fn compile_one(
             entry.ir.clone(),
         ));
         run.results.push(ModuleResult {
+            frontend_state: None,
             name: dotted,
             uri: document.uri.clone(),
             status: ModuleStatus::Unchanged,
@@ -707,6 +708,7 @@ fn compile_one(
         ir.clone(),
     ));
     run.results.push(ModuleResult {
+        frontend_state: None,
         name: dotted,
         uri: document.uri.clone(),
         status: ModuleStatus::Compiled,
@@ -973,6 +975,7 @@ fn stop_headerless(
         }
     }
     run.results.push(ModuleResult {
+        frontend_state: None,
         name: entry.name.clone(),
         uri: entry.uri.clone(),
         status: ModuleStatus::Failed,
@@ -1009,6 +1012,7 @@ fn stop(
         }
     }
     run.results.push(ModuleResult {
+        frontend_state: None,
         name: dotted,
         uri: document.uri.clone(),
         status,

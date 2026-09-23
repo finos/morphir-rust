@@ -221,6 +221,7 @@ struct PreparedDocument {
     text: String,
     module_name: ModuleName,
     module_key: String,
+    gleam_module_key: String,
 }
 
 fn prepare_documents(
@@ -239,7 +240,7 @@ fn prepare_documents(
     let mut diagnostics = Vec::new();
     for document in documents {
         match module_name_from_document_uri(&document.uri, source_root.as_ref()) {
-            Ok(module_name) => {
+            Ok((module_name, gleam_module_key)) => {
                 let module_key = module_name.to_string();
                 if !seen.insert(module_key.clone()) {
                     diagnostics.push(error_diagnostic(
@@ -253,6 +254,7 @@ fn prepare_documents(
                         text: document.text.clone(),
                         module_name,
                         module_key,
+                        gleam_module_key,
                     });
                 }
             }
@@ -273,7 +275,7 @@ fn prepare_documents(
 fn module_name_from_document_uri(
     uri: &str,
     source_root: Option<&ParsedPath>,
-) -> std::result::Result<ModuleName, String> {
+) -> std::result::Result<(ModuleName, String), String> {
     let path = parsed_path(uri)?;
     // An explicit source root is authoritative. Without one, preserve the path
     // following the conventional `src` directory, or fall back to the basename.
@@ -304,7 +306,7 @@ fn module_name_from_document_uri(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    canonicalize_gleam_module_segments(&refs)
+    Ok((canonicalize_gleam_module_segments(&refs)?, refs.join("/")))
 }
 
 #[derive(Debug, PartialEq, Eq)]

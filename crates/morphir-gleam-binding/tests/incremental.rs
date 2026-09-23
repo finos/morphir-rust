@@ -121,6 +121,29 @@ fn unchanged_sources_reuse_ir_and_report_digests() {
 }
 
 #[test]
+fn unchanged_v3_modules_reuse_ir_with_upstream_type_interfaces() {
+    let mut input = request(A, Some(B));
+    input.options.ir_version = "3".into();
+    let first = compile(input.clone());
+    assert!(first.success, "{:?}", first.diagnostics);
+    input.baseline = Some(baseline(&CompileBaseline::default(), &first));
+    let second = compile(input);
+    assert!(second.success, "{:?}", second.diagnostics);
+    assert_eq!(second.ir, first.ir);
+    for name in ["a", "b"] {
+        assert_eq!(module(&second, name).status, ModuleStatus::Unchanged);
+    }
+
+    let mut changed = request(A_CHANGED, Some(B));
+    changed.options.ir_version = "3".into();
+    changed.baseline = Some(baseline(&CompileBaseline::default(), &first));
+    let third = compile(changed);
+    assert!(third.success, "{:?}", third.diagnostics);
+    assert_eq!(module(&third, "b").status, ModuleStatus::Unchanged);
+    assert_eq!(module(&third, "a").status, ModuleStatus::Compiled);
+}
+
+#[test]
 fn changed_public_type_recompiles_its_dependents() {
     let (first, baseline) = first();
     let result = rerun(A, Some("pub type Number = Float\n"), baseline);

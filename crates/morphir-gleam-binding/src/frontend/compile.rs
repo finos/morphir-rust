@@ -4,7 +4,7 @@ use super::{ast::ModuleIR, resolver};
 use crate::vfs::OsVfs;
 use crate::{error_diagnostic, failed_compile, incremental, version::IrVersion};
 use ecow::EcoString;
-use gleam_core::type_::ModuleInterface;
+use gleam_core::{ast::TypedModule, type_::ModuleInterface};
 use indexmap::IndexMap;
 use morphir_core::ir::v4::{
     Access, AccessControlled, Distribution, IRFile, LibraryContent, ModuleDefinition,
@@ -18,6 +18,26 @@ struct Document {
     source: crate::PreparedDocument,
     parsed: Option<ModuleIR>,
     diagnostics: Vec<Diagnostic>,
+}
+
+fn analyze_typed_module(
+    source: &crate::PreparedDocument,
+    parsed: &ModuleIR,
+    package: &str,
+    dependencies: &IndexMap<String, morphir_core::ir::v4::PackageSpecification>,
+    typed_interfaces: &im::HashMap<EcoString, ModuleInterface>,
+) -> std::result::Result<TypedModule, String> {
+    let mut interfaces = typed_interfaces.clone();
+    for import in &parsed.imports {
+        if import.module.starts_with("gleam/") && !interfaces.contains_key(import.module.as_str()) {
+            let sdk = dependencies
+                .get("morphir/SDK")
+                .ok_or("Missing explicit morphir/SDK dependency specification for Gleam import")?;
+            let interface = analysis::sdk_type_interface(&import.module, sdk)?;
+            interfaces.insert(import.module.as_str().into(), interface);
+        }
+    }
+    analysis::analyze_module(&source.gleam_module_key, package, &source.text, &interfaces)
 }
 
 pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
@@ -189,9 +209,15 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                 let mut current_imports = result.depends_on.clone();
                 current_imports.sort();
                 current_imports.dedup();
-                let decision = if version == IrVersion::V3 && !request.options.types_only {
-                    incremental::Decision::Compile
-                } else if stored_imports == current_imports {
+                let needs_typed_interface = documents
+                    .iter()
+                    .any(|document| imports[&document.source.module_key].contains(name));
+                let needs_typed_analysis = version == IrVersion::V3
+                    && !request.options.types_only
+                    && (!parsed.values.is_empty()
+                        || needs_typed_interface
+                        || parsed.imports.iter().any(|import| !import.types.is_empty()));
+                let decision = if stored_imports == current_imports {
                     incremental::decide(name, &source_digest, &baseline.modules, &changed)
                 } else {
                     incremental::Decision::Compile
@@ -199,10 +225,35 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                 match decision {
                     incremental::Decision::Reuse(entry) => {
                         let definition = baseline.definitions[name].clone();
-                        result.status = ModuleStatus::Unchanged;
-                        result.interface_digest = Some(entry.interface_digest);
-                        modules.insert(name.clone(), definition.clone());
-                        available.insert(name.clone(), definition);
+                        let typed_result = if needs_typed_analysis {
+                            analyze_typed_module(
+                                source,
+                                parsed,
+                                &package.to_string(),
+                                &dependencies,
+                                &typed_interfaces,
+                            )
+                            .map(|typed| Some(typed.type_info))
+                        } else {
+                            Ok(None)
+                        };
+                        match typed_result {
+                            Ok(interface) => {
+                                if let Some(interface) = interface {
+                                    typed_interfaces
+                                        .insert(source.gleam_module_key.as_str().into(), interface);
+                                }
+                                result.status = ModuleStatus::Unchanged;
+                                result.interface_digest = Some(entry.interface_digest);
+                                modules.insert(name.clone(), definition.clone());
+                                available.insert(name.clone(), definition);
+                            }
+                            Err(message) => result.diagnostics.push(error_diagnostic(
+                                "GLEAM_TYPED_ANALYSIS",
+                                message,
+                                Some(&source.uri),
+                            )),
+                        }
                     }
                     incremental::Decision::Compile => {
                         match resolver::resolve_one(&package, parsed, &available, &dependencies) {
@@ -242,41 +293,14 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                                         package.clone(),
                                         source.module_name.clone(),
                                     );
-                                    let needs_typed_interface = documents.iter().any(|document| {
-                                        imports[&document.source.module_key].contains(name)
-                                    });
-                                    let typed_values = if version == IrVersion::V3
-                                        && !request.options.types_only
-                                        && (!resolved.values.is_empty()
-                                            || needs_typed_interface
-                                            || parsed
-                                                .imports
-                                                .iter()
-                                                .any(|import| !import.types.is_empty()))
-                                    {
+                                    let typed_values = if needs_typed_analysis {
                                         let typed = (|| -> std::result::Result<_, String> {
-                                            let mut interfaces = typed_interfaces.clone();
-                                            for import in &parsed.imports {
-                                                if import.module.starts_with("gleam/")
-                                                    && !interfaces
-                                                        .contains_key(import.module.as_str())
-                                                {
-                                                    let sdk = dependencies.get("morphir/SDK").ok_or("Missing explicit morphir/SDK dependency specification for Gleam import")?;
-                                                    let interface = analysis::sdk_type_interface(
-                                                        &import.module,
-                                                        sdk,
-                                                    )?;
-                                                    interfaces.insert(
-                                                        import.module.as_str().into(),
-                                                        interface,
-                                                    );
-                                                }
-                                            }
-                                            let typed = analysis::analyze_module(
-                                                &source.gleam_module_key,
+                                            let typed = analyze_typed_module(
+                                                source,
+                                                parsed,
                                                 &package.to_string(),
-                                                &source.text,
-                                                &interfaces,
+                                                &dependencies,
+                                                &typed_interfaces,
                                             )?;
                                             let values =
                                                 analysis::lower_typed_functions(&typed, &package)?;

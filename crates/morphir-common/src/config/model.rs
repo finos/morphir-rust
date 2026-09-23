@@ -285,7 +285,7 @@ const IR_LAYOUT_VALUES: [&str; 2] = ["single-file", "document-tree"];
 
 /// The values `ir.format` accepts. The JSON schema (`morphir-config-v1.json`)
 /// restricts the field the same way; keep the two in agreement.
-const IR_FORMAT_VALUES: [&str; 2] = ["json", "yaml"];
+const IR_FORMAT_VALUES: [&str; 3] = ["json", "yaml", "ion"];
 
 fn deserialize_ir_layout<'de, D>(deserializer: D) -> Result<String, D::Error>
 where

@@ -225,7 +225,7 @@ METADATA_JSON=$(CARGO_TARGET_DIR="$BUILD_TARGET_DIR" cargo run \
 jq -e '
     type == "object" and
     (.crateVersion | type == "string" and length > 0) and
-    (.protocolVersion | type == "number" and . >= 0 and . == floor)
+    (.protocolVersion | type == "string" and test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$"))
 ' <<<"$METADATA_JSON" >/dev/null
 CRATE_VERSION=$(jq -er '.crateVersion' <<<"$METADATA_JSON")
 PROTOCOL_VERSION=$(jq -er '.protocolVersion' <<<"$METADATA_JSON")
@@ -323,7 +323,7 @@ fi
 
 jq --sort-keys --indent 2 -n \
     --arg crateVersion "$CRATE_VERSION" \
-    --argjson protocolVersion "$PROTOCOL_VERSION" \
+    --arg protocolVersion "$PROTOCOL_VERSION" \
     --arg rustSourceCommit "$SOURCE_COMMIT" \
     --arg wasmSha256 "$WASM_SHA256" \
     '{
@@ -338,7 +338,7 @@ cmp "$CORPUS_SOURCE" "$CORPUS_EXPORT"
 ACTUAL_SHA256=$(shasum -a 256 "$WASM_FILE" | awk '{ print $1 }')
 jq -e \
     --arg crateVersion "$CRATE_VERSION" \
-    --argjson protocolVersion "$PROTOCOL_VERSION" \
+    --arg protocolVersion "$PROTOCOL_VERSION" \
     --arg rustSourceCommit "$SOURCE_COMMIT" \
     --arg wasmSha256 "$ACTUAL_SHA256" \
     '.protocolVersion == $protocolVersion and

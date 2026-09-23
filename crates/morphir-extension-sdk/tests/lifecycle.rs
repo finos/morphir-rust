@@ -172,3 +172,45 @@ fn protocol_refuses_a_second_initialize() {
         );
     }
 }
+
+/// Each session a host opens over one provider has its own lifecycle: one
+/// session's shutdown does not close the next, and two sessions can be open
+/// at once.
+#[test]
+fn every_opened_protocol_has_its_own_lifecycle() {
+    let extension = NativeExtension::frontend_only(DocFrontend).unwrap();
+    let init = || {
+        request(
+            methods::INITIALIZE,
+            json!({"protocolVersions":["0.1"],"host":{"name":"test","version":"1"}}),
+        )
+    };
+
+    let first = extension.open_protocol();
+    assert!(first.handle(init()).error.is_none());
+    assert!(
+        first
+            .handle(request(methods::SHUTDOWN, json!({})))
+            .error
+            .is_none()
+    );
+    assert_not_initialized(first.handle(request(methods::INFO, json!({}))));
+
+    let second = extension.open_protocol();
+    assert_not_initialized(second.handle(request(methods::INFO, json!({}))));
+    assert!(second.handle(init()).error.is_none());
+    let third = extension.clone().open_protocol();
+    assert!(third.handle(init()).error.is_none());
+    assert!(
+        second
+            .handle(request(methods::INFO, json!({})))
+            .error
+            .is_none()
+    );
+    assert!(
+        third
+            .handle(request(methods::INFO, json!({})))
+            .error
+            .is_none()
+    );
+}

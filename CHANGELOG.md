@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinguishes describe from session fallback. Legacy installs retain the
   version-1 catalog shape, and competing installs cannot overwrite an entry. The SDK
   compares complete statements and names the first differing member.
+- Local extension repositories publish version-2 process bundles with verified
+  per-platform digests, checksums and capability statements. Host artifacts are
+  described through a caller-supplied probe; foreign statements remain declared.
+  Undeclared platform differences and probe disagreements are refused.
 - Extension distribution readers ignore unknown optional members, reject unknown
   critical paths, accept supported SemVer schemas, and convert flat capability
   metadata to declared statements while preserving supplied artifact statements

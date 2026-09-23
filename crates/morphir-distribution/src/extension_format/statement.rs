@@ -11,7 +11,7 @@ pub enum StatementProvenance {
     /// Metadata supplied by a publisher or converted from old flat keys.
     #[default]
     Declared,
-    /// Metadata verified by an installation probe.
+    /// Metadata verified by a publication or installation probe.
     Probed,
 }
 
@@ -171,6 +171,7 @@ impl StatementRecord {
                 parsed: statement,
             }));
             self.statement_source = None;
+            self.probe_source = None;
         }
     }
 }

@@ -29,6 +29,16 @@ const HEADER_MEMBERS: &[&str] = &[
 
 const MODULE_MEMBERS: &[&str] = &["critical", "doc", "name", "package", "types", "values"];
 
+const ALIAS_MEMBERS: &[&str] = &[
+    "critical",
+    "doc",
+    "module",
+    "name",
+    "package",
+    "typeExp",
+    "typeParams",
+];
+
 type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
 
 /// Built-in Ion IR codec.
@@ -282,18 +292,29 @@ fn read_library_modules(
     let mut modules = Vec::new();
     let mut seen = HashSet::new();
     for index in 1..last {
-        let module = read_def_module(values.get(index).expect("index is in range"), package)?;
-        if !seen.insert(module.path.clone()) {
-            return Err(IonCodec::error(
-                "morphir::ir::ion::duplicate_name",
-                Stage::Normalization,
-                format!(
-                    "module '{}' is already defined",
-                    canonical_package(&module.path)
-                ),
-            ));
+        let element = values.get(index).expect("index is in range");
+        match annotation_names(element)?.as_slice() {
+            ["public", "def", "module"] | ["private", "def", "module"] => {
+                let module = read_def_module(element, package)?;
+                if !seen.insert(module.path.clone()) {
+                    return Err(duplicate_name("module", &module.path));
+                }
+                modules.push(module);
+            }
+            ["public", "def", "alias", "type"] | ["private", "def", "alias", "type"] => {
+                attach_alias(element, package, &mut modules)?;
+            }
+            names => {
+                return Err(IonCodec::error(
+                    "morphir::ir::ion::unexpected_value",
+                    Stage::Detection,
+                    format!(
+                        "expected a module or an alias type, found {}",
+                        display_annotations(names)
+                    ),
+                ));
+            }
         }
-        modules.push(module);
     }
     Ok(modules)
 }
@@ -317,14 +338,7 @@ fn read_inline_modules(
     for element in list.iter() {
         let module = read_def_module(element, package)?;
         if !seen.insert(module.path.clone()) {
-            return Err(IonCodec::error(
-                "morphir::ir::ion::duplicate_name",
-                Stage::Normalization,
-                format!(
-                    "module '{}' is already defined",
-                    canonical_package(&module.path)
-                ),
-            ));
+            return Err(duplicate_name("module", &module.path));
         }
         decoded.push(module);
     }
@@ -372,16 +386,7 @@ fn read_def_module(
     };
     let fields = struct_fields(element, "module")?;
     reject_critical_unknowns(&fields, MODULE_MEMBERS)?;
-    if let Some(declared) = optional_string(&fields, "package")? {
-        let declared_package = classic_path(declared)?;
-        if declared_package != *package {
-            return Err(IonCodec::error(
-                "morphir::ir::ion::unexpected_member",
-                Stage::Normalization,
-                "a v3 module definition belongs to the distribution package",
-            ));
-        }
-    }
+    require_distribution_package(&fields, package)?;
     reject_populated_member_list(&fields, "types")?;
     reject_populated_member_list(&fields, "values")?;
     let name = required_string(&fields, "name")?;
@@ -396,6 +401,175 @@ fn read_def_module(
             },
         },
     })
+}
+
+fn attach_alias(
+    element: &Element,
+    package: &classic::Path,
+    modules: &mut [ClassicModule],
+) -> Result<(), TransportDiagnostic> {
+    let access = match annotation_names(element)?.as_slice() {
+        ["public", "def", "alias", "type"] => classic::Access::Public,
+        ["private", "def", "alias", "type"] => classic::Access::Private,
+        names => {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unexpected_value",
+                Stage::Detection,
+                format!(
+                    "expected public::def::alias::type, found {}",
+                    display_annotations(names)
+                ),
+            ));
+        }
+    };
+    let fields = struct_fields(element, "alias::type")?;
+    reject_critical_unknowns(&fields, ALIAS_MEMBERS)?;
+    require_distribution_package(&fields, package)?;
+    let module_name = required_string(&fields, "module")?;
+    let module_path = classic_path(module_name)?;
+    let module = modules
+        .iter_mut()
+        .find(|module| module.path == module_path)
+        .ok_or_else(|| {
+            IonCodec::error(
+                "morphir::ir::ion::missing_member",
+                Stage::Normalization,
+                format!("module '{module_name}' is not defined"),
+            )
+        })?;
+    let name = classic_path(required_string(&fields, "name")?)?;
+    if name.segments.len() != 1 {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_name",
+            Stage::Normalization,
+            "a type name is one canonical name",
+        ));
+    }
+    let local_name = name.segments[0].clone();
+    if module
+        .definition
+        .value
+        .types
+        .iter()
+        .any(|(existing, _)| existing == &local_name)
+    {
+        return Err(duplicate_name("type", &name));
+    }
+    let type_exp = compact_type(required_string(&fields, "typeExp")?)?;
+    module.definition.value.types.push((
+        local_name,
+        classic::AccessControlled {
+            access,
+            value: classic::Documented {
+                doc: optional_string(&fields, "doc")?.unwrap_or("").to_owned(),
+                value: classic::TypeDefinition::Alias(
+                    canonical_name_list(&fields, "typeParams")?,
+                    type_exp,
+                ),
+            },
+        },
+    ));
+    Ok(())
+}
+
+fn compact_type(text: &str) -> Result<classic::Type<classic::Attrs>, TransportDiagnostic> {
+    if text.contains('#') || text.contains(':') {
+        let name = morphir_core::naming::FQName::from_canonical_string(text).map_err(|error| {
+            IonCodec::error(
+                "morphir::ir::ion::invalid_name",
+                Stage::Normalization,
+                error,
+            )
+        })?;
+        return Ok(classic::Type::Reference(
+            classic::Attrs::None,
+            classic::FQName::new(
+                classic_path_from(&name.package_path),
+                classic_path_from(&name.module_path),
+                classic_name_from(&name.local_name),
+            ),
+            Vec::new(),
+        ));
+    }
+    let name = morphir_core::naming::Name::from_canonical_string(text).map_err(|error| {
+        IonCodec::error(
+            "morphir::ir::ion::invalid_name",
+            Stage::Normalization,
+            error,
+        )
+    })?;
+    Ok(classic::Type::Variable(
+        classic::Attrs::None,
+        classic_name_from(&name),
+    ))
+}
+
+fn canonical_name_list(
+    fields: &BTreeMap<&str, &Element>,
+    name: &str,
+) -> Result<Vec<classic::Name>, TransportDiagnostic> {
+    let Some(element) = fields.get(name) else {
+        return Ok(Vec::new());
+    };
+    let Some(list) = element.as_list() else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_member",
+            Stage::Normalization,
+            format!("{name} is a list"),
+        ));
+    };
+    let mut names = Vec::new();
+    for item in list.iter() {
+        let Some(text) = item.as_string() else {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::invalid_member",
+                Stage::Normalization,
+                format!("{name} contains a canonical name"),
+            ));
+        };
+        let parsed = morphir_core::naming::Name::from_canonical_string(text).map_err(|error| {
+            IonCodec::error(
+                "morphir::ir::ion::invalid_name",
+                Stage::Normalization,
+                error,
+            )
+        })?;
+        names.push(classic_name_from(&parsed));
+    }
+    Ok(names)
+}
+
+fn classic_name_from(name: &morphir_core::naming::Name) -> classic::Name {
+    classic::Name::new(name.words())
+}
+
+fn classic_path_from(path: &morphir_core::naming::Path) -> classic::Path {
+    classic::Path::new(path.segments.iter().map(classic_name_from).collect())
+}
+
+fn require_distribution_package(
+    fields: &BTreeMap<&str, &Element>,
+    package: &classic::Path,
+) -> Result<(), TransportDiagnostic> {
+    let Some(declared) = optional_string(fields, "package")? else {
+        return Ok(());
+    };
+    if classic_path(declared)? != *package {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_member",
+            Stage::Normalization,
+            "a v3 definition belongs to the distribution package",
+        ));
+    }
+    Ok(())
+}
+
+fn duplicate_name(kind: &str, path: &classic::Path) -> TransportDiagnostic {
+    IonCodec::error(
+        "morphir::ir::ion::duplicate_name",
+        Stage::Normalization,
+        format!("{kind} '{}' is already defined", canonical_package(path)),
+    )
 }
 
 fn reject_populated_member_list(

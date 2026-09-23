@@ -64,6 +64,63 @@ public::def::module::{
 morphir_footer::{}
 "#;
 
+const V3_ALIAS_JSON: &str = r#"{
+  "formatVersion": 3,
+  "distribution": ["Library", [["example"]], [], {
+    "modules": [
+      [
+        [["eligibility"]],
+        {
+          "access": "Public",
+          "value": {
+            "types": [
+              [
+                ["decision"],
+                {
+                  "access": "Public",
+                  "value": {
+                    "doc": "",
+                    "value": [
+                      "TypeAliasDefinition",
+                      [],
+                      [
+                        "Reference",
+                        {},
+                        [[["morphir"], ["s", "d", "k"]], [["basics"]], ["bool"]],
+                        []
+                      ]
+                    ]
+                  }
+                }
+              ]
+            ],
+            "values": [],
+            "doc": null
+          }
+        }
+      ]
+    ]
+  }]
+}"#;
+
+const V3_ALIAS_ION: &str = r#"
+morphir::{
+  ionVersion: "0.1.0-draft.1",
+  formatVersion: "3.0.0",
+  kind: library,
+  packageName: "example",
+}
+public::def::module::{
+  name: "eligibility",
+}
+public::def::alias::type::{
+  module: "eligibility",
+  name: "decision",
+  typeExp: "morphir/SDK:basics#bool",
+}
+morphir_footer::{}
+"#;
+
 const V3_MODULE_RECORD: &str = r#"
 morphir::{
   ionVersion: "0.1.0-draft.1",
@@ -137,6 +194,24 @@ fn an_empty_v3_library_datagram_matches_the_json_ir() {
     let json = decode(
         &JsonCodec::new(),
         V3_JSON,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
+    )
+    .unwrap();
+
+    assert_eq!(ion, json);
+}
+
+#[test]
+fn a_public_v3_alias_datagram_matches_the_json_ir() {
+    let ion = decode(
+        &IonCodec::new(),
+        V3_ALIAS_ION,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion()),
+    )
+    .unwrap();
+    let json = decode(
+        &JsonCodec::new(),
+        V3_ALIAS_JSON,
         &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
     )
     .unwrap();

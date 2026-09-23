@@ -220,6 +220,24 @@ fn a_public_v3_alias_datagram_matches_the_json_ir() {
 }
 
 #[test]
+fn a_public_v3_alias_round_trips_through_ion() {
+    let json_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json());
+    let ion_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion());
+    let original = decode(&JsonCodec::new(), V3_ALIAS_JSON, &json_options).unwrap();
+
+    let ion = encode(&IonCodec::new(), original.clone(), &ion_options).unwrap();
+    let from_ion = decode(&IonCodec::new(), &ion, &ion_options)
+        .unwrap_or_else(|error| panic!("failed to decode generated Ion: {error:?}\n{ion}"));
+
+    assert_eq!(from_ion, original);
+    assert!(ion.contains("public::def::alias::type"), "{ion}");
+    assert!(
+        ion.contains(r#"typeExp: "morphir/SDK:basics#bool""#),
+        "{ion}"
+    );
+}
+
+#[test]
 fn a_public_v3_module_datagram_matches_the_json_ir() {
     let ion = decode(
         &IonCodec::new(),

@@ -168,6 +168,9 @@ fn write_v3_library(
     let mut sequence = ion_rs::Sequence::builder().push(header);
     for module in &definition.modules {
         sequence = sequence.push(module_element(module)?);
+        for type_definition in &module.definition.value.types {
+            sequence = sequence.push(alias_element(&module.path, type_definition)?);
+        }
     }
     let text: String = sequence
         .push(footer)
@@ -201,11 +204,11 @@ fn write_v3_library(
 
 fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic> {
     let definition = &module.definition.value;
-    if !definition.types.is_empty() || !definition.values.is_empty() {
+    if !definition.values.is_empty() {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_node",
             Stage::Encoding,
-            "the Ion writer does not encode module types or values yet",
+            "the Ion writer does not encode module values yet",
         ));
     }
     let access = match module.definition.access {
@@ -219,17 +222,79 @@ fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic
     Ok(Element::from(builder.build()).with_annotations([access, "def", "module"]))
 }
 
+fn alias_element(
+    module: &classic::Path,
+    definition: &(
+        classic::Name,
+        classic::AccessControlled<classic::Documented<classic::TypeDefinition<classic::Attrs>>>,
+    ),
+) -> Result<Element, TransportDiagnostic> {
+    let (name, body) = definition;
+    let classic::TypeDefinition::Alias(parameters, type_exp) = &body.value.value else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Encoding,
+            "the Ion writer encodes alias types only",
+        ));
+    };
+    let access = match body.access {
+        classic::Access::Public => "public",
+        classic::Access::Private => "private",
+    };
+    let mut builder = ion_rs::Struct::builder()
+        .with_field("module", canonical_package(module))
+        .with_field("name", canonical_name(name))
+        .with_field("typeExp", compact_type_text(type_exp)?);
+    if !parameters.is_empty() {
+        let parameters = parameters
+            .iter()
+            .map(canonical_name)
+            .fold(ion_rs::Sequence::builder(), |builder, name| {
+                builder.push(name)
+            })
+            .build_list();
+        builder = builder.with_field("typeParams", parameters);
+    }
+    if !body.value.doc.is_empty() {
+        builder = builder.with_field("doc", body.value.doc.as_str());
+    }
+    Ok(Element::from(builder.build()).with_annotations([access, "def", "alias", "type"]))
+}
+
+fn compact_type_text(
+    type_exp: &classic::Type<classic::Attrs>,
+) -> Result<String, TransportDiagnostic> {
+    match type_exp {
+        classic::Type::Reference(classic::Attrs::None, name, arguments) if arguments.is_empty() => {
+            Ok(format!(
+                "{}:{}#{}",
+                canonical_package(&name.package_path),
+                canonical_package(&name.module_path),
+                canonical_name(&name.local_name)
+            ))
+        }
+        classic::Type::Variable(classic::Attrs::None, name) => Ok(canonical_name(name)),
+        _ => Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Encoding,
+            "the Ion writer encodes a reference or a variable as typeExp",
+        )),
+    }
+}
+
+fn canonical_name(name: &classic::Name) -> String {
+    let words = name
+        .words
+        .iter()
+        .copied()
+        .map(morphir_core::naming::resolve);
+    morphir_core::naming::Name::from_words(words).to_canonical_string()
+}
+
 fn canonical_package(path: &classic::Path) -> String {
     path.segments
         .iter()
-        .map(|name| {
-            let words = name
-                .words
-                .iter()
-                .copied()
-                .map(morphir_core::naming::resolve);
-            morphir_core::naming::Name::from_words(words).to_canonical_string()
-        })
+        .map(canonical_name)
         .collect::<Vec<_>>()
         .join("/")
 }

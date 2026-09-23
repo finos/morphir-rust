@@ -4,7 +4,8 @@ use super::{ExpectedExtension, Loaded, MepTransport, Session, TransportError, Tr
 use crate::DaemonError;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use async_trait::async_trait;
-use morphir_extension_sdk::NativeExtension;
+use morphir_extension_sdk::{NativeExtension, NativeProtocol};
+use std::sync::Arc;
 
 /// Factory for native extension typestate sessions.
 pub struct NativeMepSession;
@@ -19,7 +20,9 @@ impl NativeMepSession {
 /// In-process implementation of the object-safe MEP transport.
 pub struct NativeMepTransport {
     expected: ExpectedExtension,
-    extension: NativeExtension,
+    /// This session's own protocol endpoint: clones of one provider share
+    /// handlers, not lifecycle, so sessions over it do not interfere.
+    protocol: Arc<dyn NativeProtocol>,
     stopped: bool,
 }
 
@@ -32,7 +35,7 @@ impl NativeMepTransport {
         );
         Self {
             expected,
-            extension,
+            protocol: extension.open_protocol(),
             stopped: false,
         }
     }
@@ -55,8 +58,8 @@ impl MepTransport for NativeMepTransport {
             ));
         }
 
-        let extension = self.extension.clone();
-        tokio::task::spawn_blocking(move || extension.protocol().handle(request))
+        let protocol = Arc::clone(&self.protocol);
+        tokio::task::spawn_blocking(move || protocol.handle(request))
             .await
             .map_err(|error| {
                 TransportError::new(

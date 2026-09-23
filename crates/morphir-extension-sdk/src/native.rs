@@ -131,7 +131,7 @@ pub struct NativeExtension {
     info: ExtensionInfo,
     roles: NativeRoles,
     common: CommonCapabilities,
-    protocol: Arc<dyn NativeProtocol>,
+    protocol: Arc<ProtocolHandle>,
 }
 
 /// Fixtures used only by this crate's doctests. Not part of the public API.
@@ -323,9 +323,23 @@ impl NativeExtension {
 
     /// Return the protocol endpoint, which requires initialization before work.
     ///
+    /// Every clone of this extension shares this endpoint and its lifecycle.
+    /// A host that opens more than one session uses [`Self::open_protocol`].
     /// Direct typed handles do not participate in the protocol lifecycle.
     pub fn protocol(&self) -> &dyn NativeProtocol {
         self.protocol.as_ref()
+    }
+
+    /// Open a protocol endpoint with its own lifecycle, for one session.
+    ///
+    /// The endpoint starts before `morphir.initialize` and shares the
+    /// extension's handlers, so a host can run one session after another, or
+    /// several at once, over the same provider.
+    pub fn open_protocol(&self) -> Arc<dyn NativeProtocol> {
+        Arc::new(ProtocolHandle {
+            session: crate::__ProtocolSession::new(),
+            dispatch: Arc::clone(&self.protocol.dispatch),
+        })
     }
 }
 
@@ -464,9 +478,11 @@ where
         // not the authored aggregate validated above — see `project_capabilities`.
         let protocol = Arc::new(ProtocolHandle {
             session: crate::__ProtocolSession::new(),
-            dispatchers: roles.dispatchers(),
-            info: info.clone(),
-            capabilities: project_capabilities(&roles, &common),
+            dispatch: Arc::new(ProtocolDispatch {
+                dispatchers: roles.dispatchers(),
+                info: info.clone(),
+                capabilities: project_capabilities(&roles, &common),
+            }),
         });
 
         Ok(NativeExtension {
@@ -611,17 +627,28 @@ where
     }
 }
 
-struct ProtocolHandle {
-    session: crate::__ProtocolSession,
+/// The handlers a protocol endpoint dispatches to, shared by every session.
+struct ProtocolDispatch {
     dispatchers: Vec<NativeRoleDispatch>,
     info: ExtensionInfo,
     capabilities: ExtensionCapabilities,
 }
 
+struct ProtocolHandle {
+    session: crate::__ProtocolSession,
+    dispatch: Arc<ProtocolDispatch>,
+}
+
 impl NativeProtocol for ProtocolHandle {
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
+        let dispatch = &self.dispatch;
         self.session.dispatch(&request, || {
-            dispatch_request_with_roles(&request, &self.dispatchers, &self.info, &self.capabilities)
+            dispatch_request_with_roles(
+                &request,
+                &dispatch.dispatchers,
+                &dispatch.info,
+                &dispatch.capabilities,
+            )
         })
     }
 }

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The package MVP adapter exposes `update-local-library` through the production
+  scoped-update API. Its bounded protocol checks all 27 frozen success and
+  refusal scenarios, including target selection, old pins, authenticated
+  metadata, content and protected-state failures (finos/morphir#852).
 - The package MVP adapter exposes metadata-only `refresh-local-library` through
   the production refresh API, returning authenticated envelope digests without
   acquiring package assets or writing consumer output (finos/morphir#852).

@@ -65,8 +65,9 @@ impl SourceIdentity for GleamIdentity {
         format!("local/{}", module.replace('/', "-"))
     }
 
-    fn check_package_name(&self, name: &str) -> std::result::Result<(), String> {
-        crate::validate_package_name(name).map(|_| ())
+    /// Gleam reports an accepted name as the request spelled it.
+    fn normalize_package_name(&self, name: &str) -> std::result::Result<String, String> {
+        crate::validate_package_name(name).map(|_| name.to_owned())
     }
 }
 

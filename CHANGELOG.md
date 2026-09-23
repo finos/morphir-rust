@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The built-in Elm workspace provider reports an explicit ad-hoc package name
+  in its normal form (finos/morphir#917). It splits the name on `/` and `.`,
+  splits each piece into words as morphir-elm `Name.fromString` does, and joins
+  words with `-` and pieces with `/`: `My.Package` and `My/Package` both report
+  `my/package`. A piece with no letters or digits is refused with
+  `workspace.project-name.invalid`. The `SourceIdentity` hook
+  `check_package_name` is now `normalize_package_name` and returns the name the
+  snapshot reports; Gleam keeps its names unchanged.
+
 ### Added
 - The package MVP adapter exposes `update-local-library` through the production
   scoped-update API. Its bounded protocol checks all 27 frozen success and

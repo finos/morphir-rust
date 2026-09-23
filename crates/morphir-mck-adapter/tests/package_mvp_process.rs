@@ -76,6 +76,20 @@ fn refresh(files: Vec<Value>) -> Output {
     exchange(&format!("{request}\n"))
 }
 
+#[test]
+fn refresh_rejects_an_unmodeled_consumer_output_setup() {
+    let request = json!({
+        "id":2,"op":"refresh-local-library","profile":PROFILE,"files":files(),
+        "environment":{"trustState":"initialized","output":"sentinel"}
+    });
+    let output = exchange(&format!("{request}\n"));
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("metadata-only refresh requires absent consumer output")
+    );
+}
+
 fn responses(output: &Output) -> Vec<Value> {
     assert!(
         output.status.success(),

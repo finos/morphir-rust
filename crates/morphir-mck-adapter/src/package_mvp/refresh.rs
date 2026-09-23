@@ -4,6 +4,10 @@ pub(super) async fn execute(
     files: BTreeMap<String, Vec<u8>>,
     environment: Environment,
 ) -> Result<serde_json::Value> {
+    ensure!(
+        environment.output == OutputSetup::Absent,
+        "metadata-only refresh requires absent consumer output"
+    );
     let directory = tempfile::tempdir()?;
     let root = directory.path();
     for (name, bytes) in &files {

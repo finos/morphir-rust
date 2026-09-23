@@ -1,5 +1,6 @@
 use morphir_core::ir::classic as ir;
-use morphir_runtime::{EvaluationLimits, RuntimeValue, evaluate_v3};
+use morphir_runtime::{EvaluationLimits, RuntimeValue, evaluate_v3, evaluate_v3_with_deadline};
+use std::time::{Duration, Instant};
 
 type Expr = ir::Value<ir::Attrs, ir::Type<ir::Attrs>>;
 
@@ -460,4 +461,19 @@ fn lexical_definition_and_recursive_local_function_are_evaluated() {
         EvaluationLimits::default(),
     );
     assert_eq!(actual, Ok(RuntimeValue::Integer(3)));
+}
+
+#[test]
+fn expired_host_deadline_stops_before_reducing_the_rule() {
+    let actual = evaluate_v3_with_deadline(
+        &independent_arity_program(true),
+        &reference("rules", "check-arity"),
+        vec![RuntimeValue::Integer(0), RuntimeValue::List(vec![])],
+        EvaluationLimits::default(),
+        Some(Instant::now() - Duration::from_millis(1)),
+    );
+    assert_eq!(
+        actual,
+        Err(morphir_runtime::EvaluationError::DeadlineExceeded)
+    );
 }

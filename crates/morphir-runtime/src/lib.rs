@@ -3,6 +3,7 @@
 use morphir_core::ir::classic as ir;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 type Expression = ir::Value<ir::Attrs, ir::Type<ir::Attrs>>;
 type Definition = ir::ValueDefinition<ir::Attrs, ir::Type<ir::Attrs>>;
@@ -50,6 +51,7 @@ pub enum EvaluationError {
     TypeMismatch(&'static str),
     NonExhaustivePattern,
     FuelExhausted,
+    DeadlineExceeded,
     CallDepthExceeded,
     IntegerOverflow,
     UnsupportedExpression(&'static str),
@@ -84,6 +86,7 @@ struct Evaluator<'a> {
     distribution: &'a ir::Distribution,
     remaining_fuel: u64,
     max_call_depth: usize,
+    deadline: Option<Instant>,
 }
 
 /// Evaluate one top-level V3 value with typed runtime arguments.
@@ -92,6 +95,17 @@ pub fn evaluate_v3(
     entrypoint: &ir::FQName,
     arguments: Vec<RuntimeValue>,
     limits: EvaluationLimits,
+) -> Result<RuntimeValue, EvaluationError> {
+    evaluate_v3_with_deadline(distribution, entrypoint, arguments, limits, None)
+}
+
+/// Evaluate with an optional host deadline, checked at each reduction step.
+pub fn evaluate_v3_with_deadline(
+    distribution: &ir::Distribution,
+    entrypoint: &ir::FQName,
+    arguments: Vec<RuntimeValue>,
+    limits: EvaluationLimits,
+    deadline: Option<Instant>,
 ) -> Result<RuntimeValue, EvaluationError> {
     if distribution.format_version != 3 {
         return Err(EvaluationError::UnsupportedVersion(
@@ -102,6 +116,7 @@ pub fn evaluate_v3(
         distribution,
         remaining_fuel: limits.fuel,
         max_call_depth: limits.max_call_depth,
+        deadline,
     };
     let definition = evaluator
         .definition(entrypoint)
@@ -161,6 +176,12 @@ impl<'a> Evaluator<'a> {
     }
 
     fn tick(&mut self) -> Result<(), EvaluationError> {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(EvaluationError::DeadlineExceeded);
+        }
         self.remaining_fuel = self
             .remaining_fuel
             .checked_sub(1)

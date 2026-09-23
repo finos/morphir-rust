@@ -62,6 +62,7 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "elm-native-release-test".into(),
                 version: "1.0.0".into(),
             },

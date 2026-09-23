@@ -53,6 +53,7 @@ async fn installed_wasm_runs_the_common_mep_lifecycle() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "morphir-installed-wasm-conformance".into(),
                 version: "0.1.0".into(),
             },

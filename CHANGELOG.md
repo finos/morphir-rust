@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- MEP `initialize.host` carries an optional typed CLI peer kind. Missing or
+  unknown kinds remain unspecified.
 - Bounded classic V3 IR evaluation with typed inputs and outputs, explicit
   preflight and runtime failures, and a first recursive arity-rule pilot.
 - Gleam V3 typed value lowering and caller-owned typed interfaces for

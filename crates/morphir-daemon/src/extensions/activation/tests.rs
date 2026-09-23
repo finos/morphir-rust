@@ -581,6 +581,7 @@ async fn process_activation_negotiates_persisted_frontend_and_backend_capabiliti
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },
@@ -607,6 +608,7 @@ async fn process_activation_allows_unpersisted_workspace_capabilities() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },
@@ -632,6 +634,7 @@ async fn process_activation_rejects_frontend_capability_drift() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },
@@ -679,6 +682,7 @@ async fn wasm_activation_uses_locked_identity_for_the_shared_loaded_transport() 
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },
@@ -701,6 +705,7 @@ async fn wasm_activation_negotiates_persisted_frontend_and_backend_capabilities(
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },
@@ -726,6 +731,7 @@ async fn wasm_activation_allows_unpersisted_workspace_capabilities() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },
@@ -750,6 +756,7 @@ async fn wasm_activation_rejects_frontend_capability_drift() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "activation-test".into(),
                 version: "1.0.0".into(),
             },

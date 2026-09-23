@@ -52,6 +52,7 @@ async fn installed_openapi_wasm_runs_one_generation_through_the_host() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "morphir-installed-wasm-conformance".into(),
                 version: "0.1.0".into(),
             },

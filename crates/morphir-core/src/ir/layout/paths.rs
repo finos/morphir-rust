@@ -156,7 +156,7 @@ pub fn to_physical(logical: &str, profile: Profile) -> String {
 /// it.
 pub fn from_physical(physical: &str) -> Option<String> {
     let normalized = physical.replace('\\', "/");
-    for ext in [".json", ".yaml", ".yml"] {
+    for ext in [".json", ".yaml", ".yml", ".ion"] {
         if let Some(stripped) = normalized.strip_suffix(ext) {
             return Some(stripped.to_string());
         }

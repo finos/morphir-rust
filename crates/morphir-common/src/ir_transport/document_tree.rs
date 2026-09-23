@@ -48,10 +48,11 @@ const MIGRATE_GUIDANCE: &str =
 /// The manifest file names a tree root may carry, and the profile each selects.
 ///
 /// `.yml` is read but never written, as the kit's `from_physical` treats it.
-const MANIFEST_NAMES: [(&str, Profile); 3] = [
+const MANIFEST_NAMES: [(&str, Profile); 4] = [
     ("manifest.json", Profile::Json),
     ("manifest.yaml", Profile::Yaml),
     ("manifest.yml", Profile::Yaml),
+    ("manifest.ion", Profile::Ion),
 ];
 
 // =============================================================================
@@ -149,12 +150,14 @@ fn profile_of(format: &FormatId) -> Result<Profile, TransportDiagnostic> {
         Ok(Profile::Json)
     } else if *format == FormatId::yaml() {
         Ok(Profile::Yaml)
+    } else if *format == FormatId::ion() {
+        Ok(Profile::Ion)
     } else {
         Err(tree_error(
             "morphir::ir::document_tree::unsupported_format",
             Stage::Detection,
             format!("document trees do not have a '{format}' profile"),
-            "select json or yaml, or register a document-tree profile",
+            "select json, yaml, or ion, or register a document-tree profile",
         ))
     }
 }
@@ -164,6 +167,7 @@ fn format_of(profile: Profile) -> FormatId {
     match profile {
         Profile::Json => FormatId::json(),
         Profile::Yaml => FormatId::yaml(),
+        Profile::Ion => FormatId::ion(),
     }
 }
 
@@ -199,6 +203,7 @@ fn agrees_with(physical: &str, profile: Profile) -> bool {
     match profile {
         Profile::Json => physical.ends_with(".json"),
         Profile::Yaml => physical.ends_with(".yaml") || physical.ends_with(".yml"),
+        Profile::Ion => physical.ends_with(".ion"),
     }
 }
 
@@ -281,7 +286,7 @@ pub fn discover_document_tree_format(root: &VfsPath) -> Result<FormatId, Transpo
             "morphir::ir::detection::missing_manifest",
             Stage::Detection,
             "the document tree has no supported manifest",
-            "add manifest.yaml or manifest.json, or select single-file input",
+            "add manifest.yaml, manifest.json, or manifest.ion, or select single-file input",
         )),
         _ => Err(tree_error(
             "morphir::ir::detection::ambiguous_manifest",

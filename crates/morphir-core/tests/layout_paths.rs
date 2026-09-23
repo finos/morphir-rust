@@ -89,6 +89,10 @@ fn from_physical_recognizes_every_known_extension() {
         from_physical("pkg/a/module.yml").as_deref(),
         Some("pkg/a/module")
     );
+    assert_eq!(
+        from_physical("pkg/a/name.type.ion").as_deref(),
+        Some("pkg/a/name.type")
+    );
 }
 
 #[test]
@@ -114,6 +118,10 @@ fn to_physical_appends_the_profile_extension() {
     assert_eq!(
         to_physical("pkg/a/module", Profile::Yaml),
         "pkg/a/module.yaml"
+    );
+    assert_eq!(
+        to_physical("pkg/a/module", Profile::Ion),
+        "pkg/a/module.ion"
     );
 }
 

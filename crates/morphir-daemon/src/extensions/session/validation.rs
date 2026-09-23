@@ -79,11 +79,30 @@ fn frontend_differences(
             if advertised.fragments != discovered.fragments {
                 members.push("fragments");
             }
+            if advertised.multi_document != discovered.multi_document {
+                members.push("multiDocument");
+            }
             members
         }
         (None, Some(_)) => vec!["no frontend capability was advertised"],
         (Some(_), None) => vec!["no frontend capability was discovered"],
         (None, None) => Vec::new(),
+    }
+}
+
+/// A persisted frontend record, completed with the members it cannot carry.
+///
+/// An installed record persists the frontend members its release record
+/// declares. `multiDocument` is not one of them, so a persisted record's value
+/// for it is unknown rather than false, and the guest's advertised value
+/// stands. Every member the record does carry must still agree.
+fn persisted_frontend(
+    persisted: &FrontendCapability,
+    advertised: Option<&FrontendCapability>,
+) -> FrontendCapability {
+    FrontendCapability {
+        multi_document: advertised.is_some_and(|advertised| advertised.multi_document),
+        ..persisted.clone()
     }
 }
 
@@ -460,15 +479,19 @@ pub(in crate::extensions) fn validate_negotiation(
             }
             CapabilityExpectation::Persisted(discovered)
                 if discovered.frontend().is_some_and(|expected| {
-                    result.capabilities.frontend.as_ref() != Some(expected)
+                    result.capabilities.frontend.as_ref()
+                        != Some(&persisted_frontend(
+                            expected,
+                            result.capabilities.frontend.as_ref(),
+                        ))
                 }) =>
             {
+                let expected = discovered.frontend().map(|expected| {
+                    persisted_frontend(expected, result.capabilities.frontend.as_ref())
+                });
                 Some((
                     "frontend capabilities",
-                    frontend_differences(
-                        result.capabilities.frontend.as_ref(),
-                        discovered.frontend(),
-                    ),
+                    frontend_differences(result.capabilities.frontend.as_ref(), expected.as_ref()),
                 ))
             }
             CapabilityExpectation::Persisted(discovered)
@@ -768,6 +791,38 @@ mod tests {
         assert_eq!(order_rx.recv().await, Some("marker"));
         validation.await.unwrap();
         assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    /// An installed record cannot carry `multiDocument`, so a guest that
+    /// advertises it still agrees with its persisted frontend record, while a
+    /// member the record does carry must still match.
+    #[test]
+    fn a_persisted_frontend_leaves_multi_document_to_the_guest() {
+        let persisted = FrontendCapability {
+            ir_versions: vec!["3".into()],
+            compile: true,
+            ..FrontendCapability::default()
+        };
+        let advertised = FrontendCapability {
+            multi_document: true,
+            ..persisted.clone()
+        };
+
+        assert_eq!(
+            persisted_frontend(&persisted, Some(&advertised)),
+            advertised
+        );
+
+        let drifted = FrontendCapability {
+            ir_versions: vec!["4".into()],
+            ..advertised.clone()
+        };
+        let completed = persisted_frontend(&persisted, Some(&drifted));
+        assert_ne!(completed, drifted);
+        assert_eq!(
+            frontend_differences(Some(&drifted), Some(&completed)),
+            vec!["irVersions"]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -28,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FrontendCapability.multiDocument` declares that one compile request may
   submit more than one document. It defaults to false, so a host refuses a
   larger source set before invoking a frontend that does not declare it. The
-  native Elm and Gleam frontends declare it.
+  native Elm and Gleam frontends declare it. An installed release record does not persist
+  it, so a session with an installed extension takes the guest's advertised
+  value for it rather than refusing the session over it; every member the
+  record does persist must still agree.
 - `ResolvedFrontend::supports_workspace_discovery` and `native_workspace`, and
   `morphir_devkit::capture_source_selection`, which captures an explicit source
   selection as an ad-hoc discovery request under one root, with canonical,

@@ -87,6 +87,8 @@ enum OutputSetup {
 
 /// Drive the bounded local Library MVP adapter through actual package APIs.
 /// An invalid protocol or unclassified production error stops the process.
+/// A runnable signed `resolve-local-library` request and response is in
+/// `examples/package_mvp_resolve.rs` (`cargo run -p morphir-mck-adapter --example package_mvp_resolve`).
 ///
 /// ```
 /// use morphir_mck_adapter::package_mvp::run;

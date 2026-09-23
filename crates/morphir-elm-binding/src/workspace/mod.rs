@@ -496,6 +496,8 @@ mod tests {
             ("acme//widgets", "acme/widgets"),
             (" acme / widgets ", "acme/widgets"),
             ("a.b/c", "a/b/c"),
+            // The trim set is Unicode White_Space, which includes NEL.
+            ("acme/\u{0085}/widgets", "acme/widgets"),
         ];
         for (name, expected) in cases {
             let DiscoveryResponse::Success { snapshot } = discover_named(name) else {
@@ -534,6 +536,11 @@ mod tests {
             (
                 "acme/-/x",
                 "project name `acme/-/x` is invalid: segment `-` has no letters or digits",
+            ),
+            // BOM is not White_Space, so it is kept and has no words.
+            (
+                "acme/\u{feff}/widgets",
+                "project name `acme/\u{feff}/widgets` is invalid: segment `\u{feff}` has no letters or digits",
             ),
         ];
         for (name, message) in cases {

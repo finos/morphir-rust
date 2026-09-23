@@ -233,7 +233,7 @@ fn release_records_reject_malformed_schema_versions() {
     for version in [
         serde_json::json!(1),
         serde_json::json!("1"),
-        serde_json::json!("1.0.0"),
+        serde_json::json!("1.0.0.0"),
         serde_json::json!("01.0"),
     ] {
         let mut record = portable_wasm_release();
@@ -270,7 +270,7 @@ fn jsonl_histories_reject_malformed_schema_version_wires() {
     for version in [
         serde_json::json!(1),
         serde_json::json!("1"),
-        serde_json::json!("1.0.0"),
+        serde_json::json!("1.0.0.0"),
         serde_json::json!("01.0"),
     ] {
         let mut record = portable_wasm_release();
@@ -322,7 +322,7 @@ fn jsonl_history_rejects_malformed_lines_and_mixed_identities() {
 }
 
 #[test]
-fn index_records_reject_unknown_fields_and_empty_required_collections() {
+fn index_records_ignore_unknown_fields_but_reject_empty_required_collections() {
     let base: serde_json::Value =
         serde_json::from_str(&release("1.0.0", &["stable"], ("linux", "x86_64"))).unwrap();
 
@@ -339,6 +339,9 @@ fn index_records_reject_unknown_fields_and_empty_required_collections() {
     let mut unknown_source = base.clone();
     unknown_source["artifacts"][0]["source"]["url"] = serde_json::json!("file://outside");
     cases.push(unknown_source);
+    for optional in cases.drain(..) {
+        assert!(ExtensionHistory::parse_jsonl(optional.to_string().as_bytes()).is_ok());
+    }
     let mut empty_name = base.clone();
     empty_name["name"] = serde_json::json!("  ");
     cases.push(empty_name);

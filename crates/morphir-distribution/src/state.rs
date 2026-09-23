@@ -1,6 +1,9 @@
 //! Exact locks, installed catalog state, and offline activation.
 
 mod activation;
+mod readers;
+use crate::extension_format::{ExtensionSchemaVersion, StatementProvenance, StatementRecord};
+use morphir_extension_sdk::statement::CapabilityStatement;
 
 pub use activation::{
     VerifiedExtensionArtifact, VerifiedProcessArtifact, VerifiedWasmArtifact, activate_installed,
@@ -68,7 +71,7 @@ pub struct ExtensionLock {
 impl ExtensionLock {
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
-        let release = &artifact.selected.release;
+        let metadata = readers::SelectedMetadata::from_artifact(artifact)?;
         let lock = Self {
             schema_version: CURRENT_EXTENSION_LOCK_SCHEMA_VERSION,
             selection: artifact.selected.selection.clone(),
@@ -81,10 +84,10 @@ impl ExtensionLock {
             platform: artifact.selected.artifact.platform().cloned(),
             args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
-            capabilities: artifact.selected.release.capabilities().to_vec(),
-            mep_versions: artifact.selected.release.mep_versions().to_vec(),
-            frontend: release.frontend().cloned(),
-            backend: release.backend().cloned(),
+            capabilities: metadata.capabilities,
+            mep_versions: metadata.mep_versions,
+            frontend: metadata.frontend,
+            backend: metadata.backend,
             executable: artifact.selected.artifact.executable(),
         };
         validate_runtime_state(
@@ -248,8 +251,8 @@ fn extension_lock_path(home: &MorphirHome, id: &ExtensionId) -> PathBuf {
 }
 
 /// One active extension entry in the durable installed catalog.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstalledExtension {
     extension_id: ExtensionId,
     name: String,
@@ -267,12 +270,28 @@ pub struct InstalledExtension {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     backend: Option<BackendRecord>,
     executable: bool,
+    #[serde(flatten)]
+    statement: StatementRecord,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    critical: Vec<String>,
 }
 
 impl InstalledExtension {
+    /// Return the installed artifact's supplied or converted capability statement.
+    pub fn statement(&self) -> &CapabilityStatement {
+        self.statement
+            .statement()
+            .expect("installed record has a statement")
+    }
+
+    /// Return whether the installed statement is declared or probed.
+    pub fn statement_provenance(&self) -> StatementProvenance {
+        self.statement.provenance()
+    }
+
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
-        let release = &artifact.selected.release;
+        let metadata = readers::SelectedMetadata::from_artifact(artifact)?;
         let installed = Self {
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -282,12 +301,14 @@ impl InstalledExtension {
             args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
             store_path: artifact.store_path.clone(),
-            capabilities: artifact.selected.release.capabilities().to_vec(),
-            mep_versions: artifact.selected.release.mep_versions().to_vec(),
+            capabilities: metadata.capabilities,
+            mep_versions: metadata.mep_versions,
             index: artifact.selected.index.clone(),
-            frontend: release.frontend().cloned(),
-            backend: release.backend().cloned(),
+            frontend: metadata.frontend,
+            backend: metadata.backend,
             executable: artifact.selected.artifact.executable(),
+            statement: artifact.selected.artifact.statement_record().clone(),
+            critical: vec![],
         };
         validate_installed_runtime(&installed)?;
         Ok(installed)
@@ -426,11 +447,13 @@ impl InstalledExtensionSnapshot {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CatalogFile {
-    schema_version: SchemaVersion,
+    schema_version: ExtensionSchemaVersion,
     extensions: Vec<InstalledExtension>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    critical: Vec<String>,
 }
 
 /// Durable installed extension catalog.
@@ -456,13 +479,14 @@ impl InstalledCatalog {
             });
         }
         let bytes = read_state_bytes(&path)?;
-        let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
-        validate_extension_state_schema(
-            "installed extension catalog",
-            envelope.schema_version,
-            MINIMUM_CATALOG_SCHEMA_VERSION,
-            CURRENT_CATALOG_SCHEMA_VERSION,
-        )?;
+        if let Ok(envelope) = serde_json::from_slice::<StateSchemaEnvelope>(&bytes) {
+            validate_extension_state_schema(
+                "installed extension catalog",
+                envelope.schema_version,
+                MINIMUM_CATALOG_SCHEMA_VERSION,
+                CURRENT_CATALOG_SCHEMA_VERSION,
+            )?;
+        }
         let stored: CatalogFile = decode_state(&path, &bytes)?;
         let mut extensions = BTreeMap::new();
         for extension in stored.extensions {
@@ -499,7 +523,8 @@ impl InstalledCatalog {
         let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+            schema_version: ExtensionSchemaVersion::default(),
+            critical: vec![],
             extensions: next.values().cloned().collect(),
         };
         atomic_write_json(&self.home.extensions_catalog_file(), &stored)?;
@@ -538,7 +563,8 @@ impl<'home> ExtensionInstaller<'home> {
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+            schema_version: ExtensionSchemaVersion::default(),
+            critical: vec![],
             extensions: extensions.into_values().collect(),
         };
         let lock_bytes = encode_json(&lock)?;
@@ -574,7 +600,8 @@ fn uninstall_with_writer(
         .remove(id)
         .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
     let stored = CatalogFile {
-        schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+        schema_version: ExtensionSchemaVersion::default(),
+        critical: vec![],
         extensions: extensions.into_values().collect(),
     };
     let lock_path = extension_lock_path(home, id);

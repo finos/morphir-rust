@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   character counts as byte offsets.
 
 ### Added
+- Extension distribution readers ignore unknown optional members, reject unknown
+  critical paths, accept supported SemVer schemas, and convert flat capability
+  metadata to declared statements while preserving supplied artifact statements
+  (finos/morphir#921). Existing writers retain their version-1 formats.
+- SDK guest and native protocol sessions return `-32014` for requests outside
+  the initialization and shutdown lifecycle.
 - Guests built on the SDK answer `morphir.extension.describe` with a capability statement
   (`statementVersion` `0.1.0-draft.1`) before `initialize` and without side effects. Readers
   refuse an unknown critical member and ignore other unknown members, and a pure check tells

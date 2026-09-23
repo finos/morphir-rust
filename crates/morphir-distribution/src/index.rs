@@ -30,14 +30,9 @@ impl ExtensionHistory {
             if line.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            let envelope: ReleaseSchemaEnvelope =
-                serde_json::from_slice(line).map_err(|source| {
-                    DistributionError::InvalidRecord {
-                        line: line_index + 1,
-                        source,
-                    }
-                })?;
-            if !supports_release_schema_version(envelope.schema_version) {
+            if let Ok(envelope) = serde_json::from_slice::<ReleaseSchemaEnvelope>(line)
+                && !supports_release_schema_version(envelope.schema_version)
+            {
                 return Err(DistributionError::UnsupportedSchema {
                     line: line_index + 1,
                     version: envelope.schema_version,

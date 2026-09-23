@@ -101,6 +101,7 @@
 pub mod error;
 #[cfg(target_arch = "wasm32")]
 pub mod host;
+mod lifecycle;
 pub mod native;
 pub mod prelude;
 pub mod protocol;
@@ -111,6 +112,8 @@ pub mod types;
 
 // Re-exports
 pub use error::{ExtensionError, Result};
+#[doc(hidden)]
+pub use lifecycle::ProtocolSession as __ProtocolSession;
 pub use native::{NativeBackend, NativeExtension, NativeFrontend, NativeProtocol, NativeWorkspace};
 pub use source::{SourceContextError, SourcePath, SourceRoot};
 pub use traits::{Backend, Extension, Frontend, Transform, Validator, Workspace};
@@ -151,15 +154,16 @@ macro_rules! export_extension {
         pub fn handle(
             Json(request): Json<$crate::protocol::ExtensionRequest>,
         ) -> FnResult<Json<$crate::protocol::ExtensionResponse>> {
+            static SESSION: $crate::__ProtocolSession = $crate::__ProtocolSession::new();
             let mut dispatchers: Vec<$crate::DispatchFn<$impl>> = Vec::new();
             let mut declared_types = Vec::new();
             $crate::__push_extension_dispatchers!(dispatchers, $impl, $($capability),+);
             $crate::__push_extension_types!(declared_types, $($capability),+);
-            let result = $crate::__dispatch_request::<$impl>(
+            let result = SESSION.dispatch(&request, || $crate::__dispatch_request::<$impl>(
                 &request,
                 &dispatchers,
                 &declared_types,
-            );
+            ));
             Ok(Json(result))
         }
     };
@@ -284,7 +288,11 @@ pub fn __extension_info<E: Extension>(declared_types: &[ExtensionType]) -> Exten
     info
 }
 
-/// Internal dispatch function used by export_extension! macro.
+/// Stateless dispatch used inside the session guard in [`export_extension!`].
+///
+/// Calling this helper directly bypasses lifecycle checks. Generated guests
+/// keep a separate session guard across calls and construct a default extension
+/// only when dispatching an extension operation.
 #[doc(hidden)]
 pub fn __dispatch_request<E: Extension + Default>(
     request: &protocol::ExtensionRequest,
@@ -323,9 +331,9 @@ pub fn __dispatch_request<E: Extension + Default>(
 
 /// Dispatch a protocol request to an existing extension instance.
 ///
-/// Native hosts use this entry point to preserve extension state across direct
-/// and protocol calls. The WASM export helper continues to instantiate a
-/// default extension through [`__dispatch_request`].
+/// This low-level helper does not enforce protocol lifecycle ordering. Native
+/// hosts use [`NativeExtension::protocol`] for session-aware dispatch. The WASM
+/// export helper instantiates a default extension through [`__dispatch_request`].
 #[doc(hidden)]
 pub fn __dispatch_request_with<E: Extension>(
     extension: &E,

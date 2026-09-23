@@ -27,7 +27,7 @@ impl IndexKind {
 
 /// Exact index metadata used to resolve an artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexProvenance {
     kind: IndexKind,
     identity: PathBuf,

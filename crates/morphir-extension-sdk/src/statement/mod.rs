@@ -167,7 +167,7 @@ fn read_critical<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<String>, D::Error> {
     let paths = Vec::<String>::deserialize(deserializer)?;
     for path in &paths {
-        if !understands(path) {
+        if !understands_member(path) {
             return Err(D::Error::custom(format!(
                 "unknown critical member '{path}'"
             )));
@@ -176,7 +176,8 @@ fn read_critical<'de, D: serde::Deserializer<'de>>(
     Ok(paths)
 }
 
-fn understands(path: &str) -> bool {
+/// Whether this SDK understands the semantics of a statement member path.
+pub fn understands_member(path: &str) -> bool {
     matches!(
         path,
         "statementVersion"

@@ -1,8 +1,10 @@
+#[path = "support/native.rs"]
+mod native;
+
 use morphir_extension_sdk::{
     prelude::*,
     protocol::{ExtensionRequest, methods},
 };
-use morphir_rust_binding::RustExtension;
 
 #[path = "support/functions.rs"]
 mod functions;
@@ -11,7 +13,7 @@ mod functions;
 fn functions_and_lambdas_execute_through_both_ir_versions_and_native_mep() {
     functions::assert_executable(&format!("mod models {{ {} }}", functions::SOURCE));
     for version in ["3", "4"] {
-        let extension = NativeExtension::frontend_backend(RustExtension).unwrap();
+        let extension = native::an_initialized_extension();
         let request = CompileRequest {
             language_id: "rust".into(),
             sources: SourceSet {

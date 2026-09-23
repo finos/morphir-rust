@@ -64,6 +64,7 @@ pub fn resolve(
                 ArtifactRuntime::Process => artifact.platform() == Some(platform),
                 ArtifactRuntime::Wasm => true,
             })
+            .filter(|artifact| supports_artifact_mep(artifact))
             .collect::<Vec<_>>();
         match artifacts.as_slice() {
             [] => continue,
@@ -90,10 +91,16 @@ pub fn resolve(
 }
 
 fn supports_host_mep(release: &ReleaseRecord) -> bool {
-    release
-        .mep_versions()
-        .iter()
-        .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+    release.artifacts().iter().any(supports_artifact_mep)
+}
+
+fn supports_artifact_mep(artifact: &ArtifactRecord) -> bool {
+    artifact.statement().is_some_and(|statement| {
+        statement
+            .protocol_versions
+            .iter()
+            .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+    })
 }
 
 fn matches_selection(release: &ReleaseRecord, selection: &Selection) -> bool {

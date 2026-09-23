@@ -1,10 +1,21 @@
-//! Strict wire DTOs and validated release manifest records.
+//! Wire DTOs and validated release manifest records.
+
+mod capabilities;
+mod release;
+
+pub use capabilities::{BackendRecord, FrontendLanguageRecord, FrontendRecord};
+pub use release::ReleaseRecord;
 
 use super::identity::portable_token;
 use super::{
     ArtifactFilename, Channel, ExtensionId, RelativeArtifactPath, SchemaVersion, Sha256Digest,
 };
 use crate::error::{Result, invalid_value};
+use crate::extension_format::{
+    CAPABILITY_PATHS, ExtensionSchemaVersion, StatementProvenance, StatementRecord,
+    validate_members,
+};
+use morphir_extension_sdk::statement::CapabilityStatement;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
@@ -49,6 +60,13 @@ impl<T> FieldPresence<T> {
 
     fn has_value(&self) -> bool {
         matches!(self, Self::Present(Some(_)))
+    }
+
+    fn as_option(&self) -> Option<&T> {
+        match self {
+            Self::Present(value) => value.as_ref(),
+            Self::Missing => None,
+        }
     }
 
     fn into_option(self) -> Option<T> {
@@ -146,7 +164,7 @@ pub enum ArtifactRuntime {
 
 /// Artifact source supported by this acquisition version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ArtifactSource {
     /// A raw file below the controlled local index root.
     LocalFile {
@@ -171,237 +189,6 @@ pub enum Capability {
     Workspace,
 }
 
-/// One source language accepted by a schema `"1.0"` frontend extension.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FrontendLanguageRecord {
-    id: String,
-    file_extensions: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FrontendLanguageRecordWire {
-    id: String,
-    file_extensions: Vec<String>,
-}
-
-impl<'de> Deserialize<'de> for FrontendLanguageRecord {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = FrontendLanguageRecordWire::deserialize(deserializer)?;
-        let id = wire.id.trim();
-        if id.is_empty() || id != wire.id {
-            return Err(serde::de::Error::custom(
-                "frontend languages must have non-empty trimmed IDs",
-            ));
-        }
-        if !valid_frontend_file_extensions(&wire.file_extensions) {
-            return Err(serde::de::Error::custom(
-                "frontend file extensions must be non-empty, dot-prefixed, trimmed, and unique",
-            ));
-        }
-        Ok(Self {
-            id: wire.id,
-            file_extensions: wire.file_extensions,
-        })
-    }
-}
-
-impl FrontendLanguageRecord {
-    /// Return the stable source-language identifier.
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Return the non-empty unique file extensions recognized for this language.
-    pub fn file_extensions(&self) -> &[String] {
-        &self.file_extensions
-    }
-}
-
-/// Frontend-specific metadata carried by schema `"1.0"` release records.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FrontendRecord {
-    languages: Vec<FrontendLanguageRecord>,
-    ir_versions: Vec<String>,
-    #[serde(default = "default_frontend_compile")]
-    compile: bool,
-    /// Whether the frontend accepts a baseline and reports per-module results.
-    /// Absent in records written before incremental frontends existed, and in
-    /// every record for a frontend that is not incremental.
-    #[serde(default, skip_serializing_if = "is_false")]
-    incremental: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FrontendRecordWire {
-    languages: Vec<FrontendLanguageRecord>,
-    ir_versions: Vec<String>,
-    #[serde(default = "default_frontend_compile")]
-    compile: bool,
-    #[serde(default)]
-    incremental: bool,
-}
-
-fn default_frontend_compile() -> bool {
-    true
-}
-
-fn valid_frontend_file_extensions(values: &[String]) -> bool {
-    !values.is_empty()
-        && values.iter().all(|value| {
-            let trimmed = value.trim();
-            !trimmed.is_empty() && trimmed == value && trimmed.starts_with('.')
-        })
-        && values
-            .iter()
-            .map(|value| value.trim())
-            .collect::<BTreeSet<_>>()
-            .len()
-            == values.len()
-}
-
-impl<'de> Deserialize<'de> for FrontendRecord {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = FrontendRecordWire::deserialize(deserializer)?;
-        if wire.languages.is_empty()
-            || wire
-                .languages
-                .iter()
-                .map(|language| language.id().trim())
-                .collect::<BTreeSet<_>>()
-                .len()
-                != wire.languages.len()
-        {
-            return Err(serde::de::Error::custom(
-                "frontend languages must be non-empty and have unique IDs",
-            ));
-        }
-        if !valid_backend_identifiers(&wire.ir_versions) {
-            return Err(serde::de::Error::custom(
-                "frontend IR versions must be non-empty and unique",
-            ));
-        }
-        Ok(Self {
-            languages: wire.languages,
-            ir_versions: wire.ir_versions,
-            compile: wire.compile,
-            incremental: wire.incremental,
-        })
-    }
-}
-
-impl FrontendRecord {
-    /// Return the non-empty set of source languages accepted by the frontend.
-    pub fn languages(&self) -> &[FrontendLanguageRecord] {
-        &self.languages
-    }
-
-    /// Return the non-empty unique Morphir IR versions produced by the frontend.
-    pub fn ir_versions(&self) -> &[String] {
-        &self.ir_versions
-    }
-
-    /// Return whether this frontend accepts compile requests.
-    pub fn compile(&self) -> bool {
-        self.compile
-    }
-
-    /// Return whether this frontend compiles incrementally against a baseline.
-    pub fn incremental(&self) -> bool {
-        self.incremental
-    }
-}
-
-/// Backend-specific metadata carried by schema `"1.0"` release records.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackendRecord {
-    targets: Vec<String>,
-    ir_versions: Vec<String>,
-    generate: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackendRecordWire {
-    targets: Vec<String>,
-    ir_versions: Vec<String>,
-    #[serde(default = "default_backend_generate")]
-    generate: bool,
-}
-
-fn default_backend_generate() -> bool {
-    true
-}
-
-fn valid_backend_identifiers(values: &[String]) -> bool {
-    !values.is_empty()
-        && values.iter().all(|value| {
-            let trimmed = value.trim();
-            !trimmed.is_empty() && trimmed == value
-        })
-        && values
-            .iter()
-            .map(|value| value.trim())
-            .collect::<BTreeSet<_>>()
-            .len()
-            == values.len()
-}
-
-impl<'de> Deserialize<'de> for BackendRecord {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = BackendRecordWire::deserialize(deserializer)?;
-        if !valid_backend_identifiers(&wire.targets) {
-            return Err(serde::de::Error::custom(
-                "backend targets must be non-empty and unique",
-            ));
-        }
-        if !valid_backend_identifiers(&wire.ir_versions) {
-            return Err(serde::de::Error::custom(
-                "backend IR versions must be non-empty and unique",
-            ));
-        }
-        Ok(Self {
-            targets: wire.targets,
-            ir_versions: wire.ir_versions,
-            generate: wire.generate,
-        })
-    }
-}
-
-impl BackendRecord {
-    /// Return the non-empty unique backend target names.
-    pub fn targets(&self) -> &[String] {
-        &self.targets
-    }
-
-    /// Return the non-empty unique Morphir IR versions supported by the backend.
-    pub fn ir_versions(&self) -> &[String] {
-        &self.ir_versions
-    }
-
-    /// Return whether this backend accepts generate requests.
-    pub fn generate(&self) -> bool {
-        self.generate
-    }
-}
-
 /// One process-specific or portable artifact declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -414,14 +201,18 @@ pub struct ArtifactRecord {
     filename: ArtifactFilename,
     args: Vec<String>,
     executable: bool,
+    #[serde(flatten)]
+    statement: StatementRecord,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    critical: Vec<String>,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct ArtifactRecordWire {
     runtime: ArtifactRuntime,
     #[serde(default)]
-    platform: FieldPresence<Platform>,
+    platform: FieldPresence<ExtensionPlatform>,
     source: ArtifactSource,
     sha256: Sha256Digest,
     filename: ArtifactFilename,
@@ -429,9 +220,27 @@ struct ArtifactRecordWire {
     args: Vec<String>,
     #[serde(default)]
     executable: bool,
+    #[serde(flatten)]
+    statement: StatementRecord,
+    #[serde(default)]
+    critical: Vec<String>,
 }
 
 impl ArtifactRecord {
+    /// Return the supplied statement or the declaration converted from release metadata.
+    pub fn statement(&self) -> Option<&CapabilityStatement> {
+        self.statement.statement()
+    }
+
+    /// Return how the statement was obtained.
+    pub fn statement_provenance(&self) -> StatementProvenance {
+        self.statement.provenance()
+    }
+
+    pub(crate) fn statement_record(&self) -> &StatementRecord {
+        &self.statement
+    }
+
     /// Return the artifact runtime.
     pub fn runtime(&self) -> ArtifactRuntime {
         self.runtime
@@ -473,7 +282,10 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
     where
         D: Deserializer<'de>,
     {
-        let wire = ArtifactRecordWire::deserialize(deserializer)?;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        validate_members(&value, ARTIFACT_PATHS, false).map_err(serde::de::Error::custom)?;
+        let wire: ArtifactRecordWire =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
         match wire.runtime {
             ArtifactRuntime::Process if !wire.platform.has_value() => {
                 return Err(serde::de::Error::custom(
@@ -501,183 +313,14 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
         }
         Ok(Self {
             runtime: wire.runtime,
-            platform: wire.platform.into_option(),
+            platform: wire.platform.into_option().map(|platform| platform.0),
             source: wire.source,
             sha256: wire.sha256,
             filename: wire.filename,
             args: wire.args,
             executable: wire.executable,
-        })
-    }
-}
-
-/// One exact extension release from a JSONL history.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReleaseRecord {
-    schema_version: SchemaVersion,
-    id: ExtensionId,
-    name: String,
-    version: Version,
-    channels: Vec<Channel>,
-    mep_versions: Vec<String>,
-    capabilities: Vec<Capability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    frontend: Option<FrontendRecord>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    backend: Option<BackendRecord>,
-    artifacts: Vec<ArtifactRecord>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReleaseRecordWire {
-    schema_version: SchemaVersion,
-    id: ExtensionId,
-    name: String,
-    version: Version,
-    #[serde(default)]
-    channels: Vec<Channel>,
-    mep_versions: Vec<String>,
-    capabilities: Vec<Capability>,
-    #[serde(default)]
-    frontend: FieldPresence<FrontendRecord>,
-    #[serde(default)]
-    backend: FieldPresence<BackendRecord>,
-    artifacts: Vec<ArtifactRecord>,
-}
-
-impl ReleaseRecord {
-    /// Return the index record schema version.
-    pub fn schema_version(&self) -> SchemaVersion {
-        self.schema_version
-    }
-
-    /// Return the stable portable identity.
-    pub fn extension_id(&self) -> &ExtensionId {
-        &self.id
-    }
-
-    /// Return the non-empty human-readable name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Return the exact semantic version.
-    pub fn version(&self) -> &Version {
-        &self.version
-    }
-
-    /// Return moving channels that point at this release.
-    pub fn channels(&self) -> &[Channel] {
-        &self.channels
-    }
-
-    /// Return non-empty supported MEP version spellings.
-    pub fn mep_versions(&self) -> &[String] {
-        &self.mep_versions
-    }
-
-    /// Return the non-empty set of advertised operations.
-    pub fn capabilities(&self) -> &[Capability] {
-        &self.capabilities
-    }
-
-    /// Return frontend-specific metadata when declared by a schema `"1.0"` record.
-    pub fn frontend(&self) -> Option<&FrontendRecord> {
-        self.frontend.as_ref()
-    }
-
-    /// Return backend-specific metadata when declared by a schema `"1.0"` record.
-    pub fn backend(&self) -> Option<&BackendRecord> {
-        self.backend.as_ref()
-    }
-
-    /// Return the non-empty platform artifact set.
-    pub fn artifacts(&self) -> &[ArtifactRecord] {
-        &self.artifacts
-    }
-}
-
-impl<'de> Deserialize<'de> for ReleaseRecord {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = ReleaseRecordWire::deserialize(deserializer)?;
-        if !supports_release_schema_version(wire.schema_version) {
-            return Err(serde::de::Error::custom(format!(
-                "unsupported extension index schema version {}; supported range is {} through {}",
-                wire.schema_version, MINIMUM_RELEASE_SCHEMA_VERSION, CURRENT_RELEASE_SCHEMA_VERSION
-            )));
-        }
-        if wire.name.trim().is_empty() {
-            return Err(serde::de::Error::custom("extension name cannot be empty"));
-        }
-        if wire.mep_versions.is_empty()
-            || wire
-                .mep_versions
-                .iter()
-                .any(|version| version.trim().is_empty())
-        {
-            return Err(serde::de::Error::custom(
-                "MEP versions must contain non-empty values",
-            ));
-        }
-        if wire.capabilities.is_empty() {
-            return Err(serde::de::Error::custom(
-                "extension capabilities cannot be empty",
-            ));
-        }
-        if wire.capabilities.iter().collect::<BTreeSet<_>>().len() != wire.capabilities.len() {
-            return Err(serde::de::Error::custom(
-                "extension capabilities cannot contain duplicates",
-            ));
-        }
-        let declares_backend = wire.capabilities.contains(&Capability::Backend);
-        match (declares_backend, wire.backend.has_value()) {
-            (true, false) => {
-                return Err(serde::de::Error::custom(
-                    "backend metadata is required when backend capability is declared",
-                ));
-            }
-            (false, _) if !wire.backend.is_missing() => {
-                return Err(serde::de::Error::custom(
-                    "backend metadata requires the backend capability",
-                ));
-            }
-            _ => {}
-        }
-        let declares_frontend = wire.capabilities.contains(&Capability::Frontend);
-        match (declares_frontend, wire.frontend.has_value()) {
-            (true, false) => {
-                return Err(serde::de::Error::custom(
-                    "frontend metadata is required when frontend capability is declared",
-                ));
-            }
-            (false, _) if !wire.frontend.is_missing() => {
-                return Err(serde::de::Error::custom(
-                    "frontend metadata requires the frontend capability",
-                ));
-            }
-            _ => {}
-        }
-        if wire.artifacts.is_empty() {
-            return Err(serde::de::Error::custom(
-                "release artifacts cannot be empty",
-            ));
-        }
-        Ok(Self {
-            schema_version: wire.schema_version,
-            id: wire.id,
-            name: wire.name,
-            version: wire.version,
-            channels: wire.channels,
-            mep_versions: wire.mep_versions,
-            capabilities: wire.capabilities,
-            frontend: wire.frontend.into_option(),
-            backend: wire.backend.into_option(),
-            artifacts: wire.artifacts,
+            statement: wire.statement,
+            critical: wire.critical,
         })
     }
 }
@@ -705,3 +348,30 @@ impl fmt::Display for Selection {
         }
     }
 }
+
+#[derive(Deserialize)]
+struct ExtensionPlatform(#[serde(deserialize_with = "required_extension_platform")] Platform);
+
+fn required_extension_platform<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Platform, D::Error> {
+    crate::extension_format::read_platform(deserializer)?
+        .ok_or_else(|| serde::de::Error::custom("expected platform"))
+}
+
+const ARTIFACT_PATHS: &[&str] = &[
+    "runtime",
+    "platform",
+    "platform.os",
+    "platform.arch",
+    "source",
+    "source.kind",
+    "source.path",
+    "sha256",
+    "filename",
+    "args",
+    "executable",
+    "statement",
+    "statementSource",
+    "critical",
+];

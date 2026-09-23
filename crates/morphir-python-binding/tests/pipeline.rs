@@ -1,5 +1,7 @@
+#[path = "support/native.rs"]
+mod native;
+
 use morphir_extension_sdk::{
-    native::NativeExtension,
     prelude::*,
     protocol::{ExtensionRequest, methods},
 };
@@ -38,7 +40,7 @@ fn compile(source: &str) -> CompileResult {
 
 #[test]
 fn product_and_sum_have_the_expected_ir_and_roundtrip_through_mep() {
-    let extension = NativeExtension::frontend_backend(PythonExtension).unwrap();
+    let extension = native::an_initialized_extension();
     let response = extension.protocol().handle(
         ExtensionRequest::new(
             methods::COMPILE,
@@ -175,7 +177,7 @@ fn legacy_source_root_uri_option_is_rejected_not_ignored() {
 /// is only one shape left.
 #[test]
 fn a_release_era_legacy_compile_request_still_compiles() {
-    let extension = NativeExtension::frontend_backend(PythonExtension).unwrap();
+    let extension = native::an_initialized_extension();
     let response = extension.protocol().handle(
         ExtensionRequest::new(
             methods::COMPILE,

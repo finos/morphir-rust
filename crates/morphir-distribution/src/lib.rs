@@ -87,12 +87,14 @@
 
 mod domain;
 mod error;
+mod extension_format;
 mod index;
 mod local;
 mod repository;
 mod repository_authoring;
 mod resolver;
 mod state;
+pub use extension_format::{ExtensionSchemaVersion, StatementProvenance};
 mod state_io;
 mod store;
 mod tool_archive;
@@ -115,7 +117,8 @@ pub use repository::{
     RepositoryEndpoint, RepositoryName, RepositoryState, RepositoryVerification,
 };
 pub use repository_authoring::{
-    LocalExtensionRepository, PublicationStatus, RepositoryPublication,
+    BundleArtifactDescriptor, LocalExtensionRepository, PlatformDifferences, PublicationStatus,
+    ReleaseBundleDescriptor, RepositoryPublication,
 };
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{

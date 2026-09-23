@@ -64,6 +64,21 @@ public::def::module::{
 morphir_footer::{}
 "#;
 
+const V3_MODULE_RECORD: &str = r#"
+morphir::{
+  ionVersion: "0.1.0-draft.1",
+  formatVersion: "3.0.0",
+  kind: library,
+  packageName: "example",
+  modules: [
+    public::def::module::{
+      name: "eligibility",
+      doc: "Credit eligibility.",
+    },
+  ],
+}
+"#;
+
 #[derive(Default)]
 struct CollectingSink(Vec<SemanticEvent>);
 
@@ -134,6 +149,24 @@ fn a_public_v3_module_datagram_matches_the_json_ir() {
     let ion = decode(
         &IonCodec::new(),
         V3_MODULE_ION,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion()),
+    )
+    .unwrap();
+    let json = decode(
+        &JsonCodec::new(),
+        V3_MODULE_JSON,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
+    )
+    .unwrap();
+
+    assert_eq!(ion, json);
+}
+
+#[test]
+fn a_public_v3_module_record_matches_the_json_ir() {
+    let ion = decode(
+        &IonCodec::new(),
+        V3_MODULE_RECORD,
         &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion()),
     )
     .unwrap();

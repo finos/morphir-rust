@@ -264,12 +264,10 @@ fn read_library_modules(
     header_fields: &BTreeMap<&str, &Element>,
     package: &classic::Path,
 ) -> Result<Vec<ClassicModule>, TransportDiagnostic> {
-    // A record keeps modules inside the header. This slice reads the datagram
-    // spelling, where each module is its own top-level value.
-    reject_inline_modules(header_fields)?;
     if values.len() == 1 {
-        return Ok(Vec::new());
+        return read_inline_modules(header_fields, package);
     }
+    reject_inline_modules(header_fields)?;
     let last = values.len() - 1;
     let footer = values.get(last).expect("length is at least 2");
     expect_marker(footer, "morphir_footer")?;
@@ -298,6 +296,39 @@ fn read_library_modules(
         modules.push(module);
     }
     Ok(modules)
+}
+
+fn read_inline_modules(
+    fields: &BTreeMap<&str, &Element>,
+    package: &classic::Path,
+) -> Result<Vec<ClassicModule>, TransportDiagnostic> {
+    let Some(modules) = fields.get("modules") else {
+        return Ok(Vec::new());
+    };
+    let Some(list) = modules.as_list() else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_member",
+            Stage::Normalization,
+            "modules is a list",
+        ));
+    };
+    let mut decoded = Vec::new();
+    let mut seen = HashSet::new();
+    for element in list.iter() {
+        let module = read_def_module(element, package)?;
+        if !seen.insert(module.path.clone()) {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::duplicate_name",
+                Stage::Normalization,
+                format!(
+                    "module '{}' is already defined",
+                    canonical_package(&module.path)
+                ),
+            ));
+        }
+        decoded.push(module);
+    }
+    Ok(decoded)
 }
 
 fn reject_inline_modules(fields: &BTreeMap<&str, &Element>) -> Result<(), TransportDiagnostic> {

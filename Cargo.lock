@@ -4600,8 +4600,11 @@ dependencies = [
  "morphir-common",
  "morphir-core",
  "morphir-package",
+ "morphir-package-tough",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

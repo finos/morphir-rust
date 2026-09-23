@@ -28,8 +28,9 @@ fn main() -> Result<()> {
         ["--suite", "package", "--contract", "0.1.0-draft.2"] => {
             morphir_mck_adapter::package_resolution::run(io::stdin().lock(), io::stdout())?
         }
+        ["package-mvp"] => morphir_mck_adapter::package_mvp::run(io::stdin().lock(), io::stdout())?,
         _ => anyhow::bail!(
-            "usage: mck-adapter-rust [--suite ir|package [--contract 0.1.0-draft.1|0.1.0-draft.2]]"
+            "usage: mck-adapter-rust [--suite ir|package [--contract 0.1.0-draft.1|0.1.0-draft.2]] | package-mvp"
         ),
     }
     Ok(())

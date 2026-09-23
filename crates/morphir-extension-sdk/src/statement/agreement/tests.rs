@@ -4,7 +4,7 @@ use serde_json::json;
 fn a_statement() -> Value {
     json!({
         "statementVersion": "0.1.0-draft.1",
-        "protocolVersions": ["0.1", "0.2"],
+        "protocolVersions": [crate::protocol::MEP_VERSION, "0.2"],
         "extension": {"id": "example", "name": "Example", "version": "1.0.0", "types": ["frontend", "workspace"]},
         "capabilities": {
             "frontend": {"compile": true, "languages": [{"id": "elm", "fileExtensions": [".elm"]}], "irVersions": ["3"]},
@@ -21,12 +21,20 @@ fn sessions_can_omit_kinds_and_nested_members_but_not_change_arrays() {
     let less = json!({"frontend": {"compile": true}});
     assert!(
         statement
-            .check_session("0.1", &extension, less.as_object().unwrap())
+            .check_session(
+                crate::protocol::MEP_VERSION,
+                &extension,
+                less.as_object().unwrap()
+            )
             .is_ok()
     );
     let changed = json!({"frontend": {"irVersions": []}});
     assert!(matches!(
-        statement.check_session("0.1", &extension, changed.as_object().unwrap()),
+        statement.check_session(
+            crate::protocol::MEP_VERSION,
+            &extension,
+            changed.as_object().unwrap()
+        ),
         Err(SessionAgreementError::CapabilityMember(_))
     ));
 }
@@ -50,7 +58,11 @@ fn agreement_refuses_the_first_failed_rule() {
     ));
     extension.types.push(crate::ExtensionType::Backend);
     assert!(matches!(
-        statement.check_session("0.1", &extension, &statement.capabilities),
+        statement.check_session(
+            crate::protocol::MEP_VERSION,
+            &extension,
+            &statement.capabilities
+        ),
         Err(SessionAgreementError::CapabilityKind(_))
     ));
     extension.types.pop();
@@ -60,13 +72,53 @@ fn agreement_refuses_the_first_failed_rule() {
         json!({"backend":{}}),
     ] {
         assert!(matches!(
-            statement.check_session("0.1", &extension, reported.as_object().unwrap()),
+            statement.check_session(
+                crate::protocol::MEP_VERSION,
+                &extension,
+                reported.as_object().unwrap()
+            ),
             Err(SessionAgreementError::CapabilityMember(_))
         ));
     }
     assert!(
         statement
-            .check_session("0.1", &extension, &statement.capabilities)
+            .check_session(
+                crate::protocol::MEP_VERSION,
+                &extension,
+                &statement.capabilities
+            )
             .is_ok()
+    );
+}
+
+#[test]
+fn direct_statements_must_match_in_both_directions() {
+    let declared: CapabilityStatement = serde_json::from_value(a_statement()).unwrap();
+    assert!(declared.check_statement(&declared).is_ok());
+    for (member, replacement) in [
+        ("protocolVersions", json!([crate::protocol::MEP_VERSION])),
+        ("capabilities", json!({"frontend": {"compile": true}})),
+        ("critical", json!(["capabilities.frontend.compile"])),
+    ] {
+        let mut wire = a_statement();
+        wire[member] = replacement;
+        let reported: CapabilityStatement = serde_json::from_value(wire).unwrap();
+        assert!(
+            declared
+                .check_statement(&reported)
+                .unwrap_err()
+                .to_string()
+                .contains(member)
+        );
+        assert!(reported.check_statement(&declared).is_err());
+    }
+    let mut reported = declared.clone();
+    reported.capabilities["frontend"]["compile"] = false.into();
+    assert!(
+        declared
+            .check_statement(&reported)
+            .unwrap_err()
+            .to_string()
+            .contains("capabilities.frontend.compile")
     );
 }

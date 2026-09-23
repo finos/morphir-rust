@@ -3,7 +3,7 @@
 mod statement;
 mod version;
 
-pub use statement::{StatementProvenance, StatementRecord};
+pub use statement::{ProbeSource, StatementProvenance, StatementRecord};
 pub use version::ExtensionSchemaVersion;
 
 use morphir_extension_sdk::statement::{CapabilityStatement, StatementRequirements};

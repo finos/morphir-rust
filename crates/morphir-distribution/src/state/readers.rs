@@ -53,6 +53,7 @@ const INSTALLED_PATHS: &[&str] = &[
     "executable",
     "statement",
     "statementSource",
+    "probeSource",
     "critical",
     "requires",
     "requires.host",

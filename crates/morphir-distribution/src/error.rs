@@ -6,6 +6,17 @@ use std::path::PathBuf;
 /// A failure to parse, resolve, verify, or persist an extension artifact.
 #[derive(Debug, thiserror::Error)]
 pub enum DistributionError {
+    /// An install raced with an existing entry; replacement requires an update.
+    #[error("extension {id} is already installed; use morphir extension update")]
+    AlreadyInstalled {
+        /// The extension that is already active.
+        id: crate::ExtensionId,
+    },
+
+    /// The selected artifact could not supply an agreeing capability statement.
+    #[error("extension probe failed: {0}")]
+    Probe(String),
+
     /// The caller's host version does not satisfy the extension requirements.
     #[error(transparent)]
     HostRequirement(#[from] morphir_extension_sdk::statement::HostRequirementError),

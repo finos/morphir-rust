@@ -151,73 +151,6 @@ fn full_flush(file: &File) -> io::Result<()> {
     result(unsafe { libc::fcntl(file.as_raw_fd(), libc::F_FULLFSYNC) })?;
     Ok(())
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn anchored_storage_refuses_links_and_never_replaces_immutable_bytes() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
-        root.mkdir("objects").unwrap();
-        let objects = root.child("objects").unwrap();
-        objects.install("one", b"first").unwrap();
-        assert!(objects.install("one", b"second").is_err());
-        assert_eq!(objects.read("one", 20).unwrap(), b"first");
-        std::os::unix::fs::symlink("objects/one", temp.path().join("alias")).unwrap();
-        assert!(root.read("alias", 20).is_err());
-        assert!(root.read("objects/one", 20).is_err());
-        assert!(root.read("../one", 20).is_err());
-    }
-    #[test]
-    fn replacement_exposes_complete_bytes_and_flushes_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
-        root.install("timestamp", b"old").unwrap();
-        root.install("prepared", b"complete successor").unwrap();
-        root.replace("prepared", "timestamp").unwrap();
-        root.flush().unwrap();
-        assert_eq!(root.read("timestamp", 100).unwrap(), b"complete successor");
-    }
-    #[test]
-    fn immutable_reads_reject_hardlinks_to_mutable_outside_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
-        root.install("source", b"mutable").unwrap();
-        std::fs::hard_link(temp.path().join("source"), temp.path().join("alias")).unwrap();
-        assert!(root.read("alias", 100).is_err());
-        assert!(root.read("source", 100).is_err());
-    }
-    #[test]
-    fn configured_root_alias_is_resolved_once_but_descendant_links_are_refused() {
-        let temp = tempfile::tempdir().unwrap();
-        let real = temp.path().join("real");
-        std::fs::create_dir(&real).unwrap();
-        std::os::unix::fs::symlink(&real, temp.path().join("alias")).unwrap();
-        let root = Directory::open(&temp.path().join("alias")).unwrap();
-        root.install("file", b"content").unwrap();
-        std::os::unix::fs::symlink("file", real.join("link")).unwrap();
-        assert!(root.read("link", 100).is_err());
-    }
-    #[test]
-    fn failed_object_promotion_leaves_no_final_immutable_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
-        root.mkdir("staging").unwrap();
-        let staging = root.child("staging").unwrap();
-        super::super::FAULT.with(|fault| {
-            fault.set(Some((
-                super::super::FaultPoint::BeforeObjectPromotion,
-                super::super::FaultAction::Fail,
-            )))
-        });
-        let result = root.install_path("targets/records/item", b"complete bytes", &staging);
-        super::super::FAULT.with(|fault| fault.set(None));
-        assert!(result.is_err());
-        assert!(!temp.path().join("targets/records/item").exists());
-        assert_eq!(staging.read("item", 100).unwrap(), b"complete bytes");
-    }
-}
-
 impl Directory {
     pub(super) fn create(path: &Path) -> io::Result<Self> {
         let parent = path
@@ -367,5 +300,72 @@ impl Directory {
         super::checkpoint(super::FaultPoint::BeforeObjectPromotion)
             .map_err(|_| io::Error::other("injected pre-promotion failure"))?;
         staging.promote(last, &directory, last)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn anchored_storage_refuses_links_and_never_replaces_immutable_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
+        root.mkdir("objects").unwrap();
+        let objects = root.child("objects").unwrap();
+        objects.install("one", b"first").unwrap();
+        assert!(objects.install("one", b"second").is_err());
+        assert_eq!(objects.read("one", 20).unwrap(), b"first");
+        std::os::unix::fs::symlink("objects/one", temp.path().join("alias")).unwrap();
+        assert!(root.read("alias", 20).is_err());
+        assert!(root.read("objects/one", 20).is_err());
+        assert!(root.read("../one", 20).is_err());
+    }
+    #[test]
+    fn replacement_exposes_complete_bytes_and_flushes_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
+        root.install("timestamp", b"old").unwrap();
+        root.install("prepared", b"complete successor").unwrap();
+        root.replace("prepared", "timestamp").unwrap();
+        root.flush().unwrap();
+        assert_eq!(root.read("timestamp", 100).unwrap(), b"complete successor");
+    }
+    #[test]
+    fn immutable_reads_reject_hardlinks_to_mutable_outside_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
+        root.install("source", b"mutable").unwrap();
+        std::fs::hard_link(temp.path().join("source"), temp.path().join("alias")).unwrap();
+        assert!(root.read("alias", 100).is_err());
+        assert!(root.read("source", 100).is_err());
+    }
+    #[test]
+    fn configured_root_alias_is_resolved_once_but_descendant_links_are_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, temp.path().join("alias")).unwrap();
+        let root = Directory::open(&temp.path().join("alias")).unwrap();
+        root.install("file", b"content").unwrap();
+        std::os::unix::fs::symlink("file", real.join("link")).unwrap();
+        assert!(root.read("link", 100).is_err());
+    }
+    #[test]
+    fn failed_object_promotion_leaves_no_final_immutable_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
+        root.mkdir("staging").unwrap();
+        let staging = root.child("staging").unwrap();
+        super::super::FAULT.with(|fault| {
+            fault.set(Some((
+                super::super::FaultPoint::BeforeObjectPromotion,
+                super::super::FaultAction::Fail,
+            )))
+        });
+        let result = root.install_path("targets/records/item", b"complete bytes", &staging);
+        super::super::FAULT.with(|fault| fault.set(None));
+        assert!(result.is_err());
+        assert!(!temp.path().join("targets/records/item").exists());
+        assert_eq!(staging.read("item", 100).unwrap(), b"complete bytes");
     }
 }

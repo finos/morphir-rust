@@ -2,9 +2,11 @@
 
 use morphir_core::ir::classic as ir;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 type Expression = ir::Value<ir::Attrs, ir::Type<ir::Attrs>>;
 type Definition = ir::ValueDefinition<ir::Attrs, ir::Type<ir::Attrs>>;
+type Environment = HashMap<ir::Name, Evaluated>;
 type Library<'a> = (
     &'a ir::Path,
     &'a [(ir::Path, ir::PackageSpecification<ir::Attrs>)],
@@ -18,6 +20,7 @@ pub enum RuntimeValue {
     String(String),
     Unit,
     List(Vec<Self>),
+    Tuple(Vec<Self>),
     Constructor(ir::FQName, Vec<Self>),
 }
 
@@ -55,11 +58,23 @@ pub enum EvaluationError {
 #[derive(Clone)]
 enum Callable {
     User(ir::FQName),
+    Local(Box<Definition>, Box<Environment>),
+    Recursive(
+        ir::Name,
+        Rc<HashMap<ir::Name, Definition>>,
+        Box<Environment>,
+    ),
+    Lambda(
+        ir::Pattern<ir::Type<ir::Attrs>>,
+        Box<Expression>,
+        Box<Environment>,
+    ),
     Constructor(ir::FQName),
     Add,
     Equal,
 }
 
+#[derive(Clone)]
 enum Evaluated {
     Data(RuntimeValue),
     Function(Callable, Vec<RuntimeValue>),
@@ -97,7 +112,7 @@ pub fn evaluate_v3(
             actual: arguments.len(),
         });
     }
-    evaluator.call_user(&definition, arguments, 0)
+    evaluator.call_user(&definition, arguments, &Environment::new(), 0)
 }
 
 impl<'a> Evaluator<'a> {
@@ -157,18 +172,21 @@ impl<'a> Evaluator<'a> {
         &mut self,
         definition: &Definition,
         arguments: Vec<RuntimeValue>,
+        captured: &Environment,
         depth: usize,
     ) -> Result<RuntimeValue, EvaluationError> {
         if depth >= self.max_call_depth {
             return Err(EvaluationError::CallDepthExceeded);
         }
         self.tick()?;
-        let environment = definition
-            .input_types
-            .iter()
-            .zip(arguments)
-            .map(|(parameter, value)| (parameter.name.clone(), value))
-            .collect();
+        let mut environment = captured.clone();
+        environment.extend(
+            definition
+                .input_types
+                .iter()
+                .zip(arguments)
+                .map(|(parameter, value)| (parameter.name.clone(), Evaluated::Data(value))),
+        );
         Self::data(self.eval(&definition.body, &environment, depth + 1)?)
     }
 
@@ -230,6 +248,13 @@ impl<'a> Evaluator<'a> {
                 .ok_or_else(|| EvaluationError::UnknownReference(name.clone()))?
                 .input_types
                 .len(),
+            Callable::Local(definition, _) => definition.input_types.len(),
+            Callable::Recursive(name, definitions, _) => definitions
+                .get(name)
+                .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?
+                .input_types
+                .len(),
+            Callable::Lambda(..) => 1,
             Callable::Constructor(name) => self
                 .constructor_arity(name)
                 .ok_or_else(|| EvaluationError::UnknownReference(name.clone()))?,
@@ -249,7 +274,37 @@ impl<'a> Evaluator<'a> {
                 let definition = self
                     .definition(&name)
                     .ok_or(EvaluationError::UnknownReference(name))?;
-                self.call_user(&definition, arguments, depth)?
+                self.call_user(&definition, arguments, &Environment::new(), depth)?
+            }
+            Callable::Local(definition, captured) => {
+                self.call_user(&definition, arguments, &captured, depth)?
+            }
+            Callable::Recursive(name, definitions, captured) => {
+                let definition = definitions
+                    .get(&name)
+                    .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?;
+                let mut recursive_environment = *captured.clone();
+                for local in definitions.keys() {
+                    recursive_environment.insert(
+                        local.clone(),
+                        Evaluated::Function(
+                            Callable::Recursive(
+                                local.clone(),
+                                definitions.clone(),
+                                captured.clone(),
+                            ),
+                            vec![],
+                        ),
+                    );
+                }
+                self.call_user(definition, arguments, &recursive_environment, depth)?
+            }
+            Callable::Lambda(pattern, body, captured) => {
+                let mut environment = *captured;
+                if !match_pattern(&pattern, &arguments[0], &mut environment) {
+                    return Err(EvaluationError::NonExhaustivePattern);
+                }
+                Self::data(self.eval(&body, &environment, depth)?)?
             }
             Callable::Constructor(name) => RuntimeValue::Constructor(name, arguments),
             Callable::Add => {
@@ -281,7 +336,7 @@ impl<'a> Evaluator<'a> {
     fn eval(
         &mut self,
         expr: &Expression,
-        environment: &HashMap<ir::Name, RuntimeValue>,
+        environment: &Environment,
         depth: usize,
     ) -> Result<Evaluated, EvaluationError> {
         self.tick()?;
@@ -305,12 +360,16 @@ impl<'a> Evaluator<'a> {
                     .map(|value| Self::data(self.eval(value, environment, depth)?))
                     .collect::<Result<_, _>>()?,
             )),
-            ir::Value::Variable(_, name) => Evaluated::Data(
-                environment
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?,
-            ),
+            ir::Value::Tuple(_, values) => Evaluated::Data(RuntimeValue::Tuple(
+                values
+                    .iter()
+                    .map(|value| Self::data(self.eval(value, environment, depth)?))
+                    .collect::<Result<_, _>>()?,
+            )),
+            ir::Value::Variable(_, name) => environment
+                .get(name)
+                .cloned()
+                .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?,
             ir::Value::Reference(_, name) => self.resolve_reference(name)?,
             ir::Value::Constructor(_, name) => match self.constructor_arity(name) {
                 Some(0) => Evaluated::Data(RuntimeValue::Constructor(name.clone(), vec![])),
@@ -321,6 +380,54 @@ impl<'a> Evaluator<'a> {
                 let function = self.eval(function, environment, depth)?;
                 let argument = Self::data(self.eval(argument, environment, depth)?)?;
                 self.apply(function, argument, depth)?
+            }
+            ir::Value::Lambda(_, pattern, body) => Evaluated::Function(
+                Callable::Lambda(pattern.clone(), body.clone(), Box::new(environment.clone())),
+                vec![],
+            ),
+            ir::Value::LetDefinition(_, name, definition, in_expr) => {
+                let binding = if definition.input_types.is_empty() {
+                    self.eval(&definition.body, environment, depth)?
+                } else {
+                    Evaluated::Function(
+                        Callable::Local(definition.clone(), Box::new(environment.clone())),
+                        vec![],
+                    )
+                };
+                let mut next = environment.clone();
+                next.insert(name.clone(), binding);
+                self.eval(in_expr, &next, depth)?
+            }
+            ir::Value::LetRecursion(_, definitions, in_expr) => {
+                let group: Rc<HashMap<ir::Name, Definition>> = Rc::new(
+                    definitions
+                        .iter()
+                        .map(|(name, definition)| (name.clone(), *definition.clone()))
+                        .collect(),
+                );
+                let mut next = environment.clone();
+                for name in group.keys() {
+                    next.insert(
+                        name.clone(),
+                        Evaluated::Function(
+                            Callable::Recursive(
+                                name.clone(),
+                                group.clone(),
+                                Box::new(environment.clone()),
+                            ),
+                            vec![],
+                        ),
+                    );
+                }
+                self.eval(in_expr, &next, depth)?
+            }
+            ir::Value::Destructure(_, pattern, value, in_expr) => {
+                let value = Self::data(self.eval(value, environment, depth)?)?;
+                let mut next = environment.clone();
+                if !match_pattern(pattern, &value, &mut next) {
+                    return Err(EvaluationError::NonExhaustivePattern);
+                }
+                self.eval(in_expr, &next, depth)?
             }
             ir::Value::PatternMatch(_, subject, cases) => {
                 let subject = Self::data(self.eval(subject, environment, depth)?)?;
@@ -349,12 +456,12 @@ impl<'a> Evaluator<'a> {
 fn match_pattern(
     pattern: &ir::Pattern<ir::Type<ir::Attrs>>,
     value: &RuntimeValue,
-    environment: &mut HashMap<ir::Name, RuntimeValue>,
+    environment: &mut Environment,
 ) -> bool {
     match (pattern, value) {
         (ir::Pattern::Wildcard(_), _) => true,
         (ir::Pattern::As(_, inner, name), _) if match_pattern(inner, value, environment) => {
-            environment.insert(name.clone(), value.clone());
+            environment.insert(name.clone(), Evaluated::Data(value.clone()));
             true
         }
         (ir::Pattern::EmptyList(_), RuntimeValue::List(values)) => values.is_empty(),
@@ -383,7 +490,7 @@ fn match_pattern(
             RuntimeValue::Integer(actual),
         ) => expected == actual,
         (ir::Pattern::Unit(_), RuntimeValue::Unit) => true,
-        (ir::Pattern::Tuple(_, patterns), RuntimeValue::List(values)) => {
+        (ir::Pattern::Tuple(_, patterns), RuntimeValue::Tuple(values)) => {
             patterns.len() == values.len()
                 && patterns
                     .iter()

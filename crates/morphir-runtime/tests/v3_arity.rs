@@ -308,3 +308,75 @@ fn independent_literal_program_evaluates_without_a_compiler() {
     .unwrap();
     assert_eq!(actual, RuntimeValue::Integer(42));
 }
+
+#[test]
+fn lexical_definition_and_recursive_local_function_are_evaluated() {
+    let local_count = ir::Value::PatternMatch(
+        attr(),
+        Box::new(variable("items")),
+        vec![
+            (ir::Pattern::EmptyList(attr()), literal(0)),
+            (
+                ir::Pattern::HeadTail(
+                    attr(),
+                    Box::new(ir::Pattern::Wildcard(attr())),
+                    Box::new(ir::Pattern::As(
+                        attr(),
+                        Box::new(ir::Pattern::Wildcard(attr())),
+                        name("rest"),
+                    )),
+                ),
+                apply(
+                    apply(sdk("add"), literal(1)),
+                    apply(variable("count"), variable("rest")),
+                ),
+            ),
+        ],
+    );
+    let body = ir::Value::LetDefinition(
+        attr(),
+        name("offset"),
+        Box::new(function(&[], literal(1))),
+        Box::new(ir::Value::LetRecursion(
+            attr(),
+            vec![(name("count"), Box::new(function(&["items"], local_count)))],
+            Box::new(apply(
+                apply(sdk("add"), variable("offset")),
+                apply(variable("count"), variable("values")),
+            )),
+        )),
+    );
+    let program = ir::Distribution {
+        format_version: 3,
+        distribution: ir::DistributionBody::Library(
+            path("example/arity"),
+            vec![(
+                path("morphir/SDK"),
+                ir::PackageSpecification { modules: vec![] },
+            )],
+            ir::PackageDefinition {
+                modules: vec![ir::ModuleEntry {
+                    path: path("rules"),
+                    definition: ir::AccessControlled {
+                        access: ir::Access::Public,
+                        value: ir::ModuleDefinition {
+                            types: vec![],
+                            values: vec![defined("local-count", &["values"], body)],
+                            doc: None,
+                        },
+                    },
+                }],
+            },
+        ),
+    };
+    let actual = evaluate_v3(
+        &program,
+        &reference("rules", "local-count"),
+        vec![RuntimeValue::List(vec![
+            RuntimeValue::Unit,
+            RuntimeValue::Unit,
+        ])],
+        EvaluationLimits::default(),
+    );
+    assert_eq!(actual, Ok(RuntimeValue::Integer(3)));
+}

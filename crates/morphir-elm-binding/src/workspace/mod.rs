@@ -498,6 +498,8 @@ mod tests {
             ("a.b/c", "a/b/c"),
             // The trim set is Unicode White_Space, which includes NEL.
             ("acme/\u{0085}/widgets", "acme/widgets"),
+            // A non-ASCII letter is a delimiter, as in `Name.fromString`.
+            ("éa/pkg", "a/pkg"),
         ];
         for (name, expected) in cases {
             let DiscoveryResponse::Success { snapshot } = discover_named(name) else {

@@ -346,6 +346,51 @@ fn zero_argument_definition_reference_evaluates_the_named_value() {
 }
 
 #[test]
+fn lambda_application_obeys_call_depth_limit() {
+    let lambda = ir::Value::Lambda(
+        attr(),
+        ir::Pattern::As(
+            attr(),
+            Box::new(ir::Pattern::Wildcard(attr())),
+            name("value"),
+        ),
+        Box::new(variable("value")),
+    );
+    let program = ir::Distribution {
+        format_version: 3,
+        distribution: ir::DistributionBody::Library(
+            path("example/arity"),
+            vec![],
+            ir::PackageDefinition {
+                modules: vec![ir::ModuleEntry {
+                    path: path("rules"),
+                    definition: ir::AccessControlled {
+                        access: ir::Access::Public,
+                        value: ir::ModuleDefinition {
+                            types: vec![],
+                            values: vec![defined("apply-lambda", &[], apply(lambda, literal(3)))],
+                            doc: None,
+                        },
+                    },
+                }],
+            },
+        ),
+    };
+    assert_eq!(
+        evaluate_v3(
+            &program,
+            &reference("rules", "apply-lambda"),
+            vec![],
+            EvaluationLimits {
+                fuel: 100,
+                max_call_depth: 1
+            }
+        ),
+        Err(morphir_runtime::EvaluationError::CallDepthExceeded),
+    );
+}
+
+#[test]
 fn lexical_definition_and_recursive_local_function_are_evaluated() {
     let local_count = ir::Value::PatternMatch(
         attr(),

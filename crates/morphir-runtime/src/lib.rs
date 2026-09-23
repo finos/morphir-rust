@@ -300,11 +300,14 @@ impl<'a> Evaluator<'a> {
                 self.call_user(definition, arguments, &recursive_environment, depth)?
             }
             Callable::Lambda(pattern, body, captured) => {
+                if depth >= self.max_call_depth {
+                    return Err(EvaluationError::CallDepthExceeded);
+                }
                 let mut environment = *captured;
                 if !match_pattern(&pattern, &arguments[0], &mut environment) {
                     return Err(EvaluationError::NonExhaustivePattern);
                 }
-                Self::data(self.eval(&body, &environment, depth)?)?
+                Self::data(self.eval(&body, &environment, depth + 1)?)?
             }
             Callable::Constructor(name) => RuntimeValue::Constructor(name, arguments),
             Callable::Add => {

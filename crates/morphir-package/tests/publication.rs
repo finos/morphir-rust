@@ -802,3 +802,37 @@ fn role_versions_above_u64_are_exact_and_survive_restart() {
         "18446744073709551617"
     );
 }
+
+#[test]
+fn relative_initialization_uses_the_process_working_directory() {
+    let (_temp, base, policy, _key) = setup();
+    std::fs::write(base.join("policy.json"), policy).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "relative_initialization_process", "--nocapture"])
+        .current_dir(&base)
+        .env("MORPHIR_TEST_RELATIVE_INITIALIZATION", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        base.join("relative-registry/metadata/1.root.json")
+            .is_file()
+    );
+    assert!(base.join("relative-state/identity.json").is_file());
+}
+#[test]
+fn relative_initialization_process() {
+    if std::env::var_os("MORPHIR_TEST_RELATIVE_INITIALIZATION").is_none() {
+        return;
+    }
+    let policy = std::fs::read("policy.json").unwrap();
+    let root = std::fs::read("registry/metadata/1.root.json").unwrap();
+    let registry = std::path::Path::new("relative-registry");
+    let state = std::path::Path::new("relative-state");
+    Registry::initialize(registry, state, &policy, &root).unwrap();
+    Registry::open(registry, state, &policy).unwrap();
+}

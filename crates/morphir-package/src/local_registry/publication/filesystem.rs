@@ -155,7 +155,8 @@ impl Directory {
     pub(super) fn create(path: &Path) -> io::Result<Self> {
         let parent = path
             .parent()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parent"))?;
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let component = path
             .file_name()
             .and_then(|v| v.to_str())

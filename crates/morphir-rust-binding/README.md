@@ -366,9 +366,9 @@ artifact, its SHA-256 checksum and `release.json`. A clean checkout builds from
 an archived HEAD and records that commit in the descriptor. A dirty checkout
 can produce a local test bundle, without release provenance.
 
-Independent releases use tags such as `extension/rust/v0.1.0`. Download the
-assets from the [Rust v0.1.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.1.0).
-The published descriptor is named `morphir-rust-binding-0.1.0.release.json`;
+Independent releases use tags such as `extension/rust/v0.2.0`. Download the
+assets from the [Rust v0.2.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.2.0).
+The published descriptor is named `morphir-rust-binding-0.2.0.release.json`;
 rename it to `release.json` alongside the WASM and checksum before publishing
 the directory to a local extension repository.
 

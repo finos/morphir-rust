@@ -4729,7 +4729,7 @@ dependencies = [
 
 [[package]]
 name = "morphir-python-binding"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cucumber",
  "morphir-core",
@@ -4750,7 +4750,7 @@ version = "0.2.0"
 
 [[package]]
 name = "morphir-rust-binding"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cucumber",
  "extism",

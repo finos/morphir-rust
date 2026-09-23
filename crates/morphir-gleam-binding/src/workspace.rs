@@ -387,6 +387,7 @@ mod tests {
             Some(&source_root),
         )
         .expect("a derivable module path")
+        .0
         .to_string()
     }
 

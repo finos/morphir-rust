@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Bounded classic V3 IR evaluation with typed inputs and outputs, explicit
+  preflight and runtime failures, and a first recursive arity-rule pilot.
+- Gleam V3 typed value lowering and caller-owned typed interfaces for
+  incremental compilation against last-good dependencies.
 - Local APFS Library publication with exact signed proposals, durable role-version
   reservations, staged immutable objects, serialized writers and timestamp commit
   recovery. The first macOS provider supports dependency-free classic V4 registries;

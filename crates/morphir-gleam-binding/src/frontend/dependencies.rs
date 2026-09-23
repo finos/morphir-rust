@@ -92,6 +92,9 @@ pub(crate) fn package_specifications(
 }
 
 pub(crate) fn canonical_package_name(value: &str) -> Result<PackageName, String> {
+    if value == "morphir/SDK" {
+        return Ok(PackageName::parse(value));
+    }
     if value.is_empty()
         || value.starts_with('/')
         || value.contains('\\')
@@ -233,5 +236,19 @@ fn display_format_version(version: &FormatVersion) -> String {
     match version {
         FormatVersion::String(version) => format!("'{version}'"),
         FormatVersion::Integer(version) => version.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_package_name;
+
+    #[test]
+    fn explicit_sdk_dependency_uses_well_known_ir_identity() {
+        assert_eq!(
+            canonical_package_name("morphir/SDK").unwrap().to_string(),
+            "morphir/SDK"
+        );
+        assert!(canonical_package_name("example/Upper").is_err());
     }
 }

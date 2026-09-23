@@ -1,5 +1,6 @@
 //! Gleam frontend - parse Gleam source to Morphir IR
 
+pub(crate) mod analysis;
 pub mod ast;
 pub mod compare;
 pub(crate) mod compile;

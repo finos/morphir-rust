@@ -67,16 +67,16 @@ fn malformed_patterns_are_parse_errors_even_when_values_are_skipped() {
 }
 
 #[test]
-fn valid_unsupported_patterns_remain_skippable() {
+fn valid_unsupported_patterns_are_skippable_only_in_types_only_mode() {
     for body in [
         "let assert \"prefix\" <> rest = value\n rest",
         "case value { \"prefix\" <> rest -> rest }",
         "let assert <<x:size(8)>> = value\n x",
         "case value { <<x:size(8)>> -> x }",
     ] {
-        for (version, types_only) in [("4", true), ("3", false)] {
+        for version in ["4", "3"] {
             let result = GleamExtension
-                .compile(request(body, version, types_only))
+                .compile(request(body, version, true))
                 .unwrap();
             assert!(result.success, "{body}: {:?}", result.diagnostics);
             assert!(result.ir.is_some());
@@ -87,5 +87,16 @@ fn valid_unsupported_patterns_remain_skippable() {
                     .any(|diagnostic| diagnostic.code.as_deref() == Some("GLEAM_VALUE_SKIPPED"))
             );
         }
+        let result = GleamExtension.compile(request(body, "3", false)).unwrap();
+        assert!(!result.success, "{body}: {:?}", result.diagnostics);
+        assert!(result.ir.is_none());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code.as_deref() == Some("GLEAM_TYPED_ANALYSIS") }),
+            "{body}: {:?}",
+            result.diagnostics
+        );
     }
 }

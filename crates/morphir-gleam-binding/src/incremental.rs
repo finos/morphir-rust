@@ -19,7 +19,7 @@ pub(crate) struct Baseline {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Decision {
-    Reuse(BaselineModule),
+    Reuse(Box<BaselineModule>),
     Compile,
 }
 
@@ -173,7 +173,7 @@ pub(crate) fn decide(
                     .iter()
                     .any(|name| changed_interfaces.contains(name)) =>
         {
-            Decision::Reuse(entry.clone())
+            Decision::Reuse(Box::new(entry.clone()))
         }
         _ => Decision::Compile,
     }
@@ -244,6 +244,7 @@ mod tests {
     fn stored_module(name: &str, dependencies: &[&str]) -> BaselineModule {
         let module = empty_module();
         BaselineModule {
+            frontend_state: None,
             name: name.into(),
             uri: format!("file:///src/{name}.gleam"),
             source_digest: source_digest("pub type X = Int"),
@@ -276,7 +277,7 @@ mod tests {
                 &baseline,
                 &HashSet::new()
             ),
-            Decision::Reuse(entry.clone())
+            Decision::Reuse(Box::new(entry.clone()))
         );
         assert_eq!(
             decide(&entry.name, "changed", &baseline, &HashSet::new()),

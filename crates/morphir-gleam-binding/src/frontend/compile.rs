@@ -1,7 +1,11 @@
 //! Dependency-ordered compilation with caller-owned incremental state.
+use super::analysis;
 use super::{ast::ModuleIR, resolver};
 use crate::vfs::OsVfs;
 use crate::{error_diagnostic, failed_compile, incremental, version::IrVersion};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use ecow::EcoString;
+use gleam_core::{ast::TypedModule, type_::ModuleInterface};
 use indexmap::IndexMap;
 use morphir_core::ir::v4::{
     Access, AccessControlled, Distribution, IRFile, LibraryContent, ModuleDefinition,
@@ -15,6 +19,46 @@ struct Document {
     source: crate::PreparedDocument,
     parsed: Option<ModuleIR>,
     diagnostics: Vec<Diagnostic>,
+}
+
+fn encode_typed_interface(interface: &ModuleInterface) -> Result<serde_json::Value> {
+    Ok(serde_json::Value::String(
+        STANDARD.encode(rmp_serde::to_vec(interface).map_err(|error| {
+            morphir_extension_sdk::ExtensionError::execution(error.to_string())
+        })?),
+    ))
+}
+
+fn decode_typed_interface(
+    state: &serde_json::Value,
+) -> std::result::Result<ModuleInterface, String> {
+    let encoded = state
+        .as_str()
+        .ok_or("Baseline typed interface must be a string")?;
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| error.to_string())?;
+    rmp_serde::from_slice(&bytes).map_err(|error| error.to_string())
+}
+
+fn analyze_typed_module(
+    source: &crate::PreparedDocument,
+    parsed: &ModuleIR,
+    package: &str,
+    dependencies: &IndexMap<String, morphir_core::ir::v4::PackageSpecification>,
+    typed_interfaces: &im::HashMap<EcoString, ModuleInterface>,
+) -> std::result::Result<TypedModule, String> {
+    let mut interfaces = typed_interfaces.clone();
+    for import in &parsed.imports {
+        if import.module.starts_with("gleam/") && !interfaces.contains_key(import.module.as_str()) {
+            let sdk = dependencies
+                .get("morphir/SDK")
+                .ok_or("Missing explicit morphir/SDK dependency specification for Gleam import")?;
+            let interface = analysis::sdk_type_interface(&import.module, sdk)?;
+            interfaces.insert(import.module.as_str().into(), interface);
+        }
+    }
+    analysis::analyze_module(&source.gleam_module_key, package, &source.text, &interfaces)
 }
 
 pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
@@ -126,6 +170,7 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
             .cloned(),
     );
     let mut available: IndexMap<String, AccessControlled<ModuleDefinition>> = IndexMap::new();
+    let mut typed_interfaces: im::HashMap<EcoString, ModuleInterface> = im::HashMap::new();
     let mut modules = IndexMap::new();
     let mut results = Vec::new();
     let output_dir = request
@@ -149,6 +194,7 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
             interface_digest: None,
             depends_on,
             ir: None,
+            frontend_state: None,
             diagnostics: document.diagnostics.clone(),
         };
         if cyclic.contains(name) {
@@ -185,6 +231,14 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                 let mut current_imports = result.depends_on.clone();
                 current_imports.sort();
                 current_imports.dedup();
+                let needs_typed_interface = documents
+                    .iter()
+                    .any(|document| imports[&document.source.module_key].contains(name));
+                let needs_typed_analysis = version == IrVersion::V3
+                    && !request.options.types_only
+                    && (!parsed.values.is_empty()
+                        || needs_typed_interface
+                        || parsed.imports.iter().any(|import| !import.types.is_empty()));
                 let decision = if stored_imports == current_imports {
                     incremental::decide(name, &source_digest, &baseline.modules, &changed)
                 } else {
@@ -193,10 +247,46 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                 match decision {
                     incremental::Decision::Reuse(entry) => {
                         let definition = baseline.definitions[name].clone();
-                        result.status = ModuleStatus::Unchanged;
-                        result.interface_digest = Some(entry.interface_digest);
-                        modules.insert(name.clone(), definition.clone());
-                        available.insert(name.clone(), definition);
+                        let typed_result = if needs_typed_analysis {
+                            entry.frontend_state.as_ref().map_or_else(
+                                || {
+                                    analyze_typed_module(
+                                        source,
+                                        parsed,
+                                        &package.to_string(),
+                                        &dependencies,
+                                        &typed_interfaces,
+                                    )
+                                    .map(|typed| Some(typed.type_info))
+                                },
+                                |state| {
+                                    decode_typed_interface(state).map(Some).map_err(|error| {
+                                        format!("Invalid baseline typed interface: {error}")
+                                    })
+                                },
+                            )
+                        } else {
+                            Ok(None)
+                        };
+                        match typed_result {
+                            Ok(interface) => {
+                                if let Some(interface) = interface {
+                                    result.frontend_state =
+                                        Some(encode_typed_interface(&interface)?);
+                                    typed_interfaces
+                                        .insert(source.gleam_module_key.as_str().into(), interface);
+                                }
+                                result.status = ModuleStatus::Unchanged;
+                                result.interface_digest = Some(entry.interface_digest);
+                                modules.insert(name.clone(), definition.clone());
+                                available.insert(name.clone(), definition);
+                            }
+                            Err(message) => result.diagnostics.push(error_diagnostic(
+                                "GLEAM_TYPED_ANALYSIS",
+                                message,
+                                Some(&source.uri),
+                            )),
+                        }
                     }
                     incremental::Decision::Compile => {
                         match resolver::resolve_one(&package, parsed, &available, &dependencies) {
@@ -210,18 +300,13 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                                 result.diagnostics.extend(
                                     cycles.into_iter().map(|e| located_resolution(e, source)),
                                 );
-                                if request.options.types_only || version == IrVersion::V3 {
+                                if request.options.types_only {
                                     for value in &resolved.values {
                                         let mut diagnostic = error_diagnostic(
                                             "GLEAM_VALUE_SKIPPED",
                                             format!(
-                                                "Value '{}' omitted from type-only compilation{}",
-                                                value.name,
-                                                if version == IrVersion::V3 {
-                                                    "; use IR v4 to retain Gleam function bodies"
-                                                } else {
-                                                    ""
-                                                }
+                                                "Value '{}' omitted from type-only compilation",
+                                                value.name
                                             ),
                                             Some(&source.uri),
                                         );
@@ -241,29 +326,74 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                                         package.clone(),
                                         source.module_name.clone(),
                                     );
-                                    match visitor.build_module_definition(
-                                        &resolved,
-                                        if exposed.contains(name) {
-                                            Access::Public
-                                        } else {
-                                            Access::Private
-                                        },
-                                    ) {
-                                        Ok(definition) => {
-                                            let digest = incremental::interface_digest(&definition);
-                                            if baseline.modules.get(name).is_none_or(|prior| {
-                                                prior.interface_digest != digest
-                                            }) {
-                                                changed.insert(name.clone());
+                                    let typed_values = if needs_typed_analysis {
+                                        let typed = (|| -> std::result::Result<_, String> {
+                                            let typed = analyze_typed_module(
+                                                source,
+                                                parsed,
+                                                &package.to_string(),
+                                                &dependencies,
+                                                &typed_interfaces,
+                                            )?;
+                                            let values =
+                                                analysis::lower_typed_functions(&typed, &package)?;
+                                            Ok((typed, values))
+                                        })();
+                                        match typed {
+                                            Ok((typed, values)) => {
+                                                result.frontend_state =
+                                                    Some(encode_typed_interface(&typed.type_info)?);
+                                                typed_interfaces.insert(
+                                                    source.gleam_module_key.as_str().into(),
+                                                    typed.type_info,
+                                                );
+                                                Some(values)
                                             }
-                                            result.status = ModuleStatus::Compiled;
-                                            result.interface_digest = Some(digest);
-                                            result.ir = Some(serde_json::to_value(&definition)?);
-                                            available.insert(name.clone(), definition.clone());
-                                            modules.insert(name.clone(), definition);
+                                            Err(message) => {
+                                                result.diagnostics.push(error_diagnostic(
+                                                    "GLEAM_TYPED_ANALYSIS",
+                                                    message,
+                                                    Some(&source.uri),
+                                                ));
+                                                None
+                                            }
                                         }
-                                        Err(error) => {
-                                            let diagnostic = match error.get_ref().and_then(|error| error.downcast_ref::<super::visitor::UnsupportedValue>()) {
+                                    } else {
+                                        None
+                                    };
+                                    if !result
+                                        .diagnostics
+                                        .iter()
+                                        .any(|d| d.severity == DiagnosticSeverity::Error)
+                                    {
+                                        match visitor.build_module_definition(
+                                            &resolved,
+                                            if exposed.contains(name) {
+                                                Access::Public
+                                            } else {
+                                                Access::Private
+                                            },
+                                        ) {
+                                            Ok(mut definition) => {
+                                                if let Some(values) = typed_values {
+                                                    definition.value.values = values;
+                                                }
+                                                let digest =
+                                                    incremental::interface_digest(&definition);
+                                                if baseline.modules.get(name).is_none_or(|prior| {
+                                                    prior.interface_digest != digest
+                                                }) {
+                                                    changed.insert(name.clone());
+                                                }
+                                                result.status = ModuleStatus::Compiled;
+                                                result.interface_digest = Some(digest);
+                                                result.ir =
+                                                    Some(serde_json::to_value(&definition)?);
+                                                available.insert(name.clone(), definition.clone());
+                                                modules.insert(name.clone(), definition);
+                                            }
+                                            Err(error) => {
+                                                let diagnostic = match error.get_ref().and_then(|error| error.downcast_ref::<super::visitor::UnsupportedValue>()) {
                                                 Some(unsupported) => located_resolution(resolver::ResolutionError {
                                                     code: "GLEAM_UNSUPPORTED_VALUE",
                                                     module: name.clone(),
@@ -272,7 +402,8 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                                                 }, source),
                                                 None => error_diagnostic("IR_CONVERSION_ERROR", error.to_string(), Some(&source.uri)),
                                             };
-                                            result.diagnostics.push(diagnostic);
+                                                result.diagnostics.push(diagnostic);
+                                            }
                                         }
                                     }
                                 }
@@ -285,6 +416,25 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
         if matches!(result.status, ModuleStatus::Failed | ModuleStatus::Blocked) {
             if let Some(definition) = baseline.definitions.get(name) {
                 available.insert(name.clone(), definition.clone());
+                if version == IrVersion::V3
+                    && !request.options.types_only
+                    && let Some(state) = baseline
+                        .modules
+                        .get(name)
+                        .and_then(|entry| entry.frontend_state.as_ref())
+                {
+                    match decode_typed_interface(state) {
+                        Ok(interface) => {
+                            typed_interfaces
+                                .insert(source.gleam_module_key.as_str().into(), interface);
+                        }
+                        Err(error) => result.diagnostics.push(error_diagnostic(
+                            "GLEAM_BASELINE",
+                            format!("Invalid baseline typed interface: {error}"),
+                            Some(&source.uri),
+                        )),
+                    }
+                }
             } else {
                 changed.insert(name.clone());
             }

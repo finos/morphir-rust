@@ -127,7 +127,7 @@ features = ["serde"]
 version = "0.4"
 
 [dependencies.pem]
-version = "3"
+version = "4"
 
 [dependencies.percent-encoding]
 version = "2"
@@ -198,7 +198,7 @@ version = "2"
 version = "2"
 
 [dev-dependencies.hex-literal]
-version = "0.4"
+version = "1.0"
 
 [dev-dependencies.httptest]
 version = "0.16"

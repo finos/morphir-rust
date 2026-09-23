@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `workspace.project-name.invalid`. The `SourceIdentity` hook
   `check_package_name` is now `normalize_package_name` and returns the name the
   snapshot reports; Gleam keeps its names unchanged.
+- `test:cli-release <id>` runs every bundle through morphir 0.4.0-beta.5, the
+  first CLI that ignores an unknown descriptor member unless the descriptor lists
+  it as critical (kb `morphir-extensions` decision 0004, finos/morphir#921). The
+  `TRANSITIONAL_FIELDS` skip is removed: every publish failure fails the job, and
+  the Gleam bundle, which carries `workspaceDiscovery`, is checked again.
 
 ### Fixed
 - Extension publication refuses mixed runtimes and target ABIs the index cannot

@@ -1,4 +1,4 @@
-"""Exercise extension selection and the transitional publish gate of the cli-release task."""
+"""Exercise extension selection and the publish step of the cli-release task."""
 
 import json
 import os
@@ -26,25 +26,6 @@ if [ "$2" = "install" ]; then
 fi
 exit 0
 """
-
-# What a released CLI says about a descriptor field it has never heard of.
-#
-# Reproduced with the CLI's real layout, not as one long line. miette hard-wraps the diagnostic to
-# the terminal width and prefixes every continuation with a `│` gutter, which routinely splits
-# `unknown field` from the field name it is about:
-#
-#     × Failed to publish extension release: invalid extension release bundle
-#     │ at .../release.json: unknown field
-#     │ `workspaceDiscovery`, expected one of `schemaVersion`, ...
-#
-# A single-line stub passes against a task that only flattens newlines, while the real CI job
-# fails — which is exactly what happened. The wrapping is the part worth pinning.
-UNKNOWN_FIELD_FAILURE = """    echo "Error:   × Failed to publish extension release: invalid extension release bundle" >&2
-    echo "  │ at $PWD/release.json: unknown field" >&2
-    echo "  │ \\`{field}\\`, expected one of \\`schemaVersion\\`, \\`shortId\\`," >&2
-    echo "  │ \\`extensionId\\`, \\`package\\`, \\`version\\` at line 29 column 22" >&2
-    exit 1"""
-
 
 def _descriptor(**extra: object) -> str:
     fields = {
@@ -74,78 +55,42 @@ class CliReleaseTaskTests(unittest.TestCase):
             self.assertIn(f"no bundle at {bundle}", result.stderr)
 
 
-class TransitionalFieldTests(unittest.TestCase):
-    """The gate degrades to a skip for a field no released CLI can parse, and for nothing else."""
+class PublishTests(unittest.TestCase):
+    """Every publish failure fails the task; nothing is downgraded to a skip."""
 
-    def test_the_transitional_list_documents_its_own_removal(self) -> None:
+    def test_the_task_has_no_transitional_skip(self) -> None:
         task = TASK.read_text(encoding="utf-8")
-        self.assertIn("TRANSITIONAL_FIELDS='workspaceDiscovery'", task)
-        self.assertIn("deny_unknown_fields", task)
-        self.assertIn("Delete this entry", task)
+        self.assertNotIn("TRANSITIONAL_FIELDS", task)
+        self.assertNotIn("skipping the compatibility check", task)
 
-    def test_an_unparsable_transitional_field_skips_the_check(self) -> None:
-        result = self._publish(
-            UNKNOWN_FIELD_FAILURE.format(field="workspaceDiscovery"),
-            descriptor=_descriptor(workspaceDiscovery=True),
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("skipping the compatibility check", result.stderr)
-        self.assertIn("workspaceDiscovery", result.stderr)
-        self.assertIn("0.0.0-stub", result.stderr)
-        self.assertIn(".config/morphir-cli-version", result.stderr)
-        # The install, and everything after it, must not have run.
-        self.assertNotIn("morphir extension install", result.stderr)
-        # Diagnostics belong on stderr; this task's stdout is consumed as output.
-        self.assertNotIn("skipping", result.stdout)
-
-    def test_a_published_transitional_field_reports_the_entry_as_stale(self) -> None:
+    def test_a_successful_publish_goes_on_to_install(self) -> None:
         result = self._publish(
             '    echo "published"\n    exit 0',
             descriptor=_descriptor(workspaceDiscovery=True),
         )
         # The stub exits 9 from `extension install`, so the task carried on past the publish.
         self.assertEqual(9, result.returncode, result.stderr)
-        self.assertIn("is stale", result.stderr)
-        self.assertIn("workspaceDiscovery", result.stderr)
         self.assertIn("published", result.stdout)
-        self.assertNotIn("is stale", result.stdout)
 
-    def test_a_descriptor_without_the_field_reports_nothing(self) -> None:
-        result = self._publish('    exit 0', descriptor=_descriptor())
-        self.assertEqual(9, result.returncode, result.stderr)
-        self.assertNotIn("stale", result.stderr)
-
-    def test_an_unrelated_publish_failure_still_fails(self) -> None:
+    def test_a_publish_failure_fails_with_its_status(self) -> None:
         result = self._publish(
             '    echo "Failed to publish extension release: checksum mismatch" >&2\n    exit 3',
-            descriptor=_descriptor(workspaceDiscovery=True),
+            descriptor=_descriptor(),
         )
         self.assertEqual(3, result.returncode, result.stdout)
         self.assertIn("checksum mismatch", result.stderr)
         self.assertNotIn("skipping", result.stderr)
+        self.assertNotIn("morphir extension install", result.stderr)
 
-    def test_a_silent_publish_failure_still_fails(self) -> None:
-        """A non-zero exit with output the task does not recognise is never skippable."""
-        result = self._publish('    exit 4', descriptor=_descriptor(workspaceDiscovery=True))
-        self.assertEqual(4, result.returncode, result.stdout)
-        self.assertNotIn("skipping", result.stderr)
-
-    def test_an_unknown_field_outside_the_list_still_fails(self) -> None:
+    def test_an_unknown_field_error_still_fails(self) -> None:
+        """A CLI that rejects a descriptor member fails the check; it is not a transition."""
         result = self._publish(
-            UNKNOWN_FIELD_FAILURE.format(field="providerSynthesis"),
-            descriptor=_descriptor(providerSynthesis=True),
+            '    echo "invalid extension release bundle: unknown field \\`workspaceDiscovery\\`" >&2\n'
+            '    exit 1',
+            descriptor=_descriptor(workspaceDiscovery=True),
         )
         self.assertEqual(1, result.returncode, result.stdout)
-        self.assertIn("providerSynthesis", result.stderr)
-        self.assertNotIn("skipping", result.stderr)
-
-    def test_a_transitional_error_about_an_absent_field_still_fails(self) -> None:
-        """The error naming the field is not enough; the descriptor has to carry it."""
-        result = self._publish(
-            UNKNOWN_FIELD_FAILURE.format(field="workspaceDiscovery"),
-            descriptor=_descriptor(),
-        )
-        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn("unknown field", result.stderr)
         self.assertNotIn("skipping", result.stderr)
 
     def _publish(self, behaviour: str, descriptor: str) -> subprocess.CompletedProcess:

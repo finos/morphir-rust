@@ -63,6 +63,7 @@ fn baseline(previous: &CompileBaseline, result: &CompileResult) -> CompileBaseli
             .iter()
             .filter_map(|module| match module.status {
                 ModuleStatus::Compiled => Some(BaselineModule {
+                    frontend_state: module.frontend_state.clone(),
                     name: module.name.clone(),
                     uri: module.uri.clone(),
                     source_digest: module.source_digest.clone().expect("source digest"),
@@ -204,6 +205,25 @@ fn broken_dependency_without_baseline_blocks_dependent() {
 fn broken_dependency_reuses_last_good_interface_for_unchanged_dependent() {
     let (_, baseline) = first();
     let result = rerun(A, Some(B_BROKEN), baseline);
+    assert!(!result.success);
+    assert_eq!(module(&result, "b").status, ModuleStatus::Failed);
+    assert_eq!(module(&result, "a").status, ModuleStatus::Unchanged);
+    assert_eq!(result.modules, vec!["a"]);
+}
+
+#[test]
+fn broken_v3_dependency_reuses_last_good_typed_interface() {
+    let dependent = "import b.{type Number}\npub fn id(value: Number) -> Number { value }\n";
+    let dependency = "pub type Number = Int\n";
+    let mut initial_request = request(dependent, Some(dependency));
+    initial_request.options.ir_version = "3".into();
+    let first = compile(initial_request);
+    assert!(first.success, "{:?}", first.diagnostics);
+
+    let mut broken_request = request(dependent, Some(B_BROKEN));
+    broken_request.options.ir_version = "3".into();
+    broken_request.baseline = Some(baseline(&CompileBaseline::default(), &first));
+    let result = compile(broken_request);
     assert!(!result.success);
     assert_eq!(module(&result, "b").status, ModuleStatus::Failed);
     assert_eq!(module(&result, "a").status, ModuleStatus::Unchanged);

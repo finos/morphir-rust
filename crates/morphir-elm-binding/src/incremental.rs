@@ -27,7 +27,7 @@ pub struct Digests {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// The baseline still describes the module; reuse its IR and digests.
-    Reuse(BaselineModule),
+    Reuse(Box<BaselineModule>),
     /// The module has to be resolved and lowered again.
     Compile,
 }
@@ -56,7 +56,7 @@ pub fn decide(
     {
         return Decision::Compile;
     }
-    Decision::Reuse(entry.clone())
+    Decision::Reuse(Box::new(entry.clone()))
 }
 
 #[cfg(test)]
@@ -65,6 +65,7 @@ mod tests {
 
     fn entry(name: &str, source: &str, depends_on: &[&str]) -> BaselineModule {
         BaselineModule {
+            frontend_state: None,
             name: name.into(),
             uri: format!("file:///work/{name}.elm"),
             source_digest: source.into(),

@@ -347,6 +347,59 @@ fn zero_argument_definition_reference_evaluates_the_named_value() {
 }
 
 #[test]
+fn zero_argument_recursive_binding_is_a_value() {
+    let mut program = independent_arity_program(false);
+    let ir::DistributionBody::Library(_, _, package) = &mut program.distribution;
+    let body = ir::Value::LetRecursion(
+        attr(),
+        vec![(name("answer"), Box::new(function(&[], literal(42))))],
+        Box::new(variable("answer")),
+    );
+    package.modules[0]
+        .definition
+        .value
+        .values
+        .push(defined("local-answer", &[], body));
+    assert_eq!(
+        evaluate_v3(
+            &program,
+            &reference("rules", "local-answer"),
+            vec![],
+            EvaluationLimits::default(),
+        ),
+        Ok(RuntimeValue::Integer(42)),
+    );
+}
+
+#[test]
+fn cyclic_zero_argument_binding_stops_at_call_depth_limit() {
+    let mut program = independent_arity_program(false);
+    let ir::DistributionBody::Library(_, _, package) = &mut program.distribution;
+    let body = ir::Value::LetRecursion(
+        attr(),
+        vec![(name("loop"), Box::new(function(&[], variable("loop"))))],
+        Box::new(variable("loop")),
+    );
+    package.modules[0]
+        .definition
+        .value
+        .values
+        .push(defined("local-loop", &[], body));
+    assert_eq!(
+        evaluate_v3(
+            &program,
+            &reference("rules", "local-loop"),
+            vec![],
+            EvaluationLimits {
+                fuel: 100,
+                max_call_depth: 8,
+            },
+        ),
+        Err(morphir_runtime::EvaluationError::CallDepthExceeded),
+    );
+}
+
+#[test]
 fn lambda_application_obeys_call_depth_limit() {
     let lambda = ir::Value::Lambda(
         attr(),

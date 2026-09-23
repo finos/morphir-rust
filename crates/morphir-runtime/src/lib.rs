@@ -1,4 +1,51 @@
 //! Pure evaluation of classic Morphir IR values.
+//!
+//! The V3 evaluator accepts a classic IR distribution, an entrypoint, typed
+//! arguments, and explicit resource limits. It returns data or a typed error.
+//!
+//! ```
+//! use morphir_core::ir::classic as ir;
+//! use morphir_runtime::{evaluate_v3, EvaluationLimits, RuntimeValue};
+//!
+//! let name = ir::Name::from_str("answer");
+//! let package = ir::Path::new(vec![ir::Name::from_str("example")]);
+//! let module = ir::Path::new(vec![ir::Name::from_str("rules")]);
+//! let unit = ir::Type::Unit(ir::Attrs::None);
+//! let definition = ir::ValueDefinition {
+//!     input_types: vec![],
+//!     output_type: unit.clone(),
+//!     body: ir::Value::Literal(unit, ir::Literal::WholeNumber(42)),
+//! };
+//! let distribution = ir::Distribution {
+//!     format_version: 3,
+//!     distribution: ir::DistributionBody::Library(
+//!         package.clone(),
+//!         vec![],
+//!         ir::PackageDefinition { modules: vec![ir::ModuleEntry {
+//!             path: module.clone(),
+//!             definition: ir::AccessControlled {
+//!                 access: ir::Access::Public,
+//!                 value: ir::ModuleDefinition {
+//!                     types: vec![],
+//!                     values: vec![(name.clone(), ir::AccessControlled {
+//!                         access: ir::Access::Public,
+//!                         value: ir::Documented::new("", definition),
+//!                     })],
+//!                     doc: None,
+//!                 },
+//!             },
+//!         }] },
+//!     ),
+//! };
+//! let entrypoint = ir::FQName::new(package, module, name);
+//! assert_eq!(
+//!     evaluate_v3(&distribution, &entrypoint, vec![], EvaluationLimits {
+//!         fuel: 1_000,
+//!         max_call_depth: 32,
+//!     }),
+//!     Ok(RuntimeValue::Integer(42)),
+//! );
+//! ```
 
 use morphir_core::ir::classic as ir;
 use std::collections::HashMap;
@@ -15,19 +62,30 @@ type Library<'a> = (
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Data values returned by the bounded V3 evaluator.
 pub enum RuntimeValue {
+    /// Signed whole number.
     Integer(i64),
+    /// Boolean value.
     Boolean(bool),
+    /// UTF-8 string.
     String(String),
+    /// Unit value.
     Unit,
+    /// Ordered list of values.
     List(Vec<Self>),
+    /// Fixed-length tuple of values.
     Tuple(Vec<Self>),
+    /// Constructed value with its fully qualified constructor name and fields.
     Constructor(ir::FQName, Vec<Self>),
 }
 
+/// Limits applied to each evaluation call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvaluationLimits {
+    /// Maximum number of reduction steps.
     pub fuel: u64,
+    /// Maximum nested function-call depth.
     pub max_call_depth: usize,
 }
 
@@ -41,19 +99,38 @@ impl Default for EvaluationLimits {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A distinct refusal or failure while evaluating V3 IR.
 pub enum EvaluationError {
+    /// The distribution is not classic V3.
     UnsupportedVersion(u32),
+    /// The requested top-level value is absent.
     MissingEntrypoint(ir::FQName),
+    /// A referenced package was not declared as a dependency.
     MissingDependency(ir::Path),
+    /// A declared reference has no supported definition.
     UnknownReference(ir::FQName),
+    /// A local variable is not bound.
     UnknownVariable(ir::Name),
-    ArityMismatch { expected: usize, actual: usize },
+    /// The supplied argument count differs from the definition's arity.
+    ArityMismatch {
+        /// Required number of arguments.
+        expected: usize,
+        /// Supplied number of arguments.
+        actual: usize,
+    },
+    /// An expression requires a different runtime value form.
     TypeMismatch(&'static str),
+    /// No pattern matches the subject.
     NonExhaustivePattern,
+    /// The reduction-step budget was consumed.
     FuelExhausted,
+    /// The host deadline was reached.
     DeadlineExceeded,
+    /// The nested call-depth budget was reached.
     CallDepthExceeded,
+    /// Checked whole-number arithmetic overflowed.
     IntegerOverflow,
+    /// The expression form is outside this evaluator's bounded subset.
     UnsupportedExpression(&'static str),
 }
 
@@ -304,20 +381,7 @@ impl<'a> Evaluator<'a> {
                 let definition = definitions
                     .get(&name)
                     .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?;
-                let mut recursive_environment = *captured.clone();
-                for local in definitions.keys() {
-                    recursive_environment.insert(
-                        local.clone(),
-                        Evaluated::Function(
-                            Callable::Recursive(
-                                local.clone(),
-                                definitions.clone(),
-                                captured.clone(),
-                            ),
-                            vec![],
-                        ),
-                    );
-                }
+                let recursive_environment = Self::recursive_environment(&definitions, &captured);
                 self.call_user(definition, arguments, &recursive_environment, depth)?
             }
             Callable::Lambda(pattern, body, captured) => {
@@ -357,6 +421,27 @@ impl<'a> Evaluator<'a> {
         }))
     }
 
+    fn recursive_environment(
+        definitions: &Rc<HashMap<ir::Name, Definition>>,
+        captured: &Environment,
+    ) -> Environment {
+        let mut environment = captured.clone();
+        for local in definitions.keys() {
+            environment.insert(
+                local.clone(),
+                Evaluated::Function(
+                    Callable::Recursive(
+                        local.clone(),
+                        definitions.clone(),
+                        Box::new(captured.clone()),
+                    ),
+                    vec![],
+                ),
+            );
+        }
+        environment
+    }
+
     fn eval(
         &mut self,
         expr: &Expression,
@@ -390,10 +475,33 @@ impl<'a> Evaluator<'a> {
                     .map(|value| Self::data(self.eval(value, environment, depth)?))
                     .collect::<Result<_, _>>()?,
             )),
-            ir::Value::Variable(_, name) => environment
-                .get(name)
-                .cloned()
-                .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?,
+            ir::Value::Variable(_, name) => {
+                let binding = environment
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?;
+                match binding {
+                    Evaluated::Function(
+                        Callable::Recursive(local, definitions, captured),
+                        arguments,
+                    ) if arguments.is_empty()
+                        && definitions
+                            .get(&local)
+                            .is_some_and(|definition| definition.input_types.is_empty()) =>
+                    {
+                        let definition = &definitions[&local];
+                        let recursive_environment =
+                            Self::recursive_environment(&definitions, &captured);
+                        Evaluated::Data(self.call_user(
+                            definition,
+                            vec![],
+                            &recursive_environment,
+                            depth,
+                        )?)
+                    }
+                    other => other,
+                }
+            }
             ir::Value::Reference(_, name) => {
                 if let Some(definition) = self
                     .definition(name)

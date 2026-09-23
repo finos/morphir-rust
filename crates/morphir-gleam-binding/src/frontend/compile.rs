@@ -3,6 +3,7 @@ use super::analysis;
 use super::{ast::ModuleIR, resolver};
 use crate::vfs::OsVfs;
 use crate::{error_diagnostic, failed_compile, incremental, version::IrVersion};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ecow::EcoString;
 use gleam_core::{ast::TypedModule, type_::ModuleInterface};
 use indexmap::IndexMap;
@@ -18,6 +19,26 @@ struct Document {
     source: crate::PreparedDocument,
     parsed: Option<ModuleIR>,
     diagnostics: Vec<Diagnostic>,
+}
+
+fn encode_typed_interface(interface: &ModuleInterface) -> Result<serde_json::Value> {
+    Ok(serde_json::Value::String(
+        STANDARD.encode(rmp_serde::to_vec(interface).map_err(|error| {
+            morphir_extension_sdk::ExtensionError::execution(error.to_string())
+        })?),
+    ))
+}
+
+fn decode_typed_interface(
+    state: &serde_json::Value,
+) -> std::result::Result<ModuleInterface, String> {
+    let encoded = state
+        .as_str()
+        .ok_or("Baseline typed interface must be a string")?;
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| error.to_string())?;
+    rmp_serde::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
 fn analyze_typed_module(
@@ -173,6 +194,7 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
             interface_digest: None,
             depends_on,
             ir: None,
+            frontend_state: None,
             diagnostics: document.diagnostics.clone(),
         };
         if cyclic.contains(name) {
@@ -226,20 +248,31 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                     incremental::Decision::Reuse(entry) => {
                         let definition = baseline.definitions[name].clone();
                         let typed_result = if needs_typed_analysis {
-                            analyze_typed_module(
-                                source,
-                                parsed,
-                                &package.to_string(),
-                                &dependencies,
-                                &typed_interfaces,
+                            entry.frontend_state.as_ref().map_or_else(
+                                || {
+                                    analyze_typed_module(
+                                        source,
+                                        parsed,
+                                        &package.to_string(),
+                                        &dependencies,
+                                        &typed_interfaces,
+                                    )
+                                    .map(|typed| Some(typed.type_info))
+                                },
+                                |state| {
+                                    decode_typed_interface(state).map(Some).map_err(|error| {
+                                        format!("Invalid baseline typed interface: {error}")
+                                    })
+                                },
                             )
-                            .map(|typed| Some(typed.type_info))
                         } else {
                             Ok(None)
                         };
                         match typed_result {
                             Ok(interface) => {
                                 if let Some(interface) = interface {
+                                    result.frontend_state =
+                                        Some(encode_typed_interface(&interface)?);
                                     typed_interfaces
                                         .insert(source.gleam_module_key.as_str().into(), interface);
                                 }
@@ -308,6 +341,8 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
                                         })();
                                         match typed {
                                             Ok((typed, values)) => {
+                                                result.frontend_state =
+                                                    Some(encode_typed_interface(&typed.type_info)?);
                                                 typed_interfaces.insert(
                                                     source.gleam_module_key.as_str().into(),
                                                     typed.type_info,
@@ -381,6 +416,25 @@ pub(crate) fn compile(mut request: CompileRequest) -> Result<CompileResult> {
         if matches!(result.status, ModuleStatus::Failed | ModuleStatus::Blocked) {
             if let Some(definition) = baseline.definitions.get(name) {
                 available.insert(name.clone(), definition.clone());
+                if version == IrVersion::V3
+                    && !request.options.types_only
+                    && let Some(state) = baseline
+                        .modules
+                        .get(name)
+                        .and_then(|entry| entry.frontend_state.as_ref())
+                {
+                    match decode_typed_interface(state) {
+                        Ok(interface) => {
+                            typed_interfaces
+                                .insert(source.gleam_module_key.as_str().into(), interface);
+                        }
+                        Err(error) => result.diagnostics.push(error_diagnostic(
+                            "GLEAM_BASELINE",
+                            format!("Invalid baseline typed interface: {error}"),
+                            Some(&source.uri),
+                        )),
+                    }
+                }
             } else {
                 changed.insert(name.clone());
             }

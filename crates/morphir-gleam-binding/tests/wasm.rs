@@ -165,6 +165,7 @@ fn baseline(result: &CompileResult) -> CompileBaseline {
             .module_results
             .iter()
             .map(|module| BaselineModule {
+                frontend_state: module.frontend_state.clone(),
                 name: module.name.clone(),
                 uri: module.uri.clone(),
                 source_digest: module.source_digest.clone().unwrap(),

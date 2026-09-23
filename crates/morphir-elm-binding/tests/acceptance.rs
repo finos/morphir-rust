@@ -348,6 +348,7 @@ fn baseline_from(previous: &CompileBaseline, result: &CompileResult) -> CompileB
             continue;
         }
         let entry = BaselineModule {
+            frontend_state: None,
             name: module.name.clone(),
             uri: module.uri.clone(),
             source_digest: module

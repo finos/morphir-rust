@@ -630,6 +630,9 @@ pub struct BaselineModule {
     pub depends_on: Vec<String>,
     /// Previously compiled IR for this module.
     pub ir: serde_json::Value,
+    /// Frontend-owned state needed to reuse this module's interface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend_state: Option<serde_json::Value>,
 }
 
 /// Baseline supplied by the host for incremental compilation.
@@ -687,6 +690,9 @@ pub struct ModuleResult {
     /// Compiled IR for this module, when produced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ir: Option<serde_json::Value>,
+    /// Frontend-owned state to store alongside compiled IR in a baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend_state: Option<serde_json::Value>,
     /// Diagnostics for this module.
     #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
@@ -1454,6 +1460,7 @@ mod incremental_tests {
         );
         let with = CompileResult {
             module_results: vec![ModuleResult {
+                frontend_state: None,
                 name: "A".into(),
                 uri: "file:///A.elm".into(),
                 status: ModuleStatus::Unchanged,

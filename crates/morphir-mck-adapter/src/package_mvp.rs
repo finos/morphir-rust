@@ -1,5 +1,7 @@
 //! The draft-3 local Library MVP testee over the shared MCK JSON-lines protocol.
 
+mod refresh;
+
 use crate::package::positive_integer_id;
 use anyhow::{Context, Result, bail, ensure};
 use morphir_package::{
@@ -42,6 +44,13 @@ enum Request {
         profile: String,
         #[serde(rename = "exactRoot")]
         exact_root: String,
+        #[serde(default)]
+        environment: Environment,
+        files: Vec<WireFile>,
+    },
+    #[serde(rename = "refresh-local-library")]
+    RefreshLocalLibrary {
+        profile: String,
         #[serde(default)]
         environment: Environment,
         files: Vec<WireFile>,
@@ -89,6 +98,8 @@ enum OutputSetup {
 /// An invalid protocol or unclassified production error stops the process.
 /// A runnable signed `resolve-local-library` request and response is in
 /// `examples/package_mvp_resolve.rs` (`cargo run -p morphir-mck-adapter --example package_mvp_resolve`).
+/// A metadata-only `refresh-local-library` example is in
+/// `examples/package_mvp_refresh.rs` (`cargo run -p morphir-mck-adapter --example package_mvp_refresh`).
 ///
 /// ```
 /// use morphir_mck_adapter::package_mvp::run;
@@ -100,7 +111,7 @@ enum OutputSetup {
 /// run(Cursor::new(input), &mut output)?;
 /// let reply: Value = serde_json::from_slice(output.split(|byte| *byte == b'\n').next().unwrap())?;
 /// assert_eq!(reply["contractVersion"], "0.1.0-draft.3");
-/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library", "resolve-local-library"]));
+/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library", "resolve-local-library", "refresh-local-library"]));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
@@ -124,7 +135,7 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
             Request::Capabilities {} => json!({
                 "suite":"package","contractVersion":CONTRACT,
                 "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-                "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library"]
+                "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library","refresh-local-library"]
             }),
             Request::RestoreLocalLibrary {
                 profile,
@@ -144,6 +155,15 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 ensure!(profile == PROFILE, "unsupported package MVP profile");
                 let files = admit_files(files)?;
                 runtime.block_on(resolve(files, &exact_root, environment))?
+            }
+            Request::RefreshLocalLibrary {
+                profile,
+                environment,
+                files,
+            } => {
+                ensure!(profile == PROFILE, "unsupported package MVP profile");
+                let files = admit_refresh_files(files)?;
+                runtime.block_on(refresh::execute(files, environment))?
             }
             Request::Exit {} => break,
         };
@@ -176,41 +196,8 @@ fn admit_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
         (15..=16).contains(&files.len()),
         "package MVP requires 15 or 16 input files"
     );
-    let mut found = BTreeMap::new();
-    let mut total = 0usize;
-    for file in files {
-        ensure!(
-            allowed_path(&file.path),
-            "unsupported package MVP input path"
-        );
-        ensure!(
-            file.hex.len() <= 2 * MAX_FILE,
-            "package MVP input file limit"
-        );
-        let bytes = decode_hex(&file.hex)?;
-        total = total
-            .checked_add(bytes.len())
-            .context("package MVP input size overflow")?;
-        ensure!(total <= MAX_TOTAL, "package MVP total input limit");
-        ensure!(
-            found.insert(file.path, bytes).is_none(),
-            "duplicate package MVP input path"
-        );
-    }
-    for name in [
-        "trust-policy.json",
-        "morphir.lock",
-        "registry/metadata/1.root.json",
-        "registry/metadata/1.snapshot.json",
-        "registry/metadata/1.targets.json",
-        "registry/metadata/1.timestamp.json",
-        "registry/metadata/timestamp.json",
-    ] {
-        ensure!(
-            found.contains_key(name),
-            "missing package MVP input file: {name}"
-        );
-    }
+    let found = decode_files(files)?;
+    require_common_inputs(&found)?;
     let mut bundles = BTreeMap::<&str, BTreeSet<&str>>::new();
     let mut records = 0;
     let mut statements = 0;
@@ -236,6 +223,59 @@ fn admit_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
         "package MVP requires two records and statements"
     );
     Ok(found)
+}
+
+fn admit_refresh_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
+    ensure!(
+        (7..=16).contains(&files.len()),
+        "package MVP refresh requires 7 to 16 input files"
+    );
+    let found = decode_files(files)?;
+    require_common_inputs(&found)?;
+    Ok(found)
+}
+
+fn decode_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut found = BTreeMap::new();
+    let mut total = 0usize;
+    for file in files {
+        ensure!(
+            allowed_path(&file.path),
+            "unsupported package MVP input path"
+        );
+        ensure!(
+            file.hex.len() <= 2 * MAX_FILE,
+            "package MVP input file limit"
+        );
+        let bytes = decode_hex(&file.hex)?;
+        total = total
+            .checked_add(bytes.len())
+            .context("package MVP input size overflow")?;
+        ensure!(total <= MAX_TOTAL, "package MVP total input limit");
+        ensure!(
+            found.insert(file.path, bytes).is_none(),
+            "duplicate package MVP input path"
+        );
+    }
+    Ok(found)
+}
+
+fn require_common_inputs(found: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    for name in [
+        "trust-policy.json",
+        "morphir.lock",
+        "registry/metadata/1.root.json",
+        "registry/metadata/1.snapshot.json",
+        "registry/metadata/1.targets.json",
+        "registry/metadata/1.timestamp.json",
+        "registry/metadata/timestamp.json",
+    ] {
+        ensure!(
+            found.contains_key(name),
+            "missing package MVP input file: {name}"
+        );
+    }
+    Ok(())
 }
 
 fn allowed_path(path: &str) -> bool {

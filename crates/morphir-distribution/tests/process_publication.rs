@@ -253,15 +253,22 @@ fn republish_from_another_host_ignores_provenance() {
         .unwrap()
         .remove("probeSource");
     fs::write(&history, serde_json::to_vec(&host_a).unwrap()).unwrap();
-    assert_eq!(
-        repository
-            .publish_with_process_probe(&bundle, describe)
-            .unwrap()
-            .status(),
-        PublicationStatus::AlreadyPresent
-    );
+    let publication = repository
+        .publish_with_process_probe(&bundle, describe)
+        .unwrap();
+    assert_eq!(publication.status(), PublicationStatus::AlreadyPresent);
     let stored: Value = serde_json::from_slice(&fs::read(&history).unwrap()).unwrap();
     assert_eq!(stored["artifacts"][0]["statementSource"], "probed");
+    assert_eq!(stored["artifacts"][0]["probeSource"], "session-fallback");
+    assert_eq!(stored["artifacts"][1]["statementSource"], "probed");
+    assert_eq!(stored["artifacts"][1]["probeSource"], "describe");
+    assert_eq!(serde_json::to_value(publication.release()).unwrap(), stored);
+    let upgraded = fs::read(&history).unwrap();
+    let repeated = repository
+        .publish_with_process_probe(&bundle, describe)
+        .unwrap();
+    assert_eq!(serde_json::to_value(repeated.release()).unwrap(), stored);
+    assert_eq!(fs::read(&history).unwrap(), upgraded);
     edit(&bundle, |value| {
         for artifact in value["artifacts"].as_array_mut().unwrap() {
             artifact["statement"]["future"] = json!(true);
@@ -392,4 +399,175 @@ fn version_two_wasm_keeps_declared_statement_without_probe() {
     assert_eq!(wire["artifacts"][0]["statement"], declared);
     assert_eq!(wire["artifacts"][0]["statementSource"], "declared");
     assert!(wire["artifacts"][0].get("probeSource").is_none());
+}
+
+#[test]
+fn mixed_runtimes_are_refused_before_probing() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = bundle(temp.path(), &[statement(), statement()]);
+    edit(&bundle, |value| {
+        value["artifacts"][0]["runtime"] = json!("wasm");
+        value["artifacts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("platform");
+    });
+    let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+    let error = repository
+        .publish_with_process_probe(&bundle, |_, _| panic!("must refuse before probing"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("a bundle holds either WASM artifacts or process artifacts, not both"),
+        "{error}"
+    );
+    assert!(!repository.root().join("extensions/example.jsonl").exists());
+}
+
+#[test]
+fn unrepresentable_target_triples_are_refused() {
+    for triple in [
+        "x86_64-unknown-linux-musl",
+        "x86_64-pc-windows-gnu",
+        "powerpc64-unknown-linux-gnu",
+        "aarch64_be-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnux32",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = bundle(temp.path(), &[statement()]);
+        edit(&bundle, |value| {
+            value["artifacts"][0]["platform"] = json!(triple)
+        });
+        let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+        let error = repository
+            .publish_with_process_probe(&bundle, |_, _| panic!("must refuse before probing"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(triple) && error.contains("this index cannot represent it yet"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn linux_gnu_target_is_accepted() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = bundle(temp.path(), &[statement()]);
+    edit(&bundle, |value| {
+        value["artifacts"][0]["platform"] = json!("x86_64-unknown-linux-gnu")
+    });
+    let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+    let publication = repository
+        .publish_with_process_probe(&bundle, |artifact, _| {
+            Ok(morphir_distribution::PublicationDescription::Describe(
+                artifact.statement().clone(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(publication.release()).unwrap()["artifacts"][0]["platform"],
+        json!({"os":"linux", "arch":"x86_64"})
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn already_present_returns_stored_provenance_without_rewriting_history() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = bundle(temp.path(), &[statement()]);
+    let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+    repository.publish(&bundle).unwrap();
+    let history = repository.root().join("extensions/example.jsonl");
+    let mut stored: Value = serde_json::from_slice(&fs::read(&history).unwrap()).unwrap();
+    stored["artifacts"][0]["statementSource"] = json!("probed");
+    stored["artifacts"][0]["probeSource"] = json!("describe");
+    let bytes = serde_json::to_vec_pretty(&stored).unwrap();
+    // Keep JSONL valid while changing whitespace so a rewrite is observable.
+    let bytes: Vec<_> = bytes.into_iter().filter(|byte| *byte != b'\n').collect();
+    fs::write(&history, &bytes).unwrap();
+    let publication = repository.publish(&bundle).unwrap();
+    assert_eq!(
+        publication.status(),
+        morphir_distribution::PublicationStatus::AlreadyPresent
+    );
+    assert_eq!(serde_json::to_value(publication.release()).unwrap(), stored);
+    assert_eq!(fs::read(history).unwrap(), bytes);
+}
+
+#[test]
+#[cfg(unix)]
+fn descriptor_critical_paths_survive_publication() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = bundle(temp.path(), &[statement()]);
+    edit(&bundle, |value| {
+        value["requires"] = json!({"host": [">=0.1.0"]});
+        value["critical"] = json!([
+            "extensionId",
+            "artifacts.statement.capabilities.backend.generate",
+            "requires.host"
+        ]);
+    });
+    let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+    let publication = repository.publish(&bundle).unwrap();
+    assert_eq!(
+        serde_json::to_value(publication.release()).unwrap()["critical"],
+        json!([
+            "id",
+            "artifacts.statement.capabilities.backend.generate",
+            "requires.host"
+        ])
+    );
+}
+
+#[test]
+fn descriptor_critical_paths_without_record_members_are_refused() {
+    for path in [
+        "shortId",
+        "gitCommit",
+        "platformDifferences",
+        "artifacts.requires.host",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = bundle(temp.path(), &[statement()]);
+        edit(&bundle, |value| value["critical"] = json!([path]));
+        let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+        let error = repository
+            .publish_with_process_probe(&bundle, |_, _| panic!("must refuse before probing"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(path)
+                && error.contains("no corresponding member in the published record"),
+            "{error}"
+        );
+        assert!(!repository.root().join("extensions/example.jsonl").exists());
+    }
+}
+
+#[test]
+fn canonical_little_endian_gnu_architectures_remain_supported() {
+    for (arch, expected) in [
+        ("powerpc64le", "powerpc64"),
+        ("riscv64gc", "riscv64"),
+        ("loongarch64", "loongarch64"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = bundle(temp.path(), &[statement()]);
+        edit(&bundle, |value| {
+            value["artifacts"][0]["platform"] = json!(format!("{arch}-unknown-linux-gnu"))
+        });
+        let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
+        let publication = repository
+            .publish_with_process_probe(&bundle, |artifact, _| {
+                Ok(morphir_distribution::PublicationDescription::Describe(
+                    artifact.statement().clone(),
+                ))
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(publication.release()).unwrap()["artifacts"][0]["platform"],
+            json!({"os":"linux", "arch":expected})
+        );
+    }
 }

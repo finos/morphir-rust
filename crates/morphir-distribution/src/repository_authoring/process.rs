@@ -12,7 +12,19 @@ pub(super) fn verify(
     descriptor: ReleaseBundleDescriptor,
     probe: &mut impl FnMut(&BundleArtifactDescriptor, &[u8]) -> Result<PublicationDescription>,
 ) -> Result<VerifiedReleaseBundle> {
+    let runtime = descriptor.artifacts()[0].runtime();
+    if descriptor
+        .artifacts()
+        .iter()
+        .any(|artifact| artifact.runtime() != runtime)
+    {
+        return Err(invalid_bundle(
+            root,
+            "a bundle holds either WASM artifacts or process artifacts, not both",
+        ));
+    }
     let wire = serde_json::to_value(&descriptor).map_err(DistributionError::StateEncoding)?;
+    let critical = record_critical(root, &wire)?;
     let mut names = BTreeSet::from(["release.json".to_owned()]);
     let mut platforms = BTreeSet::new();
     let mut artifacts = Vec::new();
@@ -90,6 +102,9 @@ pub(super) fn verify(
         if let Some(platform) = platform {
             record["platform"] = json!(platform);
         }
+        if let Some(critical) = wire["artifacts"][index].get("critical") {
+            record["critical"] = critical.clone();
+        }
         records.push(record);
         artifacts.push(VerifiedBundleArtifact {
             artifact: artifact.filename().clone(),
@@ -147,16 +162,40 @@ pub(super) fn verify(
         "schemaVersion": "2.0.0-draft.1", "id": descriptor.extension_id(),
         "name": first.extension.name, "version": descriptor.version(), "channels": [channel],
         "artifacts": records,
+        "critical": critical,
     });
     if let Some(requires) = wire.get("requires") {
         release["requires"] = requires.clone();
-        if requires.get("host").is_some() {
-            release["critical"] = json!(["requires.host"]);
-        }
     }
     let release =
         serde_json::from_value(release).map_err(|error| invalid_bundle(root, error.to_string()))?;
     Ok(VerifiedReleaseBundle { release, artifacts })
+}
+
+fn record_critical(root: &Path, descriptor: &Value) -> Result<Vec<String>> {
+    let paths: Vec<String> = descriptor
+        .get("critical")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(DistributionError::StateEncoding)?
+        .unwrap_or_default();
+    paths
+        .into_iter()
+        .map(|path| match path.as_str() {
+            "extensionId" => Ok("id".into()),
+            "shortId"
+            | "gitCommit"
+            | "platformDifferences"
+            | "artifacts.requires"
+            | "artifacts.requires.host" => Err(invalid_bundle(
+                root,
+                format!(
+                    "critical path '{path}' has no corresponding member in the published record"
+                ),
+            )),
+            _ => Ok(path),
+        })
+        .collect()
 }
 
 fn platform(root: &Path, triple: &str) -> Result<Platform> {
@@ -168,12 +207,14 @@ fn platform(root: &Path, triple: &str) -> Result<Platform> {
     })?;
     let os = match suffix {
         "apple-darwin" => "macos",
-        "unknown-linux-gnu" | "unknown-linux-musl" => "linux",
-        "pc-windows-msvc" | "pc-windows-gnu" => "windows",
+        "unknown-linux-gnu" => "linux",
+        "pc-windows-msvc" => "windows",
         _ => {
             return Err(invalid_bundle(
                 root,
-                format!("unsupported process platform '{triple}'"),
+                format!(
+                    "unsupported process platform '{triple}': this index cannot represent it yet"
+                ),
             ));
         }
     };
@@ -181,15 +222,15 @@ fn platform(root: &Path, triple: &str) -> Result<Platform> {
         "arm64" | "aarch64" => "aarch64",
         "i686" | "i586" | "i386" | "x86" => "x86",
         "amd64" | "x86_64" => "x86_64",
-        "arm" | "armv7" | "armv7a" | "thumbv7neon" => "arm",
-        "powerpc64" | "powerpc64le" => "powerpc64",
-        "riscv64" | "riscv64gc" => "riscv64",
-        "riscv32" | "riscv32gc" | "riscv32imac" => "riscv32",
-        "loongarch64" | "s390x" | "sparc64" | "powerpc" => arch,
+        "powerpc64le" if os == "linux" => "powerpc64",
+        "riscv64gc" if os == "linux" => "riscv64",
+        "loongarch64" if os == "linux" => "loongarch64",
         _ => {
             return Err(invalid_bundle(
                 root,
-                format!("unsupported process architecture '{arch}'"),
+                format!(
+                    "unsupported process architecture '{arch}' in '{triple}': this index cannot represent it yet"
+                ),
             ));
         }
     };
@@ -324,5 +365,57 @@ fn differing_members(left: &Value, right: &Value, path: &str, differences: &mut 
         }
         _ if left != right => differences.push(path.to_owned()),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_reader_refuses_published_critical_statement_member() {
+        let root = tempfile::tempdir().unwrap();
+        let digest = Sha256Digest::of_bytes(b"wasm");
+        let descriptor = serde_json::from_value(json!({
+            "schemaVersion": "2.0.0-draft.1", "extensionId": "example", "shortId": "example",
+            "version": "1.0.0", "critical": ["artifacts.statement.capabilities.backend.generate"],
+            "artifacts": [{"runtime": "wasm", "filename": "guest.wasm", "sha256": digest,
+                "statement": {"statementVersion": "0.1.0-draft.1",
+                    "protocolVersions": [morphir_extension_sdk::protocol::MEP_VERSION],
+                    "extension": {"id": "example", "name": "Example", "version": "1.0.0", "types": ["backend"]},
+                    "capabilities": {"backend": {"targets": ["sql"], "irVersions": ["3"], "generate": true}}
+                }}]
+        })).unwrap();
+        let entries = BTreeMap::from([
+            ("release.json".into(), vec![]),
+            ("guest.wasm".into(), b"wasm".to_vec()),
+            (
+                "guest.wasm.sha256".into(),
+                format!("{digest}  guest.wasm\n").into_bytes(),
+            ),
+        ]);
+        let bundle = verify(root.path(), &entries, descriptor, &mut |_, _| {
+            panic!("WASM must not probe")
+        })
+        .unwrap();
+        let mut record = serde_json::to_value(bundle.release).unwrap();
+        // Use the shared must-ignore reader with an older vocabulary that does
+        // not understand per-artifact statements. Schema support is independent.
+        let older_paths = [
+            "schemaVersion",
+            "id",
+            "name",
+            "version",
+            "artifacts",
+            "critical",
+        ];
+        let error =
+            crate::extension_format::validate_members(&record, &older_paths, true).unwrap_err();
+        assert!(
+            error.contains("artifacts.statement.capabilities.backend.generate"),
+            "{error}"
+        );
+        record.as_object_mut().unwrap().remove("critical");
+        assert!(crate::extension_format::validate_members(&record, &older_paths, true).is_ok());
     }
 }

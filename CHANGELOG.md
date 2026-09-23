@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot reports; Gleam keeps its names unchanged.
 
 ### Fixed
+- Extension publication refuses mixed runtimes and target ABIs the index cannot
+  represent, preserves descriptor critical paths, and returns stored release
+  records while persisting declared-to-probed provenance upgrades.
 - A native in-process provider gives each MEP session its own lifecycle. `NativeExtension::open_protocol` opens an endpoint for one session, and the daemon's native transport uses it, so a session after a shutdown, or two sessions at once, over one provider no longer fail with `-32014` or "already initialized".
 - Extension resolution and installation check `requires.host` against an explicit
   caller-supplied host version. Parsing validates requirements without comparing

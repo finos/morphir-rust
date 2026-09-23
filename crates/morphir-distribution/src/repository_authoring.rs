@@ -171,7 +171,16 @@ impl LocalExtensionRepository {
             .join("extensions")
             .join(format!("{}.jsonl", bundle.release.extension_id()));
         let previous = read_optional(&history_path)?;
-        let status = publication_status(previous.as_deref(), &bundle.release)?;
+        let existing = existing_release(previous.as_deref(), &bundle.release)?;
+        let status = if existing.is_some() {
+            PublicationStatus::AlreadyPresent
+        } else {
+            PublicationStatus::Published
+        };
+        let release = match &existing {
+            Some(stored) => upgrade_provenance(stored, &bundle.release)?,
+            None => bundle.release,
+        };
         // Refuse destination conflicts before publishing any artifact.
         for artifact in &bundle.artifacts {
             self.check_artifact_destination(artifact)?;
@@ -184,14 +193,18 @@ impl LocalExtensionRepository {
         let artifact_path = artifact_paths[0].clone();
 
         if status == PublicationStatus::Published {
-            let next = append_release(previous.as_deref(), &bundle.release)?;
+            let next = append_release(previous.as_deref(), &release)?;
+            atomic_write_bytes(&history_path, &next)?;
+        } else if existing.as_ref() != Some(&release) {
+            let next =
+                replace_provenance(previous.as_deref().expect("existing history"), &release)?;
             atomic_write_bytes(&history_path, &next)?;
         }
 
         tracing::info!(
             event_name = "extension.repository.publish",
-            extension_id = %bundle.release.extension_id(),
-            version = %bundle.release.version(),
+            extension_id = %release.extension_id(),
+            version = %release.version(),
             status = match status {
                 PublicationStatus::Published => "published",
                 PublicationStatus::AlreadyPresent => "already-present",
@@ -200,7 +213,7 @@ impl LocalExtensionRepository {
         );
         Ok(RepositoryPublication {
             status,
-            release: bundle.release,
+            release,
             artifact_path,
         })
     }
@@ -576,18 +589,18 @@ fn verify_digest(path: &Path, bytes: &[u8], expected: &Sha256Digest) -> Result<(
     }
 }
 
-fn publication_status(
+fn existing_release(
     previous: Option<&[u8]>,
     release: &ReleaseRecord,
-) -> Result<PublicationStatus> {
+) -> Result<Option<ReleaseRecord>> {
     let Some(previous) = previous else {
-        return Ok(PublicationStatus::Published);
+        return Ok(None);
     };
     let history = ExtensionHistory::parse_jsonl(previous)?;
     for existing in history.releases() {
         if existing.version().cmp_precedence(release.version()).is_eq() {
             return if without_provenance(existing)? == without_provenance(release)? {
-                Ok(PublicationStatus::AlreadyPresent)
+                Ok(Some(existing.clone()))
             } else {
                 Err(DistributionError::RepositoryReleaseConflict {
                     id: release.extension_id().clone(),
@@ -596,7 +609,61 @@ fn publication_status(
             };
         }
     }
-    Ok(PublicationStatus::Published)
+    Ok(None)
+}
+
+fn upgrade_provenance(stored: &ReleaseRecord, incoming: &ReleaseRecord) -> Result<ReleaseRecord> {
+    let mut wire = serde_json::to_value(stored).map_err(DistributionError::StateEncoding)?;
+    let incoming = serde_json::to_value(incoming).map_err(DistributionError::StateEncoding)?;
+    for (artifact, candidate) in wire["artifacts"]
+        .as_array_mut()
+        .expect("release artifacts")
+        .iter_mut()
+        .zip(incoming["artifacts"].as_array().expect("release artifacts"))
+    {
+        if artifact["statementSource"] == "declared" && candidate["statementSource"] == "probed" {
+            artifact["statementSource"] = candidate["statementSource"].clone();
+            artifact["probeSource"] = candidate["probeSource"].clone();
+        }
+    }
+    serde_json::from_value(wire).map_err(DistributionError::StateEncoding)
+}
+
+fn replace_provenance(previous: &[u8], release: &ReleaseRecord) -> Result<Vec<u8>> {
+    let updated = serde_json::to_value(release).map_err(DistributionError::StateEncoding)?;
+    let mut next = Vec::new();
+    for line in previous.split_inclusive(|byte| *byte == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            next.extend_from_slice(line);
+            continue;
+        }
+        let mut wire: serde_json::Value =
+            serde_json::from_slice(line).map_err(DistributionError::StateEncoding)?;
+        if wire["version"] == updated["version"] {
+            // Preserve unknown members and every declared statement. Only the
+            // provenance changes; unrelated history lines retain their bytes.
+            for (artifact, upgraded) in wire["artifacts"]
+                .as_array_mut()
+                .expect("validated history artifacts")
+                .iter_mut()
+                .zip(updated["artifacts"].as_array().expect("release artifacts"))
+            {
+                for member in ["statementSource", "probeSource"] {
+                    if let Some(value) = upgraded.get(member) {
+                        artifact[member] = value.clone();
+                    }
+                }
+            }
+            next.extend(serde_json::to_vec(&wire).map_err(DistributionError::StateEncoding)?);
+            if line.ends_with(b"\n") {
+                next.push(b'\n');
+            }
+        } else {
+            next.extend_from_slice(line);
+        }
+    }
+    ExtensionHistory::parse_jsonl(&next)?;
+    Ok(next)
 }
 
 fn without_provenance(release: &ReleaseRecord) -> Result<serde_json::Value> {

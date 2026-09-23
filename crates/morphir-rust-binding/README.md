@@ -343,7 +343,7 @@ For a distributable guest, build with `--release`. Its artifact is
 `MORPHIR_RUST_GUEST` to that artifact's absolute path when running the host tests. Tests load it with
 WASI disabled and compare native and guest results for both IR versions.
 
-The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.1.0`,
+The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.2.0`,
 frontend language `rust`, suffix `.rs`, backend target `rust`, and
 `irVersions: ["3", "4"]` on both capabilities.
 

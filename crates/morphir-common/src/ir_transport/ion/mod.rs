@@ -8,11 +8,12 @@ use std::io::{Read, Write};
 
 use ion_rs::{Element, IonType, Symbol};
 use morphir_core::ir::classic;
-use morphir_core::traversal::IrCursor;
+use morphir_core::traversal::{IrCursor, SemanticEvent};
 
 use super::semantic;
 
 mod type_expr;
+mod v4;
 mod value_expr;
 use super::{
     CodecOptions, EventSink, EventSource, FormatId, IrCodec, IrVersion, Stage, TransportDiagnostic,
@@ -67,6 +68,36 @@ impl IonCodec {
     }
 }
 
+struct IonEncoder<'writer> {
+    writer: &'writer mut dyn Write,
+    version: IrVersion,
+    events: Vec<SemanticEvent>,
+}
+
+impl EventSink for IonEncoder<'_> {
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
+        self.events.push(event);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), TransportDiagnostic> {
+        struct Memory(std::collections::VecDeque<SemanticEvent>);
+
+        impl EventSource for Memory {
+            fn next_event(&mut self) -> Result<Option<SemanticEvent>, TransportDiagnostic> {
+                Ok(self.0.pop_front())
+            }
+        }
+
+        let mut source = Memory(std::mem::take(&mut self.events).into());
+        IonCodec::new().encode(
+            &mut source,
+            self.writer,
+            &CodecOptions::new(self.version, super::Layout::SingleFile, FormatId::ion()),
+        )
+    }
+}
+
 impl Default for IonCodec {
     fn default() -> Self {
         Self::new()
@@ -107,6 +138,10 @@ impl IrCodec for IonCodec {
                 "an Ion IR document starts with morphir::",
             )
         })?;
+        if options.version() == IrVersion::V4 {
+            let file = v4::decode(&values)?;
+            return semantic::emit_v4(file, sink);
+        }
         expect_marker(header, "morphir")?;
         let header_fields = struct_fields(header, "morphir")?;
         let library = read_library_header(&header_fields, options.version())?;
@@ -122,6 +157,18 @@ impl IrCodec for IonCodec {
         semantic::emit_classic_v3(distribution, sink)
     }
 
+    fn encoder<'writer>(
+        &self,
+        writer: &'writer mut dyn Write,
+        options: &CodecOptions,
+    ) -> Result<Box<dyn EventSink + 'writer>, TransportDiagnostic> {
+        Ok(Box::new(IonEncoder {
+            writer,
+            version: options.version(),
+            events: Vec::new(),
+        }))
+    }
+
     fn encode(
         &self,
         source: &mut dyn EventSource,
@@ -132,11 +179,7 @@ impl IrCodec for IonCodec {
             semantic::SemanticFile::ClassicV3(distribution) => {
                 write_v3_library(distribution, writer)
             }
-            semantic::SemanticFile::V4(_) => Err(IonCodec::error(
-                "morphir::ir::ion::encode_unsupported",
-                Stage::Encoding,
-                "the Ion codec encodes formatVersion 3 only",
-            )),
+            semantic::SemanticFile::V4(file) => v4::write(file, writer),
         }
     }
 }

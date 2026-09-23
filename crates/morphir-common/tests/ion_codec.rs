@@ -5,7 +5,8 @@ use morphir_common::ir_transport::{
     CodecOptions, CodecRegistry, EventSink, EventSource, FormatId, IonCodec, IrCodec, IrVersion,
     JsonCodec, Layout, Stage, TransportDiagnostic,
 };
-use morphir_core::traversal::{IrCursor, SemanticEvent};
+use morphir_core::ir::v4::FormatVersion;
+use morphir_core::traversal::{DistributionHeader, IrCursor, SemanticEvent, SemanticEventKind};
 
 const V3_JSON: &str = r#"{
   "formatVersion": 3,
@@ -171,6 +172,33 @@ struct QueueSource(VecDeque<SemanticEvent>);
 impl EventSource for QueueSource {
     fn next_event(&mut self) -> Result<Option<SemanticEvent>, TransportDiagnostic> {
         Ok(self.0.pop_front())
+    }
+}
+
+fn release_string(events: Vec<SemanticEvent>) -> Vec<SemanticEvent> {
+    events
+        .into_iter()
+        .map(|event| {
+            let (cursor, kind) = event.into_parts();
+            let kind = match kind {
+                SemanticEventKind::Begin(DistributionHeader::V4Library {
+                    format_version,
+                    package,
+                }) => SemanticEventKind::Begin(DistributionHeader::V4Library {
+                    format_version: canonical_release(format_version),
+                    package,
+                }),
+                other => other,
+            };
+            SemanticEvent::new(cursor, kind)
+        })
+        .collect()
+}
+
+fn canonical_release(version: FormatVersion) -> FormatVersion {
+    match version {
+        FormatVersion::Integer(4) => FormatVersion::String("4.0.0".to_owned()),
+        other => other,
     }
 }
 
@@ -357,6 +385,36 @@ fn an_empty_v3_library_round_trips_through_ion() {
     assert_eq!(from_ion, original);
     assert!(ion.contains("morphir_footer::"), "{ion}");
     assert!(ion.contains(r#"ionVersion:"#), "{ion}");
+}
+
+#[test]
+fn v4_library_fixtures_round_trip_through_ion() {
+    for fixture in [
+        "../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json",
+        "../../morphir-core/tests/fixtures/ir/v4/complete-example.json",
+    ] {
+        let json = match fixture {
+            path if path.ends_with("v4-library-distribution.json") => {
+                include_str!("../../morphir-core/tests/fixtures/ir/v4/v4-library-distribution.json")
+            }
+            _ => include_str!("../../morphir-core/tests/fixtures/ir/v4/complete-example.json"),
+        };
+        let json_options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
+        let ion_options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::ion());
+        let original = decode(&JsonCodec::new(), json, &json_options)
+            .unwrap_or_else(|error| panic!("{fixture} json: {error:?}"));
+        let ion = encode(&IonCodec::new(), original.clone(), &ion_options)
+            .unwrap_or_else(|error| panic!("{fixture} encode: {error:?}"));
+        let from_ion = decode(&IonCodec::new(), &ion, &ion_options)
+            .unwrap_or_else(|error| panic!("{fixture} ion: {error:?}\n{ion}"));
+        // Ion stores formatVersion as the release string. JSON may store the
+        // same release as the integer 4.
+        assert_eq!(
+            release_string(from_ion),
+            release_string(original),
+            "{fixture}\n{ion}"
+        );
+    }
 }
 
 #[test]

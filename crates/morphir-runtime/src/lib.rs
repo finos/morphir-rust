@@ -370,7 +370,21 @@ impl<'a> Evaluator<'a> {
                 .get(name)
                 .cloned()
                 .ok_or_else(|| EvaluationError::UnknownVariable(name.clone()))?,
-            ir::Value::Reference(_, name) => self.resolve_reference(name)?,
+            ir::Value::Reference(_, name) => {
+                if let Some(definition) = self
+                    .definition(name)
+                    .filter(|definition| definition.input_types.is_empty())
+                {
+                    Evaluated::Data(self.call_user(
+                        &definition,
+                        vec![],
+                        &Environment::new(),
+                        depth,
+                    )?)
+                } else {
+                    self.resolve_reference(name)?
+                }
+            }
             ir::Value::Constructor(_, name) => match self.constructor_arity(name) {
                 Some(0) => Evaluated::Data(RuntimeValue::Constructor(name.clone(), vec![])),
                 Some(_) => Evaluated::Function(Callable::Constructor(name.clone()), vec![]),

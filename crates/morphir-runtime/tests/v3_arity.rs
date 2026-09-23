@@ -310,6 +310,42 @@ fn independent_literal_program_evaluates_without_a_compiler() {
 }
 
 #[test]
+fn zero_argument_definition_reference_evaluates_the_named_value() {
+    let program = ir::Distribution {
+        format_version: 3,
+        distribution: ir::DistributionBody::Library(
+            path("example/arity"),
+            vec![],
+            ir::PackageDefinition {
+                modules: vec![ir::ModuleEntry {
+                    path: path("rules"),
+                    definition: ir::AccessControlled {
+                        access: ir::Access::Public,
+                        value: ir::ModuleDefinition {
+                            types: vec![],
+                            values: vec![
+                                defined("answer", &[], literal(42)),
+                                defined("proxy", &[], value_ref("rules", "answer")),
+                            ],
+                            doc: None,
+                        },
+                    },
+                }],
+            },
+        ),
+    };
+    assert_eq!(
+        evaluate_v3(
+            &program,
+            &reference("rules", "proxy"),
+            vec![],
+            EvaluationLimits::default()
+        ),
+        Ok(RuntimeValue::Integer(42)),
+    );
+}
+
+#[test]
 fn lexical_definition_and_recursive_local_function_are_evaluated() {
     let local_count = ir::Value::PatternMatch(
         attr(),

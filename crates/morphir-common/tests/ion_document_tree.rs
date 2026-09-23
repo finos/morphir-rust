@@ -665,3 +665,32 @@ fn a_module_file_directly_under_the_package_is_refused() {
 
     assert_refused(&root, "a module path has at least one name");
 }
+
+#[test]
+fn a_v4_type_with_attributes_is_refused_rather_than_dropped() {
+    let mut ir = v4_fixture(COMPLETE_EXAMPLE);
+    let Distribution::Library(content) = &mut ir.distribution else {
+        panic!("a library");
+    };
+    let module = content.def.modules.values_mut().next().unwrap();
+    let value = module.value.values.values_mut().next().unwrap();
+    let output = value
+        .value
+        .value
+        .output_type
+        .as_mut()
+        .expect("an output type");
+    let (morphir_core::ir::v4::Type::Reference(attributes, _, _)
+    | morphir_core::ir::v4::Type::Variable(attributes, _)) = output
+    else {
+        panic!("the fixture's first output type is a reference or a variable");
+    };
+    attributes
+        .extensions
+        .insert("hint".to_owned(), serde_json::json!("kept"));
+
+    let error = write_document_tree_with_options(&memory_root(), &ir, &tree_options(IrVersion::V4))
+        .expect_err("the writer refuses attributes it cannot encode");
+
+    assert!(format!("{error:?}").contains("attributes"), "{error:?}");
+}

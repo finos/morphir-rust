@@ -90,11 +90,11 @@ fn read_library(
         match annotation_names(element)?.as_slice() {
             ["package", "spec"] => {
                 let (name, spec) = read_package_spec(element)?;
-                dependencies.insert(name, spec);
+                merge_dependency(&mut dependencies, name, spec)?;
             }
             ["public", "def", "module"] | ["private", "def", "module"] => {
                 let (name, module) = read_def_module(element)?;
-                modules.insert(name, module);
+                insert_new(&mut modules, "module", name, module)?;
             }
             names => {
                 return Err(IonCodec::error(
@@ -126,7 +126,7 @@ fn read_package_spec(
         let list = list.as_list().ok_or_else(|| member("modules is a list"))?;
         for module in list.iter() {
             let (module_name, spec) = read_module_spec(module)?;
-            modules.insert(module_name, spec);
+            insert_new(&mut modules, "module", module_name, spec)?;
         }
     }
     Ok((name, v4::PackageSpecification { modules }))
@@ -149,7 +149,7 @@ fn read_module_spec(
             .iter()
         {
             let (type_name, spec) = read_type_spec(item)?;
-            types.insert(type_name, spec);
+            insert_new(&mut types, "type", type_name, spec)?;
         }
     }
     if let Some(list) = fields.get("values") {
@@ -159,7 +159,7 @@ fn read_module_spec(
             .iter()
         {
             let (value_name, spec) = read_value_spec(item)?;
-            values.insert(value_name, spec);
+            insert_new(&mut values, "value", value_name, spec)?;
         }
     }
     Ok((
@@ -236,7 +236,7 @@ fn read_def_module(
             .iter()
         {
             let (type_name, defined) = read_type_def(item)?;
-            types.insert(type_name, defined);
+            insert_new(&mut types, "type", type_name, defined)?;
         }
     }
     if let Some(list) = fields.get("values") {
@@ -246,7 +246,7 @@ fn read_def_module(
             .iter()
         {
             let (value_name, defined) = read_value_def(item)?;
-            values.insert(value_name, defined);
+            insert_new(&mut values, "value", value_name, defined)?;
         }
     }
     Ok((
@@ -329,7 +329,7 @@ fn read_value_def(
         [_, "def", "native", "value"] => v4::ValueBody::Native {
             native_info: v4::NativeInfo {
                 hint: read_hint(required_field(&fields, "hint")?)?,
-                description: None,
+                description: super::optional_string(&fields, "description")?.map(str::to_owned),
             },
         },
         _ => {
@@ -410,6 +410,9 @@ fn read_type(element: &Element) -> Result<v4::Type, TransportDiagnostic> {
 }
 
 fn write_type(ty: &v4::Type) -> Result<Element, TransportDiagnostic> {
+    if *ty.attributes() != TypeAttributes::default() {
+        return Err(unwritten_attributes("type"));
+    }
     Ok(match ty {
         v4::Type::Variable(_, name) => Element::string(name.to_canonical_string()),
         v4::Type::Reference(_, name, arguments) if arguments.is_empty() => {
@@ -516,6 +519,9 @@ fn read_value(element: &Element) -> Result<v4::Value, TransportDiagnostic> {
 }
 
 fn write_value(value: &v4::Value) -> Result<Element, TransportDiagnostic> {
+    if *value.attributes() != ValueAttributes::default() {
+        return Err(unwritten_attributes("value"));
+    }
     match value {
         v4::Value::Literal(_, v4::Literal::Float(literal)) => Ok(sexp(vec![
             Element::symbol("float"),
@@ -842,12 +848,15 @@ fn write_value_def(
                 .with_field("name", name)
                 .with_field("body", write_value(body)?),
         ),
-        v4::ValueBody::Native { native_info } => (
-            "native",
-            ion_rs::Struct::builder()
+        v4::ValueBody::Native { native_info } => {
+            let mut builder = ion_rs::Struct::builder()
                 .with_field("name", name)
-                .with_field("hint", write_hint(&native_info.hint)?),
-        ),
+                .with_field("hint", write_hint(&native_info.hint)?);
+            if let Some(description) = &native_info.description {
+                builder = builder.with_field("description", description.as_str());
+            }
+            ("native", builder)
+        }
         other => return Err(member(format!("unsupported value body {other:?}"))),
     };
     if !definition.input_types.is_empty() {
@@ -939,6 +948,51 @@ fn sexp(items: Vec<Element>) -> Element {
                 builder.push(element)
             })
             .build_sexp(),
+    )
+}
+
+/// Inserts an entry whose name must be new. A repeated name is refused, as the v3 reader and the
+/// tree merge refuse it.
+fn insert_new<T>(
+    entries: &mut IndexMap<String, T>,
+    kind: &str,
+    name: String,
+    entry: T,
+) -> Result<(), TransportDiagnostic> {
+    if entries.contains_key(&name) {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::duplicate_name",
+            Stage::Normalization,
+            format!("{kind} '{name}' is already defined"),
+        ));
+    }
+    entries.insert(name, entry);
+    Ok(())
+}
+
+/// A repeated `package::spec` is a fragment of the same dependency, so its modules merge.
+fn merge_dependency(
+    dependencies: &mut IndexMap<String, v4::PackageSpecification>,
+    name: String,
+    spec: v4::PackageSpecification,
+) -> Result<(), TransportDiagnostic> {
+    let Some(existing) = dependencies.get_mut(&name) else {
+        dependencies.insert(name, spec);
+        return Ok(());
+    };
+    for (module_name, module) in spec.modules {
+        insert_new(&mut existing.modules, "module", module_name, module)?;
+    }
+    Ok(())
+}
+
+/// The writer does not encode v4 attributes yet. Refusing them keeps a round trip from dropping
+/// them without a word.
+fn unwritten_attributes(node: &str) -> TransportDiagnostic {
+    IonCodec::error(
+        "morphir::ir::ion::unsupported_node",
+        Stage::Encoding,
+        format!("the Ion writer does not encode v4 {node} attributes yet"),
     )
 }
 

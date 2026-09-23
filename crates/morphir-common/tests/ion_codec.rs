@@ -440,3 +440,105 @@ fn the_builtin_registry_resolves_ion() {
         &FormatId::ion()
     );
 }
+
+const V4_HEADER: &str = r#"
+morphir::{
+  ionVersion: "0.1.0-draft.1",
+  formatVersion: "4.0.0",
+  kind: library,
+  packageName: "example",
+}
+"#;
+
+fn v4_ion() -> CodecOptions {
+    CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::ion())
+}
+
+fn refusal(input: &str) -> String {
+    let error = decode(&IonCodec::new(), input, &v4_ion()).expect_err("the datagram is refused");
+    format!("{error:?}")
+}
+
+#[test]
+fn a_v4_module_defined_twice_is_refused() {
+    let text = format!(
+        "{V4_HEADER}
+public::def::module::{{ name: \"eligibility\" }}
+public::def::module::{{ name: \"eligibility\" }}
+morphir_footer::{{}}"
+    );
+
+    assert!(refusal(&text).contains("duplicate_name"));
+}
+
+#[test]
+fn a_v4_type_defined_twice_in_a_module_is_refused() {
+    let text = format!(
+        "{V4_HEADER}
+public::def::module::{{
+  name: \"eligibility\",
+  types: [
+    public::def::alias::type::{{ name: \"score\", typeExp: \"morphir/SDK:basics#int\" }},
+    public::def::alias::type::{{ name: \"score\", typeExp: \"morphir/SDK:basics#int\" }},
+  ],
+}}
+morphir_footer::{{}}"
+    );
+
+    assert!(refusal(&text).contains("duplicate_name"));
+}
+
+#[test]
+fn a_v4_dependency_stated_twice_merges_its_modules() {
+    let split = format!(
+        "{V4_HEADER}
+package::spec::{{ name: \"morphir/SDK\", modules: [ module::spec::{{ name: \"basics\" }} ] }}
+package::spec::{{ name: \"morphir/SDK\", modules: [ module::spec::{{ name: \"list\" }} ] }}
+morphir_footer::{{}}"
+    );
+    let merged = format!(
+        "{V4_HEADER}
+package::spec::{{
+  name: \"morphir/SDK\",
+  modules: [ module::spec::{{ name: \"basics\" }}, module::spec::{{ name: \"list\" }} ],
+}}
+morphir_footer::{{}}"
+    );
+
+    assert_eq!(
+        decode(&IonCodec::new(), &split, &v4_ion()).unwrap(),
+        decode(&IonCodec::new(), &merged, &v4_ion()).unwrap()
+    );
+}
+
+#[test]
+fn a_v4_native_description_round_trips() {
+    let text = format!(
+        "{V4_HEADER}
+public::def::module::{{
+  name: \"basics\",
+  values: [
+    public::def::native::value::{{
+      name: \"add\",
+      inputTypes: {{ a: \"morphir/SDK:basics#int\", b: \"morphir/SDK:basics#int\" }},
+      outputType: \"morphir/SDK:basics#int\",
+      hint: arithmetic,
+      description: \"Integer addition.\",
+    }},
+  ],
+}}
+morphir_footer::{{}}"
+    );
+    let events = decode(&IonCodec::new(), &text, &v4_ion()).unwrap();
+
+    let ion = encode(&IonCodec::new(), events.clone(), &v4_ion()).unwrap();
+    let json = encode(
+        &JsonCodec::new(),
+        events.clone(),
+        &CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json()),
+    )
+    .unwrap();
+
+    assert!(json.contains("Integer addition."), "{json}");
+    assert_eq!(decode(&IonCodec::new(), &ion, &v4_ion()).unwrap(), events);
+}

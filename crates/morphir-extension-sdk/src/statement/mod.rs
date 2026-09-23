@@ -194,6 +194,7 @@ fn understands(path: &str) -> bool {
             | "capabilities.frontend.irVersions"
             | "capabilities.frontend.compile"
             | "capabilities.frontend.incremental"
+            | "capabilities.frontend.fragments"
             | "capabilities.frontend.multiDocument"
             | "capabilities.backend.targets"
             | "capabilities.backend.irVersions"

@@ -3,6 +3,7 @@
 use super::*;
 use morphir_extension_sdk::protocol::{DescribeParams, RpcError};
 use morphir_extension_sdk::statement::CapabilityStatement;
+use morphir_extension_sdk::types::{ExtensionCapabilities, ExtensionType};
 use serde_json::{Map, Value};
 
 /// How a process supplied its capability statement.
@@ -76,6 +77,7 @@ impl SpawnedProcessTransport {
                 "Description extension identity differs from launch identity".into(),
             ));
         }
+        check_capability_kinds(&statement)?;
         if !statement
             .protocol_versions
             .iter()
@@ -162,6 +164,53 @@ impl SpawnedProcessTransport {
     }
 }
 
+/// Holds a direct description to the rule a negotiated session already
+/// follows: every declared kind has its capability object, every known
+/// capability object has its declared kind, and each object has its wire
+/// shape. A fallback statement comes from a validated session, so only the
+/// direct path needs this.
+fn check_capability_kinds(statement: &CapabilityStatement) -> Result<()> {
+    let types = &statement.extension.types;
+    let unique: std::collections::HashSet<_> = types.iter().copied().collect();
+    if unique.len() != types.len() {
+        return Err(DaemonError::Extension(
+            "Description repeated a capability kind".into(),
+        ));
+    }
+    let capabilities = &statement.capabilities;
+    for (kind, member, name) in [
+        (ExtensionType::Frontend, "frontend", "Frontend"),
+        (ExtensionType::Backend, "backend", "Backend"),
+        (ExtensionType::Workspace, "workspace", "Workspace"),
+    ] {
+        match (unique.contains(&kind), capabilities.get(member)) {
+            (true, None) => {
+                return Err(DaemonError::Extension(format!(
+                    "Description declared {name} without {member} capabilities"
+                )));
+            }
+            (false, Some(_)) => {
+                return Err(DaemonError::Extension(format!(
+                    "Description advertised {member} capabilities without declaring {name}"
+                )));
+            }
+            _ => {}
+        }
+    }
+    let known: Map<String, Value> = ["frontend", "backend", "workspace"]
+        .into_iter()
+        .filter_map(|member| {
+            capabilities
+                .get(member)
+                .map(|value| (member.to_owned(), value.clone()))
+        })
+        .collect();
+    serde_json::from_value::<ExtensionCapabilities>(Value::Object(known)).map_err(|error| {
+        DaemonError::Extension(format!("Description capabilities are malformed: {error}"))
+    })?;
+    Ok(())
+}
+
 fn permits_fallback(error: &RpcError) -> bool {
     if error.code == error_codes::METHOD_NOT_FOUND {
         return true;
@@ -185,4 +234,83 @@ fn permits_fallback(error: &RpcError) -> bool {
     ]
     .iter()
     .any(|phrase| message.contains(phrase))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn statement(types: Value, capabilities: Value) -> CapabilityStatement {
+        serde_json::from_value(serde_json::json!({
+            "statementVersion": "0.1.0-draft.1",
+            "protocolVersions": ["0.1"],
+            "extension": {"id": "example", "name": "Example", "version": "1.0.0", "types": types},
+            "capabilities": capabilities,
+        }))
+        .expect("a well-formed statement")
+    }
+
+    fn refusal(types: Value, capabilities: Value) -> String {
+        check_capability_kinds(&statement(types, capabilities))
+            .expect_err("an inconsistent description is refused")
+            .to_string()
+    }
+
+    #[test]
+    fn declared_kinds_and_capability_objects_must_match() {
+        let backend = serde_json::json!({"targets": ["x"], "irVersions": ["3"], "generate": true});
+        assert!(
+            check_capability_kinds(&statement(
+                serde_json::json!(["backend"]),
+                serde_json::json!({"backend": backend.clone()})
+            ))
+            .is_ok()
+        );
+        assert!(
+            refusal(serde_json::json!(["backend"]), serde_json::json!({}))
+                .contains("declared Backend without backend capabilities")
+        );
+        assert!(
+            refusal(
+                serde_json::json!([]),
+                serde_json::json!({"backend": backend})
+            )
+            .contains("advertised backend capabilities without declaring Backend")
+        );
+        assert!(
+            refusal(serde_json::json!(["workspace"]), serde_json::json!({}))
+                .contains("declared Workspace without workspace capabilities")
+        );
+    }
+
+    #[test]
+    fn repeated_kinds_and_malformed_objects_are_refused() {
+        let workspace =
+            serde_json::json!({"discover": true, "protocolVersions": ["0.1.0-draft.1"]});
+        assert!(
+            refusal(
+                serde_json::json!(["workspace", "workspace"]),
+                serde_json::json!({"workspace": workspace})
+            )
+            .contains("repeated a capability kind")
+        );
+        assert!(
+            refusal(
+                serde_json::json!(["frontend"]),
+                serde_json::json!({"frontend": {"compile": "yes"}})
+            )
+            .contains("malformed")
+        );
+    }
+
+    #[test]
+    fn unknown_capability_members_are_not_kinds() {
+        assert!(
+            check_capability_kinds(&statement(
+                serde_json::json!([]),
+                serde_json::json!({"future": {"anything": 1}})
+            ))
+            .is_ok()
+        );
+    }
 }

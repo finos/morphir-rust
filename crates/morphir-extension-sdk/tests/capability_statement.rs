@@ -89,3 +89,22 @@ fn absent_host_comparators_do_not_restrict_prerelease_hosts() {
         );
     }
 }
+
+#[test]
+fn every_frontend_member_the_sdk_reads_can_be_critical() {
+    for member in [
+        "languages",
+        "irVersions",
+        "compile",
+        "incremental",
+        "fragments",
+        "multiDocument",
+    ] {
+        let mut wire = a_statement();
+        wire["critical"] = json!([format!("capabilities.frontend.{member}")]);
+        assert!(
+            serde_json::from_value::<CapabilityStatement>(wire).is_ok(),
+            "{member}"
+        );
+    }
+}

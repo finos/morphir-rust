@@ -146,7 +146,7 @@ fn snapshot_and_response_wire_shapes_are_stable() {
         project_path: Some(RelativePath::parse("packages/orders").unwrap()),
     };
     let snapshot = WorkspaceSnapshot {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: morphir_workspace::workspace_discovery_protocol(),
         config_anchor: Some(RelativePath::parse("morphir.toml").unwrap()),
         name: Some("shop".to_owned()),
         state: WorkspaceState::Open,
@@ -171,7 +171,7 @@ fn snapshot_and_response_wire_shapes_are_stable() {
 
     let value = serde_json::to_value(&response).unwrap();
     assert_eq!(value["status"], "success");
-    assert_eq!(value["snapshot"]["protocolVersion"], 1);
+    assert_eq!(value["snapshot"]["protocolVersion"], "0.1.0-draft.1");
     assert_eq!(value["snapshot"]["configAnchor"], "morphir.toml");
     assert_eq!(value["snapshot"]["state"], "open");
     assert_eq!(

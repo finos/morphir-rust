@@ -90,6 +90,15 @@ pub struct FrontendCapability {
     pub incremental: bool,
     /// Whether the frontend can compile source fragments.
     pub fragments: bool,
+    /// Whether one compile request may submit more than one document.
+    ///
+    /// A frontend that does not declare this compiles exactly one document
+    /// per request, and a host must refuse a larger source set before
+    /// invoking it rather than let the frontend drop or reject documents.
+    /// Written only when true, so a single-document frontend's capabilities
+    /// are unchanged on the wire.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_document: bool,
 }
 
 /// Code-generation features advertised by a backend extension.
@@ -109,7 +118,7 @@ pub struct BackendCapability {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceCapability {
     /// Portable workspace discovery protocol versions accepted by the extension.
-    pub protocol_versions: Vec<u32>,
+    pub protocol_versions: Vec<morphir_workspace::Version>,
     /// Whether the extension accepts workspace discovery requests.
     pub discover: bool,
 }
@@ -1169,6 +1178,7 @@ mod tests {
                 compile: true,
                 incremental: false,
                 fragments: false,
+                multi_document: false,
             }),
             ..ExtensionCapabilities::default()
         };
@@ -1200,6 +1210,23 @@ mod tests {
         let decoded: ExtensionCapabilities = serde_json::from_value(legacy.clone()).unwrap();
         assert!(decoded.frontend.is_none());
         assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+    }
+
+    #[test]
+    fn a_multi_document_frontend_says_so_and_silence_means_one_document() {
+        let frontend = FrontendCapability {
+            compile: true,
+            multi_document: true,
+            ..FrontendCapability::default()
+        };
+
+        let wire = serde_json::to_value(&frontend).unwrap();
+        assert_eq!(wire["multiDocument"], true);
+
+        let mut silent = wire;
+        silent.as_object_mut().unwrap().remove("multiDocument");
+        let decoded: FrontendCapability = serde_json::from_value(silent).unwrap();
+        assert!(!decoded.multi_document);
     }
 
     #[test]

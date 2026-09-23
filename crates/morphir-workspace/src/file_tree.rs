@@ -4,9 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::RelativePath;
 
-/// The current version of the workspace discovery wire protocol.
-pub const WORKSPACE_DISCOVERY_PROTOCOL: u32 = 1;
-
 /// An entry in a portable, root-confined file tree.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -66,7 +63,7 @@ impl FileTree {
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveryRequest {
     /// The requested workspace discovery protocol version.
-    pub protocol_version: u32,
+    pub protocol_version: semver::Version,
     /// The file tree rooted at the development mount.
     pub development_root: FileTree,
     /// The optional file tree rooted at the Morphir home mount.

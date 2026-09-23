@@ -1307,7 +1307,7 @@ fn the_extension_advertises_the_elm_frontend_backend_and_workspace() {
     let workspace = capabilities.workspace.expect("a workspace capability");
     assert_eq!(
         workspace.protocol_versions,
-        vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL]
+        vec![morphir_workspace::workspace_discovery_protocol()]
     );
     assert!(workspace.discover);
 }

@@ -40,6 +40,7 @@
 //!                 compile: true,
 //!                 incremental: false,
 //!                 fragments: false,
+//!                 multi_document: false,
 //!             }),
 //!             ..ExtensionCapabilities::default()
 //!         }
@@ -530,7 +531,6 @@ mod tests {
     use crate::protocol::{ExtensionRequest, methods};
     use morphir_workspace::{
         DiscoveryRequest, DiscoveryResponse, FileEntry, FileTree, RelativePath,
-        WORKSPACE_DISCOVERY_PROTOCOL,
     };
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -618,7 +618,7 @@ mod tests {
         fn capabilities() -> ExtensionCapabilities {
             ExtensionCapabilities {
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![WORKSPACE_DISCOVERY_PROTOCOL],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -634,7 +634,7 @@ mod tests {
 
     fn a_workspace_request() -> DiscoveryRequest {
         DiscoveryRequest {
-            protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),
@@ -798,7 +798,7 @@ mod tests {
         assert_eq!(
             result.capabilities.workspace,
             Some(WorkspaceCapability {
-                protocol_versions: vec![WORKSPACE_DISCOVERY_PROTOCOL],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             })
         );

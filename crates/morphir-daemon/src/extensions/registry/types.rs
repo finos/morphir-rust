@@ -227,6 +227,41 @@ impl ResolvedFrontend {
         self.native_extension().and_then(NativeExtension::frontend)
     }
 
+    /// Whether this provider declares workspace discovery, and so can
+    /// synthesize a project from an explicit source selection.
+    ///
+    /// A built-in's complete native metadata states the capability and the
+    /// protocol versions it accepts. An installed provider persists only the
+    /// capability kind its release declared; the protocol version is settled
+    /// when a session negotiates, so the kind alone answers here.
+    pub fn supports_workspace_discovery(&self) -> bool {
+        match self.provider.capability_metadata_scope {
+            CapabilityMetadataScope::Complete => self
+                .provider
+                .capabilities
+                .workspace
+                .as_ref()
+                .is_some_and(|workspace| {
+                    workspace.discover
+                        && workspace
+                            .protocol_versions
+                            .iter()
+                            .any(morphir_workspace::speaks_workspace_discovery_protocol)
+                }),
+            CapabilityMetadataScope::PersistedFrontendBackend => self
+                .provider
+                .info
+                .types
+                .contains(&morphir_extension_sdk::ExtensionType::Workspace),
+        }
+    }
+
+    /// Return the direct native workspace handle when direct invocation was
+    /// selected and the built-in registered a workspace role.
+    pub fn native_workspace(&self) -> Option<&dyn morphir_extension_sdk::NativeWorkspace> {
+        self.native_extension().and_then(NativeExtension::workspace)
+    }
+
     /// Create a loaded native protocol session only when protocol invocation was selected.
     pub fn native_mep_session(&self) -> Option<Session<NativeMepTransport, Loaded>> {
         match (&self.provider.runtime, self.invocation_mode) {

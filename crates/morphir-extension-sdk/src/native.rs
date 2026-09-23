@@ -667,6 +667,7 @@ mod tests {
                     compile: true,
                     incremental: false,
                     fragments: false,
+                    multi_document: false,
                 }),
                 backend: Some(BackendCapability {
                     targets: vec!["recording".into()],
@@ -934,7 +935,7 @@ mod tests {
     fn a_workspace_discovery_request() -> morphir_workspace::DiscoveryRequest {
         use morphir_workspace::{FileEntry, FileTree, RelativePath};
         morphir_workspace::DiscoveryRequest {
-            protocol_version: 1,
+            protocol_version: morphir_workspace::workspace_discovery_protocol(),
             development_root: FileTree {
                 entries: std::collections::BTreeMap::from([
                     (RelativePath::root(), FileEntry::Directory),
@@ -969,7 +970,7 @@ mod tests {
                     ..FrontendCapability::default()
                 }),
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1006,7 +1007,7 @@ mod tests {
                     ..BackendCapability::default()
                 }),
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1043,7 +1044,7 @@ mod tests {
                     ..BackendCapability::default()
                 }),
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1096,7 +1097,7 @@ mod tests {
                     ..FrontendCapability::default()
                 }),
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1146,7 +1147,7 @@ mod tests {
                     ..BackendCapability::default()
                 }),
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1193,7 +1194,7 @@ mod tests {
         fn capabilities() -> ExtensionCapabilities {
             ExtensionCapabilities {
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1252,7 +1253,7 @@ mod tests {
         fn capabilities() -> ExtensionCapabilities {
             ExtensionCapabilities {
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![9999],
+                    protocol_versions: vec![morphir_workspace::Version::new(9999, 0, 0)],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1287,7 +1288,7 @@ mod tests {
         fn capabilities() -> ExtensionCapabilities {
             ExtensionCapabilities {
                 workspace: Some(WorkspaceCapability {
-                    protocol_versions: vec![1],
+                    protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                     discover: true,
                 }),
                 ..ExtensionCapabilities::default()
@@ -1398,6 +1399,7 @@ mod tests {
                     compile: true,
                     incremental: false,
                     fragments: false,
+                    multi_document: false,
                 }),
                 backend: Some(BackendCapability {
                     targets: vec!["decorated".into()],
@@ -1573,7 +1575,7 @@ mod tests {
     #[test]
     fn project_capabilities_includes_a_registered_workspace_capability() {
         let capability = WorkspaceCapability {
-            protocol_versions: vec![1],
+            protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
             discover: true,
         };
         let roles = NativeRoles {
@@ -1849,7 +1851,7 @@ mod tests {
         assert_eq!(
             extension.capabilities().workspace,
             Some(WorkspaceCapability {
-                protocol_versions: vec![1],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             })
         );

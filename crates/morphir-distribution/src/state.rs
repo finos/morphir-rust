@@ -395,6 +395,7 @@ impl InstalledExtension {
                 compile: record.compile(),
                 incremental: record.incremental(),
                 fragments: false,
+                multi_document: false,
             }),
             backend: self.backend.as_ref().map(|backend| BackendCapability {
                 targets: backend.targets().to_vec(),

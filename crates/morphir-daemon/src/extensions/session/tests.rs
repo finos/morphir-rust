@@ -142,16 +142,19 @@ pub(super) fn backend_initialization(generate: bool) -> InitializeResult {
     result
 }
 
-fn workspace_initialization(discover: bool, protocol_versions: Vec<u32>) -> InitializeResult {
+fn workspace_initialization(discover: bool, protocol_versions: Vec<&str>) -> InitializeResult {
     let mut result = initialization(extension(vec![ExtensionType::Workspace]));
     result.capabilities.workspace = Some(WorkspaceCapability {
-        protocol_versions,
+        protocol_versions: protocol_versions
+            .into_iter()
+            .map(|version| morphir_workspace::Version::parse(version).unwrap())
+            .collect(),
         discover,
     });
     result
 }
 
-fn workspace_discovery_request(protocol_version: u32) -> serde_json::Value {
+fn workspace_discovery_request(protocol_version: &str) -> serde_json::Value {
     serde_json::json!({
         "protocolVersion": protocol_version,
         "developmentRoot": {"entries": {}},
@@ -225,6 +228,7 @@ impl Extension for RecordingExtension {
                 compile: true,
                 incremental: false,
                 fragments: false,
+                multi_document: false,
             }),
             backend: Some(BackendCapability {
                 targets: vec!["recording".into()],
@@ -353,6 +357,7 @@ fn native_frontend_capabilities() -> ExtensionCapabilities {
             compile: true,
             incremental: false,
             fragments: false,
+            multi_document: false,
         }),
         ..ExtensionCapabilities::default()
     }
@@ -556,7 +561,7 @@ impl Extension for RecordingWorkspaceExtension {
     fn capabilities() -> ExtensionCapabilities {
         ExtensionCapabilities {
             workspace: Some(WorkspaceCapability {
-                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             }),
             ..ExtensionCapabilities::default()
@@ -576,7 +581,7 @@ impl Workspace for RecordingWorkspaceExtension {
 fn native_workspace_discovery_request() -> morphir_workspace::DiscoveryRequest {
     use morphir_workspace::{FileEntry, FileTree, RelativePath};
     morphir_workspace::DiscoveryRequest {
-        protocol_version: morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: morphir_workspace::workspace_discovery_protocol(),
         development_root: FileTree {
             entries: std::collections::BTreeMap::from([
                 (RelativePath::root(), FileEntry::Directory),
@@ -875,7 +880,7 @@ async fn rejects_declared_workspace_without_workspace_capabilities() {
 async fn rejects_workspace_capabilities_without_declared_workspace() {
     let mut result = initialization(extension(vec![ExtensionType::Validator]));
     result.capabilities.workspace = Some(WorkspaceCapability {
-        protocol_versions: vec![1],
+        protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
         discover: true,
     });
     let response = ExtensionResponse::success(1, result).unwrap();
@@ -1060,6 +1065,7 @@ async fn a_capability_mismatch_names_the_members_that_differ() {
         compile: true,
         incremental: false,
         fragments: false,
+        multi_document: false,
     };
     let mut advertised = persisted.clone();
     advertised.incremental = true;
@@ -1334,8 +1340,8 @@ async fn permits_generate_when_the_backend_enabled_it() {
 #[tokio::test]
 async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
     for initialized in [
-        workspace_initialization(false, vec![1]),
-        workspace_initialization(true, vec![2]),
+        workspace_initialization(false, vec!["0.1.0-draft.1"]),
+        workspace_initialization(true, vec!["0.1.0-draft.2"]),
     ] {
         let initialized = ExtensionResponse::success(1, initialized).unwrap();
         let session = Session::loaded(scripted_transport([initialized]))
@@ -1346,7 +1352,7 @@ async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
         match session
             .invoke::<serde_json::Value>(
                 methods::WORKSPACE_DISCOVER,
-                workspace_discovery_request(1),
+                workspace_discovery_request("0.1.0-draft.1"),
             )
             .await
         {
@@ -1366,15 +1372,19 @@ async fn rejects_workspace_discovery_when_it_was_not_enabled_without_sending() {
 
 #[tokio::test]
 async fn rejects_an_unsupported_workspace_request_protocol_without_sending() {
-    let initialized = ExtensionResponse::success(1, workspace_initialization(true, vec![1]))
-        .expect("workspace initialization should serialize");
+    let initialized =
+        ExtensionResponse::success(1, workspace_initialization(true, vec!["0.1.0-draft.1"]))
+            .expect("workspace initialization should serialize");
     let session = Session::loaded(scripted_transport([initialized]))
         .initialize(params())
         .await
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(2))
+        .invoke::<serde_json::Value>(
+            methods::WORKSPACE_DISCOVER,
+            workspace_discovery_request("0.1.0-draft.2"),
+        )
         .await
     {
         InvokeOutcome::Rejected(session, error) => {
@@ -1391,7 +1401,8 @@ async fn rejects_an_unsupported_workspace_request_protocol_without_sending() {
 #[tokio::test]
 async fn permits_workspace_discovery_for_protocol_v1() {
     let initialized =
-        ExtensionResponse::success(1, workspace_initialization(true, vec![1])).unwrap();
+        ExtensionResponse::success(1, workspace_initialization(true, vec!["0.1.0-draft.1"]))
+            .unwrap();
     let discovered = ExtensionResponse::success(
         2,
         serde_json::json!({
@@ -1410,7 +1421,10 @@ async fn permits_workspace_discovery_for_protocol_v1() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(1))
+        .invoke::<serde_json::Value>(
+            methods::WORKSPACE_DISCOVER,
+            workspace_discovery_request("0.1.0-draft.1"),
+        )
         .await
     {
         InvokeOutcome::Success(session, result) => {
@@ -1433,12 +1447,13 @@ async fn permits_workspace_discovery_for_protocol_v1() {
 #[tokio::test]
 async fn malformed_workspace_discovery_result_fails_the_session() {
     let initialized =
-        ExtensionResponse::success(1, workspace_initialization(true, vec![1])).unwrap();
+        ExtensionResponse::success(1, workspace_initialization(true, vec!["0.1.0-draft.1"]))
+            .unwrap();
     let malformed = ExtensionResponse::success(
         2,
         serde_json::json!({
             "status": "success",
-            "snapshot": {"protocolVersion": 1}
+            "snapshot": {"protocolVersion": "0.1.0-draft.1"}
         }),
     )
     .unwrap();
@@ -1448,7 +1463,10 @@ async fn malformed_workspace_discovery_result_fails_the_session() {
         .unwrap_or_else(|failure| panic!("initialization failed: {}", failure.error()));
 
     match session
-        .invoke::<serde_json::Value>(methods::WORKSPACE_DISCOVER, workspace_discovery_request(1))
+        .invoke::<serde_json::Value>(
+            methods::WORKSPACE_DISCOVER,
+            workspace_discovery_request("0.1.0-draft.1"),
+        )
         .await
     {
         InvokeOutcome::Failed(failure) => {

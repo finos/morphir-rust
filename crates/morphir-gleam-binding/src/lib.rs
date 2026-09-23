@@ -61,6 +61,7 @@ impl Extension for GleamExtension {
                 compile: true,
                 incremental: true,
                 fragments: false,
+                multi_document: true,
             }),
             backend: Some(BackendCapability {
                 targets: vec!["gleam".into()],
@@ -68,7 +69,7 @@ impl Extension for GleamExtension {
                 generate: true,
             }),
             workspace: Some(WorkspaceCapability {
-                protocol_versions: vec![morphir_workspace::WORKSPACE_DISCOVERY_PROTOCOL],
+                protocol_versions: vec![morphir_workspace::workspace_discovery_protocol()],
                 discover: true,
             }),
             incremental: true,
@@ -679,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_advertise_both_releases_and_incremental_compilation() {
+    fn capabilities_advertise_both_releases_incremental_and_multi_document_compilation() {
         let capabilities = serde_json::to_value(GleamExtension::capabilities())
             .expect("serialize Gleam capabilities");
 
@@ -690,7 +691,8 @@ mod tests {
                 "irVersions": ["3", "4"],
                 "compile": true,
                 "incremental": true,
-                "fragments": false
+                "fragments": false,
+                "multiDocument": true
             })
         );
         assert_eq!(
@@ -704,7 +706,7 @@ mod tests {
         assert_eq!(
             capabilities["workspace"],
             serde_json::json!({
-                "protocolVersions": [1],
+                "protocolVersions": ["0.1.0-draft.1"],
                 "discover": true
             })
         );

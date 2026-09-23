@@ -2,9 +2,7 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use morphir_workspace::{
-    DiscoveryRequest, FileEntry, FileTree, ProjectState, RelativePath, WORKSPACE_DISCOVERY_PROTOCOL,
-};
+use morphir_workspace::{DiscoveryRequest, FileEntry, FileTree, ProjectState, RelativePath};
 
 use crate::{
     ConfigLoadOptions, SourceSelection, build_workspace_discovery_request, discover_workspace,
@@ -58,7 +56,7 @@ fn fixture_request() -> DiscoveryRequest {
     let mut entries = BTreeMap::from([(RelativePath::root(), FileEntry::Directory)]);
     walk(&root, &root, &mut entries);
     DiscoveryRequest {
-        protocol_version: WORKSPACE_DISCOVERY_PROTOCOL,
+        protocol_version: morphir_workspace::workspace_discovery_protocol(),
         development_root: FileTree { entries },
         morphir_home: None,
         system_config: None,

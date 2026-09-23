@@ -29,6 +29,11 @@ const HEADER_MEMBERS: &[&str] = &[
 
 const MODULE_MEMBERS: &[&str] = &["critical", "doc", "name", "package", "types", "values"];
 
+type ClassicAlias = (
+    classic::Name,
+    classic::AccessControlled<classic::Documented<classic::TypeDefinition<classic::Attrs>>>,
+);
+
 const ALIAS_MEMBERS: &[&str] = &[
     "critical",
     "doc",
@@ -224,10 +229,7 @@ fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic
 
 fn alias_element(
     module: &classic::Path,
-    definition: &(
-        classic::Name,
-        classic::AccessControlled<classic::Documented<classic::TypeDefinition<classic::Attrs>>>,
-    ),
+    definition: &ClassicAlias,
 ) -> Result<Element, TransportDiagnostic> {
     let (name, body) = definition;
     let classic::TypeDefinition::Alias(parameters, type_exp) = &body.value.value else {
@@ -452,20 +454,48 @@ fn read_def_module(
     let fields = struct_fields(element, "module")?;
     reject_critical_unknowns(&fields, MODULE_MEMBERS)?;
     require_distribution_package(&fields, package)?;
-    reject_populated_member_list(&fields, "types")?;
     reject_populated_member_list(&fields, "values")?;
-    let name = required_string(&fields, "name")?;
+    let path = classic_path(required_string(&fields, "name")?)?;
     Ok(classic::ModuleEntry {
-        path: classic_path(name)?,
         definition: classic::AccessControlled {
             access,
             value: classic::ModuleDefinition {
-                types: Vec::new(),
+                types: read_inline_aliases(fields.get("types").copied(), package, &path)?,
                 values: Vec::new(),
                 doc: optional_string(&fields, "doc")?.map(str::to_owned),
             },
         },
+        path,
     })
+}
+
+fn read_inline_aliases(
+    types: Option<&Element>,
+    package: &classic::Path,
+    owner: &classic::Path,
+) -> Result<Vec<ClassicAlias>, TransportDiagnostic> {
+    let Some(types) = types else {
+        return Ok(Vec::new());
+    };
+    let Some(list) = types.as_list() else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_member",
+            Stage::Normalization,
+            "types is a list",
+        ));
+    };
+    let mut decoded = Vec::new();
+    for element in list.iter() {
+        let (_owner, definition) = read_alias(element, package, Some(owner))?;
+        if decoded.iter().any(|(name, _)| name == &definition.0) {
+            return Err(duplicate_name(
+                "type",
+                &classic::Path::new(vec![definition.0.clone()]),
+            ));
+        }
+        decoded.push(definition);
+    }
+    Ok(decoded)
 }
 
 fn attach_alias(
@@ -473,6 +503,41 @@ fn attach_alias(
     package: &classic::Path,
     modules: &mut [ClassicModule],
 ) -> Result<(), TransportDiagnostic> {
+    let (module_path, definition) = read_alias(element, package, None)?;
+    let module = modules
+        .iter_mut()
+        .find(|module| module.path == module_path)
+        .ok_or_else(|| {
+            IonCodec::error(
+                "morphir::ir::ion::missing_member",
+                Stage::Normalization,
+                format!(
+                    "module '{}' is not defined",
+                    canonical_package(&module_path)
+                ),
+            )
+        })?;
+    if module
+        .definition
+        .value
+        .types
+        .iter()
+        .any(|(existing, _)| existing == &definition.0)
+    {
+        return Err(duplicate_name(
+            "type",
+            &classic::Path::new(vec![definition.0.clone()]),
+        ));
+    }
+    module.definition.value.types.push(definition);
+    Ok(())
+}
+
+fn read_alias(
+    element: &Element,
+    package: &classic::Path,
+    owner: Option<&classic::Path>,
+) -> Result<(classic::Path, ClassicAlias), TransportDiagnostic> {
     let access = match annotation_names(element)?.as_slice() {
         ["public", "def", "alias", "type"] => classic::Access::Public,
         ["private", "def", "alias", "type"] => classic::Access::Private,
@@ -490,18 +555,25 @@ fn attach_alias(
     let fields = struct_fields(element, "alias::type")?;
     reject_critical_unknowns(&fields, ALIAS_MEMBERS)?;
     require_distribution_package(&fields, package)?;
-    let module_name = required_string(&fields, "module")?;
-    let module_path = classic_path(module_name)?;
-    let module = modules
-        .iter_mut()
-        .find(|module| module.path == module_path)
-        .ok_or_else(|| {
+    let module_path = match optional_string(&fields, "module")? {
+        Some(name) => classic_path(name)?,
+        None => owner.cloned().ok_or_else(|| {
             IonCodec::error(
                 "morphir::ir::ion::missing_member",
                 Stage::Normalization,
-                format!("module '{module_name}' is not defined"),
+                "a top-level type names its module",
             )
-        })?;
+        })?,
+    };
+    if let Some(owner) = owner
+        && module_path != *owner
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_member",
+            Stage::Normalization,
+            "a nested type belongs to its module",
+        ));
+    }
     let name = classic_path(required_string(&fields, "name")?)?;
     if name.segments.len() != 1 {
         return Err(IonCodec::error(
@@ -511,30 +583,23 @@ fn attach_alias(
         ));
     }
     let local_name = name.segments[0].clone();
-    if module
-        .definition
-        .value
-        .types
-        .iter()
-        .any(|(existing, _)| existing == &local_name)
-    {
-        return Err(duplicate_name("type", &name));
-    }
     let type_exp = compact_type(required_string(&fields, "typeExp")?)?;
-    module.definition.value.types.push((
-        local_name,
-        classic::AccessControlled {
-            access,
-            value: classic::Documented {
-                doc: optional_string(&fields, "doc")?.unwrap_or("").to_owned(),
-                value: classic::TypeDefinition::Alias(
-                    canonical_name_list(&fields, "typeParams")?,
-                    type_exp,
-                ),
+    Ok((
+        module_path,
+        (
+            local_name,
+            classic::AccessControlled {
+                access,
+                value: classic::Documented {
+                    doc: optional_string(&fields, "doc")?.unwrap_or("").to_owned(),
+                    value: classic::TypeDefinition::Alias(
+                        canonical_name_list(&fields, "typeParams")?,
+                        type_exp,
+                    ),
+                },
             },
-        },
-    ));
-    Ok(())
+        ),
+    ))
 }
 
 fn compact_type(text: &str) -> Result<classic::Type<classic::Attrs>, TransportDiagnostic> {

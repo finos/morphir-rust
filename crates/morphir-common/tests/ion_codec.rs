@@ -121,6 +121,26 @@ public::def::alias::type::{
 morphir_footer::{}
 "#;
 
+const V3_ALIAS_RECORD: &str = r#"
+morphir::{
+  ionVersion: "0.1.0-draft.1",
+  formatVersion: "3.0.0",
+  kind: library,
+  packageName: "example",
+  modules: [
+    public::def::module::{
+      name: "eligibility",
+      types: [
+        public::def::alias::type::{
+          name: "decision",
+          typeExp: "morphir/SDK:basics#bool",
+        },
+      ],
+    },
+  ],
+}
+"#;
+
 const V3_MODULE_RECORD: &str = r#"
 morphir::{
   ionVersion: "0.1.0-draft.1",
@@ -206,6 +226,24 @@ fn a_public_v3_alias_datagram_matches_the_json_ir() {
     let ion = decode(
         &IonCodec::new(),
         V3_ALIAS_ION,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion()),
+    )
+    .unwrap();
+    let json = decode(
+        &JsonCodec::new(),
+        V3_ALIAS_JSON,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
+    )
+    .unwrap();
+
+    assert_eq!(ion, json);
+}
+
+#[test]
+fn a_public_v3_alias_record_matches_the_json_ir() {
+    let ion = decode(
+        &IonCodec::new(),
+        V3_ALIAS_RECORD,
         &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion()),
     )
     .unwrap();

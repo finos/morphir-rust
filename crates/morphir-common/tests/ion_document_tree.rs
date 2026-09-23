@@ -600,3 +600,68 @@ fn a_v4_library_keeps_every_module_of_the_fixture() {
         original.def.modules.keys().collect::<Vec<_>>()
     );
 }
+
+// =============================================================================
+// Names that look like tree files
+// =============================================================================
+
+/// A module, type, or value may be named `manifest` or `module`. The distribution manifest is only
+/// ever the tree root's `manifest.ion`, and a module's own file is only ever the `module` leaf, so
+/// neither name collides with them. `con` is a Windows device name and takes a `_` suffix.
+const RESERVED_LOOKING: &str = r#"
+morphir::{
+  ionVersion: "0.1.0-draft.1",
+  formatVersion: "4.0.0",
+  kind: library,
+  packageName: "example",
+}
+public::def::module::{
+  name: "manifest",
+  types: [
+    public::def::alias::type::{ name: "manifest", typeExp: "morphir/SDK:basics#int" },
+    public::def::alias::type::{ name: "module", typeExp: "morphir/SDK:basics#int" },
+  ],
+}
+public::def::module::{
+  name: "module",
+  types: [ public::def::alias::type::{ name: "con", typeExp: "morphir/SDK:basics#int" } ],
+}
+public::def::module::{
+  name: "manifest/module",
+  types: [ public::def::alias::type::{ name: "manifest", typeExp: "morphir/SDK:basics#int" } ],
+}
+morphir_footer::{}
+"#;
+
+#[test]
+fn modules_and_types_named_like_tree_files_round_trip() {
+    let expected = v4_datagram(RESERVED_LOOKING);
+    let root = memory_root();
+
+    write_document_tree_with_options(&root, &expected, &tree_options(IrVersion::V4)).unwrap();
+
+    let files = every_file(&root);
+    for path in [
+        "manifest.ion",
+        "pkg/example/manifest/module.ion",
+        "pkg/example/manifest/manifest.type.ion",
+        "pkg/example/manifest/module.type.ion",
+        "pkg/example/module/module.ion",
+        "pkg/example/module/con_.type.ion",
+        "pkg/example/manifest/module/module.ion",
+        "pkg/example/manifest/module/manifest.type.ion",
+    ] {
+        assert!(files.contains(&path.to_owned()), "{path} in {files:#?}");
+    }
+    assert_eq!(read_v4(&root).unwrap(), expected);
+}
+
+#[test]
+fn a_module_file_directly_under_the_package_is_refused() {
+    let root = tree(&[
+        ("manifest.ion", V4_MANIFEST),
+        ("pkg/example/finance/module.ion", "public::def::module::{}"),
+    ]);
+
+    assert_refused(&root, "a module path has at least one name");
+}

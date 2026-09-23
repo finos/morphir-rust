@@ -208,6 +208,16 @@ fn scope_of(
     let at = module_manifest_path(root, dir);
     match root {
         Root::Pkg => {
+            if dir == own {
+                return Err(error(
+                    "morphir::ir::ion::unexpected_member",
+                    &at,
+                    format!(
+                        "a module path has at least one name, so its file is \
+                         pkg/{own}/<module>/module, not pkg/{own}/module"
+                    ),
+                ));
+            }
             let module = dir
                 .strip_prefix(own)
                 .and_then(|rest| rest.strip_prefix('/'))

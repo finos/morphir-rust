@@ -102,103 +102,15 @@ format_version() {
     python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["formatVersion"])' "$PROJECT/$1"
 }
 
-# ---- transitional descriptor fields -----------------------------------------------------------
+# ---- publish and install --------------------------------------------------------------------
 
-# `release.json` is read with #[serde(deny_unknown_fields)] (crates/morphir-distribution/src/
-# domain/manifest.rs), and that attribute predates every 0.4.0 release. A released CLI therefore
-# rejects a descriptor outright when it carries a field newer than itself: no release can parse a
-# field that did not exist when it was cut. A descriptor field added on main is consequently
-# unpublishable here until `.config/morphir-cli-version` names a release that knows it - a
-# transition every new field goes through, not a defect in the bundle.
-#
-# Each field listed here turns that one publish failure into a skip. Everything else the publish
-# reports stays a failure, so this never becomes a blanket "publish problems are fine".
-#
-#   workspaceDiscovery  Written into the descriptor by `extension:artifact:<id>` for an extension
-#                       that serves workspace discovery, and not droppable: the daemon compares
-#                       the capability kinds an extension reports at initialization against the
-#                       kinds in its published record and refuses the session on any difference,
-#                       so a bundle without the field cannot negotiate at all. Added after
-#                       0.4.0-beta.3, which is the pin, so no released CLI parses it yet.
-#                       Delete this entry once the pin names a release whose manifest knows the
-#                       field; the success path below says so on its own when that happens.
-TRANSITIONAL_FIELDS='workspaceDiscovery'
-
-# A transitional field counts only when the descriptor actually carries it, so an `unknown field`
-# error about something else can never be read as this transition. The descriptors this task
-# publishes are JSON objects printed one key per line, so a line-anchored key match is enough.
-descriptor_carries() {
-    grep -q "^[[:space:]]*\"$1\"[[:space:]]*:" "$PUBLISH/release.json"
-}
-
+# From 0.4.0-beta.5 the CLI reads `release.json` by the must-ignore rule (kb `morphir-extensions`
+# decision 0004): it ignores a member it does not know unless the descriptor lists it as critical.
+# A descriptor field added on main therefore publishes through the pinned release, and any
+# publish failure is a real failure.
 morphir extension repository init "$WORK/repository"
 morphir extension repository add local --directory "$WORK/repository"
-
-# The publish is the first thing the released CLI does with the new descriptor, so it is where a
-# transitional field surfaces. Capture it rather than letting `set -e` abort on it: its output is
-# what decides between a skip and a real failure, and it is replayed either way.
-PUBLISH_STDOUT="$WORK/publish.out"
-PUBLISH_STDERR="$WORK/publish.err"
-PUBLISH_STATUS=0
-morphir extension repository publish local --bundle "$PUBLISH" \
-    >"$PUBLISH_STDOUT" 2>"$PUBLISH_STDERR" || PUBLISH_STATUS=$?
-
-replay_publish() {
-    cat "$PUBLISH_STDOUT"
-    cat "$PUBLISH_STDERR" >&2
-}
-
-if [ "$PUBLISH_STATUS" -eq 0 ]; then
-    replay_publish
-    # Publishing a descriptor that carries a transitional field means the pinned CLI has caught
-    # up with it, and the entry above is now dead weight. Say so; do not fail over it.
-    for field in $TRANSITIONAL_FIELDS; do
-        descriptor_carries "$field" || continue
-        echo "warning: morphir $VERSION published a descriptor carrying \`$field\`, so that" >&2
-        echo "warning: entry in TRANSITIONAL_FIELDS (.mise/tasks/test/cli-release) is stale" >&2
-        echo "warning: and should be deleted." >&2
-    done
-else
-    # Serde names the field it could not parse, so the skip needs both halves to line up: the
-    # error has to name a field this task already expects to be unparsable, and the descriptor
-    # has to really carry it. A non-zero exit whose output matches neither is a genuine failure.
-    #
-    # The CLI renders that error through miette, which hard-wraps it to the terminal width and
-    # prefixes every continuation line with a `│` gutter, so `unknown field` and the field name
-    # routinely land on different lines:
-    #
-    #     × Failed to publish extension release: invalid extension release bundle
-    #     │ at .../release.json: unknown field
-    #     │ `workspaceDiscovery`, expected one of `schemaVersion`, ...
-    #
-    # Flattening newlines alone leaves the gutter sitting between the two halves, so the match has
-    # to erase the decoration as well and squeeze the runs of spaces that wrapping introduces.
-    # Matching the two halves separately instead would be looser than it looks: the field list in
-    # `expected one of` names every field the CLI does know, so a field that is merely *absent*
-    # from an older descriptor could satisfy a split match without the error being about it.
-    PUBLISH_REPORT="$WORK/publish.report"
-    cat "$PUBLISH_STDOUT" "$PUBLISH_STDERR" | tr '\n' ' ' | tr '│' ' ' | tr -s ' ' >"$PUBLISH_REPORT"
-    SKIPPED_FIELD=
-    for field in $TRANSITIONAL_FIELDS; do
-        descriptor_carries "$field" || continue
-        grep -q 'unknown field `'"$field"'`' "$PUBLISH_REPORT" || continue
-        SKIPPED_FIELD="$field"
-        break
-    done
-    if [ -z "$SKIPPED_FIELD" ]; then
-        replay_publish
-        echo "publishing the $EXTENSION_ID bundle failed with status $PUBLISH_STATUS." >&2
-        exit "$PUBLISH_STATUS"
-    fi
-    echo "warning: skipping the compatibility check for the $EXTENSION_ID bundle." >&2
-    echo "warning: morphir $VERSION cannot read the \`$SKIPPED_FIELD\` field that" >&2
-    echo "warning: the descriptor in $BUNDLE carries, so publish, install and use went" >&2
-    echo "warning: unexercised for this bundle. Pinning a release that parses" >&2
-    echo "warning: \`$SKIPPED_FIELD\` in .config/morphir-cli-version restores it." >&2
-    echo "warning: the publish reported:" >&2
-    sed 's/^/warning:   /' "$PUBLISH_STDERR" >&2
-    exit 0
-fi
+morphir extension repository publish local --bundle "$PUBLISH"
 
 morphir extension install --repository local "$EXTENSION_ID"
 # The extension has to activate from Morphir Home alone.

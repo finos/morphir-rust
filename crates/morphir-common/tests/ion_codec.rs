@@ -1,10 +1,11 @@
+use std::collections::VecDeque;
 use std::io::Cursor;
 
 use morphir_common::ir_transport::{
-    CodecOptions, CodecRegistry, EventSink, FormatId, IonCodec, IrCodec, IrVersion, JsonCodec,
-    Layout, TransportDiagnostic,
+    CodecOptions, CodecRegistry, EventSink, EventSource, FormatId, IonCodec, IrCodec, IrVersion,
+    JsonCodec, Layout, Stage, TransportDiagnostic,
 };
-use morphir_core::traversal::SemanticEvent;
+use morphir_core::traversal::{IrCursor, SemanticEvent};
 
 const V3_JSON: &str = r#"{
   "formatVersion": 3,
@@ -31,6 +32,14 @@ impl EventSink for CollectingSink {
     }
 }
 
+struct QueueSource(VecDeque<SemanticEvent>);
+
+impl EventSource for QueueSource {
+    fn next_event(&mut self) -> Result<Option<SemanticEvent>, TransportDiagnostic> {
+        Ok(self.0.pop_front())
+    }
+}
+
 fn decode(
     codec: &dyn IrCodec,
     input: &str,
@@ -40,6 +49,24 @@ fn decode(
     let mut sink = CollectingSink::default();
     codec.decode(&mut reader, options, &mut sink)?;
     Ok(sink.0)
+}
+
+fn encode(
+    codec: &dyn IrCodec,
+    events: Vec<SemanticEvent>,
+    options: &CodecOptions,
+) -> Result<String, TransportDiagnostic> {
+    let mut source = QueueSource(events.into());
+    let mut output = Vec::new();
+    codec.encode(&mut source, &mut output, options)?;
+    String::from_utf8(output).map_err(|error| {
+        TransportDiagnostic::error(
+            "morphir::ir::test::invalid_utf8",
+            Stage::Encoding,
+            IrCursor::root(),
+            error.to_string(),
+        )
+    })
 }
 
 #[test]
@@ -58,6 +85,21 @@ fn an_empty_v3_library_datagram_matches_the_json_ir() {
     .unwrap();
 
     assert_eq!(ion, json);
+}
+
+#[test]
+fn an_empty_v3_library_round_trips_through_ion() {
+    let json_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json());
+    let ion_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion());
+    let original = decode(&JsonCodec::new(), V3_JSON, &json_options).unwrap();
+
+    let ion = encode(&IonCodec::new(), original.clone(), &ion_options).unwrap();
+    let from_ion = decode(&IonCodec::new(), &ion, &ion_options)
+        .unwrap_or_else(|error| panic!("failed to decode generated Ion: {error:?}\n{ion}"));
+
+    assert_eq!(from_ion, original);
+    assert!(ion.contains("morphir_footer::"), "{ion}");
+    assert!(ion.contains(r#"ionVersion:"#), "{ion}");
 }
 
 #[test]

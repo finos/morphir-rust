@@ -106,16 +106,89 @@ impl IrCodec for IonCodec {
 
     fn encode(
         &self,
-        _source: &mut dyn EventSource,
-        _writer: &mut dyn Write,
-        _options: &CodecOptions,
+        source: &mut dyn EventSource,
+        writer: &mut dyn Write,
+        options: &CodecOptions,
     ) -> Result<(), TransportDiagnostic> {
-        Err(IonCodec::error(
-            "morphir::ir::ion::encode_unsupported",
-            Stage::Encoding,
-            "the Ion codec does not encode a distribution yet",
-        ))
+        match semantic::collect(source, options.version())? {
+            semantic::SemanticFile::ClassicV3(distribution) => {
+                write_empty_v3_library(distribution, writer)
+            }
+            semantic::SemanticFile::V4(_) => Err(IonCodec::error(
+                "morphir::ir::ion::encode_unsupported",
+                Stage::Encoding,
+                "the Ion codec encodes formatVersion 3 only",
+            )),
+        }
     }
+}
+
+fn write_empty_v3_library(
+    distribution: classic::Distribution,
+    writer: &mut dyn Write,
+) -> Result<(), TransportDiagnostic> {
+    if distribution.format_version != 3 {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::version_mismatch",
+            Stage::Encoding,
+            format!(
+                "the v3 Ion writer received formatVersion {}",
+                distribution.format_version
+            ),
+        ));
+    }
+    let classic::DistributionBody::Library(package, dependencies, definition) =
+        distribution.distribution;
+    if !dependencies.is_empty() || !definition.modules.is_empty() {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Encoding,
+            "the Ion writer encodes an empty v3 library",
+        ));
+    }
+    let header = Element::from(ion_rs::ion_struct! {
+        "ionVersion": ION_CONTRACT,
+        "formatVersion": "3.0.0",
+        "kind": Element::symbol("library"),
+        "packageName": canonical_package(&package),
+    })
+    .with_annotations(["morphir"]);
+    let footer =
+        Element::from(ion_rs::Struct::builder().build()).with_annotations(["morphir_footer"]);
+    let text: String = ion_rs::ion_seq![header, footer]
+        .encode_as(ion_rs::v1_0::Text.with_format(ion_rs::TextFormat::Pretty))
+        .map_err(|error| {
+            IonCodec::error(
+                "morphir::ir::ion::encode_failed",
+                Stage::Encoding,
+                error.to_string(),
+            )
+        })?;
+    writer.write_all(text.as_bytes()).map_err(|error| {
+        IonCodec::error(
+            "morphir::ir::ion::encode_failed",
+            Stage::Encoding,
+            error.to_string(),
+        )
+    })?;
+    if !text.ends_with('\n') {
+        writer.write_all(b"\n").map_err(|error| {
+            IonCodec::error(
+                "morphir::ir::ion::encode_failed",
+                Stage::Encoding,
+                error.to_string(),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn canonical_package(path: &classic::Path) -> String {
+    path.segments
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn decode_v3_library_header(

@@ -68,7 +68,7 @@ impl AuthoredLibrary {
         statement["kind"] = json!("LibraryRegistryRecord");
         statement["source"] =
             json!({"kind":"registry-directory","path":format!("bundles/{}",&digest[7..])});
-        statement["statement"] = json!({"path":format!("statements/{}.json",&digest[7..]),
+        statement["statement"] = json!({"path":format!("statements/{}/release.json",&digest[7..]),
             "digest":Digest::of_bytes(&envelope).to_string()});
         let mut record = crate::metadata::NormalizedMetadata::parse(&statement.to_string())
             .map_err(|_| Error::InvalidInput)?

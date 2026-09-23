@@ -36,7 +36,8 @@ wire_enum!(
     UnsupportedPayloadType,
     CapabilityUnavailable,
     UnauthorizedPublisher,
-    SignatureInvalid
+    SignatureInvalid,
+    PublicationConflict
 );
 wire_enum!(
     Resource,
@@ -102,6 +103,11 @@ wire_enum!(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Witness {
+    /// Exact publication predecessor comparison.
+    Revision {
+        expected: super::publication::Predecessor,
+        actual: super::publication::Predecessor,
+    },
     /// Unsafe path spelling.
     Path {
         subject: SubjectWire,

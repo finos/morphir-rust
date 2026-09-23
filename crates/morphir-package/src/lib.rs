@@ -4,6 +4,8 @@
 //! draft-2 resolution module selects from finite immutable catalogs. It does not
 //! acquire files or establish trust or public API compatibility.
 
+pub mod authoring;
+
 pub mod digest;
 pub mod library;
 pub mod local_registry;

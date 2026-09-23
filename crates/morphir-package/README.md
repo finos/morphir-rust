@@ -124,3 +124,59 @@ recovery/revocation rules, target package-view validation, publisher authorizati
 package installation or grant reuse. Internal admission errors are not a new wire
 report format. Native filesystem/SQLite candidate probes remain separate evidence;
 this module does not claim a qualified provider or completed PKG-3.
+
+## Library authoring and local publication
+
+`authoring::AuthoredLibrary::create` validates a dependency-free classic V4 IR
+against an explicit manifest input and derives its payload digest. The input
+contains `packagePath`, `version`, empty `dependencies`, and `exports` mapping
+aliases to public module names. `from_bundle` revalidates existing manifest and IR
+bytes. `sign` creates an immutable registry record and publisher DSSE envelope.
+`LocalSigningKey` is an explicit Ed25519 seed adapter; callers own key acquisition
+and protection. Its separate `sign_tuf` method signs caller-authored repository
+metadata. No signing key enters the publication transaction.
+
+On macOS, `local_registry::publication::Registry` provides `initialize`, `open`,
+`prepare`, and `publish`. Initialize absent registry and private-state directories
+with an explicitly pinned, signed bootstrap root and trust policy. Both directory
+parents must already exist on local APFS. Open holds an exclusive OS lock on the
+anchored registry directory inode until the handle is dropped. An operation mutex
+serializes threads sharing one handle; a poisoned operation refuses reuse. Configured roots
+resolve once; descendants use anchored no-follow operations, and regular files
+must have exactly one hard link. The private state binds both directory identities
+to the bootstrap root; do not copy, delete, or reconstruct it from public metadata.
+
+Prepare returns a serializable `Draft`, including the exact timestamp predecessor
+and next unused role versions. It does not reserve versions. `Draft::sign` accepts
+explicit targets, snapshot, and timestamp signers, returning exact `Proposal`
+bytes. Publish independently authenticates those bytes, the current complete view,
+the publisher statement, and the requested bundle. It checks the predecessor
+before immutable-release/idempotence checks. A new publication retains every
+prior target and status and adds exactly the requested record and statement.
+An exact retry preserves yanked/revoked status and ignores an unused proposal.
+
+The transaction durably reserves all three role versions before installing
+objects. Bundles and target files are staged and promoted without replacement;
+numbered metadata and timestamp evidence are retained. The sole public commit
+point replaces `metadata/timestamp.json`, followed by the required directory
+flush. Version floors include durable reservations, occupied metadata names, and
+private commit receipts; versions use exact positive integers. An abandoned
+reservation burns its versions. Restart authenticates the actual current view
+and never promotes orphan files. A missing established timestamp is a refusal,
+not a new empty registry.
+
+`commit-outcome-uncertain` means the timestamp may already be visible and must not
+be rolled back. Reopen and inspect the authenticated current predecessor before
+preparing a retry. A retry with an old predecessor conflicts; a retry against the
+observed successor is idempotent when the exact release is already present.
+Private state corruption is fail-closed and requires operator investigation.
+
+This first profile supports dependency-free classic V4 bundles throughout the
+registry and uses the pinned bootstrap root without root rotation. Publication is
+unavailable on other operating systems and refuses nonlocal/non-APFS filesystems.
+It uses macOS full-flush operations and exclusive rename primitives. Tests cover
+two-process serialization, inode-lock replacement, interrupted transactions,
+version burning, and injected final-flush failure. Process termination tests do
+not establish power-loss durability or complete the shared publication MCK
+qualification corpus. Error codes are exposed by the runtime, but only a subset
+currently has the complete draft.3 structured witness representation.

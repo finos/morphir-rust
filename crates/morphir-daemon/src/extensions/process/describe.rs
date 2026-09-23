@@ -212,11 +212,12 @@ fn check_capability_kinds(statement: &CapabilityStatement) -> Result<()> {
 }
 
 fn permits_fallback(error: &RpcError) -> bool {
-    if error.code == error_codes::METHOD_NOT_FOUND {
+    if error.code == error_codes::METHOD_NOT_FOUND || error.code == error_codes::NOT_INITIALIZED {
         return true;
     }
-    // MEP does not assign a code to pre-initialize refusal. Recognize explicit
-    // lifecycle refusals, without treating internal errors as optional methods.
+    // Guests released before MEP assigned `-32014` refuse with a message.
+    // Recognize explicit lifecycle refusals from them, without treating
+    // internal errors as optional methods.
     if error.code != error_codes::INVALID_REQUEST && !(-32099..=-32000).contains(&error.code) {
         return false;
     }

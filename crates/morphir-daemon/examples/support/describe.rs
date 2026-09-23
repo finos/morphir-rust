@@ -1,6 +1,8 @@
 //! Strict lifecycle fixture for process description tests.
 
-use morphir_extension_sdk::protocol::{ExtensionRequest, ExtensionResponse, RpcError, methods};
+use morphir_extension_sdk::protocol::{
+    ExtensionRequest, ExtensionResponse, RpcError, error_codes, methods,
+};
 use serde_json::{Value, json};
 
 pub struct DescribeFixture {
@@ -16,19 +18,21 @@ impl DescribeFixture {
     }
 
     pub fn accept(&mut self, message: &Value) -> Result<(), Box<dyn std::error::Error>> {
-        let sequence: &[&str] =
-            if matches!(self.mode.as_str(), "method-not-found" | "not-initialized") {
-                &[
-                    methods::DESCRIBE,
-                    methods::INITIALIZE,
-                    methods::INITIALIZED,
-                    methods::CAPABILITIES,
-                    methods::SHUTDOWN,
-                    methods::EXIT,
-                ]
-            } else {
-                &[methods::DESCRIBE, methods::EXIT]
-            };
+        let sequence: &[&str] = if matches!(
+            self.mode.as_str(),
+            "method-not-found" | "not-initialized" | "legacy-not-initialized"
+        ) {
+            &[
+                methods::DESCRIBE,
+                methods::INITIALIZE,
+                methods::INITIALIZED,
+                methods::CAPABILITIES,
+                methods::SHUTDOWN,
+                methods::EXIT,
+            ]
+        } else {
+            &[methods::DESCRIBE, methods::EXIT]
+        };
         let expected = sequence.get(self.next).ok_or("unexpected extra request")?;
         if message["method"].as_str() != Some(expected) {
             return Err(format!("expected {expected}, received {}", message["method"]).into());
@@ -50,7 +54,14 @@ impl DescribeFixture {
         }
         let error = match self.mode.as_str() {
             "method-not-found" => Some(RpcError::method_not_found(methods::DESCRIBE)),
-            "not-initialized" => Some(RpcError::invalid_request("Extension is not initialized")),
+            "not-initialized" => Some(RpcError {
+                code: error_codes::NOT_INITIALIZED,
+                message: "morphir.extension.describe is not allowed yet".into(),
+                data: None,
+            }),
+            "legacy-not-initialized" => {
+                Some(RpcError::invalid_request("Extension is not initialized"))
+            }
             "internal-error" => Some(RpcError::internal_error("deliberate failure")),
             _ => None,
         };

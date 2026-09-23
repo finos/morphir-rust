@@ -65,6 +65,12 @@ async fn falls_back_on_pre_initialize_refusal() {
     assert_fallback("not-initialized").await;
 }
 
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn falls_back_on_a_legacy_pre_initialize_refusal_message() {
+    assert_fallback("legacy-not-initialized").await;
+}
+
 async fn assert_fallback(mode: &str) {
     let result = DescribeDriver::describe(mode).await.unwrap();
     assert_eq!(result.source, DescriptionSource::SessionFallback);

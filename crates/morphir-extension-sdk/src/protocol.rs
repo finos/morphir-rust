@@ -225,6 +225,8 @@ pub mod error_codes {
     pub const PERMISSION_DENIED: i32 = -32012;
     /// Extension did not advertise the requested capability.
     pub const CAPABILITY_UNAVAILABLE: i32 = -32013;
+    /// The request is not allowed before `morphir.initialize`, or after shutdown.
+    pub const NOT_INITIALIZED: i32 = -32014;
 }
 
 impl RpcError {

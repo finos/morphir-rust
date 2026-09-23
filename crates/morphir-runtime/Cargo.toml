@@ -12,3 +12,4 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+morphir-core = { path = "../morphir-core" }

@@ -4748,6 +4748,9 @@ dependencies = [
 [[package]]
 name = "morphir-runtime"
 version = "0.2.0"
+dependencies = [
+ "morphir-core",
+]
 
 [[package]]
 name = "morphir-rust-binding"

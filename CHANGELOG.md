@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `check_package_name` is now `normalize_package_name` and returns the name the
   snapshot reports; Gleam keeps its names unchanged.
 
+### Fixed
+- `morphir_core::ir::classic::Name::from_str` no longer panics when a
+  non-ASCII character comes before a word (for example `éa`). It used
+  character counts as byte offsets.
+
 ### Added
 - The package MVP adapter exposes `update-local-library` through the production
   scoped-update API. Its bounded protocol checks all 27 frozen success and

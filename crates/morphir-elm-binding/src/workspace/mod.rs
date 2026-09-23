@@ -21,7 +21,7 @@ use morphir_extension_sdk::prelude::*;
 use morphir_workspace::{DiscoveryRequest, DiscoveryResponse, RelativePath, SourceIdentity};
 
 use crate::ElmExtension;
-use crate::frontend::boundary::package_path;
+use crate::names::words;
 use module_header::{elm_module_name, fallback_elm_module_name};
 
 impl Workspace for ElmExtension {
@@ -59,15 +59,30 @@ impl SourceIdentity for ElmIdentity {
         format!("local/{}", module.to_ascii_lowercase().replace('.', "-"))
     }
 
-    /// This frontend accepts both the `local/example` and `My.Package`
-    /// spellings, so its contract is only that the name spells a package
-    /// path at all.
-    fn check_package_name(&self, name: &str) -> std::result::Result<(), String> {
-        if package_path(name).is_empty() {
-            Err("it names no package path segments".into())
-        } else {
-            Ok(())
+    /// The Elm package-name contract every Elm workspace provider shares:
+    /// split on both `/` and `.`, trim each piece and drop empty ones, split
+    /// each piece into words as morphir-elm `Name.fromString` does, and join
+    /// words with `-` and pieces with `/`. So `My.Package`, `My/Package` and
+    /// `my/package` all report `my/package`, which is also the package path
+    /// each of them compiles to.
+    fn normalize_package_name(&self, name: &str) -> std::result::Result<String, String> {
+        let pieces: Vec<&str> = name
+            .split(['/', '.'])
+            .map(str::trim)
+            .filter(|piece| !piece.is_empty())
+            .collect();
+        if pieces.is_empty() {
+            return Err("it names no package path segments".into());
         }
+        let mut segments = Vec::with_capacity(pieces.len());
+        for piece in pieces {
+            let piece_words = words(piece);
+            if piece_words.is_empty() {
+                return Err(format!("segment `{piece}` has no letters or digits"));
+            }
+            segments.push(piece_words.join("-"));
+        }
+        Ok(segments.join("/"))
     }
 }
 
@@ -300,8 +315,8 @@ mod tests {
         assert_eq!(project.exposed_modules, Some(vec!["Foo_Bar".to_owned()]));
     }
 
-    /// An explicit name survives untouched — it came from the caller, not
-    /// from this provider — but exposure is still derived, because the two
+    /// An explicit name already in normal form survives untouched, but
+    /// exposure is still derived, because the two
     /// fields answer different questions. `--package-name` says what to call
     /// the package; it says nothing about which modules the package
     /// publishes, and the single submitted file's declared module is exactly
@@ -450,23 +465,136 @@ mod tests {
         assert_eq!(snapshot.state, WorkspaceState::Open);
     }
 
-    /// An explicit name goes through this provider's package contract, which
-    /// accepts both spellings but not a name spelling no package path.
-    #[test]
-    fn an_explicit_name_must_spell_a_package_path() {
+    /// Discovers `Widget.elm` under the explicit `name`.
+    fn discover_named(name: &str) -> DiscoveryResponse {
         let mut request = ad_hoc_request(".", "Widget.elm", "module Acme.Widget exposing (..)\n");
-        request.cli_overlay = serde_json::json!({ "project": { "name": "/./" } });
+        request.cli_overlay = serde_json::json!({ "project": { "name": name } });
+        ElmExtension
+            .discover(request)
+            .expect("the typed call itself should not error")
+    }
+
+    /// Every accepted row of the shared Elm package-name contract: the name
+    /// is split on `.` and `/`, each piece into morphir-elm `Name.fromString`
+    /// words, and the snapshot reports the normal form.
+    #[test]
+    fn an_explicit_name_is_reported_in_its_normal_form() {
+        let cases = [
+            ("acme/widgets", "acme/widgets"),
+            ("finos/morphir-sdk", "finos/morphir-sdk"),
+            ("My.Package", "my/package"),
+            ("My/Package", "my/package"),
+            ("Documentation.Decoration", "documentation/decoration"),
+            ("Morphir.Reference.Model", "morphir/reference/model"),
+            ("morphir/sdk.core", "morphir/sdk/core"),
+            ("Acme/Widgets", "acme/widgets"),
+            ("acme/my_widgets", "acme/my-widgets"),
+            ("MyPackage", "my-package"),
+            ("my-package", "my-package"),
+            ("local/mywidget", "local/mywidget"),
+            ("SDK/v2", "s-d-k/v-2"),
+            ("acme//widgets", "acme/widgets"),
+            (" acme / widgets ", "acme/widgets"),
+            ("a.b/c", "a/b/c"),
+            // The trim set is Unicode White_Space, which includes NEL.
+            ("acme/\u{0085}/widgets", "acme/widgets"),
+            // A non-ASCII letter is a delimiter, as in `Name.fromString`.
+            ("éa/pkg", "a/pkg"),
+        ];
+        for (name, expected) in cases {
+            let DiscoveryResponse::Success { snapshot } = discover_named(name) else {
+                panic!("expected `{name}` to be accepted");
+            };
+            assert_eq!(
+                snapshot.projects[0].name, expected,
+                "normal form of `{name}`"
+            );
+        }
+    }
+
+    /// The normal form is its own normal form.
+    #[test]
+    fn the_normal_form_is_idempotent() {
+        for name in ["my/package", "s-d-k/v-2", "acme/my-widgets", "a/b/c"] {
+            assert_eq!(
+                ElmIdentity.normalize_package_name(name),
+                Ok(name.to_owned())
+            );
+        }
+    }
+
+    /// Every refused row of the contract, with its exact message.
+    #[test]
+    fn an_explicit_name_that_spells_no_package_is_refused() {
+        let cases = [
+            (
+                "/./",
+                "project name `/./` is invalid: it names no package path segments",
+            ),
+            (
+                "acme/_",
+                "project name `acme/_` is invalid: segment `_` has no letters or digits",
+            ),
+            (
+                "acme/-/x",
+                "project name `acme/-/x` is invalid: segment `-` has no letters or digits",
+            ),
+            // BOM is not White_Space, so it is kept and has no words.
+            (
+                "acme/\u{feff}/widgets",
+                "project name `acme/\u{feff}/widgets` is invalid: segment `\u{feff}` has no letters or digits",
+            ),
+        ];
+        for (name, message) in cases {
+            let DiscoveryResponse::Failure { error } = discover_named(name) else {
+                panic!("expected `{name}` to be refused");
+            };
+            assert_eq!(
+                error.code,
+                morphir_workspace::WORKSPACE_PROJECT_NAME_INVALID
+            );
+            assert_eq!(error.message, message);
+        }
+    }
+
+    /// A blank name keeps failing in portable discovery, before this policy.
+    #[test]
+    fn a_blank_explicit_name_is_empty() {
+        let DiscoveryResponse::Failure { error } = discover_named("") else {
+            panic!("expected a blank name to be refused");
+        };
+        assert_eq!(error.code, morphir_workspace::WORKSPACE_PROJECT_NAME_EMPTY);
+    }
+
+    /// End to end: a two-file selection named `My.Package` reports
+    /// `my/package` and still exposes both modules in selection order.
+    #[test]
+    fn a_named_multi_source_selection_reports_the_normal_form() {
+        let mut request = ad_hoc_request(".", "A.elm", "module Acme.Widget exposing (..)\n");
+        let second = RelativePath::parse("B.elm").expect("a confined wire path");
+        request.development_root.entries.insert(
+            second.clone(),
+            FileEntry::File {
+                text: "module Acme.Gadget exposing (..)\n".to_owned(),
+            },
+        );
+        request.cli_overlay = serde_json::json!({ "project": { "name": "My.Package" } });
+        if let DiscoveryPurpose::AdHocSources { sources, .. } = &mut request.purpose {
+            sources.paths.push(second);
+        }
 
         let response = ElmExtension
             .discover(request)
             .expect("the typed call itself should not error");
 
-        let DiscoveryResponse::Failure { error } = response else {
-            panic!("expected a discovery failure");
+        let DiscoveryResponse::Success { snapshot } = response else {
+            panic!("expected a successful discovery response");
         };
+        let project = &snapshot.projects[0];
+        assert_eq!(project.name, "my/package");
         assert_eq!(
-            error.code,
-            morphir_workspace::WORKSPACE_PROJECT_NAME_INVALID
+            project.exposed_modules,
+            Some(vec!["Acme.Widget".to_owned(), "Acme.Gadget".to_owned()])
         );
     }
 

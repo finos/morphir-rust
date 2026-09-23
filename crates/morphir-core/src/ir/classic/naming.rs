@@ -39,7 +39,7 @@ impl std::str::FromStr for Name {
                 while i < len && chars[i].is_ascii_lowercase() {
                     i += 1;
                 }
-                words.push(intern(&s[start..i].to_lowercase()));
+                words.push(intern(&word(&chars[start..i])));
             } else if c.is_ascii_digit() {
                 // Match [0-9]+
                 let start = i;
@@ -47,7 +47,7 @@ impl std::str::FromStr for Name {
                 while i < len && chars[i].is_ascii_digit() {
                     i += 1;
                 }
-                words.push(intern(&s[start..i].to_lowercase()));
+                words.push(intern(&word(&chars[start..i])));
             } else {
                 // Delimiter or other character, skip
                 i += 1;
@@ -56,6 +56,12 @@ impl std::str::FromStr for Name {
 
         Ok(Name { words })
     }
+}
+
+/// A matched word, lowercased. `chars` indexes characters, not bytes, so the
+/// word is rebuilt from them rather than sliced from the source string.
+fn word(chars: &[char]) -> String {
+    chars.iter().map(char::to_ascii_lowercase).collect()
 }
 
 impl Name {
@@ -306,6 +312,18 @@ mod tests {
         assert_eq!(
             Name::from_str("a1b2").words,
             vec![intern("a"), intern("1"), intern("b"), intern("2")]
+        );
+    }
+
+    /// A non-ASCII character is a delimiter, as in morphir-elm's
+    /// `[a-zA-Z][a-z]*|[0-9]+`, and the words after it are still split at
+    /// character boundaries.
+    #[test]
+    fn test_name_from_str_skips_non_ascii() {
+        assert_eq!(Name::from_str("éa").words, vec![intern("a")]);
+        assert_eq!(
+            Name::from_str("fooÉtéBar").words,
+            vec![intern("foo"), intern("t"), intern("bar")]
         );
     }
 }

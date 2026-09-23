@@ -37,8 +37,13 @@ pub trait SourceIdentity {
     fn synthesized_package_name(&self, module: &str) -> String;
 
     /// Checks an explicit package name against this language's package
-    /// contract, returning why it is rejected.
-    fn check_package_name(&self, name: &str) -> Result<(), String>;
+    /// contract and returns the name in this language's normal form, or why
+    /// the name is rejected.
+    ///
+    /// The snapshot reports the returned name, not the spelling the request
+    /// used, so two spellings of one package get one name. A language with
+    /// no normal form returns `name` unchanged.
+    fn normalize_package_name(&self, name: &str) -> Result<String, String>;
 
     /// How many distinct sources `paths` holds. Discovery has already
     /// rejected repeated paths, so the default counts them.
@@ -53,7 +58,8 @@ pub trait SourceIdentity {
 /// unchanged. For an ad-hoc project, in order:
 ///
 /// 1. an explicit name must satisfy the package contract
-///    (`workspace.project-name.invalid`);
+///    (`workspace.project-name.invalid`), and the project takes the name's
+///    normal form;
 /// 2. an unnamed selection must hold exactly one distinct source
 ///    (`workspace.selection.name-required`);
 /// 3. every source is named; a source the language cannot name is a project
@@ -120,8 +126,8 @@ fn complete_project(
 ) -> Result<(), DiscoveryFailure> {
     let root = project.relative_path.clone();
     if !project.name.is_empty() {
-        identity
-            .check_package_name(&project.name)
+        project.name = identity
+            .normalize_package_name(&project.name)
             .map_err(|reason| DiscoveryFailure {
                 code: WORKSPACE_PROJECT_NAME_INVALID.to_owned(),
                 message: format!("project name `{}` is invalid: {reason}", project.name),
@@ -195,7 +201,7 @@ mod tests {
     use crate::{FileEntry, FileTree, ProjectOrigin, ProjectSource, SourceSelection};
 
     /// Names a module for the file's stem, uppercased; refuses a stem holding
-    /// `-`; accepts only lowercase package names.
+    /// `-`; accepts only lowercase package names, and normalizes `.` to `/`.
     struct Stems;
 
     impl SourceIdentity for Stems {
@@ -221,11 +227,11 @@ mod tests {
             format!("local/{}", module.to_ascii_lowercase())
         }
 
-        fn check_package_name(&self, name: &str) -> Result<(), String> {
+        fn normalize_package_name(&self, name: &str) -> Result<String, String> {
             if name.chars().any(|character| character.is_ascii_uppercase()) {
                 Err("must be lowercase".into())
             } else {
-                Ok(())
+                Ok(name.replace('.', "/"))
             }
         }
     }
@@ -313,6 +319,30 @@ mod tests {
 
         assert_eq!(error.code, WORKSPACE_PROJECT_NAME_INVALID);
         assert!(error.message.contains("must be lowercase"));
+    }
+
+    /// The snapshot reports the normal form the policy returns, not the
+    /// spelling the request used.
+    #[test]
+    fn an_explicit_name_is_reported_in_its_normal_form() {
+        let snapshot = synthesized(&["src/a.x"], Some("acme.pkg"))
+            .into_result()
+            .unwrap();
+
+        assert_eq!(snapshot.projects[0].name, "acme/pkg");
+    }
+
+    /// A rejected name is quoted as the request spelled it.
+    #[test]
+    fn a_rejected_name_is_quoted_as_requested() {
+        let error = synthesized(&["src/a.x"], Some("Acme.Pkg"))
+            .into_result()
+            .unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "project name `Acme.Pkg` is invalid: must be lowercase"
+        );
     }
 
     /// The contract check runs before cardinality would matter, and a bad

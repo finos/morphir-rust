@@ -23,5 +23,8 @@ morphir-package = { path = "../morphir-package" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order", "arbitrary_precision"] }
 anyhow = { workspace = true }
+tempfile = { workspace = true }
+tokio = { version = "1", features = ["rt"] }
+package_tough = { package = "morphir-package-tough", path = "../../third_party/morphir-package-tough", default-features = false, features = ["experimental-storage"] }
 
 [dev-dependencies]

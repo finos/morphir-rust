@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot reports; Gleam keeps its names unchanged.
 
 ### Fixed
+- Extension publication refuses mixed runtimes and target ABIs the index cannot
+  represent, preserves descriptor critical paths, and returns stored release
+  records while persisting declared-to-probed provenance upgrades.
 - A native in-process provider gives each MEP session its own lifecycle. `NativeExtension::open_protocol` opens an endpoint for one session, and the daemon's native transport uses it, so a session after a shutdown, or two sessions at once, over one provider no longer fail with `-32014` or "already initialized".
 - Extension resolution and installation check `requires.host` against an explicit
   caller-supplied host version. Parsing validates requirements without comparing
@@ -33,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinguishes describe from session fallback. Legacy installs retain the
   version-1 catalog shape, and competing installs cannot overwrite an entry. The SDK
   compares complete statements and names the first differing member.
+- Local extension repositories publish version-2 process bundles with verified
+  per-platform digests, checksums and capability statements. Host artifacts are
+  described through a caller-supplied probe; foreign statements remain declared.
+  Undeclared platform differences and probe disagreements are refused.
 - Extension distribution readers ignore unknown optional members, reject unknown
   critical paths, accept supported SemVer schemas, and convert flat capability
   metadata to declared statements while preserving supplied artifact statements

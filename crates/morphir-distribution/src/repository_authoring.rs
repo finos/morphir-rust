@@ -20,7 +20,24 @@ const REPOSITORY_DIRECTORIES: [&str; 2] = ["artifacts", "extensions"];
 mod descriptor_tests;
 
 mod descriptor;
+mod process;
 pub use descriptor::{BundleArtifactDescriptor, PlatformDifferences, ReleaseBundleDescriptor};
+
+/// Evidence returned by a process publication probe.
+#[derive(Debug, Clone)]
+pub enum PublicationDescription {
+    /// A direct description must match the complete declared statement.
+    Describe(morphir_extension_sdk::statement::CapabilityStatement),
+    /// An older guest supplied only negotiated session metadata.
+    SessionFallback {
+        /// The single negotiated MEP version.
+        protocol_version: String,
+        /// The identity reported during initialization.
+        extension: morphir_extension_sdk::ExtensionInfo,
+        /// Capability members exactly as reported by the session.
+        capabilities: serde_json::Map<String, serde_json::Value>,
+    },
+}
 
 /// Whether publication added a release or found the exact release already present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +67,8 @@ impl RepositoryPublication {
         &self.release
     }
 
-    /// Return the canonical artifact path below the repository root.
+    /// Return the first canonical artifact path below the repository root.
+    /// All published artifacts are listed in [`Self::release`].
     pub fn artifact_path(&self) -> &Path {
         &self.artifact_path
     }
@@ -111,27 +129,82 @@ impl LocalExtensionRepository {
         &self.root
     }
 
-    /// Verify and publish one deterministic extension release bundle atomically.
+    /// Verify and publish a bundle that does not require a host process probe.
+    /// Use [`Self::publish_with_process_probe`] for host process artifacts.
     pub fn publish(&self, bundle: impl AsRef<Path>) -> Result<RepositoryPublication> {
-        let bundle = VerifiedReleaseBundle::load(bundle.as_ref())?;
+        self.publish_with_process_probe(bundle, |artifact, _| {
+            Err(invalid_bundle(
+                artifact.filename().as_str(),
+                "host process artifact requires a describe probe; use publish_with_process_probe",
+            ))
+        })
+    }
+
+    /// Verify every artifact, describe host processes, then publish the release.
+    ///
+    /// The probe must describe the supplied verified bytes, not reread a bundle
+    /// path. It runs only for process artifacts matching the current platform.
+    /// Foreign artifacts retain their declared statements. A mismatch is refused
+    /// before repository writes. Version-1 WASM publication never calls the probe.
+    ///
+    /// ```no_run
+    /// use morphir_distribution::{BundleArtifactDescriptor, LocalExtensionRepository, PublicationDescription, Result};
+    /// # fn describe_verified(_: &BundleArtifactDescriptor, _: &[u8]) -> Result<PublicationDescription> {
+    /// #     unimplemented!()
+    /// # }
+    /// # fn publish() -> Result<()> {
+    /// let repository = LocalExtensionRepository::open("./repository")?;
+    /// let publication = repository.publish_with_process_probe("./bundle", describe_verified)?;
+    /// assert!(!publication.release().artifacts().is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn publish_with_process_probe(
+        &self,
+        bundle: impl AsRef<Path>,
+        mut probe: impl FnMut(&BundleArtifactDescriptor, &[u8]) -> Result<PublicationDescription>,
+    ) -> Result<RepositoryPublication> {
+        let bundle = VerifiedReleaseBundle::load(bundle.as_ref(), &mut probe)?;
         let _guard = StateGuard::acquire(&self.root.join(".publish.lock"))?;
         let history_path = self
             .root
             .join("extensions")
             .join(format!("{}.jsonl", bundle.release.extension_id()));
         let previous = read_optional(&history_path)?;
-        let status = publication_status(previous.as_deref(), &bundle.release)?;
-        let artifact_path = self.publish_artifact(&bundle)?;
+        let existing = existing_release(previous.as_deref(), &bundle.release)?;
+        let status = if existing.is_some() {
+            PublicationStatus::AlreadyPresent
+        } else {
+            PublicationStatus::Published
+        };
+        let release = match &existing {
+            Some(stored) => upgrade_provenance(stored, &bundle.release)?,
+            None => bundle.release,
+        };
+        // Refuse destination conflicts before publishing any artifact.
+        for artifact in &bundle.artifacts {
+            self.check_artifact_destination(artifact)?;
+        }
+        let artifact_paths = bundle
+            .artifacts
+            .iter()
+            .map(|artifact| self.publish_artifact(artifact))
+            .collect::<Result<Vec<_>>>()?;
+        let artifact_path = artifact_paths[0].clone();
 
         if status == PublicationStatus::Published {
-            let next = append_release(previous.as_deref(), &bundle.release)?;
+            let next = append_release(previous.as_deref(), &release)?;
+            atomic_write_bytes(&history_path, &next)?;
+        } else if existing.as_ref() != Some(&release) {
+            let next =
+                replace_provenance(previous.as_deref().expect("existing history"), &release)?;
             atomic_write_bytes(&history_path, &next)?;
         }
 
         tracing::info!(
             event_name = "extension.repository.publish",
-            extension_id = %bundle.release.extension_id(),
-            version = %bundle.release.version(),
+            extension_id = %release.extension_id(),
+            version = %release.version(),
             status = match status {
                 PublicationStatus::Published => "published",
                 PublicationStatus::AlreadyPresent => "already-present",
@@ -140,19 +213,41 @@ impl LocalExtensionRepository {
         );
         Ok(RepositoryPublication {
             status,
-            release: bundle.release,
+            release,
             artifact_path,
         })
     }
 
-    fn publish_artifact(&self, bundle: &VerifiedReleaseBundle) -> Result<PathBuf> {
+    fn publish_artifact(&self, bundle: &VerifiedBundleArtifact) -> Result<PathBuf> {
+        if let Some(existing) = self.check_artifact_destination(bundle)? {
+            return Ok(existing);
+        }
         let destination = self.root.join("artifacts").join(bundle.artifact.as_str());
-        if destination.exists() {
-            let metadata =
-                fs::symlink_metadata(&destination).map_err(|source| DistributionError::Io {
+        atomic_write_bytes(&destination, &bundle.artifact_bytes)?;
+        let canonical = fs::canonicalize(&destination).map_err(|source| DistributionError::Io {
+            path: destination,
+            source,
+        })?;
+        ensure_contained(&self.root, &canonical)?;
+        Ok(canonical)
+    }
+
+    fn check_artifact_destination(
+        &self,
+        bundle: &VerifiedBundleArtifact,
+    ) -> Result<Option<PathBuf>> {
+        let destination = self.root.join("artifacts").join(bundle.artifact.as_str());
+        let metadata = match fs::symlink_metadata(&destination) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(DistributionError::Io {
                     path: destination.clone(),
                     source,
-                })?;
+                });
+            }
+        };
+        if let Some(metadata) = metadata {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(invalid_bundle(
                     &destination,
@@ -170,16 +265,9 @@ impl LocalExtensionRepository {
                 source,
             })?;
             verify_digest(&canonical, &bytes, &bundle.digest)?;
-            return Ok(canonical);
+            return Ok(Some(canonical));
         }
-
-        atomic_write_bytes(&destination, &bundle.artifact_bytes)?;
-        let canonical = fs::canonicalize(&destination).map_err(|source| DistributionError::Io {
-            path: destination,
-            source,
-        })?;
-        ensure_contained(&self.root, &canonical)?;
-        Ok(canonical)
+        Ok(None)
     }
 }
 
@@ -226,13 +314,20 @@ struct LegacyReleaseBundleDescriptor {
 
 struct VerifiedReleaseBundle {
     release: ReleaseRecord,
+    artifacts: Vec<VerifiedBundleArtifact>,
+}
+
+struct VerifiedBundleArtifact {
     artifact: ArtifactFilename,
     artifact_bytes: Vec<u8>,
     digest: Sha256Digest,
 }
 
 impl VerifiedReleaseBundle {
-    fn load(requested: &Path) -> Result<Self> {
+    fn load(
+        requested: &Path,
+        probe: &mut impl FnMut(&BundleArtifactDescriptor, &[u8]) -> Result<PublicationDescription>,
+    ) -> Result<Self> {
         let root = canonical_directory(requested, "release bundle is not a directory")?;
         let entries = regular_bundle_entries(&root)?;
         let descriptor_bytes = entries
@@ -240,6 +335,9 @@ impl VerifiedReleaseBundle {
             .ok_or_else(|| invalid_bundle(&root, "release bundle has no release.json"))?;
         let descriptor: ReleaseBundleDescriptor = serde_json::from_slice(descriptor_bytes)
             .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))?;
+        if descriptor.legacy.is_none() {
+            return process::verify(&root, &entries, descriptor, probe);
+        }
         let descriptor = descriptor.into_legacy(&root)?;
 
         let artifact_name = descriptor.artifact.as_str();
@@ -279,9 +377,11 @@ impl VerifiedReleaseBundle {
         let release = descriptor.release_record(&root)?;
         Ok(Self {
             release,
-            artifact: descriptor.artifact,
-            artifact_bytes,
-            digest: descriptor.sha256,
+            artifacts: vec![VerifiedBundleArtifact {
+                artifact: descriptor.artifact,
+                artifact_bytes,
+                digest: descriptor.sha256,
+            }],
         })
     }
 }
@@ -489,18 +589,18 @@ fn verify_digest(path: &Path, bytes: &[u8], expected: &Sha256Digest) -> Result<(
     }
 }
 
-fn publication_status(
+fn existing_release(
     previous: Option<&[u8]>,
     release: &ReleaseRecord,
-) -> Result<PublicationStatus> {
+) -> Result<Option<ReleaseRecord>> {
     let Some(previous) = previous else {
-        return Ok(PublicationStatus::Published);
+        return Ok(None);
     };
     let history = ExtensionHistory::parse_jsonl(previous)?;
     for existing in history.releases() {
         if existing.version().cmp_precedence(release.version()).is_eq() {
-            return if existing == release {
-                Ok(PublicationStatus::AlreadyPresent)
+            return if without_provenance(existing)? == without_provenance(release)? {
+                Ok(Some(existing.clone()))
             } else {
                 Err(DistributionError::RepositoryReleaseConflict {
                     id: release.extension_id().clone(),
@@ -509,7 +609,74 @@ fn publication_status(
             };
         }
     }
-    Ok(PublicationStatus::Published)
+    Ok(None)
+}
+
+fn upgrade_provenance(stored: &ReleaseRecord, incoming: &ReleaseRecord) -> Result<ReleaseRecord> {
+    let mut wire = serde_json::to_value(stored).map_err(DistributionError::StateEncoding)?;
+    let incoming = serde_json::to_value(incoming).map_err(DistributionError::StateEncoding)?;
+    for (artifact, candidate) in wire["artifacts"]
+        .as_array_mut()
+        .expect("release artifacts")
+        .iter_mut()
+        .zip(incoming["artifacts"].as_array().expect("release artifacts"))
+    {
+        if artifact["statementSource"] == "declared" && candidate["statementSource"] == "probed" {
+            artifact["statementSource"] = candidate["statementSource"].clone();
+            artifact["probeSource"] = candidate["probeSource"].clone();
+        }
+    }
+    serde_json::from_value(wire).map_err(DistributionError::StateEncoding)
+}
+
+fn replace_provenance(previous: &[u8], release: &ReleaseRecord) -> Result<Vec<u8>> {
+    let updated = serde_json::to_value(release).map_err(DistributionError::StateEncoding)?;
+    let mut next = Vec::new();
+    for line in previous.split_inclusive(|byte| *byte == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            next.extend_from_slice(line);
+            continue;
+        }
+        let mut wire: serde_json::Value =
+            serde_json::from_slice(line).map_err(DistributionError::StateEncoding)?;
+        if wire["version"] == updated["version"] {
+            // Preserve unknown members and every declared statement. Only the
+            // provenance changes; unrelated history lines retain their bytes.
+            for (artifact, upgraded) in wire["artifacts"]
+                .as_array_mut()
+                .expect("validated history artifacts")
+                .iter_mut()
+                .zip(updated["artifacts"].as_array().expect("release artifacts"))
+            {
+                for member in ["statementSource", "probeSource"] {
+                    if let Some(value) = upgraded.get(member) {
+                        artifact[member] = value.clone();
+                    }
+                }
+            }
+            next.extend(serde_json::to_vec(&wire).map_err(DistributionError::StateEncoding)?);
+            if line.ends_with(b"\n") {
+                next.push(b'\n');
+            }
+        } else {
+            next.extend_from_slice(line);
+        }
+    }
+    ExtensionHistory::parse_jsonl(&next)?;
+    Ok(next)
+}
+
+fn without_provenance(release: &ReleaseRecord) -> Result<serde_json::Value> {
+    let mut wire = serde_json::to_value(release).map_err(DistributionError::StateEncoding)?;
+    if let Some(artifacts) = wire["artifacts"].as_array_mut() {
+        for artifact in artifacts {
+            if let Some(record) = artifact.as_object_mut() {
+                record.remove("statementSource");
+                record.remove("probeSource");
+            }
+        }
+    }
+    Ok(wire)
 }
 
 fn append_release(previous: Option<&[u8]>, release: &ReleaseRecord) -> Result<Vec<u8>> {

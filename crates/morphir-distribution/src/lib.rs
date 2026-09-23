@@ -121,8 +121,8 @@ pub use repository::{
     RepositoryEndpoint, RepositoryName, RepositoryState, RepositoryVerification,
 };
 pub use repository_authoring::{
-    BundleArtifactDescriptor, LocalExtensionRepository, PlatformDifferences, PublicationStatus,
-    ReleaseBundleDescriptor, RepositoryPublication,
+    BundleArtifactDescriptor, LocalExtensionRepository, PlatformDifferences,
+    PublicationDescription, PublicationStatus, ReleaseBundleDescriptor, RepositoryPublication,
 };
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{

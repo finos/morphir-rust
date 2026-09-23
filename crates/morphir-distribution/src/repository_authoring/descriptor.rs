@@ -98,7 +98,7 @@ pub struct ReleaseBundleDescriptor {
     version: Version,
     artifacts: Vec<BundleArtifactDescriptor>,
     platform_differences: Option<PlatformDifferences>,
-    legacy: Option<LegacyReleaseBundleDescriptor>,
+    pub(super) legacy: Option<LegacyReleaseBundleDescriptor>,
     wire: Value,
 }
 

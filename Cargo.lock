@@ -4601,6 +4601,7 @@ dependencies = [
  "morphir-core",
  "morphir-package",
  "morphir-package-tough",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

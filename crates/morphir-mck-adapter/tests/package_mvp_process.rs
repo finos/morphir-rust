@@ -140,9 +140,141 @@ fn invalid_timestamp_signature_is_the_narrow_refusal() {
         json!({
             "id":2,"outcome":"refused","category":"metadata-authentication",
             "reason":"timestamp-signature-threshold",
-            "output":"absent","lockUnchanged":true,"registryUnchanged":true
+            "output":"absent","outputFiles":[],"lockUnchanged":true,"registryUnchanged":true
         })
     );
+}
+
+#[test]
+fn uninitialized_state_is_a_typed_refusal_with_no_output() {
+    let request = json!({
+        "id":2,"op":"restore-local-library","profile":PROFILE,"files":files(),
+        "environment":{"trustState":"uninitialized","output":"absent"}
+    });
+    let answer = responses(&exchange(&format!(
+        "{{\"id\":1,\"op\":\"capabilities\"}}\n{request}\n"
+    )));
+    assert_eq!(
+        answer[1],
+        json!({
+            "id":2,"outcome":"refused","category":"trust-state","reason":"uninitialized",
+            "output":"absent","outputFiles":[],"lockUnchanged":true,"registryUnchanged":true
+        })
+    );
+}
+
+#[test]
+fn established_state_and_occupied_output_refusals_preserve_inputs() {
+    for (trust_state, output, category, reason) in [
+        (
+            "missing-database",
+            "absent",
+            "trust-state",
+            "missing-established-database",
+        ),
+        (
+            "corrupt-database",
+            "absent",
+            "trust-state",
+            "corrupt-established-database",
+        ),
+        (
+            "unresolved-operation",
+            "absent",
+            "trust-state",
+            "unresolved-operation",
+        ),
+        (
+            "initialized",
+            "sentinel",
+            "output-conflict",
+            "destination-exists",
+        ),
+    ] {
+        let request = json!({
+            "id":2,"op":"restore-local-library","profile":PROFILE,"files":files(),
+            "environment":{"trustState":trust_state,"output":output}
+        });
+        let answer = responses(&exchange(&format!("{request}\n")));
+        let expected_files = if output == "sentinel" {
+            json!([{"path":"sentinel.txt","sha256":"sha256:f01f017ba20623e8154cdcd63fb16d79795bc0d6f57271934e5a9864b772d425"}])
+        } else {
+            json!([])
+        };
+        assert_eq!(
+            answer[0],
+            json!({
+                "id":2,"outcome":"refused","category":category,"reason":reason,
+                "output":if output == "sentinel" { "preserved-sentinel" } else { "absent" },
+                "outputFiles":expected_files,"lockUnchanged":true,"registryUnchanged":true
+            }),
+            "{trust_state}/{output}"
+        );
+    }
+}
+
+#[test]
+fn bounded_file_variants_produce_independent_refusals() {
+    let mut bad_content = files();
+    let ir = bad_content
+        .iter_mut()
+        .find(|file| file["path"].as_str().unwrap().ends_with("/ir.json"))
+        .unwrap();
+    ir["hex"] = json!(format!("{}0a", ir["hex"].as_str().unwrap()));
+
+    let mut extra_bundle = files();
+    extra_bundle.push(json!({
+        "path":"registry/bundles/5922bc8860f6cd008b9cda341be7f3a776ea332e63261392e94c17e19a647886/undeclared.txt",
+        "hex":"6e6f7420696e206d616e69666573740a"
+    }));
+
+    let mut historical_policy = files();
+    let policy = historical_policy
+        .iter_mut()
+        .find(|file| file["path"] == "trust-policy.json")
+        .unwrap();
+    let original = policy["hex"].as_str().unwrap().to_owned();
+    historical_policy.push(json!({"path":"initialization-policy.json","hex":original}));
+    let policy = historical_policy
+        .iter_mut()
+        .find(|file| file["path"] == "trust-policy.json")
+        .unwrap();
+    let bytes = (0..original.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&original[index..index + 2], 16).unwrap())
+        .collect::<Vec<_>>();
+    let mut policy_json: Value = serde_json::from_slice(&bytes).unwrap();
+    policy_json["continuedUse"] = json!("previous-authorization");
+    policy["hex"] = json!(
+        serde_json::to_vec(&policy_json)
+            .unwrap()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+
+    for (variant, expected_category, expected_reason) in [
+        (bad_content, "package-integrity", "content-digest-mismatch"),
+        (
+            extra_bundle,
+            "package-integrity",
+            "bundle-inventory-mismatch",
+        ),
+        (
+            historical_policy,
+            "unsupported-policy",
+            "historical-authorization-unsupported",
+        ),
+    ] {
+        let answer = responses(&restore(variant));
+        assert_eq!(
+            answer[1],
+            json!({
+                "id":2,"outcome":"refused","category":expected_category,"reason":expected_reason,
+                "output":"absent","outputFiles":[],"lockUnchanged":true,"registryUnchanged":true
+            })
+        );
+    }
 }
 
 #[test]

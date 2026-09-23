@@ -154,3 +154,21 @@ fn protocol_sessions_are_isolated_per_provider() {
         );
     }
 }
+
+#[test]
+fn protocol_refuses_a_second_initialize() {
+    for extension in fresh_protocol_drivers() {
+        initialize(&extension);
+        let again = extension.handle(request(
+            methods::INITIALIZE,
+            json!({"protocolVersions":["0.1"],"host":{"name":"test","version":"1"}}),
+        ));
+        assert_eq!(again.error.unwrap().code, error_codes::INVALID_REQUEST);
+        assert!(
+            extension
+                .handle(request(methods::INFO, json!({})))
+                .error
+                .is_none()
+        );
+    }
+}

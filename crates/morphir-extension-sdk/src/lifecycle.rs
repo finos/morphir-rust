@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use crate::protocol::{ExtensionRequest, ExtensionResponse, RpcError, error_codes, methods};
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 enum Lifecycle {
     #[default]
     BeforeInitialize,
@@ -76,9 +76,15 @@ impl ProtocolSession {
                 method,
                 methods::INITIALIZE | methods::DESCRIBE | methods::PING | methods::EXIT
             ),
-            Lifecycle::Initialized => true,
+            Lifecycle::Initialized => method != methods::INITIALIZE,
             Lifecycle::Shutdown => method == methods::EXIT,
         };
+        if !allowed && *lifecycle == Lifecycle::Initialized {
+            return ExtensionResponse::error(
+                request.id,
+                RpcError::invalid_request("Extension is already initialized"),
+            );
+        }
         if !allowed {
             return ExtensionResponse::error(
                 request.id,

@@ -1,7 +1,7 @@
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    ExtensionHistory, ExtensionId, ExtensionInstaller, InstalledCatalog, InstalledExtension,
-    LocalIndex, Platform, ReleaseRecord, Selection, Sha256Digest, resolve,
+    Channel, ExtensionHistory, ExtensionId, ExtensionInstaller, InstalledCatalog,
+    InstalledExtension, LocalIndex, Platform, ReleaseRecord, Selection, Sha256Digest, resolve,
 };
 use semver::Version;
 use serde_json::{Value, json};
@@ -183,4 +183,34 @@ fn release_and_statement_requirements_are_both_enforced() {
             met
         );
     }
+}
+
+/// A moving channel resolves the newest release the host can run, and
+/// reports the host requirement only when no release fits.
+#[test]
+fn a_channel_skips_releases_that_need_a_newer_host() {
+    let released = |version: &str, comparators: Option<Value>| {
+        let mut value = a_release_with_requirements("statement", comparators);
+        value["version"] = json!(version);
+        value["channels"] = json!(["stable"]);
+        value["artifacts"][0]["statement"]["extension"]["version"] = json!(version);
+        value.to_string()
+    };
+    let host: Version = "0.4.0".parse().unwrap();
+    let platform = Platform::current();
+    let stable = Selection::Channel(Channel::Stable);
+
+    let both = [
+        released("1.0.0", None),
+        released("1.1.0", Some(json!([">=9.0.0"]))),
+    ]
+    .join("\n");
+    let history = ExtensionHistory::parse_jsonl(both.as_bytes()).unwrap();
+    let resolved = resolve(&history, &stable, &platform, &host).unwrap();
+    assert_eq!(resolved.release().version(), &Version::new(1, 0, 0));
+
+    let newest_only = released("1.1.0", Some(json!([">=9.0.0"])));
+    let history = ExtensionHistory::parse_jsonl(newest_only.as_bytes()).unwrap();
+    let error = resolve(&history, &stable, &platform, &host).unwrap_err();
+    assert_host_error(error, &host, &json!([">=9.0.0"]));
 }

@@ -64,6 +64,10 @@ pub fn resolve(
     }
     candidates.sort_by(|left, right| right.version().cmp_precedence(left.version()));
 
+    // A release whose statement needs a newer host is skipped, so a moving
+    // channel still resolves the newest release this host can run. The host
+    // error is reported only when no candidate fits.
+    let mut host_refusal = None;
     for release in candidates {
         let artifacts = release
             .artifacts()
@@ -77,8 +81,13 @@ pub fn resolve(
         match artifacts.as_slice() {
             [] => continue,
             [artifact] => {
-                release.check_host(host)?;
-                artifact.check_host(host)?;
+                if let Err(error) = release
+                    .check_host(host)
+                    .and_then(|()| artifact.check_host(host))
+                {
+                    host_refusal.get_or_insert(error);
+                    continue;
+                }
                 return Ok(ResolvedRelease {
                     release: release.clone(),
                     artifact: (*artifact).clone(),
@@ -94,6 +103,9 @@ pub fn resolve(
         }
     }
 
+    if let Some(error) = host_refusal {
+        return Err(error);
+    }
     Err(DistributionError::NoMatchingArtifact {
         selection: selection.to_string(),
         platform: platform.to_string(),

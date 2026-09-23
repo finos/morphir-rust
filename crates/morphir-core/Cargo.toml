@@ -29,8 +29,6 @@ serde_json = { version = "1.0", features = [
     "arbitrary_precision",
     "unbounded_depth",
 ] }
-# The Ion document-tree profile reads a tree file that is not JSON text.
-ion-rs = "1.0.1"
 schemars = { version = "1.0", features = ["derive", "indexmap2"] }
 indexmap = { version = "2", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serde"] }

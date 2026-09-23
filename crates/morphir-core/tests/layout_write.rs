@@ -574,40 +574,6 @@ fn the_yaml_profile_reads_and_writes_its_own_canonical_bytes() {
 }
 
 #[test]
-fn the_ion_profile_writes_json_text_and_reads_symbol_field_names() {
-    assert_eq!(Profile::Ion.name(), "ion");
-    assert_eq!(Profile::Ion.extension(), ".ion");
-
-    let json = Profile::Json
-        .read(TREE_0006[0].1)
-        .expect("the manifest is JSON");
-    let written = Profile::Ion.write(&json);
-    assert_eq!(written, Profile::Json.write(&json));
-    assert_eq!(Profile::Ion.read(&written).expect("JSON text is Ion"), json);
-
-    let with_symbols = Profile::Ion
-        .read("{formatVersion:4,distribution:\"Library\"}")
-        .expect("symbol field names");
-    assert_eq!(with_symbols["formatVersion"], 4);
-    assert_eq!(with_symbols["distribution"], "Library");
-
-    let decimal = Profile::Ion.read("{n:1.5d2}").expect("an Ion decimal");
-    assert_eq!(decimal["n"].as_f64(), Some(150.0));
-    let dotted = Profile::Ion.read("{n:0.}").expect("a trailing-dot decimal");
-    assert_eq!(dotted["n"].as_f64(), Some(0.0));
-
-    let list = Profile::Ion.read("{n:(1 2)}").expect("an S-expression");
-    assert_eq!(list["n"], serde_json::json!([1, 2]));
-
-    assert!(Profile::Ion.read("{n:hello}").is_err(), "a symbol value");
-    assert!(
-        Profile::Ion.read("{n:2020-01-01T00:00:00-00:00}").is_err(),
-        "a timestamp"
-    );
-    assert!(Profile::Ion.read("{a:1,a:2}").is_err(), "a duplicate field");
-}
-
-#[test]
 fn the_two_profiles_read_one_tree_file_to_the_same_value() {
     let from_yaml = Profile::Yaml
         .read(TREE_0003[1].1)

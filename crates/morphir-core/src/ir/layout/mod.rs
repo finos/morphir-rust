@@ -24,12 +24,11 @@ pub use write::{
 
 use crate::ir::Diagnostic;
 
-/// The storage profiles a document tree can be laid out under.
+/// The two storage profiles a document tree can be laid out under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
     Json,
     Yaml,
-    Ion,
 }
 
 impl Profile {
@@ -38,7 +37,6 @@ impl Profile {
         match self {
             Profile::Json => "json",
             Profile::Yaml => "yaml",
-            Profile::Ion => "ion",
         }
     }
 
@@ -47,7 +45,6 @@ impl Profile {
         match self {
             Profile::Json => ".json",
             Profile::Yaml => ".yaml",
-            Profile::Ion => ".ion",
         }
     }
 
@@ -56,7 +53,6 @@ impl Profile {
         match self {
             Profile::Json => crate::ir::json::read(text),
             Profile::Yaml => crate::ir::yaml::read(text),
-            Profile::Ion => crate::ir::ion::read(text),
         }
     }
 
@@ -67,7 +63,6 @@ impl Profile {
         match self {
             Profile::Json => crate::ir::json::write_canonical(value),
             Profile::Yaml => crate::ir::yaml::write_canonical(value),
-            Profile::Ion => crate::ir::ion::write_canonical(value),
         }
     }
 }

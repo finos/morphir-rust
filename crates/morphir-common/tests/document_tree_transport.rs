@@ -91,8 +91,6 @@ fn options(format: FormatId) -> CodecOptions {
 fn profile_of(format: &FormatId) -> Profile {
     if *format == FormatId::json() {
         Profile::Json
-    } else if *format == FormatId::ion() {
-        Profile::Ion
     } else {
         Profile::Yaml
     }
@@ -118,7 +116,6 @@ fn manifest_value(root: &VfsPath, profile: Profile) -> serde_json::Value {
     match profile {
         Profile::Json => serde_json::from_str(&text).unwrap(),
         Profile::Yaml => morphir_core::ir::yaml::read(&text).unwrap(),
-        Profile::Ion => morphir_core::ir::ion::read(&text).unwrap(),
     }
 }
 
@@ -198,34 +195,6 @@ fn a_yaml_tree_round_trips_on_a_memory_vfs() {
 fn a_yaml_tree_round_trips_on_a_physical_vfs() {
     let temp = tempfile::tempdir().unwrap();
     assert_round_trip(physical_root(temp.path()), FormatId::yaml());
-}
-
-#[test]
-fn an_ion_tree_round_trips_on_a_memory_vfs() {
-    assert_round_trip(memory_root(), FormatId::ion());
-}
-
-#[test]
-fn an_ion_tree_round_trips_on_a_physical_vfs() {
-    let temp = tempfile::tempdir().unwrap();
-    assert_round_trip(physical_root(temp.path()), FormatId::ion());
-}
-
-#[test]
-fn an_ion_tree_file_is_the_json_profile_text() {
-    let root = memory_root();
-    write_document_tree_with_options(&root, &granular_fixture(), &options(FormatId::ion()))
-        .unwrap();
-
-    let text = at(&root, "manifest", Profile::Ion)
-        .read_to_string()
-        .unwrap();
-    let value = Profile::Ion.read(&text).unwrap();
-
-    assert_eq!(text, Profile::Json.write(&value));
-    assert!(text.starts_with('{'), "{text}");
-    assert!(!text.contains("morphir::"), "{text}");
-    assert!(!text.contains("ionVersion"), "{text}");
 }
 
 #[test]

@@ -27,9 +27,6 @@ pub mod v4;
 // Document-tree layout: the storage profile, path grammar and file stems.
 pub mod layout;
 
-// The Ion document-tree profile. A tree file is one JSON value.
-pub mod ion;
-
 // The JSON storage profile's canonical writer
 pub mod json;
 

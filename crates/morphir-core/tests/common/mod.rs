@@ -12,7 +12,7 @@
 #![allow(dead_code)]
 
 use morphir_core::ir::layout::{Profile, Tree, TreePolicy};
-use morphir_core::ir::{DiagnosticError, IRFile, ion, json, yaml};
+use morphir_core::ir::{IRFile, json, yaml};
 
 // =============================================================================
 // Kit case document-tree-0003: the node filename is the escaped stem
@@ -498,12 +498,6 @@ pub fn read_document(profile: Profile, text: &str) -> IRFile {
     let read = match profile {
         Profile::Json => json::read_ir_file(text),
         Profile::Yaml => yaml::read_ir_file(text),
-        // A whole IR document in this profile is JSON text. Symbol field names
-        // are read first, then written back as that JSON text.
-        Profile::Ion => match ion::read(text) {
-            Ok(value) => json::read_ir_file(&ion::write_canonical(&value)),
-            Err(diagnostic) => Err(DiagnosticError(diagnostic)),
-        },
     };
     read.unwrap_or_else(|error| panic!("the kit's canonical document reads: {:?}", error.0))
         .0

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Guests built on the SDK answer `morphir.extension.describe` with a capability statement
+  (`statementVersion` `0.1.0-draft.1`) before `initialize` and without side effects. Readers
+  refuse an unknown critical member and ignore other unknown members, and a pure check tells
+  whether a session agrees with a statement (finos/morphir#921).
+- The daemon describes a process extension in one call. When the guest does not implement
+  `describe`, it falls back to `initialize`, `initialized`, `capabilities`, `shutdown` and `exit`,
+  and reports which source produced the statement.
 - The package MVP adapter exposes `update-local-library` through the production
   scoped-update API. Its bounded protocol checks all 27 frozen success and
   refusal scenarios, including target selection, old pins, authenticated

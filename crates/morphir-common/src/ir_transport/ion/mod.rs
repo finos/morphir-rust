@@ -11,6 +11,9 @@ use morphir_core::ir::classic;
 use morphir_core::traversal::IrCursor;
 
 use super::semantic;
+
+mod type_expr;
+mod value_expr;
 use super::{
     CodecOptions, EventSink, EventSource, FormatId, IrCodec, IrVersion, Stage, TransportDiagnostic,
 };
@@ -174,7 +177,10 @@ fn write_v3_library(
     for module in &definition.modules {
         sequence = sequence.push(module_element(module)?);
         for type_definition in &module.definition.value.types {
-            sequence = sequence.push(alias_element(&module.path, type_definition)?);
+            sequence = sequence.push(type_element(&module.path, type_definition)?);
+        }
+        for value_definition in &module.definition.value.values {
+            sequence = sequence.push(value_element(&module.path, value_definition)?);
         }
     }
     let text: String = sequence
@@ -209,13 +215,6 @@ fn write_v3_library(
 
 fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic> {
     let definition = &module.definition.value;
-    if !definition.values.is_empty() {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::unsupported_node",
-            Stage::Encoding,
-            "the Ion writer does not encode module values yet",
-        ));
-    }
     let access = match module.definition.access {
         classic::Access::Public => "public",
         classic::Access::Private => "private",
@@ -246,7 +245,7 @@ fn alias_element(
     let mut builder = ion_rs::Struct::builder()
         .with_field("module", canonical_package(module))
         .with_field("name", canonical_name(name))
-        .with_field("typeExp", compact_type_text(type_exp)?);
+        .with_field("typeExp", type_expr::write_type(type_exp));
     if !parameters.is_empty() {
         let parameters = parameters
             .iter()
@@ -263,25 +262,87 @@ fn alias_element(
     Ok(Element::from(builder.build()).with_annotations([access, "def", "alias", "type"]))
 }
 
-fn compact_type_text(
-    type_exp: &classic::Type<classic::Attrs>,
-) -> Result<String, TransportDiagnostic> {
-    match type_exp {
-        classic::Type::Reference(classic::Attrs::None, name, arguments) if arguments.is_empty() => {
-            Ok(format!(
-                "{}:{}#{}",
-                canonical_package(&name.package_path),
-                canonical_package(&name.module_path),
-                canonical_name(&name.local_name)
-            ))
+fn type_element(
+    module: &classic::Path,
+    definition: &ClassicAlias,
+) -> Result<Element, TransportDiagnostic> {
+    match &definition.1.value.value {
+        classic::TypeDefinition::Alias(_, _) => alias_element(module, definition),
+        classic::TypeDefinition::Custom(parameters, constructors) => {
+            custom_element(module, definition, parameters, constructors)
         }
-        classic::Type::Variable(classic::Attrs::None, name) => Ok(canonical_name(name)),
-        _ => Err(IonCodec::error(
-            "morphir::ir::ion::unsupported_node",
-            Stage::Encoding,
-            "the Ion writer encodes a reference or a variable as typeExp",
-        )),
     }
+}
+
+fn custom_element(
+    module: &classic::Path,
+    definition: &ClassicAlias,
+    parameters: &[classic::Name],
+    constructors: &classic::AccessControlled<Vec<classic::Constructor<classic::Attrs>>>,
+) -> Result<Element, TransportDiagnostic> {
+    let (name, body) = definition;
+    let access = access_symbol(&body.access);
+    let mut builder = ion_rs::Struct::builder()
+        .with_field("module", canonical_package(module))
+        .with_field("name", canonical_name(name))
+        .with_field(
+            "access",
+            Element::symbol(access_symbol(&constructors.access)),
+        )
+        .with_field(
+            "constructors",
+            type_expr::write_constructors(&constructors.value),
+        );
+    if !parameters.is_empty() {
+        builder = builder.with_field("typeParams", name_list(parameters));
+    }
+    if !body.value.doc.is_empty() {
+        builder = builder.with_field("doc", body.value.doc.as_str());
+    }
+    Ok(Element::from(builder.build()).with_annotations([access, "def", "custom", "type"]))
+}
+
+fn value_element(
+    module: &classic::Path,
+    definition: &value_expr::ClassicValueEntry,
+) -> Result<Element, TransportDiagnostic> {
+    let (name, body) = definition;
+    let access = access_symbol(&body.access);
+    let mut builder = ion_rs::Struct::builder()
+        .with_field("module", canonical_package(module))
+        .with_field("name", canonical_name(name))
+        .with_field(
+            "outputType",
+            type_expr::write_type(&body.value.value.output_type),
+        )
+        .with_field("body", value_expr::write_value(&body.value.value.body)?);
+    if !body.value.value.input_types.is_empty() {
+        builder = builder.with_field(
+            "inputTypes",
+            value_expr::write_inputs(&body.value.value.input_types),
+        );
+    }
+    if !body.value.doc.is_empty() {
+        builder = builder.with_field("doc", body.value.doc.as_str());
+    }
+    Ok(Element::from(builder.build()).with_annotations([access, "def", "value"]))
+}
+
+fn access_symbol(access: &classic::Access) -> &'static str {
+    match access {
+        classic::Access::Public => "public",
+        classic::Access::Private => "private",
+    }
+}
+
+fn name_list(names: &[classic::Name]) -> ion_rs::List {
+    names
+        .iter()
+        .map(canonical_name)
+        .fold(ion_rs::Sequence::builder(), |builder, name| {
+            builder.push(name)
+        })
+        .build_list()
 }
 
 fn canonical_name(name: &classic::Name) -> String {
@@ -371,12 +432,18 @@ fn read_library_modules(
             ["public", "def", "alias", "type"] | ["private", "def", "alias", "type"] => {
                 attach_alias(element, package, &mut modules)?;
             }
+            ["public", "def", "custom", "type"] | ["private", "def", "custom", "type"] => {
+                attach_custom(element, package, &mut modules)?;
+            }
+            ["public", "def", "value"] | ["private", "def", "value"] => {
+                attach_value(element, package, &mut modules)?;
+            }
             names => {
                 return Err(IonCodec::error(
                     "morphir::ir::ion::unexpected_value",
                     Stage::Detection,
                     format!(
-                        "expected a module or an alias type, found {}",
+                        "expected a module, type, or value, found {}",
                         display_annotations(names)
                     ),
                 ));
@@ -454,14 +521,13 @@ fn read_def_module(
     let fields = struct_fields(element, "module")?;
     reject_critical_unknowns(&fields, MODULE_MEMBERS)?;
     require_distribution_package(&fields, package)?;
-    reject_populated_member_list(&fields, "values")?;
     let path = classic_path(required_string(&fields, "name")?)?;
     Ok(classic::ModuleEntry {
         definition: classic::AccessControlled {
             access,
             value: classic::ModuleDefinition {
-                types: read_inline_aliases(fields.get("types").copied(), package, &path)?,
-                values: Vec::new(),
+                types: read_inline_types(fields.get("types").copied(), package, &path)?,
+                values: read_inline_values(fields.get("values").copied(), package, &path)?,
                 doc: optional_string(&fields, "doc")?.map(str::to_owned),
             },
         },
@@ -469,7 +535,7 @@ fn read_def_module(
     })
 }
 
-fn read_inline_aliases(
+fn read_inline_types(
     types: Option<&Element>,
     package: &classic::Path,
     owner: &classic::Path,
@@ -486,7 +552,7 @@ fn read_inline_aliases(
     };
     let mut decoded = Vec::new();
     for element in list.iter() {
-        let (_owner, definition) = read_alias(element, package, Some(owner))?;
+        let (_owner, definition) = read_type_member(element, package, Some(owner))?;
         if decoded.iter().any(|(name, _)| name == &definition.0) {
             return Err(duplicate_name(
                 "type",
@@ -496,6 +562,29 @@ fn read_inline_aliases(
         decoded.push(definition);
     }
     Ok(decoded)
+}
+
+fn read_type_member(
+    element: &Element,
+    package: &classic::Path,
+    owner: Option<&classic::Path>,
+) -> Result<(classic::Path, ClassicAlias), TransportDiagnostic> {
+    match annotation_names(element)?.as_slice() {
+        ["public", "def", "alias", "type"] | ["private", "def", "alias", "type"] => {
+            read_alias(element, package, owner)
+        }
+        ["public", "def", "custom", "type"] | ["private", "def", "custom", "type"] => {
+            read_custom(element, package, owner)
+        }
+        names => Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_value",
+            Stage::Detection,
+            format!(
+                "expected an alias or a custom type, found {}",
+                display_annotations(names)
+            ),
+        )),
+    }
 }
 
 fn attach_alias(
@@ -531,6 +620,68 @@ fn attach_alias(
     }
     module.definition.value.types.push(definition);
     Ok(())
+}
+
+fn attach_custom(
+    element: &Element,
+    package: &classic::Path,
+    modules: &mut [ClassicModule],
+) -> Result<(), TransportDiagnostic> {
+    let (module_path, definition) = read_custom(element, package, None)?;
+    let module = find_module(modules, &module_path)?;
+    if module
+        .definition
+        .value
+        .types
+        .iter()
+        .any(|(existing, _)| existing == &definition.0)
+    {
+        return Err(duplicate_name(
+            "type",
+            &classic::Path::new(vec![definition.0.clone()]),
+        ));
+    }
+    module.definition.value.types.push(definition);
+    Ok(())
+}
+
+fn attach_value(
+    element: &Element,
+    package: &classic::Path,
+    modules: &mut [ClassicModule],
+) -> Result<(), TransportDiagnostic> {
+    let (module_path, definition) = read_value_member(element, package, None)?;
+    let module = find_module(modules, &module_path)?;
+    if module
+        .definition
+        .value
+        .values
+        .iter()
+        .any(|(existing, _)| existing == &definition.0)
+    {
+        return Err(duplicate_name(
+            "value",
+            &classic::Path::new(vec![definition.0.clone()]),
+        ));
+    }
+    module.definition.value.values.push(definition);
+    Ok(())
+}
+
+fn find_module<'a>(
+    modules: &'a mut [ClassicModule],
+    module_path: &classic::Path,
+) -> Result<&'a mut ClassicModule, TransportDiagnostic> {
+    modules
+        .iter_mut()
+        .find(|module| module.path == *module_path)
+        .ok_or_else(|| {
+            IonCodec::error(
+                "morphir::ir::ion::missing_member",
+                Stage::Normalization,
+                format!("module '{}' is not defined", canonical_package(module_path)),
+            )
+        })
 }
 
 fn read_alias(
@@ -583,7 +734,7 @@ fn read_alias(
         ));
     }
     let local_name = name.segments[0].clone();
-    let type_exp = compact_type(required_string(&fields, "typeExp")?)?;
+    let type_exp = type_expr::read_type(required_field(&fields, "typeExp")?)?;
     Ok((
         module_path,
         (
@@ -602,36 +753,156 @@ fn read_alias(
     ))
 }
 
-fn compact_type(text: &str) -> Result<classic::Type<classic::Attrs>, TransportDiagnostic> {
-    if text.contains('#') || text.contains(':') {
-        let name = morphir_core::naming::FQName::from_canonical_string(text).map_err(|error| {
-            IonCodec::error(
-                "morphir::ir::ion::invalid_name",
+fn read_custom(
+    element: &Element,
+    package: &classic::Path,
+    owner: Option<&classic::Path>,
+) -> Result<(classic::Path, ClassicAlias), TransportDiagnostic> {
+    let access = match annotation_names(element)?.as_slice() {
+        ["public", "def", "custom", "type"] => classic::Access::Public,
+        ["private", "def", "custom", "type"] => classic::Access::Private,
+        names => {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unexpected_value",
+                Stage::Detection,
+                format!(
+                    "expected public::def::custom::type, found {}",
+                    display_annotations(names)
+                ),
+            ));
+        }
+    };
+    let fields = struct_fields(element, "custom::type")?;
+    require_distribution_package(&fields, package)?;
+    let module_path = owned_module(&fields, owner)?;
+    let local_name = type_expr::local_name(required_string(&fields, "name")?)?;
+    let constructor_access = match required_text(&fields, "access")? {
+        "public" => classic::Access::Public,
+        "private" => classic::Access::Private,
+        other => {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::invalid_member",
                 Stage::Normalization,
-                error,
+                format!("constructor access is public or private, found {other}"),
+            ));
+        }
+    };
+    let constructors = match fields.get("constructors") {
+        Some(element) => type_expr::read_constructors(element)?,
+        None => Vec::new(),
+    };
+    Ok((
+        module_path,
+        (
+            local_name,
+            classic::AccessControlled {
+                access,
+                value: classic::Documented {
+                    doc: optional_string(&fields, "doc")?.unwrap_or("").to_owned(),
+                    value: classic::TypeDefinition::Custom(
+                        canonical_name_list(&fields, "typeParams")?,
+                        classic::AccessControlled {
+                            access: constructor_access,
+                            value: constructors,
+                        },
+                    ),
+                },
+            },
+        ),
+    ))
+}
+
+fn read_value_member(
+    element: &Element,
+    package: &classic::Path,
+    owner: Option<&classic::Path>,
+) -> Result<(classic::Path, value_expr::ClassicValueEntry), TransportDiagnostic> {
+    let access = match annotation_names(element)?.as_slice() {
+        ["public", "def", "value"] => classic::Access::Public,
+        ["private", "def", "value"] => classic::Access::Private,
+        names => {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unexpected_value",
+                Stage::Detection,
+                format!(
+                    "expected public::def::value, found {}",
+                    display_annotations(names)
+                ),
+            ));
+        }
+    };
+    let fields = struct_fields(element, "value")?;
+    require_distribution_package(&fields, package)?;
+    let module_path = owned_module(&fields, owner)?;
+    let local_name = type_expr::local_name(required_string(&fields, "name")?)?;
+    Ok((
+        module_path,
+        (
+            local_name,
+            classic::AccessControlled {
+                access,
+                value: classic::Documented {
+                    doc: optional_string(&fields, "doc")?.unwrap_or("").to_owned(),
+                    value: value_expr::read_definition(&fields)?,
+                },
+            },
+        ),
+    ))
+}
+
+fn read_inline_values(
+    values: Option<&Element>,
+    package: &classic::Path,
+    owner: &classic::Path,
+) -> Result<Vec<value_expr::ClassicValueEntry>, TransportDiagnostic> {
+    let Some(values) = values else {
+        return Ok(Vec::new());
+    };
+    let Some(list) = values.as_list() else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_member",
+            Stage::Normalization,
+            "values is a list",
+        ));
+    };
+    let mut decoded = Vec::new();
+    for element in list.iter() {
+        let (_owner, definition) = read_value_member(element, package, Some(owner))?;
+        if decoded.iter().any(|(name, _)| name == &definition.0) {
+            return Err(duplicate_name(
+                "value",
+                &classic::Path::new(vec![definition.0.clone()]),
+            ));
+        }
+        decoded.push(definition);
+    }
+    Ok(decoded)
+}
+
+fn owned_module(
+    fields: &BTreeMap<&str, &Element>,
+    owner: Option<&classic::Path>,
+) -> Result<classic::Path, TransportDiagnostic> {
+    let module_path = match optional_string(fields, "module")? {
+        Some(name) => classic_path(name)?,
+        None => owner.cloned().ok_or_else(|| {
+            IonCodec::error(
+                "morphir::ir::ion::missing_member",
+                Stage::Normalization,
+                "a top-level definition names its module",
             )
-        })?;
-        return Ok(classic::Type::Reference(
-            classic::Attrs::None,
-            classic::FQName::new(
-                classic_path_from(&name.package_path),
-                classic_path_from(&name.module_path),
-                classic_name_from(&name.local_name),
-            ),
-            Vec::new(),
+        })?,
+    };
+    if let Some(owner) = owner
+        && module_path != *owner
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_member",
+            Stage::Normalization,
+            "a nested definition belongs to its module",
         ));
     }
-    let name = morphir_core::naming::Name::from_canonical_string(text).map_err(|error| {
-        IonCodec::error(
-            "morphir::ir::ion::invalid_name",
-            Stage::Normalization,
-            error,
-        )
-    })?;
-    Ok(classic::Type::Variable(
-        classic::Attrs::None,
-        classic_name_from(&name),
-    ))
+    Ok(module_path)
 }
 
 fn canonical_name_list(
@@ -700,30 +971,6 @@ fn duplicate_name(kind: &str, path: &classic::Path) -> TransportDiagnostic {
         Stage::Normalization,
         format!("{kind} '{}' is already defined", canonical_package(path)),
     )
-}
-
-fn reject_populated_member_list(
-    fields: &BTreeMap<&str, &Element>,
-    name: &str,
-) -> Result<(), TransportDiagnostic> {
-    let Some(element) = fields.get(name) else {
-        return Ok(());
-    };
-    let Some(list) = element.as_list() else {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::invalid_member",
-            Stage::Normalization,
-            format!("{name} is a list"),
-        ));
-    };
-    if list.is_empty() {
-        return Ok(());
-    }
-    Err(IonCodec::error(
-        "morphir::ir::ion::unsupported_node",
-        Stage::Normalization,
-        format!("a module {name} list is not decoded yet"),
-    ))
 }
 
 fn accept_ion_version(text: Option<&str>) -> Result<(), TransportDiagnostic> {

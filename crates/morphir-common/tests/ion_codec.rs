@@ -360,6 +360,20 @@ fn an_empty_v3_library_round_trips_through_ion() {
 }
 
 #[test]
+fn greeting_example_round_trips_through_ion() {
+    let json = include_str!("../../morphir-core/tests/fixtures/ir/classic/greeting-example.json");
+    let json_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json());
+    let ion_options = CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion());
+    let original = decode(&JsonCodec::new(), json, &json_options).unwrap();
+
+    let ion = encode(&IonCodec::new(), original.clone(), &ion_options).unwrap();
+    let from_ion = decode(&IonCodec::new(), &ion, &ion_options)
+        .unwrap_or_else(|error| panic!("failed to decode generated Ion: {error:?}\n{ion}"));
+
+    assert_eq!(from_ion, original);
+}
+
+#[test]
 fn the_builtin_registry_resolves_ion() {
     let registry = CodecRegistry::with_builtins();
 

@@ -3,7 +3,7 @@
 //! `ionVersion` is the spelling contract. A missing value means the latest
 //! version this reader implements. `formatVersion` selects the IR.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Write};
 
 use ion_rs::{Element, IonType, Symbol};
@@ -23,8 +23,13 @@ const HEADER_MEMBERS: &[&str] = &[
     "formatVersion",
     "ionVersion",
     "kind",
+    "modules",
     "packageName",
 ];
+
+const MODULE_MEMBERS: &[&str] = &["critical", "doc", "name", "package", "types", "values"];
+
+type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
 
 /// Built-in Ion IR codec.
 pub struct IonCodec {
@@ -86,32 +91,17 @@ impl IrCodec for IonCodec {
         })?;
         expect_marker(header, "morphir")?;
         let header_fields = struct_fields(header, "morphir")?;
-        match values.get(1) {
-            None => {}
-            Some(footer) if values.len() == 2 => {
-                expect_marker(footer, "morphir_footer")?;
-                let footer_fields = struct_fields(footer, "morphir_footer")?;
-                if !footer_fields.is_empty() {
-                    return Err(IonCodec::error(
-                        "morphir::ir::ion::unexpected_member",
-                        Stage::Normalization,
-                        "morphir_footer has no members",
-                    ));
-                }
-            }
-            Some(_) => {
-                return Err(IonCodec::error(
-                    "morphir::ir::ion::unexpected_value",
-                    Stage::Detection,
-                    format!(
-                        "a record is one morphir value and an empty datagram ends with morphir_footer, found {} top-level values",
-                        values.len()
-                    ),
-                ));
-            }
-        }
-        let package = decode_v3_library_header(&header_fields, options.version())?;
-        semantic::emit_classic_v3(package, sink)
+        let library = read_library_header(&header_fields, options.version())?;
+        let modules = read_library_modules(&values, &header_fields, &library.package)?;
+        let distribution = classic::Distribution {
+            format_version: library.format_version,
+            distribution: classic::DistributionBody::Library(
+                library.package,
+                Vec::new(),
+                classic::PackageDefinition { modules },
+            ),
+        };
+        semantic::emit_classic_v3(distribution, sink)
     }
 
     fn encode(
@@ -201,11 +191,16 @@ fn canonical_package(path: &classic::Path) -> String {
         .join("/")
 }
 
-fn decode_v3_library_header(
+struct LibraryHeader {
+    format_version: u32,
+    package: classic::Path,
+}
+
+fn read_library_header(
     fields: &BTreeMap<&str, &Element>,
     selected: IrVersion,
-) -> Result<classic::Distribution, TransportDiagnostic> {
-    reject_critical_unknowns(fields)?;
+) -> Result<LibraryHeader, TransportDiagnostic> {
+    reject_critical_unknowns(fields, HEADER_MEMBERS)?;
     accept_ion_version(optional_string(fields, "ionVersion")?)?;
     let format_version = required_string(fields, "formatVersion")?;
     let major = accept_format_version(format_version, selected)?;
@@ -225,17 +220,142 @@ fn decode_v3_library_header(
         ));
     }
     let package_name = required_string(fields, "packageName")?;
-    let package = classic_path(package_name)?;
-    Ok(classic::Distribution {
+    Ok(LibraryHeader {
         format_version: major,
-        distribution: classic::DistributionBody::Library(
-            package,
-            Vec::new(),
-            classic::PackageDefinition::<classic::Attrs, classic::Type<classic::Attrs>> {
-                modules: Vec::new(),
-            },
-        ),
+        package: classic_path(package_name)?,
     })
+}
+
+fn read_library_modules(
+    values: &ion_rs::Sequence,
+    header_fields: &BTreeMap<&str, &Element>,
+    package: &classic::Path,
+) -> Result<Vec<ClassicModule>, TransportDiagnostic> {
+    // A record keeps modules inside the header. This slice reads the datagram
+    // spelling, where each module is its own top-level value.
+    reject_inline_modules(header_fields)?;
+    if values.len() == 1 {
+        return Ok(Vec::new());
+    }
+    let last = values.len() - 1;
+    let footer = values.get(last).expect("length is at least 2");
+    expect_marker(footer, "morphir_footer")?;
+    let footer_fields = struct_fields(footer, "morphir_footer")?;
+    if !footer_fields.is_empty() {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_member",
+            Stage::Normalization,
+            "morphir_footer has no members",
+        ));
+    }
+    let mut modules = Vec::new();
+    let mut seen = HashSet::new();
+    for index in 1..last {
+        let module = read_def_module(values.get(index).expect("index is in range"), package)?;
+        if !seen.insert(module.path.clone()) {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::duplicate_name",
+                Stage::Normalization,
+                format!(
+                    "module '{}' is already defined",
+                    canonical_package(&module.path)
+                ),
+            ));
+        }
+        modules.push(module);
+    }
+    Ok(modules)
+}
+
+fn reject_inline_modules(fields: &BTreeMap<&str, &Element>) -> Result<(), TransportDiagnostic> {
+    let Some(modules) = fields.get("modules") else {
+        return Ok(());
+    };
+    let Some(list) = modules.as_list() else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_member",
+            Stage::Normalization,
+            "modules is a list",
+        ));
+    };
+    if list.is_empty() {
+        return Ok(());
+    }
+    Err(IonCodec::error(
+        "morphir::ir::ion::unsupported_node",
+        Stage::Normalization,
+        "a datagram writes each module as its own value",
+    ))
+}
+
+fn read_def_module(
+    element: &Element,
+    package: &classic::Path,
+) -> Result<ClassicModule, TransportDiagnostic> {
+    let access = match annotation_names(element)?.as_slice() {
+        ["public", "def", "module"] => classic::Access::Public,
+        ["private", "def", "module"] => classic::Access::Private,
+        names => {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unexpected_value",
+                Stage::Detection,
+                format!(
+                    "expected public::def::module, found {}",
+                    display_annotations(names)
+                ),
+            ));
+        }
+    };
+    let fields = struct_fields(element, "module")?;
+    reject_critical_unknowns(&fields, MODULE_MEMBERS)?;
+    if let Some(declared) = optional_string(&fields, "package")? {
+        let declared_package = classic_path(declared)?;
+        if declared_package != *package {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unexpected_member",
+                Stage::Normalization,
+                "a v3 module definition belongs to the distribution package",
+            ));
+        }
+    }
+    reject_populated_member_list(&fields, "types")?;
+    reject_populated_member_list(&fields, "values")?;
+    let name = required_string(&fields, "name")?;
+    Ok(classic::ModuleEntry {
+        path: classic_path(name)?,
+        definition: classic::AccessControlled {
+            access,
+            value: classic::ModuleDefinition {
+                types: Vec::new(),
+                values: Vec::new(),
+                doc: optional_string(&fields, "doc")?.map(str::to_owned),
+            },
+        },
+    })
+}
+
+fn reject_populated_member_list(
+    fields: &BTreeMap<&str, &Element>,
+    name: &str,
+) -> Result<(), TransportDiagnostic> {
+    let Some(element) = fields.get(name) else {
+        return Ok(());
+    };
+    let Some(list) = element.as_list() else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::invalid_member",
+            Stage::Normalization,
+            format!("{name} is a list"),
+        ));
+    };
+    if list.is_empty() {
+        return Ok(());
+    }
+    Err(IonCodec::error(
+        "morphir::ir::ion::unsupported_node",
+        Stage::Normalization,
+        format!("a module {name} list is not decoded yet"),
+    ))
 }
 
 fn accept_ion_version(text: Option<&str>) -> Result<(), TransportDiagnostic> {
@@ -293,12 +413,15 @@ fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, Transpo
     Ok(u32::try_from(major).expect("IR major fits in u32"))
 }
 
-fn reject_critical_unknowns(fields: &BTreeMap<&str, &Element>) -> Result<(), TransportDiagnostic> {
+fn reject_critical_unknowns(
+    fields: &BTreeMap<&str, &Element>,
+    known_members: &[&str],
+) -> Result<(), TransportDiagnostic> {
     let Some(critical) = fields.get("critical") else {
         return Ok(());
     };
     let names = text_list(critical, "critical")?;
-    let known: BTreeSet<&str> = HEADER_MEMBERS.iter().copied().collect();
+    let known: BTreeSet<&str> = known_members.iter().copied().collect();
     for name in names {
         if !known.contains(name.as_str()) {
             return Err(IonCodec::error(
@@ -312,40 +435,38 @@ fn reject_critical_unknowns(fields: &BTreeMap<&str, &Element>) -> Result<(), Tra
 }
 
 fn classic_path(canonical: &str) -> Result<classic::Path, TransportDiagnostic> {
-    if canonical.is_empty() || canonical.starts_with('/') || canonical.ends_with('/') {
+    let path = morphir_core::naming::Path::from_canonical_string(canonical).map_err(|error| {
+        IonCodec::error(
+            "morphir::ir::ion::invalid_name",
+            Stage::Normalization,
+            error,
+        )
+    })?;
+    if path.is_empty() {
         return Err(IonCodec::error(
             "morphir::ir::ion::invalid_name",
             Stage::Normalization,
-            format!("packageName '{canonical}' is not a canonical package name"),
+            "a canonical name has at least one segment",
         ));
     }
-    let mut segments = Vec::new();
-    for segment in canonical.split('/') {
-        if segment.is_empty() {
-            return Err(IonCodec::error(
-                "morphir::ir::ion::invalid_name",
-                Stage::Normalization,
-                format!("packageName '{canonical}' is not a canonical package name"),
-            ));
-        }
-        let name = classic::Name::from_str(segment);
-        if name.words.is_empty() {
-            return Err(IonCodec::error(
-                "morphir::ir::ion::invalid_name",
-                Stage::Normalization,
-                format!("packageName '{canonical}' is not a canonical package name"),
-            ));
-        }
-        segments.push(name);
-    }
+    let segments = path
+        .segments
+        .into_iter()
+        .map(|name| classic::Name::new(name.words()))
+        .collect();
     Ok(classic::Path::new(segments))
 }
 
-fn expect_marker(element: &Element, expected: &str) -> Result<(), TransportDiagnostic> {
+fn annotation_names(element: &Element) -> Result<Vec<&str>, TransportDiagnostic> {
     let mut names = Vec::new();
     for symbol in element.annotations().iter() {
         names.push(symbol_text(symbol)?);
     }
+    Ok(names)
+}
+
+fn expect_marker(element: &Element, expected: &str) -> Result<(), TransportDiagnostic> {
+    let names = annotation_names(element)?;
     if names != [expected] {
         return Err(IonCodec::error(
             "morphir::ir::ion::unexpected_value",

@@ -31,6 +31,39 @@ morphir::{
 }
 "#;
 
+const V3_MODULE_JSON: &str = r#"{
+  "formatVersion": 3,
+  "distribution": ["Library", [["example"]], [], {
+    "modules": [
+      [
+        [["eligibility"]],
+        {
+          "access": "Public",
+          "value": {
+            "types": [],
+            "values": [],
+            "doc": "Credit eligibility."
+          }
+        }
+      ]
+    ]
+  }]
+}"#;
+
+const V3_MODULE_ION: &str = r#"
+morphir::{
+  ionVersion: "0.1.0-draft.1",
+  formatVersion: "3.0.0",
+  kind: library,
+  packageName: "example",
+}
+public::def::module::{
+  name: "eligibility",
+  doc: "Credit eligibility.",
+}
+morphir_footer::{}
+"#;
+
 #[derive(Default)]
 struct CollectingSink(Vec<SemanticEvent>);
 
@@ -89,6 +122,24 @@ fn an_empty_v3_library_datagram_matches_the_json_ir() {
     let json = decode(
         &JsonCodec::new(),
         V3_JSON,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
+    )
+    .unwrap();
+
+    assert_eq!(ion, json);
+}
+
+#[test]
+fn a_public_v3_module_datagram_matches_the_json_ir() {
+    let ion = decode(
+        &IonCodec::new(),
+        V3_MODULE_ION,
+        &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::ion()),
+    )
+    .unwrap();
+    let json = decode(
+        &JsonCodec::new(),
+        V3_MODULE_JSON,
         &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
     )
     .unwrap();

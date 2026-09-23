@@ -1,8 +1,10 @@
 //! Native child-process transport for the Morphir Extension Protocol.
 
+mod describe;
 mod launch;
 mod transport;
 
+pub use describe::{DescriptionSource, ProcessDescription};
 pub use launch::ProcessLaunch;
 use launch::ProcessProgram;
 pub use transport::SpawnedProcessTransport;

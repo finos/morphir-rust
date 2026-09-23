@@ -68,6 +68,10 @@ pub struct TransportError {
 }
 
 impl TransportError {
+    pub(crate) fn into_error(self) -> DaemonError {
+        self.error
+    }
+
     /// Record a transport failure and what is known about the peer afterwards.
     pub fn new(error: DaemonError, state: TransportState) -> Self {
         Self { error, state }

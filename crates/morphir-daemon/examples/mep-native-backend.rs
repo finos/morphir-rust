@@ -7,6 +7,9 @@ use morphir_extension_sdk::{
 };
 use std::io::{self, BufRead, Write};
 
+#[path = "support/describe.rs"]
+mod describe;
+
 const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Default)]
@@ -89,6 +92,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     let mut awaiting_exit = false;
+    let mut describe_fixture = describe::DescribeFixture::from_environment();
 
     loop {
         let Some(body) = read_frame(&mut reader)? else {
@@ -101,6 +105,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
             break;
         };
+        let message: serde_json::Value = serde_json::from_slice(&body)?;
+        if let Some(fixture) = &mut describe_fixture {
+            fixture.accept(&message)?;
+        }
         if awaiting_exit {
             let notification: serde_json::Value = serde_json::from_slice(&body)?;
             if notification
@@ -121,6 +129,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
             break;
         }
+        if message["jsonrpc"] == "2.0" && message.get("id").is_none() {
+            if message["method"] == methods::EXIT {
+                break;
+            }
+            if message["method"] == methods::INITIALIZED {
+                continue;
+            }
+        }
         let request: ExtensionRequest = serde_json::from_slice(&body)?;
         let shutdown = request.method == methods::SHUTDOWN;
         let mut response = morphir_extension_sdk::__dispatch_request::<NativeBackend>(
@@ -139,6 +155,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 .and_then(serde_json::Value::as_object_mut)
         {
             result.insert("protocolVersion".into(), "unsupported".into());
+        }
+        if let Some(fixture) = &describe_fixture {
+            fixture.adjust(&request, &mut response);
         }
         write_frame(&mut writer, &response)?;
         if request.method == methods::INITIALIZE

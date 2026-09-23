@@ -105,6 +105,7 @@ pub mod native;
 pub mod prelude;
 pub mod protocol;
 pub mod source;
+pub mod statement;
 pub mod traits;
 pub mod types;
 
@@ -293,6 +294,14 @@ pub fn __dispatch_request<E: Extension + Default>(
     use protocol::methods;
 
     match request.method.as_str() {
+        methods::DESCRIBE => dispatch_response(
+            request.id,
+            dispatch_describe_with_metadata(
+                request,
+                &__extension_info::<E>(declared_types),
+                &E::capabilities(),
+            ),
+        ),
         methods::INITIALIZE => dispatch_response(
             request.id,
             dispatch_initialize::<E>(request, declared_types),
@@ -327,6 +336,14 @@ pub fn __dispatch_request_with<E: Extension>(
     use protocol::methods;
 
     match request.method.as_str() {
+        methods::DESCRIBE => dispatch_response(
+            request.id,
+            dispatch_describe_with_metadata(
+                request,
+                &__extension_info::<E>(declared_types),
+                &E::capabilities(),
+            ),
+        ),
         methods::INITIALIZE => {
             let info = __extension_info::<E>(declared_types);
             let capabilities = E::capabilities();
@@ -374,6 +391,7 @@ pub(crate) fn dispatch_request_with_roles(
     use protocol::methods;
 
     let result = match request.method.as_str() {
+        methods::DESCRIBE => dispatch_describe_with_metadata(request, info, capabilities),
         methods::INITIALIZE => dispatch_initialize_with_metadata(request, info, capabilities),
         methods::PING => Ok(serde_json::json!({ "ok": true })),
         methods::INFO => serde_json::to_value(info).map_err(ExtensionError::from),
@@ -422,6 +440,37 @@ fn dispatch_response(
         },
         Err(error) => protocol::ExtensionResponse::from_extension_error(request_id, &error),
     }
+}
+
+fn dispatch_describe_with_metadata(
+    request: &protocol::ExtensionRequest,
+    info: &ExtensionInfo,
+    capabilities: &ExtensionCapabilities,
+) -> std::result::Result<serde_json::Value, ExtensionError> {
+    let params: protocol::DescribeParams = serde_json::from_value(request.params.clone())
+        .map_err(|error| ExtensionError::InvalidParams(error.to_string()))?;
+    if !params
+        .protocol_versions
+        .iter()
+        .any(|version| protocol::SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+    {
+        return Err(ExtensionError::ProtocolVersionMismatch {
+            host_versions: params.protocol_versions,
+            extension_versions: protocol::SUPPORTED_MEP_VERSIONS
+                .iter()
+                .map(|version| (*version).into())
+                .collect(),
+        });
+    }
+    let statement = statement::CapabilityStatement::from_metadata(
+        protocol::SUPPORTED_MEP_VERSIONS
+            .iter()
+            .map(|version| (*version).into())
+            .collect(),
+        info.clone(),
+        capabilities,
+    )?;
+    serde_json::to_value(statement).map_err(ExtensionError::from)
 }
 
 fn dispatch_initialize<E: Extension>(

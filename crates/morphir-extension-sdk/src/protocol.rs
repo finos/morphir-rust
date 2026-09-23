@@ -17,6 +17,10 @@ pub const SUPPORTED_MEP_VERSIONS: &[&str] = &[MEP_VERSION];
 pub mod methods {
     /// Negotiate a Morphir Extension Protocol session.
     pub const INITIALIZE: &str = "morphir.initialize";
+    /// Read the guest capability statement without starting a session.
+    pub const DESCRIBE: &str = "morphir.extension.describe";
+    /// Acknowledge successful initialization.
+    pub const INITIALIZED: &str = "morphir.initialized";
     /// Check whether an extension can respond.
     pub const PING: &str = "morphir.ping";
     /// Get extension info
@@ -46,6 +50,14 @@ pub struct PeerInfo {
     pub name: String,
     /// Peer version.
     pub version: String,
+}
+
+/// Protocol versions understood by a caller requesting a capability statement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeParams {
+    /// MEP versions supported by the caller.
+    pub protocol_versions: Vec<String>,
 }
 
 /// Parameters offered by a host when it initializes an extension.
@@ -213,6 +225,8 @@ pub mod error_codes {
     pub const PERMISSION_DENIED: i32 = -32012;
     /// Extension did not advertise the requested capability.
     pub const CAPABILITY_UNAVAILABLE: i32 = -32013;
+    /// The request is not allowed before `morphir.initialize`, or after shutdown.
+    pub const NOT_INITIALIZED: i32 = -32014;
 }
 
 impl RpcError {

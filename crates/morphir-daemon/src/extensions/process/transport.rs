@@ -5,7 +5,7 @@ use super::*;
 /// Only [`SpawnedProcessSession::spawn_typestate`] constructs this type, so a
 /// runtime-erased compatibility session cannot be reintroduced as loaded.
 pub struct SpawnedProcessTransport {
-    session: SpawnedProcessSession,
+    pub(super) session: SpawnedProcessSession,
 }
 
 impl SpawnedProcessTransport {

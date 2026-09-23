@@ -1,6 +1,7 @@
 //! Exact locks, installed catalog state, and offline activation.
 
 mod activation;
+mod probe;
 mod readers;
 use crate::extension_format::{ExtensionSchemaVersion, StatementProvenance, StatementRecord};
 use morphir_extension_sdk::statement::CapabilityStatement;
@@ -298,6 +299,11 @@ impl InstalledExtension {
         self.statement.provenance()
     }
 
+    /// Return the operation that supplied the installed probe statement.
+    pub fn probe_source(&self) -> Option<crate::ProbeSource> {
+        self.statement.probe_source()
+    }
+
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
         let metadata = readers::SelectedMetadata::from_artifact(artifact)?;
@@ -559,6 +565,11 @@ pub struct ExtensionInstaller<'home> {
     home: &'home MorphirHome,
 }
 
+enum InstallMode {
+    Create,
+    Replace,
+}
+
 impl<'home> ExtensionInstaller<'home> {
     /// Construct an installer for one Morphir home.
     pub fn new(home: &'home MorphirHome) -> Self {
@@ -582,10 +593,24 @@ impl<'home> ExtensionInstaller<'home> {
     ) -> Result<InstalledExtension> {
         selected.check_host(host)?;
         let verified = ArtifactStore::from_home(self.home).materialize(selected)?;
+        self.commit_verified(verified, writer, InstallMode::Replace)
+    }
+
+    fn commit_verified(
+        &self,
+        verified: VerifiedArtifact,
+        writer: &impl StateWriter,
+        mode: InstallMode,
+    ) -> Result<InstalledExtension> {
         let _transaction = extension_state_guard(self.home)?;
         let catalog = InstalledCatalog::load_unlocked(self.home)?;
         let lock = ExtensionLock::from_verified(&verified)?;
         let entry = InstalledExtension::from_verified(&verified)?;
+        if matches!(mode, InstallMode::Create) && catalog.get(&entry.extension_id).is_some() {
+            return Err(DistributionError::AlreadyInstalled {
+                id: entry.extension_id,
+            });
+        }
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {

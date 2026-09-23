@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   character counts as byte offsets.
 
 ### Added
+- Extension installers can stage and probe the selected artifact before changing
+  the active store, locks, or catalog. Staging uses a private directory under
+  Morphir home. Supplied statement bodies remain unchanged; provenance
+  distinguishes describe from session fallback. Legacy installs retain the
+  version-1 catalog shape, and competing installs cannot overwrite an entry. The SDK
+  compares complete statements and names the first differing member.
 - Extension distribution readers ignore unknown optional members, reject unknown
   critical paths, accept supported SemVer schemas, and convert flat capability
   metadata to declared statements while preserving supplied artifact statements

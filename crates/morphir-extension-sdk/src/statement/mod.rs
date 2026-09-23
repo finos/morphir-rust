@@ -4,7 +4,7 @@
 //! exact draft below is supported; critical paths must be understood explicitly.
 
 mod agreement;
-pub use agreement::SessionAgreementError;
+pub use agreement::{SessionAgreementError, StatementAgreementError};
 
 use crate::{ExtensionCapabilities, ExtensionInfo};
 use semver::{Comparator, Version, VersionReq};

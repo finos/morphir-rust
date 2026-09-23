@@ -2,6 +2,11 @@ use super::CapabilityStatement;
 use crate::{ExtensionInfo, ExtensionType};
 use serde_json::{Map, Value};
 
+/// The first member that differs between two complete capability statements.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("statement member {0} differs")]
+pub struct StatementAgreementError(pub String);
+
 /// The first failed rule of session agreement, in protocol order.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SessionAgreementError {
@@ -20,6 +25,39 @@ pub enum SessionAgreementError {
 }
 
 impl CapabilityStatement {
+    /// Compare complete statements, including protocol sets and requirements.
+    /// Unlike session agreement, neither statement may omit a reported member.
+    pub fn check_statement(&self, reported: &Self) -> Result<(), StatementAgreementError> {
+        fn compare(left: &Value, right: &Value, path: &str) -> Result<(), StatementAgreementError> {
+            if let (Value::Object(left), Value::Object(right)) = (left, right) {
+                for key in left
+                    .keys()
+                    .chain(right.keys().filter(|key| !left.contains_key(*key)))
+                {
+                    let path = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    match (left.get(key), right.get(key)) {
+                        (Some(left), Some(right)) => compare(left, right, &path)?,
+                        _ => return Err(StatementAgreementError(path)),
+                    }
+                }
+                Ok(())
+            } else if left == right {
+                Ok(())
+            } else {
+                Err(StatementAgreementError(path.into()))
+            }
+        }
+        compare(
+            &serde_json::to_value(self).expect("statement serializes"),
+            &serde_json::to_value(reported).expect("statement serializes"),
+            "",
+        )
+    }
+
     /// Check a session against this statement without I/O or normalization.
     ///
     /// Pass capability members as received on the wire: typed capability defaults

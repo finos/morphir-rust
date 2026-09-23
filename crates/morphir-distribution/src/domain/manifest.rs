@@ -249,6 +249,15 @@ impl ArtifactRecord {
         &self.statement
     }
 
+    /// Preserve the selected declaration, without claiming a local probe.
+    pub fn declared_statement_record(&self) -> StatementRecord {
+        self.statement.as_declared()
+    }
+
+    pub(crate) fn record_statement(&mut self, statement: StatementRecord) {
+        self.statement = statement;
+    }
+
     /// Return the artifact runtime.
     pub fn runtime(&self) -> ArtifactRuntime {
         self.runtime

@@ -1,13 +1,14 @@
 //! The draft-3 local Library MVP testee over the shared MCK JSON-lines protocol.
 
 mod refresh;
+mod update;
 
 use crate::package::positive_integer_id;
 use anyhow::{Context, Result, bail, ensure};
 use morphir_package::{
     digest::Digest,
     local_registry::{Code, Phase, mvp, tuf},
-    resolution::{PackagePath, ReleaseId, StableVersion},
+    resolution::{PackagePath, ReleaseId, StableVersion, UpdateTarget},
     strict_json,
 };
 use package_tough::{error, schema};
@@ -51,6 +52,14 @@ enum Request {
     #[serde(rename = "refresh-local-library")]
     RefreshLocalLibrary {
         profile: String,
+        #[serde(default)]
+        environment: Environment,
+        files: Vec<WireFile>,
+    },
+    #[serde(rename = "update-local-library")]
+    UpdateLocalLibrary {
+        profile: String,
+        targets: Vec<String>,
         #[serde(default)]
         environment: Environment,
         files: Vec<WireFile>,
@@ -111,7 +120,7 @@ enum OutputSetup {
 /// run(Cursor::new(input), &mut output)?;
 /// let reply: Value = serde_json::from_slice(output.split(|byte| *byte == b'\n').next().unwrap())?;
 /// assert_eq!(reply["contractVersion"], "0.1.0-draft.3");
-/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library", "resolve-local-library", "refresh-local-library"]));
+/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library", "resolve-local-library", "refresh-local-library", "update-local-library"]));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
@@ -135,7 +144,7 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
             Request::Capabilities {} => json!({
                 "suite":"package","contractVersion":CONTRACT,
                 "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-                "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library","refresh-local-library"]
+                "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library","refresh-local-library","update-local-library"]
             }),
             Request::RestoreLocalLibrary {
                 profile,
@@ -164,6 +173,16 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 ensure!(profile == PROFILE, "unsupported package MVP profile");
                 let files = admit_refresh_files(files)?;
                 runtime.block_on(refresh::execute(files, environment))?
+            }
+            Request::UpdateLocalLibrary {
+                profile,
+                targets,
+                environment,
+                files,
+            } => {
+                ensure!(profile == PROFILE, "unsupported package MVP profile");
+                let files = admit_update_files(files)?;
+                runtime.block_on(update::execute(files, &targets, environment))?
             }
             Request::Exit {} => break,
         };
@@ -235,6 +254,26 @@ fn admit_refresh_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>
     Ok(found)
 }
 
+fn admit_update_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
+    ensure!(
+        (50..=51).contains(&files.len()),
+        "package MVP update requires 50 or 51 input files"
+    );
+    let found = decode_files(files)?;
+    require_common_inputs(&found)?;
+    for name in [
+        "registry/metadata/2.snapshot.json",
+        "registry/metadata/2.targets.json",
+        "registry/metadata/2.timestamp.json",
+    ] {
+        ensure!(
+            found.contains_key(name),
+            "missing package MVP update input: {name}"
+        );
+    }
+    Ok(found)
+}
+
 fn decode_files(files: Vec<WireFile>) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut found = BTreeMap::new();
     let mut total = 0usize;
@@ -291,6 +330,9 @@ fn allowed_path(path: &str) -> bool {
             | "registry/metadata/1.targets.json"
             | "registry/metadata/1.timestamp.json"
             | "registry/metadata/timestamp.json"
+            | "registry/metadata/2.snapshot.json"
+            | "registry/metadata/2.targets.json"
+            | "registry/metadata/2.timestamp.json"
     ) {
         return true;
     }

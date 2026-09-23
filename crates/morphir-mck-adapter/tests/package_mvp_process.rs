@@ -76,6 +76,405 @@ fn refresh(files: Vec<Value>) -> Output {
     exchange(&format!("{request}\n"))
 }
 
+fn update_files() -> Vec<Value> {
+    fn collect(root: &Path, directory: &Path, found: &mut Vec<Value>) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                collect(root, &path, found);
+            } else {
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .replace('\\', "/");
+                let hex = fs::read(path)
+                    .unwrap()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                found.push(json!({"path":name,"hex":hex}));
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../morphir-package/tests/local_registry/update-fixture");
+    let mut found = Vec::new();
+    for input in ["morphir.lock", "trust-policy.json"] {
+        let bytes = fs::read(root.join(input)).unwrap();
+        let hex = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        found.push(json!({"path":input,"hex":hex}));
+    }
+    collect(&root, &root.join("registry"), &mut found);
+    found.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    assert_eq!(found.len(), 50);
+    found
+}
+
+fn update_files_with_metadata_variant(variant: &str) -> Vec<Value> {
+    let mut found = update_files();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../morphir-package/tests/local_registry/update-fixture/variants")
+        .join(variant);
+    for entry in fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        let name = format!("registry/metadata/{}", entry.file_name().to_str().unwrap());
+        let hex = fs::read(entry.path())
+            .unwrap()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        found.iter_mut().find(|file| file["path"] == name).unwrap()["hex"] = json!(hex);
+    }
+    found
+}
+
+fn update_files_with_json_edit(path: &str, edit: impl FnOnce(&mut Value)) -> Vec<Value> {
+    let mut found = update_files();
+    let file = found.iter_mut().find(|file| file["path"] == path).unwrap();
+    let bytes = file["hex"].as_str().unwrap();
+    let bytes = (0..bytes.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&bytes[index..index + 2], 16).unwrap())
+        .collect::<Vec<_>>();
+    let mut document: Value = serde_json::from_slice(&bytes).unwrap();
+    edit(&mut document);
+    file["hex"] = json!(
+        serde_json::to_vec_pretty(&document)
+            .unwrap()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    found
+}
+
+fn update_files_with_content_edit(path: &str, edit: impl FnOnce(&mut Vec<u8>)) -> Vec<Value> {
+    let mut found = update_files();
+    let file = found.iter_mut().find(|file| file["path"] == path).unwrap();
+    let hex = file["hex"].as_str().unwrap();
+    let mut bytes = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+        .collect::<Vec<_>>();
+    edit(&mut bytes);
+    file["hex"] = json!(
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    found
+}
+
+fn assert_update_refusal(files: Vec<Value>, targets: &[&str], category: &str, reason: &str) {
+    assert_update_refusal_in(
+        files,
+        targets,
+        json!({"trustState":"initialized","output":"absent"}),
+        category,
+        reason,
+    );
+}
+
+fn assert_update_refusal_in(
+    files: Vec<Value>,
+    targets: &[&str],
+    environment: Value,
+    category: &str,
+    reason: &str,
+) {
+    let request = json!({
+        "id":2,"op":"update-local-library","profile":PROFILE,
+        "targets":targets,"files":files,"environment":environment
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    let sentinel = environment["output"] == "sentinel";
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"refused","category":category,"reason":reason,
+            "output":if sentinel { "preserved-sentinel" } else { "absent" },
+            "outputFiles":if sentinel { vec![json!({"path":"morphir.lock","sha256":"sha256:f01f017ba20623e8154cdcd63fb16d79795bc0d6f57271934e5a9864b772d425"})] } else { vec![] },
+            "lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+fn assert_update_success(files: Vec<Value>, targets: &[&str], digest: &str) {
+    let request = json!({
+        "id":2,"op":"update-local-library","profile":PROFILE,
+        "targets":targets,"files":files
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"updated","output":"present",
+            "outputFiles":[{"path":"morphir.lock","sha256":format!("sha256:{digest}")}],
+            "lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+#[test]
+fn updates_the_independently_frozen_scoped_lock() {
+    let request = json!({
+        "id":2,"op":"update-local-library","profile":PROFILE,
+        "targets":["example.com/finance/eligibility"],"files":update_files()
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"updated","output":"present",
+            "outputFiles":[{"path":"morphir.lock","sha256":"sha256:7190428c25cd4b927c5db8bb9fbcbe936c81cfacc679734309a76424d332321a"}],
+            "lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+#[test]
+fn update_refuses_empty_targets_without_publishing_a_lock() {
+    let request = json!({
+        "id":2,"op":"update-local-library","profile":PROFILE,
+        "targets":[],"files":update_files()
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"refused","category":"invalid-input","reason":"invalid-update-targets",
+            "output":"absent","outputFiles":[],"lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+#[test]
+fn update_refuses_a_change_outside_the_old_dependency_closure() {
+    let request = json!({
+        "id":2,"op":"update-local-library","profile":PROFILE,
+        "targets":["example.com/finance/eligibility@1.4.0"],
+        "files":update_files_with_metadata_variant("scope-conflict")
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"refused","category":"resolution","reason":"update-scope-conflict",
+            "output":"absent","outputFiles":[],"lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+#[test]
+fn update_refuses_malformed_and_ineligible_targets() {
+    let path = "example.com/finance/eligibility";
+    for targets in [
+        vec!["../invalid"],
+        vec!["example.com/finance/loan-rules"],
+        vec!["example.com/finance/missing"],
+        vec![path, path],
+    ] {
+        assert_update_refusal(
+            update_files(),
+            &targets,
+            "invalid-input",
+            "invalid-update-targets",
+        );
+    }
+    for targets in [
+        vec!["example.com/finance/eligibility@9.9.9"],
+        vec!["example.com/finance/eligibility@1.9.0"],
+    ] {
+        assert_update_refusal(
+            update_files(),
+            &targets,
+            "resolution",
+            "unsatisfiable-requirements",
+        );
+    }
+}
+
+#[test]
+fn update_refuses_revocation_and_invalid_old_graph() {
+    assert_update_refusal(
+        update_files_with_metadata_variant("revoked-frozen"),
+        &["example.com/finance/eligibility"],
+        "unsupported-policy",
+        "revocation-transition-unsupported",
+    );
+    let files = update_files_with_json_edit("morphir.lock", |lock| {
+        lock["graph"]["nodes"][0]["bindings"][0]["target"]["version"] = "9.9.9".into();
+    });
+    assert_update_refusal(
+        files,
+        &["example.com/finance/eligibility"],
+        "invalid-input",
+        "invalid-old-lock",
+    );
+}
+
+#[test]
+fn update_preserves_frozen_scoped_outcomes_across_target_forms_and_statuses() {
+    let target = "example.com/finance/eligibility";
+    let common = "7190428c25cd4b927c5db8bb9fbcbe936c81cfacc679734309a76424d332321a";
+    for targets in [
+        vec![target, "example.com/finance/child@1.1.0"],
+        vec!["example.com/finance/child@1.1.0", target],
+        vec!["example.com/finance/eligibility@1.3.0"],
+    ] {
+        assert_update_success(update_files(), &targets, common);
+    }
+    assert_update_success(
+        update_files(),
+        &["example.com/finance/eligibility@1.2.0"],
+        "062762de6ffa30a63a03cb8d8a7b8fd63ed1f20c4a69789ade3310c3aa64ca6f",
+    );
+    assert_update_success(
+        update_files_with_metadata_variant("yanked-frozen"),
+        &[target],
+        "3380a67664c1987595b9a6a97cfa4c40094193e4fefe33e3fa0f1dbf6ff91fe8",
+    );
+    assert_update_success(
+        update_files_with_metadata_variant("yanked-root"),
+        &[target],
+        "10ba4fd1d245432fe94d9fea08edf65449988d1b0edfc13f9abdb044c2c09810",
+    );
+}
+
+#[test]
+fn update_refuses_old_pin_mismatches() {
+    let target = &["example.com/finance/eligibility"][..];
+    let acquisition = update_files_with_json_edit("morphir.lock", |lock| {
+        lock["acquisitions"][0]["record"]["digest"] = format!("sha256:{}", "00".repeat(32)).into();
+    });
+    assert_update_refusal(
+        acquisition,
+        target,
+        "invalid-input",
+        "old-record-acquisition-mismatch",
+    );
+    let statement = update_files_with_json_edit("morphir.lock", |lock| {
+        let evidence = lock["evidence"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["kind"] == "release-statement")
+            .unwrap();
+        evidence["digest"] = format!("sha256:{}", "00".repeat(32)).into();
+    });
+    assert_update_refusal(
+        statement,
+        target,
+        "invalid-input",
+        "old-record-acquisition-mismatch",
+    );
+}
+
+#[test]
+fn update_refuses_authentication_and_state_failures() {
+    let target = &["example.com/finance/eligibility"][..];
+    let invalid_signature =
+        update_files_with_json_edit("registry/metadata/2.timestamp.json", |timestamp| {
+            timestamp["signatures"][0]["sig"] = "00".repeat(64).into();
+        });
+    let mut invalid_signature = invalid_signature;
+    let changed = invalid_signature
+        .iter()
+        .find(|file| file["path"] == "registry/metadata/2.timestamp.json")
+        .unwrap()["hex"]
+        .clone();
+    invalid_signature
+        .iter_mut()
+        .find(|file| file["path"] == "registry/metadata/timestamp.json")
+        .unwrap()["hex"] = changed;
+    assert_update_refusal(
+        invalid_signature,
+        target,
+        "metadata-authentication",
+        "timestamp-signature-threshold",
+    );
+    for (trust_state, reason) in [
+        ("uninitialized", "uninitialized"),
+        ("missing-database", "missing-established-database"),
+        ("corrupt-database", "corrupt-established-database"),
+        ("unresolved-operation", "unresolved-operation"),
+    ] {
+        assert_update_refusal_in(
+            update_files(),
+            target,
+            json!({"trustState":trust_state,"output":"absent"}),
+            "trust-state",
+            reason,
+        );
+    }
+    assert_update_refusal_in(
+        update_files(),
+        target,
+        json!({"trustState":"initialized","output":"sentinel"}),
+        "output-conflict",
+        "destination-exists",
+    );
+}
+
+#[test]
+fn update_refuses_expired_metadata_and_tampered_frozen_content() {
+    let target = &["example.com/finance/eligibility"][..];
+    let expired = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../morphir-package/tests/local_registry/update-fixture/variants/expired-timestamp.json",
+    ))
+    .unwrap();
+    let expired_hex = expired
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut files = update_files();
+    for name in [
+        "registry/metadata/2.timestamp.json",
+        "registry/metadata/timestamp.json",
+    ] {
+        files.iter_mut().find(|file| file["path"] == name).unwrap()["hex"] = json!(expired_hex);
+    }
+    assert_update_refusal(
+        files,
+        target,
+        "metadata-authentication",
+        "timestamp-expired",
+    );
+
+    let lock: Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../morphir-package/tests/local_registry/update-fixture/morphir.lock"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let acquisition = lock["acquisitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["release"]["packagePath"] == "example.com/finance/sibling")
+        .unwrap();
+    let path = format!(
+        "registry/{}/ir.json",
+        acquisition["source"]["path"].as_str().unwrap()
+    );
+    let files = update_files_with_content_edit(&path, |bytes| bytes.push(b'\n'));
+    assert_update_refusal(
+        files,
+        target,
+        "package-integrity",
+        "content-digest-mismatch",
+    );
+}
+
 #[test]
 fn refresh_rejects_an_unmodeled_consumer_output_setup() {
     let request = json!({
@@ -105,14 +504,14 @@ fn responses(output: &Output) -> Vec<Value> {
 }
 
 #[test]
-fn advertises_the_fresh_restore_resolve_and_refresh_operations() {
+fn advertises_the_fresh_restore_resolve_refresh_and_update_operations() {
     let answer = responses(&exchange("{\"id\":1,\"op\":\"capabilities\"}\n"));
     assert_eq!(
         answer,
         vec![json!({
             "id":1,"suite":"package","contractVersion":"0.1.0-draft.3",
             "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-            "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library","refresh-local-library"]
+            "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library","refresh-local-library","update-local-library"]
         })]
     );
 }

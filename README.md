@@ -54,6 +54,10 @@ the resulting full-lock digest against the independent frozen golden.
 For metadata-only refresh, run
 `cargo run -p morphir-mck-adapter --example package_mvp_refresh`. It sends only
 the lock, policy and signed metadata, then checks the authenticated receipt.
+For a scoped update, run
+`cargo run -p morphir-mck-adapter --example package_mvp_update`. It submits an
+explicit target and the complete signed local fixture, then checks the new full
+lock digest while retaining the old lock.
 
 ## Extensions
 

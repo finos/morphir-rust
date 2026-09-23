@@ -255,6 +255,7 @@ fn verification_and_resolution_use_the_configured_repository() {
             &ExtensionId::parse("morphir-avro").unwrap(),
             Selection::Channel(Channel::Stable),
             &Platform::new("linux", "x86_64").unwrap(),
+            &"0.4.0".parse().unwrap(),
         )
         .unwrap();
     assert_eq!(selected.release().version().to_string(), "0.1.0");
@@ -274,6 +275,7 @@ fn disabled_repository_cannot_resolve_extensions() {
             &ExtensionId::parse("morphir-avro").unwrap(),
             Selection::Channel(Channel::Stable),
             &Platform::new("linux", "x86_64").unwrap(),
+            &"0.4.0".parse().unwrap(),
         ),
         Err(DistributionError::RepositoryDisabled { name: actual }) if actual == name
     ));
@@ -713,4 +715,34 @@ fn search_returns_repository_qualified_matches_from_enabled_local_endpoints() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn publishing_preserves_host_requirements_for_resolution() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
+    let bundle = release_bundle(root.path(), "morphir-avro", "0.1.0", b"avro wasm");
+    let path = bundle.join("release.json");
+    let mut descriptor: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    descriptor["requires"] = serde_json::json!({"host": [">=0.4.0-alpha.7", "<0.5.0"]});
+    descriptor["critical"] = serde_json::json!(["requires.host"]);
+    fs::write(&path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+    repository.publish(&bundle).unwrap();
+
+    let index = morphir_distribution::LocalIndex::open(repository.root()).unwrap();
+    let id = ExtensionId::parse("morphir-avro").unwrap();
+    let resolve = |host: &str| {
+        index.resolve(
+            &id,
+            Selection::Channel(Channel::Stable),
+            &Platform::current(),
+            &host.parse().unwrap(),
+        )
+    };
+    let error = resolve("0.2.0").unwrap_err().to_string();
+    assert!(error.contains("0.2.0"), "{error}");
+    assert!(error.contains(">=0.4.0-alpha.7"), "{error}");
+    assert!(error.contains("<0.5.0"), "{error}");
+    resolve("0.4.0-beta.4").unwrap();
 }

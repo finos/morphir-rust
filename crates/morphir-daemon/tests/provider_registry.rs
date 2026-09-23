@@ -310,9 +310,16 @@ fn installed(spec: InstalledSpec<'_>) -> InstalledExtensionSnapshot {
     let id = ExtensionId::parse(spec.id).unwrap();
     let selected = LocalIndex::open(&index)
         .unwrap()
-        .resolve(&id, Selection::Channel(Channel::Stable), &platform)
+        .resolve(
+            &id,
+            Selection::Channel(Channel::Stable),
+            &platform,
+            &"0.4.0".parse().unwrap(),
+        )
         .unwrap();
-    ExtensionInstaller::new(&home).install(selected).unwrap();
+    ExtensionInstaller::new(&home)
+        .install(selected, &"0.4.0".parse().unwrap())
+        .unwrap();
     list_installed(&home).unwrap().pop().unwrap()
 }
 

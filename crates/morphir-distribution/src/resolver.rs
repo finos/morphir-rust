@@ -16,6 +16,12 @@ pub struct ResolvedRelease {
 }
 
 impl ResolvedRelease {
+    /// Check both release and selected artifact requirements for this host.
+    pub fn check_host(&self, host: &semver::Version) -> Result<()> {
+        self.release.check_host(host)?;
+        self.artifact.check_host(host)
+    }
+
     /// Return the exact selected release record.
     pub fn release(&self) -> &ReleaseRecord {
         &self.release
@@ -33,10 +39,12 @@ impl ResolvedRelease {
 }
 
 /// Select the highest compatible exact release and one platform artifact.
+/// Refuse if its requirements are not met by the caller's host version.
 pub fn resolve(
     history: &ExtensionHistory,
     selection: &Selection,
     platform: &Platform,
+    host: &semver::Version,
 ) -> Result<ResolvedRelease> {
     let matching_selection = history
         .releases()
@@ -56,6 +64,10 @@ pub fn resolve(
     }
     candidates.sort_by(|left, right| right.version().cmp_precedence(left.version()));
 
+    // A release whose statement needs a newer host is skipped, so a moving
+    // channel still resolves the newest release this host can run. The host
+    // error is reported only when no candidate fits.
+    let mut host_refusal = None;
     for release in candidates {
         let artifacts = release
             .artifacts()
@@ -64,10 +76,18 @@ pub fn resolve(
                 ArtifactRuntime::Process => artifact.platform() == Some(platform),
                 ArtifactRuntime::Wasm => true,
             })
+            .filter(|artifact| supports_artifact_mep(artifact))
             .collect::<Vec<_>>();
         match artifacts.as_slice() {
             [] => continue,
             [artifact] => {
+                if let Err(error) = release
+                    .check_host(host)
+                    .and_then(|()| artifact.check_host(host))
+                {
+                    host_refusal.get_or_insert(error);
+                    continue;
+                }
                 return Ok(ResolvedRelease {
                     release: release.clone(),
                     artifact: (*artifact).clone(),
@@ -83,6 +103,9 @@ pub fn resolve(
         }
     }
 
+    if let Some(error) = host_refusal {
+        return Err(error);
+    }
     Err(DistributionError::NoMatchingArtifact {
         selection: selection.to_string(),
         platform: platform.to_string(),
@@ -90,10 +113,16 @@ pub fn resolve(
 }
 
 fn supports_host_mep(release: &ReleaseRecord) -> bool {
-    release
-        .mep_versions()
-        .iter()
-        .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+    release.artifacts().iter().any(supports_artifact_mep)
+}
+
+fn supports_artifact_mep(artifact: &ArtifactRecord) -> bool {
+    artifact.statement().is_some_and(|statement| {
+        statement
+            .protocol_versions
+            .iter()
+            .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))
+    })
 }
 
 fn matches_selection(release: &ReleaseRecord, selection: &Selection) -> bool {

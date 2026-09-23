@@ -1,6 +1,9 @@
 //! Exact locks, installed catalog state, and offline activation.
 
 mod activation;
+mod readers;
+use crate::extension_format::{ExtensionSchemaVersion, StatementProvenance, StatementRecord};
+use morphir_extension_sdk::statement::CapabilityStatement;
 
 pub use activation::{
     VerifiedExtensionArtifact, VerifiedProcessArtifact, VerifiedWasmArtifact, activate_installed,
@@ -68,7 +71,7 @@ pub struct ExtensionLock {
 impl ExtensionLock {
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
-        let release = &artifact.selected.release;
+        let metadata = readers::SelectedMetadata::from_artifact(artifact)?;
         let lock = Self {
             schema_version: CURRENT_EXTENSION_LOCK_SCHEMA_VERSION,
             selection: artifact.selected.selection.clone(),
@@ -81,10 +84,10 @@ impl ExtensionLock {
             platform: artifact.selected.artifact.platform().cloned(),
             args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
-            capabilities: artifact.selected.release.capabilities().to_vec(),
-            mep_versions: artifact.selected.release.mep_versions().to_vec(),
-            frontend: release.frontend().cloned(),
-            backend: release.backend().cloned(),
+            capabilities: metadata.capabilities,
+            mep_versions: metadata.mep_versions,
+            frontend: metadata.frontend,
+            backend: metadata.backend,
             executable: artifact.selected.artifact.executable(),
         };
         validate_runtime_state(
@@ -248,8 +251,8 @@ fn extension_lock_path(home: &MorphirHome, id: &ExtensionId) -> PathBuf {
 }
 
 /// One active extension entry in the durable installed catalog.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstalledExtension {
     extension_id: ExtensionId,
     name: String,
@@ -267,12 +270,37 @@ pub struct InstalledExtension {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     backend: Option<BackendRecord>,
     executable: bool,
+    #[serde(flatten)]
+    statement: StatementRecord,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    critical: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requires: Option<serde_json::Value>,
 }
 
 impl InstalledExtension {
+    /// Check release and statement requirements against the caller's host version.
+    pub fn check_host(&self, host: &Version) -> Result<()> {
+        crate::extension_format::check_requirements(self.requires.as_ref(), host)?;
+        self.statement().check_host(host)?;
+        Ok(())
+    }
+
+    /// Return the installed artifact's supplied or converted capability statement.
+    pub fn statement(&self) -> &CapabilityStatement {
+        self.statement
+            .statement()
+            .expect("installed record has a statement")
+    }
+
+    /// Return whether the installed statement is declared or probed.
+    pub fn statement_provenance(&self) -> StatementProvenance {
+        self.statement.provenance()
+    }
+
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
         let runtime = artifact.selected.artifact.runtime();
-        let release = &artifact.selected.release;
+        let metadata = readers::SelectedMetadata::from_artifact(artifact)?;
         let installed = Self {
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
@@ -282,12 +310,25 @@ impl InstalledExtension {
             args: artifact.selected.artifact.args().to_vec(),
             digest: artifact.selected.artifact.digest().clone(),
             store_path: artifact.store_path.clone(),
-            capabilities: artifact.selected.release.capabilities().to_vec(),
-            mep_versions: artifact.selected.release.mep_versions().to_vec(),
+            capabilities: metadata.capabilities,
+            mep_versions: metadata.mep_versions,
             index: artifact.selected.index.clone(),
-            frontend: release.frontend().cloned(),
-            backend: release.backend().cloned(),
+            frontend: metadata.frontend,
+            backend: metadata.backend,
             executable: artifact.selected.artifact.executable(),
+            statement: artifact.selected.artifact.statement_record().clone(),
+            critical: if artifact
+                .selected
+                .release
+                .requires()
+                .and_then(|requires| requires.get("host"))
+                .is_some()
+            {
+                vec!["requires.host".into()]
+            } else {
+                vec![]
+            },
+            requires: artifact.selected.release.requires().cloned(),
         };
         validate_installed_runtime(&installed)?;
         Ok(installed)
@@ -426,11 +467,13 @@ impl InstalledExtensionSnapshot {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CatalogFile {
-    schema_version: SchemaVersion,
+    schema_version: ExtensionSchemaVersion,
     extensions: Vec<InstalledExtension>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    critical: Vec<String>,
 }
 
 /// Durable installed extension catalog.
@@ -456,13 +499,14 @@ impl InstalledCatalog {
             });
         }
         let bytes = read_state_bytes(&path)?;
-        let envelope: StateSchemaEnvelope = decode_state(&path, &bytes)?;
-        validate_extension_state_schema(
-            "installed extension catalog",
-            envelope.schema_version,
-            MINIMUM_CATALOG_SCHEMA_VERSION,
-            CURRENT_CATALOG_SCHEMA_VERSION,
-        )?;
+        if let Ok(envelope) = serde_json::from_slice::<StateSchemaEnvelope>(&bytes) {
+            validate_extension_state_schema(
+                "installed extension catalog",
+                envelope.schema_version,
+                MINIMUM_CATALOG_SCHEMA_VERSION,
+                CURRENT_CATALOG_SCHEMA_VERSION,
+            )?;
+        }
         let stored: CatalogFile = decode_state(&path, &bytes)?;
         let mut extensions = BTreeMap::new();
         for extension in stored.extensions {
@@ -499,7 +543,8 @@ impl InstalledCatalog {
         let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+            schema_version: ExtensionSchemaVersion::default(),
+            critical: vec![],
             extensions: next.values().cloned().collect(),
         };
         atomic_write_json(&self.home.extensions_catalog_file(), &stored)?;
@@ -520,16 +565,22 @@ impl<'home> ExtensionInstaller<'home> {
         Self { home }
     }
 
-    /// Materialize verified bytes, write the exact lock, then register them.
-    pub fn install(&self, selected: ResolvedArtifact) -> Result<InstalledExtension> {
-        self.install_with_writer(selected, &FilesystemStateWriter)
+    /// Check the caller's host version, materialize verified bytes, then write lock and catalog.
+    pub fn install(
+        &self,
+        selected: ResolvedArtifact,
+        host: &Version,
+    ) -> Result<InstalledExtension> {
+        self.install_with_writer(selected, host, &FilesystemStateWriter)
     }
 
     fn install_with_writer(
         &self,
         selected: ResolvedArtifact,
+        host: &Version,
         writer: &impl StateWriter,
     ) -> Result<InstalledExtension> {
+        selected.check_host(host)?;
         let verified = ArtifactStore::from_home(self.home).materialize(selected)?;
         let _transaction = extension_state_guard(self.home)?;
         let catalog = InstalledCatalog::load_unlocked(self.home)?;
@@ -538,7 +589,8 @@ impl<'home> ExtensionInstaller<'home> {
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+            schema_version: ExtensionSchemaVersion::default(),
+            critical: vec![],
             extensions: extensions.into_values().collect(),
         };
         let lock_bytes = encode_json(&lock)?;
@@ -574,7 +626,8 @@ fn uninstall_with_writer(
         .remove(id)
         .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
     let stored = CatalogFile {
-        schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+        schema_version: ExtensionSchemaVersion::default(),
+        critical: vec![],
         extensions: extensions.into_values().collect(),
     };
     let lock_path = extension_lock_path(home, id);
@@ -952,10 +1005,17 @@ mod tests {
         let select = || {
             LocalIndex::open(&index)
                 .unwrap()
-                .resolve(&id, Selection::Channel(Channel::Stable), &platform)
+                .resolve(
+                    &id,
+                    Selection::Channel(Channel::Stable),
+                    &platform,
+                    &"0.4.0".parse().unwrap(),
+                )
                 .unwrap()
         };
-        ExtensionInstaller::new(&home).install(select()).unwrap();
+        ExtensionInstaller::new(&home)
+            .install(select(), &"0.4.0".parse().unwrap())
+            .unwrap();
         let lock_path = extension_lock_path(&home, &id);
         let catalog_path = home.extensions_catalog_file();
         let previous_lock = fs::read(&lock_path).unwrap();
@@ -967,7 +1027,7 @@ mod tests {
             fail_after_write: false,
         };
         let error = ExtensionInstaller::new(&home)
-            .install_with_writer(select(), &writer)
+            .install_with_writer(select(), &"0.4.0".parse().unwrap(), &writer)
             .unwrap_err();
 
         assert!(error.to_string().contains("injected catalog write failure"));
@@ -1004,6 +1064,7 @@ mod tests {
                 &id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap();
         let (reached_tx, reached_rx) = mpsc::channel();
@@ -1015,7 +1076,11 @@ mod tests {
         };
         let update_home = home.clone();
         let update = thread::spawn(move || {
-            ExtensionInstaller::new(&update_home).install_with_writer(selected, &writer)
+            ExtensionInstaller::new(&update_home).install_with_writer(
+                selected,
+                &"0.4.0".parse().unwrap(),
+                &writer,
+            )
         });
         reached_rx.recv().unwrap();
 
@@ -1062,6 +1127,7 @@ mod tests {
                 &id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap();
         let (catalog_read_tx, catalog_read_rx) = mpsc::channel();
@@ -1075,7 +1141,9 @@ mod tests {
         });
         catalog_read_rx.recv().unwrap();
 
-        ExtensionInstaller::new(&home).install(selected).unwrap();
+        ExtensionInstaller::new(&home)
+            .install(selected, &"0.4.0".parse().unwrap())
+            .unwrap();
         resume_tx.send(()).unwrap();
 
         match listing.join().unwrap().unwrap_err() {
@@ -1096,6 +1164,7 @@ mod tests {
                 &id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap();
         let (catalog_read_tx, catalog_read_rx) = mpsc::channel();
@@ -1115,7 +1184,10 @@ mod tests {
         let update = thread::spawn(move || {
             update_started_tx.send(()).unwrap();
             update_done_tx
-                .send(ExtensionInstaller::new(&update_home).install(selected))
+                .send(
+                    ExtensionInstaller::new(&update_home)
+                        .install(selected, &"0.4.0".parse().unwrap()),
+                )
                 .unwrap();
         });
         update_started_rx.recv().unwrap();
@@ -1165,13 +1237,16 @@ mod tests {
                 &id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap();
         let update_home = home.clone();
-        thread::spawn(move || ExtensionInstaller::new(&update_home).install(selected))
-            .join()
-            .unwrap()
-            .unwrap();
+        thread::spawn(move || {
+            ExtensionInstaller::new(&update_home).install(selected, &"0.4.0".parse().unwrap())
+        })
+        .join()
+        .unwrap()
+        .unwrap();
 
         let activated = activate_installed_snapshot(&home, &snapshot).unwrap();
 
@@ -1222,9 +1297,12 @@ mod tests {
                 &id,
                 Selection::Channel(Channel::Stable),
                 &Platform::new("linux", "x86_64").unwrap(),
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap();
-        ExtensionInstaller::new(&home).install(selected).unwrap();
+        ExtensionInstaller::new(&home)
+            .install(selected, &"0.4.0".parse().unwrap())
+            .unwrap();
         (root, home, id)
     }
 

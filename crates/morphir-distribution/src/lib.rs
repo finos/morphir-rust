@@ -14,12 +14,14 @@
 //! # fn install() -> Result<(), Box<dyn std::error::Error>> {
 //! let home = MorphirHome::resolve()?;
 //! let id = ExtensionId::parse("morphir-elm")?;
+//! let host = "0.4.0".parse()?;
 //! let selected = LocalIndex::open("./controlled-index")?.resolve(
 //!     &id,
 //!     Selection::Channel(Channel::Stable),
 //!     &Platform::current(),
+//!     &host,
 //! )?;
-//! ExtensionInstaller::new(&home).install(selected)?;
+//! ExtensionInstaller::new(&home).install(selected, &host)?;
 //!
 //! // Activation is offline and rehashes the installed bytes.
 //! let artifact = activate_installed(&home, &id)?;
@@ -87,12 +89,14 @@
 
 mod domain;
 mod error;
+mod extension_format;
 mod index;
 mod local;
 mod repository;
 mod repository_authoring;
 mod resolver;
 mod state;
+pub use extension_format::{ExtensionSchemaVersion, StatementProvenance};
 mod state_io;
 mod store;
 mod tool_archive;
@@ -115,7 +119,8 @@ pub use repository::{
     RepositoryEndpoint, RepositoryName, RepositoryState, RepositoryVerification,
 };
 pub use repository_authoring::{
-    LocalExtensionRepository, PublicationStatus, RepositoryPublication,
+    BundleArtifactDescriptor, LocalExtensionRepository, PlatformDifferences, PublicationStatus,
+    ReleaseBundleDescriptor, RepositoryPublication,
 };
 pub use resolver::{ResolvedRelease, resolve};
 pub use state::{

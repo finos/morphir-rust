@@ -1,5 +1,7 @@
+#[path = "support/native.rs"]
+mod native;
+
 use morphir_extension_sdk::{
-    native::NativeExtension,
     prelude::*,
     protocol::{ExtensionRequest, methods},
 };
@@ -32,7 +34,7 @@ fn request(source: &str) -> CompileRequest {
 }
 
 fn compile(source: &str) -> CompileResult {
-    let extension = NativeExtension::frontend_backend(PythonExtension).unwrap();
+    let extension = native::an_initialized_extension();
     let response = extension
         .protocol()
         .handle(ExtensionRequest::new(methods::COMPILE, request(source), 1).unwrap());

@@ -13,8 +13,14 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RELEASE_BUNDLE_SCHEMA_VERSION: u32 = 1;
 const REPOSITORY_DIRECTORIES: [&str; 2] = ["artifacts", "extensions"];
+
+#[cfg(test)]
+#[path = "repository_authoring/descriptor_tests.rs"]
+mod descriptor_tests;
+
+mod descriptor;
+pub use descriptor::{BundleArtifactDescriptor, PlatformDifferences, ReleaseBundleDescriptor};
 
 /// Whether publication added a release or found the exact release already present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,9 +184,12 @@ impl LocalExtensionRepository {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReleaseBundleDescriptor {
-    schema_version: u32,
+#[serde(rename_all = "camelCase")]
+struct LegacyReleaseBundleDescriptor {
+    #[serde(default)]
+    requires: Option<serde_json::Value>,
+    #[serde(flatten)]
+    statement_record: crate::extension_format::StatementRecord,
     short_id: String,
     extension_id: ExtensionId,
     package: String,
@@ -231,7 +240,7 @@ impl VerifiedReleaseBundle {
             .ok_or_else(|| invalid_bundle(&root, "release bundle has no release.json"))?;
         let descriptor: ReleaseBundleDescriptor = serde_json::from_slice(descriptor_bytes)
             .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))?;
-        descriptor.validate(&root)?;
+        let descriptor = descriptor.into_legacy(&root)?;
 
         let artifact_name = descriptor.artifact.as_str();
         let checksum_name = format!("{artifact_name}.sha256");
@@ -277,17 +286,8 @@ impl VerifiedReleaseBundle {
     }
 }
 
-impl ReleaseBundleDescriptor {
+impl LegacyReleaseBundleDescriptor {
     fn validate(&self, root: &Path) -> Result<()> {
-        if self.schema_version != RELEASE_BUNDLE_SCHEMA_VERSION {
-            return Err(invalid_bundle(
-                root.join("release.json"),
-                format!(
-                    "unsupported release bundle schema version {}",
-                    self.schema_version
-                ),
-            ));
-        }
         if !portable_token(&self.short_id) || !portable_token(&self.package) {
             return Err(invalid_bundle(
                 root.join("release.json"),
@@ -403,6 +403,21 @@ impl ReleaseBundleDescriptor {
             capabilities.push("workspace");
         }
         record["capabilities"] = serde_json::json!(capabilities);
+        if let Some(requires) = &self.requires {
+            record["requires"] = requires.clone();
+            if requires.get("host").is_some() {
+                record["critical"] = serde_json::json!(["requires.host"]);
+            }
+        }
+        if let Some(fields) = serde_json::to_value(&self.statement_record)
+            .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))?
+            .as_object()
+        {
+            record["artifacts"][0]
+                .as_object_mut()
+                .expect("artifact is an object")
+                .extend(fields.clone());
+        }
         serde_json::from_value(record)
             .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))
     }

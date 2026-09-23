@@ -321,7 +321,9 @@ impl NativeExtension {
             .map(|role| role.handle.as_ref())
     }
 
-    /// Return the protocol endpoint.
+    /// Return the protocol endpoint, which requires initialization before work.
+    ///
+    /// Direct typed handles do not participate in the protocol lifecycle.
     pub fn protocol(&self) -> &dyn NativeProtocol {
         self.protocol.as_ref()
     }
@@ -461,6 +463,7 @@ where
         // Feed the protocol handle the same projection `capabilities()` computes,
         // not the authored aggregate validated above — see `project_capabilities`.
         let protocol = Arc::new(ProtocolHandle {
+            session: crate::__ProtocolSession::new(),
             dispatchers: roles.dispatchers(),
             info: info.clone(),
             capabilities: project_capabilities(&roles, &common),
@@ -609,6 +612,7 @@ where
 }
 
 struct ProtocolHandle {
+    session: crate::__ProtocolSession,
     dispatchers: Vec<NativeRoleDispatch>,
     info: ExtensionInfo,
     capabilities: ExtensionCapabilities,
@@ -616,7 +620,9 @@ struct ProtocolHandle {
 
 impl NativeProtocol for ProtocolHandle {
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
-        dispatch_request_with_roles(&request, &self.dispatchers, &self.info, &self.capabilities)
+        self.session.dispatch(&request, || {
+            dispatch_request_with_roles(&request, &self.dispatchers, &self.info, &self.capabilities)
+        })
     }
 }
 
@@ -1669,6 +1675,24 @@ mod tests {
         }
     }
 
+    fn initialize_protocol(provider: &NativeExtension) -> crate::protocol::InitializeResult {
+        let response = provider.protocol().handle(
+            ExtensionRequest::new(
+                methods::INITIALIZE,
+                crate::protocol::InitializeParams {
+                    protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
+                    host: crate::protocol::PeerInfo {
+                        name: "test-host".into(),
+                        version: "1.0.0".into(),
+                    },
+                },
+                3,
+            )
+            .unwrap(),
+        );
+        serde_json::from_value(response.result.unwrap()).unwrap()
+    }
+
     #[test]
     fn direct_and_protocol_frontend_dispatch_are_equivalent() {
         let extension = RecordingExtension::default();
@@ -1682,6 +1706,7 @@ mod tests {
             .compile(request.clone())
             .unwrap();
         let rpc = ExtensionRequest::new(methods::COMPILE, request.clone(), 7).unwrap();
+        initialize_protocol(&provider);
         let protocol = provider.protocol().handle(rpc);
         let through_mep: CompileResult = serde_json::from_value(protocol.result.unwrap()).unwrap();
 
@@ -1759,6 +1784,7 @@ mod tests {
         let expected_info = serde_json::to_value(provider.info()).unwrap();
         let expected_capabilities = serde_json::to_value(provider.capabilities()).unwrap();
 
+        let initialize = initialize_protocol(&provider);
         let info = provider
             .protocol()
             .handle(ExtensionRequest::new(methods::INFO, serde_json::json!({}), 1).unwrap());
@@ -1769,22 +1795,6 @@ mod tests {
         );
         assert_eq!(capabilities.result.unwrap(), expected_capabilities);
 
-        let initialize = provider.protocol().handle(
-            ExtensionRequest::new(
-                methods::INITIALIZE,
-                crate::protocol::InitializeParams {
-                    protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
-                    host: crate::protocol::PeerInfo {
-                        name: "test-host".into(),
-                        version: "1.0.0".into(),
-                    },
-                },
-                3,
-            )
-            .unwrap(),
-        );
-        let initialize: crate::protocol::InitializeResult =
-            serde_json::from_value(initialize.result.unwrap()).unwrap();
         assert_eq!(
             serde_json::to_value(initialize.extension).unwrap(),
             expected_info
@@ -1810,6 +1820,7 @@ mod tests {
             .unwrap()
             .compile(request.clone())
             .unwrap();
+        initialize_protocol(&provider);
         let protocol = provider
             .protocol()
             .handle(ExtensionRequest::new(methods::COMPILE, request, 1).unwrap());
@@ -1959,6 +1970,7 @@ mod tests {
             .discover(request.clone())
             .unwrap();
         let rpc = ExtensionRequest::new(methods::WORKSPACE_DISCOVER, request.clone(), 7).unwrap();
+        initialize_protocol(&provider);
         let protocol = provider.protocol().handle(rpc);
         let through_mep: morphir_workspace::DiscoveryResponse =
             serde_json::from_value(protocol.result.unwrap()).unwrap();
@@ -2004,6 +2016,7 @@ mod tests {
             serde_json::json!({ "enabled": true })
         );
 
+        let initialize = initialize_protocol(&provider);
         let info = provider
             .protocol()
             .handle(ExtensionRequest::new(methods::INFO, serde_json::json!({}), 1).unwrap());
@@ -2014,22 +2027,6 @@ mod tests {
         );
         assert_eq!(capabilities.result.unwrap(), expected_capabilities);
 
-        let initialize = provider.protocol().handle(
-            ExtensionRequest::new(
-                methods::INITIALIZE,
-                crate::protocol::InitializeParams {
-                    protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
-                    host: crate::protocol::PeerInfo {
-                        name: "test-host".into(),
-                        version: "1.0.0".into(),
-                    },
-                },
-                3,
-            )
-            .unwrap(),
-        );
-        let initialize: crate::protocol::InitializeResult =
-            serde_json::from_value(initialize.result.unwrap()).unwrap();
         assert_eq!(
             serde_json::to_value(initialize.extension).unwrap(),
             expected_info
@@ -2045,6 +2042,7 @@ mod tests {
     #[test]
     fn unknown_method_is_method_not_found_through_role_dispatch() {
         let native = NativeExtension::frontend_only(FrontendOnly).expect("FrontendOnly is valid");
+        initialize_protocol(&native);
         let response = native.protocol().handle(
             ExtensionRequest::new("morphir.not.a.method", serde_json::json!({}), 7)
                 .expect("request is well formed"),

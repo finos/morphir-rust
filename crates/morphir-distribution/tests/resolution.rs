@@ -233,7 +233,7 @@ fn release_records_reject_malformed_schema_versions() {
     for version in [
         serde_json::json!(1),
         serde_json::json!("1"),
-        serde_json::json!("1.0.0"),
+        serde_json::json!("1.0.0.0"),
         serde_json::json!("01.0"),
     ] {
         let mut record = portable_wasm_release();
@@ -270,7 +270,7 @@ fn jsonl_histories_reject_malformed_schema_version_wires() {
     for version in [
         serde_json::json!(1),
         serde_json::json!("1"),
-        serde_json::json!("1.0.0"),
+        serde_json::json!("1.0.0.0"),
         serde_json::json!("01.0"),
     ] {
         let mut record = portable_wasm_release();
@@ -322,7 +322,7 @@ fn jsonl_history_rejects_malformed_lines_and_mixed_identities() {
 }
 
 #[test]
-fn index_records_reject_unknown_fields_and_empty_required_collections() {
+fn index_records_ignore_unknown_fields_but_reject_empty_required_collections() {
     let base: serde_json::Value =
         serde_json::from_str(&release("1.0.0", &["stable"], ("linux", "x86_64"))).unwrap();
 
@@ -339,6 +339,9 @@ fn index_records_reject_unknown_fields_and_empty_required_collections() {
     let mut unknown_source = base.clone();
     unknown_source["artifacts"][0]["source"]["url"] = serde_json::json!("file://outside");
     cases.push(unknown_source);
+    for optional in cases.drain(..) {
+        assert!(ExtensionHistory::parse_jsonl(optional.to_string().as_bytes()).is_ok());
+    }
     let mut empty_name = base.clone();
     empty_name["name"] = serde_json::json!("  ");
     cases.push(empty_name);
@@ -416,6 +419,7 @@ fn stable_selects_the_highest_non_prerelease_for_the_platform() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap();
 
@@ -439,6 +443,7 @@ fn stable_skips_a_newer_release_with_no_host_supported_mep_version() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap();
 
@@ -465,7 +470,8 @@ fn exact_and_channel_selection_reject_releases_with_no_supported_mep_version() {
         Selection::Exact(Version::parse("2.0.0").unwrap()),
         Selection::Channel(Channel::Stable),
     ] {
-        let error = resolve(&history, &selection, &platform).unwrap_err();
+        let error =
+            resolve(&history, &selection, &platform, &"0.4.0".parse().unwrap()).unwrap_err();
         match error {
             DistributionError::NoCompatibleMepVersion {
                 selection: rejected,
@@ -491,7 +497,13 @@ fn preview_and_insiders_resolve_the_same_preview_family_but_preserve_request() {
     let platform = Platform::new("linux", "x86_64").unwrap();
 
     for channel in [Channel::Preview(None), Channel::Insiders] {
-        let selected = resolve(&history, &Selection::Channel(channel.clone()), &platform).unwrap();
+        let selected = resolve(
+            &history,
+            &Selection::Channel(channel.clone()),
+            &platform,
+            &"0.4.0".parse().unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             selected.release().version(),
             &Version::parse("1.1.0-preview.2").unwrap()
@@ -503,6 +515,7 @@ fn preview_and_insiders_resolve_the_same_preview_family_but_preserve_request() {
         &history,
         &Selection::Channel(Channel::parse("preview/nightly").unwrap()),
         &platform,
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -520,6 +533,7 @@ fn exact_selection_ignores_channels_and_selects_prereleases() {
         &history,
         &Selection::Exact(exact.clone()),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap();
     assert_eq!(selected.release().version(), &exact);
@@ -537,6 +551,7 @@ fn ambiguous_platform_artifacts_are_rejected() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap_err();
     assert!(error.to_string().contains("more than one artifact"));
@@ -551,7 +566,13 @@ fn portable_wasm_resolves_on_linux_and_macos() {
         Platform::new("linux", "x86_64").unwrap(),
         Platform::new("macos", "aarch64").unwrap(),
     ] {
-        let selected = resolve(&history, &Selection::Channel(Channel::Stable), &platform).unwrap();
+        let selected = resolve(
+            &history,
+            &Selection::Channel(Channel::Stable),
+            &platform,
+            &"0.4.0".parse().unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             selected.artifact().filename().as_str(),
             "morphir_avro_extension.wasm"
@@ -567,6 +588,7 @@ fn portable_wasm_reports_no_platform_without_panicking() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap();
 
@@ -625,6 +647,7 @@ fn schema_1_0_accepts_process_artifacts() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap();
 
@@ -857,6 +880,7 @@ fn portable_wasm_matching_artifacts_are_rejected_as_ambiguous() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap_err();
     assert!(error.to_string().contains("more than one artifact"));
@@ -883,6 +907,7 @@ fn host_process_and_portable_wasm_artifacts_are_rejected_as_ambiguous() {
         &history,
         &Selection::Channel(Channel::Stable),
         &Platform::new("linux", "x86_64").unwrap(),
+        &"0.4.0".parse().unwrap(),
     )
     .unwrap_err();
     assert!(error.to_string().contains("more than one artifact"));

@@ -347,9 +347,12 @@ mod runtime_mother {
                 &extension_id,
                 Selection::Channel(Channel::Stable),
                 &platform,
+                &"0.4.0".parse().unwrap(),
             )
             .unwrap();
-        let installed = ExtensionInstaller::new(&home).install(selected).unwrap();
+        let installed = ExtensionInstaller::new(&home)
+            .install(selected, &"0.4.0".parse().unwrap())
+            .unwrap();
         let installed_path = home.root().join(installed.store_path());
         #[cfg(unix)]
         let staging_directory = home.temp_dir().join("extensions");

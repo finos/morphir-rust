@@ -418,12 +418,14 @@ impl<'home> ExtensionRepositories<'home> {
     }
 
     /// Resolve one exact extension artifact through an enabled repository.
+    /// Check its requirements against the caller's host version.
     pub fn resolve(
         &self,
         repository_name: &RepositoryName,
         extension_id: &ExtensionId,
         selection: Selection,
         platform: &Platform,
+        host: &semver::Version,
     ) -> Result<ResolvedArtifact> {
         let repository = self.get(repository_name)?;
         if repository.state == RepositoryState::Disabled {
@@ -434,7 +436,7 @@ impl<'home> ExtensionRepositories<'home> {
         repository
             .endpoint
             .local_index()?
-            .resolve(extension_id, selection, platform)
+            .resolve(extension_id, selection, platform, host)
     }
 
     fn set_state(

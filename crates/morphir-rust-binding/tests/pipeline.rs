@@ -1,3 +1,6 @@
+#[path = "support/native.rs"]
+mod native;
+
 use morphir_extension_sdk::{
     prelude::*,
     protocol::{ExtensionRequest, methods},
@@ -7,7 +10,7 @@ use quote::ToTokens;
 
 #[test]
 fn binding_declarations_compile_through_native_mep() {
-    let extension = NativeExtension::frontend_backend(RustExtension).unwrap();
+    let extension = native::an_initialized_extension();
     let request = CompileRequest {
         language_id: "rust".into(),
         sources: SourceSet {
@@ -55,7 +58,7 @@ fn binding_declarations_compile_through_native_mep() {
 #[test]
 fn types_compile_and_generate_through_native_mep_in_both_versions() {
     for version in ["3", "4"] {
-        let extension = NativeExtension::frontend_backend(RustExtension).unwrap();
+        let extension = native::an_initialized_extension();
         let request = CompileRequest {
             language_id: "rust".into(),
             sources: SourceSet {

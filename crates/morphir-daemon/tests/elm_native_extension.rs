@@ -47,9 +47,12 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
             &id,
             Selection::Channel(Channel::Stable),
             &Platform::current(),
+            &"0.4.0".parse().unwrap(),
         )
         .unwrap();
-    ExtensionInstaller::new(&home).install(selected).unwrap();
+    ExtensionInstaller::new(&home)
+        .install(selected, &"0.4.0".parse().unwrap())
+        .unwrap();
     // Removing this fixture's repository proves activation uses the installed copy.
     std::fs::remove_dir_all(repository.root()).unwrap();
     let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())

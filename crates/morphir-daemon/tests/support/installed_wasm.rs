@@ -102,8 +102,9 @@ impl InstalledWasmMother {
             &self.extension_id,
             Selection::Channel(Channel::Stable),
             &Platform::current(),
+            &"0.4.0".parse().unwrap(),
         )?;
-        ExtensionInstaller::new(&self.home).install(selected)
+        ExtensionInstaller::new(&self.home).install(selected, &"0.4.0".parse().unwrap())
     }
 }
 

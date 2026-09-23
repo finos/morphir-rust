@@ -1,0 +1,27 @@
+//! Native protocol fixture with a completed initialization handshake.
+
+use morphir_extension_sdk::{
+    NativeExtension,
+    protocol::{ExtensionRequest, InitializeParams, MEP_VERSION, PeerInfo, methods},
+};
+use morphir_python_binding::PythonExtension;
+
+pub fn an_initialized_extension() -> NativeExtension {
+    let extension = NativeExtension::frontend_backend(PythonExtension).unwrap();
+    let response = extension.protocol().handle(
+        ExtensionRequest::new(
+            methods::INITIALIZE,
+            InitializeParams {
+                protocol_versions: vec![MEP_VERSION.into()],
+                host: PeerInfo {
+                    name: "binding-test".into(),
+                    version: "1.0.0".into(),
+                },
+            },
+            0,
+        )
+        .unwrap(),
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+    extension
+}

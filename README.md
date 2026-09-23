@@ -47,6 +47,11 @@ This table lists the crates in the Cargo workspace.
 | `morphir-workspace` | Portable workspace discovery protocol and algorithms. |
 | `morphir-workspace-wasm` | Browser-facing JSON and WebAssembly adapter for workspace discovery. |
 
+The package MVP adapter has a runnable signed initial-resolve example:
+`cargo run -p morphir-mck-adapter --example package_mvp_resolve`. It sends the
+exact root and input-only fixture files through the adapter session, then checks
+the resulting full-lock digest against the independent frozen golden.
+
 ## Extensions
 
 This table lists independently releasable extensions. Registrations come from

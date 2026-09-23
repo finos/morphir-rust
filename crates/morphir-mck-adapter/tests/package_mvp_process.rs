@@ -86,14 +86,47 @@ fn responses(output: &Output) -> Vec<Value> {
 }
 
 #[test]
-fn advertises_only_the_mvp_restore_operation() {
+fn advertises_the_fresh_restore_and_resolve_operations() {
     let answer = responses(&exchange("{\"id\":1,\"op\":\"capabilities\"}\n"));
     assert_eq!(
         answer,
         vec![json!({
             "id":1,"suite":"package","contractVersion":"0.1.0-draft.3",
             "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-            "profiles":[PROFILE],"operations":["restore-local-library"]
+            "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library"]
+        })]
+    );
+}
+
+#[test]
+fn resolves_the_signed_graph_to_the_independently_frozen_lock_digest() {
+    let request = json!({
+        "id":2,"op":"resolve-local-library","profile":PROFILE,"files":files(),
+        "exactRoot":"example.com/finance/loan-rules@1.0.0"
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"resolved","output":"present",
+            "outputFiles":[{"path":"morphir.lock","sha256":"sha256:2db3c346d885528c3ef46d60ed9c563d5f6ba45992ef2f6a3c7dfc294d5b8f24"}],
+            "lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+#[test]
+fn unavailable_exact_root_is_a_typed_refusal_without_a_partial_lock() {
+    let request = json!({
+        "id":2,"op":"resolve-local-library","profile":PROFILE,"files":files(),
+        "exactRoot":"example.com/finance/loan-rules@9.9.9"
+    });
+    let answer = responses(&exchange(&format!("{request}\n")));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"refused","category":"invalid-input","reason":"published-root-unavailable",
+            "output":"absent","outputFiles":[],"lockUnchanged":true,"registryUnchanged":true
         })]
     );
 }

@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use morphir_package::{
     digest::Digest,
     local_registry::{Code, Phase, mvp, tuf},
+    resolution::{PackagePath, ReleaseId, StableVersion},
     strict_json,
 };
 use package_tough::{error, schema};
@@ -32,6 +33,15 @@ enum Request {
     #[serde(rename = "restore-local-library")]
     RestoreLocalLibrary {
         profile: String,
+        #[serde(default)]
+        environment: Environment,
+        files: Vec<WireFile>,
+    },
+    #[serde(rename = "resolve-local-library")]
+    ResolveLocalLibrary {
+        profile: String,
+        #[serde(rename = "exactRoot")]
+        exact_root: String,
         #[serde(default)]
         environment: Environment,
         files: Vec<WireFile>,
@@ -77,6 +87,8 @@ enum OutputSetup {
 
 /// Drive the bounded local Library MVP adapter through actual package APIs.
 /// An invalid protocol or unclassified production error stops the process.
+/// A runnable signed `resolve-local-library` request and response is in
+/// `examples/package_mvp_resolve.rs` (`cargo run -p morphir-mck-adapter --example package_mvp_resolve`).
 ///
 /// ```
 /// use morphir_mck_adapter::package_mvp::run;
@@ -88,7 +100,7 @@ enum OutputSetup {
 /// run(Cursor::new(input), &mut output)?;
 /// let reply: Value = serde_json::from_slice(output.split(|byte| *byte == b'\n').next().unwrap())?;
 /// assert_eq!(reply["contractVersion"], "0.1.0-draft.3");
-/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library"]));
+/// assert_eq!(reply["operations"], serde_json::json!(["restore-local-library", "resolve-local-library"]));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
@@ -112,7 +124,7 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
             Request::Capabilities {} => json!({
                 "suite":"package","contractVersion":CONTRACT,
                 "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-                "profiles":[PROFILE],"operations":["restore-local-library"]
+                "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library"]
             }),
             Request::RestoreLocalLibrary {
                 profile,
@@ -122,6 +134,16 @@ pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
                 ensure!(profile == PROFILE, "unsupported package MVP profile");
                 let files = admit_files(files)?;
                 runtime.block_on(restore(files, environment))?
+            }
+            Request::ResolveLocalLibrary {
+                profile,
+                exact_root,
+                environment,
+                files,
+            } => {
+                ensure!(profile == PROFILE, "unsupported package MVP profile");
+                let files = admit_files(files)?;
+                runtime.block_on(resolve(files, &exact_root, environment))?
             }
             Request::Exit {} => break,
         };
@@ -401,6 +423,106 @@ async fn restore(
     }
 }
 
+async fn resolve(
+    files: BTreeMap<String, Vec<u8>>,
+    exact_root: &str,
+    environment: Environment,
+) -> Result<serde_json::Value> {
+    let (package_path, version) = exact_root
+        .rsplit_once('@')
+        .context("exact root must contain a version")?;
+    let release = ReleaseId::new(
+        PackagePath::parse(package_path)?,
+        StableVersion::parse(version)?,
+    );
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    for (name, bytes) in &files {
+        let path = root.join(name);
+        fs::create_dir_all(path.parent().context("input has no parent")?)?;
+        fs::write(path, bytes)?;
+    }
+    let registry = root.join("registry");
+    let before_registry = inventory(&registry)?;
+    let lock = root.join("morphir.lock");
+    let before_lock = fs::read(&lock)?;
+    let policy = files.get("trust-policy.json").context("missing policy")?;
+    let initialization_policy = files.get("initialization-policy.json").unwrap_or(policy);
+    let bootstrap = files
+        .get("registry/metadata/1.root.json")
+        .context("missing root")?;
+    let state = root.join("trust");
+    let output = root.join("resolved.lock");
+    if environment.trust_state != TrustState::Uninitialized {
+        mvp::initialize(mvp::InitializeRequest {
+            policy: initialization_policy,
+            root: bootstrap,
+            state: &state,
+        })?;
+    }
+    match environment.trust_state {
+        TrustState::MissingDatabase => fs::remove_file(state.join("trust.sqlite"))?,
+        TrustState::CorruptDatabase => {
+            fs::write(state.join("trust.sqlite"), b"not a SQLite database\n")?
+        }
+        TrustState::UnresolvedOperation => {
+            fs::write(state.join("operation"), b"unresolved prior operation\n")?
+        }
+        TrustState::Initialized | TrustState::Uninitialized => {}
+    }
+    if environment.output == OutputSetup::Sentinel {
+        fs::write(&output, b"unrelated consumer content\n")?;
+    }
+    let result = mvp::resolve(mvp::ResolveRequest {
+        policy,
+        root: release,
+        registry: &registry,
+        state: &state,
+        output: &output,
+    })
+    .await;
+    let lock_unchanged = fs::read(&lock)? == before_lock;
+    let registry_unchanged = inventory(&registry)? == before_registry;
+    ensure!(
+        lock_unchanged && registry_unchanged,
+        "resolve changed package MVP inputs"
+    );
+    match result {
+        Ok(_) => {
+            let bytes = fs::read(&output).context("resolve did not publish a lock")?;
+            Ok(json!({
+                "outcome":"resolved", "output":"present",
+                "outputFiles":[{"path":"morphir.lock","sha256":Digest::of_bytes(&bytes).to_string()}],
+                "lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged
+            }))
+        }
+        Err(error) => {
+            let (category, reason) = classify_refusal(&error)
+                .ok_or_else(|| anyhow::anyhow!("package MVP resolve failed: {error:#}"))?;
+            let (output_state, output_files) = if environment.output == OutputSetup::Sentinel {
+                ensure!(
+                    fs::read(&output)? == b"unrelated consumer content\n",
+                    "refused resolve changed occupied output"
+                );
+                (
+                    "preserved-sentinel",
+                    vec![
+                        json!({"path":"morphir.lock","sha256":Digest::of_bytes(b"unrelated consumer content\n").to_string()}),
+                    ],
+                )
+            } else {
+                ensure!(!output.exists(), "refused resolve published output");
+                ("absent", Vec::new())
+            };
+            Ok(json!({
+                "outcome":"refused","category":category,"reason":reason,
+                "output":output_state,"outputFiles":output_files,
+                "lockUnchanged":lock_unchanged,"registryUnchanged":registry_unchanged
+            }))
+        }
+    }
+}
+
 fn classify_refusal(error: &mvp::Error) -> Option<(&'static str, &'static str)> {
     match error {
         e if timestamp_signature_failure(e) => {
@@ -423,6 +545,9 @@ fn classify_refusal(error: &mvp::Error) -> Option<(&'static str, &'static str)> 
         }
         mvp::Error::Refused("bundle inventory differs from manifest") => {
             Some(("package-integrity", "bundle-inventory-mismatch"))
+        }
+        mvp::Error::Refused("published root is unavailable for new selection") => {
+            Some(("invalid-input", "published-root-unavailable"))
         }
         mvp::Error::Refused(
             "historical evidence unsupported by MVP; refresh lock metadata pins",

@@ -12,6 +12,7 @@ use morphir_core::traversal::{IrCursor, SemanticEvent};
 
 use super::semantic;
 
+mod tree;
 mod type_expr;
 mod v4;
 mod value_expr;
@@ -131,30 +132,7 @@ impl IrCodec for IonCodec {
             )
             .with_guidance("correct the Ion syntax or select the actual input format")
         })?;
-        let header = values.get(0).ok_or_else(|| {
-            IonCodec::error(
-                "morphir::ir::ion::unexpected_value",
-                Stage::Detection,
-                "an Ion IR document starts with morphir::",
-            )
-        })?;
-        if options.version() == IrVersion::V4 {
-            let file = v4::decode(&values)?;
-            return semantic::emit_v4(file, sink);
-        }
-        expect_marker(header, "morphir")?;
-        let header_fields = struct_fields(header, "morphir")?;
-        let library = read_library_header(&header_fields, options.version())?;
-        let modules = read_library_modules(&values, &header_fields, &library.package)?;
-        let distribution = classic::Distribution {
-            format_version: library.format_version,
-            distribution: classic::DistributionBody::Library(
-                library.package,
-                Vec::new(),
-                classic::PackageDefinition { modules },
-            ),
-        };
-        semantic::emit_classic_v3(distribution, sink)
+        emit_values(&values, options.version(), sink)
     }
 
     fn encoder<'writer>(
@@ -175,19 +153,99 @@ impl IrCodec for IonCodec {
         writer: &mut dyn Write,
         options: &CodecOptions,
     ) -> Result<(), TransportDiagnostic> {
-        match semantic::collect(source, options.version())? {
-            semantic::SemanticFile::ClassicV3(distribution) => {
-                write_v3_library(distribution, writer)
-            }
-            semantic::SemanticFile::V4(file) => v4::write(file, writer),
-        }
+        let values = datagram(semantic::collect(source, options.version())?)?;
+        writer
+            .write_all(ion_text(values)?.as_bytes())
+            .map_err(|error| {
+                IonCodec::error(
+                    "morphir::ir::ion::encode_failed",
+                    Stage::Encoding,
+                    error.to_string(),
+                )
+            })
     }
 }
 
-fn write_v3_library(
-    distribution: classic::Distribution,
-    writer: &mut dyn Write,
+/// Emits the events of one datagram or record.
+fn emit_values(
+    values: &ion_rs::Sequence,
+    version: IrVersion,
+    sink: &mut dyn EventSink,
 ) -> Result<(), TransportDiagnostic> {
+    let header = values.get(0).ok_or_else(|| {
+        IonCodec::error(
+            "morphir::ir::ion::unexpected_value",
+            Stage::Detection,
+            "an Ion IR document starts with morphir::",
+        )
+    })?;
+    if version == IrVersion::V4 {
+        let file = v4::decode(values)?;
+        return semantic::emit_v4(file, sink);
+    }
+    expect_marker(header, "morphir")?;
+    let header_fields = struct_fields(header, "morphir")?;
+    let library = read_library_header(&header_fields, version)?;
+    let modules = read_library_modules(values, &header_fields, &library.package)?;
+    let distribution = classic::Distribution {
+        format_version: library.format_version,
+        distribution: classic::DistributionBody::Library(
+            library.package,
+            Vec::new(),
+            classic::PackageDefinition { modules },
+        ),
+    };
+    semantic::emit_classic_v3(distribution, sink)
+}
+
+/// Emits the events of an Ion document tree, read as the datagram it spells.
+pub(super) fn read_tree(
+    files: &morphir_core::ir::layout::Tree,
+    version: IrVersion,
+    sink: &mut dyn EventSink,
+) -> Result<(), TransportDiagnostic> {
+    emit_values(&tree::read(files, version)?, version, sink)
+}
+
+/// The files of an Ion document tree, keyed by logical path, in write order.
+pub(super) fn write_tree(
+    source: &mut dyn EventSource,
+    version: IrVersion,
+    path_budget: u32,
+) -> Result<Vec<(String, String)>, TransportDiagnostic> {
+    tree::write(datagram(semantic::collect(source, version)?)?, path_budget)
+}
+
+pub(super) use tree::EXTENSION as TREE_EXTENSION;
+
+/// The datagram a single-file writer emits for a distribution.
+fn datagram(file: semantic::SemanticFile) -> Result<ion_rs::Sequence, TransportDiagnostic> {
+    match file {
+        semantic::SemanticFile::ClassicV3(distribution) => v3_datagram(distribution),
+        semantic::SemanticFile::V4(file) => v4::datagram(file),
+    }
+}
+
+/// Ion text for a sequence of top-level values, with one trailing newline.
+fn ion_text(values: ion_rs::Sequence) -> Result<String, TransportDiagnostic> {
+    let mut text: String = values
+        .encode_as(ion_rs::v1_0::Text.with_format(ion_rs::TextFormat::Pretty))
+        .map_err(|error| {
+            IonCodec::error(
+                "morphir::ir::ion::encode_failed",
+                Stage::Encoding,
+                error.to_string(),
+            )
+        })?;
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+fn v3_datagram(
+    distribution: classic::Distribution,
+) -> Result<ion_rs::Sequence, TransportDiagnostic> {
     if distribution.format_version != 3 {
         return Err(IonCodec::error(
             "morphir::ir::ion::version_mismatch",
@@ -226,34 +284,7 @@ fn write_v3_library(
             sequence = sequence.push(value_element(&module.path, value_definition)?);
         }
     }
-    let text: String = sequence
-        .push(footer)
-        .build()
-        .encode_as(ion_rs::v1_0::Text.with_format(ion_rs::TextFormat::Pretty))
-        .map_err(|error| {
-            IonCodec::error(
-                "morphir::ir::ion::encode_failed",
-                Stage::Encoding,
-                error.to_string(),
-            )
-        })?;
-    writer.write_all(text.as_bytes()).map_err(|error| {
-        IonCodec::error(
-            "morphir::ir::ion::encode_failed",
-            Stage::Encoding,
-            error.to_string(),
-        )
-    })?;
-    if !text.ends_with('\n') {
-        writer.write_all(b"\n").map_err(|error| {
-            IonCodec::error(
-                "morphir::ir::ion::encode_failed",
-                Stage::Encoding,
-                error.to_string(),
-            )
-        })?;
-    }
-    Ok(())
+    Ok(sequence.push(footer).build())
 }
 
 fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic> {

@@ -63,11 +63,32 @@ pub fn truncate_stem(escaped: &str, available: usize) -> Option<String> {
     let prefix: String = escaped.chars().take(keep).collect();
     let trimmed = prefix.trim_end_matches(['-', '_']);
 
+    Some(format!("{trimmed}__{}", short_hash(escaped)))
+}
+
+/// Whether `stem` is the file stem of the name that escapes to `escaped`: the escaped stem
+/// itself, or a cut [`truncate_stem`] could have made of it under some budget.
+///
+/// A reader that finds a cut stem cannot recover the name from it, but it can check a name the
+/// file states against the stem the file is under.
+pub fn is_stem_of(stem: &str, escaped: &str) -> bool {
+    if stem == escaped {
+        return true;
+    }
+    let Some((kept, hash)) = stem.rsplit_once("__") else {
+        return false;
+    };
+    !kept.is_empty() && escaped.starts_with(kept) && hash == short_hash(escaped)
+}
+
+/// The first eight hex digits of the SHA-256 digest of `escaped`.
+fn short_hash(escaped: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(escaped.as_bytes());
     let digest = hasher.finalize();
-    let hash_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    let short_hash = &hash_hex[..8];
-
-    Some(format!("{trimmed}__{short_hash}"))
+    digest
+        .iter()
+        .take(4)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

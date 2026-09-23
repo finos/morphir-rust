@@ -51,10 +51,7 @@ pub(super) fn decode(values: &ion_rs::Sequence) -> Result<v4::IRFile, TransportD
     Ok(file)
 }
 
-pub(super) fn write(
-    file: v4::IRFile,
-    writer: &mut dyn std::io::Write,
-) -> Result<(), TransportDiagnostic> {
+pub(super) fn datagram(file: v4::IRFile) -> Result<ion_rs::Sequence, TransportDiagnostic> {
     let v4::Distribution::Library(content) = file.distribution else {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_kind",
@@ -69,24 +66,7 @@ pub(super) fn write(
     for (name, module) in &content.def.modules {
         sequence = sequence.push(def_module(name, module)?);
     }
-    let text: String = sequence
-        .push(footer())
-        .build()
-        .encode_as(ion_rs::v1_0::Text.with_format(ion_rs::TextFormat::Pretty))
-        .map_err(|error| {
-            IonCodec::error(
-                "morphir::ir::ion::encode_failed",
-                Stage::Encoding,
-                error.to_string(),
-            )
-        })?;
-    writer.write_all(text.as_bytes()).map_err(|error| {
-        IonCodec::error(
-            "morphir::ir::ion::encode_failed",
-            Stage::Encoding,
-            error.to_string(),
-        )
-    })
+    Ok(sequence.push(footer()).build())
 }
 
 fn read_library(

@@ -35,6 +35,21 @@ impl ExtismConformanceDriver {
         Self { container }
     }
 
+    /// Load the backend and open its session, as the daemon does before it
+    /// sends any work: a guest refuses other requests before `initialize`.
+    async fn load_initialized_wasm_backend() -> Self {
+        let driver = Self::load_wasm_backend();
+        let _: serde_json::Value = driver
+            .container
+            .call(
+                methods::INITIALIZE,
+                json!({"protocolVersions": ["0.1"], "host": {"name": "conformance", "version": "0.0.0"}}),
+            )
+            .await
+            .expect("the backend should initialize");
+        driver
+    }
+
     async fn generate(&self, ir: serde_json::Value) -> GenerateResult {
         self.container
             .call(
@@ -74,7 +89,7 @@ fn a_distribution_with_one_value() -> serde_json::Value {
 #[tokio::test]
 #[ignore = "requires the independently built morphir-wasm-binding artifact"]
 async fn loads_the_real_extension_and_discovers_its_capabilities() {
-    let driver = ExtismConformanceDriver::load_wasm_backend();
+    let driver = ExtismConformanceDriver::load_initialized_wasm_backend().await;
 
     assert_eq!(driver.container.info().id, "morphir-wasm-binding");
     assert!(driver.container.supports(ExtensionType::Backend));
@@ -90,7 +105,7 @@ async fn loads_the_real_extension_and_discovers_its_capabilities() {
 #[tokio::test]
 #[ignore = "requires the independently built morphir-wasm-binding artifact"]
 async fn invokes_the_real_backend_and_returns_valid_wasm() {
-    let driver = ExtismConformanceDriver::load_wasm_backend();
+    let driver = ExtismConformanceDriver::load_initialized_wasm_backend().await;
 
     let result = driver.generate(a_distribution_with_one_value()).await;
 
@@ -108,7 +123,7 @@ async fn invokes_the_real_backend_and_returns_valid_wasm() {
 #[tokio::test]
 #[ignore = "requires the independently built morphir-wasm-binding artifact"]
 async fn returns_generation_failures_as_structured_diagnostics() {
-    let driver = ExtismConformanceDriver::load_wasm_backend();
+    let driver = ExtismConformanceDriver::load_initialized_wasm_backend().await;
 
     let result = driver.generate(json!("not Morphir IR")).await;
 
@@ -121,7 +136,7 @@ async fn returns_generation_failures_as_structured_diagnostics() {
 #[tokio::test]
 #[ignore = "requires the independently built morphir-wasm-binding artifact"]
 async fn rejects_unknown_methods_at_the_guest_boundary() {
-    let driver = ExtismConformanceDriver::load_wasm_backend();
+    let driver = ExtismConformanceDriver::load_initialized_wasm_backend().await;
 
     let error = driver
         .container
@@ -147,4 +162,23 @@ async fn completes_the_mep_lifecycle_in_order() {
         json!("not Morphir IR"),
     )
     .await;
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built morphir-wasm-binding artifact"]
+async fn refuses_work_before_initialize() {
+    let driver = ExtismConformanceDriver::load_wasm_backend();
+
+    let error = driver
+        .container
+        .call::<_, serde_json::Value>(methods::CAPABILITIES, json!({}))
+        .await
+        .expect_err("the guest should refuse work before initialize");
+
+    assert!(
+        error
+            .to_string()
+            .contains(&error_codes::NOT_INITIALIZED.to_string()),
+        "{error}"
+    );
 }

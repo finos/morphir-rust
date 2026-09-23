@@ -51,6 +51,9 @@ The package MVP adapter has a runnable signed initial-resolve example:
 `cargo run -p morphir-mck-adapter --example package_mvp_resolve`. It sends the
 exact root and input-only fixture files through the adapter session, then checks
 the resulting full-lock digest against the independent frozen golden.
+For metadata-only refresh, run
+`cargo run -p morphir-mck-adapter --example package_mvp_refresh`. It sends only
+the lock, policy and signed metadata, then checks the authenticated receipt.
 
 ## Extensions
 

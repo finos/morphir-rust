@@ -71,6 +71,25 @@ fn restore(files: Vec<Value>) -> Output {
     ))
 }
 
+fn refresh(files: Vec<Value>) -> Output {
+    let request = json!({"id":2,"op":"refresh-local-library","profile":PROFILE,"files":files});
+    exchange(&format!("{request}\n"))
+}
+
+#[test]
+fn refresh_rejects_an_unmodeled_consumer_output_setup() {
+    let request = json!({
+        "id":2,"op":"refresh-local-library","profile":PROFILE,"files":files(),
+        "environment":{"trustState":"initialized","output":"sentinel"}
+    });
+    let output = exchange(&format!("{request}\n"));
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("metadata-only refresh requires absent consumer output")
+    );
+}
+
 fn responses(output: &Output) -> Vec<Value> {
     assert!(
         output.status.success(),
@@ -86,14 +105,14 @@ fn responses(output: &Output) -> Vec<Value> {
 }
 
 #[test]
-fn advertises_the_fresh_restore_and_resolve_operations() {
+fn advertises_the_fresh_restore_resolve_and_refresh_operations() {
     let answer = responses(&exchange("{\"id\":1,\"op\":\"capabilities\"}\n"));
     assert_eq!(
         answer,
         vec![json!({
             "id":1,"suite":"package","contractVersion":"0.1.0-draft.3",
             "implementation":"morphir-rust","implementationVersion":env!("CARGO_PKG_VERSION"),
-            "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library"]
+            "profiles":[PROFILE],"operations":["restore-local-library","resolve-local-library","refresh-local-library"]
         })]
     );
 }
@@ -112,6 +131,57 @@ fn resolves_the_signed_graph_to_the_independently_frozen_lock_digest() {
             "outputFiles":[{"path":"morphir.lock","sha256":"sha256:2db3c346d885528c3ef46d60ed9c563d5f6ba45992ef2f6a3c7dfc294d5b8f24"}],
             "lockUnchanged":true,"registryUnchanged":true
         })]
+    );
+}
+
+#[test]
+fn refresh_authenticates_only_the_frozen_metadata_envelopes() {
+    let answer = responses(&refresh(files()));
+    assert_eq!(
+        answer,
+        vec![json!({
+            "id":2,"outcome":"refreshed","output":"absent","outputFiles":[],
+            "receipt":{
+                "profile":"local-library-mvp","profileVersion":"0.1.0-draft.1",
+                "registry":"local",
+                "timestampDigest":"sha256:42ef09963e40de1cff6de42d5680d4c67e9f337693fb804af2873f5ee4d19636",
+                "snapshotDigest":"sha256:9cc590f7328e43e14597bab4bfc82e2192457e7bec07684d63a622b8f97bbe0e"
+            },
+            "lockUnchanged":true,"registryUnchanged":true
+        })]
+    );
+}
+
+#[test]
+fn refresh_does_not_require_package_bundles_records_or_publisher_envelopes() {
+    let expected = responses(&refresh(files()))[0].clone();
+    for prefix in [
+        "registry/bundles/",
+        "registry/targets/records/",
+        "registry/targets/statements/",
+    ] {
+        let mut input = files();
+        input.retain(|file| !file["path"].as_str().unwrap().starts_with(prefix));
+        assert_eq!(responses(&refresh(input))[0], expected, "{prefix}");
+    }
+}
+
+#[test]
+fn refresh_rejects_invalid_timestamp_signature_without_a_receipt() {
+    let mut input = files();
+    let timestamp = input
+        .iter_mut()
+        .find(|file| file["path"] == "registry/metadata/timestamp.json")
+        .unwrap();
+    let invalid = fs::read(fixture().join("bad-timestamp-signature.json")).unwrap();
+    timestamp["hex"] = Value::String(invalid.iter().map(|byte| format!("{byte:02x}")).collect());
+    assert_eq!(
+        responses(&refresh(input))[0],
+        json!({
+            "id":2,"outcome":"refused","category":"metadata-authentication",
+            "reason":"timestamp-signature-threshold","output":"absent","outputFiles":[],
+            "lockUnchanged":true,"registryUnchanged":true
+        })
     );
 }
 

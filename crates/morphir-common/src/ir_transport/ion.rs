@@ -77,28 +77,38 @@ impl IrCodec for IonCodec {
             )
             .with_guidance("correct the Ion syntax or select the actual input format")
         })?;
-        if values.len() != 2 {
-            return Err(IonCodec::error(
+        let header = values.get(0).ok_or_else(|| {
+            IonCodec::error(
                 "morphir::ir::ion::unexpected_value",
                 Stage::Detection,
-                format!(
-                    "an empty library datagram has a morphir header and a morphir_footer, found {} top-level values",
-                    values.len()
-                ),
-            ));
-        }
-        let header = values.get(0).expect("length checked");
-        let footer = values.get(1).expect("length checked");
+                "an Ion IR document starts with morphir::",
+            )
+        })?;
         expect_marker(header, "morphir")?;
-        expect_marker(footer, "morphir_footer")?;
         let header_fields = struct_fields(header, "morphir")?;
-        let footer_fields = struct_fields(footer, "morphir_footer")?;
-        if !footer_fields.is_empty() {
-            return Err(IonCodec::error(
-                "morphir::ir::ion::unexpected_member",
-                Stage::Normalization,
-                "morphir_footer has no members",
-            ));
+        match values.get(1) {
+            None => {}
+            Some(footer) if values.len() == 2 => {
+                expect_marker(footer, "morphir_footer")?;
+                let footer_fields = struct_fields(footer, "morphir_footer")?;
+                if !footer_fields.is_empty() {
+                    return Err(IonCodec::error(
+                        "morphir::ir::ion::unexpected_member",
+                        Stage::Normalization,
+                        "morphir_footer has no members",
+                    ));
+                }
+            }
+            Some(_) => {
+                return Err(IonCodec::error(
+                    "morphir::ir::ion::unexpected_value",
+                    Stage::Detection,
+                    format!(
+                        "a record is one morphir value and an empty datagram ends with morphir_footer, found {} top-level values",
+                        values.len()
+                    ),
+                ));
+            }
         }
         let package = decode_v3_library_header(&header_fields, options.version())?;
         semantic::emit_classic_v3(package, sink)

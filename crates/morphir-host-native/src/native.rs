@@ -1,11 +1,18 @@
-//! A `morphir_host::Channel` over an in-process native extension.
+//! A `morphir_host::Channel` over an in-process native extension, and the
+//! registry source for built-in extensions.
 
+use crate::CheckedConnection;
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::{ExtensionRequest, ExtensionResponse};
-use morphir_extension_sdk::{NativeExtension, NativeProtocol};
-use morphir_host::{
-    Channel, ChannelCause, ChannelError, ChannelState, ExpectedExtension, Outgoing,
+use morphir_extension_sdk::{
+    ExtensionCapabilities, ExtensionInfo, NativeExtension, NativeProtocol,
 };
+use morphir_host::{
+    CapabilityMetadataScope, Channel, ChannelCause, ChannelError, ChannelState, ExpectedChecks,
+    ExpectedExtension, GuestConnection, GuestSource, HostError, InvocationMode, InvocationPolicy,
+    JsonRpcConnection, Outgoing, ProviderOrigin,
+};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
@@ -92,5 +99,65 @@ impl Channel for NativeChannel {
     async fn close(&mut self) -> Result<ChannelState, ChannelError> {
         self.stopped = true;
         Ok(ChannelState::Stopped)
+    }
+}
+
+/// A built-in extension as a registry source.
+///
+/// Its origin is `Builtin` and its capability metadata is complete. Under
+/// `PreferDirect` the caller invokes the extension's typed handles through
+/// [`GuestSource::native`]; under `ProtocolOnly` it connects over a
+/// [`NativeChannel`], with the same checks as any other guest.
+pub struct NativeSource {
+    extension: NativeExtension,
+    capabilities: ExtensionCapabilities,
+}
+
+impl NativeSource {
+    /// Offer `extension` to a registry.
+    pub fn new(extension: NativeExtension) -> Self {
+        let capabilities = extension.capabilities();
+        Self {
+            extension,
+            capabilities,
+        }
+    }
+}
+
+#[async_trait]
+impl GuestSource for NativeSource {
+    fn info(&self) -> &ExtensionInfo {
+        self.extension.info()
+    }
+
+    fn capabilities(&self) -> &ExtensionCapabilities {
+        &self.capabilities
+    }
+
+    fn origin(&self) -> ProviderOrigin {
+        ProviderOrigin::Builtin
+    }
+
+    fn capability_metadata_scope(&self) -> CapabilityMetadataScope {
+        CapabilityMetadataScope::Complete
+    }
+
+    fn invocation_mode(&self, policy: InvocationPolicy) -> InvocationMode {
+        match policy {
+            InvocationPolicy::PreferDirect => InvocationMode::NativeDirect,
+            InvocationPolicy::ProtocolOnly => InvocationMode::NativeMep,
+        }
+    }
+
+    fn native(&self) -> Option<&NativeExtension> {
+        Some(&self.extension)
+    }
+
+    async fn connect(&self, _workspace: &Path) -> Result<Box<dyn GuestConnection>, HostError> {
+        let channel = NativeChannel::new(&self.extension);
+        let checks = ExpectedChecks::new(channel.expectation());
+        Ok(Box::new(CheckedConnection::new(JsonRpcConnection::new(
+            channel, checks,
+        ))))
     }
 }

@@ -83,17 +83,9 @@ pub fn decode(req: &DecodeRequest) -> DecodeResponse {
 }
 
 fn decode_here(req: &DecodeRequest) -> DecodeResponse {
-    // Neither of these can happen while the driver honours `capabilities`, and neither is a
-    // statement about the document, so they answer `protocol_error` rather than spending one of
-    // the kit's diagnostic codes on "this binding does not do that".
-    //
-    // Version 3 is read and written in the classic model, whose only spelling is JSON: the kit's
-    // version 3 cases carry no yaml fence, so there is nothing for this binding to answer.
-    if req.version == 3 && req.profile == Profile::Yaml {
-        return DecodeResponse::Refused {
-            diagnostic: ProtocolDiagnostic::new("this binding decodes version 3 as json only"),
-        };
-    }
+    // This cannot happen while the driver honours `capabilities`, and it is not a statement about
+    // the document, so it answers `protocol_error` rather than spending one of the kit's
+    // diagnostic codes on "this binding does not do that".
     if !matches!(req.version, 3 | 4) {
         return DecodeResponse::Refused {
             diagnostic: ProtocolDiagnostic::new(format!(
@@ -416,18 +408,15 @@ fn read(req: &DecodeRequest) -> Result<(Node, Vec<Warning>), Diagnostic> {
         // morphir-core's reader settles the repeated-member and nesting-ceiling rules before the
         // text becomes a value: `serde_json::Value` folds a repeated member onto the last one
         // written and would hide it.
-        Profile::Json => {
-            let value = morphir_core::ir::json::read(&req.input)?;
-            if req.version == 3 {
-                return read_v3(req).map(|node| (node, Vec::new()));
-            }
-            value
-        }
+        Profile::Json => morphir_core::ir::json::read(&req.input)?,
         // The YAML reader walks the document itself, so the repeated member and the nesting
         // ceiling are already its answers, in the kit's codes and with the kit's cursors; there
-        // is no separate probe. Version 3 never reaches here (`decode_here` refuses it).
+        // is no separate probe.
         Profile::Yaml => morphir_core::ir::yaml::read(&req.input)?,
     };
+    if req.version == 3 {
+        return read_v3(req, &value).map(|node| (node, Vec::new()));
+    }
     read_v4(req, value)
 }
 
@@ -515,43 +504,62 @@ type ClassicPattern = classic::Pattern<ClassicAnnotation>;
 type ClassicValueDefinition = classic::ValueDefinition<classic::Attrs, ClassicAnnotation>;
 type ClassicArgument = classic::value::ValueArgument<classic::Attrs, ClassicAnnotation>;
 
-fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
+/// Reads one version 3 node in the classic model.
+///
+/// JSON is deserialized from the text itself, once morphir-core's reader has checked it; YAML
+/// from the value morphir-core's YAML reader produced. Both profiles then write the same classic
+/// value tree.
+fn read_v3(req: &DecodeRequest, value: &Json) -> Result<Node, Diagnostic> {
     fn of<T: for<'de> Deserialize<'de>>(
-        text: &str,
-        wrap: fn(T) -> Node,
+        req: &DecodeRequest,
+        value: &Json,
+        wrap: impl FnOnce(T) -> Node,
     ) -> Result<Node, Diagnostic> {
-        serde_json::from_str::<T>(text)
-            .map(wrap)
-            .map_err(|error| recover(&error))
+        let read = match req.profile {
+            Profile::Json => serde_json::from_str::<T>(&req.input),
+            Profile::Yaml => T::deserialize(value),
+        };
+        read.map(wrap).map_err(|error| recover(&error))
     }
 
-    let text = &req.input;
     match req.node {
-        NodeKind::Name => of(text, Node::ClassicName),
-        NodeKind::Path => of(text, Node::ClassicPath),
-        NodeKind::FQName => of(text, Node::ClassicFQName),
-        NodeKind::Literal => of(text, Node::ClassicLiteral),
-        NodeKind::Type => of(text, Node::ClassicType),
-        NodeKind::Pattern => of(text, Node::ClassicPattern),
-        NodeKind::Value => of(text, Node::ClassicValue),
-        NodeKind::ValueDefinition => of(text, Node::ClassicValueDefinition),
-        NodeKind::TypeSpecification => of(text, Node::ClassicTypeSpecification),
-        // The rest are nodes a classic document only ever carries inside a whole distribution,
-        // whose value attribute is the inferred type itself rather than something a reader can
-        // clear — so there is no version 3 answer this adapter can give for them on their own.
-        NodeKind::FormatVersion
-        | NodeKind::TypeDefinition
+        NodeKind::Name => of(req, value, Node::ClassicName),
+        NodeKind::Path => of(req, value, Node::ClassicPath),
+        NodeKind::FQName => of(req, value, Node::ClassicFQName),
+        NodeKind::Literal => of(req, value, Node::ClassicLiteral),
+        NodeKind::Type => of(req, value, Node::ClassicType),
+        NodeKind::Pattern => of(req, value, Node::ClassicPattern),
+        NodeKind::Value => of(req, value, Node::ClassicValue),
+        NodeKind::ValueDefinition => of(req, value, Node::ClassicValueDefinition),
+        NodeKind::TypeSpecification => of(req, value, Node::ClassicTypeSpecification),
+        // A version 3 format version is one of the support table's v3 releases; the table itself
+        // is the v4 node's, so a later minor is refused the same way at either version.
+        NodeKind::FormatVersion => {
+            v3_major(value, "/")?;
+            of(req, value, Node::FormatVersion)
+        }
+        // The kit names the whole document `Distribution` as well as `IRFile`.
+        NodeKind::IRFile | NodeKind::Distribution => {
+            if let Some(version) = value.get("formatVersion") {
+                v3_major(version, "/formatVersion")?;
+            }
+            of(req, value, |distribution| Node::ClassicDistribution {
+                distribution,
+                strip: false,
+            })
+        }
+        NodeKind::DistributionManifestFile => {
+            morphir_core::ir::layout::read_v3_manifest_file(value).map(Node::ClassicManifestFile)
+        }
+        // These are nodes a classic document carries only inside a whole distribution, or the
+        // tree files whose role (definitions or specifications) only the tree around them
+        // decides — so there is no version 3 answer this adapter gives for them on their own.
+        NodeKind::TypeDefinition
         | NodeKind::ValueSpecification
         | NodeKind::AccessControlledTypeDefinition
         | NodeKind::AccessControlledValueDefinition
         | NodeKind::ModuleDefinition
         | NodeKind::ModuleSpecification
-        | NodeKind::IRFile
-        | NodeKind::Distribution
-        // `readTree`/`writeTree` answer a version 3 tree's files, but `decode` reads one of
-        // these kinds on its own with no tree around it, and there is no version 3 answer for
-        // that here.
-        | NodeKind::DistributionManifestFile
         | NodeKind::ModuleManifestFile
         | NodeKind::TypeDefinitionFile
         | NodeKind::ValueDefinitionFile => Err(Diagnostic::normalization(
@@ -562,6 +570,24 @@ fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
                 req.node
             ),
         )),
+    }
+}
+
+/// Refuses a format version whose major is not 3 as a document of another version. Anything that
+/// has no readable major is left to the reader, which says what is wrong with it.
+fn v3_major(version: &Json, cursor: &str) -> Result<(), Diagnostic> {
+    let major = match version {
+        Json::Number(number) => number.as_u64(),
+        Json::String(text) => text.split('.').next().and_then(|major| major.parse().ok()),
+        _ => None,
+    };
+    match major {
+        Some(major) if major != 3 => Err(Diagnostic::normalization(
+            DiagnosticCode::VersionMismatch,
+            cursor,
+            format!("formatVersion {version} is not a version 3 release"),
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -814,6 +840,15 @@ enum Node {
     ClassicPattern(ClassicPattern),
     ClassicValue(ClassicValue),
     ClassicValueDefinition(ClassicValueDefinition),
+    /// A whole classic document. Its attributes are cleared as it is written rather than in the
+    /// model, whose `Library` value attribute is the inferred type itself (see
+    /// [`stripped_classic_distribution`]).
+    ClassicDistribution {
+        distribution: classic::Distribution,
+        strip: bool,
+    },
+    /// A v3 tree's manifest, as the value a v3 tree writes for it. A manifest has no attributes.
+    ClassicManifestFile(Json),
 }
 
 impl Node {
@@ -862,6 +897,10 @@ impl Node {
             Node::ClassicPattern(node) => classic_pattern_kind(node),
             Node::ClassicValue(node) => classic_value_kind(node),
             Node::ClassicValueDefinition(_) => "ValueDefinition",
+            Node::ClassicDistribution { distribution, .. } => {
+                classic_distribution_kind(&distribution.distribution)
+            }
+            Node::ClassicManifestFile(_) => "DistributionManifestFile",
         }
     }
 
@@ -941,6 +980,10 @@ impl Node {
             Node::ClassicValueDefinition(node) => {
                 Node::ClassicValueDefinition(strip_classic_value_definition(node))
             }
+            Node::ClassicDistribution { distribution, .. } => Node::ClassicDistribution {
+                distribution,
+                strip: true,
+            },
             // Names, paths, literals, the format version, a classic type and a classic type
             // specification — which carries nothing but types — have no attributes a reader can
             // clear.
@@ -1004,6 +1047,15 @@ impl Node {
             Node::ClassicPattern(node) => text(node),
             Node::ClassicValue(node) => text(node),
             Node::ClassicValueDefinition(node) => text(node),
+            Node::ClassicDistribution {
+                distribution,
+                strip: true,
+            } => stripped_classic_distribution(distribution),
+            Node::ClassicDistribution {
+                distribution,
+                strip: false,
+            } => classic_value_of(distribution),
+            Node::ClassicManifestFile(node) => Ok(node.clone()),
         }
     }
 }

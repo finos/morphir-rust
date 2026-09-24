@@ -464,6 +464,21 @@ pub fn write_tree_v3(
     Ok(out.into_vec())
 }
 
+/// A v3 distribution manifest read on its own, with no tree around it, and answered as the value
+/// a v3 tree writes for it: every check [`read_tree_v3`] makes of a manifest, then the writer's
+/// spelling. `$meta` is dropped and never written back (decision 0014).
+///
+/// Diagnostics are cursored from the file's root (`/formatVersion`, …), not from `manifest`.
+pub fn read_v3_manifest_file(value: &JsonValue) -> Result<JsonValue, Diagnostic> {
+    let envelope = V3::decode_manifest(value, "")?;
+    Ok(manifest(
+        envelope.kind,
+        &envelope.package,
+        envelope.path_budget,
+        &envelope.dependencies,
+    ))
+}
+
 /// The root manifest of a v3 document tree. Total: a manifest carries only names, a kind and a
 /// number.
 pub fn write_v3_manifest(

@@ -439,3 +439,26 @@ fn a_member_other_than_meta_is_still_refused_in_every_v3_tree_file() {
         assert_eq!(error.cursor, format!("{path}#/meta"), "{error:?}");
     }
 }
+
+/// A v3 manifest read on its own answers what a v3 tree writes for it, `$meta` dropped, with the
+/// same checks the tree reader makes, cursored from the file's own root.
+#[test]
+fn a_v3_manifest_file_reads_on_its_own() {
+    let (_, written) = morphir_core::ir::layout::write_v3_manifest(
+        morphir_core::ir::layout::V3Kind::Library,
+        &morphir_core::naming::PackageName::parse("my-org/my-project"),
+        &[],
+        &policy(Profile::Json, 4000),
+    );
+    let mut with_meta = parsed(Profile::Json, &written);
+    with_meta["$meta"] = serde_json::json!({ "generator": "example" });
+    assert_eq!(
+        morphir_core::ir::layout::read_v3_manifest_file(&with_meta).unwrap(),
+        parsed(Profile::Json, &written)
+    );
+
+    with_meta["formatVersion"] = serde_json::json!(4);
+    let error = morphir_core::ir::layout::read_v3_manifest_file(&with_meta).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
+    assert_eq!(error.cursor, "/formatVersion", "{error:?}");
+}

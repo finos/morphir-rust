@@ -54,3 +54,12 @@ pub enum HostError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
+
+impl From<crate::channel::ChannelError> for HostError {
+    fn from(error: crate::channel::ChannelError) -> Self {
+        HostError::Channel {
+            message: error.message,
+            state: error.state,
+        }
+    }
+}

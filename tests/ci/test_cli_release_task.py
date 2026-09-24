@@ -29,12 +29,19 @@ exit 0
 
 def _descriptor(**extra: object) -> str:
     fields = {
-        "schemaVersion": 1,
+        "schemaVersion": "2.0.0-draft.2",
         "shortId": "gleam",
         "extensionId": "morphir-gleam",
         "version": "0.1.0",
-        "artifact": "morphir-gleam.tar.gz",
-        "sha256": "0" * 64,
+        "artifacts": [{"runtime": "wasm", "filename": "morphir-gleam.wasm",
+                       "sha256": "0" * 64, "claims": {
+                           "claimsVersion": "0.1.0-draft.2",
+                           "protocolVersions": ["0.1"],
+                           "extension": {"id": "morphir-gleam", "name": "Morphir Gleam",
+                                         "version": "0.1.0", "types": ["backend"]},
+                           "capabilities": {"backend": {"targets": ["gleam"],
+                                                       "irVersions": ["3", "4"], "generate": True}},
+                       }}],
     }
     fields.update(extra)
     return json.dumps(fields, indent=2) + "\n"
@@ -66,7 +73,7 @@ class PublishTests(unittest.TestCase):
     def test_a_successful_publish_goes_on_to_install(self) -> None:
         result = self._publish(
             '    echo "published"\n    exit 0',
-            descriptor=_descriptor(workspaceDiscovery=True),
+            descriptor=_descriptor(),
         )
         # The stub exits 9 from `extension install`, so the task carried on past the publish.
         self.assertEqual(9, result.returncode, result.stderr)
@@ -87,7 +94,7 @@ class PublishTests(unittest.TestCase):
         result = self._publish(
             '    echo "invalid extension release bundle: unknown field \\`workspaceDiscovery\\`" >&2\n'
             '    exit 1',
-            descriptor=_descriptor(workspaceDiscovery=True),
+            descriptor=_descriptor(),
         )
         self.assertEqual(1, result.returncode, result.stdout)
         self.assertIn("unknown field", result.stderr)

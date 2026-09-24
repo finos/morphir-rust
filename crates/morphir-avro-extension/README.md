@@ -61,3 +61,16 @@ the exact bundle created by the build job and never rebuilds it.
 See
 [`docs/contributors/design/extensions/README.md`](../../docs/contributors/design/extensions/README.md)
 for the contributor release workflow.
+
+### Bundle descriptor compatibility
+
+Newly built bundles include a version-2 `release.json` with capability claims
+read from the exact WASM being packaged and checked against
+`.github/extensions.toml`. Publishing requires Morphir CLI `0.4.0-beta.7` or
+later; older CLIs cannot read this descriptor. The versioned WASM and
+`.wasm.sha256` names are unchanged. The downloaded descriptor is still named
+`<artifact-base>-<version>.release.json`; rename it to `release.json` before
+publishing. WASM installs show `Claims: unchecked`.
+
+See the [packaging contract](../../docs/extensions/capability-claims.md#packaging-wasm-extensions)
+for the descriptor shape and provenance rules.

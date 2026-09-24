@@ -8,6 +8,7 @@ import stat
 import sys
 
 from .bundles import verified_bundle, write_bundle
+from .claims import read_claims
 from .errors import PackageError
 from .model import expected_bundle, package_version, registered_extension, require_identifier
 from .paths import clean_extension_staging, clean_head_snapshot, validate_extension_staging
@@ -103,6 +104,7 @@ def package(root: Path, args: argparse.Namespace) -> None:
         version,
         wasm_bytes,
         args.git_commit,
+        read_claims(root, wasm_bytes),
     )
     write_bundle(args.output, expected)
 

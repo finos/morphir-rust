@@ -139,3 +139,16 @@ results. Explicit fatal parse-stage requests still report failure.
 The official parser also runs inside the WASM guest. Parsing does not need
 randomness; the guest explicitly returns an unsupported error if an upstream
 code path requests entropy.
+
+### Bundle descriptor compatibility
+
+Newly built bundles include a version-2 `release.json` with capability claims
+read from the exact WASM being packaged and checked against
+`.github/extensions.toml`. Publishing requires Morphir CLI `0.4.0-beta.7` or
+later; older CLIs cannot read this descriptor. The versioned WASM and
+`.wasm.sha256` names are unchanged. The downloaded descriptor is still named
+`<artifact-base>-<version>.release.json`; rename it to `release.json` before
+publishing. WASM installs show `Claims: unchecked`.
+
+See the [packaging contract](../../docs/extensions/capability-claims.md#packaging-wasm-extensions)
+for the descriptor shape and provenance rules.

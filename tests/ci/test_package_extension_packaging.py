@@ -41,11 +41,11 @@ class PackageExtensionTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(["openapi", "json-schema"], descriptor["targets"])
+        self.assertEqual(["openapi", "json-schema"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
         self.assertEqual("morphir-openapi", descriptor["extensionId"])
         # The guest reports this exact spelling at initialization; a
         # repository record derived from the identifier would not match it.
-        self.assertEqual("Morphir OpenAPI", descriptor["name"])
+        self.assertEqual("Morphir OpenAPI", descriptor["artifacts"][0]["claims"]["extension"]["name"])
 
     @staticmethod
     def _descriptor(short_id: str, extension: dict) -> dict:
@@ -68,17 +68,17 @@ class PackageExtensionTests(unittest.TestCase):
             "elm-native", registry["extensions"]["elm-native"]
         )
 
-        self.assertIs(True, descriptor["incremental"])
+        self.assertIs(True, descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["incremental"])
 
-    def test_a_frontend_without_the_flag_writes_no_incremental_key(self) -> None:
-        """The flag is written only when true, so older descriptors are unchanged."""
+    def test_a_frontend_without_the_registry_flag_claims_no_incremental_support(self) -> None:
+        """An absent registry flag means the guest must not claim this capability."""
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         python = registry["extensions"]["python"]
         self.assertNotIn("incremental", python)
 
         descriptor = self._descriptor("python", python)
 
-        self.assertNotIn("incremental", descriptor)
+        self.assertFalse(descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["incremental"])
 
     def test_rejects_incremental_without_a_frontend(self) -> None:
         """Nothing honours the flag on a backend-only entry, so it is refused."""
@@ -109,17 +109,17 @@ class PackageExtensionTests(unittest.TestCase):
 
                 descriptor = self._descriptor(short_id, extension)
 
-                self.assertIs(True, descriptor["workspaceDiscovery"])
+                self.assertIs(True, descriptor["artifacts"][0]["claims"]["capabilities"]["workspace"]["discover"])
 
     def test_an_extension_without_the_flag_writes_no_workspace_key(self) -> None:
-        """The flag is written only when true, so older descriptors are unchanged."""
+        """An absent registry flag means the guest must not claim this capability."""
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
         python = registry["extensions"]["python"]
         self.assertNotIn("workspace_discovery", python)
 
         descriptor = self._descriptor("python", python)
 
-        self.assertNotIn("workspaceDiscovery", descriptor)
+        self.assertNotIn("workspace", descriptor["artifacts"][0]["claims"]["capabilities"])
 
     def test_rejects_workspace_discovery_without_a_frontend(self) -> None:
         """Discovery synthesis needs the languages that name the sources."""
@@ -156,7 +156,7 @@ class PackageExtensionTests(unittest.TestCase):
 
         descriptor = self._descriptor("avro", avro)
 
-        self.assertNotIn("workspaceDiscovery", descriptor)
+        self.assertNotIn("workspace", descriptor["artifacts"][0]["claims"]["capabilities"])
 
     def test_rejects_a_non_boolean_incremental_flag(self) -> None:
         registry = tomllib.loads(EXTENSIONS_TOML.read_text(encoding="utf-8"))
@@ -184,17 +184,16 @@ class PackageExtensionTests(unittest.TestCase):
         descriptor = json.loads(
             (self.fixture.output / "release.json").read_text(encoding="utf-8")
         )
-        artifact = self.fixture.output / descriptor["artifact"]
-        self.assertEqual(1, descriptor["schemaVersion"])
+        artifact = self.fixture.output / descriptor["artifacts"][0]["filename"]
+        self.assertEqual("2.0.0-draft.2", descriptor["schemaVersion"])
         self.assertEqual("avro", descriptor["shortId"])
         self.assertEqual("morphir-avro", descriptor["extensionId"])
-        self.assertEqual("morphir-avro-extension", descriptor["package"])
         self.assertEqual("0.1.0", descriptor["version"])
-        self.assertEqual(["0.1"], descriptor["mepVersions"])
-        self.assertEqual("wasm", descriptor["runtime"])
-        self.assertEqual(["avro"], descriptor["targets"])
-        self.assertEqual(["3", "4"], descriptor["irVersions"])
-        self.assertEqual(sha256(artifact), descriptor["sha256"])
+        self.assertEqual(["0.1"], descriptor["artifacts"][0]["claims"]["protocolVersions"])
+        self.assertEqual("wasm", descriptor["artifacts"][0]["runtime"])
+        self.assertEqual(["avro"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
+        self.assertEqual(["3", "4"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["irVersions"])
+        self.assertEqual(sha256(artifact), descriptor["artifacts"][0]["sha256"])
         self.assertEqual(self.fixture.wasm.read_bytes(), artifact.read_bytes())
 
     def test_validate_extension_staging_accepts_any_registered_short_id(self) -> None:
@@ -309,14 +308,8 @@ class PackageExtensionTests(unittest.TestCase):
                 "schemaVersion",
                 "shortId",
                 "extensionId",
-                "package",
                 "version",
-                "mepVersions",
-                "runtime",
-                "targets",
-                "irVersions",
-                "artifact",
-                "sha256",
+                "artifacts",
             ],
             list(descriptor),
         )

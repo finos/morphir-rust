@@ -395,3 +395,16 @@ subset. Additional expressions, imports and whole-crate name resolution are
 follow-on work. Conditional, pattern and callable tests compile and execute source and
 generated Rust against fixed expected results for both IR versions, including
 the native and WASM extension protocols.
+
+### Bundle descriptor compatibility
+
+Newly built bundles include a version-2 `release.json` with capability claims
+read from the exact WASM being packaged and checked against
+`.github/extensions.toml`. Publishing requires Morphir CLI `0.4.0-beta.7` or
+later; older CLIs cannot read this descriptor. The versioned WASM and
+`.wasm.sha256` names are unchanged. The downloaded descriptor is still named
+`<artifact-base>-<version>.release.json`; rename it to `release.json` before
+publishing. WASM installs show `Claims: unchecked`.
+
+See the [packaging contract](../../docs/extensions/capability-claims.md#packaging-wasm-extensions)
+for the descriptor shape and provenance rules.

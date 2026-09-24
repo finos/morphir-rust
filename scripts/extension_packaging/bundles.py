@@ -11,6 +11,7 @@ import stat
 import tempfile
 
 from .errors import PackageError
+from .model import wasm_artifact
 from .paths import lstat_optional, reject_symlink_components
 
 
@@ -75,8 +76,9 @@ def verified_bundle(source: Path) -> dict[str, bytes]:
         raise PackageError(f"cannot parse source bundle release.json: {error}") from error
     if not isinstance(descriptor, dict):
         raise PackageError("source bundle release.json must contain a JSON object")
-    artifact = descriptor.get("artifact")
-    digest = descriptor.get("sha256")
+    entry = wasm_artifact(descriptor)
+    artifact = entry["filename"]
+    digest = entry["sha256"]
     if (
         not isinstance(artifact, str)
         or not artifact

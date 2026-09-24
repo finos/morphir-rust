@@ -20,12 +20,21 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 
 from extension_packaging.errors import PackageError  # noqa: E402
-from extension_packaging.model import descriptor_bytes  # noqa: E402
+from extension_packaging.model import descriptor_bytes as build_descriptor_bytes  # noqa: E402
 from extension_packaging.paths import (  # noqa: E402
     clean_extension_staging,
     clean_head_snapshot,
     validate_extension_staging,
 )
+
+from extension_claims_test_support import claims_for_extension
+
+
+def descriptor_bytes(short_id, extension, version, artifact_name, digest, git_commit):
+    """Build a descriptor using a fixture guest's independently supplied claims."""
+    return build_descriptor_bytes(short_id, extension, version, artifact_name, digest,
+                                  git_commit, claims_for_extension(extension, version))
+
 
 EXTENSIONS_TOML = REPOSITORY_ROOT / ".github" / "extensions.toml"
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_extension.py"
@@ -89,6 +98,15 @@ class PackageFixture:
         )
         self.wasm.write_bytes(b"\x00asm\x01\x00\x00\x00fixture")
 
+        claims = claims_for_extension(tomllib.loads(registry)["extensions"]["avro"], cargo_version)
+        self.claims_file = self.root / "guest-claims.json"
+        self.claims_file.write_text(json.dumps(claims), encoding="utf-8")
+        tools = self.root / "claims-bin"
+        tools.mkdir()
+        cargo = tools / "cargo"
+        cargo.write_text("#!/bin/sh\ncat guest-claims.json\n", encoding="utf-8")
+        cargo.chmod(0o755)
+
     def package(
         self,
         short_id: str = "avro",
@@ -111,6 +129,7 @@ class PackageFixture:
         return subprocess.run(
             command,
             cwd=self.root,
+            env={**os.environ, "PATH": str(self.root / "claims-bin") + os.pathsep + os.environ["PATH"]},
             check=False,
             capture_output=True,
             text=True,
@@ -236,6 +255,9 @@ fi
                 printf '%s\n' "ignored-source-present" >> "$ARTIFACT_TASK_LOG"
             fi
             case "$*" in
+                'run --quiet --locked -p morphir-host-native --bin extension-claims -- '*)
+                    cat guest-claims.json
+                    ;;
                 'build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown')
                     mkdir -p target/wasm32-unknown-unknown/release
                     printf '\\000asm\\001\\000\\000\\000' > target/wasm32-unknown-unknown/release/morphir_avro_extension.wasm

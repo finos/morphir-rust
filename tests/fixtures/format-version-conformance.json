@@ -271,7 +271,7 @@
   ],
   "supportTableCases": {
     "parse": [
-      { "name": "reference table is canonical", "input": "[3.0.0,3.1.0),[4.0.0,4.1.0)", "canonical": "[3.0.0,3.1.0),[4.0.0,4.1.0)" },
+      { "name": "older v3.0-only table is canonical", "input": "[3.0.0,3.1.0),[4.0.0,4.1.0)", "canonical": "[3.0.0,3.1.0),[4.0.0,4.1.0)" },
       { "name": "whitespace is dropped", "input": "[3.0.0, 3.1.0) , [4.0.0 ,4.1.0)", "canonical": "[3.0.0,3.1.0),[4.0.0,4.1.0)" },
       { "name": "inclusive upper advances", "input": "[4.0.0,4.0.2]", "canonical": "[4.0.0,4.0.3)" },
       { "name": "exclusive lower advances", "input": "(4.0.0,4.1.0)", "canonical": "[4.0.1,4.1.0)" },

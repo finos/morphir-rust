@@ -2,11 +2,7 @@
 //! the shared MCK driver compares fixed expectations without using an IR codec.
 
 use anyhow::{Result, anyhow};
-use morphir_core::ir::classic;
-use morphir_core::naming::{PackageName, Path};
-use morphir_core::node_address::{
-    ArtifactSelector, NodeCatalog, NodeIndex, NodeResolutionError, NodeUri,
-};
+use morphir_core::node_address::{NodeCatalog, NodeIndex, NodeResolutionError, NodeUri};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
@@ -67,10 +63,8 @@ fn resolve(input: &str, uri: &str) -> Value {
     let version = value.get("formatVersion");
     let mut catalog = NodeCatalog::new();
     let result = match version {
-        Some(Value::Number(number)) if number.as_u64() == Some(3) => {
-            add_v3(&mut catalog, input, value)
-        }
-        Some(Value::String(text)) if text == "3.0.0" => add_v3(&mut catalog, input, value),
+        Some(Value::Number(number)) if number.as_u64() == Some(3) => add_v3(&mut catalog, input),
+        Some(Value::String(text)) if text.starts_with("3.") => add_v3(&mut catalog, input),
         Some(Value::Number(number)) if number.as_u64() == Some(4) => add_v4(&mut catalog, input),
         Some(Value::String(text)) if text == "4.0.0" => add_v4(&mut catalog, input),
         _ => return json!({"ok":false,"outcome":"format_version_mismatch"}),
@@ -86,19 +80,8 @@ fn resolve(input: &str, uri: &str) -> Value {
     }
 }
 
-fn add_v3(catalog: &mut NodeCatalog, input: &str, value: Value) -> Result<()> {
-    let distribution: classic::Distribution = serde_json::from_value(value)?;
-    let classic::DistributionBody::Library(package, _, _) = &distribution.distribution;
-    let package = package
-        .segments
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("/");
-    let index = NodeIndex::v3(
-        &distribution,
-        ArtifactSelector::Package(PackageName::new(Path::new(&package))),
-    )?;
+fn add_v3(catalog: &mut NodeCatalog, input: &str) -> Result<()> {
+    let index = NodeIndex::v3_json(input.as_bytes())?;
     catalog.add_current(index);
     catalog.add_v3_json_snapshot(input.as_bytes(), None)?;
     Ok(())

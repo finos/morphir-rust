@@ -73,10 +73,10 @@ mod tests {
     }
 
     #[test]
-    fn string_three_one_zero_is_unsupported_minor() {
+    fn string_three_one_zero_is_supported() {
         let normalized = normalize_json(json!("3.1.0")).expect("recognized revision");
         assert_eq!(normalized.release, ReleaseTriplet::new(3, 1, 0));
-        assert_eq!(normalized.compatibility, Compatibility::UnsupportedMinor);
+        assert_eq!(normalized.compatibility, Compatibility::Supported);
     }
 
     #[test]

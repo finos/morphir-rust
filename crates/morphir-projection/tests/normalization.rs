@@ -78,7 +78,7 @@ fn format_version_errors_are_classified_before_distribution_decoding() {
             "format_version_out_of_range",
         ),
         (
-            serde_json::json!("3.1.0"),
+            serde_json::json!("3.2.0"),
             "unsupported_format_version_minor",
         ),
         (

@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn unsupported_minor_is_reported_as_a_minor() {
         assert_eq!(
-            baseline("3.1.0"),
+            baseline("3.2.0"),
             Err("unsupported_format_version_minor".to_owned())
         );
     }

@@ -24,7 +24,7 @@ fn capabilities_match_the_stage_one_contract() {
     assert_eq!(caps["contractVersion"], 1);
     assert_eq!(caps["binding"], "morphir-rust");
     assert_eq!(caps["language"], "rust");
-    assert_eq!(caps["formatVersions"], "[3.0.0,3.1.0),[4.0.0,4.1.0)");
+    assert_eq!(caps["formatVersions"], "[3.0.0,3.2.0),[4.0.0,4.1.0)");
     assert_eq!(caps["versions"], serde_json::json!([3, 4]));
     assert_eq!(caps["profiles"], serde_json::json!(["json", "yaml"]));
     assert_eq!(caps["layouts"], serde_json::json!(["single", "tree"]));
@@ -56,7 +56,7 @@ fn capabilities_match_the_stage_one_contract() {
 fn the_capabilities_reply_declares_the_support_table() {
     let line = serde_json::to_string(&capabilities()).unwrap();
     assert!(
-        line.contains(r#""formatVersions":"[3.0.0,3.1.0),[4.0.0,4.1.0)""#),
+        line.contains(r#""formatVersions":"[3.0.0,3.2.0),[4.0.0,4.1.0)""#),
         "{line}"
     );
     assert!(

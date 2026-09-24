@@ -206,12 +206,12 @@ fn rejects_unsupported_versions_and_inconsistent_v3_value_annotations() {
 
 #[test]
 fn backend_reads_compatible_patches_but_rejects_other_minor_versions() {
-    for baseline in ["3", "4"] {
+    for (baseline, rejected_minor) in [("3", "3.2.0"), ("4", "4.1.0")] {
         let mut ir = compile(a_request(baseline));
         ir["formatVersion"] = json!(format!("{baseline}.0.7"));
         let result = generate(ir.clone());
         assert!(result.success, "{:?}", result.diagnostics);
-        ir["formatVersion"] = json!(format!("{baseline}.1.0"));
+        ir["formatVersion"] = json!(rejected_minor);
         assert!(!generate(ir).success);
     }
 }

@@ -7,7 +7,7 @@ use super::triplet::ReleaseTriplet;
 use std::cmp::Ordering;
 
 /// The reference table of the parent specification.
-pub const REFERENCE_SUPPORT_TABLE: &str = "[3.0.0,3.1.0),[4.0.0,4.1.0)";
+pub const REFERENCE_SUPPORT_TABLE: &str = "[3.0.0,3.2.0),[4.0.0,4.1.0)";
 
 /// The smallest release the domain has.
 ///

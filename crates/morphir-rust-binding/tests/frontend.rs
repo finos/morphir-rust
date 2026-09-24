@@ -125,7 +125,7 @@ fn types_only_skips_functions_with_warning_otherwise_compiles() {
 }
 #[test]
 fn validates_request_and_cli_context() {
-    for version in ["2", "5", "3.1.0", "4.1.0", "junk"] {
+    for version in ["2", "5", "3.2.0", "4.1.0", "junk"] {
         assert!(!compile("pub struct X;", version).success);
     }
     let mut req = request("pub struct X;", "3");

@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn load_ir_normalizes_every_supported_classic_v3_release_string() {
-    for version in ["3.0.0", "3.0.1"] {
+    for version in ["3.0.0", "3.0.1", "3.1.0"] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("morphir-ir.json");
         std::fs::write(
@@ -24,7 +24,7 @@ fn load_ir_normalizes_every_supported_classic_v3_release_string() {
 
 #[test]
 fn load_ir_does_not_normalize_unsupported_classic_version_strings() {
-    for version in ["3.", "3.1.0"] {
+    for version in ["3.", "3.2.0"] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("morphir-ir.json");
         std::fs::write(

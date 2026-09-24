@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Write};
 
 use ion_rs::{Element, IonType, Symbol};
+use morphir_core::format_version::{DeclaredRelease, ReleaseTriplet, SupportTable};
 use morphir_core::ir::classic;
 use morphir_core::traversal::{IrCursor, SemanticEvent};
 
@@ -187,17 +188,34 @@ fn emit_values(
     }
     expect_marker(header, "morphir")?;
     let header_fields = struct_fields(header, "morphir")?;
-    let library = read_library_header(&header_fields, version)?;
-    let (dependencies, modules) = read_library_modules(values, &header_fields, &library.package)?;
-    let distribution = classic::Distribution {
-        format_version: library.format_version,
-        distribution: classic::DistributionBody::Library(
-            library.package,
-            dependencies,
-            classic::PackageDefinition { modules },
-        ),
+    let header = read_classic_header(&header_fields, version)?;
+    let distribution = match header.kind {
+        ClassicKind::Library => {
+            let (dependencies, modules) =
+                read_library_modules(values, &header_fields, &header.package)?;
+            classic::DistributionBody::Library(
+                header.package,
+                dependencies,
+                classic::PackageDefinition { modules },
+            )
+        }
+        ClassicKind::Specs => {
+            let (dependencies, modules) =
+                read_specs_modules(values, &header_fields, &header.package)?;
+            classic::DistributionBody::Specs(
+                header.package,
+                dependencies,
+                classic::PackageSpecification { modules },
+            )
+        }
     };
-    semantic::emit_classic_v3(distribution, sink)
+    semantic::emit_classic_v3(
+        classic::Distribution {
+            format_version: header.format_version,
+            distribution,
+        },
+        sink,
+    )
 }
 
 /// Emits the events of an Ion document tree, read as the datagram it spells.
@@ -258,18 +276,27 @@ fn v3_datagram(
             ),
         ));
     }
-    let classic::DistributionBody::Library(package, dependencies, definition) =
-        distribution.distribution;
-    let header = Element::from(ion_rs::ion_struct! {
-        "ionVersion": ION_CONTRACT,
-        "formatVersion": "3.0.0",
-        "kind": Element::symbol("library"),
-        "packageName": canonical_package(&package),
-    })
-    .with_annotations(["morphir"]);
     let footer =
         Element::from(ion_rs::Struct::builder().build()).with_annotations(["morphir_footer"]);
-    let mut sequence = ion_rs::Sequence::builder().push(header);
+    let (package, dependencies, definition) = match distribution.distribution {
+        classic::DistributionBody::Library(package, dependencies, definition) => {
+            (package, dependencies, definition)
+        }
+        // A Specs writes 3.1.0, the version that introduced it, and its own modules as
+        // top-level module::spec values.
+        classic::DistributionBody::Specs(package, dependencies, specification) => {
+            let mut sequence =
+                ion_rs::Sequence::builder().push(v3_header("3.1.0", "specs", &package));
+            for dependency in &dependencies {
+                sequence = sequence.push(specs::write_package_spec(dependency)?);
+            }
+            for module in &specification.modules {
+                sequence = sequence.push(specs::write_module_spec(module)?);
+            }
+            return Ok(sequence.push(footer).build());
+        }
+    };
+    let mut sequence = ion_rs::Sequence::builder().push(v3_header("3.0.0", "library", &package));
     for dependency in &dependencies {
         sequence = sequence.push(specs::write_package_spec(dependency)?);
     }
@@ -283,6 +310,17 @@ fn v3_datagram(
         }
     }
     Ok(sequence.push(footer).build())
+}
+
+/// The `morphir::` header of a v3 datagram.
+fn v3_header(format_version: &str, kind: &str, package: &classic::Path) -> Element {
+    Element::from(ion_rs::ion_struct! {
+        "ionVersion": ION_CONTRACT,
+        "formatVersion": format_version,
+        "kind": Element::symbol(kind),
+        "packageName": canonical_package(package),
+    })
+    .with_annotations(["morphir"])
 }
 
 fn module_element(module: &ClassicModule) -> Result<Element, TransportDiagnostic> {
@@ -434,19 +472,28 @@ fn canonical_package(path: &classic::Path) -> String {
         .join("/")
 }
 
-struct LibraryHeader {
+/// The kind of a v3 distribution: a `library` defines its modules, a `specs` publishes their
+/// specifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassicKind {
+    Library,
+    Specs,
+}
+
+struct ClassicHeader {
     format_version: u32,
+    kind: ClassicKind,
     package: classic::Path,
 }
 
-fn read_library_header(
+fn read_classic_header(
     fields: &BTreeMap<&str, &Element>,
     selected: IrVersion,
-) -> Result<LibraryHeader, TransportDiagnostic> {
+) -> Result<ClassicHeader, TransportDiagnostic> {
     reject_critical_unknowns(fields, HEADER_MEMBERS)?;
     accept_ion_version(optional_string(fields, "ionVersion")?)?;
     let format_version = required_string(fields, "formatVersion")?;
-    let major = accept_format_version(format_version, selected)?;
+    let release = accept_format_version(format_version, selected)?;
     if selected != IrVersion::V3 {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_version",
@@ -454,17 +501,35 @@ fn read_library_header(
             "the Ion codec decodes formatVersion 3 only",
         ));
     }
-    let kind = required_text(fields, "kind")?;
-    if kind != "library" {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::unsupported_kind",
-            Stage::Normalization,
-            format!("a v3 Ion distribution has kind library, found {kind}"),
-        ));
+    let kind = match required_text(fields, "kind")? {
+        "library" => ClassicKind::Library,
+        "specs" => ClassicKind::Specs,
+        kind => {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::unsupported_kind",
+                Stage::Normalization,
+                format!("a v3 Ion distribution has kind library or specs, found {kind}"),
+            ));
+        }
+    };
+    if kind == ClassicKind::Specs {
+        classic::check_specs_release(&DeclaredRelease {
+            release,
+            declared: format_version.to_owned(),
+        })
+        .map_err(|message| {
+            IonCodec::error(
+                "morphir::ir::ion::specs_before_3_1",
+                Stage::Normalization,
+                message,
+            )
+            .with_guidance("declare formatVersion \"3.1.0\" or write a library distribution")
+        })?;
     }
     let package_name = required_string(fields, "packageName")?;
-    Ok(LibraryHeader {
-        format_version: major,
+    Ok(ClassicHeader {
+        format_version: release.major(),
+        kind,
         package: classic_path(package_name)?,
     })
 }
@@ -491,28 +556,7 @@ fn read_library_modules(
         }
         return Ok((dependencies, read_inline_modules(header_fields, package)?));
     }
-    reject_inline_modules(header_fields)?;
-    if header_fields
-        .get("dependencies")
-        .is_some_and(|list| list.as_list().is_none_or(|items| !items.is_empty()))
-    {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::unsupported_node",
-            Stage::Normalization,
-            "a datagram writes each dependency as its own package::spec value",
-        ));
-    }
-    let last = values.len() - 1;
-    let footer = values.get(last).expect("length is at least 2");
-    expect_marker(footer, "morphir_footer")?;
-    let footer_fields = struct_fields(footer, "morphir_footer")?;
-    if !footer_fields.is_empty() {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::unexpected_member",
-            Stage::Normalization,
-            "morphir_footer has no members",
-        ));
-    }
+    let last = datagram_body_end(values, header_fields)?;
     let mut modules = Vec::new();
     let mut seen = HashSet::new();
     for index in 1..last {
@@ -550,6 +594,97 @@ fn read_library_modules(
         }
     }
     Ok((dependencies, modules))
+}
+
+/// The dependencies and own module specifications of a v3 `specs` datagram.
+///
+/// Each dependency is a `package::spec`, and each own module is a top-level `module::spec`. A
+/// definition has no place in a `specs` distribution, so it is refused.
+fn read_specs_modules(
+    values: &ion_rs::Sequence,
+    header_fields: &BTreeMap<&str, &Element>,
+    package: &classic::Path,
+) -> Result<(Vec<specs::Dependency>, Vec<specs::OwnModule>), TransportDiagnostic> {
+    if values.len() == 1 {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Normalization,
+            "read a v3 specs distribution from its datagram",
+        ));
+    }
+    let last = datagram_body_end(values, header_fields)?;
+    let mut dependencies = Vec::new();
+    let mut modules: Vec<specs::OwnModule> = Vec::new();
+    for index in 1..last {
+        let element = values.get(index).expect("index is in range");
+        match annotation_names(element)?.as_slice() {
+            ["package", "spec"] => {
+                specs::read_package_spec(element, package, &mut dependencies)?;
+            }
+            ["module", "spec"] => {
+                require_distribution_package(&struct_fields(element, "module::spec")?, package)?;
+                let module = specs::read_module_spec(element)?;
+                if modules.iter().any(|existing| existing.path == module.path) {
+                    return Err(duplicate_name("module", &module.path));
+                }
+                modules.push(module);
+            }
+            names @ ["public" | "private", "def", ..] => {
+                return Err(IonCodec::error(
+                    "morphir::ir::ion::definition_in_specs",
+                    Stage::Normalization,
+                    format!(
+                        "a v3 specs distribution writes its modules as module::spec, found {}",
+                        display_annotations(names)
+                    ),
+                )
+                .with_guidance(
+                    "write the module as module::spec, or set the header kind to library",
+                ));
+            }
+            names => {
+                return Err(IonCodec::error(
+                    "morphir::ir::ion::unexpected_value",
+                    Stage::Detection,
+                    format!(
+                        "expected a package::spec or module::spec, found {}",
+                        display_annotations(names)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok((dependencies, modules))
+}
+
+/// Checks the frame of a datagram of at least two values: the header holds no dependencies or
+/// modules, and the last value is an empty `morphir_footer`. Returns the footer's index.
+fn datagram_body_end(
+    values: &ion_rs::Sequence,
+    header_fields: &BTreeMap<&str, &Element>,
+) -> Result<usize, TransportDiagnostic> {
+    reject_inline_modules(header_fields)?;
+    if header_fields
+        .get("dependencies")
+        .is_some_and(|list| list.as_list().is_none_or(|items| !items.is_empty()))
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Normalization,
+            "a datagram writes each dependency as its own package::spec value",
+        ));
+    }
+    let last = values.len() - 1;
+    let footer = values.get(last).expect("length is at least 2");
+    expect_marker(footer, "morphir_footer")?;
+    if !struct_fields(footer, "morphir_footer")?.is_empty() {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_member",
+            Stage::Normalization,
+            "morphir_footer has no members",
+        ));
+    }
+    Ok(last)
 }
 
 fn expect_package_spec(element: &Element) -> Result<(), TransportDiagnostic> {
@@ -1110,7 +1245,11 @@ fn accept_ion_version(text: Option<&str>) -> Result<(), TransportDiagnostic> {
     Ok(())
 }
 
-fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, TransportDiagnostic> {
+/// Checks a canonical Ion `formatVersion` against the selected version and returns its release.
+fn accept_format_version(
+    text: &str,
+    selected: IrVersion,
+) -> Result<ReleaseTriplet, TransportDiagnostic> {
     let version = semver::Version::parse(text).map_err(|error| {
         IonCodec::error(
             "morphir::ir::ion::unsupported_version",
@@ -1129,7 +1268,27 @@ fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, Transpo
         IrVersion::V3 => 3,
         IrVersion::V4 => 4,
     };
-    if version.major != major || version.minor != 0 {
+    let release = match (u32::try_from(version.minor), u32::try_from(version.patch)) {
+        (Ok(minor), Ok(patch)) => Some(ReleaseTriplet::new(major, minor, patch)),
+        _ => None,
+    };
+    if selected == IrVersion::V3 {
+        // A v3 reader takes every 3.x release of the reference support table.
+        let table = SupportTable::reference();
+        if version.major != u64::from(major)
+            || !release.is_some_and(|release| table.contains(&release))
+        {
+            return Err(IonCodec::error(
+                "morphir::ir::ion::version_mismatch",
+                Stage::Detection,
+                format!(
+                    "the selected {:?} codec accepts a 3.x formatVersion in {}, found {text}",
+                    selected,
+                    table.canonical()
+                ),
+            ));
+        }
+    } else if version.major != u64::from(major) || version.minor != 0 {
         return Err(IonCodec::error(
             "morphir::ir::ion::version_mismatch",
             Stage::Detection,
@@ -1139,7 +1298,9 @@ fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, Transpo
             ),
         ));
     }
-    Ok(u32::try_from(major).expect("IR major fits in u32"))
+    // A v3 release is always present here: the support-table check above needs it. A v4
+    // selection is refused by the caller, which reads only its major.
+    Ok(release.unwrap_or(ReleaseTriplet::new(major, 0, 0)))
 }
 
 fn reject_critical_unknowns(

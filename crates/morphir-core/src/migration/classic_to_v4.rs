@@ -596,7 +596,7 @@ fn migrate_value_specification(
     })
 }
 
-fn migrate_module_specification(
+pub fn migrate_module_specification(
     specification: &classic::ModuleSpecification<classic::Attrs>,
     context: &mut MigrationContext,
 ) -> Result<v4::ModuleSpecification, MigrationDiagnostic> {
@@ -711,9 +711,12 @@ pub fn migrate_distribution(
         ));
     }
 
-    let classic::DistributionBody::Library(package_name, dependencies, package) =
-        &distribution.distribution;
-
+    let (package_name, dependencies) = match &distribution.distribution {
+        classic::DistributionBody::Library(package_name, dependencies, _)
+        | classic::DistributionBody::Specs(package_name, dependencies, _) => {
+            (package_name, dependencies)
+        }
+    };
     let dependencies = dependencies
         .iter()
         .map(|(name, specification)| {
@@ -723,32 +726,55 @@ pub fn migrate_distribution(
             ))
         })
         .collect::<Result<_, MigrationDiagnostic>>()?;
-    let modules = package
-        .modules
-        .iter()
-        .map(|entry| {
-            Ok((
-                migrate_path(&entry.path, &context.cursor)?.to_canonical_string(),
-                v4::AccessControlled {
-                    access: migrate_access(&entry.definition.access),
-                    value: migrate_module_definition(&entry.definition.value, &mut context)?,
-                },
-            ))
-        })
-        .collect::<Result<_, MigrationDiagnostic>>()?;
+    // The package name migrates after the modules, so a malformed module still reports first.
+    let migrate_package_name = |context: &MigrationContext| {
+        migrate_path(package_name, &context.cursor).map(crate::naming::PackageName::new)
+    };
+
+    let value = match &distribution.distribution {
+        classic::DistributionBody::Library(_, _, package) => {
+            let modules = package
+                .modules
+                .iter()
+                .map(|entry| {
+                    Ok((
+                        migrate_path(&entry.path, &context.cursor)?.to_canonical_string(),
+                        v4::AccessControlled {
+                            access: migrate_access(&entry.definition.access),
+                            value: migrate_module_definition(
+                                &entry.definition.value,
+                                &mut context,
+                            )?,
+                        },
+                    ))
+                })
+                .collect::<Result<_, MigrationDiagnostic>>()?;
+            v4::IRFile {
+                format_version: v4::FormatVersion::Integer(4),
+                distribution: v4::Distribution::Library(v4::LibraryContent {
+                    package_name: migrate_package_name(&context)?,
+                    dependencies,
+                    def: v4::PackageDefinition { modules },
+                }),
+            }
+        }
+        // A v3 Specs has one v4 counterpart, the v4 Specs distribution; both hold public
+        // interfaces only, so its modules migrate as a dependency's modules do.
+        classic::DistributionBody::Specs(_, _, specification) => {
+            let spec = migrate_package_specification(specification, &mut context)?;
+            v4::IRFile {
+                format_version: v4::FormatVersion::Integer(4),
+                distribution: v4::Distribution::Specs(v4::SpecsContent {
+                    package_name: migrate_package_name(&context)?,
+                    dependencies,
+                    spec,
+                }),
+            }
+        }
+    };
 
     Ok(Migrated {
-        value: v4::IRFile {
-            format_version: v4::FormatVersion::Integer(4),
-            distribution: v4::Distribution::Library(v4::LibraryContent {
-                package_name: crate::naming::PackageName::new(migrate_path(
-                    package_name,
-                    &context.cursor,
-                )?),
-                dependencies,
-                def: v4::PackageDefinition { modules },
-            }),
-        },
+        value,
         report: context.report,
     })
 }

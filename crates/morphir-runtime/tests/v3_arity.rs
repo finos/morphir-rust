@@ -349,7 +349,9 @@ fn zero_argument_definition_reference_evaluates_the_named_value() {
 #[test]
 fn zero_argument_recursive_binding_is_a_value() {
     let mut program = independent_arity_program(false);
-    let ir::DistributionBody::Library(_, _, package) = &mut program.distribution;
+    let ir::DistributionBody::Library(_, _, package) = &mut program.distribution else {
+        panic!("a Library")
+    };
     let body = ir::Value::LetRecursion(
         attr(),
         vec![(name("answer"), Box::new(function(&[], literal(42))))],
@@ -374,7 +376,9 @@ fn zero_argument_recursive_binding_is_a_value() {
 #[test]
 fn cyclic_zero_argument_binding_stops_at_call_depth_limit() {
     let mut program = independent_arity_program(false);
-    let ir::DistributionBody::Library(_, _, package) = &mut program.distribution;
+    let ir::DistributionBody::Library(_, _, package) = &mut program.distribution else {
+        panic!("a Library")
+    };
     let body = ir::Value::LetRecursion(
         attr(),
         vec![(name("loop"), Box::new(function(&[], variable("loop"))))],

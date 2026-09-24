@@ -459,7 +459,9 @@ mod value_tests {
             }),
         };
         let written = encode(&file).unwrap();
-        let c::DistributionBody::Library(_, _, package) = written.distribution;
+        let c::DistributionBody::Library(_, _, package) = written.distribution else {
+            panic!("a Library")
+        };
         let values = &package.modules[0].definition.value.values;
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].1.value.value.input_types.len(), 1);

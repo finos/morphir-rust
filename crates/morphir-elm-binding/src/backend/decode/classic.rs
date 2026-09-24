@@ -26,7 +26,10 @@ pub fn decode(ir: &Value) -> Result<Decoded, String> {
     let distribution: Distribution = serde_json::from_value(ir.clone())
         .map_err(|error| format!("not a v3 distribution: {error}"))?;
     let DistributionBody::Library(package_path, _dependencies, definition) =
-        distribution.distribution;
+        distribution.distribution
+    else {
+        return Err("a v3 Specs distribution has no definitions to decode".to_string());
+    };
 
     let package = path(&package_path);
     let mut modules = Vec::with_capacity(definition.modules.len());

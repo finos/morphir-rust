@@ -42,6 +42,10 @@ fn test_load_reference_model_distribution() {
                     println!("  Package name: {:?}", package_name);
                     println!("  Module count: {}", package.modules.len());
                 }
+                morphir_core::ir::classic::DistributionBody::Specs(package_name, _deps, _spec) => {
+                    println!("  Package name: {:?}", package_name);
+                    println!("  Specs distribution (no definitions)");
+                }
             }
         }
         Err(e) => {
@@ -87,6 +91,10 @@ fn test_load_lcr_model_distribution() {
                     for (i, entry) in package.modules.iter().take(5).enumerate() {
                         println!("  Module {}: {:?}", i, entry.path);
                     }
+                }
+                morphir_core::ir::classic::DistributionBody::Specs(package_name, _, _) => {
+                    println!("  Package name: {:?}", package_name);
+                    println!("  Specs distribution (no definitions)");
                 }
             }
         }

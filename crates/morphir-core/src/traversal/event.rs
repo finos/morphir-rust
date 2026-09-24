@@ -13,6 +13,8 @@ pub type ClassicV3Module = classic::ModuleEntry<classic::Attrs, classic::Type<cl
 pub enum DistributionHeader {
     /// A Classic v3 library distribution.
     ClassicV3Library { package: classic::Path },
+    /// A Classic v3 specification distribution, introduced in format version 3.1.0.
+    ClassicV3Specs { package: classic::Path },
     /// A v4 library distribution.
     V4Library {
         format_version: v4::FormatVersion,
@@ -57,6 +59,11 @@ pub enum DependencyEvent {
 pub enum ModuleEvent {
     /// A Classic v3 module definition.
     ClassicV3(ClassicV3Module),
+    /// A Classic v3 module specification, the module kind of a v3 Specs distribution.
+    ClassicV3Specification {
+        path: classic::Path,
+        specification: classic::ModuleSpecification<classic::Attrs>,
+    },
     /// A v4 module definition and its access control.
     V4Definition {
         path: String,

@@ -1337,9 +1337,19 @@ mod tests {
 
     #[test]
     fn unsupported_minor_fails_before_replay() {
-        let source = br#"{"formatVersion":"3.1.0","distribution":[]}"#;
+        let source = br#"{"formatVersion":"3.2.0","distribution":[]}"#;
         let error = probe_json_root(&mut &source[..], &SupportTable::reference()).unwrap_err();
         assert_eq!(error.code(), "unsupported_format_version_minor");
+    }
+
+    #[test]
+    fn supported_minor_release_probes_to_its_major() {
+        let source =
+            br#"{"formatVersion":"3.1.0","distribution":["Library",[[["example"]]],[],{"modules":[]}]}"#;
+        let mut reader = &source[..];
+        let (probe, _input) = probe_json_root(&mut reader, &SupportTable::reference()).unwrap();
+        assert_eq!(probe.normalized.release, ReleaseTriplet::new(3, 1, 0));
+        assert!(probe.normalized.is_supported());
     }
 
     #[test]

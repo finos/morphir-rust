@@ -2,7 +2,7 @@ use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::{Context, Result, bail};
-use morphir_core::format_version::FormatVersionBaselineSeed;
+use morphir_core::format_version::{DeclaredRelease, FormatVersionReleaseSeed};
 use morphir_core::ir::classic;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
@@ -10,8 +10,15 @@ use super::IR_RECURSION_STACK_BYTES;
 
 type ClassicDependencies = Vec<(classic::Path, classic::PackageSpecification<classic::Attrs>)>;
 type ClassicModule = classic::ModuleEntry<classic::Attrs, classic::Type<classic::Attrs>>;
+type ClassicModuleSpecification = classic::package::ModuleSpecEntry<classic::Attrs>;
 
 /// Receives a Classic v3 distribution without retaining its package modules.
+///
+/// A `Library` distribution calls [`begin`](Self::begin) and then
+/// [`visit_module`](Self::visit_module) per module; a `Specs` distribution (format version
+/// 3.1.0) calls [`begin_specs`](Self::begin_specs) and then
+/// [`visit_module_specification`](Self::visit_module_specification) per module. A visitor that
+/// does not override the `Specs` methods refuses a `Specs` distribution.
 pub trait ClassicV3ModuleVisitor {
     type Output;
 
@@ -23,12 +30,27 @@ pub trait ClassicV3ModuleVisitor {
 
     fn visit_module(&mut self, module: ClassicModule) -> std::result::Result<(), String>;
 
+    fn begin_specs(
+        &mut self,
+        _package: &classic::Path,
+        _dependencies: &[(classic::Path, classic::PackageSpecification<classic::Attrs>)],
+    ) -> std::result::Result<(), String> {
+        Err("this Classic v3 visitor does not accept a Specs distribution".to_owned())
+    }
+
+    fn visit_module_specification(
+        &mut self,
+        _module: ClassicModuleSpecification,
+    ) -> std::result::Result<(), String> {
+        Err("this Classic v3 visitor does not accept a Specs distribution".to_owned())
+    }
+
     fn finish(self) -> std::result::Result<Self::Output, String>;
 }
 
 struct DistributionSeed<'visitor, V> {
     visitor: &'visitor mut V,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'_, V> {
@@ -47,7 +69,7 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'
 
 struct DistributionVisitor<'visitor, V> {
     visitor: &'visitor mut V,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V> {
@@ -69,17 +91,21 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
                     if format_version.is_some() {
                         return Err(de::Error::duplicate_field("formatVersion"));
                     }
-                    format_version = Some(map.next_value_seed(FormatVersionBaselineSeed)?);
+                    format_version = Some(map.next_value_seed(FormatVersionReleaseSeed)?);
                 }
                 "distribution" => {
                     if saw_distribution {
                         return Err(de::Error::duplicate_field("distribution"));
                     }
-                    match format_version.or(self.prevalidated_version) {
-                        Some(3) => {}
-                        Some(version) => {
+                    let declared = match format_version
+                        .as_ref()
+                        .or(self.prevalidated_version.as_ref())
+                    {
+                        Some(declared) if declared.release.major() == 3 => declared.clone(),
+                        Some(declared) => {
                             return Err(de::Error::custom(format!(
-                                "typed Classic migration requires formatVersion 3, found {version}"
+                                "typed Classic migration requires formatVersion 3, found {}",
+                                declared.release.major()
                             )));
                         }
                         None => {
@@ -87,9 +113,10 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
                                 "formatVersion must precede distribution for streaming decode",
                             ));
                         }
-                    }
+                    };
                     map.next_value_seed(DistributionBodySeed {
                         visitor: self.visitor,
+                        declared,
                     })?;
                     saw_distribution = true;
                 }
@@ -101,8 +128,10 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
         if !saw_distribution {
             return Err(de::Error::missing_field("distribution"));
         }
-        let format_version =
-            format_version.ok_or_else(|| de::Error::missing_field("formatVersion"))?;
+        let format_version = format_version
+            .ok_or_else(|| de::Error::missing_field("formatVersion"))?
+            .release
+            .major();
         if format_version != 3 {
             return Err(de::Error::custom(format!(
                 "typed Classic migration requires formatVersion 3, found {format_version}"
@@ -131,7 +160,7 @@ where
 pub(crate) fn deserialize_classic_v3<'de, D, V>(
     deserializer: D,
     visitor: &mut V,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 ) -> std::result::Result<u32, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -146,6 +175,7 @@ where
 
 struct DistributionBodySeed<'visitor, V> {
     visitor: &'visitor mut V,
+    declared: DeclaredRelease,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionBodySeed<'_, V> {
@@ -157,19 +187,24 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionBodySe
     {
         deserializer.deserialize_seq(DistributionBodyVisitor {
             visitor: self.visitor,
+            declared: self.declared,
         })
     }
 }
 
 struct DistributionBodyVisitor<'visitor, V> {
     visitor: &'visitor mut V,
+    /// The release the document declared, which decides whether it may hold a `Specs`.
+    declared: DeclaredRelease,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionBodyVisitor<'_, V> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(r#"["Library", package, dependencies, definition]"#)
+        formatter.write_str(
+            r#"["Library", package, dependencies, definition] or ["Specs", package, dependencies, specification]"#,
+        )
     }
 
     fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
@@ -179,8 +214,15 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionBodyVisitor<'_
         let tag = sequence
             .next_element::<String>()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-        if !tag.eq_ignore_ascii_case("library") {
-            return Err(de::Error::unknown_variant(&tag, &["Library"]));
+        let kind = if tag.eq_ignore_ascii_case("library") {
+            BodyKind::Library
+        } else if tag.eq_ignore_ascii_case("specs") {
+            BodyKind::Specs
+        } else {
+            return Err(de::Error::unknown_variant(&tag, &["Library", "Specs"]));
+        };
+        if let BodyKind::Specs = kind {
+            classic::check_specs_release(&self.declared).map_err(de::Error::custom)?;
         }
         let package = sequence
             .next_element::<classic::Path>()?
@@ -188,25 +230,48 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionBodyVisitor<'_
         let dependencies = sequence
             .next_element::<ClassicDependencies>()?
             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-        self.visitor
-            .begin(&package, &dependencies)
-            .map_err(de::Error::custom)?;
+        match kind {
+            BodyKind::Library => self.visitor.begin(&package, &dependencies),
+            BodyKind::Specs => self.visitor.begin_specs(&package, &dependencies),
+        }
+        .map_err(de::Error::custom)?;
         sequence
             .next_element_seed(PackageSeed {
                 visitor: self.visitor,
+                kind,
             })?
             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
         if sequence.next_element::<IgnoredAny>()?.is_some() {
-            return Err(de::Error::custom(
-                "expected the end of the Classic Library distribution",
-            ));
+            return Err(de::Error::custom(format!(
+                "expected the end of the Classic {} distribution",
+                kind.tag()
+            )));
         }
         Ok(())
     }
 }
 
+/// Which module kind the fourth element of a Classic distribution body holds.
+#[derive(Clone, Copy)]
+enum BodyKind {
+    /// `["Library", …]`: module definitions.
+    Library,
+    /// `["Specs", …]`: module specifications.
+    Specs,
+}
+
+impl BodyKind {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Library => "Library",
+            Self::Specs => "Specs",
+        }
+    }
+}
+
 struct PackageSeed<'visitor, V> {
     visitor: &'visitor mut V,
+    kind: BodyKind,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for PackageSeed<'_, V> {
@@ -218,19 +283,24 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for PackageSeed<'_, V>
     {
         deserializer.deserialize_map(PackageVisitor {
             visitor: self.visitor,
+            kind: self.kind,
         })
     }
 }
 
 struct PackageVisitor<'visitor, V> {
     visitor: &'visitor mut V,
+    kind: BodyKind,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for PackageVisitor<'_, V> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a Classic package definition object")
+        match self.kind {
+            BodyKind::Library => formatter.write_str("a Classic package definition object"),
+            BodyKind::Specs => formatter.write_str("a Classic package specification object"),
+        }
     }
 
     fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
@@ -243,6 +313,7 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for PackageVisitor<'_, V> {
                 "modules" => {
                     map.next_value_seed(ModulesSeed {
                         visitor: self.visitor,
+                        kind: self.kind,
                     })?;
                     saw_modules = true;
                 }
@@ -260,6 +331,7 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for PackageVisitor<'_, V> {
 
 struct ModulesSeed<'visitor, V> {
     visitor: &'visitor mut V,
+    kind: BodyKind,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for ModulesSeed<'_, V> {
@@ -271,12 +343,14 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for ModulesSeed<'_, V>
     {
         deserializer.deserialize_seq(ModulesVisitor {
             visitor: self.visitor,
+            kind: self.kind,
         })
     }
 }
 
 struct ModulesVisitor<'visitor, V> {
     visitor: &'visitor mut V,
+    kind: BodyKind,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
@@ -291,14 +365,29 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
         A: SeqAccess<'de>,
     {
         loop {
-            let visited = stacker::grow(IR_RECURSION_STACK_BYTES, || {
-                let Some(module) = sequence.next_element::<ClassicModule>()? else {
-                    return Ok(false);
-                };
-                self.visitor
-                    .visit_module(module)
-                    .map_err(de::Error::custom)?;
-                Ok(true)
+            let visited = stacker::grow(IR_RECURSION_STACK_BYTES, || match self.kind {
+                BodyKind::Library => {
+                    let Some(module) = sequence.next_element::<ClassicModule>()? else {
+                        return Ok(false);
+                    };
+                    self.visitor
+                        .visit_module(module)
+                        .map_err(de::Error::custom)?;
+                    Ok(true)
+                }
+                BodyKind::Specs => {
+                    // Strict: a module definition under a Specs tag is refused, not read as an
+                    // empty specification.
+                    let Some(module) = sequence
+                        .next_element::<classic::package::SpecsModuleEntry<classic::Attrs>>()?
+                    else {
+                        return Ok(false);
+                    };
+                    self.visitor
+                        .visit_module_specification(module.into())
+                        .map_err(de::Error::custom)?;
+                    Ok(true)
+                }
             })?;
             if !visited {
                 break;
@@ -327,7 +416,7 @@ where
         );
     }
 
-    let prevalidated = Some(probe.normalized.release.major());
+    let prevalidated = Some(DeclaredRelease::from_release(probe.normalized.release));
     let version = match input {
         ProbedJsonReader::Stream(mut prefixed) => {
             let mut deserializer = serde_json::Deserializer::from_reader(&mut prefixed);

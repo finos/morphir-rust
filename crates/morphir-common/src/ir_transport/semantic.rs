@@ -41,21 +41,15 @@ impl<'sink> ClassicEventVisitor<'sink> {
             message
         })
     }
-}
 
-impl ClassicV3ModuleVisitor for ClassicEventVisitor<'_> {
-    type Output = Result<(), TransportDiagnostic>;
-
-    fn begin(
+    fn begin_with(
         &mut self,
-        package: &classic::Path,
+        header: DistributionHeader,
         dependencies: &[(classic::Path, classic::PackageSpecification<classic::Attrs>)],
     ) -> Result<(), String> {
         self.accept(SemanticEvent::new(
             self.cursor.clone(),
-            SemanticEventKind::Begin(DistributionHeader::ClassicV3Library {
-                package: package.clone(),
-            }),
+            SemanticEventKind::Begin(header),
         ))?;
         for (package, specification) in dependencies {
             self.accept(SemanticEvent::new(
@@ -70,6 +64,36 @@ impl ClassicV3ModuleVisitor for ClassicEventVisitor<'_> {
         }
         Ok(())
     }
+}
+
+impl ClassicV3ModuleVisitor for ClassicEventVisitor<'_> {
+    type Output = Result<(), TransportDiagnostic>;
+
+    fn begin(
+        &mut self,
+        package: &classic::Path,
+        dependencies: &[(classic::Path, classic::PackageSpecification<classic::Attrs>)],
+    ) -> Result<(), String> {
+        self.begin_with(
+            DistributionHeader::ClassicV3Library {
+                package: package.clone(),
+            },
+            dependencies,
+        )
+    }
+
+    fn begin_specs(
+        &mut self,
+        package: &classic::Path,
+        dependencies: &[(classic::Path, classic::PackageSpecification<classic::Attrs>)],
+    ) -> Result<(), String> {
+        self.begin_with(
+            DistributionHeader::ClassicV3Specs {
+                package: package.clone(),
+            },
+            dependencies,
+        )
+    }
 
     fn visit_module(
         &mut self,
@@ -80,6 +104,21 @@ impl ClassicV3ModuleVisitor for ClassicEventVisitor<'_> {
                 .clone()
                 .child(CursorSegment::Module(module.path.to_string())),
             SemanticEventKind::Module(ModuleEvent::ClassicV3(module)),
+        ))
+    }
+
+    fn visit_module_specification(
+        &mut self,
+        module: classic::package::ModuleSpecEntry<classic::Attrs>,
+    ) -> Result<(), String> {
+        self.accept(SemanticEvent::new(
+            self.cursor
+                .clone()
+                .child(CursorSegment::Module(module.path.to_string())),
+            SemanticEventKind::Module(ModuleEvent::ClassicV3Specification {
+                path: module.path,
+                specification: module.specification,
+            }),
         ))
     }
 
@@ -129,18 +168,7 @@ pub(crate) fn emit_classic_v3(
                     package: package.clone(),
                 }),
             ))?;
-            for (dependency, specification) in dependencies {
-                let cursor = distribution_cursor
-                    .clone()
-                    .child(CursorSegment::Dependency(dependency.to_string()));
-                sink.accept(SemanticEvent::new(
-                    cursor,
-                    SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
-                        package: dependency,
-                        specification,
-                    }),
-                ))?;
-            }
+            emit_classic_v3_dependencies(dependencies, &distribution_cursor, sink)?;
             for module in definition.modules {
                 let cursor = distribution_cursor
                     .clone()
@@ -151,12 +179,52 @@ pub(crate) fn emit_classic_v3(
                 ))?;
             }
         }
+        classic::DistributionBody::Specs(package, dependencies, specification) => {
+            sink.accept(SemanticEvent::new(
+                distribution_cursor.clone(),
+                SemanticEventKind::Begin(DistributionHeader::ClassicV3Specs { package }),
+            ))?;
+            emit_classic_v3_dependencies(dependencies, &distribution_cursor, sink)?;
+            for module in specification.modules {
+                let cursor = distribution_cursor
+                    .clone()
+                    .child(CursorSegment::Module(module.path.to_string()));
+                sink.accept(SemanticEvent::new(
+                    cursor,
+                    SemanticEventKind::Module(ModuleEvent::ClassicV3Specification {
+                        path: module.path,
+                        specification: module.specification,
+                    }),
+                ))?;
+            }
+        }
     }
     sink.accept(SemanticEvent::new(
         distribution_cursor,
         SemanticEventKind::End,
     ))?;
     sink.finish()
+}
+
+/// Emits the dependencies of a Classic v3 distribution: their public faces.
+fn emit_classic_v3_dependencies(
+    dependencies: Vec<(classic::Path, classic::PackageSpecification<classic::Attrs>)>,
+    parent: &IrCursor,
+    sink: &mut dyn EventSink,
+) -> Result<(), TransportDiagnostic> {
+    for (dependency, specification) in dependencies {
+        let cursor = parent
+            .clone()
+            .child(CursorSegment::Dependency(dependency.to_string()));
+        sink.accept(SemanticEvent::new(
+            cursor,
+            SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
+                package: dependency,
+                specification,
+            }),
+        ))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn emit_v4(
@@ -294,7 +362,10 @@ pub(crate) fn collect(
 
     match (expected_version, header) {
         (IrVersion::V3, DistributionHeader::ClassicV3Library { package }) => {
-            collect_classic_v3(source, package)
+            collect_classic_v3(source, ClassicKind::Library, package)
+        }
+        (IrVersion::V3, DistributionHeader::ClassicV3Specs { package }) => {
+            collect_classic_v3(source, ClassicKind::Specs, package)
         }
         (IrVersion::V4, header @ DistributionHeader::V4Library { .. })
         | (IrVersion::V4, header @ DistributionHeader::V4Specs { .. })
@@ -310,29 +381,84 @@ pub(crate) fn collect(
     }
 }
 
+/// Which Classic v3 distribution header opened the event stream.
+#[derive(Clone, Copy)]
+enum ClassicKind {
+    Library,
+    Specs,
+}
+
 fn collect_classic_v3(
     source: &mut dyn EventSource,
+    kind: ClassicKind,
     package: classic::Path,
 ) -> Result<SemanticFile, TransportDiagnostic> {
     let mut dependencies = Vec::new();
-    let mut modules = Vec::new();
+    let mut definitions = Vec::new();
+    let mut specifications = Vec::new();
     while let Some(event) = source.next_event()? {
-        let (cursor, kind) = event.into_parts();
-        match kind {
-            SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
-                package,
+        let (cursor, event_kind) = event.into_parts();
+        match (kind, event_kind) {
+            (
+                _,
+                SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
+                    package,
+                    specification,
+                }),
+            ) => dependencies.push((package, specification)),
+            (ClassicKind::Library, SemanticEventKind::Module(ModuleEvent::ClassicV3(module))) => {
+                definitions.push(module)
+            }
+            (
+                ClassicKind::Specs,
+                SemanticEventKind::Module(ModuleEvent::ClassicV3Specification {
+                    path,
+                    specification,
+                }),
+            ) => specifications.push(classic::package::ModuleSpecEntry {
+                path,
                 specification,
-            }) => dependencies.push((package, specification)),
-            SemanticEventKind::Module(ModuleEvent::ClassicV3(module)) => modules.push(module),
-            SemanticEventKind::End => {
+            }),
+            (ClassicKind::Specs, SemanticEventKind::Module(ModuleEvent::ClassicV3(_))) => {
+                return Err(event_error(
+                    "morphir::ir::codec::module_kind_mismatch",
+                    Stage::Encoding,
+                    cursor,
+                    "a v3 Specs distribution received a module definition",
+                ));
+            }
+            (
+                ClassicKind::Library,
+                SemanticEventKind::Module(ModuleEvent::ClassicV3Specification { .. }),
+            ) => {
+                return Err(event_error(
+                    "morphir::ir::codec::module_kind_mismatch",
+                    Stage::Encoding,
+                    cursor,
+                    "a v3 Library distribution received a module specification",
+                ));
+            }
+            (_, SemanticEventKind::End) => {
                 ensure_finished(source, cursor)?;
-                return Ok(SemanticFile::ClassicV3(classic::Distribution {
-                    format_version: 3,
-                    distribution: classic::DistributionBody::Library(
+                let distribution = match kind {
+                    ClassicKind::Library => classic::DistributionBody::Library(
                         package,
                         dependencies,
-                        classic::PackageDefinition { modules },
+                        classic::PackageDefinition {
+                            modules: definitions,
+                        },
                     ),
+                    ClassicKind::Specs => classic::DistributionBody::Specs(
+                        package,
+                        dependencies,
+                        classic::PackageSpecification {
+                            modules: specifications,
+                        },
+                    ),
+                };
+                return Ok(SemanticFile::ClassicV3(classic::Distribution {
+                    format_version: 3,
+                    distribution,
                 }));
             }
             _ => {

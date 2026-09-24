@@ -1,12 +1,16 @@
 use morphir_core::ir::classic;
 
+use super::NormalizeError;
 use crate::model::{
     Constructor, DistributionKind, NamedType, ProjectionDependency, ProjectionModule,
     ProjectionPackage, TypeDeclaration, TypeExpr, ValueSpecification,
 };
 
-pub(super) fn normalize(ir: classic::Distribution) -> ProjectionPackage {
-    let classic::DistributionBody::Library(package_path, dependencies, package) = ir.distribution;
+pub(super) fn normalize(ir: classic::Distribution) -> Result<ProjectionPackage, NormalizeError> {
+    let classic::DistributionBody::Library(package_path, dependencies, package) = ir.distribution
+    else {
+        return Err(NormalizeError::UnsupportedSpecsDistribution);
+    };
     let package_name = canonical_path(&package_path);
     let dependencies = normalize_dependencies(dependencies);
     let mut modules = package
@@ -17,12 +21,12 @@ pub(super) fn normalize(ir: classic::Distribution) -> ProjectionPackage {
         .collect::<Vec<_>>();
     modules.sort_by(|left, right| left.path.cmp(&right.path));
 
-    ProjectionPackage {
+    Ok(ProjectionPackage {
         kind: DistributionKind::Library,
         package_name,
         dependencies,
         modules,
-    }
+    })
 }
 
 fn normalize_module(

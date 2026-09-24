@@ -121,7 +121,7 @@ pub struct Capabilities {
     pub binding: String,
     pub language: String,
     /// The canonical spelling of this binding's format-version support table,
-    /// e.g. `[3.0.0,3.1.0),[4.0.0,4.1.0)`. `rename_all = "camelCase"` spells
+    /// e.g. `[3.0.0,3.2.0),[4.0.0,4.1.0)`. `rename_all = "camelCase"` spells
     /// the member `formatVersions`, as `protocol.schema.json` requires.
     pub format_versions: String,
     pub versions: Vec<u32>,

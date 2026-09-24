@@ -4,7 +4,9 @@ use std::fmt;
 
 use serde::de::{self, DeserializeSeed, Deserializer, Visitor};
 
-use super::{FormatVersionDiagnostic, NormalizedFormatVersion, ScalarValue, SupportTable};
+use super::{
+    FormatVersionDiagnostic, NormalizedFormatVersion, ReleaseTriplet, ScalarValue, SupportTable,
+};
 
 /// Deserialize a normalized baseline `formatVersion` major as `u32`.
 pub fn deserialize_baseline_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
@@ -24,14 +26,60 @@ impl<'de> DeserializeSeed<'de> for FormatVersionBaselineSeed {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(FormatVersionBaselineVisitor)
+        FormatVersionReleaseSeed
+            .deserialize(deserializer)
+            .map(|declared| declared.release.major())
     }
 }
 
-struct FormatVersionBaselineVisitor;
+/// A supported wire `formatVersion`: its normalized release and the spelling the document used.
+///
+/// A reader keyed by major (the classic model) keeps the release as well when a rule depends on
+/// the minor version, such as a v3 `Specs` distribution needing 3.1.0 or later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredRelease {
+    /// The exact release after normalization: integer `3` is `3.0.0`.
+    pub release: ReleaseTriplet,
+    /// The value as the document wrote it: `3` or `3.0.0`.
+    pub declared: String,
+}
 
-impl<'de> Visitor<'de> for FormatVersionBaselineVisitor {
-    type Value = u32;
+impl DeclaredRelease {
+    /// A release known without its written spelling, for example from a root probe.
+    pub fn from_release(release: ReleaseTriplet) -> Self {
+        Self {
+            declared: release.to_string(),
+            release,
+        }
+    }
+}
+
+/// Deserialize a supported `formatVersion` as its release and declared spelling.
+pub fn deserialize_declared_release<'de, D>(deserializer: D) -> Result<DeclaredRelease, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    FormatVersionReleaseSeed.deserialize(deserializer)
+}
+
+/// Seed that deserializes one supported wire scalar into a [`DeclaredRelease`].
+pub struct FormatVersionReleaseSeed;
+
+impl<'de> DeserializeSeed<'de> for FormatVersionReleaseSeed {
+    type Value = DeclaredRelease;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(FormatVersionReleaseVisitor)
+    }
+}
+
+struct FormatVersionReleaseVisitor;
+
+impl<'de> Visitor<'de> for FormatVersionReleaseVisitor {
+    type Value = DeclaredRelease;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a supported formatVersion string or unsigned integer")
@@ -41,7 +89,7 @@ impl<'de> Visitor<'de> for FormatVersionBaselineVisitor {
     where
         E: de::Error,
     {
-        scalar_to_baseline_u32(ScalarValue::Integer(value)).map_err(de::Error::custom)
+        declared_release(ScalarValue::Integer(value)).map_err(de::Error::custom)
     }
 
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
@@ -60,7 +108,7 @@ impl<'de> Visitor<'de> for FormatVersionBaselineVisitor {
     where
         E: de::Error,
     {
-        scalar_to_baseline_u32(ScalarValue::String(value.to_owned())).map_err(de::Error::custom)
+        declared_release(ScalarValue::String(value.to_owned())).map_err(de::Error::custom)
     }
 
     fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
@@ -71,7 +119,23 @@ impl<'de> Visitor<'de> for FormatVersionBaselineVisitor {
     }
 }
 
+fn declared_release(scalar: ScalarValue) -> Result<DeclaredRelease, FormatVersionDiagnostic> {
+    let declared = match &scalar {
+        ScalarValue::Integer(value) => value.to_string(),
+        ScalarValue::String(value) => value.clone(),
+    };
+    Ok(DeclaredRelease {
+        release: supported_release(scalar)?,
+        declared,
+    })
+}
+
+#[cfg(test)]
 fn scalar_to_baseline_u32(scalar: ScalarValue) -> Result<u32, FormatVersionDiagnostic> {
+    supported_release(scalar).map(|release| release.major())
+}
+
+fn supported_release(scalar: ScalarValue) -> Result<ReleaseTriplet, FormatVersionDiagnostic> {
     let support = SupportTable::reference();
     let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support)?;
     // The classic model is keyed by major, and the patch promise says a reader
@@ -83,7 +147,7 @@ fn scalar_to_baseline_u32(scalar: ScalarValue) -> Result<u32, FormatVersionDiagn
     {
         return Err(diagnostic);
     }
-    Ok(normalized.release.major())
+    Ok(normalized.release)
 }
 
 #[cfg(test)]
@@ -121,7 +185,7 @@ mod tests {
     #[test]
     fn unsupported_minor_is_reported_as_a_minor() {
         assert_eq!(
-            baseline("3.1.0"),
+            baseline("3.2.0"),
             Err("unsupported_format_version_minor".to_owned())
         );
     }

@@ -62,6 +62,7 @@ fn test_deserialize_minimal_distribution() {
             assert!(deps.is_empty());
             assert!(pkg.modules.is_empty());
         }
+        DistributionBody::Specs(..) => panic!("a Library"),
     }
 }
 

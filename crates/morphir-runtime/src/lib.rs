@@ -103,6 +103,9 @@ impl Default for EvaluationLimits {
 pub enum EvaluationError {
     /// The distribution is not classic V3.
     UnsupportedVersion(u32),
+    /// The distribution is a v3 `Specs` distribution, which has no
+    /// definitions to evaluate.
+    UnsupportedDistribution,
     /// The requested top-level value is absent.
     MissingEntrypoint(ir::FQName),
     /// A referenced package was not declared as a dependency.
@@ -189,6 +192,9 @@ pub fn evaluate_v3_with_deadline(
             distribution.format_version,
         ));
     }
+    if !matches!(distribution.distribution, ir::DistributionBody::Library(..)) {
+        return Err(EvaluationError::UnsupportedDistribution);
+    }
     let mut evaluator = Evaluator {
         distribution,
         remaining_fuel: limits.fuel,
@@ -208,14 +214,17 @@ pub fn evaluate_v3_with_deadline(
 }
 
 impl<'a> Evaluator<'a> {
-    fn library(&self) -> Library<'_> {
+    fn library(&self) -> Result<Library<'_>, EvaluationError> {
         let ir::DistributionBody::Library(package, dependencies, definition) =
-            &self.distribution.distribution;
-        (package, dependencies, definition)
+            &self.distribution.distribution
+        else {
+            return Err(EvaluationError::UnsupportedDistribution);
+        };
+        Ok((package, dependencies, definition))
     }
 
     fn definition(&self, name: &ir::FQName) -> Option<Definition> {
-        let (package, _, definition) = self.library();
+        let (package, _, definition) = self.library().ok()?;
         if &name.package_path != package {
             return None;
         }
@@ -232,7 +241,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn constructor_arity(&self, name: &ir::FQName) -> Option<usize> {
-        let (package, _, definition) = self.library();
+        let (package, _, definition) = self.library().ok()?;
         if &name.package_path != package {
             return None;
         }
@@ -301,7 +310,7 @@ impl<'a> Evaluator<'a> {
         if self.definition(name).is_some() {
             return Ok(Evaluated::Function(Callable::User(name.clone()), vec![]));
         }
-        let (package, dependencies, _) = self.library();
+        let (package, dependencies, _) = self.library()?;
         if &name.package_path != package {
             if !dependencies
                 .iter()

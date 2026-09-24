@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specifications and every v4 distribution kind and node the draft spells, including
   attributes, Morphir annotations and document literals, whose numbers keep their lexemes
   (finos/morphir#946).
+- IR format 3.1.0: a v3 `Specs` distribution, which publishes the module specifications of a
+  package without its definitions. The classic model holds it as `DistributionBody::Specs`; the
+  JSON and YAML codecs write it as `["Specs", package, dependencies, { modules }]` at
+  `formatVersion` `"3.1.0"`, and the Ion codec as a `kind: specs` datagram whose own modules are
+  top-level `module::spec` values. A definition module in a `Specs` is refused. A v3 `Library`
+  still writes format version 3 (`"3.0.0"` in Ion). Readers accept every `3.0.x` and `3.1.x`
+  release, but a `Specs` requires 3.1.0 or later: one declared as `3` or `"3.0.x"` is refused
+  (finos/morphir#970).
 - Local APFS Library publication with exact signed proposals, durable role-version
   reservations, staged immutable objects, serialized writers and timestamp commit
   recovery. The first macOS provider supports dependency-free classic V4 registries;
@@ -34,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir-rust#236).
 
 ### Changed
+- **Breaking (format-version support table).** The reference support table is now
+  `[3.0.0,3.2.0),[4.0.0,4.1.0)`, so `3.1.x` is a supported release. A caller that asserted
+  `3.1.0` was unsupported, or that pinned the old canonical spelling, for example from the MCK
+  adapter's `formatVersions` reply, must update. `3.2.0` still fails with
+  `unsupported_format_version_minor` (finos/morphir#970).
 - The daemon's typestate MEP session now runs on the `morphir-host` session
   core. Its public API, wire sequence and error texts are unchanged.
 - **Breaking:** Rename the extension Rust API from capability statements to

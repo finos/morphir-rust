@@ -90,10 +90,37 @@ impl ProcessChild {
         self.request_timeout
     }
 
-    /// Write one frame to the child's standard input.
+    /// Write one frame to the child's standard input, under the full request
+    /// timeout.
     pub async fn write<T: Serialize>(&mut self, message: &T) -> Result<(), HostError> {
         let request_timeout = self.request_timeout;
-        match timeout(request_timeout, self.write_now(message)).await {
+        self.write_within(message, request_timeout).await
+    }
+
+    /// Read one frame body from the child's standard output, under the full
+    /// request timeout.
+    pub async fn read(&mut self) -> Result<Vec<u8>, HostError> {
+        let request_timeout = self.request_timeout;
+        self.read_within(request_timeout).await
+    }
+
+    /// Write one frame to the child's standard input, under `duration`
+    /// rather than the full request timeout.
+    ///
+    /// The timeout text always names the full configured request timeout, so
+    /// a caller that shares one timeout budget across a write and the read
+    /// that follows it (see [`Self::read_within`]) reports the same duration
+    /// a caller using [`Self::write`] would.
+    ///
+    /// Used by `ProcessChannel` to keep one exchange under one timeout.
+    #[doc(hidden)]
+    pub async fn write_within<T: Serialize>(
+        &mut self,
+        message: &T,
+        duration: Duration,
+    ) -> Result<(), HostError> {
+        let request_timeout = self.request_timeout;
+        match timeout(duration, self.write_now(message)).await {
             Ok(result) => result,
             Err(_) => Err(timed_out(format!(
                 "Extension process write timed out after {request_timeout:?}"
@@ -101,10 +128,25 @@ impl ProcessChild {
         }
     }
 
-    /// Read one frame body from the child's standard output.
-    pub async fn read(&mut self) -> Result<Vec<u8>, HostError> {
+    /// Read one frame body from the child's standard output, under
+    /// `duration` rather than the full request timeout.
+    ///
+    /// A `duration` of zero times out at once, without attempting a read:
+    /// a duration this short only ever comes from a budget an earlier write
+    /// already spent, so there is nothing left to wait for. The timeout text
+    /// always names the full configured request timeout, matching
+    /// [`Self::read`].
+    ///
+    /// Used by `ProcessChannel` to keep one exchange under one timeout.
+    #[doc(hidden)]
+    pub async fn read_within(&mut self, duration: Duration) -> Result<Vec<u8>, HostError> {
         let request_timeout = self.request_timeout;
-        match timeout(request_timeout, read_frame(&mut self.stdout)).await {
+        if duration.is_zero() {
+            return Err(timed_out(format!(
+                "Extension process read timed out after {request_timeout:?}"
+            )));
+        }
+        match timeout(duration, read_frame(&mut self.stdout)).await {
             Ok(result) => result,
             Err(_) => Err(timed_out(format!(
                 "Extension process read timed out after {request_timeout:?}"

@@ -200,7 +200,11 @@ impl<C: SessionChecks> SessionCore<C> {
 
     fn call(&mut self, method: String, params: Value) -> Action<C::Error> {
         if !self.is_ready() {
-            return Action::Rejected(self.wrong_state("call"));
+            let error = self.wrong_state("call");
+            if !matches!(self.state, State::Stopped) {
+                self.state = State::Failed;
+            }
+            return Action::Failed(error);
         }
         if matches!(
             method.as_str(),
@@ -533,7 +537,7 @@ mod tests {
             "Extension response ID 99 did not match request ID 2"
         );
         assert_eq!(
-            rejected(core.handle(compile())),
+            failed(core.handle(compile())),
             "Session cannot call while failed"
         );
     }
@@ -571,8 +575,20 @@ mod tests {
         let mut core = ready_core();
         sent(core.handle(compile()));
         assert_eq!(
-            rejected(core.handle(compile())),
+            failed(core.handle(compile())),
             "Session cannot call while waiting for a response"
+        );
+        assert!(!core.is_ready());
+    }
+
+    #[test]
+    fn a_call_after_shutdown_fails() {
+        let mut core = ready_core();
+        sent(core.handle(Event::Close));
+        assert!(matches!(core.handle(ok(2, json!({}))), Action::ShutDown));
+        assert_eq!(
+            failed(core.handle(compile())),
+            "Session cannot call while stopped"
         );
     }
 

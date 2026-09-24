@@ -15,6 +15,7 @@ use serde_json::Value;
 pub struct JsonRpcConnection<C, K: SessionChecks<Error = HostError> = BasicChecks> {
     channel: C,
     core: SessionCore<K>,
+    finished: bool,
 }
 
 impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnection<C, K> {
@@ -23,6 +24,7 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnect
         Self {
             channel,
             core: SessionCore::new(checks),
+            finished: false,
         }
     }
 
@@ -35,12 +37,14 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnect
         while let Action::Send(request) = action {
             if let Err(error) = self.channel.send(Outgoing::Request(request)).await {
                 self.core.handle(Event::TransportFailed);
+                self.finished = true;
                 return Err(error.into());
             }
             match self.channel.receive().await {
                 Ok(response) => action = self.core.handle(Event::Received(response)),
                 Err(error) => {
                     self.core.handle(Event::TransportFailed);
+                    self.finished = true;
                     return Err(error.into());
                 }
             }
@@ -50,7 +54,9 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnect
 
     /// Abort the channel after a protocol failure, and keep the first error.
     async fn abort(&mut self, error: HostError) -> HostError {
-        match self.channel.close().await {
+        let result = self.channel.close().await;
+        self.finished = true;
+        match result {
             Ok(_) => error,
             Err(close) => HostError::Channel {
                 message: format!("{error}; transport abort also failed: {}", close.message),
@@ -72,6 +78,12 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> GuestConnectio
     for JsonRpcConnection<C, K>
 {
     async fn open(&mut self, params: InitializeParams) -> Result<Negotiated, HostError> {
+        if self.finished {
+            return Err(HostError::State {
+                action: "open",
+                state: "closed",
+            });
+        }
         match self.step(Event::Open(params)).await? {
             Action::Ready => Ok(self
                 .core
@@ -87,6 +99,12 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> GuestConnectio
     }
 
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+        if self.finished {
+            return Err(CallError::Failed(HostError::State {
+                action: "call",
+                state: "closed",
+            }));
+        }
         let event = Event::Call {
             method: method.to_owned(),
             params,
@@ -104,14 +122,24 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> GuestConnectio
     }
 
     async fn close(&mut self) -> Result<(), HostError> {
+        if self.finished {
+            return Ok(());
+        }
         match self.step(Event::Close).await? {
             Action::ShutDown => {
-                self.channel
+                if let Err(error) = self
+                    .channel
                     .send(Outgoing::Notification(
                         ExtensionNotification::without_params(methods::EXIT),
                     ))
-                    .await?;
-                match self.channel.close().await? {
+                    .await
+                {
+                    self.finished = true;
+                    return Err(error.into());
+                }
+                let result = self.channel.close().await;
+                self.finished = true;
+                match result? {
                     ChannelState::Stopped => Ok(()),
                     ChannelState::Indeterminate => Err(HostError::Channel {
                         message: "Extension shutdown outcome is indeterminate".into(),

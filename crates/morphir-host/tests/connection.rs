@@ -131,3 +131,47 @@ async fn a_failed_handshake_closes_the_channel() {
     );
     assert_eq!(log.closes(), 1);
 }
+
+#[tokio::test]
+async fn close_after_a_transport_failure_does_not_touch_the_channel() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .fail(ChannelError {
+            message: "pipe closed".into(),
+            state: ChannelState::Indeterminate,
+        });
+    let log = channel.log();
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    connection.open(params()).await.unwrap();
+    connection
+        .call(methods::COMPILE, json!({}))
+        .await
+        .unwrap_err();
+    let methods_before = log.methods();
+
+    connection.close().await.unwrap();
+
+    assert_eq!(log.closes(), 0);
+    assert_eq!(log.methods(), methods_before);
+}
+
+#[tokio::test]
+async fn a_call_after_a_failure_fails_without_sending() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(42, json!({})));
+    let log = channel.log();
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    connection.open(params()).await.unwrap();
+    connection
+        .call(methods::COMPILE, json!({}))
+        .await
+        .unwrap_err();
+    let methods_before = log.methods();
+
+    match connection.call(methods::COMPILE, json!({})).await {
+        Err(CallError::Failed(_)) => {}
+        other => panic!("expected a failure, got {other:?}"),
+    }
+    assert_eq!(log.methods(), methods_before);
+}

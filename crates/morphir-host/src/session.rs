@@ -7,6 +7,18 @@ use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateRequest, Gene
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+/// Combine a call failure with a failure to shut down in order.
+///
+/// The combined error keeps the channel state of the shutdown failure, since
+/// that is the failure that describes the transport now.
+fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
+    let message = format!("{error}; orderly shutdown also failed: {close}");
+    match close {
+        HostError::Channel { state, .. } => HostError::Channel { message, state },
+        _ => HostError::Invalid(message),
+    }
+}
+
 /// One live guest after the handshake.
 ///
 /// The client owns the session and closes it. A client may hold many sessions.
@@ -52,9 +64,7 @@ impl Session {
                 let error = HostError::from(error);
                 match self.connection.close().await {
                     Ok(()) => Err(CallError::Failed(error)),
-                    Err(close) => Err(CallError::Failed(HostError::Rejected(format!(
-                        "{error}; orderly shutdown also failed: {close}"
-                    )))),
+                    Err(close) => Err(CallError::Failed(also_failed_to_shut_down(error, close))),
                 }
             }
         }
@@ -102,9 +112,7 @@ where
         }
         Err(CallError::Rejected(error)) => match session.close().await {
             Ok(()) => Err(error),
-            Err(close) => Err(HostError::Rejected(format!(
-                "{error}; orderly shutdown also failed: {close}"
-            ))),
+            Err(close) => Err(also_failed_to_shut_down(error, close)),
         },
         Err(CallError::Failed(error)) => Err(error),
     }

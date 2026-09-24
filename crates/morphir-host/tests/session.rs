@@ -1,7 +1,7 @@
 use morphir_extension_sdk::protocol::{ExtensionResponse, PeerInfo, PeerKind, RpcError, methods};
 use morphir_extension_sdk::{CompileRequest, CompileResult};
 use morphir_host::testing::{MemoryChannel, frontend_initialize_result};
-use morphir_host::{BasicChecks, HostConfig, JsonRpcConnection, Session, compile_once};
+use morphir_host::{BasicChecks, CallError, HostConfig, JsonRpcConnection, Session, compile_once};
 use serde_json::json;
 
 fn config() -> HostConfig {
@@ -132,4 +132,33 @@ async fn a_result_that_does_not_decode_ends_the_session_in_order() {
         ]
     );
     assert_eq!(log.closes(), 1);
+}
+
+#[tokio::test]
+async fn closing_after_a_decode_failure_closes_the_channel_once() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(2, json!({"not": "a compile result"})))
+        .respond(ok(3, json!({})));
+    let log = channel.log();
+    let connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    let mut session = Session::open(connection, &config()).await.unwrap();
+
+    match session.compile(CompileRequest::default()).await {
+        Err(CallError::Failed(_)) => {}
+        other => panic!("expected a decode failure, got {other:?}"),
+    }
+
+    session.close().await.unwrap();
+
+    assert_eq!(log.closes(), 1);
+    assert_eq!(
+        log.methods(),
+        [
+            methods::INITIALIZE,
+            methods::COMPILE,
+            methods::SHUTDOWN,
+            methods::EXIT
+        ]
+    );
 }

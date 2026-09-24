@@ -49,6 +49,14 @@ pub enum NodeResolutionError {
     InvalidSnapshot(String),
 }
 
+/// V3 node addresses cover a `Library`'s definitions; a v3 `Specs` distribution (IR 3.1.0) holds
+/// none to address yet.
+fn specs_not_addressable() -> NodeResolutionError {
+    NodeResolutionError::InvalidSnapshot(
+        "a v3 Specs distribution has no definitions to address".to_owned(),
+    )
+}
+
 /// A resolved occurrence in the normalized semantic model. Equal subtrees can
 /// have different addresses, so reverse lookup uses the occurrence's URI.
 #[derive(Debug, Clone, PartialEq)]
@@ -116,7 +124,9 @@ impl NodeCatalog {
         let digest = verify_snapshot_digest(bytes, expected)?;
         let distribution: classic::Distribution = serde_json::from_slice(bytes)
             .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
-        let classic::DistributionBody::Library(package, _, _) = &distribution.distribution;
+        let classic::DistributionBody::Library(package, _, _) = &distribution.distribution else {
+            return Err(specs_not_addressable());
+        };
         let selector = ArtifactSelector::Package(PackageName::new(classic_path(package)?));
         let index = NodeIndex::v3(&distribution, selector)?;
         self.snapshots.push((digest.clone(), index));
@@ -348,7 +358,10 @@ impl NodeIndex {
             distribution,
         )?;
         let classic::DistributionBody::Library(package_path, dependencies, package) =
-            &distribution.distribution;
+            &distribution.distribution
+        else {
+            return Err(specs_not_addressable());
+        };
         index.add(
             &WalkContext::root(NodeRoot::Package),
             IndexedNodeKind::Package,

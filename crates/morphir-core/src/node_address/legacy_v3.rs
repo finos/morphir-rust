@@ -41,8 +41,12 @@ pub fn convert_v3_node_id(
     }
     let package = legacy_path(parts[0])?;
     let module = legacy_path(parts[1])?;
+    // A v3 Specs distribution (IR 3.1.0) holds no definitions for a NodeID to select.
     let classic::DistributionBody::Library(actual_package, _, definition) =
-        &distribution.distribution;
+        &distribution.distribution
+    else {
+        return Err(LegacyNodeIdError::MappingNotSpecified);
+    };
     if package != convert_path(actual_package)? {
         return Err(LegacyNodeIdError::PackageMismatch);
     }

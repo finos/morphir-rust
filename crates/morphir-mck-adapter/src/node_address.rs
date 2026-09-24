@@ -88,7 +88,9 @@ fn resolve(input: &str, uri: &str) -> Value {
 
 fn add_v3(catalog: &mut NodeCatalog, input: &str, value: Value) -> Result<()> {
     let distribution: classic::Distribution = serde_json::from_value(value)?;
-    let classic::DistributionBody::Library(package, _, _) = &distribution.distribution;
+    let classic::DistributionBody::Library(package, _, _) = &distribution.distribution else {
+        anyhow::bail!("a v3 Specs distribution has no definitions to address");
+    };
     let package = package
         .segments
         .iter()

@@ -557,3 +557,17 @@ fn v3_legacy_type_conversion_checks_alias_and_custom_type_shape() {
         .is_err()
     );
 }
+
+#[test]
+fn a_v3_specs_snapshot_is_refused_as_having_no_definitions_to_address() {
+    let bytes =
+        br#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[]}]}"#;
+    let mut catalog = NodeCatalog::new();
+    let error = catalog.add_v3_json_snapshot(bytes, None).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Specs distribution has no definitions"),
+        "{error}"
+    );
+}

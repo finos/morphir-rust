@@ -16,7 +16,7 @@ pub use name::{CANONICAL_STYLE, Name, NameStyle, Segment};
 pub use package_name::PackageName;
 pub use path::Path;
 pub use qname::QName;
-pub use stem::{MIN_TRUNCATED_STEM_BUDGET, escaped_path, file_stem, truncate_stem};
+pub use stem::{MIN_TRUNCATED_STEM_BUDGET, escaped_path, file_stem, is_stem_of, truncate_stem};
 
 /// Namespace for serialization codecs
 pub mod codecs {

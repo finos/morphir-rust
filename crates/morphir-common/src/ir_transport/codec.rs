@@ -8,7 +8,7 @@ use morphir_core::traversal::IrCursor;
 use morphir_core::traversal::SemanticEvent;
 
 use super::{CodecOptions, FormatId, Stage, TransportDiagnostic};
-use crate::ir_transport::{JsonCodec, YamlCodec};
+use crate::ir_transport::{IonCodec, JsonCodec, YamlCodec};
 
 /// Pull-based source of semantic IR events.
 pub trait EventSource {
@@ -79,9 +79,10 @@ impl CodecRegistry {
         Self::default()
     }
 
-    /// Create a registry containing the JSON and YAML codec entries.
+    /// Create a registry containing the Ion, JSON, and YAML codec entries.
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
+        registry.register(Arc::new(IonCodec::new()));
         registry.register(Arc::new(JsonCodec::new()));
         registry.register(Arc::new(YamlCodec::new()));
         registry

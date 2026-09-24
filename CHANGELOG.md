@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preflight and runtime failures, and a first recursive arity-rule pilot.
 - Gleam V3 typed value lowering and caller-owned typed interfaces for
   incremental compilation against last-good dependencies.
+- Draft Amazon Ion IR codec (`FormatId::ion()`, `ionVersion` `0.1.0-draft.1`) for IR v3 and v4,
+  as a single-file datagram and as a document tree whose files hold the same annotated
+  elements, with names taken from their paths. v4 coverage is a library; `specs`,
+  `application`, v4 attributes and most v4 value heads are not encoded yet and are refused
+  rather than dropped (finos/morphir#946).
 - Local APFS Library publication with exact signed proposals, durable role-version
   reservations, staged immutable objects, serialized writers and timestamp commit
   recovery. The first macOS provider supports dependency-free classic V4 registries;

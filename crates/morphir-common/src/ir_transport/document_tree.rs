@@ -15,6 +15,10 @@
 //!
 //! The tree this writes is not the tree releases up to 0.4.0-alpha.7 wrote. There is no
 //! compatibility shim: an older tree is refused, with the guidance that says so.
+//!
+//! The Ion tree has the same paths, but its files hold the single-file Ion elements rather than
+//! the kit's JSON value tree, so the Ion codec lays it out and reads it back. It is defined for v3
+//! and v4. Its sink holds the whole distribution, because the Ion writer takes the datagram apart.
 
 use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
@@ -33,6 +37,7 @@ use morphir_core::traversal::{
 use vfs::VfsPath;
 
 use super::diagnostic::{core_code_name, core_message, core_source_span, core_stage};
+use super::ion;
 use super::semantic;
 use super::{
     CodecOptions, EventSink, EventSource, FormatId, IrVersion, Layout, Stage, TransportDiagnostic,
@@ -45,14 +50,73 @@ use super::{
 const MIGRATE_GUIDANCE: &str =
     "this tree predates 0.4.0-beta.1; regenerate it with morphir migrate";
 
-/// The manifest file names a tree root may carry, and the profile each selects.
+/// The manifest file names a tree root may carry, and the spelling each selects.
 ///
 /// `.yml` is read but never written, as the kit's `from_physical` treats it.
-const MANIFEST_NAMES: [(&str, Profile); 3] = [
-    ("manifest.json", Profile::Json),
-    ("manifest.yaml", Profile::Yaml),
-    ("manifest.yml", Profile::Yaml),
+const MANIFEST_NAMES: [(&str, Spelling); 4] = [
+    ("manifest.json", Spelling::Kit(Profile::Json)),
+    ("manifest.yaml", Spelling::Kit(Profile::Yaml)),
+    ("manifest.yml", Spelling::Kit(Profile::Yaml)),
+    ("manifest.ion", Spelling::Ion),
 ];
+
+/// How a tree's files are spelled: one of the kit's profiles, or the Ion elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spelling {
+    Kit(Profile),
+    Ion,
+}
+
+impl Spelling {
+    fn name(self) -> &'static str {
+        match self {
+            Spelling::Kit(profile) => profile.name(),
+            Spelling::Ion => "ion",
+        }
+    }
+
+    /// The physical path a logical one takes in this spelling.
+    fn physical(self, logical: &str) -> String {
+        match self {
+            Spelling::Kit(profile) => to_physical(logical, profile),
+            Spelling::Ion => format!("{logical}{}", ion::TREE_EXTENSION),
+        }
+    }
+
+    /// The logical path of a physical name this spelling reads, or `None` when the tree ignores
+    /// the file. An Ion tree also sees the kit's extensions, so a JSON file in it is refused
+    /// rather than skipped.
+    fn logical(self, physical: &str) -> Option<String> {
+        match self {
+            Spelling::Kit(_) => from_physical(physical),
+            Spelling::Ion => from_physical(physical).or_else(|| {
+                physical
+                    .strip_suffix(ion::TREE_EXTENSION)
+                    .map(str::to_owned)
+            }),
+        }
+    }
+}
+
+/// What a tree operation needs to know: the spelling and the path budget.
+#[derive(Debug, Clone, Copy)]
+struct Policy {
+    spelling: Spelling,
+    path_budget: u32,
+}
+
+impl Policy {
+    /// The kit's policy, when the tree is spelled in a kit profile.
+    fn kit(self) -> Option<TreePolicy> {
+        match self.spelling {
+            Spelling::Kit(profile) => Some(TreePolicy {
+                profile,
+                path_budget: self.path_budget,
+            }),
+            Spelling::Ion => None,
+        }
+    }
+}
 
 // =============================================================================
 // Diagnostics
@@ -143,32 +207,36 @@ fn event_error(
 // Options and the profile boundary
 // =============================================================================
 
-/// The kit's profile a format identifier selects.
-fn profile_of(format: &FormatId) -> Result<Profile, TransportDiagnostic> {
+/// The spelling a format identifier selects.
+fn spelling_of(format: &FormatId) -> Result<Spelling, TransportDiagnostic> {
     if *format == FormatId::json() {
-        Ok(Profile::Json)
+        Ok(Spelling::Kit(Profile::Json))
     } else if *format == FormatId::yaml() {
-        Ok(Profile::Yaml)
+        Ok(Spelling::Kit(Profile::Yaml))
+    } else if *format == FormatId::ion() {
+        Ok(Spelling::Ion)
     } else {
         Err(tree_error(
             "morphir::ir::document_tree::unsupported_format",
             Stage::Detection,
             format!("document trees do not have a '{format}' profile"),
-            "select json or yaml, or register a document-tree profile",
+            "select json, yaml, or ion, or register a document-tree profile",
         ))
     }
 }
 
-/// The format identifier a profile is selected by.
-fn format_of(profile: Profile) -> FormatId {
-    match profile {
-        Profile::Json => FormatId::json(),
-        Profile::Yaml => FormatId::yaml(),
+/// The format identifier a spelling is selected by.
+fn format_of(spelling: Spelling) -> FormatId {
+    match spelling {
+        Spelling::Kit(Profile::Json) => FormatId::json(),
+        Spelling::Kit(Profile::Yaml) => FormatId::yaml(),
+        Spelling::Ion => FormatId::ion(),
     }
 }
 
-fn validate_options(options: &CodecOptions) -> Result<TreePolicy, TransportDiagnostic> {
-    if options.version() != IrVersion::V4 {
+fn validate_options(options: &CodecOptions) -> Result<Policy, TransportDiagnostic> {
+    let spelling = spelling_of(options.format())?;
+    if options.version() != IrVersion::V4 && spelling != Spelling::Ion {
         return Err(tree_error(
             "morphir::ir::document_tree::version_unsupported",
             Stage::Detection,
@@ -184,21 +252,22 @@ fn validate_options(options: &CodecOptions) -> Result<TreePolicy, TransportDiagn
             "select the document-tree layout",
         ));
     }
-    Ok(TreePolicy {
-        profile: profile_of(options.format())?,
+    Ok(Policy {
+        spelling,
         path_budget: options.path_budget(),
     })
 }
 
-/// Whether a physical name in the tree is spelled in `profile`.
+/// Whether a physical name in the tree is spelled in `spelling`.
 ///
 /// The kit recognizes three extensions and writes two; `.yml` is the YAML profile's read-only
 /// spelling, so it agrees with a YAML tree rather than being the mismatch the reference's
 /// directory adapter calls it. A tree whose manifest is `manifest.yml` is otherwise unreadable.
-fn agrees_with(physical: &str, profile: Profile) -> bool {
-    match profile {
-        Profile::Json => physical.ends_with(".json"),
-        Profile::Yaml => physical.ends_with(".yaml") || physical.ends_with(".yml"),
+fn agrees_with(physical: &str, spelling: Spelling) -> bool {
+    match spelling {
+        Spelling::Kit(Profile::Json) => physical.ends_with(".json"),
+        Spelling::Kit(Profile::Yaml) => physical.ends_with(".yaml") || physical.ends_with(".yml"),
+        Spelling::Ion => physical.ends_with(ion::TREE_EXTENSION),
     }
 }
 
@@ -206,9 +275,9 @@ fn agrees_with(physical: &str, profile: Profile) -> bool {
 fn physical_path(
     root: &VfsPath,
     logical: &str,
-    profile: Profile,
+    spelling: Spelling,
 ) -> Result<VfsPath, TransportDiagnostic> {
-    root.join(to_physical(logical, profile)).map_err(|error| {
+    root.join(spelling.physical(logical)).map_err(|error| {
         tree_error(
             "morphir::ir::document_tree::invalid_path",
             Stage::Publication,
@@ -221,10 +290,10 @@ fn physical_path(
 /// Writes one file of a tree, creating the directories it sits under.
 fn publish(
     root: &VfsPath,
-    profile: Profile,
+    spelling: Spelling,
     (logical, text): (String, String),
 ) -> Result<(), TransportDiagnostic> {
-    let path = physical_path(root, &logical, profile)?;
+    let path = physical_path(root, &logical, spelling)?;
     let parent = path.parent();
     parent
         .create_dir_all()
@@ -259,7 +328,7 @@ fn dependency_package(key: &str) -> Result<PackageName, TransportDiagnostic> {
 /// Detect the homogeneous serialization profile of a document tree.
 pub fn discover_document_tree_format(root: &VfsPath) -> Result<FormatId, TransportDiagnostic> {
     let mut found = Vec::new();
-    for (name, profile) in MANIFEST_NAMES {
+    for (name, spelling) in MANIFEST_NAMES {
         let path = root.join(name).map_err(|error| {
             tree_error(
                 "morphir::ir::detection::invalid_manifest_path",
@@ -272,16 +341,16 @@ pub fn discover_document_tree_format(root: &VfsPath) -> Result<FormatId, Transpo
             .is_file()
             .map_err(|error| io_error("inspect", &path, Stage::Detection, error))?
         {
-            found.push((name, profile));
+            found.push((name, spelling));
         }
     }
     match found.as_slice() {
-        [(_, profile)] => Ok(format_of(*profile)),
+        [(_, spelling)] => Ok(format_of(*spelling)),
         [] => Err(tree_error(
             "morphir::ir::detection::missing_manifest",
             Stage::Detection,
             "the document tree has no supported manifest",
-            "add manifest.yaml or manifest.json, or select single-file input",
+            "add manifest.yaml, manifest.json, or manifest.ion, or select single-file input",
         )),
         _ => Err(tree_error(
             "morphir::ir::detection::ambiguous_manifest",
@@ -323,10 +392,10 @@ pub fn discover_document_tree_format(root: &VfsPath) -> Result<FormatId, Transpo
 /// refuse a legitimate deep tree read back under a smaller budget than it was written with.
 ///
 /// [pr]: crate::vfs::physical_root
-fn read_tree_files(root: &VfsPath, policy: &TreePolicy) -> Result<Tree, TransportDiagnostic> {
+fn read_tree_files(root: &VfsPath, spelling: Spelling) -> Result<Tree, TransportDiagnostic> {
     let mut files = Tree::new();
     let mut physical = std::collections::HashMap::new();
-    read_directory(root, "", 0, policy, &mut files, &mut physical)?;
+    read_directory(root, "", 0, spelling, &mut files, &mut physical)?;
     Ok(files)
 }
 
@@ -339,7 +408,7 @@ fn read_directory(
     directory: &VfsPath,
     relative: &str,
     depth: usize,
-    policy: &TreePolicy,
+    spelling: Spelling,
     files: &mut Tree,
     physical: &mut std::collections::HashMap<String, String>,
 ) -> Result<(), TransportDiagnostic> {
@@ -371,18 +440,18 @@ fn read_directory(
             .is_dir()
             .map_err(|error| io_error("inspect", &entry, Stage::Detection, error))?
         {
-            read_directory(&entry, &child, depth + 1, policy, files, physical)?;
+            read_directory(&entry, &child, depth + 1, spelling, files, physical)?;
             continue;
         }
-        let Some(logical) = from_physical(&child) else {
+        let Some(logical) = spelling.logical(&child) else {
             continue;
         };
-        if !agrees_with(&child, policy.profile) {
+        if !agrees_with(&child, spelling) {
             return Err(core_error(CoreDiagnostic::new(
                 DiagnosticCode::InvalidDistributionShape,
                 morphir_core::ir::DiagnosticStage::Semantic,
                 logical.clone(),
-                format!("{child} is not a {} file", policy.profile.name()),
+                format!("{child} is not a {} file", spelling.name()),
             )));
         }
         if let Some(previous) = physical.insert(logical.clone(), child.clone()) {
@@ -421,8 +490,164 @@ struct SinkHeader {
     entry_points: EntryPoints,
 }
 
-/// Push-based document-tree encoder that writes one module at a time.
+/// Push-based document-tree encoder.
+///
+/// A tree in a kit profile is written one module at a time. An Ion tree is written when the
+/// stream ends.
 pub struct DocumentTreeSink {
+    inner: SinkSpelling,
+}
+
+enum SinkSpelling {
+    Kit(Box<KitSink>),
+    Ion(IonSink),
+}
+
+impl DocumentTreeSink {
+    /// Create an encoder for a staging tree.
+    pub fn new(root: VfsPath, options: CodecOptions) -> Result<Self, TransportDiagnostic> {
+        let policy = validate_options(&options)?;
+        root.create_dir_all()
+            .map_err(|error| io_error("create", &root, Stage::Publication, error))?;
+        let inner = match policy.kit() {
+            Some(policy) => SinkSpelling::Kit(Box::new(KitSink::new(root, policy))),
+            None => SinkSpelling::Ion(IonSink {
+                root,
+                version: options.version(),
+                path_budget: policy.path_budget,
+                events: VecDeque::new(),
+                ended: false,
+            }),
+        };
+        Ok(Self { inner })
+    }
+}
+
+impl EventSink for DocumentTreeSink {
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
+        match &mut self.inner {
+            SinkSpelling::Kit(sink) => sink.accept(event),
+            SinkSpelling::Ion(sink) => sink.accept(event),
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), TransportDiagnostic> {
+        match &mut self.inner {
+            SinkSpelling::Kit(sink) => sink.finish(),
+            SinkSpelling::Ion(sink) => sink.finish(),
+        }
+    }
+}
+
+/// Empties the tree of everything a previous write left: both package roots, and whichever
+/// manifest spelling is there. A module that is no longer in the distribution, and a dependency
+/// that is no longer listed, both disappear this way — there is no other staleness story, because
+/// a streaming writer never sees the whole tree it is replacing.
+///
+/// The removal never follows a link. `VfsPath::remove_dir_all` is plain recursion over `read_dir`
+/// and `metadata`, so on a backend that resolves links it would delete a link's target rather than
+/// the link; [`morphir_common::vfs::physical_root`][pr] therefore builds a `ContainedPhysicalFS`,
+/// which hides linked children from `read_dir` and removes a link *as a link* when one stands in
+/// the way. A symlink or junction at `pkg/`, at `deps/`, or anywhere beneath them is unlinked;
+/// nothing outside the OS root is touched. On a backend with no links to begin with — `MemoryFS` —
+/// there is nothing to contain.
+///
+/// [pr]: crate::vfs::physical_root
+fn prune(tree: &VfsPath) -> Result<(), TransportDiagnostic> {
+    for root in [Root::Pkg, Root::Deps] {
+        let path = tree.join(root.as_str()).map_err(|error| {
+            tree_error(
+                "morphir::ir::document_tree::invalid_path",
+                Stage::Publication,
+                error.to_string(),
+                "use a valid document-tree root",
+            )
+        })?;
+        if path
+            .exists()
+            .map_err(|error| io_error("inspect", &path, Stage::Publication, error))?
+        {
+            path.remove_dir_all()
+                .map_err(|error| io_error("remove", &path, Stage::Publication, error))?;
+        }
+    }
+    for (name, _) in MANIFEST_NAMES {
+        let path = tree.join(name).map_err(|error| {
+            tree_error(
+                "morphir::ir::document_tree::invalid_path",
+                Stage::Publication,
+                error.to_string(),
+                "use a valid document-tree root",
+            )
+        })?;
+        if path
+            .exists()
+            .map_err(|error| io_error("inspect", &path, Stage::Publication, error))?
+        {
+            path.remove_file()
+                .map_err(|error| io_error("remove", &path, Stage::Publication, error))?;
+        }
+    }
+    Ok(())
+}
+
+/// The Ion tree encoder. The Ion writer lays out a whole distribution, so the events wait for the
+/// end of the stream.
+struct IonSink {
+    root: VfsPath,
+    version: IrVersion,
+    path_budget: u32,
+    events: VecDeque<SemanticEvent>,
+    ended: bool,
+}
+
+impl EventSink for IonSink {
+    fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
+        if self.ended {
+            return Err(event_error(
+                "event_after_end",
+                event.cursor(),
+                "an event appeared after the tree end",
+            ));
+        }
+        let end = matches!(event.kind(), SemanticEventKind::End);
+        self.events.push_back(event);
+        if !end {
+            return Ok(());
+        }
+        self.ended = true;
+        let mut source = QueueSource(std::mem::take(&mut self.events));
+        let files = ion::write_tree(&mut source, self.version, self.path_budget)?;
+        prune(&self.root)?;
+        files
+            .into_iter()
+            .try_for_each(|file| publish(&self.root, Spelling::Ion, file))
+    }
+
+    fn finish(&mut self) -> Result<(), TransportDiagnostic> {
+        if self.ended {
+            Ok(())
+        } else {
+            Err(event_error(
+                "missing_end",
+                &IrCursor::root(),
+                "the event source ended before the tree could be published",
+            ))
+        }
+    }
+}
+
+/// Replays buffered events.
+struct QueueSource(VecDeque<SemanticEvent>);
+
+impl EventSource for QueueSource {
+    fn next_event(&mut self) -> Result<Option<SemanticEvent>, TransportDiagnostic> {
+        Ok(self.0.pop_front())
+    }
+}
+
+/// The kit-profile encoder, which writes one module at a time.
+struct KitSink {
     root: VfsPath,
     policy: TreePolicy,
     header: Option<SinkHeader>,
@@ -434,13 +659,9 @@ pub struct DocumentTreeSink {
     ended: bool,
 }
 
-impl DocumentTreeSink {
-    /// Create an encoder for a staging tree.
-    pub fn new(root: VfsPath, options: CodecOptions) -> Result<Self, TransportDiagnostic> {
-        let policy = validate_options(&options)?;
-        root.create_dir_all()
-            .map_err(|error| io_error("create", &root, Stage::Publication, error))?;
-        Ok(Self {
+impl KitSink {
+    fn new(root: VfsPath, policy: TreePolicy) -> Self {
+        Self {
             root,
             policy,
             header: None,
@@ -449,65 +670,13 @@ impl DocumentTreeSink {
             modules: HashSet::new(),
             modules_started: false,
             ended: false,
-        })
+        }
     }
 
     fn publish_all(&self, files: Vec<(String, String)>) -> Result<(), TransportDiagnostic> {
         files
             .into_iter()
-            .try_for_each(|file| publish(&self.root, self.policy.profile, file))
-    }
-
-    /// Empties the tree of everything a previous write left: both package roots, and whichever
-    /// manifest spelling is there. A module that is no longer in the distribution, and a
-    /// dependency that is no longer listed, both disappear this way — there is no other staleness
-    /// story, because a streaming writer never sees the whole tree it is replacing.
-    ///
-    /// The removal never follows a link. `VfsPath::remove_dir_all` is plain recursion over
-    /// `read_dir` and `metadata`, so on a backend that resolves links it would delete a link's
-    /// target rather than the link; [`morphir_common::vfs::physical_root`][pr] therefore builds a
-    /// `ContainedPhysicalFS`, which hides linked children from `read_dir` and removes a link *as a
-    /// link* when one stands in the way. A symlink or junction at `pkg/`, at `deps/`, or anywhere
-    /// beneath them is unlinked; nothing outside the OS root is touched. On a backend with no links
-    /// to begin with — `MemoryFS` — there is nothing to contain.
-    ///
-    /// [pr]: crate::vfs::physical_root
-    fn prune(&self) -> Result<(), TransportDiagnostic> {
-        for root in [Root::Pkg, Root::Deps] {
-            let path = self.root.join(root.as_str()).map_err(|error| {
-                tree_error(
-                    "morphir::ir::document_tree::invalid_path",
-                    Stage::Publication,
-                    error.to_string(),
-                    "use a valid document-tree root",
-                )
-            })?;
-            if path
-                .exists()
-                .map_err(|error| io_error("inspect", &path, Stage::Publication, error))?
-            {
-                path.remove_dir_all()
-                    .map_err(|error| io_error("remove", &path, Stage::Publication, error))?;
-            }
-        }
-        for (name, _) in MANIFEST_NAMES {
-            let path = self.root.join(name).map_err(|error| {
-                tree_error(
-                    "morphir::ir::document_tree::invalid_path",
-                    Stage::Publication,
-                    error.to_string(),
-                    "use a valid document-tree root",
-                )
-            })?;
-            if path
-                .exists()
-                .map_err(|error| io_error("inspect", &path, Stage::Publication, error))?
-            {
-                path.remove_file()
-                    .map_err(|error| io_error("remove", &path, Stage::Publication, error))?;
-            }
-        }
-        Ok(())
+            .try_for_each(|file| publish(&self.root, Spelling::Kit(self.policy.profile), file))
     }
 
     fn begin(
@@ -559,7 +728,7 @@ impl DocumentTreeSink {
                 ));
             }
         };
-        self.prune()?;
+        prune(&self.root)?;
         self.header = Some(header);
         Ok(())
     }
@@ -760,13 +929,13 @@ impl DocumentTreeSink {
             },
             &self.policy,
         );
-        publish(&self.root, self.policy.profile, manifest)?;
+        publish(&self.root, Spelling::Kit(self.policy.profile), manifest)?;
         self.ended = true;
         Ok(())
     }
 }
 
-impl EventSink for DocumentTreeSink {
+impl EventSink for KitSink {
     fn accept(&mut self, event: SemanticEvent) -> Result<(), TransportDiagnostic> {
         if self.ended {
             return Err(event_error(
@@ -833,7 +1002,7 @@ impl DocumentTreeSource {
                 "select the detected input format or rename and convert the complete tree",
             ));
         }
-        let files = read_tree_files(&root, &policy)?;
+        let files = read_tree_files(&root, policy.spelling)?;
         // Discovery answers `is_file`, which resolves a link; the walk skips links. When the two
         // disagree the manifest is a link, and the kit's reader would otherwise report a tree with
         // no manifest at all — true, but not the reason.
@@ -846,9 +1015,15 @@ impl DocumentTreeSource {
                 "replace the link with the manifest file, or open the directory the link resolves to",
             ));
         }
-        let (file, _warnings) = layout::read_tree(&files, policy.profile).map_err(core_error)?;
         let mut queue = QueueSink::default();
-        semantic::emit_v4(file, &mut queue)?;
+        match policy.kit() {
+            Some(kit) => {
+                let (file, _warnings) =
+                    layout::read_tree(&files, kit.profile).map_err(core_error)?;
+                semantic::emit_v4(file, &mut queue)?;
+            }
+            None => ion::read_tree(&files, options.version(), &mut queue)?,
+        }
         Ok(Self {
             events: queue.events,
         })

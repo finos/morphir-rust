@@ -5,5 +5,6 @@ pub mod format_version;
 pub mod ir;
 pub mod migration;
 pub mod naming;
+pub mod node_address;
 
 pub use naming::{Word, intern, resolve};

@@ -7,6 +7,7 @@
 //! [`testee`] will carry the operations that answer each request once they
 //! exist.
 
+pub mod node_address;
 pub mod package;
 pub mod package_mvp;
 pub mod package_resolution;

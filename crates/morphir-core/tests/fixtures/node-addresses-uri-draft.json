@@ -1,0 +1,491 @@
+{
+  "contractVersion": "0.1.0-draft.1",
+  "uriCases": [
+    {
+      "id": "node-uri-0001",
+      "purpose": "A V4 named record field has one address in all serialization profiles",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/type/order/type-exp/record/field/customer-id",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "type",
+          "module": "domain",
+          "name": "order",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [
+          {
+            "kind": "type-expression"
+          },
+          {
+            "kind": "record-field",
+            "name": "customer-id"
+          }
+        ],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "profiles": [
+        "json",
+        "yaml",
+        "document-tree"
+      ],
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/type/order/type-exp/record/field/customer-id"
+    },
+    {
+      "id": "node-uri-0002",
+      "purpose": "A V3 Apply argument is a typed branch rather than a bare child index",
+      "uri": "morphir://ir/pkg/acme/orders?format=3.0.0#/module/domain/value/calculate-total/body/apply/argument",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "3.0.0",
+        "root": {
+          "kind": "value",
+          "module": "domain",
+          "name": "calculate-total",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [
+          {
+            "kind": "body"
+          },
+          {
+            "kind": "apply-argument"
+          }
+        ],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=3.0.0#/module/domain/value/calculate-total/body/apply/argument"
+    },
+    {
+      "id": "node-uri-0003",
+      "purpose": "A slash within one module path component is percent encoded",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/sales%2Forders/type/order",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "type",
+          "module": "sales/orders",
+          "name": "order",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/sales%2Forders/type/order"
+    },
+    {
+      "id": "node-uri-0004",
+      "purpose": "A pin selects one immutable artifact revision",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0&rev=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#/module/domain/type/order",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "type",
+          "module": "domain",
+          "name": "order",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [],
+        "revision": {
+          "kind": "pinned",
+          "algorithm": "sha256",
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0&rev=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#/module/domain/type/order"
+    },
+    {
+      "id": "node-uri-0005",
+      "purpose": "A current workspace alias requires resolver context",
+      "uri": "morphir://ir/workspace/orders?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "workspace",
+          "alias": "orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "value",
+          "module": "domain",
+          "name": "calculate-total",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/workspace/orders?format=4.0.0#/module/domain/value/calculate-total"
+    },
+    {
+      "id": "node-uri-0006",
+      "purpose": "A bare artifact format family is not a canonical exact URI version",
+      "uri": "morphir://ir/pkg/acme/orders?format=4#/module/domain/type/order",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0007",
+      "purpose": "Duplicate query parameters are ambiguous",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0&format=3.0.0#/module/domain/type/order",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0008",
+      "purpose": "A lower-case percent escape is not canonical",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/sales%2forders/type/order",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0009",
+      "purpose": "Ordered indices are nonnegative canonical decimal integers",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/type/pair/type-exp/tuple/element/01",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0010",
+      "purpose": "A decoded Unicode word outside the Morphir name grammar is rejected",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/type/caf%C3%A9",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0011",
+      "purpose": "An unpinned ordered path carries a guard for its ordered-step lineage",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0&guard=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#/module/domain/type/pair/type-exp/tuple/element/1",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "type",
+          "module": "domain",
+          "name": "pair",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [
+          {
+            "kind": "type-expression"
+          },
+          {
+            "kind": "tuple-element",
+            "index": 1
+          }
+        ],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": {
+          "algorithm": "sha256",
+          "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0&guard=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#/module/domain/type/pair/type-exp/tuple/element/1"
+    },
+    {
+      "id": "node-uri-0012",
+      "purpose": "An unpinned ordered child without a guard is unsafe",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/type/pair/type-exp/tuple/element/1",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0013",
+      "purpose": "A pinned ordered child needs no guard",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0&rev=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#/module/domain/type/pair/type-exp/tuple/element/1",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "type",
+          "module": "domain",
+          "name": "pair",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [
+          {
+            "kind": "type-expression"
+          },
+          {
+            "kind": "tuple-element",
+            "index": 1
+          }
+        ],
+        "revision": {
+          "kind": "pinned",
+          "algorithm": "sha256",
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0&rev=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#/module/domain/type/pair/type-exp/tuple/element/1"
+    },
+    {
+      "id": "node-uri-0014",
+      "purpose": "Unknown query parameters do not silently change resolution",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0&latest=true#/module/domain/type/order",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0015",
+      "purpose": "The whole V4 distribution is addressable",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/distribution",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "distribution"
+        },
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/distribution"
+    },
+    {
+      "id": "node-uri-0016",
+      "purpose": "A named module is addressable independently of its file layout",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "module",
+          "module": "domain",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain"
+    },
+    {
+      "id": "node-uri-0017",
+      "purpose": "A type and value with the same name have distinct roots",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/value/order",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "value",
+          "module": "domain",
+          "name": "order",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/module/domain/value/order"
+    },
+    {
+      "id": "node-uri-0018",
+      "purpose": "The distribution own package is addressable separately from embedded dependencies",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/package",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null,
+        "root": {
+          "kind": "package",
+          "owner": {
+            "kind": "own-package"
+          }
+        }
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/package"
+    },
+    {
+      "id": "node-uri-0019",
+      "purpose": "An embedded dependency type has a typed owner and canonical package path",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/dependency/morphir%2FSDK/module/basics/type/int",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null,
+        "root": {
+          "kind": "type",
+          "owner": {
+            "kind": "dependency",
+            "packagePath": "morphir/SDK"
+          },
+          "module": "basics",
+          "name": "int"
+        }
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/dependency/morphir%2FSDK/module/basics/type/int"
+    },
+    {
+      "id": "node-uri-0020",
+      "purpose": "An Application entry-point ID is exact text rather than a Morphir Name",
+      "uri": "morphir://ir/pkg/acme/orders?format=4.0.0#/entry-point/launch-%C3%A9",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "package",
+          "packagePath": "acme/orders"
+        },
+        "formatVersion": "4.0.0",
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null,
+        "root": {
+          "kind": "entry-point",
+          "name": "launch-é"
+        }
+      },
+      "expectedCanonicalUri": "morphir://ir/pkg/acme/orders?format=4.0.0#/entry-point/launch-%C3%A9"
+    },
+    {
+      "id": "node-uri-0021",
+      "purpose": "A canonical workspace alias can contain lowercase words and digits separated by hyphens",
+      "uri": "morphir://ir/workspace/team-orders-2?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedAddress": {
+        "artifact": {
+          "kind": "workspace",
+          "alias": "team-orders-2"
+        },
+        "formatVersion": "4.0.0",
+        "root": {
+          "kind": "value",
+          "module": "domain",
+          "name": "calculate-total",
+          "owner": {
+            "kind": "own-package"
+          }
+        },
+        "steps": [],
+        "revision": {
+          "kind": "current"
+        },
+        "guard": null
+      },
+      "expectedCanonicalUri": "morphir://ir/workspace/team-orders-2?format=4.0.0#/module/domain/value/calculate-total"
+    },
+    {
+      "id": "node-uri-0022",
+      "purpose": "Uppercase workspace aliases are invalid",
+      "uri": "morphir://ir/workspace/Orders?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0023",
+      "purpose": "Unicode workspace aliases are invalid even when UTF-8 encoded",
+      "uri": "morphir://ir/workspace/caf%C3%A9?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0024",
+      "purpose": "A slash cannot be hidden inside a workspace alias",
+      "uri": "morphir://ir/workspace/team%2Forders?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0025",
+      "purpose": "A percent sign is not part of the workspace alias domain",
+      "uri": "morphir://ir/workspace/a%25b?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0026",
+      "purpose": "An empty workspace alias is invalid",
+      "uri": "morphir://ir/workspace/?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0027",
+      "purpose": "A workspace alias must use its literal canonical ASCII spelling",
+      "uri": "morphir://ir/workspace/ord%65rs?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0028",
+      "purpose": "A workspace alias cannot end with a hyphen",
+      "uri": "morphir://ir/workspace/orders-?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    },
+    {
+      "id": "node-uri-0029",
+      "purpose": "An unescaped slash creates an invalid extra workspace path segment",
+      "uri": "morphir://ir/workspace/team/orders?format=4.0.0#/module/domain/value/calculate-total",
+      "expectedError": "invalid_node_uri"
+    }
+  ]
+}

@@ -342,7 +342,7 @@ For a distributable guest, build with `--release`. Its artifact is
 `MORPHIR_RUST_GUEST` to that artifact's absolute path when running the host tests. Tests load it with
 WASI disabled and compare native and guest results for both IR versions.
 
-The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.2.0`,
+The guest reports ID `morphir-rust`, name `Morphir Rust`, version `0.3.0`,
 frontend language `rust`, suffix `.rs`, backend target `rust`, and
 `irVersions: ["3", "4"]` on both capabilities.
 
@@ -365,9 +365,9 @@ artifact, its SHA-256 checksum and `release.json`. A clean checkout builds from
 an archived HEAD and records that commit in the descriptor. A dirty checkout
 can produce a local test bundle, without release provenance.
 
-Independent releases use tags such as `extension/rust/v0.2.0`. Download the
-assets from the [Rust v0.2.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.2.0).
-The published descriptor is named `morphir-rust-binding-0.2.0.release.json`;
+Independent releases use tags such as `extension/rust/v0.3.0`. Download the
+assets from the [Rust v0.3.0 release](https://github.com/finos/morphir-rust/releases/tag/extension/rust/v0.3.0).
+The published descriptor is named `morphir-rust-binding-0.3.0.release.json`;
 rename it to `release.json` alongside the WASM and checksum before publishing
 the directory to a local extension repository.
 

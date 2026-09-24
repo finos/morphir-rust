@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The extension bundles are released with version-2 descriptors that carry
+  each guest's capability claims: `extension/avro/v0.2.0`,
+  `extension/openapi/v0.2.0`, `extension/python/v0.4.0`,
+  `extension/rust/v0.3.0`, `extension/elm-native/v0.2.0` and the first
+  `extension/gleam/v0.3.0`. Publishing them needs Morphir CLI `0.4.0-beta.7` or
+  later; older CLIs cannot read the descriptors, so each release takes a new
+  minor version (finos/morphir#921).
+
+### Changed
 - WASM extension bundles now carry version-2 (`2.0.0-draft.2`) release
   descriptors with capability claims read from the shipped guest and checked
   against `.github/extensions.toml`. Publishing requires Morphir CLI

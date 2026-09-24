@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ClaimsRecord::check_described` checks a `morphir.extension.describe` answer
+  against the declaration. A claim set the extension supplied must match its
+  answer exactly. A declaration converted from a version-1 record is checked
+  like a session instead: identity, protocol, capability kinds and the flat
+  members only. Converted claims carry host defaults for members the flat
+  format cannot express, such as `incremental`, so an exact check refused a
+  correct extension (finos/morphir#921).
+
 ### Added
 - MEP `initialize.host` carries an optional typed CLI peer kind. Missing or
   unknown kinds remain unspecified.

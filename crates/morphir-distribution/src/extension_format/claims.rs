@@ -60,6 +60,20 @@ impl<'de> Deserialize<'de> for PreservedClaims {
     }
 }
 
+/// Why a `describe` answer does not agree with the declared claims.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DescribedAgreementError {
+    /// A supplied claim set and the answer differ.
+    #[error(transparent)]
+    Claims(morphir_extension_sdk::claims::ClaimsAgreementError),
+    /// A declaration converted from a version-1 record disagrees with the answer.
+    #[error(transparent)]
+    Session(morphir_extension_sdk::claims::SessionAgreementError),
+    /// The answer claims no protocol version.
+    #[error("describe answered with no protocol version")]
+    NoProtocolVersion,
+}
+
 /// Claims fields embedded in an artifact or installed extension record.
 /// A synthesized claim set is available to readers but omitted by legacy writers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +180,34 @@ impl ClaimsRecord {
             })
             .collect();
         declared.check_session(protocol_version, extension, &representable)
+    }
+
+    /// Check a `morphir.extension.describe` answer against the declaration.
+    ///
+    /// A claim set the extension supplied must agree with its answer exactly. A declaration
+    /// converted from a version-1 record holds only the members the flat format can express, and
+    /// its defaults are the host's, not the extension's, so the answer is checked like a session
+    /// instead: identity, the protocol, the capability kinds, and the flat members.
+    pub fn check_described(
+        &self,
+        described: &CapabilityClaimSet,
+    ) -> Result<(), DescribedAgreementError> {
+        let declared = self.claims().expect("resolved record has a declaration");
+        if self.claims.is_some() {
+            return declared
+                .check_claims(described)
+                .map_err(DescribedAgreementError::Claims);
+        }
+        let protocol_version = described
+            .protocol_versions
+            .first()
+            .ok_or(DescribedAgreementError::NoProtocolVersion)?;
+        self.check_session(
+            protocol_version,
+            &described.extension,
+            &described.capabilities,
+        )
+        .map_err(DescribedAgreementError::Session)
     }
 
     /// Return how a local probe obtained the claims, when recorded.
@@ -276,6 +318,58 @@ mod tests {
                 .check_session(MEP_VERSION, &claims.extension, &reported)
                 .is_err()
         );
+    }
+
+    /// An extension that answers `describe` reports members a version-1 record cannot express,
+    /// such as `incremental`, and the host's converted defaults need not match them.
+    #[test]
+    fn a_describe_answer_is_checked_against_converted_claims_like_a_session() {
+        let record = legacy_declaration();
+        let mut described = record.claims().unwrap().clone();
+        described.capabilities["frontend"]["incremental"] = false.into();
+        described.capabilities["frontend"]["multiDocument"] = false.into();
+        described.capabilities.insert(
+            "workspace".into(),
+            json!({"protocolVersions": ["0.1.0-draft.1"], "discover": true}),
+        );
+        assert_eq!(record.check_described(&described), Ok(()));
+
+        let mut changed = described.clone();
+        changed.capabilities["frontend"]["irVersions"] = json!(["4"]);
+        assert_eq!(
+            record.check_described(&changed),
+            Err(DescribedAgreementError::Session(
+                SessionAgreementError::CapabilityMember("capabilities.frontend.irVersions".into())
+            ))
+        );
+        let mut renamed = described.clone();
+        renamed.extension.name = "Different".into();
+        assert!(matches!(
+            record.check_described(&renamed),
+            Err(DescribedAgreementError::Session(
+                SessionAgreementError::Identity("name")
+            ))
+        ));
+        let mut silent = described.clone();
+        silent.protocol_versions.clear();
+        assert_eq!(
+            record.check_described(&silent),
+            Err(DescribedAgreementError::NoProtocolVersion)
+        );
+    }
+
+    /// A claim set the extension supplied is its own statement, so its answer must match it exactly.
+    #[test]
+    fn a_describe_answer_must_match_supplied_claims_exactly() {
+        let claims = legacy_declaration().claims().unwrap().clone();
+        let supplied = ClaimsRecord::declared(claims.clone());
+        assert_eq!(supplied.check_described(&claims), Ok(()));
+        let mut described = claims.clone();
+        described.capabilities["frontend"]["incremental"] = false.into();
+        assert!(matches!(
+            supplied.check_described(&described),
+            Err(DescribedAgreementError::Claims(_))
+        ));
     }
 
     #[test]

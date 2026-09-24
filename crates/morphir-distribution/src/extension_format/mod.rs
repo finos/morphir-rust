@@ -5,7 +5,7 @@ mod compatibility;
 pub(crate) use compatibility::{normalize_envelope, normalize_record};
 mod version;
 
-pub use claims::{ClaimCheck, ClaimsRecord, ProbeSource};
+pub use claims::{ClaimCheck, ClaimsRecord, DescribedAgreementError, ProbeSource};
 pub use version::ExtensionSchemaVersion;
 
 use morphir_extension_sdk::claims::{CapabilityClaimSet, ClaimsRequirements};

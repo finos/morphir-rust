@@ -1,0 +1,26 @@
+#!/bin/sh
+#MISE description="Print capability claims from a staged WASM extension"
+#USAGE arg "<id>" help="Extension short ID, for example avro or elm-native"
+
+set -eu
+
+ID="${usage_id:-${1:-}}"
+case "$ID" in
+    ''|*[!a-z0-9-]*|-*)
+        echo "Usage: mise run extension:claims <id> (a lowercase extension short ID)" >&2
+        exit 1
+        ;;
+esac
+
+TASK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+REPO_ROOT="$(git -C "$TASK_DIR" rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+STAGING_DIR="$REPO_ROOT/.morphir/build/extensions/$ID"
+set -- "$STAGING_DIR"/*.wasm
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+    echo "Expected exactly one built .wasm in $STAGING_DIR; run mise run extension:artifact:$ID first" >&2
+    exit 1
+fi
+
+exec cargo run --quiet --locked -p morphir-host-native --bin extension-claims -- "$1"

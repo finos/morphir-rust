@@ -75,6 +75,40 @@ This table lists independently releasable extensions. Registrations come from
 | `morphir-python` | `morphir-python-binding` | `0.3.0` | Compiles and generates Python ADTs, fixed tuples, conditional functions, typed calls and unary lambdas across multiple modules, using IR v3 or v4. |
 | `morphir-rust` | `morphir-rust-binding` | `0.2.0` | Compiles and generates Rust types, conditional functions, pattern matches, calls and typed lambdas using IR v3 and v4. |
 
+### Read claims from a built extension
+
+Build an extension bundle with `mise run extension:artifact:<id>`, then read the
+guest's capability claims from its staged `.wasm`:
+
+```sh
+mise run extension:artifact:avro
+mise run extension:claims avro
+```
+
+`extension:claims` reads the sole `.wasm` in `.morphir/build/extensions/<id>/`.
+It fails if the artifact is missing or ambiguous. To inspect any built guest directly:
+
+```sh
+cargo run --locked -p morphir-host-native --bin extension-claims -- path/to/guest.wasm
+```
+
+The tool uses the daemon's shared Extism container and sends
+`morphir.extension.describe` before initialization. Stdout contains only the
+returned claim set as JSON, including `claimsVersion`, `protocolVersions`,
+`extension`, `capabilities`, and any `requires` or `critical` members. Validation
+uses the SDK claim-set reader; output preserves the guest's JSON members rather
+than reconstructing them from native metadata. Missing or failed describe
+responses and invalid guests exit non-zero with an error on stderr.
+
+Use these claims for the exact artifact being packaged into a version-2 bundle
+descriptor. The tool does not modify the descriptor or packaging pipeline.
+The real-guest comparison test is opt-in because it requires a release WASM build:
+
+```sh
+cargo build --locked --release -p morphir-avro-extension --target wasm32-unknown-unknown
+cargo test --locked -p morphir-host-native --test extension_claims -- --ignored
+```
+
 ## Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable version recommended)

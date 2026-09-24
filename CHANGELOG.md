@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correct extension (finos/morphir#921).
 
 ### Added
+- `extension-claims` in `morphir-host-native` dumps a built WASM guest's
+  capability claims through the daemon's shared Extism host. The
+  `extension:claims <id>` mise task reads the staged extension artifact.
 - MEP `initialize.host` carries an optional typed CLI peer kind. Missing or
   unknown kinds remain unspecified.
 - Bounded classic V3 IR evaluation with typed inputs and outputs, explicit

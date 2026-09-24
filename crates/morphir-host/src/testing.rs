@@ -34,6 +34,19 @@ impl SentLog {
             .collect()
     }
 
+    /// The id of every request sent, in order. Notifications are skipped.
+    pub fn ids(&self) -> Vec<u64> {
+        self.messages
+            .lock()
+            .expect("the log is never poisoned")
+            .iter()
+            .filter_map(|message| match message {
+                Outgoing::Request(request) => Some(request.id),
+                Outgoing::Notification(_) => None,
+            })
+            .collect()
+    }
+
     /// How many times the channel was closed.
     pub fn closes(&self) -> u32 {
         *self.closes.lock().expect("the log is never poisoned")

@@ -12,6 +12,7 @@ description = "Portable Morphir extension host: MEP handshake, sessions and chan
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 morphir-workspace = { path = "../morphir-workspace" }
 async-trait = "0.1"
+semver = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = { workspace = true }

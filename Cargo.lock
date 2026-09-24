@@ -4674,6 +4674,7 @@ dependencies = [
  "morphir-extension-sdk",
  "morphir-host",
  "morphir-workspace",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -13,6 +13,8 @@ mod error;
 mod expected;
 mod jsonrpc;
 mod negotiated;
+/// The install probe: describe a guest before trusting its claims.
+pub mod probe;
 mod send;
 mod session;
 mod session_core;
@@ -31,6 +33,7 @@ pub use expected::{
 };
 pub use jsonrpc::JsonRpcConnection;
 pub use negotiated::Negotiated;
+pub use probe::{Description, DescriptionSource, describe};
 pub use send::MaybeSend;
 pub use session::{Session, call_once, compile_once, generate_once};
 pub use session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};

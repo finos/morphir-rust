@@ -48,6 +48,25 @@ class VersionTwoBundleTests(unittest.TestCase):
             self.assertEqual(claims, artifact["claims"])
             self.assertEqual(sha256(fixture.output / artifact["filename"]), artifact["sha256"])
 
+    def test_claims_version_ignores_build_metadata_only(self):
+        """The reader compares the draft exactly but ignores SemVer build metadata."""
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = PackageFixture(Path(directory) / "repo")
+            claims = an_avro_claim_set()
+            claims["claimsVersion"] = "0.1.0-draft.2+guest.42"
+            self.run_package(fixture, claims)
+            descriptor = json.loads((fixture.output / "release.json").read_bytes())
+            self.assertEqual("0.1.0-draft.2+guest.42",
+                             descriptor["artifacts"][0]["claims"]["claimsVersion"])
+        for version in ["0.1.0-draft.1", "0.1.0-draft.3", "0.1.0", 2]:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                fixture = PackageFixture(Path(directory) / "repo")
+                claims = an_avro_claim_set()
+                claims["claimsVersion"] = version
+                with self.assertRaisesRegex(PackageError, "claimsVersion"):
+                    self.run_package(fixture, claims)
+                self.assertFalse(fixture.output.exists())
+
     def test_mismatched_claims_refuse_before_output(self):
         cases = [
             ("extension", "id", "wrong"), ("extension", "version", "9.0.0"),

@@ -16,6 +16,7 @@ from .model import (
 
 
 CLAIMS_TIMEOUT_SECONDS = 1800
+CLAIMS_VERSION = "0.1.0-draft.2"
 
 
 def read_claims(root: Path, wasm_bytes: bytes) -> dict[str, Any]:
@@ -62,7 +63,10 @@ def check_claims(short_id: str, extension: dict[str, Any], version: str, claims:
         if type(actual) is not type(expected) or actual != expected:
             raise PackageError(f"extension {short_id} claims {path} does not match registry or Cargo version")
 
-    agrees("claimsVersion", "0.1.0-draft.2")
+    # The reader compares the draft exactly but ignores SemVer build metadata, as Cargo does.
+    claims_version = claims.get("claimsVersion") if isinstance(claims, dict) else None
+    if not isinstance(claims_version, str) or claims_version.split("+", 1)[0] != CLAIMS_VERSION:
+        raise PackageError(f"extension {short_id} claims claimsVersion must be {CLAIMS_VERSION}")
     agrees("extension.id", require_string(extension, "extension_id"))
     agrees("extension.version", version)
     if "name" in extension:

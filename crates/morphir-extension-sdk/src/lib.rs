@@ -730,6 +730,7 @@ mod tests {
             protocol::InitializeParams {
                 protocol_versions: protocol_versions.into_iter().map(str::to_string).collect(),
                 host: protocol::PeerInfo {
+                    kind: Default::default(),
                     name: "conformance-host".into(),
                     version: "0.1.0".into(),
                 },

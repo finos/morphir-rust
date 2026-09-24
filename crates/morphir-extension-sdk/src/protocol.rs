@@ -43,9 +43,24 @@ pub mod methods {
     pub const EXIT: &str = "morphir.exit";
 }
 
+/// The kind of host opening a Morphir Extension Protocol session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerKind {
+    /// A command-line host.
+    Cli,
+    /// A legacy or otherwise unrecognized host kind.
+    #[default]
+    #[serde(other)]
+    Unspecified,
+}
+
 /// Identifies one side of a Morphir Extension Protocol session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerInfo {
+    /// Machine-readable host category; absent in older messages.
+    #[serde(default)]
+    pub kind: PeerKind,
     /// Peer name.
     pub name: String,
     /// Peer version.
@@ -342,6 +357,44 @@ impl RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_peer_info_has_unspecified_kind() {
+        let peer: PeerInfo = serde_json::from_value(serde_json::json!({
+            "name": "morphir-cli",
+            "version": "1.0.0"
+        }))
+        .expect("legacy host should decode");
+
+        let encoded = serde_json::to_value(peer).expect("peer should encode");
+        assert_eq!(encoded["kind"], "unspecified");
+    }
+
+    #[test]
+    fn initialize_host_kind_is_typed_independently_of_name() {
+        let params: InitializeParams = serde_json::from_value(serde_json::json!({
+            "protocolVersions": ["0.1"],
+            "host": {"kind": "cli", "name": "custom-host", "version": "1.0.0"}
+        }))
+        .expect("initialize payload should decode");
+
+        assert_eq!(params.host.kind, PeerKind::Cli);
+        assert_eq!(params.host.name, "custom-host");
+        let encoded = serde_json::to_value(params).expect("initialize payload should encode");
+        assert_eq!(encoded["host"]["kind"], "cli");
+    }
+
+    #[test]
+    fn unknown_future_host_kind_is_unspecified() {
+        let peer: PeerInfo = serde_json::from_value(serde_json::json!({
+            "kind": "browser",
+            "name": "custom-host",
+            "version": "1.0.0"
+        }))
+        .expect("future peer kind should decode");
+
+        assert_eq!(peer.kind, PeerKind::Unspecified);
+    }
 
     #[test]
     fn exit_notification_has_no_request_identifier() {

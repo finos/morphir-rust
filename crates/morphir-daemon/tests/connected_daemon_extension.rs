@@ -125,6 +125,7 @@ async fn carries_morphir_payloads_larger_than_jsonrpsee_defaults() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "large-payload-test".into(),
                 version: "0.1.0".into(),
             },
@@ -185,6 +186,7 @@ async fn reports_connection_refusal_during_initialization() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "connection-failure-test".into(),
                 version: "0.1.0".into(),
             },
@@ -214,6 +216,7 @@ async fn marks_the_session_indeterminate_when_the_daemon_exceeds_the_request_tim
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "request-timeout-test".into(),
                 version: "0.1.0".into(),
             },

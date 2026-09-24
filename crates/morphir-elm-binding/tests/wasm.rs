@@ -157,6 +157,7 @@ fn initialize(plugin: &mut Plugin) {
         InitializeParams {
             protocol_versions: vec![MEP_VERSION.into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "elm-binding-integration-test".into(),
                 version: "0.1.0".into(),
             },

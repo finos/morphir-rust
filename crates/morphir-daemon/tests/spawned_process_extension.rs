@@ -96,6 +96,7 @@ async fn compatibility_session_rejects_exit_as_a_request() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "exit-request-test".into(),
                 version: "0.1.0".into(),
             },
@@ -133,6 +134,7 @@ async fn kills_a_child_that_exceeds_the_request_timeout() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "timeout-test".into(),
                 version: "0.1.0".into(),
             },
@@ -186,6 +188,7 @@ async fn kills_a_child_that_does_not_exit_after_shutdown() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "shutdown-timeout-test".into(),
                 version: "0.1.0".into(),
             },
@@ -229,6 +232,7 @@ async fn kills_a_child_after_failed_protocol_negotiation() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "negotiation-test".into(),
                 version: "0.1.0".into(),
             },
@@ -272,6 +276,7 @@ async fn aborts_promptly_after_failed_protocol_negotiation() {
         session.initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "prompt-abort-test".into(),
                 version: "0.1.0".into(),
             },
@@ -315,6 +320,7 @@ async fn compatibility_session_kills_a_child_after_a_malformed_envelope() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "invalid-envelope-test".into(),
                 version: "0.1.0".into(),
             },

@@ -596,6 +596,7 @@ async fn protocol_only_resolution_exposes_a_native_mep_session_through_shutdown(
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "registry-test".into(),
                 version: "1.0.0".into(),
             },

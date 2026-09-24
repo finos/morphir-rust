@@ -40,7 +40,7 @@ impl SpawnedProcessTransport {
     /// )).await?;
     /// let description = transport.describe(InitializeParams {
     ///     protocol_versions: vec!["0.1".into()],
-    ///     host: PeerInfo { name: "host".into(), version: "1.0.0".into() },
+    ///     host: PeerInfo { kind: Default::default(), name: "host".into(), version: "1.0.0".into() },
     /// }).await?;
     /// assert_eq!(description.statement.extension.id, "example");
     /// # Ok(()) }

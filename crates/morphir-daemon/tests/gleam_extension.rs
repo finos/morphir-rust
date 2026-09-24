@@ -63,6 +63,7 @@ async fn installed_compilation(version: &str) {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "gleam-release-test".into(),
                 version: "1.0.0".into(),
             },

@@ -177,6 +177,7 @@ pub(super) fn params() -> InitializeParams {
     InitializeParams {
         protocol_versions: vec!["0.1".into()],
         host: crate::extensions::protocol::PeerInfo {
+            kind: Default::default(),
             name: "test".into(),
             version: "1".into(),
         },

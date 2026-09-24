@@ -52,7 +52,7 @@ impl DaemonConnection {
 /// ))?;
 /// let ready = loaded.initialize(InitializeParams {
 ///     protocol_versions: vec!["0.1".into()],
-///     host: PeerInfo {
+///     host: PeerInfo { kind: Default::default(),
 ///         name: "example-host".into(),
 ///         version: "1.0.0".into(),
 ///     },

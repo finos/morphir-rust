@@ -95,7 +95,7 @@ use crate::extensions::session::{MepTransport, Ready, Session};
 /// # let session = Session::loaded(ScriptedExtension { generated: 0 })
 /// #     .initialize(InitializeParams {
 /// #         protocol_versions: vec!["0.1".to_owned()],
-/// #         host: PeerInfo { name: "morphir".to_owned(), version: "1".to_owned() },
+/// #         host: PeerInfo { kind: Default::default(), name: "morphir".to_owned(), version: "1".to_owned() },
 /// #     })
 /// #     .await
 /// #     .map_err(|failure| failure.into_error())?;

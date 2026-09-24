@@ -69,6 +69,7 @@ async fn initialize_frontend(launch: ProcessLaunch) -> Session<SpawnedProcessTra
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "morphir-conformance".into(),
                 version: "0.1.0".into(),
             },
@@ -202,6 +203,7 @@ where
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "morphir-conformance".into(),
                 version: "0.1.0".into(),
             },
@@ -289,6 +291,7 @@ where
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "morphir-conformance".into(),
                 version: "0.1.0".into(),
             },

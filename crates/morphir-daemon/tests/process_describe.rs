@@ -36,6 +36,7 @@ impl DescribeDriver {
             .describe(InitializeParams {
                 protocol_versions: vec!["0.1".into(), "future".into()],
                 host: PeerInfo {
+                    kind: Default::default(),
                     name: "describe-test".into(),
                     version: "0.2.0".into(),
                 },

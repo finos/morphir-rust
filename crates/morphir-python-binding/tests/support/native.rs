@@ -14,6 +14,7 @@ pub fn an_initialized_extension() -> NativeExtension {
             InitializeParams {
                 protocol_versions: vec![MEP_VERSION.into()],
                 host: PeerInfo {
+                    kind: Default::default(),
                     name: "binding-test".into(),
                     version: "1.0.0".into(),
                 },

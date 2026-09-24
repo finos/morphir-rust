@@ -62,6 +62,7 @@ async fn packaged_roundtrip(version: &str) {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "python-release-test".into(),
                 version: "1.0.0".into(),
             },
@@ -239,6 +240,7 @@ async fn python_adt_and_conditional_roundtrip_through_the_real_wasm_extension() 
             InitializeParams {
                 protocol_versions: vec!["0.1".into()],
                 host: PeerInfo {
+                    kind: Default::default(),
                     name: "python-test".into(),
                     version: "1.0.0".into(),
                 },

@@ -1709,6 +1709,7 @@ mod tests {
                 crate::protocol::InitializeParams {
                     protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
                     host: crate::protocol::PeerInfo {
+                        kind: Default::default(),
                         name: "test-host".into(),
                         version: "1.0.0".into(),
                     },
@@ -2095,6 +2096,7 @@ mod tests {
         let initialize_params = serde_json::to_value(crate::protocol::InitializeParams {
             protocol_versions: vec![crate::protocol::MEP_VERSION.into()],
             host: crate::protocol::PeerInfo {
+                kind: Default::default(),
                 name: "test-host".into(),
                 version: "1.0.0".into(),
             },

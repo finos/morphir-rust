@@ -64,6 +64,7 @@ async fn packaged_rust_installs_and_executes_offline_in_both_ir_versions() {
         .initialize(InitializeParams {
             protocol_versions: vec!["0.1".into()],
             host: PeerInfo {
+                kind: Default::default(),
                 name: "rust-release-test".into(),
                 version: "1.0.0".into(),
             },

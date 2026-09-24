@@ -163,7 +163,7 @@ fn read_tree_here(req: &ReadTreeRequest) -> DecodeResponse {
         return match morphir_core::ir::layout::read_tree_v3(&files, profile) {
             Ok((distribution, warnings)) => {
                 let kind = classic_distribution_kind(&distribution.distribution).to_string();
-                match write_classic_canonical(&distribution, req.profile) {
+                match write_classic_canonical(&distribution, req.strip, req.profile) {
                     Ok(text) => DecodeResponse::Ok {
                         kind,
                         canonical: BTreeMap::from([(profile_key(req.profile).to_string(), text)]),
@@ -280,18 +280,101 @@ fn read_whole_classic_distribution(
 }
 
 /// The canonical spelling of a classic distribution in the given profile, with the one trailing
-/// newline a canonical fence carries — the classic-model counterpart of [`Node::write`].
+/// newline a canonical fence carries — the classic-model counterpart of [`Node::write`]. With
+/// `strip`, every value attribute is cleared first, as [`Node::stripped`] clears a classic value's.
 fn write_classic_canonical(
     distribution: &classic::Distribution,
+    strip: bool,
     profile: Profile,
 ) -> Result<String, Diagnostic> {
-    let value = serde_json::to_value(distribution).map_err(|error| {
-        Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
-    })?;
+    let value = if strip {
+        stripped_classic_distribution(distribution)?
+    } else {
+        classic_value_of(distribution)?
+    };
     Ok(match profile {
         Profile::Json => format!("{}\n", write_canonical(&value)),
         Profile::Yaml => morphir_core::ir::yaml::write_canonical(&value),
     })
+}
+
+fn classic_value_of<T: Serialize>(node: &T) -> Result<serde_json::Value, Diagnostic> {
+    serde_json::to_value(node).map_err(|error| {
+        Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
+    })
+}
+
+/// A classic distribution as a JSON value with every value attribute cleared to `{}`.
+///
+/// Only a `Library`'s own definitions hold value expressions: a `Specs` distribution and every
+/// dependency are specifications, which carry types alone, and a classic type has nothing to clear
+/// (see [`strip_classic_value`]). A `Library` types its values' attributes as the inferred type
+/// itself, which has no empty spelling, so the stripped package is rebuilt with this adapter's
+/// optional annotation ([`ClassicAnnotation`]) in that position and written in place of the
+/// original.
+fn stripped_classic_distribution(
+    distribution: &classic::Distribution,
+) -> Result<serde_json::Value, Diagnostic> {
+    let classic::DistributionBody::Library(package, dependencies, definition) =
+        &distribution.distribution
+    else {
+        return classic_value_of(distribution);
+    };
+    let mut modules = Vec::with_capacity(definition.modules.len());
+    for module in &definition.modules {
+        let body = &module.definition.value;
+        let mut values = Vec::with_capacity(body.values.len());
+        for (name, value) in &body.values {
+            values.push((
+                name.clone(),
+                classic::AccessControlled {
+                    access: value.access.clone(),
+                    value: classic::Documented {
+                        doc: value.value.doc.clone(),
+                        value: stripped_classic_value_definition(&value.value.value)?,
+                    },
+                },
+            ));
+        }
+        modules.push(classic::ModuleEntry {
+            path: module.path.clone(),
+            definition: classic::AccessControlled {
+                access: module.definition.access.clone(),
+                value: classic::ModuleDefinition::<classic::Attrs, ClassicAnnotation> {
+                    types: body.types.clone(),
+                    values,
+                    doc: body.doc.clone(),
+                },
+            },
+        });
+    }
+    let package_definition = classic::PackageDefinition { modules };
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "formatVersion".into(),
+        distribution.emitted_format_version(),
+    );
+    document.insert(
+        "distribution".into(),
+        serde_json::Value::Array(vec![
+            "Library".into(),
+            classic_value_of(package)?,
+            classic_value_of(dependencies)?,
+            classic_value_of(&package_definition)?,
+        ]),
+    );
+    Ok(serde_json::Value::Object(document))
+}
+
+/// A Library value definition, read into this adapter's optional annotation and stripped the way
+/// a `decode` of the same definition with `strip` is.
+fn stripped_classic_value_definition(
+    definition: &classic::ValueDefinition<classic::Attrs, classic::Type<classic::Attrs>>,
+) -> Result<ClassicValueDefinition, Diagnostic> {
+    let written = classic_value_of(definition)?;
+    let read: ClassicValueDefinition =
+        serde_json::from_value(written).map_err(|error| recover(&error))?;
+    Ok(strip_classic_value_definition(read))
 }
 
 /// The `kind` a version 3 `readTree` answers: the classic distribution's own variant name, the

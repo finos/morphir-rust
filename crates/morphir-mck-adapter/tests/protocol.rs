@@ -519,3 +519,98 @@ fn a_json_node_file_inside_a_yaml_v3_tree_parses_the_same_way_a_v4_tree_does() {
     assert_eq!(response["ok"], true);
     assert_eq!(response["kind"], "Specs");
 }
+
+// =============================================================================
+// readTree — version 3 with `strip`: a typed classic Library
+// =============================================================================
+
+/// A classic `Int` reference, the type a typed Library carries at every value position.
+const V3_INT: &str = r#"["Reference",{},[[["morphir"],["s","d","k"]],[["basics"]],["int"]],[]]"#;
+
+/// `identity x = x` with its type at every attribute position: the argument's annotation and the
+/// body's own attribute.
+fn v3_typed_value_definition() -> String {
+    format!(
+        r#"{{"inputTypes":[[["x"],{V3_INT},{V3_INT}]],"outputType":{V3_INT},"body":["Variable",{V3_INT},["x"]]}}"#
+    )
+}
+
+/// A typed v3 `Library` of one module holding [`v3_typed_value_definition`].
+fn v3_typed_library() -> String {
+    format!(
+        r#"{{"formatVersion":3,"distribution":["Library",[["my"],["pkg"]],[],{{"modules":[[[["basics"]],{{"access":"Public","value":{{"types":[],"values":[[["identity"],{{"access":"Public","value":{{"doc":"","value":{}}}}}]],"doc":null}}}}]]}}]}}"#,
+        v3_typed_value_definition()
+    )
+}
+
+fn v3_typed_library_tree_files() -> Vec<serde_json::Value> {
+    let distribution: morphir_core::ir::classic::Distribution =
+        serde_json::from_str(&v3_typed_library()).expect("the fixture parses");
+    let policy = morphir_core::ir::layout::TreePolicy {
+        profile: morphir_core::ir::layout::Profile::Json,
+        path_budget: 4000,
+    };
+    morphir_core::ir::layout::write_tree_v3(&distribution, &policy)
+        .expect("the fixture lays out as a v3 tree")
+        .into_iter()
+        .map(|(path, content)| serde_json::json!({"path": path, "content": content}))
+        .collect()
+}
+
+/// The value definition inside a readTree answer for [`v3_typed_library`].
+fn answered_value_definition(response: &serde_json::Value) -> serde_json::Value {
+    let document: serde_json::Value = serde_json::from_str(
+        response["canonical"]["json"]
+            .as_str()
+            .expect("a json canonical"),
+    )
+    .expect("the canonical parses");
+    document["distribution"][3]["modules"][0][1]["value"]["values"][0][1]["value"]["value"].clone()
+}
+
+fn read_typed_library_tree(strip: bool) -> serde_json::Value {
+    let line = serde_json::json!({
+        "id": 9,
+        "op": "readTree",
+        "version": 3,
+        "profile": "json",
+        "path": "current",
+        "strip": strip,
+        "node": "Distribution",
+        "files": v3_typed_library_tree_files(),
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["kind"], "Library");
+    response
+}
+
+/// With `strip`, a v3 tree answers its values the way `decode` answers the same value definition
+/// with `strip`: every value attribute cleared to `{}`. Without it, the types stay.
+#[test]
+fn a_v3_read_tree_request_with_strip_clears_value_attributes() {
+    let decoded = response_to(
+        &serde_json::json!({
+            "id": 10,
+            "op": "decode",
+            "version": 3,
+            "profile": "json",
+            "path": "current",
+            "strip": true,
+            "node": "ValueDefinition",
+            "input": v3_typed_value_definition(),
+        })
+        .to_string(),
+    );
+    assert_eq!(decoded["ok"], true, "{decoded}");
+    let decoded: serde_json::Value =
+        serde_json::from_str(decoded["canonical"]["json"].as_str().unwrap()).unwrap();
+    assert_eq!(decoded["body"][1], serde_json::json!({}));
+
+    let stripped = read_typed_library_tree(true);
+    assert_eq!(answered_value_definition(&stripped), decoded);
+
+    let kept = read_typed_library_tree(false);
+    let int: serde_json::Value = serde_json::from_str(V3_INT).unwrap();
+    assert_eq!(answered_value_definition(&kept)["body"][1], int);
+}

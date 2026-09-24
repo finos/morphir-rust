@@ -362,12 +362,15 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for ModulesVisitor<'_, V> {
                     Ok(true)
                 }
                 BodyKind::Specs => {
-                    let Some(module) = sequence.next_element::<ClassicModuleSpecification>()?
+                    // Strict: a module definition under a Specs tag is refused, not read as an
+                    // empty specification.
+                    let Some(module) = sequence
+                        .next_element::<classic::package::SpecsModuleEntry<classic::Attrs>>()?
                     else {
                         return Ok(false);
                     };
                     self.visitor
-                        .visit_module_specification(module)
+                        .visit_module_specification(module.into())
                         .map_err(de::Error::custom)?;
                     Ok(true)
                 }

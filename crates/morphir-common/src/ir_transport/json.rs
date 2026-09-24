@@ -272,14 +272,18 @@ impl<'writer> V3JsonEventEncoder<'writer> {
         module: &impl serde::Serialize,
         cursor: &IrCursor,
     ) -> Result<(), TransportDiagnostic> {
-        self.start_modules(cursor)?;
-        if self.distribution != Some(kind) {
+        // Refuse a mismatched module before `start_modules` writes the modules opener.
+        if self
+            .distribution
+            .is_some_and(|distribution| distribution != kind)
+        {
             return Err(json_stream_error(
                 "module_kind_mismatch",
                 cursor,
                 "the module event does not match the v3 distribution kind",
             ));
         }
+        self.start_modules(cursor)?;
         if !self.first_module {
             self.write(b",")?;
         }

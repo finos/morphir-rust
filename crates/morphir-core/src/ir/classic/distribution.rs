@@ -12,7 +12,7 @@ use crate::format_version::deserialize_baseline_u32;
 
 use super::Attrs;
 use super::naming::Path;
-use super::package::{PackageDefinition, PackageSpecification};
+use super::package::{PackageDefinition, PackageSpecification, SpecsModuleEntry};
 use super::types::Type;
 
 /// Distribution of packages
@@ -162,9 +162,12 @@ impl<'de> Deserialize<'de> for DistributionBody {
                         let deps = seq
                             .next_element::<Vec<(Path, PackageSpecification<Attrs>)>>()?
                             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                        let spec = seq
-                            .next_element::<PackageSpecification<Attrs>>()?
+                        let SpecsPackage { modules } = seq
+                            .next_element::<SpecsPackage>()?
                             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                        let spec = PackageSpecification {
+                            modules: modules.into_iter().map(Into::into).collect(),
+                        };
 
                         if let Some(IgnoredAny) = seq.next_element()? {
                             return Err(de::Error::custom(
@@ -184,6 +187,13 @@ impl<'de> Deserialize<'de> for DistributionBody {
 
         deserializer.deserialize_seq(DistributionBodyVisitor)
     }
+}
+
+/// A Specs distribution's own package: its modules are read strictly, so a module definition
+/// is refused instead of read as an empty specification.
+#[derive(Deserialize)]
+struct SpecsPackage {
+    modules: Vec<SpecsModuleEntry<Attrs>>,
 }
 
 /// Tag for backward compatibility - no longer needed with custom serde

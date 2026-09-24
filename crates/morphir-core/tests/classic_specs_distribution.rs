@@ -55,3 +55,15 @@ fn a_specs_distribution_migrates_to_a_v4_specs_distribution() {
     let basics = &content.spec.modules["basics"];
     assert!(basics.types.contains_key("int"), "{basics:?}");
 }
+
+#[test]
+fn a_specs_distribution_holding_a_module_definition_is_refused() {
+    let text = r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[[[["basics"]],{"access":"Public","value":{"types":[],"values":[],"doc":"Basics."}}]]}]}"#;
+    let error = serde_json::from_str::<Distribution>(text)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("holds module specifications, not definitions"),
+        "{error}"
+    );
+}

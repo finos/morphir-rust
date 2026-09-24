@@ -51,21 +51,61 @@ fn text(codec: &dyn IrCodec, events: Vec<SemanticEvent>, format: FormatId) -> St
     String::from_utf8(out).unwrap()
 }
 
-/// Feeds `events` to a fresh encoder and returns the first diagnostic, from `accept` or `finish`.
+/// Feeds `events` to a fresh encoder and returns the first diagnostic, from `accept` or
+/// `finish`, with the bytes the encoder wrote before it.
 fn encode_failure(
     codec: &dyn IrCodec,
     events: Vec<SemanticEvent>,
     format: FormatId,
-) -> TransportDiagnostic {
+) -> (TransportDiagnostic, String) {
+    let mut out = Vec::new();
+    let mut sink = codec.encoder(&mut out, &options(format)).unwrap();
+    let mut failure = None;
+    for event in events {
+        if let Err(diagnostic) = sink.accept(event) {
+            failure = Some(diagnostic);
+            break;
+        }
+    }
+    let diagnostic = match failure {
+        Some(diagnostic) => diagnostic,
+        None => sink
+            .finish()
+            .expect_err("the encoder accepted a module of the wrong kind"),
+    };
+    drop(sink);
+    (diagnostic, String::from_utf8(out).unwrap())
+}
+
+/// The bytes an encoder writes for `events` without being finished.
+fn partial_output(codec: &dyn IrCodec, events: &[SemanticEvent], format: FormatId) -> String {
     let mut out = Vec::new();
     let mut sink = codec.encoder(&mut out, &options(format)).unwrap();
     for event in events {
-        if let Err(diagnostic) = sink.accept(event) {
-            return diagnostic;
-        }
+        sink.accept(event.clone()).unwrap();
     }
-    sink.finish()
-        .expect_err("the encoder accepted a module of the wrong kind")
+    drop(sink);
+    String::from_utf8(out).unwrap()
+}
+
+/// The events of `events` before its first module or end.
+fn before_modules(events: &[SemanticEvent]) -> Vec<SemanticEvent> {
+    events
+        .iter()
+        .take_while(|event| !is_module(event) && !matches!(event.kind(), SemanticEventKind::End))
+        .cloned()
+        .collect()
+}
+
+fn decode_failure(codec: &dyn IrCodec, text: &str, format: FormatId) -> TransportDiagnostic {
+    let mut sink = Collect::default();
+    codec
+        .decode(
+            &mut Cursor::new(text.as_bytes()),
+            &options(format),
+            &mut sink,
+        )
+        .expect_err("the decoder accepted the document")
 }
 
 fn is_module(event: &SemanticEvent) -> bool {
@@ -144,8 +184,15 @@ fn a_definition_module_under_a_specs_header_is_a_module_kind_mismatch() {
             "morphir::ir::codec::module_kind_mismatch",
         ),
     ] {
-        let diagnostic = encode_failure(codec, splice(&specs, &library), format.clone());
+        let (diagnostic, written) = encode_failure(codec, splice(&specs, &library), format.clone());
         assert_eq!(diagnostic.code(), code, "{format}: {diagnostic}");
+        // The refused module writes nothing: the output stops where the header and
+        // dependencies ended.
+        assert_eq!(
+            written,
+            partial_output(codec, &before_modules(&specs), format.clone()),
+            "{format}"
+        );
     }
 }
 
@@ -165,8 +212,15 @@ fn a_specification_module_under_a_library_header_is_a_module_kind_mismatch() {
             "morphir::ir::codec::module_kind_mismatch",
         ),
     ] {
-        let diagnostic = encode_failure(codec, splice(&library, &specs), format.clone());
+        let (diagnostic, written) = encode_failure(codec, splice(&library, &specs), format.clone());
         assert_eq!(diagnostic.code(), code, "{format}: {diagnostic}");
+        // The refused module writes nothing: the output stops where the header and
+        // dependencies ended.
+        assert_eq!(
+            written,
+            partial_output(codec, &before_modules(&library), format.clone()),
+            "{format}"
+        );
     }
 }
 
@@ -198,4 +252,43 @@ fn streaming_migration_of_a_v3_specs_distribution_matches_the_typed_migration() 
     let streamed: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(streamed, expected);
     assert!(report.get().unwrap().can_publish());
+}
+
+/// A Specs body whose own module is shaped as a definition, which the Library tag would hold.
+const SPECS_WITH_A_DEFINITION: &str = r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[[[["basics"]],{"access":"Public","value":{"types":[],"values":[],"doc":"Basics."}}]]}]}"#;
+
+#[test]
+fn a_specs_distribution_holding_a_module_definition_is_refused() {
+    for (codec, format) in [
+        (&JsonCodec::new() as &dyn IrCodec, FormatId::json()),
+        (&YamlCodec::new() as &dyn IrCodec, FormatId::yaml()),
+    ] {
+        let diagnostic = decode_failure(codec, SPECS_WITH_A_DEFINITION, format.clone());
+        assert!(
+            diagnostic
+                .message()
+                .contains("holds module specifications, not definitions"),
+            "{format}: {diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn a_lowercase_specs_tag_decodes_through_the_streaming_json_decoder() {
+    let lowercase = SPECS.replace(r#"["Specs","#, r#"["specs","#);
+    assert_eq!(
+        events(&JsonCodec::new(), &lowercase, FormatId::json()),
+        events(&JsonCodec::new(), SPECS, FormatId::json())
+    );
+}
+
+#[test]
+fn an_unknown_distribution_tag_names_both_kinds_in_the_streaming_json_decoder() {
+    let unknown = SPECS.replace(r#"["Specs","#, r#"["Application","#);
+    let diagnostic = decode_failure(&JsonCodec::new(), &unknown, FormatId::json());
+    let message = diagnostic.message();
+    assert!(
+        message.contains("Library") && message.contains("Specs"),
+        "{diagnostic}"
+    );
 }

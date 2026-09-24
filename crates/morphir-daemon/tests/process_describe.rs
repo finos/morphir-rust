@@ -4,28 +4,39 @@
 use morphir_daemon::extensions::process::DescriptionSource;
 use morphir_daemon::extensions::{ProcessLaunch, SpawnedProcessTransport};
 use morphir_extension_sdk::protocol::{InitializeParams, PeerInfo};
+use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use std::{path::PathBuf, time::Duration};
 
 struct DescribeDriver;
 impl DescribeDriver {
-    async fn describe(
-        mode: &str,
-    ) -> morphir_daemon::Result<morphir_daemon::extensions::process::ProcessDescription> {
+    fn fixture() -> PathBuf {
         let fixture =
             PathBuf::from(std::env::var_os("MEP_NATIVE_FIXTURE").expect("set MEP_NATIVE_FIXTURE"));
-        let fixture = if fixture.is_absolute() {
+        if fixture.is_absolute() {
             fixture
         } else {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../..")
                 .join(fixture)
-        };
+        }
+    }
+
+    async fn describe(
+        mode: &str,
+    ) -> morphir_daemon::Result<morphir_daemon::extensions::process::ProcessDescription> {
         let launch = ProcessLaunch::new(
             "mep-native-backend",
-            fixture,
+            Self::fixture(),
             std::env::current_dir().unwrap(),
-        )
-        .request_timeout(Duration::from_secs(2));
+        );
+        Self::describe_launch(launch, mode).await
+    }
+
+    async fn describe_launch(
+        launch: ProcessLaunch,
+        mode: &str,
+    ) -> morphir_daemon::Result<morphir_daemon::extensions::process::ProcessDescription> {
+        let launch = launch.request_timeout(Duration::from_secs(2));
         let launch = if mode == "plain" {
             launch
         } else {
@@ -102,4 +113,31 @@ async fn unrelated_errors_and_invalid_claim_sets_do_not_fall_back() {
 async fn describes_the_unmodified_sdk_guest() {
     let result = DescribeDriver::describe("plain").await.unwrap();
     assert_eq!(result.source, DescriptionSource::Describe);
+}
+
+#[tokio::test]
+#[ignore = "requires the independently built mep-native-backend executable"]
+async fn the_fallback_holds_a_discovered_launch_to_its_discovery_lock() {
+    let discovered = ExtensionInfo {
+        id: "mep-native-backend".into(),
+        name: "MEP native backend".into(),
+        version: "0.0.0-discovered".into(),
+        types: vec![ExtensionType::Backend],
+        ..ExtensionInfo::default()
+    };
+    let launch = ProcessLaunch::from_discovered(
+        discovered,
+        DescribeDriver::fixture(),
+        std::env::current_dir().unwrap(),
+    );
+    let error = DescribeDriver::describe_launch(launch, "method-not-found")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Extension error: Extension 'mep-native-backend' initialization metadata disagreed with discovery: version '{}' was discovered as '0.0.0-discovered'",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
 }

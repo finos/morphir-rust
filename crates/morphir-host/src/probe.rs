@@ -36,11 +36,30 @@ pub struct Description {
 /// is described through a short session instead. The ids and the order of
 /// messages match what released guests were tested with.
 pub async fn describe<C: Channel>(
-    mut channel: C,
+    channel: C,
     config: &HostConfig,
     expected_id: &str,
 ) -> Result<Description, HostError> {
-    match describe_inner(&mut channel, config, expected_id).await {
+    describe_with(channel, config, expected_id, BasicChecks::new(expected_id)).await
+}
+
+/// Describe the guest behind `channel`, and hold a session fallback to `checks`.
+///
+/// Same as [`describe`], except that the fallback negotiation runs `checks`
+/// in place of [`BasicChecks`]. A client that knows more about the guest
+/// than its identity, such as a discovery lock, passes it here.
+#[doc(hidden)]
+pub async fn describe_with<C, K>(
+    mut channel: C,
+    config: &HostConfig,
+    expected_id: &str,
+    mut checks: K,
+) -> Result<Description, HostError>
+where
+    C: Channel,
+    K: SessionChecks<Error = HostError>,
+{
+    match describe_inner(&mut channel, config, expected_id, &mut checks).await {
         Ok(description) => {
             channel
                 .send(Outgoing::Notification(
@@ -105,10 +124,11 @@ fn result<T: serde::de::DeserializeOwned>(
     }
 }
 
-async fn describe_inner<C: Channel>(
+async fn describe_inner<C: Channel, K: SessionChecks<Error = HostError>>(
     channel: &mut C,
     config: &HostConfig,
     expected_id: &str,
+    checks: &mut K,
 ) -> Result<Description, Failure> {
     let offered = config.protocol_versions().to_vec();
     let response = exchange(
@@ -127,7 +147,7 @@ async fn describe_inner<C: Channel>(
         && response.result.is_none()
         && response.error.as_ref().is_some_and(permits_fallback);
     if refused {
-        return describe_through_session(channel, config, expected_id).await;
+        return describe_through_session(channel, config, checks).await;
     }
     let claims: CapabilityClaimSet = result(response, 1)?;
     if claims.extension.id != expected_id {
@@ -165,15 +185,15 @@ async fn describe_inner<C: Channel>(
     })
 }
 
-async fn describe_through_session<C: Channel>(
+async fn describe_through_session<C: Channel, K: SessionChecks<Error = HostError>>(
     channel: &mut C,
     config: &HostConfig,
-    expected_id: &str,
+    checks: &mut K,
 ) -> Result<Description, Failure> {
     let params = config.initialize_params();
     let initialized: InitializeResult =
         result(exchange(channel, 2, methods::INITIALIZE, &params).await?, 2)?;
-    BasicChecks::new(expected_id).negotiate(&params.protocol_versions, initialized.clone())?;
+    checks.negotiate(&params.protocol_versions, initialized.clone())?;
     channel
         .send(Outgoing::Notification(
             ExtensionNotification::without_params(methods::INITIALIZED),
@@ -399,6 +419,32 @@ mod tests {
             assert_eq!(log.methods(), [methods::DESCRIBE]);
             assert_eq!(log.aborts(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn describe_with_holds_the_fallback_to_the_given_checks() {
+        let init = frontend_initialize_result("guest");
+        let reported = init.extension.version.clone();
+        let discovered = morphir_extension_sdk::ExtensionInfo {
+            version: "9.9.9".into(),
+            ..init.extension.clone()
+        };
+        let channel = MemoryChannel::new()
+            .respond(rpc(1, error_codes::METHOD_NOT_FOUND, "no"))
+            .respond(ok(2, init));
+        let log = channel.log();
+        let checks = crate::ExpectedChecks::new(crate::ExpectedExtension::discovered(discovered));
+        let error = describe_with(channel, &config(), "guest", checks)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Extension 'guest' initialization metadata disagreed with discovery: version '{reported}' was discovered as '9.9.9'"
+            )
+        );
+        assert_eq!(log.methods(), [methods::DESCRIBE, methods::INITIALIZE]);
+        assert_eq!(log.aborts(), 1);
     }
 
     #[tokio::test]

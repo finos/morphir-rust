@@ -7,7 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 /// A guest that answers every request frame with a success result for id 1,
-/// ignores notifications, and exits 0 when stdin closes.
+/// counts notification frames (frames with no `"id"`), and exits 0 when stdin
+/// closes after it writes `notifications=<n>` to stderr.
 ///
 /// The script uses only POSIX `sh`: `read` takes one header line, `tr`
 /// removes the carriage return, and `dd bs=1` reads exactly the body bytes.
@@ -15,6 +16,7 @@ use std::time::{Duration, Instant};
 const ECHO: &str = r#"#!/bin/sh
 PATH=/usr/bin:/bin
 len=0
+notifications=0
 while IFS= read -r header; do
   header=$(printf '%s' "$header" | tr -d '\r')
   case "$header" in
@@ -23,9 +25,11 @@ while IFS= read -r header; do
         case "$body" in
           *'"id"'*) out='{"jsonrpc":"2.0","result":{},"id":1}'
                     printf 'Content-Length: %s\r\n\r\n%s' "${#out}" "$out";;
+          *) notifications=$((notifications + 1));;
         esac;;
   esac
 done
+printf 'notifications=%s\n' "$notifications" >&2
 exit 0
 "#;
 
@@ -59,6 +63,7 @@ async fn close_after_exit_waits_without_a_second_exit() {
         .await
         .unwrap();
     assert_eq!(channel.close().await.unwrap(), ChannelState::Stopped);
+    assert_eq!(channel.stderr_output().trim(), "notifications=1");
 }
 
 #[tokio::test]

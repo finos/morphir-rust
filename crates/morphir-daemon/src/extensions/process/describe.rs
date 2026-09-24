@@ -2,7 +2,7 @@
 
 use super::*;
 use morphir_extension_sdk::claims::CapabilityClaimSet;
-use morphir_host::{Channel, ChannelError, ChannelState, HostConfig, Outgoing};
+use morphir_host::{Channel, ChannelError, ChannelState, ExpectedChecks, HostConfig, Outgoing};
 
 /// How a process supplied its capability claim set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,14 +59,18 @@ impl SpawnedProcessTransport {
     /// ```
     pub async fn describe(mut self, params: InitializeParams) -> Result<ProcessDescription> {
         let config = HostConfig::with_versions(params.host, params.protocol_versions);
-        let expected_id = self.expected_extension().id().to_owned();
+        let expected = self.expected_extension();
+        let expected_id = expected.id().to_owned();
+        // The fallback session keeps the launch's discovery lock and legacy
+        // exemption, as an ordinary session does.
+        let checks = ExpectedChecks::new(expected);
         let mut failure = None;
         let channel = TransportChannel {
             transport: &mut self,
             request: None,
             failure: &mut failure,
         };
-        match morphir_host::describe(channel, &config, &expected_id).await {
+        match morphir_host::describe_with(channel, &config, &expected_id, checks).await {
             Ok(description) => Ok(description.into()),
             Err(error) => {
                 // A channel failure keeps the daemon error it came from, so its

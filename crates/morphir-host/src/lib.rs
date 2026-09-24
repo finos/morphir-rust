@@ -33,7 +33,7 @@ pub use expected::{
 };
 pub use jsonrpc::JsonRpcConnection;
 pub use negotiated::Negotiated;
-pub use probe::{Description, DescriptionSource, describe};
+pub use probe::{Description, DescriptionSource, describe, describe_with};
 pub use send::MaybeSend;
 pub use session::{Session, call_once, compile_once, generate_once};
 pub use session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};

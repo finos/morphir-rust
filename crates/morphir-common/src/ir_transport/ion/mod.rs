@@ -492,6 +492,16 @@ fn read_library_modules(
         return Ok((dependencies, read_inline_modules(header_fields, package)?));
     }
     reject_inline_modules(header_fields)?;
+    if header_fields
+        .get("dependencies")
+        .is_some_and(|list| list.as_list().is_none_or(|items| !items.is_empty()))
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Normalization,
+            "a datagram writes each dependency as its own package::spec value",
+        ));
+    }
     let last = values.len() - 1;
     let footer = values.get(last).expect("length is at least 2");
     expect_marker(footer, "morphir_footer")?;

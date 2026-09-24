@@ -175,11 +175,18 @@ fn read_record_fields(element: Option<&Element>) -> Result<Vec<v4::Field>, Trans
     let items = element
         .as_list()
         .ok_or_else(|| member("fields is a list"))?;
-    let mut fields = Vec::new();
+    let mut fields: Vec<v4::Field> = Vec::new();
     for item in items.iter() {
         let members = struct_fields(item, "field")?;
+        let name = local_name(required_string(&members, "name")?)?;
+        if fields.iter().any(|field| field.name == name) {
+            return Err(member(format!(
+                "field '{}' is listed twice",
+                name.to_canonical_string()
+            )));
+        }
         fields.push(v4::Field {
-            name: local_name(required_string(&members, "name")?)?,
+            name,
             tpe: read_type(required_field(&members, "type")?)?,
         });
     }

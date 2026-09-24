@@ -582,3 +582,90 @@ morphir_footer::{}
         "{error:?}"
     );
 }
+
+fn v4_module(members: &str) -> String {
+    format!(
+        "{V4_HEADER}
+public::def::module::{{ name: \"m\", values: [ {members} ] }}
+morphir_footer::{{}}"
+    )
+}
+
+fn v4_value(body: &str) -> String {
+    v4_module(&format!(
+        "public::def::value::{{ name: \"v\", outputType: \"morphir/SDK:basics#int\", body: {body} }}"
+    ))
+}
+
+#[test]
+fn a_non_finite_ion_float_is_refused_not_a_panic() {
+    for body in ["nan", "+inf", "-inf", "(lambda nan 1)"] {
+        let text = v4_value(body);
+        let result = std::panic::catch_unwind(|| decode(&IonCodec::new(), &text, &v4_ion()));
+        let result = result.unwrap_or_else(|_| panic!("{body} panicked"));
+        assert!(result.is_err(), "{body} was accepted");
+    }
+}
+
+#[test]
+fn a_letrec_that_binds_a_name_twice_is_refused() {
+    let binding = "(f { outputType: \"morphir/SDK:basics#int\", body: 1 })";
+    let text = v4_value(&format!("(letrec [{binding}, {binding}] f)"));
+
+    let refusal = refusal(&text);
+    assert!(refusal.contains("twice"), "{refusal}");
+}
+
+#[test]
+fn a_record_value_that_names_a_field_twice_is_refused() {
+    for body in ["(record (a 1) (a 2))", "(update r (a 1) (a 2))"] {
+        assert!(refusal(&v4_value(body)).contains("twice"), "{body}");
+    }
+}
+
+#[test]
+fn a_record_type_that_names_a_field_twice_is_refused() {
+    let text = format!(
+        "{V4_HEADER}
+public::def::module::{{
+  name: \"m\",
+  types: [ public::def::alias::type::{{
+    name: \"t\",
+    typeExp: record::{{ fields: [ {{ name: \"a\", type: \"x\" }}, {{ name: \"a\", type: \"y\" }} ] }},
+  }} ],
+}}
+morphir_footer::{{}}"
+    );
+
+    assert!(refusal(&text).contains("twice"));
+}
+
+#[test]
+fn an_entry_point_target_is_a_fully_qualified_name() {
+    let text = r#"
+morphir::{
+  formatVersion: "4.0.0",
+  kind: application,
+  packageName: "example",
+  entryPoints: { start: { target: "not an fqname", kind: main } },
+}
+morphir_footer::{}
+"#;
+
+    assert!(decode(&IonCodec::new(), text, &v4_ion()).is_err());
+}
+
+#[test]
+fn v3_header_dependencies_in_a_datagram_are_refused_not_dropped() {
+    let text = r#"
+morphir::{
+  formatVersion: "3.0.0",
+  kind: library,
+  packageName: "example",
+  dependencies: [ package::spec::{ name: "morphir/SDK" } ],
+}
+morphir_footer::{}
+"#;
+
+    assert!(decode(&IonCodec::new(), text, &v3(FormatId::ion())).is_err());
+}

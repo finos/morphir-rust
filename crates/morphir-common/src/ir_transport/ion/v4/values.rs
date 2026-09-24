@@ -107,10 +107,20 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
             let bindings = rest[0]
                 .as_list()
                 .ok_or_else(|| member("letrec bindings are a list"))?;
-            let mut read = Vec::new();
+            let mut read: Vec<v4::LetBinding> = Vec::new();
             for binding in bindings.iter() {
                 let pair = pair(binding, "a letrec binding is a name and a definition")?;
-                read.push(v4::LetBinding(name_of(pair[0])?, read_binding(pair[1])?));
+                let name = name_of(pair[0])?;
+                if read
+                    .iter()
+                    .any(|v4::LetBinding(existing, _)| *existing == name)
+                {
+                    return Err(member(format!(
+                        "letrec binds '{}' twice",
+                        name.to_canonical_string()
+                    )));
+                }
+                read.push(v4::LetBinding(name, read_binding(pair[1])?));
             }
             Ok(v4::Value::LetRecursion(
                 attrs(),
@@ -285,16 +295,22 @@ fn write_values(values: &[v4::Value]) -> Result<Vec<Element>, TransportDiagnosti
 }
 
 fn read_entries(elements: &[&Element]) -> Result<Vec<v4::RecordFieldEntry>, TransportDiagnostic> {
-    elements
-        .iter()
-        .map(|element| {
-            let pair = pair(element, "a record field is a name and a value")?;
-            Ok(v4::RecordFieldEntry(
-                name_of(pair[0])?,
-                read_value(pair[1])?,
-            ))
-        })
-        .collect()
+    let mut entries: Vec<v4::RecordFieldEntry> = Vec::new();
+    for element in elements {
+        let pair = pair(element, "a record field is a name and a value")?;
+        let name = name_of(pair[0])?;
+        if entries
+            .iter()
+            .any(|v4::RecordFieldEntry(existing, _)| *existing == name)
+        {
+            return Err(member(format!(
+                "field '{}' is set twice",
+                name.to_canonical_string()
+            )));
+        }
+        entries.push(v4::RecordFieldEntry(name, read_value(pair[1])?));
+    }
+    Ok(entries)
 }
 
 fn write_entries(entries: &[v4::RecordFieldEntry]) -> Result<Vec<Element>, TransportDiagnostic> {
@@ -513,6 +529,11 @@ fn bare_literal(element: &Element) -> Result<Option<v4::Literal>, TransportDiagn
         return Ok(Some(v4::Literal::Integer(value.into())));
     }
     if let Some(value) = element.as_float() {
+        if !value.is_finite() {
+            return Err(member(
+                "an Ion float is finite; nan and the infinities have no Morphir literal",
+            ));
+        }
         return Ok(Some(v4::Literal::Float(v4::FloatLiteral::from_f64(value))));
     }
     Ok(None)

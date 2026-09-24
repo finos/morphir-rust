@@ -265,8 +265,10 @@ fn read_entry_points(element: Option<&Element>) -> Result<v4::EntryPoints, Trans
         let kind = super::required_text(&members, "kind")?;
         let kind: v4::EntryPointKind = serde_json::from_value(serde_json::json!(kind))
             .map_err(|_| member(format!("unknown entry point kind '{kind}'")))?;
+        let target = required_string(&members, "target")?;
+        fq_name(target)?;
         let entry_point = v4::EntryPoint {
-            target: required_string(&members, "target")?.to_owned(),
+            target: target.to_owned(),
             kind,
             doc: super::optional_string(&members, "doc")?.map(str::to_owned),
         };

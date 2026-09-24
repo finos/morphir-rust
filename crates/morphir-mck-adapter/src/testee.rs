@@ -28,6 +28,7 @@ use serde_json::Value as Json;
 
 use morphir_core::ir::classic;
 use morphir_core::ir::json::write_canonical;
+use morphir_core::ir::v4::serde_document;
 use morphir_core::ir::v4::{
     AccessControlled, Annotation, AnnotationArgument, ApplicationContent, ConstructorArg,
     ConstructorArgSpec, ConstructorDefinition, ConstructorSpecification, Distribution,
@@ -540,9 +541,14 @@ fn read_v3(req: &DecodeRequest, value: &Json) -> Result<Node, Diagnostic> {
         }
         // The kit names the whole document `Distribution` as well as `IRFile`.
         NodeKind::IRFile | NodeKind::Distribution => {
+            // A document of another version is that before anything else: its members are its
+            // own version's business (document-tree-0016).
             if let Some(version) = value.get("formatVersion") {
                 v3_major(version, "/formatVersion")?;
             }
+            // The classic reader drops a root member it does not know and has no code for a
+            // missing version, so the root is held to the v4 document's rule first.
+            serde_document::document_root(value, "", "a version 3 document")?;
             of(req, value, |distribution| Node::ClassicDistribution {
                 distribution,
                 strip: false,

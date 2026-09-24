@@ -703,3 +703,47 @@ fn a_v3_node_reads_and_writes_yaml() {
     // The profile's canonical writer: block style at the top, flow style below it.
     assert_eq!(canonical, "- Literal\n- {}\n- [WholeNumberLiteral, 42]\n");
 }
+
+/// A v3 document's root is checked the way a v4 document's is before the classic reader sees it:
+/// that reader drops a member it does not know and has no code for a missing version.
+#[test]
+fn a_v3_document_root_holds_exactly_its_two_members() {
+    use morphir_core::ir::DiagnosticCode;
+
+    let without_version = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        r#"{ "distribution": ["Specs", [["my"], ["pkg"]], [], { "modules": [] }] }"#,
+    ));
+    assert_eq!(without_version.code, DiagnosticCode::MissingFormatVersion);
+
+    let without_distribution = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        r#"{ "formatVersion": "3.1.0" }"#,
+    ));
+    assert_eq!(without_distribution.code, DiagnosticCode::MissingMember);
+
+    let unknown = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        &V3_SPECS.replace(
+            "{ \"formatVersion\"",
+            "{ \"generator\": \"example\", \"formatVersion\"",
+        ),
+    ));
+    assert_eq!(unknown.code, DiagnosticCode::UnknownMember);
+    assert_eq!(unknown.cursor, "/generator");
+
+    // distributions-0009: `$meta` is reserved in tree files only; a single document has none.
+    let meta = refused(&v3(
+        NodeKind::IRFile,
+        Profile::Yaml,
+        &format!("$meta:\n  generator: example\n{V3_SPECS_YAML}"),
+    ));
+    assert_eq!(meta.code, DiagnosticCode::UnknownMember);
+    assert_eq!(meta.cursor, "/$meta");
+
+    let not_an_object = refused(&v3(NodeKind::Distribution, Profile::Json, "[]"));
+    assert_eq!(not_an_object.code, DiagnosticCode::InvalidType);
+}

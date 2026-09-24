@@ -1246,13 +1246,23 @@ fn decode_entry_points(value: &JsonValue, cursor: &str) -> Result<EntryPoints, D
     })
 }
 
-/// Decodes a whole version 4 document.
+/// The root of a whole single-file document: an object whose only members are `formatVersion`
+/// and `distribution`, both present. Answers the two members' values.
 ///
-/// `formatVersion` comes first and `distribution` second; a document that writes them the other
-/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
-/// a single document, so it is unknown here (distributions-0009).
-pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
-    let members = members_of(value, cursor, "a version 4 document")?;
+/// This is the check [`decode_ir_file`] makes of a version 4 root, in its order and with its
+/// codes: an unknown member first (`unknown_member` at the member), then a missing
+/// `formatVersion` (`missing_format_version`) and a missing `distribution` (`missing_member`),
+/// both at the root. `$meta` is not reserved in a single document (distributions-0009). `what`
+/// names the document in the `invalid_type` a root that is not an object earns.
+///
+/// Public so a classic (version 3) reader, whose derived decoder ignores unknown members, can
+/// hold its root to the same rule before deserializing it.
+pub fn document_root<'a>(
+    value: &'a JsonValue,
+    cursor: &str,
+    what: &str,
+) -> Result<(&'a JsonValue, &'a JsonValue), Diagnostic> {
+    let members = members_of(value, cursor, what)?;
     for member in members.keys() {
         if !matches!(member.as_str(), "formatVersion" | "distribution") {
             return Err(unknown_member(&format!("{cursor}/{member}"), member));
@@ -1268,6 +1278,16 @@ pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<I
     let distribution = members
         .get("distribution")
         .ok_or_else(|| missing(cursor, "distribution"))?;
+    Ok((format_version, distribution))
+}
+
+/// Decodes a whole version 4 document.
+///
+/// `formatVersion` comes first and `distribution` second; a document that writes them the other
+/// way round is the same document. `$meta` is reserved for the files of a document tree, not for
+/// a single document, so it is unknown here (distributions-0009).
+pub(in crate::ir) fn decode_ir_file(value: &JsonValue, cursor: &str) -> Result<IRFile, Diagnostic> {
+    let (format_version, distribution) = document_root(value, cursor, "a version 4 document")?;
     Ok(IRFile {
         format_version: decode_format_version(format_version, &format!("{cursor}/formatVersion"))?,
         distribution: decode_distribution(distribution, &format!("{cursor}/distribution"))?,

@@ -42,7 +42,7 @@ prefixes = [
 [extensions]
 # When one of these crates is affected, every extension bundle is rebuilt,
 # because the bundle tasks run daemon tests against the bundle.
-crates = ["morphir-daemon"]
+crates = ["morphir-host", "morphir-daemon"]
 paths = [
   ".github/extensions.toml",
   "scripts/package_extension.py",
@@ -88,20 +88,22 @@ crates = [
   "morphir-workspace",
   "morphir-workspace-wasm",
   "morphir-devkit",
+  "morphir-host",
   "morphir-daemon",
 ]
 paths = [".mise/tasks/build/workspace-wasm"]
 
 [jobs.test-native-extension]
-crates = ["morphir-daemon"]
+crates = ["morphir-host", "morphir-daemon"]
 paths = [".mise/tasks/test/process"]
 
 [jobs.test-daemon-extension]
-crates = ["morphir-daemon"]
+crates = ["morphir-host", "morphir-daemon"]
 paths = [".mise/tasks/test/daemon"]
 
 [jobs.test-extism]
 crates = [
+  "morphir-host",
   "morphir-daemon",
   "morphir-wasm-binding",
   "morphir-avro-extension",

@@ -98,6 +98,7 @@
 //! morphir_extension_sdk::export_extension!(MyExtension, frontend);
 //! ```
 
+pub mod claims;
 pub mod error;
 #[cfg(target_arch = "wasm32")]
 pub mod host;
@@ -106,7 +107,6 @@ pub mod native;
 pub mod prelude;
 pub mod protocol;
 pub mod source;
-pub mod statement;
 pub mod traits;
 pub mod types;
 
@@ -470,7 +470,7 @@ fn dispatch_describe_with_metadata(
                 .collect(),
         });
     }
-    let statement = statement::CapabilityStatement::from_metadata(
+    let claims = claims::CapabilityClaimSet::from_metadata(
         protocol::SUPPORTED_MEP_VERSIONS
             .iter()
             .map(|version| (*version).into())
@@ -478,7 +478,7 @@ fn dispatch_describe_with_metadata(
         info.clone(),
         capabilities,
     )?;
-    serde_json::to_value(statement).map_err(ExtensionError::from)
+    serde_json::to_value(claims).map_err(ExtensionError::from)
 }
 
 fn dispatch_initialize<E: Extension>(

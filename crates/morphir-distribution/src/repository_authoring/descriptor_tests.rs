@@ -12,9 +12,9 @@ fn a_legacy_descriptor() -> Value {
     })
 }
 
-fn a_statement() -> Value {
+fn a_claims() -> Value {
     json!({
-        "statementVersion": "0.1.0-draft.1", "protocolVersions": ["0.1"],
+        "claimsVersion": "0.1.0-draft.2", "protocolVersions": ["0.1"],
         "extension": {"id": "morphir-elm", "name": "Elm", "version": "0.3.0", "types": ["frontend", "workspace"]},
         "capabilities": {"frontend": {"compile": true}, "workspace": {"discover": true}}
     })
@@ -22,10 +22,10 @@ fn a_statement() -> Value {
 
 fn a_v2_descriptor() -> Value {
     json!({
-        "schemaVersion": "2.0.0-draft.1", "extensionId": "morphir-elm",
+        "schemaVersion": "2.0.0-draft.2", "extensionId": "morphir-elm",
         "shortId": "elm", "version": "0.3.0", "platformDifferences": "none",
         "artifacts": [{"platform": "aarch64-apple-darwin", "runtime": "process",
-            "filename": "morphir-elm.tgz", "sha256": "a".repeat(64), "statement": a_statement()}]
+            "filename": "morphir-elm.tgz", "sha256": "a".repeat(64), "claims": a_claims()}]
     })
 }
 
@@ -79,24 +79,21 @@ fn descriptor_parses_host_requirements_without_comparing_versions() {
 }
 
 #[test]
-fn descriptor_converts_flat_frontend_workspace_to_declared_statement() {
+fn descriptor_converts_flat_frontend_workspace_to_declared_claims() {
     let descriptor: ReleaseBundleDescriptor =
         serde_json::from_value(a_legacy_descriptor()).unwrap();
     let artifact = &descriptor.artifacts()[0];
     assert_eq!(
-        artifact.statement_provenance(),
-        crate::extension_format::StatementProvenance::Declared
+        artifact.claim_check(),
+        crate::extension_format::ClaimCheck::Unchecked
     );
-    let statement = artifact.statement();
-    assert_eq!(statement.extension.id, "morphir-elm");
-    assert_eq!(statement.protocol_versions, ["0.1"]);
-    assert_eq!(
-        statement.capabilities["frontend"]["languages"][0]["id"],
-        "elm"
-    );
-    assert_eq!(statement.capabilities["frontend"]["incremental"], true);
+    let claims = artifact.claims();
+    assert_eq!(claims.extension.id, "morphir-elm");
+    assert_eq!(claims.protocol_versions, ["0.1"]);
+    assert_eq!(claims.capabilities["frontend"]["languages"][0]["id"], "elm");
+    assert_eq!(claims.capabilities["frontend"]["incremental"], true);
     assert!(
-        statement
+        claims
             .extension
             .types
             .contains(&morphir_extension_sdk::ExtensionType::Workspace)
@@ -104,26 +101,23 @@ fn descriptor_converts_flat_frontend_workspace_to_declared_statement() {
 }
 
 #[test]
-fn descriptor_preserves_supplied_statement_and_provenance() {
-    for source in ["declared", "probed"] {
+fn descriptor_preserves_supplied_claims_and_provenance() {
+    for source in ["unchecked", "probed"] {
         for mut value in [a_legacy_descriptor(), a_v2_descriptor()] {
             let target = if value.get("artifacts").is_some() {
                 &mut value["artifacts"][0]
             } else {
                 &mut value
             };
-            let mut statement = a_statement();
-            statement["capabilities"]["futureCapability"] = json!({"enabled": true});
-            target["statement"] = statement.clone();
-            target["statementSource"] = json!(source);
+            let mut claims = a_claims();
+            claims["capabilities"]["futureCapability"] = json!({"enabled": true});
+            target["claims"] = claims.clone();
+            target["claimCheck"] = json!(source);
             let descriptor: ReleaseBundleDescriptor = serde_json::from_value(value).unwrap();
             let artifact = &descriptor.artifacts()[0];
+            assert_eq!(serde_json::to_value(artifact.claims()).unwrap(), claims);
             assert_eq!(
-                serde_json::to_value(artifact.statement()).unwrap(),
-                statement
-            );
-            assert_eq!(
-                serde_json::to_value(artifact.statement_provenance()).unwrap(),
+                serde_json::to_value(artifact.claim_check()).unwrap(),
                 source
             );
         }
@@ -133,7 +127,7 @@ fn descriptor_preserves_supplied_statement_and_provenance() {
 #[test]
 fn descriptor_accepts_supported_versions_only() {
     let mut v2 = a_v2_descriptor();
-    v2["schemaVersion"] = json!("2.0.0-draft.1+build.123");
+    v2["schemaVersion"] = json!("2.0.0-draft.2+build.123");
     serde_json::from_value::<ReleaseBundleDescriptor>(v2).unwrap();
     for version in [json!(1), json!("1.0"), json!("1.7.8")] {
         let mut value = a_legacy_descriptor();
@@ -145,7 +139,7 @@ fn descriptor_accepts_supported_versions_only() {
         json!(2),
         json!("2.0.0"),
         json!("3.0.0"),
-        json!("2.0.0-draft.2"),
+        json!("2.0.0-draft.3"),
         json!("1.1.0-draft.1"),
     ] {
         let mut value = a_legacy_descriptor();
@@ -182,12 +176,12 @@ fn descriptor_ignores_nested_optional_members_but_refuses_nested_critical() {
 }
 
 #[test]
-fn descriptor_requires_v2_statements_and_valid_artifact_declarations() {
+fn descriptor_requires_v2_claim_sets_and_valid_artifact_declarations() {
     let mut value = a_v2_descriptor();
     value["artifacts"][0]
         .as_object_mut()
         .unwrap()
-        .remove("statement");
+        .remove("claims");
     assert!(serde_json::from_value::<ReleaseBundleDescriptor>(value).is_err());
     let mut value = a_v2_descriptor();
     value["artifacts"] = json!([]);
@@ -211,15 +205,15 @@ fn descriptor_recognizes_critical_artifact_paths() {
     let mut value = a_v2_descriptor();
     value["critical"] = json!([
         "artifacts.runtime",
-        "artifacts.statement.capabilities.workspace.discover"
+        "artifacts.claims.capabilities.workspace.discover"
     ]);
     serde_json::from_value::<ReleaseBundleDescriptor>(value).unwrap();
 }
 
 #[test]
-fn descriptor_artifact_reader_requires_a_statement() {
+fn descriptor_artifact_reader_requires_a_claims() {
     let mut artifact = a_v2_descriptor()["artifacts"][0].clone();
-    artifact.as_object_mut().unwrap().remove("statement");
+    artifact.as_object_mut().unwrap().remove("claims");
     assert!(serde_json::from_value::<super::BundleArtifactDescriptor>(artifact).is_err());
 }
 
@@ -236,7 +230,7 @@ fn descriptor_rejects_unknown_platform_differences_and_wasm_platforms() {
 }
 
 #[test]
-fn descriptor_round_trips_supplied_statements_and_legacy_wire_shape() {
+fn descriptor_round_trips_supplied_claim_sets_and_legacy_wire_shape() {
     let mut absent_version = a_legacy_descriptor();
     absent_version
         .as_object_mut()
@@ -251,9 +245,9 @@ fn descriptor_round_trips_supplied_statements_and_legacy_wire_shape() {
         } else {
             &mut value
         };
-        target["statement"] = a_statement();
-        target["statement"]["futureStatementMember"] = json!({"retained": true});
-        target["statementSource"] = json!("probed");
+        target["claims"] = a_claims();
+        target["claims"]["futureClaimsMember"] = json!({"retained": true});
+        target["claimCheck"] = json!("probed");
         let descriptor: ReleaseBundleDescriptor = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(descriptor).unwrap(), value);
     }
@@ -263,14 +257,14 @@ fn descriptor_round_trips_supplied_statements_and_legacy_wire_shape() {
 }
 
 #[test]
-fn descriptor_retains_distinct_statements_for_each_artifact() {
+fn descriptor_retains_distinct_claim_sets_for_each_artifact() {
     let mut value = a_v2_descriptor();
     value["platformDifferences"] = json!("declared");
     let mut wasm = value["artifacts"][0].clone();
     wasm.as_object_mut().unwrap().remove("platform");
     wasm["runtime"] = json!("wasm");
     wasm["filename"] = json!("morphir-elm.wasm");
-    wasm["statement"]["capabilities"]["frontend"]["incremental"] = json!(false);
+    wasm["claims"]["capabilities"]["frontend"]["incremental"] = json!(false);
     value["artifacts"].as_array_mut().unwrap().push(wasm);
     let descriptor =
         ReleaseBundleDescriptor::parse_json(&serde_json::to_vec(&value).unwrap()).unwrap();
@@ -285,11 +279,11 @@ fn descriptor_retains_distinct_statements_for_each_artifact() {
     );
     assert!(descriptor.artifacts()[1].platform().is_none());
     assert_eq!(
-        descriptor.artifacts()[1].statement().capabilities["frontend"]["incremental"],
+        descriptor.artifacts()[1].claims().capabilities["frontend"]["incremental"],
         false
     );
     assert!(
-        descriptor.artifacts()[0].statement().capabilities["frontend"]
+        descriptor.artifacts()[0].claims().capabilities["frontend"]
             .get("incremental")
             .is_none()
     );

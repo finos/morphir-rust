@@ -96,9 +96,7 @@ mod repository;
 mod repository_authoring;
 mod resolver;
 mod state;
-pub use extension_format::{
-    ExtensionSchemaVersion, ProbeSource, StatementProvenance, StatementRecord,
-};
+pub use extension_format::{ClaimCheck, ClaimsRecord, ExtensionSchemaVersion, ProbeSource};
 mod state_io;
 mod store;
 mod tool_archive;

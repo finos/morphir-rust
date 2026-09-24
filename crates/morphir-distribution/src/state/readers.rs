@@ -26,7 +26,7 @@ struct InstalledExtensionWire {
     backend: Option<BackendRecord>,
     executable: bool,
     #[serde(flatten)]
-    statement: StatementRecord,
+    claims: ClaimsRecord,
     #[serde(default)]
     critical: Vec<String>,
     #[serde(default)]
@@ -51,8 +51,8 @@ const INSTALLED_PATHS: &[&str] = &[
     "index.identity",
     "index.revision",
     "executable",
-    "statement",
-    "statementSource",
+    "claims",
+    "claimCheck",
     "probeSource",
     "critical",
     "requires",
@@ -64,18 +64,19 @@ impl<'de> Deserialize<'de> for InstalledExtension {
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         let mut value = Value::deserialize(deserializer)?;
+        crate::extension_format::normalize_record(&mut value).map_err(D::Error::custom)?;
         let mut paths = INSTALLED_PATHS.to_vec();
         paths.extend_from_slice(CAPABILITY_PATHS);
         validate_members(&value, &paths, true).map_err(D::Error::custom)?;
-        if let Some(statement) = value.get("statement").cloned() {
+        if let Some(claims) = value.get("claims").cloned() {
             let object = value
                 .as_object_mut()
                 .ok_or_else(|| D::Error::custom("expected installed record"))?;
             for (flat, projected) in [
-                ("mepVersions", &statement["protocolVersions"]),
-                ("capabilities", &statement["extension"]["types"]),
-                ("frontend", &statement["capabilities"]["frontend"]),
-                ("backend", &statement["capabilities"]["backend"]),
+                ("mepVersions", &claims["protocolVersions"]),
+                ("capabilities", &claims["extension"]["types"]),
+                ("frontend", &claims["capabilities"]["frontend"]),
+                ("backend", &claims["capabilities"]["backend"]),
             ] {
                 if !projected.is_null() {
                     object.entry(flat).or_insert_with(|| projected.clone());
@@ -99,7 +100,7 @@ impl<'de> Deserialize<'de> for InstalledExtension {
             frontend: wire.frontend,
             backend: wire.backend,
             executable: wire.executable,
-            statement: wire.statement,
+            claims: wire.claims,
             critical: wire.critical,
             requires: wire.requires,
         };
@@ -117,8 +118,8 @@ impl<'de> Deserialize<'de> for InstalledExtension {
             );
         }
         installed
-            .statement
-            .supply_legacy(CapabilityStatement::from_session(
+            .claims
+            .supply_legacy(CapabilityClaimSet::from_session(
                 installed.mep_versions.clone(),
                 installed.extension_info(),
                 capabilities,
@@ -140,7 +141,9 @@ impl<'de> Deserialize<'de> for CatalogFile {
             #[serde(default)]
             critical: Vec<String>,
         }
-        let value = Value::deserialize(deserializer)?;
+        let mut value = Value::deserialize(deserializer)?;
+        crate::extension_format::normalize_envelope(&mut value, "extensions")
+            .map_err(D::Error::custom)?;
         let mut paths = vec![
             "schemaVersion".to_owned(),
             "extensions".into(),
@@ -168,7 +171,7 @@ impl<'de> Deserialize<'de> for CatalogFile {
 }
 
 /// Project only the selected artifact into the existing version-1 lock fields.
-/// Statements from other platforms never contribute capabilities here.
+/// Claims from other platforms never contribute capabilities here.
 pub(super) struct SelectedMetadata {
     pub capabilities: Vec<Capability>,
     pub mep_versions: Vec<String>,
@@ -178,26 +181,26 @@ pub(super) struct SelectedMetadata {
 
 impl SelectedMetadata {
     pub fn from_artifact(artifact: &VerifiedArtifact) -> Result<Self> {
-        let statement = artifact
+        let claims = artifact
             .selected
             .artifact
-            .statement()
-            .expect("release reader supplies statement");
+            .claims()
+            .expect("release reader supplies claims");
         Ok(Self {
             capabilities: serde_json::from_value(
-                serde_json::to_value(&statement.extension.types)
+                serde_json::to_value(&claims.extension.types)
                     .map_err(DistributionError::StateEncoding)?,
             )
             .map_err(DistributionError::StateEncoding)?,
-            mep_versions: statement.protocol_versions.clone(),
-            frontend: statement
+            mep_versions: claims.protocol_versions.clone(),
+            frontend: claims
                 .capabilities
                 .get("frontend")
                 .cloned()
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(DistributionError::StateEncoding)?,
-            backend: statement
+            backend: claims
                 .capabilities
                 .get("backend")
                 .cloned()

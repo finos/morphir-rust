@@ -1,49 +1,50 @@
-//! Preserve supplied statements and keep converted declarations off legacy wires.
+//! Preserve supplied claim sets and keep converted declarations off legacy wires.
 
-use morphir_extension_sdk::statement::CapabilityStatement;
+use morphir_extension_sdk::claims::CapabilityClaimSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// How an artifact's capability statement was obtained.
+/// Whether a host has checked the artifact's capability claims with a probe.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum StatementProvenance {
+pub enum ClaimCheck {
     /// Metadata supplied by a publisher or converted from old flat keys.
     #[default]
-    Declared,
+    Unchecked,
     /// Metadata verified by a publication or installation probe.
     Probed,
 }
 
-/// The operation that supplied an installation probe's statement.
+/// The operation that supplied an installation probe's claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProbeSource {
     /// The guest answered the one-shot description request.
     Describe,
-    /// The host reconstructed a statement from a negotiated session.
+    /// The host reconstructed a claim set from a negotiated session.
     SessionFallback,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
-struct PreservedStatement {
+struct PreservedClaims {
     wire: Value,
     #[serde(skip)]
-    parsed: CapabilityStatement,
+    parsed: CapabilityClaimSet,
 }
 
-impl PartialEq for PreservedStatement {
+impl PartialEq for PreservedClaims {
     fn eq(&self, other: &Self) -> bool {
         self.wire == other.wire
     }
 }
-impl Eq for PreservedStatement {}
+impl Eq for PreservedClaims {}
 
-impl<'de> Deserialize<'de> for PreservedStatement {
+impl<'de> Deserialize<'de> for PreservedClaims {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let wire = Value::deserialize(deserializer)?;
-        let parsed: CapabilityStatement =
+        let mut wire = Value::deserialize(deserializer)?;
+        super::compatibility::normalize_document(&mut wire)?;
+        let parsed: CapabilityClaimSet =
             serde_json::from_value(wire.clone()).map_err(serde::de::Error::custom)?;
         if wire
             .get("requires")
@@ -59,41 +60,64 @@ impl<'de> Deserialize<'de> for PreservedStatement {
     }
 }
 
-/// Statement fields embedded in an artifact or installed extension record.
-/// A synthesized statement is available to readers but omitted by legacy writers.
+/// Claims fields embedded in an artifact or installed extension record.
+/// A synthesized claim set is available to readers but omitted by legacy writers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StatementRecord {
+#[serde(rename_all = "camelCase", try_from = "Value")]
+pub struct ClaimsRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    statement: Option<Box<PreservedStatement>>,
+    claims: Option<Box<PreservedClaims>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    statement_source: Option<StatementProvenance>,
+    claim_check: Option<ClaimCheck>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     probe_source: Option<ProbeSource>,
     #[serde(skip)]
-    legacy: Option<Box<PreservedStatement>>,
+    legacy: Option<Box<PreservedClaims>>,
 }
 
-impl StatementRecord {
+impl TryFrom<Value> for ClaimsRecord {
+    type Error = String;
+
+    fn try_from(mut value: Value) -> Result<Self, Self::Error> {
+        super::normalize_record(&mut value)?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            claims: Option<Box<PreservedClaims>>,
+            claim_check: Option<ClaimCheck>,
+            probe_source: Option<ProbeSource>,
+        }
+        let wire: Wire = serde_json::from_value(value).map_err(|error| error.to_string())?;
+        Ok(Self {
+            claims: wire.claims,
+            claim_check: wire.claim_check,
+            probe_source: wire.probe_source,
+            legacy: None,
+        })
+    }
+}
+
+impl ClaimsRecord {
+    pub(crate) fn has_supplied_claims(&self) -> bool {
+        self.claims.is_some()
+    }
+
     pub(crate) fn as_declared(&self) -> Self {
         Self {
-            statement_source: self
-                .statement
-                .as_ref()
-                .map(|_| StatementProvenance::Declared),
+            claim_check: self.claims.as_ref().map(|_| ClaimCheck::Unchecked),
             probe_source: None,
             ..self.clone()
         }
     }
 
     /// Record a declaration without claiming local verification.
-    pub fn declared(statement: CapabilityStatement) -> Self {
+    pub fn declared(claims: CapabilityClaimSet) -> Self {
         Self {
-            statement: Some(Box::new(PreservedStatement {
-                wire: serde_json::to_value(&statement).expect("statement serializes"),
-                parsed: statement,
+            claims: Some(Box::new(PreservedClaims {
+                wire: serde_json::to_value(&claims).expect("claim set serializes"),
+                parsed: claims,
             })),
-            statement_source: Some(StatementProvenance::Declared),
+            claim_check: Some(ClaimCheck::Unchecked),
             probe_source: None,
             legacy: None,
         }
@@ -102,8 +126,8 @@ impl StatementRecord {
     /// Mark the preserved declaration as verified. Legacy records keep their old wire shape.
     pub fn probed(&self, source: ProbeSource) -> Self {
         Self {
-            statement_source: self.statement.as_ref().map(|_| StatementProvenance::Probed),
-            probe_source: self.statement.as_ref().map(|_| source),
+            claim_check: self.claims.as_ref().map(|_| ClaimCheck::Probed),
+            probe_source: self.claims.as_ref().map(|_| source),
             ..self.clone()
         }
     }
@@ -115,9 +139,9 @@ impl StatementRecord {
         protocol_version: &str,
         extension: &morphir_extension_sdk::ExtensionInfo,
         capabilities: &serde_json::Map<String, Value>,
-    ) -> Result<(), morphir_extension_sdk::statement::SessionAgreementError> {
-        let declared = self.statement().expect("resolved record has a declaration");
-        if self.statement.is_some() {
+    ) -> Result<(), morphir_extension_sdk::claims::SessionAgreementError> {
+        let declared = self.claims().expect("resolved record has a declaration");
+        if self.claims.is_some() {
             return declared.check_session(protocol_version, extension, capabilities);
         }
         let representable = capabilities
@@ -144,33 +168,33 @@ impl StatementRecord {
         declared.check_session(protocol_version, extension, &representable)
     }
 
-    /// Return how a local probe obtained the statement, when recorded.
+    /// Return how a local probe obtained the claims, when recorded.
     pub fn probe_source(&self) -> Option<ProbeSource> {
-        (self.provenance() == StatementProvenance::Probed)
+        (self.claim_check() == ClaimCheck::Probed)
             .then_some(self.probe_source)
             .flatten()
     }
 
-    /// Return the supplied or converted capability statement, if available.
-    pub fn statement(&self) -> Option<&CapabilityStatement> {
-        self.statement
+    /// Return the supplied or converted capability claim set, if available.
+    pub fn claims(&self) -> Option<&CapabilityClaimSet> {
+        self.claims
             .as_ref()
             .or(self.legacy.as_ref())
             .map(|value| &value.parsed)
     }
 
-    /// Return the recorded provenance, defaulting old declarations to `declared`.
-    pub fn provenance(&self) -> StatementProvenance {
-        self.statement_source.unwrap_or_default()
+    /// Return the recorded check status, defaulting old declarations to `unchecked`.
+    pub fn claim_check(&self) -> ClaimCheck {
+        self.claim_check.unwrap_or_default()
     }
 
-    pub(crate) fn supply_legacy(&mut self, statement: CapabilityStatement) {
-        if self.statement.is_none() {
-            self.legacy = Some(Box::new(PreservedStatement {
-                wire: serde_json::to_value(&statement).expect("statement serializes"),
-                parsed: statement,
+    pub(crate) fn supply_legacy(&mut self, claims: CapabilityClaimSet) {
+        if self.claims.is_none() {
+            self.legacy = Some(Box::new(PreservedClaims {
+                wire: serde_json::to_value(&claims).expect("claim set serializes"),
+                parsed: claims,
             }));
-            self.statement_source = None;
+            self.claim_check = None;
             self.probe_source = None;
         }
     }
@@ -179,35 +203,35 @@ impl StatementRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use morphir_extension_sdk::claims::SessionAgreementError;
     use morphir_extension_sdk::protocol::MEP_VERSION;
-    use morphir_extension_sdk::statement::SessionAgreementError;
     use serde_json::json;
 
-    fn legacy_declaration() -> StatementRecord {
-        let statement = serde_json::from_value(json!({
-            "statementVersion": "0.1.0-draft.1", "protocolVersions": [MEP_VERSION],
+    fn legacy_declaration() -> ClaimsRecord {
+        let claims = serde_json::from_value(json!({
+            "claimsVersion": "0.1.0-draft.2", "protocolVersions": [MEP_VERSION],
             "extension": {"id": "sample", "name": "Sample", "version": "1.0.0", "types": ["frontend", "backend"]},
             "capabilities": {
                 "frontend": {"languages": [{"id": "elm", "fileExtensions": [".elm"]}], "irVersions": ["3"], "compile": true},
                 "backend": {"targets": ["text"], "irVersions": ["3"], "generate": true}
             }
         })).unwrap();
-        let mut record = StatementRecord::default();
-        record.supply_legacy(statement);
+        let mut record = ClaimsRecord::default();
+        record.supply_legacy(claims);
         record
     }
 
     #[test]
     fn legacy_agreement_ignores_only_members_outside_flat_keys() {
         let record = legacy_declaration();
-        let statement = record.statement().unwrap();
-        let mut reported = statement.capabilities.clone();
+        let claims = record.claims().unwrap();
+        let mut reported = claims.capabilities.clone();
         reported["frontend"]["incremental"] = true.into();
         reported["backend"]["future"] = json!({"extra": true});
         reported.insert("streaming".into(), true.into());
         assert!(
             record
-                .check_session(MEP_VERSION, &statement.extension, &reported)
+                .check_session(MEP_VERSION, &claims.extension, &reported)
                 .is_ok()
         );
         for (kind, member, replacement) in [
@@ -221,23 +245,23 @@ mod tests {
             let mut changed = reported.clone();
             changed[kind][member] = replacement;
             assert_eq!(
-                record.check_session(MEP_VERSION, &statement.extension, &changed),
+                record.check_session(MEP_VERSION, &claims.extension, &changed),
                 Err(SessionAgreementError::CapabilityMember(format!(
                     "capabilities.{kind}.{member}"
                 )))
             );
         }
-        let mut extension = statement.extension.clone();
+        let mut extension = claims.extension.clone();
         extension.name = "Different".into();
         assert_eq!(
             record.check_session(MEP_VERSION, &extension, &reported),
             Err(SessionAgreementError::Identity("name"))
         );
         assert!(matches!(
-            record.check_session("unsupported", &statement.extension, &reported),
+            record.check_session("unsupported", &claims.extension, &reported),
             Err(SessionAgreementError::ProtocolVersion(_))
         ));
-        let mut extension = statement.extension.clone();
+        let mut extension = claims.extension.clone();
         extension
             .types
             .push(morphir_extension_sdk::ExtensionType::Validator);
@@ -245,17 +269,17 @@ mod tests {
             record.check_session(MEP_VERSION, &extension, &reported),
             Err(SessionAgreementError::CapabilityKind(_))
         ));
-        // Supplied statements retain the full protocol rule, including optional members.
-        let supplied = StatementRecord::declared(statement.clone());
+        // Supplied claim sets retain the full protocol rule, including optional members.
+        let supplied = ClaimsRecord::declared(claims.clone());
         assert!(
             supplied
-                .check_session(MEP_VERSION, &statement.extension, &reported)
+                .check_session(MEP_VERSION, &claims.extension, &reported)
                 .is_err()
         );
     }
 
     #[test]
-    fn provenance_never_promotes_a_legacy_record_to_a_supplied_statement() {
+    fn provenance_never_promotes_a_legacy_record_to_a_supplied_claims() {
         let record = legacy_declaration();
         for transformed in [
             record.as_declared(),
@@ -264,10 +288,10 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(&transformed).unwrap(), json!({}));
             assert_eq!(
-                serde_json::to_value(transformed.statement()).unwrap(),
-                serde_json::to_value(record.statement()).unwrap()
+                serde_json::to_value(transformed.claims()).unwrap(),
+                serde_json::to_value(record.claims()).unwrap()
             );
-            assert_eq!(transformed.provenance(), StatementProvenance::Declared);
+            assert_eq!(transformed.claim_check(), ClaimCheck::Unchecked);
             assert_eq!(transformed.probe_source(), None);
         }
     }

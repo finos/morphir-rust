@@ -2,9 +2,9 @@
 use super::*;
 
 impl ExtensionInstaller<'_> {
-    /// Verify and stage the selected bytes, then run the host's statement probe.
+    /// Verify and stage the selected bytes, then run the host's claims probe.
     ///
-    /// The callback may execute only the staged artifact and must return a statement
+    /// The callback may execute only the staged artifact and must return a claim set
     /// that agrees with its declaration, or an error. No active store, catalog, or
     /// extension lock is changed until it succeeds. The staged bytes are rehashed
     /// during publication; the original source is never reopened after the probe.
@@ -16,7 +16,7 @@ impl ExtensionInstaller<'_> {
     /// # -> morphir_distribution::Result<()> {
     /// morphir_distribution::ExtensionInstaller::new(home)
     ///     .install_with_probe(selected, host, async |artifact| {
-    ///         Ok(artifact.selected().artifact().declared_statement_record())
+    ///         Ok(artifact.selected().artifact().declared_claims_record())
     ///     }).await?;
     /// # Ok(()) }
     /// ```
@@ -24,7 +24,7 @@ impl ExtensionInstaller<'_> {
         &self,
         selected: ResolvedArtifact,
         host: &Version,
-        probe: impl AsyncFnOnce(&VerifiedArtifact) -> Result<StatementRecord>,
+        probe: impl AsyncFnOnce(&VerifiedArtifact) -> Result<ClaimsRecord>,
     ) -> Result<InstalledExtension> {
         selected.check_host(host)?;
         let staging_root = self.home.temp_dir();
@@ -49,14 +49,14 @@ impl ExtensionInstaller<'_> {
         let staging_home = MorphirHome::resolve_from(Some(staging.path().as_os_str()), None)
             .map_err(|error| DistributionError::Probe(error.to_string()))?;
         let mut verified = ArtifactStore::from_home(&staging_home).materialize(selected)?;
-        let statement = probe(&verified).await?;
-        statement
-            .statement()
+        let claims = probe(&verified).await?;
+        claims
+            .claims()
             .ok_or_else(|| {
-                DistributionError::Probe("probe returned no capability statement".into())
+                DistributionError::Probe("probe returned no capability claim set".into())
             })?
             .check_host(host)?;
-        verified.selected.artifact.record_statement(statement);
+        verified.selected.artifact.record_claims(claims);
         // Validate both projections before publishing any bytes to the active home.
         ExtensionLock::from_verified(&verified)?;
         InstalledExtension::from_verified(&verified)?;

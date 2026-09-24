@@ -26,8 +26,8 @@ pub use descriptor::{BundleArtifactDescriptor, PlatformDifferences, ReleaseBundl
 /// Evidence returned by a process publication probe.
 #[derive(Debug, Clone)]
 pub enum PublicationDescription {
-    /// A direct description must match the complete declared statement.
-    Describe(morphir_extension_sdk::statement::CapabilityStatement),
+    /// A direct description must match the complete declared claims.
+    Describe(morphir_extension_sdk::claims::CapabilityClaimSet),
     /// An older guest supplied only negotiated session metadata.
     SessionFallback {
         /// The single negotiated MEP version.
@@ -144,7 +144,7 @@ impl LocalExtensionRepository {
     ///
     /// The probe must describe the supplied verified bytes, not reread a bundle
     /// path. It runs only for process artifacts matching the current platform.
-    /// Foreign artifacts retain their declared statements. A mismatch is refused
+    /// Foreign artifacts retain their declared claim sets. A mismatch is refused
     /// before repository writes. Version-1 WASM publication never calls the probe.
     ///
     /// ```no_run
@@ -277,7 +277,7 @@ struct LegacyReleaseBundleDescriptor {
     #[serde(default)]
     requires: Option<serde_json::Value>,
     #[serde(flatten)]
-    statement_record: crate::extension_format::StatementRecord,
+    claims_record: crate::extension_format::ClaimsRecord,
     short_id: String,
     extension_id: ExtensionId,
     package: String,
@@ -509,7 +509,7 @@ impl LegacyReleaseBundleDescriptor {
                 record["critical"] = serde_json::json!(["requires.host"]);
             }
         }
-        if let Some(fields) = serde_json::to_value(&self.statement_record)
+        if let Some(fields) = serde_json::to_value(&self.claims_record)
             .map_err(|error| invalid_bundle(root.join("release.json"), error.to_string()))?
             .as_object()
         {
@@ -621,8 +621,8 @@ fn upgrade_provenance(stored: &ReleaseRecord, incoming: &ReleaseRecord) -> Resul
         .iter_mut()
         .zip(incoming["artifacts"].as_array().expect("release artifacts"))
     {
-        if artifact["statementSource"] == "declared" && candidate["statementSource"] == "probed" {
-            artifact["statementSource"] = candidate["statementSource"].clone();
+        if artifact["claimCheck"] == "unchecked" && candidate["claimCheck"] == "probed" {
+            artifact["claimCheck"] = candidate["claimCheck"].clone();
             artifact["probeSource"] = candidate["probeSource"].clone();
         }
     }
@@ -640,15 +640,17 @@ fn replace_provenance(previous: &[u8], release: &ReleaseRecord) -> Result<Vec<u8
         let mut wire: serde_json::Value =
             serde_json::from_slice(line).map_err(DistributionError::StateEncoding)?;
         if wire["version"] == updated["version"] {
-            // Preserve unknown members and every declared statement. Only the
-            // provenance changes; unrelated history lines retain their bytes.
+            // Upgrade this record's wire draft before applying probe evidence.
+            // Preserve optional metadata and unrelated history lines verbatim.
+            crate::extension_format::normalize_envelope(&mut wire, "artifacts")
+                .map_err(|error| invalid_bundle("extension history", error))?;
             for (artifact, upgraded) in wire["artifacts"]
                 .as_array_mut()
                 .expect("validated history artifacts")
                 .iter_mut()
                 .zip(updated["artifacts"].as_array().expect("release artifacts"))
             {
-                for member in ["statementSource", "probeSource"] {
+                for member in ["claimCheck", "probeSource"] {
                     if let Some(value) = upgraded.get(member) {
                         artifact[member] = value.clone();
                     }
@@ -671,7 +673,7 @@ fn without_provenance(release: &ReleaseRecord) -> Result<serde_json::Value> {
     if let Some(artifacts) = wire["artifacts"].as_array_mut() {
         for artifact in artifacts {
             if let Some(record) = artifact.as_object_mut() {
-                record.remove("statementSource");
+                record.remove("claimCheck");
                 record.remove("probeSource");
             }
         }

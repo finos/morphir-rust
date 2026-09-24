@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The daemon's typestate MEP session now runs on the `morphir-host` session
   core. Its public API, wire sequence and error texts are unchanged.
+- **Breaking:** Rename the extension Rust API from capability statements to
+  capability claim sets (`CapabilityClaimSet`, `ClaimsRecord`, `ClaimCheck`, and
+  the SDK `claims` module). Readers accept exact draft.1 and draft.2 formats;
+  writers emit draft.2 with `claimsVersion`, `claims`, and `claimCheck`.
+  Morphir hosts `0.4.0-beta.6` and earlier cannot read draft.2 records or
+  `describe` responses. An installed catalog that holds any entry with claims
+  is written as `2.0.0-draft.2`, so those hosts cannot read that catalog at all,
+  its version-1 entries included; a catalog of version-1 entries only stays
+  `1.0`. Version-1 flat formats and MEP `0.1` are unchanged
+  (finos/morphir#921; kb `morphir-extensions`, decision 0007,
+  "Extensions make capability claims").
 - **Breaking:** SDK-built extensions now require the `sources` compile envelope
   and Morphir CLI `0.4.0-beta.6` or later. CLI `0.4.0-beta.5` and earlier cannot
   compile with them: the legacy top-level `documents` envelope and options-bag
@@ -65,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Extension publication refuses mixed runtimes and target ABIs the index cannot
   represent, preserves descriptor critical paths, and returns stored release
-  records while persisting declared-to-probed provenance upgrades.
+  records while persisting unchecked-to-probed check upgrades.
 - A native in-process provider gives each MEP session its own lifecycle. `NativeExtension::open_protocol` opens an endpoint for one session, and the daemon's native transport uses it, so a session after a shutdown, or two sessions at once, over one provider no longer fail with `-32014` or "already initialized".
 - Extension resolution and installation check `requires.host` against an explicit
   caller-supplied host version. Parsing validates requirements without comparing
@@ -77,27 +88,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Extension installers can stage and probe the selected artifact before changing
   the active store, locks, or catalog. Staging uses a private directory under
-  Morphir home. Supplied statement bodies remain unchanged; provenance
+  Morphir home. Supplied claim set bodies remain unchanged; provenance
   distinguishes describe from session fallback. Legacy installs retain the
   version-1 catalog shape, and competing installs cannot overwrite an entry. The SDK
-  compares complete statements and names the first differing member.
+  compares complete claim sets and names the first differing member.
 - Local extension repositories publish version-2 process bundles with verified
-  per-platform digests, checksums and capability statements. Host artifacts are
-  described through a caller-supplied probe; foreign statements remain declared.
+  per-platform digests, checksums and capability claim sets. Host artifacts are
+  described through a caller-supplied probe; foreign claims remain unchecked.
   Undeclared platform differences and probe disagreements are refused.
 - Extension distribution readers ignore unknown optional members, reject unknown
   critical paths, accept supported SemVer schemas, and convert flat capability
-  metadata to declared statements while preserving supplied artifact statements
+  metadata to unchecked claim sets while preserving supplied artifact claims
   (finos/morphir#921). Existing writers retain their version-1 formats.
 - SDK guest and native protocol sessions return `-32014` for requests outside
   the initialization and shutdown lifecycle.
-- Guests built on the SDK answer `morphir.extension.describe` with a capability statement
-  (`statementVersion` `0.1.0-draft.1`) before `initialize` and without side effects. Readers
+- Guests built on the SDK answer `morphir.extension.describe` with a capability claim set
+  (`claimsVersion` `0.1.0-draft.2`) before `initialize` and without side effects. Readers
   refuse an unknown critical member and ignore other unknown members, and a pure check tells
-  whether a session agrees with a statement (finos/morphir#921).
+  whether a session agrees with a claim set (finos/morphir#921).
 - The daemon describes a process extension in one call. When the guest does not implement
   `describe`, it falls back to `initialize`, `initialized`, `capabilities`, `shutdown` and `exit`,
-  and reports which source produced the statement.
+  and reports which source produced the claim set.
 - The package MVP adapter exposes `update-local-library` through the production
   scoped-update API. Its bounded protocol checks all 27 frozen success and
   refusal scenarios, including target selection, old pins, authenticated

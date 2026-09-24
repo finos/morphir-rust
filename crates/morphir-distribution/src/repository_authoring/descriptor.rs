@@ -2,11 +2,9 @@
 
 use super::{LegacyReleaseBundleDescriptor, invalid_bundle};
 use crate::domain::portable_token;
-use crate::extension_format::{
-    ExtensionSchemaVersion, StatementProvenance, StatementRecord, validate_members,
-};
+use crate::extension_format::{ClaimCheck, ClaimsRecord, ExtensionSchemaVersion, validate_members};
 use crate::{ArtifactFilename, ArtifactRuntime, ExtensionId, Result, Sha256Digest};
-use morphir_extension_sdk::statement::CapabilityStatement;
+use morphir_extension_sdk::claims::CapabilityClaimSet;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -36,8 +34,8 @@ const LEGACY_PATHS: &[&str] = &[
     "irVersions",
     "artifact",
     "sha256",
-    "statement",
-    "statementSource",
+    "claims",
+    "claimCheck",
 ];
 const V2_PATHS: &[&str] = &[
     "platformDifferences",
@@ -46,8 +44,8 @@ const V2_PATHS: &[&str] = &[
     "artifacts.runtime",
     "artifacts.filename",
     "artifacts.sha256",
-    "artifacts.statement",
-    "artifacts.statementSource",
+    "artifacts.claims",
+    "artifacts.claimCheck",
     "artifacts.critical",
     "artifacts.requires",
     "artifacts.requires.host",
@@ -57,8 +55,8 @@ const ARTIFACT_PATHS: &[&str] = &[
     "runtime",
     "filename",
     "sha256",
-    "statement",
-    "statementSource",
+    "claims",
+    "claimCheck",
     "critical",
     "requires",
     "requires.host",
@@ -74,7 +72,7 @@ pub enum PlatformDifferences {
     Declared,
 }
 
-/// A bundle descriptor normalized to per-artifact capability statements.
+/// A bundle descriptor normalized to per-artifact capability claim sets.
 ///
 /// Reading a descriptor does not open, verify, execute, or publish its artifacts.
 ///
@@ -102,14 +100,14 @@ pub struct ReleaseBundleDescriptor {
     wire: Value,
 }
 
-/// One artifact named by a bundle descriptor, including its unprobed statement.
+/// One artifact named by a bundle descriptor, including its unprobed claims.
 #[derive(Debug)]
 pub struct BundleArtifactDescriptor {
     runtime: ArtifactRuntime,
     platform: Option<String>,
     filename: ArtifactFilename,
     sha256: Sha256Digest,
-    statement_record: StatementRecord,
+    claims_record: ClaimsRecord,
 }
 
 impl ReleaseBundleDescriptor {
@@ -161,6 +159,7 @@ impl ReleaseBundleDescriptor {
         {
             value["schemaVersion"] = Value::String("1.0".into());
         }
+        crate::extension_format::normalize_envelope(&mut value, "artifacts")?;
         let schema_version: ExtensionSchemaVersion = value
             .get("schemaVersion")
             .cloned()
@@ -181,14 +180,14 @@ impl ReleaseBundleDescriptor {
             legacy
                 .validate(Path::new(""))
                 .map_err(|error| error.to_string())?;
-            let mut statement_record = legacy.statement_record.clone();
+            let mut claims_record = legacy.claims_record.clone();
             let release = legacy
                 .release_record(Path::new(""))
                 .map_err(|error| error.to_string())?;
-            statement_record.supply_legacy(
+            claims_record.supply_legacy(
                 release.artifacts()[0]
-                    .statement()
-                    .expect("release reader supplies a legacy statement")
+                    .claims()
+                    .expect("release reader supplies a legacy claim set")
                     .clone(),
             );
             let artifact = BundleArtifactDescriptor {
@@ -196,7 +195,7 @@ impl ReleaseBundleDescriptor {
                 platform: None,
                 filename: legacy.artifact.clone(),
                 sha256: legacy.sha256.clone(),
-                statement_record,
+                claims_record,
             };
             return Ok(Self {
                 schema_version,
@@ -219,6 +218,7 @@ impl ReleaseBundleDescriptor {
             #[serde(default)]
             platform_differences: Option<PlatformDifferences>,
         }
+        let original = value.clone();
         let wire: V2 = serde_json::from_value(value).map_err(|error| error.to_string())?;
         if !portable_token(&wire.short_id) {
             return Err("release bundle shortId must be a portable token".into());
@@ -258,7 +258,8 @@ impl<'de> Deserialize<'de> for ReleaseBundleDescriptor {
 
 impl<'de> Deserialize<'de> for BundleArtifactDescriptor {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        let value = Value::deserialize(deserializer)?;
+        let mut value = Value::deserialize(deserializer)?;
+        crate::extension_format::normalize_record(&mut value).map_err(serde::de::Error::custom)?;
         validate_members(&value, ARTIFACT_PATHS, true).map_err(serde::de::Error::custom)?;
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -269,13 +270,13 @@ impl<'de> Deserialize<'de> for BundleArtifactDescriptor {
             filename: ArtifactFilename,
             sha256: Sha256Digest,
             #[serde(flatten)]
-            statement_record: StatementRecord,
+            claims_record: ClaimsRecord,
         }
         let platform_present = value.get("platform").is_some();
         let wire: Wire = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-        if wire.statement_record.statement().is_none() {
+        if wire.claims_record.claims().is_none() {
             return Err(serde::de::Error::custom(
-                "version-2 bundle artifact requires statement",
+                "version-2 bundle artifact requires claims",
             ));
         }
         if wire.runtime == ArtifactRuntime::Process
@@ -298,7 +299,7 @@ impl<'de> Deserialize<'de> for BundleArtifactDescriptor {
             platform: wire.platform,
             filename: wire.filename,
             sha256: wire.sha256,
-            statement_record: wire.statement_record,
+            claims_record: wire.claims_record,
         })
     }
 }
@@ -320,14 +321,14 @@ impl BundleArtifactDescriptor {
     pub fn sha256(&self) -> &Sha256Digest {
         &self.sha256
     }
-    /// Return the supplied statement or a declared conversion of legacy metadata.
-    pub fn statement(&self) -> &CapabilityStatement {
-        self.statement_record
-            .statement()
-            .expect("bundle reader requires or supplies a statement")
+    /// Return the supplied claims or a declared conversion of legacy metadata.
+    pub fn claims(&self) -> &CapabilityClaimSet {
+        self.claims_record
+            .claims()
+            .expect("bundle reader requires or supplies a claim set")
     }
-    /// Return whether the statement was declared or recorded as probed.
-    pub fn statement_provenance(&self) -> StatementProvenance {
-        self.statement_record.provenance()
+    /// Return whether the claims are unchecked or recorded as probed.
+    pub fn claim_check(&self) -> ClaimCheck {
+        self.claims_record.claim_check()
     }
 }

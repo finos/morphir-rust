@@ -84,12 +84,12 @@ impl ReleaseRecord {
         &self.channels
     }
 
-    /// Return legacy MEP declarations. Statement-only records declare versions per artifact.
+    /// Return legacy MEP declarations. Claims-only records declare versions per artifact.
     pub fn mep_versions(&self) -> &[String] {
         &self.mep_versions
     }
 
-    /// Return legacy capability kinds. Statement-only records declare kinds per artifact.
+    /// Return legacy capability kinds. Claims-only records declare kinds per artifact.
     pub fn capabilities(&self) -> &[Capability] {
         &self.capabilities
     }
@@ -115,7 +115,9 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        crate::extension_format::normalize_envelope(&mut value, "artifacts")
+            .map_err(serde::de::Error::custom)?;
         let mut paths = RELEASE_PATHS.to_vec();
         paths.extend_from_slice(CAPABILITY_PATHS);
         validate_members(&value, &paths, true).map_err(serde::de::Error::custom)?;
@@ -124,12 +126,12 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
         if wire.name.trim().is_empty() {
             return Err(serde::de::Error::custom("extension name cannot be empty"));
         }
-        let has_statements = !wire.artifacts.is_empty()
+        let has_claim_sets = !wire.artifacts.is_empty()
             && wire
                 .artifacts
                 .iter()
-                .all(|artifact| artifact.statement().is_some());
-        if (!has_statements && wire.mep_versions.is_empty())
+                .all(|artifact| artifact.claims().is_some());
+        if (!has_claim_sets && wire.mep_versions.is_empty())
             || wire
                 .mep_versions
                 .iter()
@@ -139,7 +141,7 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
                 "MEP versions must contain non-empty values",
             ));
         }
-        if wire.capabilities.is_empty() && !has_statements {
+        if wire.capabilities.is_empty() && !has_claim_sets {
             return Err(serde::de::Error::custom(
                 "extension capabilities cannot be empty",
             ));
@@ -205,10 +207,10 @@ impl<'de> Deserialize<'de> for ReleaseRecord {
             .map_err(serde::de::Error::custom)?,
             ..Default::default()
         };
-        let statement =
-            CapabilityStatement::from_session(wire.mep_versions.clone(), info, capabilities);
+        let claims =
+            CapabilityClaimSet::from_session(wire.mep_versions.clone(), info, capabilities);
         for artifact in &mut wire.artifacts {
-            artifact.statement.supply_legacy(statement.clone());
+            artifact.claims.supply_legacy(claims.clone());
         }
         Ok(Self {
             schema_version: wire.schema_version,
@@ -250,7 +252,7 @@ const RELEASE_PATHS: &[&str] = &[
     "artifacts.filename",
     "artifacts.args",
     "artifacts.executable",
-    "artifacts.statement",
-    "artifacts.statementSource",
+    "artifacts.claims",
+    "artifacts.claimCheck",
     "artifacts.critical",
 ];

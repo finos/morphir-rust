@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::Platform;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionType, statement::CapabilityStatement};
+use morphir_extension_sdk::{ExtensionCapabilities, ExtensionType, claims::CapabilityClaimSet};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -29,7 +29,7 @@ pub(super) fn verify(
     let mut platforms = BTreeSet::new();
     let mut artifacts = Vec::new();
     let mut records = Vec::new();
-    let first = descriptor.artifacts()[0].statement();
+    let first = descriptor.artifacts()[0].claims();
     for (index, artifact) in descriptor.artifacts().iter().enumerate() {
         let filename = artifact.filename().as_str();
         if [".tgz", ".tar.gz", ".zip", ".tar"]
@@ -55,20 +55,20 @@ pub(super) fn verify(
         if !platforms.insert(platform.clone()) {
             return Err(invalid_bundle(root, "duplicate artifact platform"));
         }
-        validate_statement(root, artifact.statement(), &descriptor)?;
+        validate_claims(root, artifact.claims(), &descriptor)?;
         if wire["artifacts"][index].get("requires").is_some() {
             return Err(invalid_bundle(
                 root,
                 format!(
-                    "artifact '{filename}': put host requirements in statement.requires, not artifact.requires"
+                    "artifact '{filename}': put host requirements in claims.requires, not artifact.requires"
                 ),
             ));
         }
         if descriptor.platform_differences() != Some(PlatformDifferences::Declared) {
             let mut differences = Vec::new();
             differing_members(
-                &wire["artifacts"][0]["statement"],
-                &wire["artifacts"][index]["statement"],
+                &wire["artifacts"][0]["claims"],
+                &wire["artifacts"][index]["claims"],
                 "",
                 &mut differences,
             );
@@ -96,7 +96,7 @@ pub(super) fn verify(
         let mut record = json!({
             "runtime": artifact.runtime(), "filename": filename, "sha256": artifact.sha256(),
             "source": {"kind": "local-file", "path": format!("artifacts/{filename}")},
-            "statement": wire["artifacts"][index]["statement"], "statementSource": "declared",
+            "claims": wire["artifacts"][index]["claims"], "claimCheck": "unchecked",
             "executable": artifact.runtime() == ArtifactRuntime::Process,
         });
         if let Some(platform) = platform {
@@ -132,8 +132,8 @@ pub(super) fn verify(
             let path = root.join(artifact.filename().as_str());
             match probe(artifact, &verified.artifact_bytes)? {
                 PublicationDescription::Describe(reported) => {
-                    validate_statement(&path, &reported, &descriptor)?;
-                    check_agreement(&path, artifact.statement(), &reported)?;
+                    validate_claims(&path, &reported, &descriptor)?;
+                    check_agreement(&path, artifact.claims(), &reported)?;
                     record["probeSource"] = json!("describe");
                 }
                 PublicationDescription::SessionFallback {
@@ -142,7 +142,7 @@ pub(super) fn verify(
                     capabilities,
                 } => {
                     artifact
-                        .statement()
+                        .claims()
                         .check_session(&protocol_version, &extension, &capabilities)
                         .map_err(|error| {
                             invalid_bundle(&path, format!("described session disagrees: {error}"))
@@ -150,7 +150,7 @@ pub(super) fn verify(
                     record["probeSource"] = json!("session-fallback");
                 }
             }
-            record["statementSource"] = json!("probed");
+            record["claimCheck"] = json!("probed");
         }
     }
     let channel = if descriptor.version().pre.is_empty() {
@@ -159,7 +159,7 @@ pub(super) fn verify(
         "preview"
     };
     let mut release = json!({
-        "schemaVersion": "2.0.0-draft.1", "id": descriptor.extension_id(),
+        "schemaVersion": "2.0.0-draft.2", "id": descriptor.extension_id(),
         "name": first.extension.name, "version": descriptor.version(), "channels": [channel],
         "artifacts": records,
         "critical": critical,
@@ -237,37 +237,37 @@ fn platform(root: &Path, triple: &str) -> Result<Platform> {
     Platform::new(os, arch)
 }
 
-fn validate_statement(
+fn validate_claims(
     root: &Path,
-    statement: &CapabilityStatement,
+    claims: &CapabilityClaimSet,
     descriptor: &ReleaseBundleDescriptor,
 ) -> Result<()> {
-    if statement.extension.id != descriptor.extension_id().as_str()
-        || statement.extension.version != descriptor.version().to_string()
+    if claims.extension.id != descriptor.extension_id().as_str()
+        || claims.extension.version != descriptor.version().to_string()
     {
         return Err(invalid_bundle(
             root,
-            "statement extension.id or extension.version differs from release.json",
+            "claims extension.id or extension.version differs from release.json",
         ));
     }
-    if statement.protocol_versions.is_empty()
-        || statement
+    if claims.protocol_versions.is_empty()
+        || claims
             .protocol_versions
             .iter()
             .any(|version| version.trim().is_empty())
     {
         return Err(invalid_bundle(
             root,
-            "statement protocolVersions must contain non-empty versions",
+            "claims protocolVersions must contain non-empty versions",
         ));
     }
-    let kinds = &statement.extension.types;
+    let kinds = &claims.extension.types;
     let mut seen = Vec::new();
     for kind in kinds {
         if seen.contains(kind) {
             return Err(invalid_bundle(
                 root,
-                "statement extension.types contains a repeated capability kind",
+                "claims extension.types contains a repeated capability kind",
             ));
         }
         seen.push(*kind);
@@ -277,10 +277,10 @@ fn validate_statement(
         (ExtensionType::Backend, "backend"),
         (ExtensionType::Workspace, "workspace"),
     ] {
-        if kinds.contains(&kind) != statement.capabilities.contains_key(member) {
+        if kinds.contains(&kind) != claims.capabilities.contains_key(member) {
             return Err(invalid_bundle(
                 root,
-                format!("statement extension.types and capabilities.{member} disagree"),
+                format!("claims extension.types and capabilities.{member} disagree"),
             ));
         }
     }
@@ -289,25 +289,24 @@ fn validate_statement(
     let known = ["frontend", "backend", "workspace"]
         .into_iter()
         .filter_map(|member| {
-            statement
+            claims
                 .capabilities
                 .get(member)
                 .map(|value| (member.to_owned(), value.clone()))
         })
         .collect();
-    serde_json::from_value::<ExtensionCapabilities>(Value::Object(known)).map_err(|error| {
-        invalid_bundle(root, format!("invalid statement capabilities: {error}"))
-    })?;
+    serde_json::from_value::<ExtensionCapabilities>(Value::Object(known))
+        .map_err(|error| invalid_bundle(root, format!("invalid claims capabilities: {error}")))?;
     Ok(())
 }
 
 fn check_agreement(
     path: &Path,
-    stated: &CapabilityStatement,
-    reported: &CapabilityStatement,
+    stated: &CapabilityClaimSet,
+    reported: &CapabilityClaimSet,
 ) -> Result<()> {
     // Reuse the SDK agreement rule in both directions: describe compares two
-    // statements, so the session rule alone would allow omitted capabilities.
+    // claim sets, so the session rule alone would allow omitted capabilities.
     for (expected, actual) in [(stated, reported), (reported, stated)] {
         for version in &actual.protocol_versions {
             if let Err(error) =
@@ -316,30 +315,27 @@ fn check_agreement(
                 return Err(invalid_bundle(
                     path,
                     format!(
-                        "described statement disagrees: {error}; differing members: {}",
-                        statement_differences(stated, reported)?.join(", ")
+                        "described claims disagree: {error}; differing members: {}",
+                        claims_differences(stated, reported)?.join(", ")
                     ),
                 ));
             }
         }
     }
-    let differences = statement_differences(stated, reported)?;
+    let differences = claims_differences(stated, reported)?;
     if differences.is_empty() {
         Ok(())
     } else {
         Err(invalid_bundle(
             path,
-            format!(
-                "described statement disagrees at {}",
-                differences.join(", ")
-            ),
+            format!("described claims disagree at {}", differences.join(", ")),
         ))
     }
 }
 
-fn statement_differences(
-    left: &CapabilityStatement,
-    right: &CapabilityStatement,
+fn claims_differences(
+    left: &CapabilityClaimSet,
+    right: &CapabilityClaimSet,
 ) -> Result<Vec<String>> {
     let left = serde_json::to_value(left).map_err(DistributionError::StateEncoding)?;
     let right = serde_json::to_value(right).map_err(DistributionError::StateEncoding)?;
@@ -373,14 +369,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn older_reader_refuses_published_critical_statement_member() {
+    fn older_reader_refuses_published_critical_claims_member() {
         let root = tempfile::tempdir().unwrap();
         let digest = Sha256Digest::of_bytes(b"wasm");
         let descriptor = serde_json::from_value(json!({
-            "schemaVersion": "2.0.0-draft.1", "extensionId": "example", "shortId": "example",
-            "version": "1.0.0", "critical": ["artifacts.statement.capabilities.backend.generate"],
+            "schemaVersion": "2.0.0-draft.2", "extensionId": "example", "shortId": "example",
+            "version": "1.0.0", "critical": ["artifacts.claims.capabilities.backend.generate"],
             "artifacts": [{"runtime": "wasm", "filename": "guest.wasm", "sha256": digest,
-                "statement": {"statementVersion": "0.1.0-draft.1",
+                "claims": {"claimsVersion": "0.1.0-draft.2",
                     "protocolVersions": [morphir_extension_sdk::protocol::MEP_VERSION],
                     "extension": {"id": "example", "name": "Example", "version": "1.0.0", "types": ["backend"]},
                     "capabilities": {"backend": {"targets": ["sql"], "irVersions": ["3"], "generate": true}}
@@ -400,7 +396,7 @@ mod tests {
         .unwrap();
         let mut record = serde_json::to_value(bundle.release).unwrap();
         // Use the shared must-ignore reader with an older vocabulary that does
-        // not understand per-artifact statements. Schema support is independent.
+        // not understand per-artifact claim sets. Schema support is independent.
         let older_paths = [
             "schemaVersion",
             "id",
@@ -412,7 +408,7 @@ mod tests {
         let error =
             crate::extension_format::validate_members(&record, &older_paths, true).unwrap_err();
         assert!(
-            error.contains("artifacts.statement.capabilities.backend.generate"),
+            error.contains("artifacts.claims.capabilities.backend.generate"),
             "{error}"
         );
         record.as_object_mut().unwrap().remove("critical");

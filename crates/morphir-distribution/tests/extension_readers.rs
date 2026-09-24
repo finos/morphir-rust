@@ -17,8 +17,8 @@ fn an_old_installed_record() -> Value {
         "index":{"kind":"local-directory","identity":"/tmp/index","revision":"b".repeat(64)}})
 }
 
-fn a_statement() -> Value {
-    json!({"statementVersion":"0.1.0-draft.1","protocolVersions":["0.1"],
+fn a_claims() -> Value {
+    json!({"claimsVersion":"0.1.0-draft.2","protocolVersions":["0.1"],
         "extension":{"id":"sample","name":"Sample","version":"1.0.0","types":["backend"]},
         "capabilities":{"backend":{"targets":["text"],"irVersions":["3"],"generate":true,"future":42}}})
 }
@@ -69,6 +69,7 @@ fn index_accepts_supported_schema_versions_and_missing_version() {
         Some("1.0.0"),
         Some("1.9.27"),
         Some("2.0.0-draft.1"),
+        Some("2.0.0-draft.2"),
     ] {
         let mut value = an_old_release();
         value.as_object_mut().unwrap().remove("schemaVersion");
@@ -89,7 +90,7 @@ fn index_refuses_other_schema_versions() {
         "2.0.0",
         "3.0.0",
         "1.0.0-rc.1",
-        "2.0.0-draft.2",
+        "2.0.0-draft.3",
         "2.1.0-draft.1",
         "banana",
     ] {
@@ -103,28 +104,28 @@ fn index_refuses_other_schema_versions() {
 }
 
 #[test]
-fn index_retains_each_artifacts_statement() {
+fn index_retains_each_artifacts_claims() {
     let mut value = an_old_release();
-    value["artifacts"][0]["statement"] = a_statement();
-    value["artifacts"][0]["statementSource"] = json!("probed");
+    value["artifacts"][0]["claims"] = a_claims();
+    value["artifacts"][0]["claimCheck"] = json!("probed");
     let record: ReleaseRecord = serde_json::from_value(value.clone()).unwrap();
     let written = serde_json::to_value(record).unwrap();
     assert_eq!(
-        written["artifacts"][0]["statement"],
-        value["artifacts"][0]["statement"]
+        written["artifacts"][0]["claims"],
+        value["artifacts"][0]["claims"]
     );
-    assert_eq!(written["artifacts"][0]["statementSource"], "probed");
+    assert_eq!(written["artifacts"][0]["claimCheck"], "probed");
 }
 
 #[test]
-fn installed_retains_statement_and_provenance() {
+fn installed_retains_claims_and_provenance() {
     let mut value = an_old_installed_record();
-    value["statement"] = a_statement();
-    value["statementSource"] = json!("declared");
+    value["claims"] = a_claims();
+    value["claimCheck"] = json!("unchecked");
     let record: InstalledExtension = serde_json::from_value(value.clone()).unwrap();
     let written = serde_json::to_value(record).unwrap();
-    assert_eq!(written["statement"], value["statement"]);
-    assert_eq!(written["statementSource"], "declared");
+    assert_eq!(written["claims"], value["claims"]);
+    assert_eq!(written["claimCheck"], "unchecked");
 }
 
 #[test]
@@ -149,33 +150,24 @@ fn index_checks_host_comparators_and_requires_critical() {
 
 #[test]
 fn old_flat_records_convert_to_declared_without_changing_writers() {
-    use morphir_distribution::StatementProvenance;
+    use morphir_distribution::ClaimCheck;
     let release: ReleaseRecord = serde_json::from_value(an_old_release()).unwrap();
-    let statement = release.artifacts()[0].statement().unwrap();
-    assert_eq!(statement.extension.id, "sample");
-    assert_eq!(
-        statement.capabilities["backend"]["targets"],
-        json!(["text"])
-    );
-    assert_eq!(
-        release.artifacts()[0].statement_provenance(),
-        StatementProvenance::Declared
-    );
+    let claims = release.artifacts()[0].claims().unwrap();
+    assert_eq!(claims.extension.id, "sample");
+    assert_eq!(claims.capabilities["backend"]["targets"], json!(["text"]));
+    assert_eq!(release.artifacts()[0].claim_check(), ClaimCheck::Unchecked);
     assert!(
         serde_json::to_value(release).unwrap()["artifacts"][0]
-            .get("statement")
+            .get("claims")
             .is_none()
     );
     let installed: InstalledExtension = serde_json::from_value(an_old_installed_record()).unwrap();
-    assert_eq!(installed.statement().extension.id, "sample");
-    assert_eq!(
-        installed.statement_provenance(),
-        StatementProvenance::Declared
-    );
+    assert_eq!(installed.claims().extension.id, "sample");
+    assert_eq!(installed.claim_check(), ClaimCheck::Unchecked);
     assert!(
         serde_json::to_value(installed)
             .unwrap()
-            .get("statement")
+            .get("claims")
             .is_none()
     );
 }
@@ -212,7 +204,7 @@ fn catalog_ignores_optional_members_and_checks_critical_by_name() {
 
 #[test]
 fn catalog_accepts_supported_versions_and_refuses_others() {
-    for version in ["1.0", "1.0.0", "1.42.3", "2.0.0-draft.1"] {
+    for version in ["1.0", "1.0.0", "1.42.3", "2.0.0-draft.1", "2.0.0-draft.2"] {
         assert!(
             read_catalog(json!({"schemaVersion":version,"extensions":[]})).is_ok(),
             "{version}"
@@ -223,7 +215,7 @@ fn catalog_accepts_supported_versions_and_refuses_others() {
         "2.0.0",
         "3.0.0",
         "1.0.0-rc.1",
-        "2.0.0-draft.2",
+        "2.0.0-draft.3",
         "2.1.0-draft.1",
         "banana",
     ] {
@@ -235,39 +227,39 @@ fn catalog_accepts_supported_versions_and_refuses_others() {
 }
 
 #[test]
-fn statement_only_records_need_no_flat_capability_metadata() {
+fn claims_only_records_need_no_flat_capability_metadata() {
     let mut release = an_old_release();
     for key in ["mepVersions", "capabilities", "backend"] {
         release.as_object_mut().unwrap().remove(key);
     }
-    release["schemaVersion"] = json!("2.0.0-draft.1");
-    release["artifacts"][0]["statement"] = a_statement();
+    release["schemaVersion"] = json!("2.0.0-draft.2");
+    release["artifacts"][0]["claims"] = a_claims();
     let parsed = serde_json::from_value::<ReleaseRecord>(release).unwrap();
     assert_eq!(
-        parsed.artifacts()[0].statement().unwrap().capabilities["backend"]["future"],
+        parsed.artifacts()[0].claims().unwrap().capabilities["backend"]["future"],
         42
     );
     let mut installed = an_old_installed_record();
     for key in ["mepVersions", "capabilities", "backend"] {
         installed.as_object_mut().unwrap().remove(key);
     }
-    installed["statement"] = a_statement();
+    installed["claims"] = a_claims();
     let parsed = serde_json::from_value::<InstalledExtension>(installed).unwrap();
-    assert_eq!(parsed.statement().capabilities["backend"]["future"], 42);
+    assert_eq!(parsed.claims().capabilities["backend"]["future"], 42);
 }
 
 #[test]
-fn supplied_statements_parse_without_comparing_host_requirements() {
+fn supplied_claim_sets_parse_without_comparing_host_requirements() {
     let mut value = an_old_release();
-    let mut statement = a_statement();
-    statement["requires"] = json!({"host":[">=999.0.0"]});
-    statement["critical"] = json!(["requires.host"]);
-    value["artifacts"][0]["statement"] = statement;
+    let mut claims = a_claims();
+    claims["requires"] = json!({"host":[">=999.0.0"]});
+    claims["critical"] = json!(["requires.host"]);
+    value["artifacts"][0]["claims"] = claims;
     assert!(serde_json::from_value::<ReleaseRecord>(value).is_ok());
 }
 
 #[test]
-fn installing_a_statement_only_index_record_keeps_the_selected_statement() {
+fn installing_a_claims_only_index_record_keeps_the_selected_claims() {
     use morphir_distribution::{
         ExtensionId, ExtensionInstaller, LocalIndex, Platform, Selection, Sha256Digest,
     };
@@ -280,8 +272,8 @@ fn installing_a_statement_only_index_record_keeps_the_selected_statement() {
     for key in ["mepVersions", "capabilities", "backend"] {
         value.as_object_mut().unwrap().remove(key);
     }
-    value["schemaVersion"] = json!("2.0.0-draft.1");
-    value["artifacts"][0]["statement"] = a_statement();
+    value["schemaVersion"] = json!("2.0.0-draft.2");
+    value["artifacts"][0]["claims"] = a_claims();
     value["artifacts"][0]["sha256"] = json!(Sha256Digest::of_bytes(b"wasm"));
     std::fs::write(index.join("extensions/sample.jsonl"), value.to_string()).unwrap();
     let selected = LocalIndex::open(&index)
@@ -301,10 +293,18 @@ fn installing_a_statement_only_index_record_keeps_the_selected_statement() {
     let installed = ExtensionInstaller::new(&home)
         .install(selected, &"0.4.0".parse().unwrap())
         .unwrap();
-    assert_eq!(installed.statement().capabilities["backend"]["future"], 42);
+    let catalog: Value =
+        serde_json::from_slice(&std::fs::read(home.extensions_catalog_file()).unwrap()).unwrap();
+    assert_eq!(catalog["schemaVersion"], "2.0.0-draft.2");
+    assert!(catalog["extensions"][0].get("statement").is_none());
     assert_eq!(
-        serde_json::to_value(installed).unwrap()["statement"],
-        a_statement()
+        catalog["extensions"][0]["claims"]["claimsVersion"],
+        "0.1.0-draft.2"
+    );
+    assert_eq!(installed.claims().capabilities["backend"]["future"], 42);
+    assert_eq!(
+        serde_json::to_value(installed).unwrap()["claims"],
+        a_claims()
     );
 }
 
@@ -331,22 +331,25 @@ fn critical_paths_cannot_claim_unimplemented_flat_members() {
 }
 
 #[test]
-fn critical_statement_paths_must_belong_to_the_current_format() {
+fn critical_claims_paths_must_belong_to_the_current_format() {
     let mut value = an_old_release();
-    value["statement"] = a_statement();
-    value["critical"] = json!(["statement.requires.host"]);
+    value["claims"] = a_claims();
+    value["critical"] = json!(["claims.requires.host"]);
     assert!(
         serde_json::from_value::<ReleaseRecord>(value)
             .unwrap_err()
             .to_string()
-            .contains("statement.requires.host")
+            .contains("claims.requires.host")
     );
     let mut value = an_old_release();
-    value["artifacts"][0]["critical"] = json!(["extensions.statement.requires.host"]);
+    value["artifacts"][0]["critical"] = json!(["extensions.claims.requires.host"]);
     assert!(
         serde_json::from_value::<ReleaseRecord>(value)
             .unwrap_err()
             .to_string()
-            .contains("extensions.statement.requires.host")
+            .contains("extensions.claims.requires.host")
     );
 }
+
+#[path = "extension_readers/compatibility.rs"]
+mod compatibility;

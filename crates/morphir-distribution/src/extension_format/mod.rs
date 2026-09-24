@@ -1,12 +1,14 @@
 //! Compatibility rules shared only by extension distribution documents.
 
-mod statement;
+mod claims;
+mod compatibility;
+pub(crate) use compatibility::{normalize_envelope, normalize_record};
 mod version;
 
-pub use statement::{ProbeSource, StatementProvenance, StatementRecord};
+pub use claims::{ClaimCheck, ClaimsRecord, ProbeSource};
 pub use version::ExtensionSchemaVersion;
 
-use morphir_extension_sdk::statement::{CapabilityStatement, StatementRequirements};
+use morphir_extension_sdk::claims::{CapabilityClaimSet, ClaimsRequirements};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -20,18 +22,18 @@ pub(crate) fn validate_members(
         |value| serde_json::from_value(value.clone()).map_err(|error| error.to_string()),
     )?;
     for path in &critical {
-        let statement_path = path
-            .split_once("statement.")
-            .filter(|(prefix, _)| known_paths.contains(&format!("{prefix}statement").as_str()));
+        let claims_path = path
+            .split_once("claims.")
+            .filter(|(prefix, _)| known_paths.contains(&format!("{prefix}claims").as_str()));
         if !known_paths.contains(&path.as_str())
-            && !statement_path
-                .is_some_and(|(_, path)| morphir_extension_sdk::statement::understands_member(path))
+            && !claims_path
+                .is_some_and(|(_, path)| morphir_extension_sdk::claims::understands_member(path))
         {
             return Err(format!("unknown critical member '{path}'"));
         }
     }
     if validate_requires && let Some(requires) = value.get("requires") {
-        let _: StatementRequirements =
+        let _: ClaimsRequirements =
             serde_json::from_value(requires.clone()).map_err(|error| error.to_string())?;
         if requires.get("host").is_some() && !critical.iter().any(|path| path == "requires.host") {
             return Err("requires.host must be listed in critical".into());
@@ -75,10 +77,10 @@ pub(crate) fn check_requirements(
     requires: Option<&Value>,
     host: &semver::Version,
 ) -> crate::Result<()> {
-    let mut statement =
-        CapabilityStatement::from_session(vec![], Default::default(), Default::default());
-    statement.requires = requires.map(|value| {
+    let mut claims =
+        CapabilityClaimSet::from_session(vec![], Default::default(), Default::default());
+    claims.requires = requires.map(|value| {
         serde_json::from_value(value.clone()).expect("reader validated host requirements")
     });
-    statement.check_host(host).map_err(Into::into)
+    claims.check_host(host).map_err(Into::into)
 }

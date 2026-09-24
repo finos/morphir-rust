@@ -12,10 +12,9 @@ use super::{
 };
 use crate::error::{Result, invalid_value};
 use crate::extension_format::{
-    CAPABILITY_PATHS, ExtensionSchemaVersion, StatementProvenance, StatementRecord,
-    validate_members,
+    CAPABILITY_PATHS, ClaimCheck, ClaimsRecord, ExtensionSchemaVersion, validate_members,
 };
-use morphir_extension_sdk::statement::CapabilityStatement;
+use morphir_extension_sdk::claims::CapabilityClaimSet;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
@@ -202,7 +201,7 @@ pub struct ArtifactRecord {
     args: Vec<String>,
     executable: bool,
     #[serde(flatten)]
-    statement: StatementRecord,
+    claims: ClaimsRecord,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     critical: Vec<String>,
 }
@@ -221,41 +220,41 @@ struct ArtifactRecordWire {
     #[serde(default)]
     executable: bool,
     #[serde(flatten)]
-    statement: StatementRecord,
+    claims: ClaimsRecord,
     #[serde(default)]
     critical: Vec<String>,
 }
 
 impl ArtifactRecord {
-    /// Check the artifact statement against the caller's host version.
+    /// Check the artifact claims against the caller's host version.
     pub fn check_host(&self, host: &Version) -> Result<()> {
-        if let Some(statement) = self.statement() {
-            statement.check_host(host)?;
+        if let Some(claims) = self.claims() {
+            claims.check_host(host)?;
         }
         Ok(())
     }
 
-    /// Return the supplied statement or the declaration converted from release metadata.
-    pub fn statement(&self) -> Option<&CapabilityStatement> {
-        self.statement.statement()
+    /// Return the supplied claims or the declaration converted from release metadata.
+    pub fn claims(&self) -> Option<&CapabilityClaimSet> {
+        self.claims.claims()
     }
 
-    /// Return how the statement was obtained.
-    pub fn statement_provenance(&self) -> StatementProvenance {
-        self.statement.provenance()
+    /// Return whether the claims have been checked.
+    pub fn claim_check(&self) -> ClaimCheck {
+        self.claims.claim_check()
     }
 
-    pub(crate) fn statement_record(&self) -> &StatementRecord {
-        &self.statement
+    pub(crate) fn claims_record(&self) -> &ClaimsRecord {
+        &self.claims
     }
 
     /// Preserve the selected declaration, without claiming a local probe.
-    pub fn declared_statement_record(&self) -> StatementRecord {
-        self.statement.as_declared()
+    pub fn declared_claims_record(&self) -> ClaimsRecord {
+        self.claims.as_declared()
     }
 
-    pub(crate) fn record_statement(&mut self, statement: StatementRecord) {
-        self.statement = statement;
+    pub(crate) fn record_claims(&mut self, claims: ClaimsRecord) {
+        self.claims = claims;
     }
 
     /// Return the artifact runtime.
@@ -299,7 +298,8 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
     where
         D: Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        crate::extension_format::normalize_record(&mut value).map_err(serde::de::Error::custom)?;
         validate_members(&value, ARTIFACT_PATHS, false).map_err(serde::de::Error::custom)?;
         let wire: ArtifactRecordWire =
             serde_json::from_value(value).map_err(serde::de::Error::custom)?;
@@ -336,7 +336,7 @@ impl<'de> Deserialize<'de> for ArtifactRecord {
             filename: wire.filename,
             args: wire.args,
             executable: wire.executable,
-            statement: wire.statement,
+            claims: wire.claims,
             critical: wire.critical,
         })
     }
@@ -388,7 +388,7 @@ const ARTIFACT_PATHS: &[&str] = &[
     "filename",
     "args",
     "executable",
-    "statement",
-    "statementSource",
+    "claims",
+    "claimCheck",
     "critical",
 ];

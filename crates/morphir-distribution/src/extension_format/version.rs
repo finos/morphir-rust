@@ -1,12 +1,12 @@
 //! Extension schema versions, retaining the released wire spelling.
 
 use crate::SchemaVersion;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// An extension schema version with legacy `1.0` compatibility.
-/// Stable major 1 and exactly `2.0.0-draft.1` are supported. No major 0
+/// Stable major 1 and exactly `2.0.0-draft.1` / `2.0.0-draft.2` are supported. No major 0
 /// schema was released; when major 2 releases, major 1 remains readable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
@@ -51,13 +51,18 @@ impl<'de> Deserialize<'de> for ExtensionSchemaVersion {
             };
         }
         let version = Version::parse(&text).map_err(serde::de::Error::custom)?;
-        let draft = Version::parse("2.0.0-draft.1").expect("supported draft is SemVer");
-        if (version.pre.is_empty() && version.major == 1) || version.cmp_precedence(&draft).is_eq()
+        let drafts = ["=2.0.0-draft.1", "=2.0.0-draft.2"];
+        if (version.pre.is_empty() && version.major == 1)
+            || drafts.iter().any(|draft| {
+                VersionReq::parse(draft)
+                    .expect("exact schema draft requirement")
+                    .matches(&version)
+            })
         {
             Ok(Self::Semver(version))
         } else {
             Err(serde::de::Error::custom(format!(
-                "unsupported extension schema version {text}; supported released major: 1; exact drafts: 2.0.0-draft.1"
+                "unsupported extension schema version {text}; supported released major: 1; exact drafts: 2.0.0-draft.1, 2.0.0-draft.2"
             )))
         }
     }

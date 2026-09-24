@@ -3,26 +3,26 @@ use morphir_extension_sdk::protocol::MEP_VERSION;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
 
-fn statement() -> Value {
-    json!({"statementVersion": "0.1.0-draft.1", "protocolVersions": [MEP_VERSION],
+fn claims() -> Value {
+    json!({"claimsVersion": "0.1.0-draft.2", "protocolVersions": [MEP_VERSION],
         "extension": {"id": "example", "name": "Example", "version": "1.0.0", "types": ["backend"]},
         "capabilities": {"backend": {"targets": ["sql"], "irVersions": ["3"], "generate": true}}})
 }
 
-fn bundle(root: &Path, statements: &[Value]) -> std::path::PathBuf {
+fn bundle(root: &Path, claim_sets: &[Value]) -> std::path::PathBuf {
     let bundle = root.join("bundle");
     fs::create_dir(&bundle).unwrap();
-    let artifacts: Vec<_> = statements.iter().enumerate().map(|(index, statement)| {
+    let artifacts: Vec<_> = claim_sets.iter().enumerate().map(|(index, claims)| {
         let filename = format!("guest-{index}");
         let digest = Sha256Digest::of_bytes(b"guest");
         fs::write(bundle.join(&filename), b"guest").unwrap();
         fs::write(bundle.join(format!("{filename}.sha256")), format!("{digest}  {filename}\n")).unwrap();
         // These targets are foreign on the supported Unix test hosts.
         json!({"runtime": "process", "platform": if index == 0 { "x86_64-pc-windows-msvc" } else { "aarch64-pc-windows-msvc" },
-            "filename": filename, "sha256": digest, "statement": statement, "statementSource": "probed"})
+            "filename": filename, "sha256": digest, "claims": claims, "claimCheck": "probed"})
     }).collect();
     fs::write(bundle.join("release.json"), serde_json::to_vec(&json!({
-        "schemaVersion": "2.0.0-draft.1", "extensionId": "example", "shortId": "example", "version": "1.0.0",
+        "schemaVersion": "2.0.0-draft.2", "extensionId": "example", "shortId": "example", "version": "1.0.0",
         "platformDifferences": "none", "artifacts": artifacts
     })).unwrap()).unwrap();
     bundle
@@ -37,18 +37,18 @@ fn edit(bundle: &Path, f: impl FnOnce(&mut Value)) {
 
 #[test]
 #[cfg(unix)]
-fn foreign_process_artifacts_keep_statements_and_are_declared() {
+fn foreign_process_artifacts_keep_claim_sets_and_are_declared() {
     let temp = tempfile::tempdir().unwrap();
-    let mut declared = statement();
+    let mut declared = claims();
     declared["future"] = json!({"retained": true});
     let bundle = bundle(temp.path(), &[declared.clone(), declared.clone()]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     let published = repository.publish(&bundle).unwrap();
     let wire = serde_json::to_value(published.release()).unwrap();
-    assert_eq!(wire["schemaVersion"], "2.0.0-draft.1");
+    assert_eq!(wire["schemaVersion"], "2.0.0-draft.2");
     for artifact in wire["artifacts"].as_array().unwrap() {
-        assert_eq!(artifact["statement"], declared);
-        assert_eq!(artifact["statementSource"], "declared");
+        assert_eq!(artifact["claims"], declared);
+        assert_eq!(artifact["claimCheck"], "unchecked");
     }
     assert!(repository.root().join("artifacts/guest-1").exists());
     assert_eq!(
@@ -61,9 +61,9 @@ fn foreign_process_artifacts_keep_statements_and_are_declared() {
 #[cfg(unix)]
 fn platform_differences_require_explicit_declaration() {
     let temp = tempfile::tempdir().unwrap();
-    let mut other = statement();
+    let mut other = claims();
     other["capabilities"]["backend"]["generate"] = json!(false);
-    let bundle = bundle(temp.path(), &[statement(), other]);
+    let bundle = bundle(temp.path(), &[claims(), other]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     let error = repository.publish(&bundle).unwrap_err().to_string();
     assert!(
@@ -87,13 +87,13 @@ fn platform_differences_require_explicit_declaration() {
 }
 
 #[test]
-fn invalid_statements_are_refused_even_on_foreign_platforms() {
+fn invalid_claim_sets_are_refused_even_on_foreign_platforms() {
     for (member, invalid) in [
-        ("statementVersion", json!("9.0.0")),
+        ("claimsVersion", json!("9.0.0")),
         ("critical", json!(["future.required"])),
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let mut declared = statement();
+        let mut declared = claims();
         declared[member] = invalid;
         let bundle = bundle(temp.path(), &[declared]);
         let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
@@ -106,7 +106,7 @@ fn invalid_statements_are_refused_even_on_foreign_platforms() {
         );
     }
     let temp = tempfile::tempdir().unwrap();
-    let mut declared = statement();
+    let mut declared = claims();
     declared["extension"]["types"] = json!(["future"]);
     let bundle = bundle(temp.path(), &[declared]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
@@ -123,7 +123,7 @@ fn invalid_statements_are_refused_even_on_foreign_platforms() {
 #[cfg(unix)]
 fn foreign_process_checksum_and_duplicate_artifacts_are_refused() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement()]);
+    let bundle = bundle(temp.path(), &[claims()]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     fs::write(bundle.join("guest-0.sha256"), b"wrong checksum").unwrap();
     assert!(
@@ -154,11 +154,11 @@ fn foreign_process_checksum_and_duplicate_artifacts_are_refused() {
 
 #[test]
 #[cfg(unix)]
-fn optional_statement_differences_must_be_declared() {
+fn optional_claims_differences_must_be_declared() {
     let temp = tempfile::tempdir().unwrap();
-    let mut other = statement();
+    let mut other = claims();
     other["future"] = json!({"enabled": true});
-    let bundle = bundle(temp.path(), &[statement(), other]);
+    let bundle = bundle(temp.path(), &[claims(), other]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     let error = repository.publish(&bundle).unwrap_err().to_string();
     assert!(
@@ -172,7 +172,7 @@ fn optional_statement_differences_must_be_declared() {
 fn every_digest_is_checked_before_a_host_probe_and_verified_bytes_are_published() {
     use morphir_distribution::{DistributionError, PublicationDescription};
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement(), statement()]);
+    let bundle = bundle(temp.path(), &[claims(), claims()]);
     let suffix = match std::env::consts::OS {
         "macos" => "apple-darwin",
         "linux" => "unknown-linux-gnu",
@@ -211,9 +211,7 @@ fn every_digest_is_checked_before_a_host_probe_and_verified_bytes_are_published(
                 b"changed after verification",
             )
             .unwrap();
-            Ok(PublicationDescription::Describe(
-                artifact.statement().clone(),
-            ))
+            Ok(PublicationDescription::Describe(artifact.claims().clone()))
         })
         .unwrap();
     assert_eq!(fs::read(publication.artifact_path()).unwrap(), b"guest");
@@ -224,7 +222,7 @@ fn every_digest_is_checked_before_a_host_probe_and_verified_bytes_are_published(
 fn republish_from_another_host_ignores_provenance() {
     use morphir_distribution::{PublicationDescription, PublicationStatus};
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement(), statement()]);
+    let bundle = bundle(temp.path(), &[claims(), claims()]);
     let suffix = if std::env::consts::OS == "macos" {
         "apple-darwin"
     } else {
@@ -235,9 +233,7 @@ fn republish_from_another_host_ignores_provenance() {
     });
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     let describe = |artifact: &morphir_distribution::BundleArtifactDescriptor, _: &[u8]| {
-        Ok(PublicationDescription::Describe(
-            artifact.statement().clone(),
-        ))
+        Ok(PublicationDescription::Describe(artifact.claims().clone()))
     };
     repository
         .publish_with_process_probe(&bundle, describe)
@@ -245,9 +241,9 @@ fn republish_from_another_host_ignores_provenance() {
     let history = repository.root().join("extensions/example.jsonl");
     let mut host_a: Value = serde_json::from_slice(&fs::read(&history).unwrap()).unwrap();
     // The same release as recorded by the other host, which probed guest-0.
-    host_a["artifacts"][0]["statementSource"] = json!("probed");
+    host_a["artifacts"][0]["claimCheck"] = json!("probed");
     host_a["artifacts"][0]["probeSource"] = json!("session-fallback");
-    host_a["artifacts"][1]["statementSource"] = json!("declared");
+    host_a["artifacts"][1]["claimCheck"] = json!("unchecked");
     host_a["artifacts"][1]
         .as_object_mut()
         .unwrap()
@@ -258,9 +254,9 @@ fn republish_from_another_host_ignores_provenance() {
         .unwrap();
     assert_eq!(publication.status(), PublicationStatus::AlreadyPresent);
     let stored: Value = serde_json::from_slice(&fs::read(&history).unwrap()).unwrap();
-    assert_eq!(stored["artifacts"][0]["statementSource"], "probed");
+    assert_eq!(stored["artifacts"][0]["claimCheck"], "probed");
     assert_eq!(stored["artifacts"][0]["probeSource"], "session-fallback");
-    assert_eq!(stored["artifacts"][1]["statementSource"], "probed");
+    assert_eq!(stored["artifacts"][1]["claimCheck"], "probed");
     assert_eq!(stored["artifacts"][1]["probeSource"], "describe");
     assert_eq!(serde_json::to_value(publication.release()).unwrap(), stored);
     let upgraded = fs::read(&history).unwrap();
@@ -271,7 +267,7 @@ fn republish_from_another_host_ignores_provenance() {
     assert_eq!(fs::read(&history).unwrap(), upgraded);
     edit(&bundle, |value| {
         for artifact in value["artifacts"].as_array_mut().unwrap() {
-            artifact["statement"]["future"] = json!(true);
+            artifact["claims"]["future"] = json!(true);
         }
     });
     assert!(
@@ -292,7 +288,7 @@ fn architecture_aliases_use_rust_names() {
         ("amd64", "x86_64"),
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let bundle = bundle(temp.path(), &[statement()]);
+        let bundle = bundle(temp.path(), &[claims()]);
         edit(&bundle, |value| {
             value["artifacts"][0]["platform"] = json!(format!("{input}-pc-windows-msvc"))
         });
@@ -308,7 +304,7 @@ fn architecture_aliases_use_rust_names() {
 #[test]
 fn unknown_architecture_is_refused() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement()]);
+    let bundle = bundle(temp.path(), &[claims()]);
     edit(&bundle, |value| {
         value["artifacts"][0]["platform"] = json!("mystery-pc-windows-msvc")
     });
@@ -324,7 +320,7 @@ fn unknown_architecture_is_refused() {
 fn archives_are_refused_before_any_probe() {
     for suffix in ["tgz", "tar.gz", "zip", "tar"] {
         let temp = tempfile::tempdir().unwrap();
-        let bundle = bundle(temp.path(), &[statement(), statement()]);
+        let bundle = bundle(temp.path(), &[claims(), claims()]);
         let filename = format!("guest-1.{suffix}");
         fs::rename(bundle.join("guest-1"), bundle.join(&filename)).unwrap();
         fs::remove_file(bundle.join("guest-1.sha256")).unwrap();
@@ -362,7 +358,7 @@ fn archives_are_refused_before_any_probe() {
 #[cfg(unix)]
 fn destination_conflict_leaves_no_partial_artifacts() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement(), statement()]);
+    let bundle = bundle(temp.path(), &[claims(), claims()]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     fs::write(
         repository.root().join("artifacts/guest-1"),
@@ -379,9 +375,9 @@ fn destination_conflict_leaves_no_partial_artifacts() {
 }
 
 #[test]
-fn version_two_wasm_keeps_declared_statement_without_probe() {
+fn version_two_wasm_keeps_declared_claims_without_probe() {
     let temp = tempfile::tempdir().unwrap();
-    let mut declared = statement();
+    let mut declared = claims();
     declared["future"] = json!({"retained": true});
     let bundle = bundle(temp.path(), &[declared.clone()]);
     edit(&bundle, |value| {
@@ -396,15 +392,15 @@ fn version_two_wasm_keeps_declared_statement_without_probe() {
         .publish_with_process_probe(&bundle, |_, _| panic!("WASM must not probe"))
         .unwrap();
     let wire = serde_json::to_value(published.release()).unwrap();
-    assert_eq!(wire["artifacts"][0]["statement"], declared);
-    assert_eq!(wire["artifacts"][0]["statementSource"], "declared");
+    assert_eq!(wire["artifacts"][0]["claims"], declared);
+    assert_eq!(wire["artifacts"][0]["claimCheck"], "unchecked");
     assert!(wire["artifacts"][0].get("probeSource").is_none());
 }
 
 #[test]
 fn mixed_runtimes_are_refused_before_probing() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement(), statement()]);
+    let bundle = bundle(temp.path(), &[claims(), claims()]);
     edit(&bundle, |value| {
         value["artifacts"][0]["runtime"] = json!("wasm");
         value["artifacts"][0]
@@ -434,7 +430,7 @@ fn unrepresentable_target_triples_are_refused() {
         "x86_64-unknown-linux-gnux32",
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let bundle = bundle(temp.path(), &[statement()]);
+        let bundle = bundle(temp.path(), &[claims()]);
         edit(&bundle, |value| {
             value["artifacts"][0]["platform"] = json!(triple)
         });
@@ -453,7 +449,7 @@ fn unrepresentable_target_triples_are_refused() {
 #[test]
 fn linux_gnu_target_is_accepted() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement()]);
+    let bundle = bundle(temp.path(), &[claims()]);
     edit(&bundle, |value| {
         value["artifacts"][0]["platform"] = json!("x86_64-unknown-linux-gnu")
     });
@@ -461,7 +457,7 @@ fn linux_gnu_target_is_accepted() {
     let publication = repository
         .publish_with_process_probe(&bundle, |artifact, _| {
             Ok(morphir_distribution::PublicationDescription::Describe(
-                artifact.statement().clone(),
+                artifact.claims().clone(),
             ))
         })
         .unwrap();
@@ -475,12 +471,12 @@ fn linux_gnu_target_is_accepted() {
 #[cfg(unix)]
 fn already_present_returns_stored_provenance_without_rewriting_history() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement()]);
+    let bundle = bundle(temp.path(), &[claims()]);
     let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
     repository.publish(&bundle).unwrap();
     let history = repository.root().join("extensions/example.jsonl");
     let mut stored: Value = serde_json::from_slice(&fs::read(&history).unwrap()).unwrap();
-    stored["artifacts"][0]["statementSource"] = json!("probed");
+    stored["artifacts"][0]["claimCheck"] = json!("probed");
     stored["artifacts"][0]["probeSource"] = json!("describe");
     let bytes = serde_json::to_vec_pretty(&stored).unwrap();
     // Keep JSONL valid while changing whitespace so a rewrite is observable.
@@ -499,12 +495,12 @@ fn already_present_returns_stored_provenance_without_rewriting_history() {
 #[cfg(unix)]
 fn descriptor_critical_paths_survive_publication() {
     let temp = tempfile::tempdir().unwrap();
-    let bundle = bundle(temp.path(), &[statement()]);
+    let bundle = bundle(temp.path(), &[claims()]);
     edit(&bundle, |value| {
         value["requires"] = json!({"host": [">=0.1.0"]});
         value["critical"] = json!([
             "extensionId",
-            "artifacts.statement.capabilities.backend.generate",
+            "artifacts.claims.capabilities.backend.generate",
             "requires.host"
         ]);
     });
@@ -514,7 +510,7 @@ fn descriptor_critical_paths_survive_publication() {
         serde_json::to_value(publication.release()).unwrap()["critical"],
         json!([
             "id",
-            "artifacts.statement.capabilities.backend.generate",
+            "artifacts.claims.capabilities.backend.generate",
             "requires.host"
         ])
     );
@@ -529,7 +525,7 @@ fn descriptor_critical_paths_without_record_members_are_refused() {
         "artifacts.requires.host",
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let bundle = bundle(temp.path(), &[statement()]);
+        let bundle = bundle(temp.path(), &[claims()]);
         edit(&bundle, |value| value["critical"] = json!([path]));
         let repository = LocalExtensionRepository::init(temp.path().join("repository")).unwrap();
         let error = repository
@@ -553,7 +549,7 @@ fn canonical_little_endian_gnu_architectures_remain_supported() {
         ("loongarch64", "loongarch64"),
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let bundle = bundle(temp.path(), &[statement()]);
+        let bundle = bundle(temp.path(), &[claims()]);
         edit(&bundle, |value| {
             value["artifacts"][0]["platform"] = json!(format!("{arch}-unknown-linux-gnu"))
         });
@@ -561,7 +557,7 @@ fn canonical_little_endian_gnu_architectures_remain_supported() {
         let publication = repository
             .publish_with_process_probe(&bundle, |artifact, _| {
                 Ok(morphir_distribution::PublicationDescription::Describe(
-                    artifact.statement().clone(),
+                    artifact.claims().clone(),
                 ))
             })
             .unwrap();
@@ -571,3 +567,7 @@ fn canonical_little_endian_gnu_architectures_remain_supported() {
         );
     }
 }
+
+#[cfg(unix)]
+#[path = "process_publication/compatibility.rs"]
+mod compatibility;

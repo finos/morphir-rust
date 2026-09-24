@@ -3,7 +3,9 @@
 use crate::ChannelState;
 use crate::channel::{Channel, ChannelError, Outgoing};
 use async_trait::async_trait;
-use morphir_extension_sdk::protocol::{ExtensionResponse, InitializeResult};
+use morphir_extension_sdk::protocol::{
+    ExtensionResponse, InitializeResult, SUPPORTED_MEP_VERSIONS,
+};
 use morphir_extension_sdk::{
     ExtensionCapabilities, ExtensionInfo, ExtensionType, FrontendCapability,
 };
@@ -98,7 +100,7 @@ impl Channel for MemoryChannel {
 /// An `initialize` answer from a frontend guest that enables compile.
 pub fn frontend_initialize_result(id: &str) -> InitializeResult {
     InitializeResult {
-        protocol_version: "0.1".into(),
+        protocol_version: SUPPORTED_MEP_VERSIONS[0].to_string(),
         extension: ExtensionInfo {
             id: id.into(),
             name: id.into(),

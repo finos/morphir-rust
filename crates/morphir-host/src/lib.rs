@@ -15,6 +15,8 @@ mod negotiated;
 mod send;
 mod session;
 mod session_core;
+/// Test doubles for clients of this crate. Enabled by the `testing` feature.
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use channel::{Channel, ChannelError, Outgoing};

@@ -27,6 +27,13 @@ pub struct ChannelError {
 ///
 /// A channel knows no MEP method names. Process stdio, HTTP, and a browser
 /// worker are channels.
+///
+/// The host never calls `close` after `send` or `receive` returns an error.
+/// So a channel that returns an error from `send` or `receive` must first
+/// release or abort its guest on its own. The `ChannelState` in the error
+/// says what that proves: `Stopped` means the guest cannot accept more
+/// requests, and `Indeterminate` means the host cannot prove whether the
+/// guest accepted the last request.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait Channel: MaybeSend {

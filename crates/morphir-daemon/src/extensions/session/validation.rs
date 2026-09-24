@@ -1,4 +1,4 @@
-//! Validation of untrusted response envelopes and initialization data.
+//! Validation of initialization data and method results.
 
 use super::controller::NegotiatedSession;
 use super::transport::{CapabilityExpectation, ExpectedExtension};

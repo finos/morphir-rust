@@ -17,4 +17,8 @@ serde_json = "1.0"
 thiserror = { workspace = true }
 
 [dev-dependencies]
+morphir-host = { path = ".", features = ["testing"] }
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[features]
+testing = []

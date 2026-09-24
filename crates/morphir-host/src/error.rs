@@ -13,8 +13,11 @@ pub enum ChannelState {
 
 /// A failure in the MEP session, the negotiation, or the transport.
 ///
-/// The `Display` text of each variant matches the message the daemon reported
-/// before this crate existed. Callers and tests match on these messages.
+/// The variants that existed as daemon messages before this crate existed
+/// keep the daemon's `Display` text: `VersionNotOffered`, the envelope texts
+/// carried by `Invalid`, `Rpc`, and the guard texts carried by `Rejected`.
+/// Callers and tests match on these messages. `State` is new to this crate
+/// and has no daemon precedent.
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
     /// The guest chose a protocol version that the host did not offer.

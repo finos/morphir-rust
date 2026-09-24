@@ -28,6 +28,49 @@ pub struct ActivatedGuest {
 /// metadata records a frontend or backend capability, those members are
 /// locked. When it records neither, the guest is checked as a schema v1
 /// extension, which may generate without a typed backend capability.
+///
+/// # Example
+///
+/// Start an installed guest, run the MEP handshake over its checked
+/// connection, generate with it, and close the session in order.
+///
+/// ```no_run
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// use morphir_distribution::VerifiedExtensionArtifact;
+/// use morphir_extension_sdk::GenerateRequest;
+/// use morphir_extension_sdk::protocol::{PeerInfo, PeerKind};
+/// use morphir_host::{HostConfig, Session};
+/// use morphir_host_native::activate;
+/// use std::path::Path;
+///
+/// # let artifact: VerifiedExtensionArtifact = todo!();
+/// let working_directory = Path::new("/var/morphir/generated");
+///
+/// // Start the guest from its verified artifact.
+/// let guest = activate(artifact, working_directory).await?;
+///
+/// // Run the MEP handshake over the guest's checked connection.
+/// let config = HostConfig::new(PeerInfo {
+///     kind: PeerKind::Unspecified,
+///     name: "example-host".into(),
+///     version: "1.0.0".into(),
+/// });
+/// let mut session = Session::open(guest.connection, &config).await?;
+///
+/// // Make one call with the open session.
+/// let request = GenerateRequest {
+///     ir: serde_json::json!({}),
+///     target: "example-target".into(),
+///     options: Default::default(),
+/// };
+/// let result = session.generate(request).await?;
+/// println!("generated {} artifact(s)", result.artifacts.len());
+///
+/// // Close the session in order, even on the happy path.
+/// session.close().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn activate(
     artifact: VerifiedExtensionArtifact,
     working_directory: &Path,

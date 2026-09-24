@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it as critical (kb `morphir-extensions` decision 0004, finos/morphir#921). The
   `TRANSITIONAL_FIELDS` skip is removed: every publish failure fails the job, and
   the Gleam bundle, which carries `workspaceDiscovery`, is checked again.
+- `morphir-python-binding` is released as `0.3.0` (`extension/python/v0.3.0`) and
+  `morphir-rust-binding` as `0.2.0` (`extension/rust/v0.2.0`). Both are rebuilt on
+  the current extension SDK, so a compile request may carry its documents as
+  `sources` (with the source root) as well as the legacy top-level `documents`.
+  The earlier bundles read only `documents`. These releases let the Morphir CLI
+  stop sending the legacy compile envelope (finos/morphir#921). The python
+  bundle is tested through Morphir CLI `0.4.0-beta.1`, `0.4.0-beta.4` and
+  `0.4.0-beta.5`.
 
 ### Fixed
 - Extension publication refuses mixed runtimes and target ABIs the index cannot

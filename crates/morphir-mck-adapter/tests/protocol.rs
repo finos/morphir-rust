@@ -310,7 +310,7 @@ fn a_write_tree_request_whose_input_is_not_a_document_answers_ok_false() {
 // readTree / writeTree — version 3: the classic Specs distribution as a JSON document tree
 // =============================================================================
 
-/// Task 7's `a_v3_specs_distribution_round_trips_through_a_tree` fixture: a `Specs` distribution
+/// morphir-core's `a_v3_specs_distribution_round_trips_through_a_tree` fixture: a `Specs` distribution
 /// of one package, one module, one opaque type, laid out as a v3 document tree (every file
 /// `formatVersion: "3.1.0"`).
 const V3_SPECS: &str = r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[[[["basics"]],{"types":[[["int"],{"doc":"","value":["OpaqueTypeSpecification",[]]}]],"values":[],"doc":"Basics."}]]}]}"#;
@@ -384,6 +384,20 @@ fn a_write_tree_request_for_a_v3_specs_document_answers_the_same_files() {
         response["files"],
         serde_json::Value::Array(v3_specs_tree_files())
     );
+    // A fixed anchor that does not come from the layout code: the three files the tree holds, and
+    // every one of them at "3.1.0".
+    let files = response["files"].as_array().expect("files is an array");
+    let paths: Vec<&str> = files
+        .iter()
+        .map(|file| file["path"].as_str().expect("a path"))
+        .collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert!(paths.contains(&"pkg/my/pkg/basics/int.type"), "{paths:?}");
+    for file in files {
+        let content: serde_json::Value =
+            serde_json::from_str(file["content"].as_str().expect("content")).expect("JSON");
+        assert_eq!(content["formatVersion"], "3.1.0", "{}", file["path"]);
+    }
 }
 
 /// A version other than 3 or 4 is still refused, the way [`an_undeclared_profile_or_version_is_refused_as_a_protocol_error`]

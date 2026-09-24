@@ -18,7 +18,6 @@ pub use controller::{
 };
 pub use extism::{ExtismSession, ExtismTransport};
 pub use native::{NativeMepSession, NativeMepTransport};
-pub(in crate::extensions) use transport::CapabilityExpectation;
 pub use transport::{
     ExpectedExtension, MepTransport, PersistedExtensionCapabilities, TransportError, TransportState,
 };

@@ -72,7 +72,7 @@ impl SpawnedProcessTransport {
             return self.describe_through_session(params).await;
         }
         let claims: CapabilityClaimSet = response.into_result(1)?;
-        if claims.extension.id != self.session.expected_extension_id {
+        if claims.extension.id != self.session.expected_extension().id() {
             return Err(DaemonError::Extension(
                 "Description extension identity differs from launch identity".into(),
             ));

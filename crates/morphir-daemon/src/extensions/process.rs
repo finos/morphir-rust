@@ -1,12 +1,11 @@
 //! Native child-process transport for the Morphir Extension Protocol.
 
 mod describe;
-mod launch;
 mod transport;
 
 pub use describe::{DescriptionSource, ProcessDescription};
-pub use launch::ProcessLaunch;
-use launch::ProcessProgram;
+pub use morphir_host_native::process::ProcessLaunch;
+use morphir_host_native::process::ProcessProgram;
 pub use transport::SpawnedProcessTransport;
 
 #[cfg(test)]
@@ -14,31 +13,24 @@ mod tests;
 
 use crate::extensions::protocol::{
     ExtensionNotification, ExtensionRequest, ExtensionResponse, ExtensionResponseExt,
-    InitializeParams, InitializeResult, MAX_MEP_PAYLOAD_BYTES, error_codes, methods,
+    InitializeParams, InitializeResult, error_codes, methods,
 };
 use crate::extensions::session::{
-    CapabilityExpectation, ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded,
-    MepTransport, NegotiatedSession, PersistedExtensionCapabilities, Session, Stopped,
-    TransportError, TransportState, validate_method_result_async, validate_negotiation,
+    ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport,
+    NegotiatedSession, Session, Stopped, TransportError, TransportState,
+    validate_method_result_async, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
+use morphir_host_native::process::{prepare_program, read_frame, write_frame};
 use serde::{Serialize, de::DeserializeOwned};
-use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
-use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{
-    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
-};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_STDERR_BYTES: usize = 256 * 1024;
 const EXECUTABLE_BUSY_RETRIES: usize = 4;
 const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
@@ -66,10 +58,7 @@ struct CompatibilityReady {
 /// }
 /// ```
 pub struct SpawnedProcessSession {
-    expected_extension_id: String,
-    discovered: Option<ExtensionInfo>,
-    capabilities: Option<CapabilityExpectation>,
-    allows_legacy_backend: bool,
+    expected_extension: ExpectedExtension,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -85,23 +74,27 @@ impl SpawnedProcessSession {
     /// Start a native extension and connect its standard streams.
     pub async fn spawn(launch: ProcessLaunch) -> Result<Self> {
         validate_launch(&launch)?;
+        let expected_extension = launch.expectation();
 
-        let (program, staged_program) = prepare_program(&launch.program).await?;
+        let (program, staged_program) = prepare_program(launch.program()).await?;
         let mut command = Command::new(&program);
         command
-            .args(&launch.args)
-            .current_dir(&launch.working_directory)
+            .args(launch.args())
+            .current_dir(launch.working_directory())
             .env_clear()
-            .envs(launch.environment)
+            .envs(launch.environment().iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        let extension_id = launch.extension_id().to_string();
+        let request_timeout = launch.configured_request_timeout();
+
         let mut child = spawn_child(&mut command).await.map_err(|error| {
             DaemonError::Extension(format!(
                 "Failed to start extension '{}': {}",
-                launch.extension_id, error
+                extension_id, error
             ))
         })?;
         let stdin = child.stdin.take().ok_or_else(|| {
@@ -116,17 +109,14 @@ impl SpawnedProcessSession {
         let stderr_task = tokio::spawn(async move { read_bounded_tail(&mut stderr).await });
 
         Ok(Self {
-            expected_extension_id: launch.extension_id,
-            discovered: launch.discovered,
-            capabilities: launch.capabilities,
-            allows_legacy_backend: launch.allows_legacy_backend,
+            expected_extension,
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             stderr_task: Some(stderr_task),
             stderr_output: String::new(),
             next_request_id: 1,
-            request_timeout: launch.request_timeout,
+            request_timeout,
             state: ProcessSessionData::Starting,
             _staged_program: staged_program,
         })
@@ -164,19 +154,7 @@ impl SpawnedProcessSession {
     }
 
     fn expected_extension(&self) -> ExpectedExtension {
-        match (&self.discovered, &self.capabilities) {
-            (Some(discovered), Some(capabilities)) => {
-                ExpectedExtension::discovered_with_expectation(
-                    discovered.clone(),
-                    capabilities.clone(),
-                )
-            }
-            (Some(discovered), None) if self.allows_legacy_backend => {
-                ExpectedExtension::legacy_discovered(discovered.clone())
-            }
-            (Some(discovered), None) => ExpectedExtension::discovered(discovered.clone()),
-            (None, _) => ExpectedExtension::identified(self.expected_extension_id.clone()),
-        }
+        self.expected_extension.clone()
     }
 
     async fn call<P, R>(&mut self, method: &str, params: P) -> Result<R>
@@ -245,7 +223,9 @@ impl SpawnedProcessSession {
             let stdin = self.stdin.as_mut().ok_or_else(|| {
                 DaemonError::Extension("Extension process stdin is closed".to_string())
             })?;
-            write_frame(stdin, &notification).await
+            write_frame(stdin, &notification)
+                .await
+                .map_err(DaemonError::from)
         };
         match timeout(self.request_timeout, send).await {
             Ok(result) => result,
@@ -449,12 +429,12 @@ fn append_bounded_tail(output: &mut Vec<u8>, chunk: &[u8], limit: usize) {
 }
 
 fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
-    if launch.extension_id.trim().is_empty() {
+    if launch.extension_id().trim().is_empty() {
         return Err(DaemonError::Extension(
             "Extension process identity cannot be empty".to_string(),
         ));
     }
-    if let ProcessProgram::Path(program) = &launch.program
+    if let ProcessProgram::Path(program) = launch.program()
         && !program.is_file()
     {
         return Err(DaemonError::Extension(format!(
@@ -462,151 +442,11 @@ fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
             program.display()
         )));
     }
-    if !launch.working_directory.is_dir() {
+    if !launch.working_directory().is_dir() {
         return Err(DaemonError::Extension(format!(
             "Extension working directory does not exist: {}",
-            launch.working_directory.display()
+            launch.working_directory().display()
         )));
     }
     Ok(())
-}
-
-async fn prepare_program(program: &ProcessProgram) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
-    match program {
-        ProcessProgram::Path(path) => Ok((path.clone(), None)),
-        ProcessProgram::VerifiedBytes {
-            filename,
-            bytes,
-            staging_directory,
-        } => {
-            let filename = filename.clone();
-            let bytes = Arc::clone(bytes);
-            let staging_directory = staging_directory.clone();
-            tokio::task::spawn_blocking(move || {
-                stage_verified_program(filename, bytes, staging_directory)
-            })
-            .await
-            .map_err(|error| {
-                DaemonError::Extension(format!("Extension staging worker failed: {error}"))
-            })?
-        }
-    }
-}
-
-fn stage_verified_program(
-    filename: OsString,
-    bytes: Arc<[u8]>,
-    staging_directory: Option<PathBuf>,
-) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
-    validate_verified_program_filename(&filename)?;
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("morphir-extension-");
-    let directory = match staging_directory {
-        Some(staging_directory) => {
-            fs::create_dir_all(&staging_directory).map_err(DaemonError::from)?;
-            builder
-                .tempdir_in(staging_directory)
-                .map_err(DaemonError::from)?
-        }
-        None => builder.tempdir().map_err(DaemonError::from)?,
-    };
-    let path = directory.path().join(filename);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(DaemonError::from)?;
-    std::io::Write::write_all(&mut file, &bytes).map_err(DaemonError::from)?;
-    file.sync_all().map_err(DaemonError::from)?;
-    make_owner_executable(&path)?;
-    Ok((path, Some(directory)))
-}
-
-fn validate_verified_program_filename(filename: &OsStr) -> Result<()> {
-    let mut components = Path::new(filename).components();
-    if matches!(
-        (components.next(), components.next()),
-        (Some(Component::Normal(_)), None)
-    ) {
-        return Ok(());
-    }
-    Err(DaemonError::Extension(
-        "Verified extension executable must be a single filename".to_owned(),
-    ))
-}
-
-#[cfg(unix)]
-fn make_owner_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(path, permissions).map_err(Into::into)
-}
-
-#[cfg(not(unix))]
-fn make_owner_executable(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-async fn write_frame<W, T>(writer: &mut W, value: &T) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-    T: Serialize,
-{
-    let body = serde_json::to_vec(value)?;
-    writer
-        .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
-        .await?;
-    writer.write_all(&body).await?;
-    writer.flush().await?;
-    Ok(())
-}
-
-async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut content_length = None;
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).await? == 0 {
-            return Err(DaemonError::Extension(
-                "Extension process closed stdout before a response frame".to_string(),
-            ));
-        }
-        if header == "\r\n" || header == "\n" {
-            break;
-        }
-        let (name, value) = header.split_once(':').ok_or_else(|| {
-            DaemonError::Extension(format!(
-                "Invalid extension protocol header: {}",
-                header.trim_end()
-            ))
-        })?;
-        if name.eq_ignore_ascii_case("content-length") {
-            if content_length.is_some() {
-                return Err(DaemonError::Extension(
-                    "Extension frame repeated Content-Length".to_string(),
-                ));
-            }
-            let length = value.trim().parse::<usize>().map_err(|error| {
-                DaemonError::Extension(format!("Invalid Content-Length: {error}"))
-            })?;
-            if length > MAX_MEP_PAYLOAD_BYTES as usize {
-                return Err(DaemonError::Extension(format!(
-                    "Extension frame exceeds the {} byte limit",
-                    MAX_MEP_PAYLOAD_BYTES
-                )));
-            }
-            content_length = Some(length);
-        }
-    }
-
-    let content_length = content_length.ok_or_else(|| {
-        DaemonError::Extension("Extension frame omitted Content-Length".to_string())
-    })?;
-    let mut body = vec![0; content_length];
-    reader.read_exact(&mut body).await?;
-    Ok(body)
 }

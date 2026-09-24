@@ -73,6 +73,7 @@ morphir-devkit = { path = "../morphir-devkit" }
 morphir-distribution = { path = "../morphir-distribution" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 morphir-host = { path = "../morphir-host" }
+morphir-host-native = { path = "../morphir-host-native" }
 morphir-workspace = { path = "../morphir-workspace" }
 
 [dev-dependencies]

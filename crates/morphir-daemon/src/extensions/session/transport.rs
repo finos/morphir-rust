@@ -4,7 +4,6 @@ use crate::DaemonError;
 use crate::extensions::protocol::{ExtensionRequest, ExtensionResponse};
 use async_trait::async_trait;
 
-pub(in crate::extensions) use morphir_host::CapabilityExpectation;
 pub use morphir_host::{ExpectedExtension, PersistedExtensionCapabilities};
 
 /// The transport's knowledge after an exchange or termination attempt.

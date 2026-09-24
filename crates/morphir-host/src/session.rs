@@ -22,6 +22,52 @@ fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
 /// One live guest after the handshake.
 ///
 /// The client owns the session and closes it. A client may hold many sessions.
+///
+/// # Example
+///
+/// ```
+/// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+/// use morphir_extension_sdk::protocol::{ExtensionResponse, PeerInfo, PeerKind};
+/// use morphir_extension_sdk::{CompileRequest, CompileResult};
+/// use morphir_host::testing::{MemoryChannel, frontend_initialize_result};
+/// use morphir_host::{BasicChecks, HostConfig, JsonRpcConnection, Session};
+///
+/// fn ok(id: u64, value: impl serde::Serialize) -> ExtensionResponse {
+///     ExtensionResponse::success(id, value).unwrap()
+/// }
+///
+/// fn compiled() -> CompileResult {
+///     CompileResult {
+///         success: true,
+///         ir_version: Some("4.0.0".into()),
+///         ir: Some(serde_json::json!({})),
+///         diagnostics: Vec::new(),
+///         modules: vec!["Example".into()],
+///         module_results: Vec::new(),
+///         context_digest: None,
+///     }
+/// }
+///
+/// // The channel answers initialize (id 1), compile (id 2) and shutdown (id 3).
+/// let channel = MemoryChannel::new()
+///     .respond(ok(1, frontend_initialize_result("example-guest")))
+///     .respond(ok(2, compiled()))
+///     .respond(ok(3, serde_json::json!({})));
+/// let connection = JsonRpcConnection::new(channel, BasicChecks::new("example-guest"));
+///
+/// let config = HostConfig::new(PeerInfo {
+///     kind: PeerKind::Unspecified,
+///     name: "example-host".into(),
+///     version: "1.0.0".into(),
+/// });
+/// let mut session = Session::open(connection, &config).await.unwrap();
+///
+/// let result = session.compile(CompileRequest::default()).await.unwrap();
+/// assert!(result.success);
+///
+/// session.close().await.unwrap();
+/// # });
+/// ```
 pub struct Session {
     connection: Box<dyn GuestConnection>,
     negotiated: Negotiated,

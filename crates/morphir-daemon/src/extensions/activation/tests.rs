@@ -788,6 +788,119 @@ async fn wasm_activation_uses_the_exact_bytes_verified_before_store_replacement(
     );
 }
 
+fn activation_params() -> InitializeParams {
+    InitializeParams {
+        protocol_versions: vec!["0.1".into()],
+        host: PeerInfo {
+            kind: Default::default(),
+            name: "activation-test".into(),
+            version: "1.0.0".into(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn host_native_wasm_activation_negotiates_persisted_capabilities() {
+    use morphir_host::GuestConnection as _;
+    let fixture = runtime_mother::wasm_with_capabilities(true);
+    let mut guest = morphir_host_native::activate(fixture.artifact, &fixture.working_directory)
+        .await
+        .unwrap();
+
+    assert_eq!(guest.id, "morphir-capabilities");
+    let negotiated = guest
+        .connection
+        .open(activation_params())
+        .await
+        .expect("the guest should reproduce both installed capabilities");
+    assert_eq!(negotiated.capabilities(), &expected_capabilities());
+}
+
+#[tokio::test]
+async fn host_native_wasm_activation_uses_the_locked_identity() {
+    use morphir_host::GuestConnection as _;
+    let fixture = runtime_mother::wasm();
+    let mut guest = morphir_host_native::activate(fixture.artifact, &fixture.working_directory)
+        .await
+        .unwrap();
+
+    assert_eq!(guest.id, "morphir-avro");
+    let error = guest
+        .connection
+        .open(activation_params())
+        .await
+        .expect_err("guest identity drift should fail initialization")
+        .to_string();
+    assert!(
+        error.contains("identity changed during initialization"),
+        "{error}"
+    );
+    assert!(error.contains("morphir-avro"), "{error}");
+    assert!(error.contains("guest-self-report"), "{error}");
+}
+
+#[tokio::test]
+async fn host_native_wasm_activation_rejects_frontend_capability_drift() {
+    use morphir_host::GuestConnection as _;
+    let fixture = runtime_mother::wasm_with_frontend_workspace(false);
+    let mut guest = morphir_host_native::activate(fixture.artifact, &fixture.working_directory)
+        .await
+        .unwrap();
+
+    let error = guest
+        .connection
+        .open(activation_params())
+        .await
+        .expect_err("frontend capability drift should fail initialization")
+        .to_string();
+    assert!(
+        error.contains("capabilities disagreed with discovery"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn host_native_process_activation_passes_arguments_and_working_directory() {
+    let (fixture, capture, args) = runtime_mother::process();
+    let expected_working_directory = fs::canonicalize(&fixture.working_directory).unwrap();
+    let guest = morphir_host_native::activate(fixture.artifact, &fixture.working_directory)
+        .await
+        .unwrap();
+
+    assert_eq!(guest.id, "morphir-process");
+    let observed = wait_for_launch(&capture, args.len() + 2).await;
+    let mut lines = observed.lines();
+    assert_eq!(
+        lines.next(),
+        Some(expected_working_directory.to_str().unwrap())
+    );
+    assert_eq!(lines.next(), Some(args.len().to_string().as_str()));
+    assert_eq!(
+        lines.collect::<Vec<_>>(),
+        args.iter()
+            .map(|argument| format!("<{argument}>"))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn host_native_process_activation_negotiates_persisted_capabilities() {
+    use morphir_host::GuestConnection as _;
+    let fixture = runtime_mother::process_with_capabilities(true);
+    let mut guest = morphir_host_native::activate(fixture.artifact, &fixture.working_directory)
+        .await
+        .unwrap();
+
+    let negotiated = guest
+        .connection
+        .open(activation_params())
+        .await
+        .expect("the process should reproduce both installed capabilities");
+    assert_eq!(negotiated.capabilities(), &expected_capabilities());
+}
+
 #[cfg(unix)]
 async fn wait_for_launch(path: &Path, expected_lines: usize) -> String {
     for _ in 0..100 {

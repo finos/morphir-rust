@@ -1,7 +1,7 @@
 //! Typestate session controller and validated negotiation data.
 
 use super::transport::{MepTransport, TransportError, TransportState};
-use super::validation::{DaemonChecks, validate_method_result_async};
+use super::validation::DaemonChecks;
 use crate::DaemonError;
 use crate::extensions::protocol::InitializeParams;
 use morphir_host::{Action, Event, SessionCore};
@@ -100,8 +100,9 @@ impl<T: MepTransport> Session<T, Ready> {
         };
         match self.step(event).await {
             Step::Action(Action::Completed(value)) => {
-                match validate_method_result_async(method, params, value)
+                match morphir_host_native::validate_result(method, params, value)
                     .await
+                    .map_err(DaemonError::from)
                     .and_then(|value| serde_json::from_value(value).map_err(Into::into))
                 {
                     Ok(value) => InvokeOutcome::Success(self, value),

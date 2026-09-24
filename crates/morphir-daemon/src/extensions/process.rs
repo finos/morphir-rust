@@ -16,8 +16,7 @@ use crate::extensions::protocol::{
 };
 use crate::extensions::session::{
     ExpectedExtension, ExtensionSession, ExtensionSessionState, Loaded, MepTransport,
-    NegotiatedSession, Session, Stopped, TransportError, TransportState,
-    validate_method_result_async, validate_negotiation,
+    NegotiatedSession, Session, Stopped, TransportError, TransportState, validate_negotiation,
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
@@ -266,5 +265,7 @@ async fn validate_compatibility_method_result(
     request_params: serde_json::Value,
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
-    validate_method_result_async(method, request_params, value).await
+    morphir_host_native::validate_result(method, request_params, value)
+        .await
+        .map_err(DaemonError::from)
 }

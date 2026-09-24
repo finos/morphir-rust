@@ -21,7 +21,7 @@ pub use native::{NativeMepSession, NativeMepTransport};
 pub use transport::{
     ExpectedExtension, MepTransport, PersistedExtensionCapabilities, TransportError, TransportState,
 };
-pub(in crate::extensions) use validation::{validate_method_result_async, validate_negotiation};
+pub(in crate::extensions) use validation::validate_negotiation;
 
 #[cfg(test)]
 mod tests;

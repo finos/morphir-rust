@@ -1,0 +1,872 @@
+//! Checking a guest's method results before the host trusts them.
+//!
+//! [`validate_result`] holds the rules. [`CheckedConnection`] applies them to
+//! every call on a [`GuestConnection`].
+
+use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use morphir_core::format_version::{
+    NormalizedFormatVersion, ReleaseTriplet, ScalarValue, SupportTable,
+};
+use morphir_distribution::RelativeArtifactPath;
+use morphir_extension_sdk::protocol::{InitializeParams, methods};
+use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateResult};
+use morphir_host::{CallError, GuestConnection, HostError, Negotiated};
+use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
+use std::collections::HashSet;
+use unicode_casefold::UnicodeCaseFold as _;
+use unicode_normalization::UnicodeNormalization as _;
+
+/// A connection that checks every method result with [`validate_result`].
+///
+/// `open` and `close` pass straight through. A result that breaks a rule
+/// ends the session: the connection shuts the guest down in order and
+/// returns [`CallError::Failed`]. If that shutdown also fails, the error
+/// names both failures.
+pub struct CheckedConnection<G> {
+    inner: G,
+}
+
+impl<G> CheckedConnection<G> {
+    /// Check the results of every call made on `inner`.
+    pub fn new(inner: G) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl<G: GuestConnection> GuestConnection for CheckedConnection<G> {
+    async fn open(&mut self, params: InitializeParams) -> Result<Negotiated, HostError> {
+        self.inner.open(params).await
+    }
+
+    async fn call(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, CallError> {
+        let value = self.inner.call(method, params.clone()).await?;
+        match validate_result(method, params, value).await {
+            Ok(value) => Ok(value),
+            Err(error) => match self.inner.close().await {
+                Ok(()) => Err(CallError::Failed(error)),
+                Err(close) => Err(CallError::Failed(also_failed_to_shut_down(error, close))),
+            },
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), HostError> {
+        self.inner.close().await
+    }
+}
+
+/// Name both failures, and keep what the shutdown failure proves.
+fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
+    let message = format!("{error}; orderly shutdown also failed: {close}");
+    match close {
+        HostError::Channel { state, .. } => HostError::Channel { message, state },
+        _ => HostError::Invalid(message),
+    }
+}
+
+fn validate_method_result(
+    method: &str,
+    request_params: &serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, HostError> {
+    if method == methods::GENERATE {
+        return validate_generate_result(value);
+    }
+    if method == methods::COMPILE {
+        return validate_compile_result(request_params, value);
+    }
+    if method == methods::WORKSPACE_DISCOVER {
+        let request: DiscoveryRequest = serde_json::from_value(request_params.clone())?;
+        let result: DiscoveryResponse = serde_json::from_value(value)?;
+        if let DiscoveryResponse::Success { snapshot } = &result
+            && snapshot.protocol_version != request.protocol_version
+        {
+            return Err(HostError::Invalid(format!(
+                "Workspace snapshot protocol version {} did not match requested protocol version {}",
+                snapshot.protocol_version, request.protocol_version
+            )));
+        }
+        return Ok(serde_json::to_value(result)?);
+    }
+    Ok(value)
+}
+
+/// Check a guest's result for `method` before the host trusts it.
+///
+/// A generated artifact must have a safe, portable path that no other
+/// artifact in the result shares, and binary content must be valid Base64.
+/// A successful compile result must name the requested IR version and carry
+/// IR of that version. A workspace snapshot must use the requested protocol
+/// version. Other methods pass through unchanged.
+///
+/// The checks for these three methods run on a blocking worker, so a large
+/// result does not stall the async runtime. A rule the result breaks is
+/// `HostError::Invalid`; a result that does not decode is `HostError::Json`.
+pub async fn validate_result(
+    method: &str,
+    request_params: serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, HostError> {
+    if method == methods::GENERATE {
+        return tokio::task::spawn_blocking(move || validate_generate_result(value))
+            .await
+            .map_err(|error| {
+                HostError::Invalid(format!(
+                    "Generated artifact validation worker failed: {error}"
+                ))
+            })?;
+    }
+    if method == methods::COMPILE {
+        return tokio::task::spawn_blocking(move || {
+            validate_compile_result(&request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            HostError::Invalid(format!("Compile result validation worker failed: {error}"))
+        })?;
+    }
+    if method == methods::WORKSPACE_DISCOVER {
+        return tokio::task::spawn_blocking(move || {
+            validate_method_result(methods::WORKSPACE_DISCOVER, &request_params, value)
+        })
+        .await
+        .map_err(|error| {
+            HostError::Invalid(format!(
+                "Workspace result validation worker failed: {error}"
+            ))
+        })?;
+    }
+    validate_method_result(method, &request_params, value)
+}
+
+fn validate_compile_result(
+    request_params: &serde_json::Value,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, HostError> {
+    let result: CompileResult = serde_json::from_value(value.clone())?;
+    if result.success && result.ir_version.is_none() {
+        return Err(HostError::Invalid(
+            "Successful compile result is missing irVersion".into(),
+        ));
+    }
+    if result.success && result.ir.is_none() {
+        return Err(HostError::Invalid(
+            "Successful compile result is missing ir".into(),
+        ));
+    }
+    if result.success {
+        let request: CompileRequest = serde_json::from_value(request_params.clone())?;
+        let result_version = result
+            .ir_version
+            .as_deref()
+            .expect("successful result version was validated");
+        let requested_release =
+            normalize_compile_ir_version(&request.options.ir_version, "requested")?;
+        let result_release = normalize_compile_ir_version(result_version, "result")?;
+        if result_release != requested_release {
+            return Err(HostError::Invalid(format!(
+                "Successful compile result irVersion '{result_version}' did not match requested irVersion '{}'",
+                request.options.ir_version
+            )));
+        }
+        validate_compile_ir(
+            result
+                .ir
+                .as_ref()
+                .expect("successful result IR was validated"),
+            requested_release,
+            &request.options.ir_version,
+        )?;
+    }
+    Ok(value)
+}
+
+fn normalize_compile_ir_version(value: &str, source: &str) -> Result<ReleaseTriplet, HostError> {
+    let scalar = if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        ScalarValue::Integer(value.parse::<u64>().map_err(|error| {
+            HostError::Invalid(format!(
+                "Successful compile {source} uses malformed irVersion '{value}': {error}"
+            ))
+        })?)
+    } else {
+        ScalarValue::String(value.to_owned())
+    };
+    let support = SupportTable::reference();
+    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support).map_err(|error| {
+        HostError::Invalid(format!(
+            "Successful compile {source} uses malformed irVersion '{value}': {error}"
+        ))
+    })?;
+    if !normalized.is_supported() {
+        return Err(HostError::Invalid(format!(
+            "Successful compile {source} uses unsupported irVersion '{value}'"
+        )));
+    }
+    Ok(normalized.release)
+}
+
+fn validate_generate_result(value: serde_json::Value) -> Result<serde_json::Value, HostError> {
+    let mut result: GenerateResult = serde_json::from_value(value)?;
+    let mut case_folded_paths = HashSet::new();
+    let mut uppercase_paths = HashSet::new();
+    for artifact in &mut result.artifacts {
+        let path = RelativeArtifactPath::parse(artifact.path.clone()).map_err(|error| {
+            HostError::Invalid(format!(
+                "Generated artifact path '{}' is invalid: {error}",
+                artifact.path
+            ))
+        })?;
+        artifact.path = path.as_str().to_owned();
+        let (case_folded, uppercase) = portable_artifact_path_keys(&artifact.path);
+        if !case_folded_paths.insert(case_folded) || !uppercase_paths.insert(uppercase) {
+            return Err(HostError::Invalid(format!(
+                "Generated artifact path '{}' is duplicate",
+                artifact.path
+            )));
+        }
+        if artifact.binary {
+            STANDARD.decode(&artifact.content).map_err(|error| {
+                HostError::Invalid(format!(
+                    "Generated binary artifact '{}' contains invalid Base64: {error}",
+                    artifact.path
+                ))
+            })?;
+        }
+    }
+    serde_json::to_value(result).map_err(Into::into)
+}
+
+fn portable_artifact_path_keys(path: &str) -> (String, String) {
+    let normalized = path.nfc().collect::<String>();
+    let case_folded = normalized
+        .as_str()
+        .case_fold()
+        .collect::<String>()
+        .nfc()
+        .collect();
+    let uppercase = normalized.to_uppercase().nfc().collect();
+    (case_folded, uppercase)
+}
+
+fn validate_compile_ir(
+    ir: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<(), HostError> {
+    let attempted_root = ir.as_object().is_some_and(|object| {
+        object.contains_key("formatVersion") || object.contains_key("distribution")
+    });
+    if attempted_root {
+        let object = ir.as_object().expect("attempted IR root is an object");
+        let format_version = object.get("formatVersion").ok_or_else(|| {
+            HostError::Invalid("Successful compile result IR file is missing formatVersion".into())
+        })?;
+        if !object.contains_key("distribution") {
+            return Err(HostError::Invalid(
+                "Successful compile result IR file is missing distribution".into(),
+            ));
+        }
+        validate_embedded_format_version(format_version, requested_release, requested_version)?;
+        return validate_typed_ir_root(ir, requested_release, requested_version);
+    }
+    validate_typed_raw_distribution(ir, requested_release, requested_version)
+}
+
+fn validate_embedded_format_version(
+    format_version: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<(), HostError> {
+    let embedded_version = match format_version {
+        serde_json::Value::String(version) => version.clone(),
+        serde_json::Value::Number(version) if version.is_u64() => version.to_string(),
+        _ => {
+            return Err(HostError::Invalid(
+                "Successful compile result embedded formatVersion must be a string or non-negative integer"
+                    .into(),
+            ));
+        }
+    };
+    let scalar = ScalarValue::from_json(format_version).map_err(|error| {
+        HostError::Invalid(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' is malformed: {error}"
+        ))
+    })?;
+    let support = SupportTable::reference();
+    let normalized = NormalizedFormatVersion::from_scalar(&scalar, &support).map_err(|error| {
+        HostError::Invalid(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' is malformed: {error}"
+        ))
+    })?;
+    if !normalized.is_supported() {
+        return Err(HostError::Invalid(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' is unsupported"
+        )));
+    }
+    if normalized.release != requested_release {
+        return Err(HostError::Invalid(format!(
+            "Successful compile result embedded formatVersion '{embedded_version}' did not match requested irVersion '{requested_version}'"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_typed_ir_root(
+    ir: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<(), HostError> {
+    let result = match requested_release.major() {
+        3 => serde_json::from_value::<morphir_core::ir::classic::Distribution>(ir.clone())
+            .map(|_| ()),
+        4 => serde_json::from_value::<morphir_core::ir::v4::IRFile>(ir.clone()).map(|_| ()),
+        _ => unreachable!("supported compile IR versions were checked"),
+    };
+    result.map_err(|error| {
+        HostError::Invalid(format!(
+            "Successful compile result is not valid Morphir IR {requested_version}: {error}"
+        ))
+    })
+}
+
+fn validate_typed_raw_distribution(
+    ir: &serde_json::Value,
+    requested_release: ReleaseTriplet,
+    requested_version: &str,
+) -> Result<(), HostError> {
+    let result = match requested_release.major() {
+        3 => serde_json::from_value::<morphir_core::ir::classic::DistributionBody>(ir.clone())
+            .map(|_| ()),
+        4 => serde_json::from_value::<morphir_core::ir::v4::Distribution>(ir.clone()).map(|_| ()),
+        _ => unreachable!("supported compile IR versions were checked"),
+    };
+    result.map_err(|error| {
+        HostError::Invalid(format!(
+            "Successful compile result is not valid Morphir IR {requested_version}: {error}"
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace_request(protocol_version: &str) -> serde_json::Value {
+        serde_json::json!({
+            "protocolVersion": protocol_version,
+            "developmentRoot": {"entries": {}},
+            "morphirHome": null,
+            "systemConfig": null,
+            "environment": {},
+            "cliOverlay": {}
+        })
+    }
+
+    fn compile_request(ir_version: &str) -> serde_json::Value {
+        serde_json::json!({
+            "languageId": "elm",
+            "sources": {"documents": []},
+            "package": {"name": "example/package", "exposedModules": []},
+            "dependencies": [],
+            "options": {"typesOnly": false, "irVersion": ir_version}
+        })
+    }
+
+    fn successful_result(ir_version: &str, ir: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "success": true,
+            "irVersion": ir_version,
+            "ir": ir,
+            "diagnostics": [],
+            "modules": []
+        })
+    }
+
+    fn v4_library_distribution() -> serde_json::Value {
+        serde_json::json!({
+            "Library": {
+                "packageName": "example/package",
+                "dependencies": {},
+                "def": {"modules": {}}
+            }
+        })
+    }
+
+    #[test]
+    fn rejects_malformed_workspace_discovery_results() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request("0.1.0-draft.1"),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {"protocolVersion": "0.1.0-draft.1"}
+            }),
+        )
+        .expect_err("workspace discovery results must match the shared protocol");
+
+        assert!(error.to_string().contains("missing field"), "{error}");
+    }
+
+    #[test]
+    fn accepts_and_normalizes_workspace_discovery_results() {
+        let value = serde_json::json!({
+            "status": "failure",
+            "error": {
+                "code": "workspace.config.missing",
+                "message": "No workspace configuration was found",
+                "path": null
+            }
+        });
+
+        assert_eq!(
+            validate_method_result(
+                methods::WORKSPACE_DISCOVER,
+                &workspace_request("0.1.0-draft.1"),
+                value.clone()
+            )
+            .expect("a typed workspace failure is a valid discovery result"),
+            value
+        );
+    }
+
+    #[test]
+    fn rejects_workspace_snapshots_using_a_different_protocol_version() {
+        let error = validate_method_result(
+            methods::WORKSPACE_DISCOVER,
+            &workspace_request("0.1.0-draft.1"),
+            serde_json::json!({
+                "status": "success",
+                "snapshot": {
+                    "protocolVersion": "0.1.0-draft.2",
+                    "configAnchor": "morphir.toml",
+                    "name": null,
+                    "state": "open",
+                    "projects": [],
+                    "diagnostics": []
+                }
+            }),
+        )
+        .expect_err("snapshot protocol must match the discovery request");
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not match requested protocol version 0.1.0-draft.1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_generated_artifact_paths() {
+        for path in [
+            "/tmp/schema.avsc",
+            "../../.ssh/authorized_keys",
+            "nested/../schema.avsc",
+            r"C:\\Users\\Public\\schema.avsc",
+        ] {
+            let error = validate_method_result(
+                methods::GENERATE,
+                &serde_json::json!({}),
+                serde_json::json!({
+                    "success": true,
+                    "artifacts": [{"path": path, "content": "{}"}],
+                    "diagnostics": []
+                }),
+            )
+            .expect_err("unsafe generated artifact paths must fail validation");
+
+            assert!(
+                error.to_string().contains("artifact path"),
+                "unexpected error for {path}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_binary_generated_artifact_content() {
+        let error = validate_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [{
+                    "path": "schema.avro",
+                    "content": "not base64!",
+                    "binary": true
+                }],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("binary artifact content must be valid base64");
+
+        assert!(error.to_string().contains("Base64"), "{error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_generated_artifact_paths() {
+        let error = validate_method_result(
+            methods::GENERATE,
+            &serde_json::json!({}),
+            serde_json::json!({
+                "success": true,
+                "artifacts": [
+                    {"path": "schema.avsc", "content": "{}"},
+                    {"path": "schema.avsc", "content": "duplicate"}
+                ],
+                "diagnostics": []
+            }),
+        )
+        .expect_err("duplicate artifact paths must fail validation");
+
+        assert!(error.to_string().contains("duplicate"), "{error}");
+    }
+
+    #[test]
+    fn rejects_portably_colliding_generated_artifact_paths() {
+        for paths in [
+            ["Foo.avsc", "foo.avsc"],
+            ["caf\u{e9}.avsc", "cafe\u{301}.avsc"],
+        ] {
+            let error = validate_method_result(
+                methods::GENERATE,
+                &serde_json::json!({}),
+                serde_json::json!({
+                    "success": true,
+                    "artifacts": [
+                        {"path": paths[0], "content": "{}"},
+                        {"path": paths[1], "content": "duplicate"}
+                    ],
+                    "diagnostics": []
+                }),
+            )
+            .expect_err("portable artifact path collisions must fail validation");
+
+            assert!(error.to_string().contains("duplicate"), "{error}");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn binary_generation_validation_runs_off_the_async_worker() {
+        let content = STANDARD.encode(vec![0_u8; 8 * 1024 * 1024]);
+        let value = serde_json::json!({
+            "success": true,
+            "artifacts": [{
+                "path": "schema.avro",
+                "content": content,
+                "binary": true
+            }],
+            "diagnostics": []
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_result(methods::GENERATE, serde_json::json!({}), value)
+                .await
+                .expect("large binary artifact should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn compile_validation_runs_off_the_async_worker() {
+        let request = compile_request("3");
+        let mut value =
+            successful_result("3", serde_json::json!(["Library", [], [], {"modules": []}]));
+        value["modules"] = serde_json::json!(["M".repeat(8 * 1024 * 1024)]);
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_result(methods::COMPILE, request, value)
+                .await
+                .expect("large compile result should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workspace_validation_runs_off_the_async_worker() {
+        let value = serde_json::json!({
+            "status": "success",
+            "snapshot": {
+                "protocolVersion": "0.1.0-draft.1",
+                "configAnchor": "morphir.toml",
+                "name": null,
+                "state": "open",
+                "projects": [],
+                "diagnostics": [{
+                    "severity": "warning",
+                    "code": "workspace.large-diagnostic",
+                    "message": "M".repeat(8 * 1024 * 1024),
+                    "path": null,
+                    "projectPath": null
+                }]
+            }
+        });
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let validation_tx = order_tx.clone();
+        let validation = tokio::spawn(async move {
+            validate_result(
+                methods::WORKSPACE_DISCOVER,
+                workspace_request("0.1.0-draft.1"),
+                value,
+            )
+            .await
+            .expect("large workspace result should validate");
+            validation_tx.send("validation").unwrap();
+        });
+        tokio::spawn(async move {
+            order_tx.send("marker").unwrap();
+        });
+
+        assert_eq!(order_rx.recv().await, Some("marker"));
+        validation.await.unwrap();
+        assert_eq!(order_rx.recv().await, Some("validation"));
+    }
+
+    #[test]
+    fn rejects_an_embedded_ir_format_version_that_differs_from_the_request() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("3"),
+            successful_result(
+                "3",
+                serde_json::json!({
+                    "formatVersion": "4.0.0",
+                    "distribution": {"Library": {}}
+                }),
+            ),
+        )
+        .expect_err("embedded format mismatch should fail");
+
+        assert!(error.to_string().contains("embedded formatVersion"));
+    }
+
+    #[test]
+    fn accepts_numeric_v4_embedded_format_for_semantic_v4_request() {
+        let value = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result(
+                "4.0.0",
+                serde_json::json!({
+                    "formatVersion": 4,
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("numeric formatVersion 4 is semantically Morphir IR 4.0.0");
+
+        assert_eq!(value["ir"]["formatVersion"], 4);
+    }
+
+    #[test]
+    fn accepts_installed_frontend_v4_result_alias_for_canonical_request() {
+        let value = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result(
+                "4",
+                serde_json::json!({
+                    "formatVersion": "4.0.0",
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("installed frontends may return the v4 family alias");
+
+        assert_eq!(value["irVersion"], "4");
+    }
+
+    #[test]
+    fn accepts_canonical_v4_result_for_family_alias_request() {
+        let value = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4"),
+            successful_result(
+                "4.0.0",
+                serde_json::json!({
+                    "formatVersion": 4,
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("the canonical v4 release and family alias are equivalent");
+
+        assert_eq!(value["irVersion"], "4.0.0");
+    }
+
+    #[test]
+    fn rejects_an_unsupported_outer_compile_ir_minor() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.1.0"),
+            successful_result("4.1.0", v4_library_distribution()),
+        )
+        .expect_err("unsupported outer IR minor revisions must fail host validation");
+
+        assert!(
+            error.to_string().contains("unsupported irVersion"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_malformed_outer_compile_result_version() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result("4.0", v4_library_distribution()),
+        )
+        .expect_err("malformed outer result versions must fail host validation");
+
+        assert!(error.to_string().contains("malformed irVersion"), "{error}");
+    }
+
+    #[test]
+    fn rejects_an_ir_file_shape_without_an_embedded_format_version() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result(
+                "4.0.0",
+                serde_json::json!({"distribution": {"Library": {}}}),
+            ),
+        )
+        .expect_err("IR file shape without formatVersion should fail");
+
+        assert!(error.to_string().contains("missing formatVersion"));
+    }
+
+    #[test]
+    fn rejects_an_empty_object_as_untyped_compile_ir() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("3"),
+            successful_result("3", serde_json::json!({})),
+        )
+        .expect_err("empty object is not typed Morphir IR");
+
+        assert!(error.to_string().contains("valid Morphir IR"));
+    }
+
+    #[test]
+    fn rejects_untyped_malformed_and_incomplete_compile_ir_shapes() {
+        let invalid = [
+            ("3", serde_json::Value::Null),
+            ("3", serde_json::json!(true)),
+            ("3", serde_json::json!(42)),
+            ("3", serde_json::json!("not-ir")),
+            ("3", serde_json::json!([])),
+            ("3", serde_json::json!(["Library"])),
+            ("3", serde_json::json!({"unrelated": {}})),
+            ("3", serde_json::json!({"formatVersion": 3})),
+            (
+                "3",
+                serde_json::json!({
+                    "distribution": ["Library", [], [], {"modules": []}]
+                }),
+            ),
+            ("4.0.0", serde_json::json!({"Library": {}})),
+            (
+                "4.0.0",
+                serde_json::json!(["Library", [], [], {"modules": []}]),
+            ),
+        ];
+
+        for (version, ir) in invalid {
+            assert!(
+                validate_method_result(
+                    methods::COMPILE,
+                    &compile_request(version),
+                    successful_result(version, ir.clone()),
+                )
+                .is_err(),
+                "{ir} must not validate as Morphir IR {version}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_numeric_classic_format_version_for_string_request_version() {
+        validate_method_result(
+            methods::COMPILE,
+            &compile_request("3"),
+            successful_result(
+                "3",
+                serde_json::json!({
+                    "formatVersion": 3,
+                    "distribution": ["Library", [], [], {"modules": []}]
+                }),
+            ),
+        )
+        .expect("numeric classic format should match string request version");
+    }
+
+    #[test]
+    fn accepts_a_raw_classic_v3_library_distribution_body() {
+        validate_method_result(
+            methods::COMPILE,
+            &compile_request("3"),
+            successful_result("3", serde_json::json!(["Library", [], [], {"modules": []}])),
+        )
+        .expect("raw Classic V3 Library body is MEP-compatible");
+    }
+
+    #[test]
+    fn accepts_string_v4_format_version() {
+        validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result(
+                "4.0.0",
+                serde_json::json!({
+                    "formatVersion": "4.0.0",
+                    "distribution": v4_library_distribution()
+                }),
+            ),
+        )
+        .expect("string V4 format should match request version");
+    }
+
+    #[test]
+    fn accepts_a_raw_distribution_without_an_ir_file_format_version() {
+        validate_method_result(
+            methods::COMPILE,
+            &compile_request("4.0.0"),
+            successful_result("4.0.0", v4_library_distribution()),
+        )
+        .expect("raw distributions are permitted without an IR file wrapper");
+    }
+
+    #[test]
+    fn rejects_an_unknown_compile_ir_version_that_the_host_cannot_validate() {
+        let error = validate_method_result(
+            methods::COMPILE,
+            &compile_request("5.0.0"),
+            successful_result("5.0.0", v4_library_distribution()),
+        )
+        .expect_err("unknown IR versions cannot be schema-validated");
+
+        assert!(error.to_string().contains("unsupported irVersion"));
+    }
+}

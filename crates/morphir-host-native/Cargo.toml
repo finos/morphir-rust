@@ -9,9 +9,13 @@ repository.workspace = true
 description = "Native channels for the Morphir extension host: processes, Extism and in-process guests"
 
 [dependencies]
-morphir-host = { path = "../morphir-host" }
+morphir-core = { path = "../morphir-core" }
+morphir-distribution = { path = "../morphir-distribution" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
+morphir-host = { path = "../morphir-host" }
+morphir-workspace = { path = "../morphir-workspace" }
 async-trait = "0.1"
+base64 = "0.23"
 extism = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -19,6 +23,8 @@ tempfile = "3"
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt", "sync", "io-util", "process", "time", "macros"] }
 tracing = "0.1"
+unicode-casefold = { workspace = true }
+unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 morphir-host = { path = "../morphir-host", features = ["testing"] }

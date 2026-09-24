@@ -54,11 +54,15 @@ impl TreeModel for V4 {
     type ValueSpec = Documented<ValueSpecification>;
     type File = IRFile;
     type Version = FormatVersion;
+    /// The `IRFile`'s version is the manifest's; a node file's own is checked for support by its
+    /// decoder and is not compared with the manifest's.
+    const FILES_REPEAT_MANIFEST_VERSION: bool = false;
 
     fn decode_manifest(
         value: &serde_json::Value,
         cursor: &str,
     ) -> Result<Envelope<DistributionKind, V4Extra>, Diagnostic> {
+        refuse_v3_manifest(value, cursor)?;
         let DistributionManifestFile {
             format_version,
             distribution,
@@ -240,6 +244,31 @@ impl TreeModel for V4 {
             body: body(node),
         })
     }
+}
+
+/// A manifest of major version 3 lays out a classic distribution, which the v3 tree reader
+/// reads. The format-version contract supports 3.x, so without this the v4 reader would take the
+/// manifest and fail later, on whichever node payload first failed to be v4.
+fn refuse_v3_manifest(value: &serde_json::Value, cursor: &str) -> Result<(), Diagnostic> {
+    let Some(written) = value.get("formatVersion") else {
+        return Ok(());
+    };
+    let major_3 = match written {
+        serde_json::Value::Number(number) => number.as_u64() == Some(3),
+        serde_json::Value::String(text) => text.split('.').next() == Some("3"),
+        _ => false,
+    };
+    if !major_3 {
+        return Ok(());
+    }
+    Err(Diagnostic::normalization(
+        DiagnosticCode::VersionMismatch,
+        format!("{cursor}/formatVersion"),
+        format!(
+            "formatVersion {written} is a v3 document tree, which the v3 tree reader reads, not \
+             the v4 one"
+        ),
+    ))
 }
 
 // =============================================================================

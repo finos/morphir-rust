@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still writes format version 3 (`"3.0.0"` in Ion). Readers accept every `3.0.x` and `3.1.x`
   release, but a `Specs` requires 3.1.0 or later: one declared as `3` or `"3.0.x"` is refused
   (finos/morphir#970).
+- IR format 3.1.0 document trees: a v3 `Library` or `Specs` laid out as a JSON or YAML document
+  tree, every file at `formatVersion` `"3.1.0"`. The transport, the layout and the Rust MCK
+  adapter's `readTree`/`writeTree` read and write them (finos/morphir#970).
 - Local APFS Library publication with exact signed proposals, durable role-version
   reservations, staged immutable objects, serialized writers and timestamp commit
   recovery. The first macOS provider supports dependency-free classic V4 registries;

@@ -24,8 +24,8 @@ use std::collections::{HashMap, HashSet};
 use indexmap::IndexMap;
 
 use super::model::{
-    AssembledModule, Entries, Envelope, ModuleFile, ModuleFileOf, Node, Packages, Role, TreeModel,
-    TypeNode, ValueNode,
+    AssembledModule, Entries, Envelope, ModuleFile, ModuleFileOf, Node, Packages, Payload, Role,
+    TreeModel, TypeNode, ValueNode,
 };
 use super::paths::{
     MANIFEST, NodeFileKind, PathKind, Root, VERSION_SLOT, classify, node_file_path,
@@ -70,6 +70,7 @@ pub(crate) fn read_tree_with<M: TreeModel>(
             consumed: HashSet::new(),
             warnings: Vec::new(),
             module_dirs_by_owner: HashMap::new(),
+            version: None,
         }
         .read()
     })
@@ -89,6 +90,9 @@ struct Reader<'a, M: TreeModel> {
     /// Every module directory, grouped by owning package, computed once the manifest names the
     /// packages — see [`PackageRoots::module_dirs_by_owner`].
     module_dirs_by_owner: HashMap<(Root, String), Vec<String>>,
+    /// The manifest's `formatVersion`, as canonical JSON text, once the manifest is read: every
+    /// other file of the tree has to say the same.
+    version: Option<String>,
 }
 
 /// One module directory: which root it is under, the directory itself, and where its manifest is.
@@ -460,6 +464,11 @@ impl<M: TreeModel> Reader<'_, M> {
     /// The path is claimed as soon as the text is parsed and before it is decoded, so a file that
     /// fails to decode is never also reported as unclaimed. The file's own diagnostics and
     /// warnings come back re-cursored onto its logical path.
+    ///
+    /// Under a model whose files repeat the manifest's version
+    /// ([`TreeModel::FILES_REPEAT_MANIFEST_VERSION`]), a parsed file is held to the manifest's
+    /// `formatVersion` before it is decoded: the tree is one distribution, so a file of another
+    /// version is refused for that alone, whatever else it says.
     fn read_file<T>(
         &mut self,
         path: &str,
@@ -477,6 +486,10 @@ impl<M: TreeModel> Reader<'_, M> {
         self.consumed.insert(path.to_owned());
         let value = parsed.map_err(|diagnostic| recursor(path, diagnostic))?;
 
+        if M::FILES_REPEAT_MANIFEST_VERSION {
+            self.agree(path, &value)?;
+        }
+
         let (decoded, warnings) = with_spelling_mode(SpellingMode::Current, || read(&value, ""));
         for warning in warnings {
             self.warnings.push((
@@ -488,6 +501,25 @@ impl<M: TreeModel> Reader<'_, M> {
             ));
         }
         decoded.map_err(|diagnostic| recursor(path, diagnostic))
+    }
+
+    /// Records the manifest's `formatVersion`, or holds any other file to it.
+    fn agree(&mut self, path: &str, value: &M::Doc) -> Result<(), Diagnostic> {
+        let found = value.format_version();
+        if path == MANIFEST {
+            self.version = found;
+            return Ok(());
+        }
+        // A file that says no version at all is left to its decoder, which answers
+        // `missing_format_version` as it would for a single document.
+        match (&self.version, found) {
+            (Some(expected), Some(found)) if found != *expected => Err(Diagnostic::normalization(
+                DiagnosticCode::VersionMismatch,
+                format!("{path}#/formatVersion"),
+                format!("formatVersion {found} does not match the manifest's {expected}"),
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// The first file under `pkg/` or `deps/` that no module claimed, in sorted order.

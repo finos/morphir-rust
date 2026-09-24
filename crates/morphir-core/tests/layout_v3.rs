@@ -1,0 +1,441 @@
+//! The v3 document tree: a classic `Library` or `Specs` distribution laid out with the v4 tree's
+//! layout, every file saying `formatVersion: "3.1.0"`.
+
+use morphir_core::ir::DiagnosticCode;
+use morphir_core::ir::classic::{Access, Distribution, DistributionBody, Name};
+use morphir_core::ir::layout::{
+    AnyTree, Profile, Tree, TreePolicy, read_any_tree, read_tree, read_tree_v3, write_tree_v3,
+};
+
+fn fixture(name: &str) -> Distribution {
+    let text = match name {
+        "greeting" => include_str!("fixtures/ir/classic/greeting-example.json"),
+        _ => include_str!("fixtures/ir/classic/v3-with-dependencies.json"),
+    };
+    serde_json::from_str(text).unwrap()
+}
+
+fn policy(profile: Profile, budget: u32) -> TreePolicy {
+    TreePolicy {
+        profile,
+        path_budget: budget,
+    }
+}
+
+fn tree(files: Vec<(String, String)>) -> Tree {
+    files.into_iter().collect()
+}
+
+/// A file of the tree, parsed through the profile's own reader.
+fn parsed(profile: Profile, text: &str) -> serde_json::Value {
+    profile.read(text).unwrap()
+}
+
+/// Module members come back in path order, so compare with members sorted by name.
+fn sorted(mut file: Distribution) -> Distribution {
+    let sort_def = |modules: &mut Vec<morphir_core::ir::classic::ModuleEntry<_, _>>| {
+        modules.sort_by(|a, b| format!("{:?}", a.path).cmp(&format!("{:?}", b.path)));
+        for module in modules.iter_mut() {
+            module
+                .definition
+                .value
+                .types
+                .sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+            module
+                .definition
+                .value
+                .values
+                .sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+        }
+    };
+    if let DistributionBody::Library(_, deps, def) = &mut file.distribution {
+        sort_def(&mut def.modules);
+        for (_, spec) in deps.iter_mut() {
+            for module in spec.modules.iter_mut() {
+                module
+                    .specification
+                    .types
+                    .sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+                module
+                    .specification
+                    .values
+                    .sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+            }
+        }
+    }
+    file
+}
+
+const SPECS: &str = r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[[[["basics"]],{"types":[[["int"],{"doc":"","value":["OpaqueTypeSpecification",[]]}]],"values":[],"doc":"Basics."}]]}]}"#;
+
+#[test]
+fn a_v3_library_round_trips_through_json_and_yaml_trees() {
+    for name in ["greeting", "deps"] {
+        for profile in [Profile::Json, Profile::Yaml] {
+            let original = fixture(name);
+            let files = write_tree_v3(&original, &policy(profile, 4000)).unwrap();
+            let (read, warnings) = read_tree_v3(&tree(files), profile).unwrap();
+            assert!(warnings.is_empty());
+            assert_eq!(sorted(read), sorted(original), "{name} {profile:?}");
+        }
+    }
+}
+
+#[test]
+fn every_v3_tree_file_says_3_1_0() {
+    for profile in [Profile::Json, Profile::Yaml] {
+        let files = write_tree_v3(&fixture("deps"), &policy(profile, 4000)).unwrap();
+        for (path, text) in &files {
+            assert_eq!(
+                parsed(profile, text)["formatVersion"],
+                serde_json::json!("3.1.0"),
+                "{path}: {text}"
+            );
+        }
+        assert!(
+            files
+                .iter()
+                .any(|(path, _)| path == "deps/morphir/_sdk/@/basics/money.type")
+        );
+    }
+}
+
+#[test]
+fn a_cut_stem_is_recorded_and_read_back() {
+    // No name in the fixture is long enough to be cut at the smallest budget, so one is added.
+    let mut original = fixture("deps");
+    if let DistributionBody::Library(_, deps, _) = &mut original.distribution {
+        let basics = &mut deps[0].1.modules[0].specification;
+        let int = basics.types[0].1.clone();
+        let long = Name::new([
+            "a", "type", "whose", "name", "is", "far", "too", "long", "for", "the", "budget",
+        ]);
+        basics.types.push((long, int));
+    }
+    let files = write_tree_v3(&original, &policy(Profile::Json, 64)).unwrap();
+    assert!(
+        files
+            .iter()
+            .any(|(_, text)| parsed(Profile::Json, text).get("fileNames").is_some()),
+        "{files:#?}"
+    );
+    let (read, _) = read_tree_v3(&tree(files), Profile::Json).unwrap();
+    assert_eq!(sorted(read), sorted(original));
+}
+
+#[test]
+fn a_node_file_whose_version_differs_from_the_manifest_is_refused() {
+    let mut files =
+        tree(write_tree_v3(&fixture("greeting"), &policy(Profile::Json, 4000)).unwrap());
+    let (path, text) = files
+        .iter()
+        .find(|(path, _)| path.ends_with(".type"))
+        .map(|(p, t)| (p.clone(), t.clone()))
+        .unwrap();
+    let mut node = parsed(Profile::Json, &text);
+    node["formatVersion"] = serde_json::json!(3);
+    files.insert(path.clone(), Profile::Json.write(&node));
+    let error = read_tree_v3(&files, Profile::Json).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
+    assert_eq!(error.cursor, format!("{path}#/formatVersion"), "{error:?}");
+}
+
+/// A v4 `Library` tree with one empty module.
+fn v4_tree() -> Tree {
+    [
+        (
+            "manifest",
+            r#"{ "formatVersion": 4, "distribution": "Library", "package": "example", "pathBudget": 4000 }"#,
+        ),
+        (
+            "pkg/example/main/module",
+            r#"{ "formatVersion": 4, "path": "main", "types": [], "values": [] }"#,
+        ),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_owned(), text.to_owned()))
+    .collect()
+}
+
+#[test]
+fn a_v4_reader_refuses_a_v3_tree_and_the_reverse() {
+    let v3 = tree(write_tree_v3(&fixture("greeting"), &policy(Profile::Json, 4000)).unwrap());
+    let error = read_tree(&v3, Profile::Json).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/formatVersion", "{error:?}");
+    assert!(error.message.contains("\"3.1.0\""), "{error:?}");
+
+    let v4 = v4_tree();
+    read_tree(&v4, Profile::Json).expect("the v4 tree is a v4 tree");
+    let error = read_tree_v3(&v4, Profile::Json).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/formatVersion", "{error:?}");
+}
+
+#[test]
+fn any_tree_reads_either_version() {
+    let original = fixture("deps");
+    let v3 = tree(write_tree_v3(&original, &policy(Profile::Yaml, 4000)).unwrap());
+    match read_any_tree(&v3, Profile::Yaml).unwrap().0 {
+        AnyTree::V3(read) => assert_eq!(sorted(read), sorted(original)),
+        AnyTree::V4(_) => panic!("a v3 tree read as v4"),
+    }
+    match read_any_tree(&v4_tree(), Profile::Json).unwrap().0 {
+        AnyTree::V4(_) => {}
+        AnyTree::V3(_) => panic!("a v4 tree read as v3"),
+    }
+}
+
+#[test]
+fn a_dependency_named_like_the_distribution_is_refused() {
+    let mut files = tree(write_tree_v3(&fixture("deps"), &policy(Profile::Json, 4000)).unwrap());
+    let mut manifest = parsed(Profile::Json, &files["manifest"]);
+    assert_eq!(manifest["dependencies"], serde_json::json!(["morphir/SDK"]));
+    manifest["dependencies"] = serde_json::json!(["example"]);
+    files.insert("manifest".into(), Profile::Json.write(&manifest));
+    let moved: Vec<(String, String)> = files
+        .iter()
+        .filter(|(path, _)| path.starts_with("deps/morphir/_sdk/@/"))
+        .map(|(path, text)| {
+            (
+                path.replace("deps/morphir/_sdk/@/", "deps/example/@/"),
+                text.clone(),
+            )
+        })
+        .collect();
+    files.retain(|path, _| !path.starts_with("deps/"));
+    files.extend(moved);
+    let error = read_tree_v3(&files, Profile::Json).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("a v3 dependency cannot name the distribution package"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_specs_tree_with_a_definition_file_is_refused() {
+    let specs: Distribution = serde_json::from_str(r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[[[["basics"]],{"types":[[["int"],{"doc":"","value":["OpaqueTypeSpecification",[]]}]],"values":[],"doc":null}]]}]}"#).unwrap();
+    let mut files = tree(write_tree_v3(&specs, &policy(Profile::Json, 4000)).unwrap());
+    files.insert(
+        "pkg/my/pkg/basics/int.type".into(),
+        r#"{"formatVersion":"3.1.0","name":"int","def":{"access":"Public","value":{"doc":"","value":["TypeAliasDefinition",[],["Unit",{}]]}}}"#.into(),
+    );
+    let error = read_tree_v3(&files, Profile::Json).unwrap_err();
+    assert!(
+        format!("{error:?}").contains("expected a specification file"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_specification_payload_with_a_member_it_does_not_hold_is_refused() {
+    let mut files = tree(
+        write_tree_v3(
+            &serde_json::from_str(SPECS).unwrap(),
+            &policy(Profile::Json, 4000),
+        )
+        .unwrap(),
+    );
+    let path = "pkg/my/pkg/basics/int.type";
+    let mut node = parsed(Profile::Json, &files[path]);
+    node["spec"]["annotations"] = serde_json::json!([]);
+    files.insert(path.into(), Profile::Json.write(&node));
+    let error = read_tree_v3(&files, Profile::Json).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::UnknownMember, "{error:?}");
+    assert_eq!(
+        error.cursor,
+        format!("{path}#/spec/annotations"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_v3_specs_distribution_round_trips_through_a_tree() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let files = write_tree_v3(&specs, &policy(Profile::Yaml, 4000)).unwrap();
+    assert_eq!(read_tree_v3(&tree(files), Profile::Yaml).unwrap().0, specs);
+}
+
+#[test]
+fn a_private_module_keeps_its_access() {
+    let mut original = fixture("deps");
+    if let DistributionBody::Library(_, _, def) = &mut original.distribution {
+        def.modules[0].definition.access = Access::Private;
+    }
+    let files = write_tree_v3(&original, &policy(Profile::Json, 4000)).unwrap();
+    let module = files
+        .iter()
+        .find(|(path, _)| path == "pkg/example/eligibility/module")
+        .map(|(_, text)| parsed(Profile::Json, text))
+        .unwrap();
+    assert_eq!(module["access"], serde_json::json!("Private"));
+    let (read, _) = read_tree_v3(&tree(files), Profile::Json).unwrap();
+    assert_eq!(sorted(read), sorted(original));
+}
+
+#[test]
+fn a_module_file_whose_version_differs_from_the_manifest_is_refused() {
+    let mut files = tree(write_tree_v3(&fixture("deps"), &policy(Profile::Yaml, 4000)).unwrap());
+    let path = "deps/morphir/_sdk/@/basics/module";
+    let mut module = parsed(Profile::Yaml, &files[path]);
+    module["formatVersion"] = serde_json::json!("4.0.0");
+    files.insert(path.into(), Profile::Yaml.write(&module));
+    let error = read_tree_v3(&files, Profile::Yaml).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
+    assert_eq!(error.cursor, format!("{path}#/formatVersion"), "{error:?}");
+}
+
+/// A JSON tree of `file`, with one file's parsed document changed by `change` and written back.
+fn edited(file: &Distribution, path: &str, change: impl FnOnce(&mut serde_json::Value)) -> Tree {
+    let mut files = tree(write_tree_v3(file, &policy(Profile::Json, 4000)).unwrap());
+    let mut document = parsed(Profile::Json, &files[path]);
+    change(&mut document);
+    files.insert(path.into(), Profile::Json.write(&document));
+    files
+}
+
+fn refusal(files: &Tree) -> morphir_core::ir::Diagnostic {
+    read_tree_v3(files, Profile::Json).unwrap_err()
+}
+
+const SPECS_TYPE: &str = "pkg/my/pkg/basics/int.type";
+
+#[test]
+fn a_node_file_without_a_format_version_is_refused_by_its_decoder() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let error = refusal(&edited(&specs, SPECS_TYPE, |node| {
+        node.as_object_mut().unwrap().remove("formatVersion");
+    }));
+    assert_eq!(
+        error.code,
+        DiagnosticCode::MissingFormatVersion,
+        "{error:?}"
+    );
+    assert_eq!(error.cursor, format!("{SPECS_TYPE}#/"), "{error:?}");
+}
+
+#[test]
+fn a_specification_file_in_a_library_package_is_refused() {
+    let greeting = fixture("greeting");
+    let files = tree(write_tree_v3(&greeting, &policy(Profile::Json, 4000)).unwrap());
+    let path = files
+        .keys()
+        .find(|path| path.starts_with("pkg/") && path.ends_with(".type"))
+        .unwrap()
+        .clone();
+    let error = refusal(&edited(&greeting, &path, |node| {
+        let node = node.as_object_mut().unwrap();
+        node.remove("def");
+        node.insert(
+            "spec".into(),
+            serde_json::json!({ "doc": "", "value": ["OpaqueTypeSpecification", []] }),
+        );
+    }));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+    assert_eq!(error.cursor, format!("{path}#/"), "{error:?}");
+    assert_eq!(error.message, "expected a definition file");
+}
+
+#[test]
+fn a_definition_shaped_specification_payload_is_refused() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let error = refusal(&edited(&specs, SPECS_TYPE, |node| {
+        node["spec"] = serde_json::json!({
+            "access": "Public",
+            "value": { "doc": "", "value": ["OpaqueTypeSpecification", []] }
+        });
+    }));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+    assert_eq!(error.cursor, format!("{SPECS_TYPE}#/spec"), "{error:?}");
+    assert_eq!(
+        error.message,
+        "expected a specification, found an access-controlled definition"
+    );
+}
+
+#[test]
+fn a_v3_manifest_has_no_entry_points() {
+    let error = refusal(&edited(&fixture("deps"), "manifest", |manifest| {
+        manifest["entryPoints"] = serde_json::json!({});
+    }));
+    assert_eq!(error.code, DiagnosticCode::UnknownMember, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/entryPoints", "{error:?}");
+}
+
+#[test]
+fn a_path_budget_below_the_floor_is_refused() {
+    let error = refusal(&edited(&fixture("deps"), "manifest", |manifest| {
+        manifest["pathBudget"] = serde_json::json!(63);
+    }));
+    assert_eq!(error.code, DiagnosticCode::InvalidType, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/pathBudget", "{error:?}");
+}
+
+#[test]
+fn a_specification_module_has_no_access() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let path = "pkg/my/pkg/basics/module";
+    let error = refusal(&edited(&specs, path, |module| {
+        module["access"] = serde_json::json!("Public");
+    }));
+    assert_eq!(error.code, DiagnosticCode::UnknownMember, "{error:?}");
+    assert_eq!(error.cursor, format!("{path}#/access"), "{error:?}");
+}
+
+#[test]
+fn a_duplicate_dependency_is_refused_the_same_way_on_write_and_on_read() {
+    let mut twice = fixture("deps");
+    if let DistributionBody::Library(_, deps, _) = &mut twice.distribution {
+        deps.push(deps[0].clone());
+    }
+    let written = write_tree_v3(&twice, &policy(Profile::Json, 4000)).unwrap_err();
+
+    let read = refusal(&edited(&fixture("deps"), "manifest", |manifest| {
+        manifest["dependencies"] = serde_json::json!(["morphir/SDK", "morphir/SDK"]);
+    }));
+
+    for error in [&written, &read] {
+        assert_eq!(error.code, DiagnosticCode::DuplicateMember, "{error:?}");
+        assert_eq!(error.cursor, "manifest#/dependencies/1", "{error:?}");
+    }
+}
+
+/// Decision 0014 (`document-tree-0005`): `$meta` at the top of any tree file is reserved and
+/// ignored.
+#[test]
+fn a_meta_member_at_the_top_of_every_v3_tree_file_is_ignored() {
+    let original = fixture("deps");
+    let mut files = tree(write_tree_v3(&original, &policy(Profile::Json, 4000)).unwrap());
+    let paths: Vec<String> = files.keys().cloned().collect();
+    for path in &paths {
+        let mut document = parsed(Profile::Json, &files[path]);
+        document["$meta"] = serde_json::json!({ "created": "2026-09-24", "by": "a tool" });
+        files.insert(path.clone(), Profile::Json.write(&document));
+    }
+    // One of each: the manifest, a module manifest and a node file.
+    assert!(paths.iter().any(|path| path == "manifest"));
+    assert!(paths.iter().any(|path| path.ends_with("/module")));
+    assert!(paths.iter().any(|path| path.ends_with(".type")));
+    let (read, warnings) = read_tree_v3(&files, Profile::Json).unwrap();
+    assert!(warnings.is_empty());
+    assert_eq!(sorted(read), sorted(original));
+}
+
+#[test]
+fn a_member_other_than_meta_is_still_refused_in_every_v3_tree_file() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    for path in ["manifest", "pkg/my/pkg/basics/module", SPECS_TYPE] {
+        let error = refusal(&edited(&specs, path, |document| {
+            document["$meta"] = serde_json::json!({});
+            document["meta"] = serde_json::json!({});
+        }));
+        assert_eq!(
+            error.code,
+            DiagnosticCode::UnknownMember,
+            "{path}: {error:?}"
+        );
+        assert_eq!(error.cursor, format!("{path}#/meta"), "{error:?}");
+    }
+}

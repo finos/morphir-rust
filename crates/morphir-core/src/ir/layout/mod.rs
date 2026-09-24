@@ -5,6 +5,10 @@
 //! see `.dev/docs/superpowers/maps/2026-09-17-reference-tree-layout-map.md`. [`paths`] and
 //! [`stems`] supply what a tree reader and a tree writer are both built on; [`read`] assembles a
 //! tree into a distribution and [`write`] lays one back out.
+//!
+//! The same layout holds a v4 distribution ([`read_tree`], [`write_tree`]) or a classic v3
+//! `Library` or `Specs` one ([`read_tree_v3`], [`write_tree_v3`]), whose files all say
+//! `formatVersion: "3.1.0"`; [`read_any_tree`] reads either, chosen by the manifest.
 
 pub mod paths;
 pub mod read;
@@ -12,6 +16,7 @@ pub mod stems;
 pub mod write;
 
 mod model;
+mod v3_model;
 mod v4_model;
 
 pub use paths::{
@@ -20,6 +25,10 @@ pub use paths::{
 };
 pub use read::read_tree;
 pub use stems::{StemResult, stem_for};
+pub use v3_model::{
+    AnyTree, V3_TREE_FORMAT_VERSION, V3Kind, read_any_tree, read_tree_v3, write_tree_v3,
+    write_v3_definition_module, write_v3_manifest, write_v3_specification_module,
+};
 pub use write::{
     ManifestHeader, TreePolicy, write_definition_module, write_manifest, write_manifest_header,
     write_specification_module, write_tree,

@@ -32,6 +32,10 @@ pub enum DiagnosticCode {
     UnsupportedFormatVersionMinor,
     InvalidYaml,
     UnsupportedYamlFeature,
+    /// A file says a format version other than the one it has to: a document tree's file that
+    /// disagrees with the tree's manifest, or a manifest a reader of another version was handed.
+    /// Not one of the kit's codes; the document-tree layout adds it.
+    VersionMismatch,
 }
 
 /// The stage in which a diagnostic was raised.

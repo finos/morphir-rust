@@ -305,3 +305,312 @@ fn a_write_tree_request_whose_input_is_not_a_document_answers_ok_false() {
         ["code", "stage", "cursor", "message"]
     );
 }
+
+// =============================================================================
+// readTree / writeTree — version 3: the classic Specs distribution as a JSON document tree
+// =============================================================================
+
+/// morphir-core's `a_v3_specs_distribution_round_trips_through_a_tree` fixture: a `Specs` distribution
+/// of one package, one module, one opaque type, laid out as a v3 document tree (every file
+/// `formatVersion: "3.1.0"`).
+const V3_SPECS: &str = r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[],{"modules":[[[["basics"]],{"types":[[["int"],{"doc":"","value":["OpaqueTypeSpecification",[]]}]],"values":[],"doc":"Basics."}]]}]}"#;
+
+/// The v3 Specs distribution laid out as a JSON document tree's files, in the wire shape a
+/// `readTree` request or a `writeTree` response carries them in.
+fn v3_specs_tree_files() -> Vec<serde_json::Value> {
+    let distribution: morphir_core::ir::classic::Distribution =
+        serde_json::from_str(V3_SPECS).expect("the fixture parses");
+    let policy = morphir_core::ir::layout::TreePolicy {
+        profile: morphir_core::ir::layout::Profile::Json,
+        path_budget: 4000,
+    };
+    morphir_core::ir::layout::write_tree_v3(&distribution, &policy)
+        .expect("the fixture lays out as a v3 tree")
+        .into_iter()
+        .map(|(path, content)| serde_json::json!({"path": path, "content": content}))
+        .collect()
+}
+
+/// The classic JSON document's canonical spelling: the compact type encoding morphir-core's
+/// classic model always writes, padded the way [`morphir_core::ir::json::write_canonical`] pads
+/// every canonical fence, with the one trailing newline a canonical fence carries.
+fn v3_specs_canonical_json() -> String {
+    let distribution: morphir_core::ir::classic::Distribution =
+        serde_json::from_str(V3_SPECS).expect("the fixture parses");
+    let value = serde_json::to_value(&distribution).expect("a classic distribution serialises");
+    format!("{}\n", morphir_core::ir::json::write_canonical(&value))
+}
+
+/// `readTree` on a version 3 tree answers `ok: true` with the classic JSON document — the same
+/// shape `document-tree-0006`'s `readTree` answers for version 4 (this file's
+/// `a_read_tree_request_for_the_escape_set_answers_ok_with_canonical_yaml`), but read into the
+/// classic model and answered under its own canonical spelling rather than the v4 `IRFile`'s.
+#[test]
+fn a_read_tree_request_for_a_v3_specs_set_answers_ok_with_the_classic_json_document() {
+    let line = serde_json::json!({
+        "id": 4,
+        "op": "readTree",
+        "version": 3,
+        "profile": "json",
+        "path": "current",
+        "strip": false,
+        "node": "Distribution",
+        "files": v3_specs_tree_files(),
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 4);
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["kind"], "Specs");
+    assert_eq!(response["canonical"]["json"], v3_specs_canonical_json());
+    assert_eq!(response["warnings"], serde_json::json!([]));
+}
+
+/// `writeTree` on the classic JSON document answers the same files [`v3_specs_tree_files`] reads
+/// from, in emission order: the manifest, the module manifest, then the type file.
+#[test]
+fn a_write_tree_request_for_a_v3_specs_document_answers_the_same_files() {
+    let line = serde_json::json!({
+        "id": 5,
+        "op": "writeTree",
+        "version": 3,
+        "path": "current",
+        "policy": {"profile": "json", "pathBudget": 4000},
+        "input": v3_specs_canonical_json(),
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 5);
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        response["files"],
+        serde_json::Value::Array(v3_specs_tree_files())
+    );
+    // A fixed anchor that does not come from the layout code: the three files the tree holds, and
+    // every one of them at "3.1.0".
+    let files = response["files"].as_array().expect("files is an array");
+    let paths: Vec<&str> = files
+        .iter()
+        .map(|file| file["path"].as_str().expect("a path"))
+        .collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert!(paths.contains(&"pkg/my/pkg/basics/int.type"), "{paths:?}");
+    for file in files {
+        let content: serde_json::Value =
+            serde_json::from_str(file["content"].as_str().expect("content")).expect("JSON");
+        assert_eq!(content["formatVersion"], "3.1.0", "{}", file["path"]);
+    }
+}
+
+/// A version other than 3 or 4 is still refused, the way [`an_undeclared_profile_or_version_is_refused_as_a_protocol_error`]
+/// (`decode.rs`) pins for `decode`.
+#[test]
+fn a_read_tree_request_at_an_unsupported_version_is_a_protocol_error() {
+    let line = serde_json::json!({
+        "id": 6,
+        "op": "readTree",
+        "version": 2,
+        "profile": "json",
+        "path": "current",
+        "strip": false,
+        "node": "Distribution",
+        "files": [],
+    });
+    let response = response_to(&line.to_string());
+    assert_protocol_error(&response, Some(6));
+}
+
+/// A version 3 tree's diagnostics come back through `readTree` the same way a version 4 tree's
+/// do: the same [`DecodeResponse::Err`] shape, the same `WireDiagnostic` four members, and the
+/// diagnostic's own code and cursor — here `layout::read_tree_v3`'s `version_mismatch` at the
+/// type file's `#/formatVersion`, the way `layout_v3.rs`'s
+/// `a_module_file_whose_version_differs_from_the_manifest_is_refused` pins it directly against
+/// morphir-core.
+#[test]
+fn a_v3_tree_diagnostic_comes_back_with_its_code_and_cursor() {
+    let mut files = v3_specs_tree_files();
+    let node_path = "pkg/my/pkg/basics/int.type";
+    for file in files.iter_mut() {
+        if file["path"] == node_path {
+            let mut node: serde_json::Value =
+                serde_json::from_str(file["content"].as_str().unwrap()).unwrap();
+            node["formatVersion"] = serde_json::json!("4.0.0");
+            file["content"] =
+                serde_json::Value::String(morphir_core::ir::json::write_canonical(&node));
+        }
+    }
+    let line = serde_json::json!({
+        "id": 8,
+        "op": "readTree",
+        "version": 3,
+        "profile": "json",
+        "path": "current",
+        "strip": false,
+        "node": "Distribution",
+        "files": files,
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 8);
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["diagnostic"]["code"], "version_mismatch");
+    assert_eq!(
+        response["diagnostic"]["cursor"],
+        format!("{node_path}#/formatVersion")
+    );
+    assert_eq!(
+        diagnostic_members(&response),
+        ["code", "stage", "cursor", "message"]
+    );
+}
+
+/// morphir-core's YAML reader is a profile of YAML, not a JSON/YAML discriminator: a *whole*
+/// file spelled in canonical JSON is also syntactically valid YAML (JSON is a syntactic subset
+/// of YAML), so it parses under the `yaml` profile rather than being refused by it — the same is
+/// true of a v4 tree's `readTree` (verified directly against `layout::read_tree` and
+/// `layout::read_tree_v3`: a whole tree written by [`morphir_core::ir::layout::write_tree_v3`]
+/// under the `json` policy round-trips through `read_tree_v3(&files, Profile::Yaml)` without
+/// error). There is no v4 `readTree` test pinning a refusal for this case, because there is
+/// nothing today's v4 tree reader refuses it with; a v3 tree inherits the identical behaviour by
+/// construction, since [`morphir_core::ir::layout::read_tree_v3`] shares `read_tree_with` with
+/// [`morphir_core::ir::layout::read_tree`] (see `layout/v3_model.rs`, `layout/read.rs`). This
+/// test pins that parity rather than a refusal: see the report for task 9 on the Review Focus
+/// item this was meant to close.
+#[test]
+fn a_json_node_file_inside_a_yaml_v3_tree_parses_the_same_way_a_v4_tree_does() {
+    let distribution: morphir_core::ir::classic::Distribution =
+        serde_json::from_str(V3_SPECS).expect("the fixture parses");
+    let yaml_policy = morphir_core::ir::layout::TreePolicy {
+        profile: morphir_core::ir::layout::Profile::Yaml,
+        path_budget: 4000,
+    };
+    let mut files = morphir_core::ir::layout::write_tree_v3(&distribution, &yaml_policy)
+        .expect("the fixture lays out as a v3 yaml tree");
+    let node_path = "pkg/my/pkg/basics/int.type";
+    let (_, node_text) = files
+        .iter()
+        .find(|(path, _)| path == node_path)
+        .expect("the type file is in the tree")
+        .clone();
+    let node_value = morphir_core::ir::layout::Profile::Yaml
+        .read(&node_text)
+        .expect("the yaml node parses");
+    let json_spelling = morphir_core::ir::layout::Profile::Json.write(&node_value);
+    for (path, content) in files.iter_mut() {
+        if path == node_path {
+            *content = json_spelling.clone();
+        }
+    }
+    let files: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|(path, content)| serde_json::json!({"path": path, "content": content}))
+        .collect();
+    let line = serde_json::json!({
+        "id": 7,
+        "op": "readTree",
+        "version": 3,
+        "profile": "yaml",
+        "path": "current",
+        "strip": false,
+        "node": "Distribution",
+        "files": files,
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["id"], 7);
+    // Not a refusal (see the doc comment above): the JSON-spelled node file is valid YAML too,
+    // so it reads the same distribution the all-YAML tree would have.
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["kind"], "Specs");
+}
+
+// =============================================================================
+// readTree — version 3 with `strip`: a typed classic Library
+// =============================================================================
+
+/// A classic `Int` reference, the type a typed Library carries at every value position.
+const V3_INT: &str = r#"["Reference",{},[[["morphir"],["s","d","k"]],[["basics"]],["int"]],[]]"#;
+
+/// `identity x = x` with its type at every attribute position: the argument's annotation and the
+/// body's own attribute.
+fn v3_typed_value_definition() -> String {
+    format!(
+        r#"{{"inputTypes":[[["x"],{V3_INT},{V3_INT}]],"outputType":{V3_INT},"body":["Variable",{V3_INT},["x"]]}}"#
+    )
+}
+
+/// A typed v3 `Library` of one module holding [`v3_typed_value_definition`].
+fn v3_typed_library() -> String {
+    format!(
+        r#"{{"formatVersion":3,"distribution":["Library",[["my"],["pkg"]],[],{{"modules":[[[["basics"]],{{"access":"Public","value":{{"types":[],"values":[[["identity"],{{"access":"Public","value":{{"doc":"","value":{}}}}}]],"doc":null}}}}]]}}]}}"#,
+        v3_typed_value_definition()
+    )
+}
+
+fn v3_typed_library_tree_files() -> Vec<serde_json::Value> {
+    let distribution: morphir_core::ir::classic::Distribution =
+        serde_json::from_str(&v3_typed_library()).expect("the fixture parses");
+    let policy = morphir_core::ir::layout::TreePolicy {
+        profile: morphir_core::ir::layout::Profile::Json,
+        path_budget: 4000,
+    };
+    morphir_core::ir::layout::write_tree_v3(&distribution, &policy)
+        .expect("the fixture lays out as a v3 tree")
+        .into_iter()
+        .map(|(path, content)| serde_json::json!({"path": path, "content": content}))
+        .collect()
+}
+
+/// The value definition inside a readTree answer for [`v3_typed_library`].
+fn answered_value_definition(response: &serde_json::Value) -> serde_json::Value {
+    let document: serde_json::Value = serde_json::from_str(
+        response["canonical"]["json"]
+            .as_str()
+            .expect("a json canonical"),
+    )
+    .expect("the canonical parses");
+    document["distribution"][3]["modules"][0][1]["value"]["values"][0][1]["value"]["value"].clone()
+}
+
+fn read_typed_library_tree(strip: bool) -> serde_json::Value {
+    let line = serde_json::json!({
+        "id": 9,
+        "op": "readTree",
+        "version": 3,
+        "profile": "json",
+        "path": "current",
+        "strip": strip,
+        "node": "Distribution",
+        "files": v3_typed_library_tree_files(),
+    });
+    let response = response_to(&line.to_string());
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["kind"], "Library");
+    response
+}
+
+/// With `strip`, a v3 tree answers its values the way `decode` answers the same value definition
+/// with `strip`: every value attribute cleared to `{}`. Without it, the types stay.
+#[test]
+fn a_v3_read_tree_request_with_strip_clears_value_attributes() {
+    let decoded = response_to(
+        &serde_json::json!({
+            "id": 10,
+            "op": "decode",
+            "version": 3,
+            "profile": "json",
+            "path": "current",
+            "strip": true,
+            "node": "ValueDefinition",
+            "input": v3_typed_value_definition(),
+        })
+        .to_string(),
+    );
+    assert_eq!(decoded["ok"], true, "{decoded}");
+    let decoded: serde_json::Value =
+        serde_json::from_str(decoded["canonical"]["json"].as_str().unwrap()).unwrap();
+    assert_eq!(decoded["body"][1], serde_json::json!({}));
+
+    let stripped = read_typed_library_tree(true);
+    assert_eq!(answered_value_definition(&stripped), decoded);
+
+    let kept = read_typed_library_tree(false);
+    let int: serde_json::Value = serde_json::from_str(V3_INT).unwrap();
+    assert_eq!(answered_value_definition(&kept)["body"][1], int);
+}

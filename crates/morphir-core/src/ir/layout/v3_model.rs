@@ -24,7 +24,7 @@ use crate::ir::classic::package::ModuleSpecEntry;
 use crate::ir::classic::{self, Attrs};
 use crate::ir::v4::IRFile;
 use crate::ir::v4::module::Documentation;
-use crate::ir::v4::tree_files::{MIN_PATH_BUDGET, is_escaped_stem};
+use crate::ir::v4::serde_document::{decode_file_names_member, decode_path_budget};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage, Warning};
 use crate::migration::migrate_name;
 use crate::naming::{ModuleName, Name, PackageName, Path};
@@ -126,7 +126,7 @@ impl TreeModel for V3 {
 
         let package_at = format!("{cursor}/package");
         let package = package_name(string(written_package, &package_at)?, &package_at)?;
-        let path_budget = path_budget(written_budget, &format!("{cursor}/pathBudget"))?;
+        let path_budget = decode_path_budget(written_budget, &format!("{cursor}/pathBudget"))?;
         let dependencies = match members.get("dependencies") {
             None => Vec::new(),
             Some(written) => {
@@ -228,7 +228,9 @@ impl TreeModel for V3 {
         listed.extend(listed_names(&values));
         let file_names = match members.get("fileNames") {
             None => Vec::new(),
-            Some(written) => file_names(written, &format!("{cursor}/fileNames"), &listed)?,
+            Some(written) => {
+                decode_file_names_member(written, &format!("{cursor}/fileNames"), &listed)?
+            }
         };
 
         Ok(ModuleFile {
@@ -287,25 +289,12 @@ impl TreeModel for V3 {
     }
 
     fn encode_manifest(envelope: &Envelope<V3Kind, ()>) -> Result<JsonValue, Diagnostic> {
-        let mut file = Map::new();
-        file.insert("formatVersion".into(), V3_TREE_FORMAT_VERSION.into());
-        file.insert("distribution".into(), envelope.kind.as_str().into());
-        file.insert(
-            "package".into(),
-            envelope.package.to_canonical_string().into(),
-        );
-        file.insert("pathBudget".into(), envelope.path_budget.into());
-        if !envelope.dependencies.is_empty() {
-            file.insert(
-                "dependencies".into(),
-                envelope
-                    .dependencies
-                    .iter()
-                    .map(|name| JsonValue::from(name.to_canonical_string()))
-                    .collect(),
-            );
-        }
-        Ok(JsonValue::Object(file))
+        Ok(manifest(
+            envelope.kind,
+            &envelope.package,
+            envelope.path_budget,
+            &envelope.dependencies,
+        ))
     }
 
     fn encode_module(
@@ -431,17 +420,11 @@ pub fn write_tree_v3(
     };
     let package = PackageName::new(canonical_path(package, MANIFEST)?);
     let mut dependency_names: Vec<PackageName> = Vec::with_capacity(dependencies.len());
-    for (name, _) in dependencies {
-        let name = PackageName::new(canonical_path(name, MANIFEST)?);
-        if name == package {
-            return Err(invalid_distribution_shape(MANIFEST, OWN_PACKAGE_DEPENDENCY));
-        }
-        if dependency_names.contains(&name) {
-            return Err(invalid_distribution_shape(
-                MANIFEST,
-                format!("duplicate dependency \"{}\"", name.to_canonical_string()),
-            ));
-        }
+    for (index, (name, _)) in dependencies.iter().enumerate() {
+        // Cursored the way the reader cursors the manifest entry this one would become.
+        let at = format!("{MANIFEST}#/dependencies/{index}");
+        let name = PackageName::new(canonical_path(name, &at)?);
+        check_dependency(&name, &at, &package, &dependency_names)?;
         dependency_names.push(name);
     }
 
@@ -473,25 +456,40 @@ pub fn write_tree_v3(
     Ok(out.into_vec())
 }
 
-/// The root manifest of a v3 document tree.
-///
-/// Total, because a manifest carries only names, a kind and a number; the fallback below is
-/// unreachable rather than a case to handle.
+/// The root manifest of a v3 document tree. Total: a manifest carries only names, a kind and a
+/// number.
 pub fn write_v3_manifest(
     kind: V3Kind,
     package: &PackageName,
     dependencies: &[PackageName],
     policy: &TreePolicy,
 ) -> (String, String) {
-    let envelope = Envelope {
-        kind,
-        package: package.clone(),
-        path_budget: policy.path_budget,
-        dependencies: dependencies.to_vec(),
-        extra: (),
-    };
-    let value = V3::encode_manifest(&envelope).unwrap_or(JsonValue::Null);
+    let value = manifest(kind, package, policy.path_budget, dependencies);
     (MANIFEST.to_owned(), policy.profile.write(&value))
+}
+
+/// What a v3 manifest says: `dependencies` only when there are any.
+fn manifest(
+    kind: V3Kind,
+    package: &PackageName,
+    path_budget: u32,
+    dependencies: &[PackageName],
+) -> JsonValue {
+    let mut file = Map::new();
+    file.insert("formatVersion".into(), V3_TREE_FORMAT_VERSION.into());
+    file.insert("distribution".into(), kind.as_str().into());
+    file.insert("package".into(), package.to_canonical_string().into());
+    file.insert("pathBudget".into(), path_budget.into());
+    if !dependencies.is_empty() {
+        file.insert(
+            "dependencies".into(),
+            dependencies
+                .iter()
+                .map(|name| JsonValue::from(name.to_canonical_string()))
+                .collect(),
+        );
+    }
+    JsonValue::Object(file)
 }
 
 /// Lays one classic module definition out as its manifest and one file per type and value, in
@@ -697,28 +695,6 @@ fn package_name(text: &str, cursor: &str) -> Result<PackageName, Diagnostic> {
         .map_err(|error| Diagnostic::normalization(DiagnosticCode::InvalidPath, cursor, error))
 }
 
-/// `pathBudget`: a number first, then an integer of at least [`MIN_PATH_BUDGET`].
-fn path_budget(value: &JsonValue, cursor: &str) -> Result<u32, Diagnostic> {
-    let JsonValue::Number(number) = value else {
-        return Err(invalid_type(
-            cursor,
-            format!("expected a number, found {}", kind_of(value)),
-        ));
-    };
-    let refuse = || {
-        invalid_type(
-            cursor,
-            format!("pathBudget must be an integer of at least {MIN_PATH_BUDGET}"),
-        )
-    };
-    let budget = number.as_u64().ok_or_else(refuse)?;
-    let budget = u32::try_from(budget).map_err(|_| refuse())?;
-    if budget < MIN_PATH_BUDGET {
-        return Err(refuse());
-    }
-    Ok(budget)
-}
-
 /// The manifest's `dependencies`: canonical package names, none twice and none the distribution's
 /// own. A classic distribution lists its dependencies beside its own package, so one that names
 /// itself would be the same package twice.
@@ -734,19 +710,31 @@ fn dependency_names(
     for (index, item) in items.iter().enumerate() {
         let at = format!("{cursor}/{index}");
         let name = package_name(string(item, &at)?, &at)?;
-        if &name == own {
-            return Err(invalid_distribution_shape(&at, OWN_PACKAGE_DEPENDENCY));
-        }
-        if names.contains(&name) {
-            return Err(Diagnostic::normalization(
-                DiagnosticCode::DuplicateMember,
-                &at,
-                format!("duplicate dependency \"{}\"", name.to_canonical_string()),
-            ));
-        }
+        check_dependency(&name, &at, own, &names)?;
         names.push(name);
     }
     Ok(names)
+}
+
+/// One dependency against the package and the dependencies before it, for the reader and the
+/// writer alike, so the two refuse the same tree with the same diagnostic.
+fn check_dependency(
+    name: &PackageName,
+    at: &str,
+    own: &PackageName,
+    earlier: &[PackageName],
+) -> Result<(), Diagnostic> {
+    if name == own {
+        return Err(invalid_distribution_shape(at, OWN_PACKAGE_DEPENDENCY));
+    }
+    if earlier.contains(name) {
+        return Err(Diagnostic::normalization(
+            DiagnosticCode::DuplicateMember,
+            at,
+            format!("duplicate dependency \"{}\"", name.to_canonical_string()),
+        ));
+    }
+    Ok(())
 }
 
 /// A module manifest's `doc`: one string, or an array of lines joined the way the text would
@@ -835,38 +823,6 @@ fn listed_names<D, S>(entries: &Entries<D, S>) -> Vec<String> {
         Entries::Definitions(items) => items.keys().cloned().collect(),
         Entries::Specifications(items) => items.keys().cloned().collect(),
     }
-}
-
-/// `fileNames`: the names whose stem was truncated for the path budget, each with the stem its
-/// file is under. The key has to be a name the module lists and the stem has to be a stem; the
-/// truncation itself is trusted, never recomputed.
-fn file_names(
-    value: &JsonValue,
-    cursor: &str,
-    listed: &[String],
-) -> Result<Vec<(Name, String)>, Diagnostic> {
-    let entries = members_of(value, cursor, "fileNames")?;
-    let mut recorded = Vec::with_capacity(entries.len());
-    for (key, written) in entries {
-        let at = format!("{cursor}/{key}");
-        let name = decode_name(&JsonValue::String(key.clone()), &at)?;
-        if !listed.contains(&name.to_canonical_string()) {
-            return Err(invalid_distribution_shape(
-                &at,
-                "fileNames key not listed in types or values",
-            ));
-        }
-        let stem = string(written, &at)?;
-        if !is_escaped_stem(stem) {
-            return Err(Diagnostic::normalization(
-                DiagnosticCode::InvalidName,
-                &at,
-                format!("\"{stem}\" is not an escaped stem"),
-            ));
-        }
-        recorded.push((name, stem.to_owned()));
-    }
-    Ok(recorded)
 }
 
 /// A node file: a format version, a name, and exactly one of `def` and `spec`.

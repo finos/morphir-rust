@@ -160,7 +160,10 @@ fn v4_tree() -> Tree {
 #[test]
 fn a_v4_reader_refuses_a_v3_tree_and_the_reverse() {
     let v3 = tree(write_tree_v3(&fixture("greeting"), &policy(Profile::Json, 4000)).unwrap());
-    assert!(read_tree(&v3, Profile::Json).is_err());
+    let error = read_tree(&v3, Profile::Json).unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/formatVersion", "{error:?}");
+    assert!(error.message.contains("\"3.1.0\""), "{error:?}");
 
     let v4 = v4_tree();
     read_tree(&v4, Profile::Json).expect("the v4 tree is a v4 tree");
@@ -282,4 +285,119 @@ fn a_module_file_whose_version_differs_from_the_manifest_is_refused() {
     let error = read_tree_v3(&files, Profile::Yaml).unwrap_err();
     assert_eq!(error.code, DiagnosticCode::VersionMismatch, "{error:?}");
     assert_eq!(error.cursor, format!("{path}#/formatVersion"), "{error:?}");
+}
+
+/// A JSON tree of `file`, with one file's parsed document changed by `change` and written back.
+fn edited(file: &Distribution, path: &str, change: impl FnOnce(&mut serde_json::Value)) -> Tree {
+    let mut files = tree(write_tree_v3(file, &policy(Profile::Json, 4000)).unwrap());
+    let mut document = parsed(Profile::Json, &files[path]);
+    change(&mut document);
+    files.insert(path.into(), Profile::Json.write(&document));
+    files
+}
+
+fn refusal(files: &Tree) -> morphir_core::ir::Diagnostic {
+    read_tree_v3(files, Profile::Json).unwrap_err()
+}
+
+const SPECS_TYPE: &str = "pkg/my/pkg/basics/int.type";
+
+#[test]
+fn a_node_file_without_a_format_version_is_refused_by_its_decoder() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let error = refusal(&edited(&specs, SPECS_TYPE, |node| {
+        node.as_object_mut().unwrap().remove("formatVersion");
+    }));
+    assert_eq!(
+        error.code,
+        DiagnosticCode::MissingFormatVersion,
+        "{error:?}"
+    );
+    assert_eq!(error.cursor, format!("{SPECS_TYPE}#/"), "{error:?}");
+}
+
+#[test]
+fn a_specification_file_in_a_library_package_is_refused() {
+    let greeting = fixture("greeting");
+    let files = tree(write_tree_v3(&greeting, &policy(Profile::Json, 4000)).unwrap());
+    let path = files
+        .keys()
+        .find(|path| path.starts_with("pkg/") && path.ends_with(".type"))
+        .unwrap()
+        .clone();
+    let error = refusal(&edited(&greeting, &path, |node| {
+        let node = node.as_object_mut().unwrap();
+        node.remove("def");
+        node.insert(
+            "spec".into(),
+            serde_json::json!({ "doc": "", "value": ["OpaqueTypeSpecification", []] }),
+        );
+    }));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+    assert_eq!(error.cursor, format!("{path}#/"), "{error:?}");
+    assert_eq!(error.message, "expected a definition file");
+}
+
+#[test]
+fn a_definition_shaped_specification_payload_is_refused() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let error = refusal(&edited(&specs, SPECS_TYPE, |node| {
+        node["spec"] = serde_json::json!({
+            "access": "Public",
+            "value": { "doc": "", "value": ["OpaqueTypeSpecification", []] }
+        });
+    }));
+    assert_eq!(error.code, DiagnosticCode::InvalidDistributionShape);
+    assert_eq!(error.cursor, format!("{SPECS_TYPE}#/spec"), "{error:?}");
+    assert_eq!(
+        error.message,
+        "expected a specification, found an access-controlled definition"
+    );
+}
+
+#[test]
+fn a_v3_manifest_has_no_entry_points() {
+    let error = refusal(&edited(&fixture("deps"), "manifest", |manifest| {
+        manifest["entryPoints"] = serde_json::json!({});
+    }));
+    assert_eq!(error.code, DiagnosticCode::UnknownMember, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/entryPoints", "{error:?}");
+}
+
+#[test]
+fn a_path_budget_below_the_floor_is_refused() {
+    let error = refusal(&edited(&fixture("deps"), "manifest", |manifest| {
+        manifest["pathBudget"] = serde_json::json!(63);
+    }));
+    assert_eq!(error.code, DiagnosticCode::InvalidType, "{error:?}");
+    assert_eq!(error.cursor, "manifest#/pathBudget", "{error:?}");
+}
+
+#[test]
+fn a_specification_module_has_no_access() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    let path = "pkg/my/pkg/basics/module";
+    let error = refusal(&edited(&specs, path, |module| {
+        module["access"] = serde_json::json!("Public");
+    }));
+    assert_eq!(error.code, DiagnosticCode::UnknownMember, "{error:?}");
+    assert_eq!(error.cursor, format!("{path}#/access"), "{error:?}");
+}
+
+#[test]
+fn a_duplicate_dependency_is_refused_the_same_way_on_write_and_on_read() {
+    let mut twice = fixture("deps");
+    if let DistributionBody::Library(_, deps, _) = &mut twice.distribution {
+        deps.push(deps[0].clone());
+    }
+    let written = write_tree_v3(&twice, &policy(Profile::Json, 4000)).unwrap_err();
+
+    let read = refusal(&edited(&fixture("deps"), "manifest", |manifest| {
+        manifest["dependencies"] = serde_json::json!(["morphir/SDK", "morphir/SDK"]);
+    }));
+
+    for error in [&written, &read] {
+        assert_eq!(error.code, DiagnosticCode::DuplicateMember, "{error:?}");
+        assert_eq!(error.cursor, "manifest#/dependencies/1", "{error:?}");
+    }
 }

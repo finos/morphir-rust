@@ -510,15 +510,13 @@ impl<M: TreeModel> Reader<'_, M> {
             self.version = found;
             return Ok(());
         }
-        match &self.version {
-            Some(expected) if found.as_ref() != Some(expected) => Err(Diagnostic::new(
+        // A file that says no version at all is left to its decoder, which answers
+        // `missing_format_version` as it would for a single document.
+        match (&self.version, found) {
+            (Some(expected), Some(found)) if found != *expected => Err(Diagnostic::normalization(
                 DiagnosticCode::VersionMismatch,
-                DiagnosticStage::Semantic,
                 format!("{path}#/formatVersion"),
-                format!(
-                    "formatVersion {} does not match the manifest's {expected}",
-                    found.as_deref().unwrap_or("(absent)")
-                ),
+                format!("formatVersion {found} does not match the manifest's {expected}"),
             )),
             _ => Ok(()),
         }

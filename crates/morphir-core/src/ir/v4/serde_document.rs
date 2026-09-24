@@ -1472,8 +1472,8 @@ pub(in crate::ir) fn decode_distribution_manifest_file(
 ///
 /// The two are separate answers. Something that is not a number at all is a type error about the
 /// member, the way any other mistyped member is; only a number gets to be measured against the
-/// floor.
-fn decode_path_budget(value: &JsonValue, cursor: &str) -> Result<u32, Diagnostic> {
+/// floor. The v3 document tree reads its manifest's budget here too, so the two cannot drift.
+pub(crate) fn decode_path_budget(value: &JsonValue, cursor: &str) -> Result<u32, Diagnostic> {
     let JsonValue::Number(number) = value else {
         return Err(expected_string_like(cursor, "a number", value));
     };
@@ -1752,8 +1752,22 @@ fn decode_file_names(
     let Some(member) = members.get("fileNames") else {
         return Ok(Vec::new());
     };
-    let at = member_cursor(members, "fileNames", cursor);
-    let entries = members_of(member.value, &at, "fileNames")?;
+    decode_file_names_member(
+        member.value,
+        &member_cursor(members, "fileNames", cursor),
+        listed,
+    )
+}
+
+/// Decodes a `fileNames` member that is present, at `at`, against the canonical names the module
+/// lists. The v3 document tree reads its module manifests' `fileNames` here too, so the two
+/// cannot drift.
+pub(crate) fn decode_file_names_member(
+    value: &JsonValue,
+    at: &str,
+    listed: &[String],
+) -> Result<Vec<(Name, String)>, Diagnostic> {
+    let entries = members_of(value, at, "fileNames")?;
     let mut recorded = Vec::with_capacity(entries.len());
     for (key, written) in entries {
         let key_at = format!("{at}/{key}");

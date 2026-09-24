@@ -15,6 +15,8 @@ pub enum LegacyNodeIdError {
     StaleTarget,
     #[error("V3 NodeID step has no reviewed semantic mapping")]
     MappingNotSpecified,
+    #[error("V3 NodeID migration requires a Library distribution")]
+    UnsupportedDistribution,
 }
 
 enum LegacyStep {
@@ -42,7 +44,10 @@ pub fn convert_v3_node_id(
     let package = legacy_path(parts[0])?;
     let module = legacy_path(parts[1])?;
     let classic::DistributionBody::Library(actual_package, _, definition) =
-        &distribution.distribution;
+        &distribution.distribution
+    else {
+        return Err(LegacyNodeIdError::UnsupportedDistribution);
+    };
     if package != convert_path(actual_package)? {
         return Err(LegacyNodeIdError::PackageMismatch);
     }

@@ -116,7 +116,10 @@ impl NodeCatalog {
         let digest = verify_snapshot_digest(bytes, expected)?;
         let distribution: classic::Distribution = serde_json::from_slice(bytes)
             .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
-        let classic::DistributionBody::Library(package, _, _) = &distribution.distribution;
+        let package = match &distribution.distribution {
+            classic::DistributionBody::Library(package, _, _)
+            | classic::DistributionBody::Specs(package, _, _) => package,
+        };
         let selector = ArtifactSelector::Package(PackageName::new(classic_path(package)?));
         let index = NodeIndex::v3(&distribution, selector)?;
         self.snapshots.push((digest.clone(), index));
@@ -341,25 +344,43 @@ impl NodeIndex {
         if distribution.format_version != 3 {
             return Err(NodeResolutionError::FormatVersionMismatch);
         }
-        let mut index = Self::new(artifact, IrFormatVersion::new(3, 0, 0));
+        let format = match &distribution.distribution {
+            classic::DistributionBody::Library(..) => IrFormatVersion::new(3, 0, 0),
+            classic::DistributionBody::Specs(..) => IrFormatVersion::new(3, 1, 0),
+        };
+        let mut index = Self::new(artifact, format);
         index.add(
             &WalkContext::root(NodeRoot::Distribution),
             IndexedNodeKind::Distribution,
             distribution,
         )?;
-        let classic::DistributionBody::Library(package_path, dependencies, package) =
-            &distribution.distribution;
-        index.add(
-            &WalkContext::root(NodeRoot::Package),
-            IndexedNodeKind::Package,
-            package,
-        )?;
+        let (package_path, dependencies) = match &distribution.distribution {
+            classic::DistributionBody::Library(path, dependencies, _)
+            | classic::DistributionBody::Specs(path, dependencies, _) => (path, dependencies),
+        };
         if let ArtifactSelector::Package(selected) = &index.artifact
             && selected.as_path() != &classic_path(package_path)?
         {
             return Err(NodeResolutionError::ArtifactMismatch);
         }
-        index.v3_definition_package(NodeOwner::OwnPackage, package)?;
+        match &distribution.distribution {
+            classic::DistributionBody::Library(_, _, package) => {
+                index.add(
+                    &WalkContext::root(NodeRoot::Package),
+                    IndexedNodeKind::Package,
+                    package,
+                )?;
+                index.v3_definition_package(NodeOwner::OwnPackage, package)?;
+            }
+            classic::DistributionBody::Specs(_, _, package) => {
+                index.add(
+                    &WalkContext::root(NodeRoot::Package),
+                    IndexedNodeKind::Package,
+                    package,
+                )?;
+                index.v3_specification_package(NodeOwner::OwnPackage, package)?;
+            }
+        }
         for (path, specification) in dependencies {
             let package = PackageName::new(classic_path(path)?);
             index.add(

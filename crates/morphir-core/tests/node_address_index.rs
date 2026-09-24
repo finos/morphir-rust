@@ -43,6 +43,40 @@ fn v4_record() -> v4::Distribution {
     })
 }
 
+#[test]
+fn v3_specs_distribution_indexes_its_public_interface() {
+    let distribution = classic::Distribution {
+        format_version: 3,
+        distribution: classic::DistributionBody::Specs(
+            classic::Path::new(vec![classic::Name::from_str("Acme")]),
+            vec![],
+            classic::PackageSpecification {
+                modules: vec![classic::package::ModuleSpecEntry {
+                    path: classic::Path::new(vec![classic::Name::from_str("Domain")]),
+                    specification: classic::ModuleSpecification {
+                        types: vec![],
+                        values: vec![],
+                        doc: None,
+                    },
+                }],
+            },
+        ),
+    };
+    let index = NodeIndex::v3(
+        &distribution,
+        ArtifactSelector::Package(PackageName::new(Path::new("acme"))),
+    )
+    .unwrap();
+    let uri = NodeUri::parse("morphir://ir/pkg/acme?format=3.1.0#/package").unwrap();
+    assert!(index.resolve(&uri).is_ok());
+    let module = NodeUri::parse("morphir://ir/pkg/acme?format=3.1.0#/module/domain").unwrap();
+    assert!(index.resolve(&module).is_ok());
+    let bytes = serde_json::to_vec(&distribution).unwrap();
+    let mut catalog = NodeCatalog::new();
+    catalog.add_v3_json_snapshot(&bytes, None).unwrap();
+    assert!(convert_v3_node_id(&distribution, &index, "Acme:Domain").is_err());
+}
+
 fn order_type(distribution: &mut v4::Distribution) -> &mut v4::Type {
     let v4::Distribution::Library(library) = distribution else {
         unreachable!()

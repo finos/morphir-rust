@@ -63,6 +63,7 @@ impl From<morphir_host::HostError> for DaemonError {
     fn from(error: morphir_host::HostError) -> Self {
         match error {
             morphir_host::HostError::Json(error) => DaemonError::Json(error),
+            morphir_host::HostError::Io(error) => DaemonError::Io(error),
             other => DaemonError::Extension(other.to_string()),
         }
     }

@@ -15,7 +15,9 @@ pub enum ChannelState {
 ///
 /// The variants that existed as daemon messages before this crate existed
 /// keep the daemon's `Display` text: `VersionNotOffered`, the envelope texts
-/// carried by `Invalid`, `Rpc`, and the guard texts carried by `Rejected`.
+/// carried by `Invalid`, `Rpc`, the guard texts carried by `Rejected`, and
+/// `Io`, which keeps the daemon's `"IO error: {0}"` text so error strings
+/// stay the same across the `From<HostError> for DaemonError` boundary.
 /// Callers and tests match on these messages. `State` is new to this crate
 /// and has no daemon precedent.
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +58,9 @@ pub enum HostError {
     /// A value could not be encoded or decoded.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    /// An I/O operation failed.
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl From<crate::channel::ChannelError> for HostError {

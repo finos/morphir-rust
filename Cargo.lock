@@ -4506,6 +4506,7 @@ dependencies = [
  "morphir-distribution",
  "morphir-extension-sdk",
  "morphir-host",
+ "morphir-host-native",
  "morphir-projection",
  "morphir-workspace",
  "notify",
@@ -4517,8 +4518,6 @@ dependencies = [
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
- "unicode-casefold",
- "unicode-normalization",
  "wat",
 ]
 
@@ -4674,10 +4673,33 @@ dependencies = [
  "morphir-extension-sdk",
  "morphir-host",
  "morphir-workspace",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "morphir-host-native"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "extism",
+ "morphir-core",
+ "morphir-distribution",
+ "morphir-extension-sdk",
+ "morphir-host",
+ "morphir-workspace",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "unicode-casefold",
+ "unicode-normalization",
+ "wat",
 ]
 
 [[package]]

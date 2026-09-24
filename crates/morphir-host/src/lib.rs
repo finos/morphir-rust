@@ -10,8 +10,11 @@ mod config;
 mod connection;
 mod envelope;
 mod error;
+mod expected;
 mod jsonrpc;
 mod negotiated;
+/// The install probe: describe a guest before trusting its claims.
+mod probe;
 mod send;
 mod session;
 mod session_core;
@@ -24,8 +27,13 @@ pub use config::HostConfig;
 pub use connection::{CallError, GuestConnection};
 pub use envelope::{EnvelopeError, validate_envelope};
 pub use error::{ChannelState, HostError};
+pub use expected::{
+    CapabilityExpectation, ExpectedChecks, ExpectedExtension, PersistedExtensionCapabilities,
+    validate_negotiation,
+};
 pub use jsonrpc::JsonRpcConnection;
 pub use negotiated::Negotiated;
+pub use probe::{Description, DescriptionSource, describe, describe_with};
 pub use send::MaybeSend;
 pub use session::{Session, call_once, compile_once, generate_once};
 pub use session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};

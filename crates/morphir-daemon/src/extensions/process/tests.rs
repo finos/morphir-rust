@@ -1,27 +1,9 @@
 use super::*;
-use morphir_extension_sdk::{BackendCapability, ExtensionInfo, ExtensionType};
-use tokio::io::{BufReader, duplex};
-
-#[test]
-fn discovered_process_launch_retains_exact_negotiation_metadata() {
-    let discovered = ExtensionInfo {
-        id: "morphir-elm".into(),
-        name: "Morphir Elm".into(),
-        version: "3.2.1".into(),
-        types: vec![ExtensionType::Frontend],
-        ..ExtensionInfo::default()
-    };
-    let launch =
-        ProcessLaunch::from_discovered(discovered.clone(), "/verified/morphir-elm", "/workspace");
-
-    assert_eq!(launch.extension_id, discovered.id);
-    let retained = launch
-        .discovered
-        .expect("verified launches should retain discovery metadata");
-    assert_eq!(retained.name, discovered.name);
-    assert_eq!(retained.version, discovered.version);
-    assert_eq!(retained.types, discovered.types);
-}
+use morphir_extension_sdk::{
+    BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType,
+};
+use morphir_host_native::process::read_frame;
+use tokio::io::BufReader;
 
 #[test]
 fn compatibility_initialization_rejects_locked_backend_capability_drift() {
@@ -116,92 +98,35 @@ async fn compatibility_invoke_rejects_unsafe_generated_artifacts() {
     assert!(error.to_string().contains("artifact path"), "{error}");
 }
 
-#[tokio::test]
-async fn verified_bytes_stage_under_the_explicit_managed_directory() {
-    let root = tempfile::tempdir().unwrap();
-    let staging_directory = root.path().join("managed-staging");
-    fs::create_dir(&staging_directory).unwrap();
-    let launch = ProcessLaunch::from_verified_bytes_in(
-        ExtensionInfo {
-            id: "example".into(),
-            ..ExtensionInfo::default()
-        },
-        OsStr::new("example"),
-        b"#!/bin/sh\n",
-        &staging_directory,
-        root.path(),
-    );
+// `stderr_capture_retains_only_the_bounded_tail` moved to
+// `morphir_host_native::process` with the stderr reader.
 
-    let (program, _retained_directory) = prepare_program(&launch.program).await.unwrap();
+/// A reader whose first poll always fails, to force a real `std::io::Error`
+/// out of `read_frame` without relying on process teardown timing.
+struct FailingReader;
 
-    assert!(program.starts_with(&staging_directory));
-}
-
-#[test]
-fn verified_bytes_reject_path_components_without_writing_outside_staging() {
-    let root = tempfile::tempdir().unwrap();
-    let staging_directory = root.path().join("managed-staging");
-    let absolute_escape = root.path().join("absolute-escape");
-
-    for filename in [
-        OsString::from("../relative-escape"),
-        OsString::from("nested/escape"),
-        absolute_escape.clone().into_os_string(),
-    ] {
-        let error = stage_verified_program(
-            filename,
-            Arc::from(&b"#!/bin/sh\n"[..]),
-            Some(staging_directory.clone()),
-        )
-        .expect_err("verified process filename must be a single basename");
-
-        assert!(error.to_string().contains("single filename"), "{error}");
+impl tokio::io::AsyncRead for FailingReader {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Err(std::io::Error::other("stdout pipe broke")))
     }
-    assert!(!absolute_escape.exists());
-    assert!(!staging_directory.join("relative-escape").exists());
-    assert!(!staging_directory.join("nested/escape").exists());
 }
 
 #[tokio::test]
-async fn content_length_frames_round_trip_formatted_json() {
-    let (mut writer, reader) = duplex(1024);
-    let value = serde_json::json!({ "message": "line one\nline two" });
-    let expected = value.clone();
-    let writing = tokio::spawn(async move { write_frame(&mut writer, &value).await });
-    let body = read_frame(&mut BufReader::new(reader))
+async fn an_io_failure_from_read_frame_keeps_the_daemons_io_error_text() {
+    let mut reader = BufReader::new(FailingReader);
+    let error = read_frame(&mut reader)
         .await
-        .expect("the frame should parse");
-    writing.await.expect("the writer task should join").unwrap();
+        .expect_err("a broken pipe must surface as an error, not hang or panic");
 
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-        expected
-    );
-}
+    let daemon_error = DaemonError::from(error);
 
-#[tokio::test]
-async fn stdout_logs_are_rejected_as_protocol_headers() {
-    let (mut writer, reader) = duplex(1024);
-    writer.write_all(b"accidental log line\n").await.unwrap();
-    drop(writer);
-
-    let error = read_frame(&mut BufReader::new(reader))
-        .await
-        .expect_err("stdout logs must not be treated as protocol data");
+    assert!(matches!(daemon_error, DaemonError::Io(_)), "{daemon_error}");
     assert!(
-        error
-            .to_string()
-            .contains("Invalid extension protocol header")
+        daemon_error.to_string().starts_with("IO error: "),
+        "{daemon_error}"
     );
-}
-
-#[test]
-fn stderr_capture_retains_only_the_bounded_tail() {
-    let mut output = b"old diagnostics".to_vec();
-    append_bounded_tail(&mut output, b"new diagnostics", 16);
-
-    assert_eq!(output, b"snew diagnostics");
-
-    append_bounded_tail(&mut output, b"0123456789abcdefghijkl", 16);
-    assert_eq!(output, b"6789abcdefghijkl");
 }

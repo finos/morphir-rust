@@ -34,6 +34,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-extension-sdk` | SDK and MEP contracts for WebAssembly extensions. |
 | `morphir-gleam-binding` | Gleam frontend and backend extension integration. |
 | `morphir-host` | Portable Morphir extension host: MEP handshake, sessions and channels. |
+| `morphir-host-native` | Native channels for the Morphir extension host: processes, Extism and in-process guests. |
 | `morphir-kb` | Operational layer for OKF knowledge bundles. |
 | `morphir-mck-adapter` | The Morphir Compatibility Kit adapter: `mck-adapter-rust`, a JSON-lines transport for IR and opt-in package operations. |
 | `morphir-okf` | Pure OKF model, parsing, and loading support. |

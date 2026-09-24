@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 pub struct SentLog {
     messages: Arc<Mutex<Vec<Outgoing>>>,
     closes: Arc<Mutex<u32>>,
+    aborts: Arc<Mutex<u32>>,
 }
 
 impl SentLog {
@@ -33,9 +34,27 @@ impl SentLog {
             .collect()
     }
 
+    /// The id of every request sent, in order. Notifications are skipped.
+    pub fn ids(&self) -> Vec<u64> {
+        self.messages
+            .lock()
+            .expect("the log is never poisoned")
+            .iter()
+            .filter_map(|message| match message {
+                Outgoing::Request(request) => Some(request.id),
+                Outgoing::Notification(_) => None,
+            })
+            .collect()
+    }
+
     /// How many times the channel was closed.
     pub fn closes(&self) -> u32 {
         *self.closes.lock().expect("the log is never poisoned")
+    }
+
+    /// How many times the channel was aborted.
+    pub fn aborts(&self) -> u32 {
+        *self.aborts.lock().expect("the log is never poisoned")
     }
 }
 
@@ -93,6 +112,11 @@ impl Channel for MemoryChannel {
 
     async fn close(&mut self) -> Result<ChannelState, ChannelError> {
         *self.log.closes.lock().expect("the log is never poisoned") += 1;
+        Ok(ChannelState::Stopped)
+    }
+
+    async fn abort(&mut self) -> Result<ChannelState, ChannelError> {
+        *self.log.aborts.lock().expect("the log is never poisoned") += 1;
         Ok(ChannelState::Stopped)
     }
 }

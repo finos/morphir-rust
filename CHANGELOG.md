@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config, a sans-IO session core, a channel trait, a JSON-RPC connection,
   sessions and one-shot helpers. It compiles for `wasm32-unknown-unknown`
   (finos/morphir-rust#236).
+- `morphir-host-native`, the native side of the extension host: channels over
+  child processes, Extism plugins and in-process Rust guests, a
+  `CheckedConnection` that checks each method result before the host trusts
+  it, and `activate`, which starts an installed guest from its verified
+  artifact (finos/morphir-rust#237, finos/morphir-rust#240).
 
 ### Changed
 - **Breaking (format-version support table).** The reference support table is now
@@ -64,6 +69,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unsupported_format_version_minor` (finos/morphir#970).
 - The daemon's typestate MEP session now runs on the `morphir-host` session
   core. Its public API, wire sequence and error texts are unchanged.
+- `morphir-host` gains `Channel::abort`, which stops a guest after a failure
+  without waiting for an orderly exit, the `ExpectedChecks` negotiation rules
+  and the `describe` install probe.
+- The daemon's process transport (`SpawnedProcessSession` and
+  `SpawnedProcessTransport`) now runs on `morphir-host-native`'s
+  `ProcessChild`. The Extism container and host functions moved to
+  `morphir-host-native`; the daemon's `ExtismTransport` stays daemon code, and
+  `NativeMepTransport` is unchanged. The re-exported
+  `morphir_daemon::extensions::ExtensionContainer` methods now return
+  `Result<_, morphir_host::HostError>` instead of `morphir_daemon::Result`,
+  so a caller that calls it directly no longer sees the `Extension error: `
+  prefix.
 - **Breaking:** Rename the extension Rust API from capability statements to
   capability claim sets (`CapabilityClaimSet`, `ClaimsRecord`, `ClaimCheck`, and
   the SDK `claims` module). Readers accept exact draft.1 and draft.2 formats;

@@ -23,6 +23,18 @@ impl HostConfig {
         }
     }
 
+    /// A host that offers exactly `protocol_versions`, in that order.
+    ///
+    /// For callers that already hold a version list from their own caller,
+    /// such as the daemon's describe probe. Other clients use [`Self::new`].
+    #[doc(hidden)]
+    pub fn with_versions(peer: PeerInfo, protocol_versions: Vec<String>) -> Self {
+        Self {
+            peer,
+            protocol_versions,
+        }
+    }
+
     /// The client's name and version.
     pub fn peer(&self) -> &PeerInfo {
         &self.peer
@@ -66,6 +78,14 @@ mod tests {
     fn offers_every_supported_version() {
         let config = HostConfig::new(peer());
         assert_eq!(config.protocol_versions(), supported().as_slice());
+    }
+
+    #[test]
+    fn with_versions_offers_exactly_the_given_list() {
+        let versions = vec!["0.1".to_owned(), "future".to_owned()];
+        let config = HostConfig::with_versions(peer(), versions.clone());
+        assert_eq!(config.protocol_versions(), versions.as_slice());
+        assert_eq!(config.initialize_params().protocol_versions, versions);
     }
 
     #[test]

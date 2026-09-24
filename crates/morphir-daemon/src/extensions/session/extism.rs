@@ -88,7 +88,7 @@ impl MepTransport for ExtismTransport {
             .container
             .call_raw("handle", &bytes)
             .await
-            .map_err(|error| TransportError::new(error, TransportState::Indeterminate))?;
+            .map_err(|error| TransportError::new(error.into(), TransportState::Indeterminate))?;
         serde_json::from_slice(&output)
             .map_err(|error| TransportError::new(error.into(), TransportState::Indeterminate))
     }

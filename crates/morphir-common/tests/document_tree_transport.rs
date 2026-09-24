@@ -9,9 +9,10 @@
 use std::io::Write;
 
 use morphir_common::ir_transport::{
-    CodecOptions, DocumentTreeSink, EventSink, FormatId, IrCodec, IrVersion, JsonCodec, Layout,
-    TransportDiagnostic, discover_document_tree_format, read_document_tree,
-    read_document_tree_with_options, write_document_tree, write_document_tree_with_options,
+    CodecOptions, DocumentTreeSink, DocumentTreeSource, EventSink, EventSource, FormatId, IrCodec,
+    IrVersion, JsonCodec, Layout, TransportDiagnostic, discover_document_tree_format,
+    read_document_tree, read_document_tree_with_options, write_document_tree,
+    write_document_tree_with_options,
 };
 use morphir_common::vfs::{memory_root, physical_root};
 use morphir_core::ir::classic;
@@ -23,6 +24,10 @@ use morphir_core::migration::{MigrationOptions, migrate_distribution};
 use morphir_core::naming::{ModuleName, Name, PackageName};
 use morphir_core::traversal::{DependencyEvent, SemanticEvent, SemanticEventKind};
 use vfs::VfsPath;
+
+mod common;
+
+use common::v3::{SPECS, sorted_v3};
 
 // =============================================================================
 // Fixtures and helpers
@@ -781,4 +786,389 @@ fn a_module_manifest_accepts_an_array_of_lines_for_doc_and_writes_one_string() {
     let rewritten: serde_json::Value =
         serde_json::from_str(&module_manifest.read_to_string().unwrap()).unwrap();
     assert_eq!(rewritten["doc"], serde_json::json!("line one\nline two"));
+}
+
+// =============================================================================
+// v3 trees
+// =============================================================================
+
+const V3_LIBRARY: &str = include_str!("fixtures/ion/v3-with-dependencies.json");
+
+fn v3_options(format: FormatId) -> CodecOptions {
+    CodecOptions::new(IrVersion::V3, Layout::DocumentTree, format)
+}
+
+/// The events a single v3 JSON document decodes to.
+fn classic_events(text: &str) -> Vec<SemanticEvent> {
+    let mut sink = CollectingSink::default();
+    JsonCodec::new()
+        .decode(
+            &mut std::io::Cursor::new(text.as_bytes()),
+            &CodecOptions::new(IrVersion::V3, Layout::SingleFile, FormatId::json()),
+            &mut sink,
+        )
+        .unwrap();
+    sink.events
+}
+
+fn write_events(root: &VfsPath, options: CodecOptions, events: Vec<SemanticEvent>) {
+    let mut sink = DocumentTreeSink::new(root.clone(), options).unwrap();
+    for event in events {
+        sink.accept(event).unwrap();
+    }
+    sink.finish().unwrap();
+}
+
+fn read_events(
+    root: &VfsPath,
+    options: CodecOptions,
+) -> Result<Vec<SemanticEvent>, TransportDiagnostic> {
+    let mut source = DocumentTreeSource::open(root.clone(), options)?;
+    let mut events = Vec::new();
+    while let Some(event) = source.next_event()? {
+        events.push(event);
+    }
+    Ok(events)
+}
+
+/// Writes `document` as a v3 tree under `root` and reads it back: the events in are the events
+/// out, up to the order a tree puts a module's members in.
+fn v3_round_trip(root: VfsPath, format: FormatId, document: &str) {
+    let original = classic_events(document);
+    let options = v3_options(format.clone());
+
+    write_events(&root, options.clone(), original.clone());
+
+    assert_file(&root, "manifest", profile_of(&format));
+    let read = read_events(&root, options)
+        .unwrap_or_else(|error| panic!("{error:?}\n{:#?}", every_physical_path(&root)));
+    assert_eq!(sorted_v3(read), sorted_v3(original), "{format}");
+}
+
+#[test]
+fn a_v3_json_tree_round_trips_on_a_memory_vfs() {
+    v3_round_trip(memory_root(), FormatId::json(), V3_LIBRARY);
+}
+
+#[test]
+fn a_v3_yaml_tree_round_trips_on_a_physical_vfs() {
+    let temp = tempfile::tempdir().unwrap();
+    v3_round_trip(physical_root(temp.path()), FormatId::yaml(), V3_LIBRARY);
+}
+
+#[test]
+fn a_v3_specs_json_tree_round_trips() {
+    v3_round_trip(memory_root(), FormatId::json(), SPECS);
+}
+
+#[test]
+fn a_v3_specs_yaml_tree_round_trips() {
+    v3_round_trip(memory_root(), FormatId::yaml(), SPECS);
+}
+
+#[test]
+fn a_written_v3_tree_says_3_1_0_in_every_file_and_puts_dependencies_under_deps() {
+    let root = memory_root();
+    write_events(
+        &root,
+        v3_options(FormatId::json()),
+        classic_events(V3_LIBRARY),
+    );
+
+    let manifest = manifest_value(&root, Profile::Json);
+    assert_eq!(manifest["formatVersion"], serde_json::json!("3.1.0"));
+    assert_eq!(manifest["distribution"], serde_json::json!("Library"));
+    assert_eq!(manifest["dependencies"], serde_json::json!(["morphir/SDK"]));
+    assert_file(
+        &root,
+        "deps/morphir/_sdk/@/basics/money.type",
+        Profile::Json,
+    );
+    assert_file(&root, "pkg/example/eligibility/module", Profile::Json);
+    for path in every_physical_path(&root) {
+        if !path.ends_with(".json") {
+            continue;
+        }
+        let file: serde_json::Value =
+            serde_json::from_str(&root.join(&path).unwrap().read_to_string().unwrap()).unwrap();
+        assert_eq!(file["formatVersion"], serde_json::json!("3.1.0"), "{path}");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The selected version and the tree's version
+// -----------------------------------------------------------------------------
+
+fn assert_selection_mismatch(diagnostic: &TransportDiagnostic) {
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::detection::version_mismatch",
+        "{diagnostic:?}"
+    );
+    assert_eq!(
+        diagnostic.guidance(),
+        Some("select the version the tree's manifest names")
+    );
+}
+
+#[test]
+fn a_v4_source_refuses_a_v3_tree() {
+    let root = memory_root();
+    v3_round_trip(root.clone(), FormatId::json(), V3_LIBRARY);
+
+    assert_selection_mismatch(&read_events(&root, options(FormatId::json())).unwrap_err());
+    assert_selection_mismatch(
+        &read_document_tree_with_options(&root, &options(FormatId::json())).unwrap_err(),
+    );
+}
+
+#[test]
+fn a_v3_source_refuses_a_v4_tree() {
+    let root = memory_root();
+    write_document_tree_with_options(&root, &granular_fixture(), &options(FormatId::yaml()))
+        .unwrap();
+
+    assert_selection_mismatch(&read_events(&root, v3_options(FormatId::yaml())).unwrap_err());
+}
+
+fn first_event_of(
+    events: Vec<SemanticEvent>,
+    matches: fn(&SemanticEventKind) -> bool,
+) -> SemanticEvent {
+    events
+        .into_iter()
+        .find(|event| matches(event.kind()))
+        .expect("the stream has such an event")
+}
+
+#[test]
+fn a_v3_sink_refuses_v4_events() {
+    let v4 = decode_json(LIBRARY_WITH_SPECIFICATION_DEPENDENCY);
+    let v3 = classic_events(V3_LIBRARY);
+
+    let mut sink = DocumentTreeSink::new(memory_root(), v3_options(FormatId::json())).unwrap();
+    let begin = first_event_of(v4.clone(), |kind| {
+        matches!(kind, SemanticEventKind::Begin(_))
+    });
+    assert_eq!(
+        sink.accept(begin).unwrap_err().code(),
+        "morphir::ir::document_tree::version_mismatch"
+    );
+
+    let mut sink = DocumentTreeSink::new(memory_root(), v3_options(FormatId::json())).unwrap();
+    sink.accept(first_event_of(v3, |kind| {
+        matches!(kind, SemanticEventKind::Begin(_))
+    }))
+    .unwrap();
+    let dependency = first_event_of(v4, |kind| matches!(kind, SemanticEventKind::Dependency(_)));
+    assert_eq!(
+        sink.accept(dependency).unwrap_err().code(),
+        "morphir::ir::document_tree::version_mismatch"
+    );
+}
+
+#[test]
+fn a_v3_sink_refuses_a_v4_module() {
+    let v4 = decode_json(&serde_json::to_string(&fixture()).unwrap());
+    let v3 = classic_events(V3_LIBRARY);
+
+    let mut sink = DocumentTreeSink::new(memory_root(), v3_options(FormatId::yaml())).unwrap();
+    sink.accept(first_event_of(v3, |kind| {
+        matches!(kind, SemanticEventKind::Begin(_))
+    }))
+    .unwrap();
+    let module = first_event_of(v4, |kind| matches!(kind, SemanticEventKind::Module(_)));
+    assert_eq!(
+        sink.accept(module).unwrap_err().code(),
+        "morphir::ir::document_tree::version_mismatch"
+    );
+}
+
+#[test]
+fn a_v4_sink_refuses_v3_events() {
+    let v3 = classic_events(V3_LIBRARY);
+
+    let mut sink = DocumentTreeSink::new(memory_root(), options(FormatId::json())).unwrap();
+    let begin = first_event_of(v3, |kind| matches!(kind, SemanticEventKind::Begin(_)));
+    assert_eq!(
+        sink.accept(begin).unwrap_err().code(),
+        "morphir::ir::document_tree::version_mismatch"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Refusals a v3 tree earns
+// -----------------------------------------------------------------------------
+
+/// Rewrites the JSON file at `physical` under `root` with `edit`.
+fn edit_json(root: &VfsPath, physical: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+    let path = root.join(physical).unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&path.read_to_string().unwrap()).unwrap();
+    edit(&mut value);
+    path.create_file()
+        .unwrap()
+        .write_all(serde_json::to_vec(&value).unwrap().as_slice())
+        .unwrap();
+}
+
+#[test]
+fn a_json_node_file_in_a_yaml_v3_tree_is_refused() {
+    let root = memory_root();
+    v3_round_trip(root.clone(), FormatId::yaml(), V3_LIBRARY);
+    let yaml = root.join("pkg/example/eligibility/module.yaml").unwrap();
+    let json = root.join("pkg/example/eligibility/module.json").unwrap();
+    json.create_file()
+        .unwrap()
+        .write_all(yaml.read_to_string().unwrap().as_bytes())
+        .unwrap();
+    yaml.remove_file().unwrap();
+
+    let diagnostic = read_events(&root, v3_options(FormatId::yaml())).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::invalid_distribution_shape"
+    );
+    assert!(
+        diagnostic.message().contains("is not a yaml file"),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
+}
+
+fn assert_node_version_refused(written: serde_json::Value) {
+    let root = memory_root();
+    v3_round_trip(root.clone(), FormatId::json(), V3_LIBRARY);
+    let node = "deps/morphir/_sdk/@/basics/int.type.json";
+    edit_json(&root, node, |file| file["formatVersion"] = written.clone());
+
+    let diagnostic = read_events(&root, v3_options(FormatId::json())).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::version_mismatch",
+        "{written}: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic.message().contains("3.1.0"),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
+}
+
+#[test]
+fn a_v3_node_file_saying_the_integer_3_is_a_version_mismatch() {
+    assert_node_version_refused(serde_json::json!(3));
+}
+
+#[test]
+fn a_v3_node_file_saying_3_0_0_is_a_version_mismatch() {
+    assert_node_version_refused(serde_json::json!("3.0.0"));
+}
+
+#[test]
+fn a_v3_tree_whose_deps_name_its_own_package_is_refused() {
+    let root = memory_root();
+    v3_round_trip(root.clone(), FormatId::json(), V3_LIBRARY);
+    // The own package's module, laid out again as a dependency's public face.
+    let own = root
+        .join("pkg/example/eligibility/module.json")
+        .unwrap()
+        .read_to_string()
+        .unwrap();
+    let dependency = root.join("deps/example/@/eligibility/module.json").unwrap();
+    dependency.parent().create_dir_all().unwrap();
+    dependency
+        .create_file()
+        .unwrap()
+        .write_all(own.as_bytes())
+        .unwrap();
+    edit_json(&root, "manifest.json", |manifest| {
+        manifest["dependencies"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!("example"));
+    });
+
+    let diagnostic = read_events(&root, v3_options(FormatId::json())).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::invalid_distribution_shape"
+    );
+    assert!(
+        diagnostic
+            .message()
+            .contains("cannot name the distribution package"),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
+}
+
+#[test]
+fn a_v3_sink_refuses_a_dependency_naming_its_own_package() {
+    let events = classic_events(V3_LIBRARY);
+    let begin = first_event_of(events.clone(), |kind| {
+        matches!(kind, SemanticEventKind::Begin(_))
+    });
+    let dependency = first_event_of(events, |kind| {
+        matches!(kind, SemanticEventKind::Dependency(_))
+    });
+    let (cursor, SemanticEventKind::Dependency(DependencyEvent::ClassicV3 { specification, .. })) =
+        dependency.into_parts()
+    else {
+        panic!("a v3 dependency");
+    };
+    let own = SemanticEvent::new(
+        cursor,
+        SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
+            package: classic::Path::new(vec![classic::Name::new(vec!["example".to_owned()])]),
+            specification,
+        }),
+    );
+
+    let mut sink = DocumentTreeSink::new(memory_root(), v3_options(FormatId::json())).unwrap();
+    sink.accept(begin).unwrap();
+    let diagnostic = sink.accept(own).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::invalid_distribution_shape"
+    );
+    assert!(
+        diagnostic
+            .message()
+            .contains("cannot name the distribution package"),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
+}
+
+#[test]
+fn a_specs_tree_holding_a_definition_file_under_pkg_is_refused() {
+    let root = memory_root();
+    v3_round_trip(root.clone(), FormatId::json(), SPECS);
+    edit_json(&root, "pkg/my/pkg/basics/int.type.json", |file| {
+        let file = file.as_object_mut().unwrap();
+        let specification = file.remove("spec").unwrap();
+        file.insert(
+            "def".to_owned(),
+            serde_json::json!({ "access": "Public", "value": specification }),
+        );
+    });
+
+    let diagnostic = read_events(&root, v3_options(FormatId::json())).unwrap_err();
+
+    assert_eq!(
+        diagnostic.code(),
+        "morphir::ir::document_tree::invalid_distribution_shape"
+    );
+    assert!(
+        diagnostic
+            .message()
+            .contains("expected a specification file"),
+        "unexpected message: {}",
+        diagnostic.message()
+    );
 }

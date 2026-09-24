@@ -200,7 +200,40 @@ fn sorted_v3(events: Vec<SemanticEvent>) -> serde_json::Value {
             }
         }
     }
+    if let Some(dependencies) = value["distribution"][2].as_array_mut() {
+        for dependency in dependencies {
+            for module in dependency[1]["modules"].as_array_mut().unwrap() {
+                for members in ["types", "values"] {
+                    if let Some(list) = module[1][members].as_array_mut() {
+                        list.sort_by_key(|entry| entry[0].to_string());
+                    }
+                }
+            }
+        }
+    }
     value
+}
+
+#[test]
+fn v3_dependency_specifications_round_trip_through_an_ion_tree() {
+    let original = decode(
+        &JsonCodec::new(),
+        include_str!("fixtures/ion/v3-with-dependencies.json"),
+        &single_options(IrVersion::V3, FormatId::json()),
+    )
+    .unwrap();
+    let root = memory_root();
+
+    write_events(&root, IrVersion::V3, original.clone());
+
+    let files = every_file(&root);
+    assert!(
+        files.contains(&"deps/morphir/_sdk/@/basics/money.type.ion".to_owned()),
+        "{files:#?}"
+    );
+    let read =
+        read_events(&root, IrVersion::V3).unwrap_or_else(|error| panic!("{error:?}\n{files:#?}"));
+    assert_eq!(sorted_v3(read), sorted_v3(original));
 }
 
 // =============================================================================

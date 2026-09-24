@@ -1,0 +1,1471 @@
+{
+ "source": "finos/morphir spec/ir/mck canonical JSON fences",
+ "commit": "66c21a18ca97e1990b235873996e4a2fb88837f5",
+ "cases": [
+  {
+   "id": "values-0001",
+   "title": "Literal shorthands",
+   "node": "Value",
+   "json": {
+    "Literal": {
+     "IntegerLiteral": 42
+    }
+   }
+  },
+  {
+   "id": "values-0002",
+   "title": "Variable and reference shorthands",
+   "node": "Value",
+   "json": {
+    "Variable": "x"
+   }
+  },
+  {
+   "id": "values-0003",
+   "title": "Reference shorthand",
+   "node": "Value",
+   "json": {
+    "Reference": "morphir/SDK:basics#add"
+   }
+  },
+  {
+   "id": "values-0004",
+   "title": "Apply",
+   "node": "Value",
+   "json": {
+    "Apply": {
+     "function": {
+      "Reference": "morphir/SDK:basics#negate"
+     },
+     "argument": {
+      "Literal": {
+       "IntegerLiteral": 1
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0005",
+   "title": "If-then-else member names",
+   "node": "Value",
+   "json": {
+    "IfThenElse": {
+     "condition": {
+      "Literal": {
+       "BoolLiteral": true
+      }
+     },
+     "then": {
+      "Literal": {
+       "IntegerLiteral": 1
+      }
+     },
+     "else": {
+      "Literal": {
+       "IntegerLiteral": 2
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0006",
+   "title": "Field access member names",
+   "node": "Value",
+   "json": {
+    "Field": {
+     "target": {
+      "Variable": "record"
+     },
+     "name": "field-name"
+    }
+   }
+  },
+  {
+   "id": "values-0007",
+   "title": "Tuple value",
+   "node": "Value",
+   "json": {
+    "Tuple": [
+     {
+      "Variable": "x"
+     },
+     {
+      "Literal": {
+       "IntegerLiteral": 1
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "values-0008",
+   "title": "Bare array and bare scalars at value position",
+   "node": "Value",
+   "json": {
+    "List": [
+     {
+      "Literal": {
+       "IntegerLiteral": 1
+      }
+     },
+     {
+      "Literal": {
+       "IntegerLiteral": 2
+      }
+     },
+     {
+      "Literal": {
+       "IntegerLiteral": 3
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "values-0009",
+   "title": "Hole",
+   "node": "Value",
+   "json": {
+    "Hole": {
+     "reason": {
+      "UnresolvedReference": {
+       "target": "my-org/project:module#deleted"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0010",
+   "title": "Unit value",
+   "node": "Value",
+   "json": {
+    "Unit": {}
+   }
+  },
+  {
+   "id": "values-0011",
+   "title": "Bare scalars are literals",
+   "node": "Value",
+   "json": {
+    "Literal": {
+     "BoolLiteral": true
+    }
+   }
+  },
+  {
+   "id": "values-0012",
+   "title": "Bare number lexemes",
+   "node": "Value",
+   "json": {
+    "Literal": {
+     "FloatLiteral": 4.0
+    }
+   }
+  },
+  {
+   "id": "values-0013",
+   "title": "Record value",
+   "node": "Value",
+   "json": {
+    "Record": {
+     "fields": {
+      "name": {
+       "Variable": "x"
+      },
+      "age": {
+       "Literal": {
+        "IntegerLiteral": 25
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0014",
+   "title": "Constructor and field function",
+   "node": "Value",
+   "json": {
+    "Constructor": "morphir/SDK:maybe#just"
+   }
+  },
+  {
+   "id": "values-0015",
+   "title": "Field function",
+   "node": "Value",
+   "json": {
+    "FieldFunction": "name"
+   }
+  },
+  {
+   "id": "values-0016",
+   "title": "Lambda",
+   "node": "Value",
+   "json": {
+    "Lambda": {
+     "pattern": {
+      "AsPattern": {
+       "pattern": {
+        "WildcardPattern": {}
+       },
+       "name": "x"
+      }
+     },
+     "body": {
+      "Variable": "x"
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0017",
+   "title": "Let definition member names",
+   "node": "Value",
+   "json": {
+    "LetDefinition": {
+     "name": "x",
+     "definition": {
+      "ExpressionBody": {
+       "inputTypes": {},
+       "outputType": "morphir/SDK:basics#int",
+       "body": {
+        "Literal": {
+         "IntegerLiteral": 1
+        }
+       }
+      }
+     },
+     "in": {
+      "Variable": "x"
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0018",
+   "title": "Let recursion",
+   "node": "Value",
+   "json": {
+    "LetRecursion": {
+     "definitions": {
+      "f": {
+       "ExpressionBody": {
+        "inputTypes": {},
+        "outputType": "morphir/SDK:basics#int",
+        "body": {
+         "Variable": "f"
+        }
+       }
+      }
+     },
+     "in": {
+      "Variable": "f"
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0019",
+   "title": "Destructure",
+   "node": "Value",
+   "json": {
+    "Destructure": {
+     "pattern": {
+      "TuplePattern": [
+       {
+        "AsPattern": {
+         "pattern": {
+          "WildcardPattern": {}
+         },
+         "name": "a"
+        }
+       },
+       {
+        "WildcardPattern": {}
+       }
+      ]
+     },
+     "value": {
+      "Variable": "pair"
+     },
+     "in": {
+      "Variable": "a"
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0020",
+   "title": "Pattern match",
+   "node": "Value",
+   "json": {
+    "PatternMatch": {
+     "value": {
+      "Variable": "x"
+     },
+     "cases": [
+      {
+       "pattern": {
+        "LiteralPattern": {
+         "IntegerLiteral": 0
+        }
+       },
+       "body": {
+        "Literal": {
+         "BoolLiteral": true
+        }
+       }
+      },
+      {
+       "pattern": {
+        "WildcardPattern": {}
+       },
+       "body": {
+        "Literal": {
+         "BoolLiteral": false
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "values-0021",
+   "title": "Update record",
+   "node": "Value",
+   "json": {
+    "UpdateRecord": {
+     "target": {
+      "Variable": "record"
+     },
+     "fields": {
+      "name": {
+       "Literal": {
+        "StringLiteral": "new"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "values-0022",
+   "title": "Attributes are kept when compared with them",
+   "node": "Value",
+   "compare": "attributes",
+   "json": {
+    "Variable": {
+     "attributes": {
+      "source": {
+       "startLine": 3,
+       "startColumn": 5,
+       "endLine": 3,
+       "endColumn": 6
+      }
+     },
+     "name": "x"
+    }
+   }
+  },
+  {
+   "id": "types-0001",
+   "title": "Type variable",
+   "node": "Type",
+   "json": "a"
+  },
+  {
+   "id": "types-0002",
+   "title": "Reference without arguments",
+   "node": "Type",
+   "json": "morphir/SDK:basics#int"
+  },
+  {
+   "id": "types-0003",
+   "title": "Reference with one argument",
+   "node": "Type",
+   "json": {
+    "Reference": [
+     "morphir/SDK:list#list",
+     "a"
+    ]
+   }
+  },
+  {
+   "id": "types-0004",
+   "title": "Tuple type",
+   "node": "Type",
+   "json": {
+    "Tuple": [
+     "morphir/SDK:basics#int",
+     "morphir/SDK:string#string"
+    ]
+   }
+  },
+  {
+   "id": "types-0005",
+   "title": "Record type",
+   "node": "Type",
+   "json": {
+    "Record": {
+     "fields": {
+      "name": "morphir/SDK:string#string",
+      "age": "morphir/SDK:basics#int"
+     }
+    }
+   }
+  },
+  {
+   "id": "types-0006",
+   "title": "Extensible record type",
+   "node": "Type",
+   "json": {
+    "ExtensibleRecord": {
+     "variable": "r",
+     "fields": {
+      "email": "morphir/SDK:string#string"
+     }
+    }
+   }
+  },
+  {
+   "id": "types-0007",
+   "title": "Function type",
+   "node": "Type",
+   "json": {
+    "Function": {
+     "parameterType": "morphir/SDK:basics#int",
+     "returnType": "morphir/SDK:string#string"
+    }
+   }
+  },
+  {
+   "id": "types-0008",
+   "title": "Unit type",
+   "node": "Type",
+   "json": {
+    "Unit": {}
+   }
+  },
+  {
+   "id": "types-0009",
+   "title": "Attributes on type expressions",
+   "node": "Type",
+   "json": "a"
+  },
+  {
+   "id": "types-0010",
+   "title": "Attributes are kept when compared with them",
+   "node": "Type",
+   "compare": "attributes",
+   "json": {
+    "Variable": {
+     "attributes": {
+      "source": {
+       "startLine": 1,
+       "startColumn": 1,
+       "endLine": 1,
+       "endColumn": 2
+      }
+     },
+     "name": "a"
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0001",
+   "title": "Integer literal renamed",
+   "node": "Literal",
+   "json": {
+    "IntegerLiteral": 42
+   }
+  },
+  {
+   "id": "patterns-and-literals-0002",
+   "title": "Decimal literal keeps its text",
+   "node": "Literal",
+   "json": {
+    "DecimalLiteral": "10.50"
+   }
+  },
+  {
+   "id": "patterns-and-literals-0003",
+   "title": "Tuple pattern",
+   "node": "Pattern",
+   "json": {
+    "TuplePattern": [
+     {
+      "WildcardPattern": {}
+     },
+     {
+      "AsPattern": {
+       "pattern": {
+        "WildcardPattern": {}
+       },
+       "name": "x"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "patterns-and-literals-0004",
+   "title": "Literal pattern shorthand",
+   "node": "Pattern",
+   "json": {
+    "LiteralPattern": {
+     "IntegerLiteral": 42
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0005",
+   "title": "Document literal",
+   "node": "Literal",
+   "json": {
+    "DocumentLiteral": {
+     "name": "Alice",
+     "age": 30,
+     "tags": [
+      "admin",
+      "user"
+     ],
+     "metadata": null
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0006",
+   "title": "Document literal keeps large integers",
+   "node": "Literal",
+   "json": {
+    "DocumentLiteral": {
+     "id": 9007199254740993,
+     "ratio": 0.1
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0008",
+   "title": "Nullary patterns",
+   "node": "Pattern",
+   "json": {
+    "WildcardPattern": {}
+   }
+  },
+  {
+   "id": "patterns-and-literals-0009",
+   "title": "Empty list and unit patterns",
+   "node": "Pattern",
+   "json": {
+    "EmptyListPattern": {}
+   }
+  },
+  {
+   "id": "patterns-and-literals-0010",
+   "title": "Constructor pattern",
+   "node": "Pattern",
+   "json": {
+    "ConstructorPattern": {
+     "fqname": "morphir/SDK:maybe#just",
+     "patterns": [
+      {
+       "AsPattern": {
+        "pattern": {
+         "WildcardPattern": {}
+        },
+        "name": "x"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0011",
+   "title": "Head-tail and unit patterns",
+   "node": "Pattern",
+   "json": {
+    "HeadTailPattern": {
+     "head": {
+      "AsPattern": {
+       "pattern": {
+        "WildcardPattern": {}
+       },
+       "name": "x"
+      }
+     },
+     "tail": {
+      "UnitPattern": {}
+     }
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0012",
+   "title": "Attributes are kept when compared with them",
+   "node": "Pattern",
+   "compare": "attributes",
+   "json": {
+    "AsPattern": {
+     "attributes": {
+      "source": {
+       "startLine": 2,
+       "startColumn": 1,
+       "endLine": 2,
+       "endColumn": 2
+      }
+     },
+     "pattern": {
+      "WildcardPattern": {}
+     },
+     "name": "x"
+    }
+   }
+  },
+  {
+   "id": "patterns-and-literals-0013",
+   "title": "Character literal",
+   "node": "Literal",
+   "json": {
+    "CharLiteral": "a"
+   }
+  },
+  {
+   "id": "patterns-and-literals-0014",
+   "title": "A date-looking plain scalar is a string",
+   "node": "Literal",
+   "json": {
+    "StringLiteral": "2026-01-15"
+   }
+  },
+  {
+   "id": "patterns-and-literals-0015",
+   "title": "Octal and hexadecimal integers are not accepted",
+   "node": "Literal",
+   "json": {
+    "IntegerLiteral": 15
+   }
+  },
+  {
+   "id": "patterns-and-literals-0016",
+   "title": "A decimal literal is a decimal lexeme",
+   "node": "Literal",
+   "json": {
+    "DecimalLiteral": "-0.00"
+   }
+  },
+  {
+   "id": "patterns-and-literals-0017",
+   "title": "A decimal lexeme may carry an exponent",
+   "node": "Literal",
+   "json": {
+    "DecimalLiteral": "1e-7"
+   }
+  },
+  {
+   "id": "patterns-and-literals-0018",
+   "title": "A decimal lexeme may omit the integer part",
+   "node": "Literal",
+   "json": {
+    "DecimalLiteral": ".5"
+   }
+  },
+  {
+   "id": "patterns-and-literals-0019",
+   "title": "An integer literal has arbitrary precision",
+   "node": "Literal",
+   "json": {
+    "IntegerLiteral": 18446744073709551616
+   }
+  },
+  {
+   "id": "patterns-and-literals-0020",
+   "title": "A negative integer literal below the 64-bit range",
+   "node": "Literal",
+   "json": {
+    "IntegerLiteral": -9223372036854775809
+   }
+  },
+  {
+   "id": "definitions-0001",
+   "title": "Access-controlled definition, three spellings",
+   "node": "AccessControlledTypeDefinition",
+   "json": {
+    "Public": {
+     "TypeAliasDefinition": {
+      "typeParams": [],
+      "typeExp": "morphir/SDK:string#string"
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0002",
+   "title": "Opaque type specification is an empty object",
+   "node": "TypeSpecification",
+   "json": {
+    "OpaqueTypeSpecification": {}
+   }
+  },
+  {
+   "id": "definitions-0003",
+   "title": "Custom type definition with constructors",
+   "node": "TypeDefinition",
+   "json": {
+    "CustomTypeDefinition": {
+     "typeParams": [
+      "a"
+     ],
+     "access": "Public",
+     "constructors": {
+      "just": [
+       [
+        "value",
+        "a"
+       ]
+      ],
+      "nothing": []
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0004",
+   "title": "Value specification",
+   "node": "ValueSpecification",
+   "json": {
+    "inputs": {
+     "a": "morphir/SDK:basics#int",
+     "b": "morphir/SDK:basics#int"
+    },
+    "output": "morphir/SDK:basics#int"
+   }
+  },
+  {
+   "id": "definitions-0005",
+   "title": "Expression body",
+   "node": "ValueDefinition",
+   "json": {
+    "ExpressionBody": {
+     "inputTypes": {
+      "x": "morphir/SDK:basics#int"
+     },
+     "outputType": "morphir/SDK:basics#int",
+     "body": {
+      "Variable": "x"
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0006",
+   "title": "Documentation on a definition",
+   "node": "AccessControlledTypeDefinition",
+   "json": {
+    "Public": {
+     "doc": "The user's display name",
+     "TypeAliasDefinition": {
+      "typeParams": [],
+      "typeExp": "morphir/SDK:string#string"
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0007",
+   "title": "Native and external bodies",
+   "node": "ValueDefinition",
+   "json": {
+    "ExternalBody": {
+     "inputTypes": {
+      "msg": "morphir/SDK:string#string"
+     },
+     "outputType": "morphir/SDK:basics#unit",
+     "externals": [
+      {
+       "targetPlatform": "javascript",
+       "externalName": "console.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "definitions-0008",
+   "title": "External body with two bindings and a fallback",
+   "node": "ValueDefinition",
+   "json": {
+    "ExternalBody": {
+     "inputTypes": {
+      "x": "morphir/SDK:basics#int"
+     },
+     "outputType": "morphir/SDK:basics#int",
+     "externals": [
+      {
+       "targetPlatform": "erlang",
+       "externalName": "math:abs"
+      },
+      {
+       "targetPlatform": "javascript",
+       "externalName": "Math.abs"
+      }
+     ],
+     "body": {
+      "Variable": "x"
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0009",
+   "title": "Native body",
+   "node": "ValueDefinition",
+   "json": {
+    "NativeBody": {
+     "inputTypes": {
+      "a": "morphir/SDK:basics#int",
+      "b": "morphir/SDK:basics#int"
+     },
+     "outputType": "morphir/SDK:basics#int",
+     "nativeInfo": {
+      "hint": {
+       "Arithmetic": {}
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0010",
+   "title": "Documentation on a value specification",
+   "node": "ModuleSpecification",
+   "json": {
+    "types": {},
+    "values": {
+     "add": {
+      "doc": "Adds two integers",
+      "inputs": {
+       "a": "morphir/SDK:basics#int",
+       "b": "morphir/SDK:basics#int"
+      },
+      "output": "morphir/SDK:basics#int"
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0011",
+   "title": "Type alias specification",
+   "node": "TypeSpecification",
+   "json": {
+    "TypeAliasSpecification": {
+     "typeParams": [
+      "a"
+     ],
+     "typeExp": {
+      "Reference": [
+       "morphir/SDK:list#list",
+       "a"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0012",
+   "title": "Custom type specification",
+   "node": "TypeSpecification",
+   "json": {
+    "CustomTypeSpecification": {
+     "typeParams": [
+      "a"
+     ],
+     "constructors": {
+      "just": [
+       [
+        "value",
+        "a"
+       ]
+      ],
+      "nothing": []
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0013",
+   "title": "Derived type specification",
+   "node": "TypeSpecification",
+   "json": {
+    "DerivedTypeSpecification": {
+     "typeParams": [],
+     "baseType": "morphir/SDK:string#string",
+     "fromBaseType": "my-org/project:module#from-string",
+     "toBaseType": "my-org/project:module#to-string"
+    }
+   }
+  },
+  {
+   "id": "definitions-0014",
+   "title": "Incomplete type definition, a hole with a type mismatch",
+   "node": "TypeDefinition",
+   "json": {
+    "IncompleteTypeDefinition": {
+     "typeParams": [
+      "a"
+     ],
+     "incompleteness": {
+      "Hole": {
+       "reason": {
+        "TypeMismatch": {
+         "expected": "morphir/SDK:basics#int",
+         "found": "morphir/SDK:string#string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0015",
+   "title": "Draft type definition with a partial type expression",
+   "node": "TypeDefinition",
+   "json": {
+    "IncompleteTypeDefinition": {
+     "typeParams": [],
+     "incompleteness": {
+      "Draft": {}
+     },
+     "partialTypeExp": "morphir/SDK:basics#int"
+    }
+   }
+  },
+  {
+   "id": "definitions-0016",
+   "title": "Incomplete value definition",
+   "node": "ValueDefinition",
+   "json": {
+    "IncompleteBody": {
+     "inputTypes": {
+      "x": "morphir/SDK:basics#int"
+     },
+     "outputType": "morphir/SDK:basics#int",
+     "incompleteness": {
+      "Hole": {
+       "reason": {
+        "DeletedDuringRefactor": {
+         "tx-id": "tx-42"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0017",
+   "title": "Private access-controlled definition",
+   "node": "AccessControlledTypeDefinition",
+   "json": {
+    "Private": {
+     "TypeAliasDefinition": {
+      "typeParams": [],
+      "typeExp": "morphir/SDK:basics#int"
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0018",
+   "title": "Access-controlled value definition, public",
+   "node": "AccessControlledValueDefinition",
+   "json": {
+    "Public": {
+     "doc": "Adds two integers",
+     "ExpressionBody": {
+      "inputTypes": {
+       "a": "morphir/SDK:basics#int",
+       "b": "morphir/SDK:basics#int"
+      },
+      "outputType": "morphir/SDK:basics#int",
+      "body": {
+       "Variable": "a"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0019",
+   "title": "Private access-controlled value definition",
+   "node": "AccessControlledValueDefinition",
+   "json": {
+    "Private": {
+     "ExpressionBody": {
+      "inputTypes": {},
+      "outputType": "morphir/SDK:basics#int",
+      "body": {
+       "Variable": "x"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0020",
+   "title": "Annotations on a type specification",
+   "node": "TypeSpecification",
+   "json": {
+    "TypeAliasSpecification": {
+     "annotations": [
+      "my-org/project:annotations#deprecated:Use user-v2 instead",
+      {
+       "name": "my-org/project:annotations#since",
+       "arguments": [
+        {
+         "Literal": {
+          "StringLiteral": "1.2.0"
+         }
+        },
+        {
+         "name": "reason",
+         "value": {
+          "Literal": {
+           "StringLiteral": "renamed"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "name": "my-org/project:annotations#internal"
+      }
+     ],
+     "typeParams": [],
+     "typeExp": "morphir/SDK:string#string"
+    }
+   }
+  },
+  {
+   "id": "definitions-0021",
+   "title": "Annotations on a value specification",
+   "node": "ValueSpecification",
+   "json": {
+    "annotations": [
+     "my-org/project:annotations#pure"
+    ],
+    "inputs": {
+     "x": "morphir/SDK:basics#int"
+    },
+    "output": "morphir/SDK:basics#int"
+   }
+  },
+  {
+   "id": "definitions-0022",
+   "title": "Annotations on a module specification",
+   "node": "ModuleSpecification",
+   "json": {
+    "annotations": [
+     "my-org/project:annotations#stable"
+    ],
+    "types": {},
+    "values": {},
+    "doc": "The domain module"
+   }
+  },
+  {
+   "id": "definitions-0024",
+   "title": "A hole incompleteness keeps a partial body",
+   "node": "TypeDefinition",
+   "json": {
+    "IncompleteTypeDefinition": {
+     "typeParams": [],
+     "incompleteness": {
+      "Hole": {
+       "reason": {
+        "UnresolvedReference": {
+         "target": "my-org/project:module#missing"
+        }
+       },
+       "partialBody": "morphir/SDK:basics#int"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0025",
+   "title": "An incomplete body keeps a partial value",
+   "node": "ValueDefinition",
+   "json": {
+    "IncompleteBody": {
+     "inputTypes": {},
+     "outputType": "morphir/SDK:basics#int",
+     "incompleteness": {
+      "Draft": {}
+     },
+     "partialBody": {
+      "Literal": {
+       "IntegerLiteral": 1
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "definitions-0029",
+   "title": "A value specification without inputs writes none",
+   "node": "ValueSpecification",
+   "json": {
+    "output": "morphir/SDK:basics#int"
+   }
+  },
+  {
+   "id": "distributions-0001",
+   "title": "Format version spellings",
+   "node": "FormatVersion",
+   "json": 4
+  },
+  {
+   "id": "distributions-0002",
+   "title": "Empty library",
+   "node": "Distribution",
+   "json": {
+    "formatVersion": 4,
+    "distribution": {
+     "Library": {
+      "packageName": "example",
+      "dependencies": {},
+      "def": {
+       "modules": {}
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "distributions-0004",
+   "title": "Complete library, JSON and YAML agree",
+   "node": "Distribution",
+   "json": {
+    "formatVersion": 4,
+    "distribution": {
+     "Library": {
+      "packageName": "regulation",
+      "dependencies": {
+       "morphir/SDK": {
+        "modules": {
+         "basics": {
+          "types": {
+           "int": {
+            "OpaqueTypeSpecification": {}
+           },
+           "float": {
+            "OpaqueTypeSpecification": {}
+           },
+           "bool": {
+            "OpaqueTypeSpecification": {}
+           }
+          },
+          "values": {
+           "add": {
+            "inputs": {
+             "a": "morphir/SDK:basics#int",
+             "b": "morphir/SDK:basics#int"
+            },
+            "output": "morphir/SDK:basics#int"
+           }
+          }
+         },
+         "list": {
+          "types": {
+           "list": {
+            "TypeAliasSpecification": {
+             "typeParams": [
+              "a"
+             ],
+             "typeExp": {
+              "Reference": [
+               "morphir/SDK:list#list",
+               "a"
+              ]
+             }
+            }
+           }
+          },
+          "values": {
+           "map": {
+            "inputs": {
+             "f": {
+              "Function": {
+               "parameterType": "a",
+               "returnType": "b"
+              }
+             },
+             "list": {
+              "Reference": [
+               "morphir/SDK:list#list",
+               "a"
+              ]
+             }
+            },
+            "output": {
+             "Reference": [
+              "morphir/SDK:list#list",
+              "b"
+             ]
+            }
+           }
+          }
+         }
+        }
+       }
+      },
+      "def": {
+       "modules": {
+        "u-s/f-r-2052-a/data-tables": {
+         "Public": {
+          "types": {
+           "data-tables": {
+            "Public": {
+             "TypeAliasDefinition": {
+              "typeParams": [],
+              "typeExp": {
+               "Record": {
+                "fields": {
+                 "inflows": "regulation:u-s/f-r-2052-a/data-tables#inflows",
+                 "outflows": "regulation:u-s/f-r-2052-a/data-tables#outflows",
+                 "supplemental": "regulation:u-s/f-r-2052-a/data-tables#supplemental"
+                }
+               }
+              }
+             }
+            }
+           },
+           "inflows": {
+            "Public": {
+             "TypeAliasDefinition": {
+              "typeParams": [],
+              "typeExp": {
+               "Record": {
+                "fields": {
+                 "assets": {
+                  "Reference": [
+                   "morphir/SDK:list#list",
+                   "regulation:u-s/f-r-2052-a/data-tables/inflows#assets"
+                  ]
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "values": {
+           "calculate-total": {
+            "Public": {
+             "ExpressionBody": {
+              "inputTypes": {
+               "tables": "regulation:u-s/f-r-2052-a/data-tables#data-tables"
+              },
+              "outputType": "morphir/SDK:basics#float",
+              "body": {
+               "Literal": {
+                "FloatLiteral": 0.0
+               }
+              }
+             }
+            }
+           }
+          },
+          "doc": "Data tables module for regulatory reporting"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "distributions-0005",
+   "title": "The SDK dependency is keyed morphir/SDK",
+   "node": "Distribution",
+   "json": {
+    "formatVersion": 4,
+    "distribution": {
+     "Library": {
+      "packageName": "example",
+      "dependencies": {
+       "morphir/SDK": {
+        "modules": {}
+       }
+      },
+      "def": {
+       "modules": {}
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "distributions-0006",
+   "title": "Specs distribution",
+   "node": "Distribution",
+   "json": {
+    "formatVersion": 4,
+    "distribution": {
+     "Specs": {
+      "packageName": "example",
+      "dependencies": {
+       "morphir/SDK": {
+        "modules": {}
+       }
+      },
+      "spec": {
+       "modules": {
+        "main": {
+         "types": {},
+         "values": {
+          "greet": {
+           "inputs": {
+            "name": "morphir/SDK:string#string"
+           },
+           "output": "morphir/SDK:string#string"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "distributions-0007",
+   "title": "Application distribution with entry points",
+   "node": "Distribution",
+   "json": {
+    "formatVersion": 4,
+    "distribution": {
+     "Application": {
+      "packageName": "example",
+      "dependencies": {},
+      "def": {
+       "modules": {
+        "main": {
+         "Public": {
+          "types": {},
+          "values": {
+           "run": {
+            "Public": {
+             "ExpressionBody": {
+              "inputTypes": {},
+              "outputType": "morphir/SDK:basics#unit",
+              "body": {
+               "Unit": {}
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      },
+      "entryPoints": {
+       "start": {
+        "target": "example:main#run",
+        "kind": "main",
+        "doc": "The application entry point"
+       },
+       "build": {
+        "target": "example:main#run",
+        "kind": "command"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "distributions-0008",
+   "title": "Later patch of a supported minor",
+   "node": "FormatVersion",
+   "json": "4.0.1"
+  },
+  {
+   "id": "distributions-0010",
+   "title": "An application's dependencies are package definitions",
+   "node": "Distribution",
+   "json": {
+    "formatVersion": 4,
+    "distribution": {
+     "Application": {
+      "packageName": "example",
+      "dependencies": {
+       "my-org/shared": {
+        "modules": {
+         "util": {
+          "Public": {
+           "types": {},
+           "values": {
+            "identity": {
+             "Public": {
+              "ExpressionBody": {
+               "inputTypes": {
+                "x": "morphir/SDK:basics#int"
+               },
+               "outputType": "morphir/SDK:basics#int",
+               "body": {
+                "Variable": "x"
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      },
+      "def": {
+       "modules": {
+        "main": {
+         "Public": {
+          "types": {},
+          "values": {
+           "run": {
+            "Public": {
+             "ExpressionBody": {
+              "inputTypes": {},
+              "outputType": "morphir/SDK:basics#unit",
+              "body": {
+               "Unit": {}
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      },
+      "entryPoints": {
+       "start": {
+        "target": "example:main#run",
+        "kind": "main"
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

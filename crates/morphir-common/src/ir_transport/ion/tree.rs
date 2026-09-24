@@ -26,7 +26,7 @@ use morphir_core::ir::layout::{
 use morphir_core::naming::{self, Name, PackageName, Path};
 
 use super::{IonCodec, annotation_names, display_annotations, ion_text, symbol_text};
-use crate::ir_transport::{IrVersion, Stage, TransportDiagnostic};
+use crate::ir_transport::{Stage, TransportDiagnostic};
 
 /// The extension every Ion tree file carries.
 pub(crate) const EXTENSION: &str = ".ion";
@@ -53,7 +53,7 @@ struct Scope {
 }
 
 /// The datagram a tree reads as.
-pub(super) fn read(files: &Tree, version: IrVersion) -> Result<Sequence, TransportDiagnostic> {
+pub(super) fn read(files: &Tree) -> Result<Sequence, TransportDiagnostic> {
     let manifest = files.get(MANIFEST).ok_or_else(|| {
         error(
             "morphir::ir::ion::missing_member",
@@ -80,13 +80,18 @@ pub(super) fn read(files: &Tree, version: IrVersion) -> Result<Sequence, Transpo
         ));
     }
     let package = header_package(&header)?;
+    // An application links its dependencies' definitions; the other kinds publish their faces.
+    let dependency_role = match header_kind(&header)? {
+        "application" => "def",
+        _ => "spec",
+    };
 
     // A dependency's modules, keyed by its canonical package name, in the order the manifest
     // names the packages and then in path order.
     let mut dependencies: IndexMap<String, Vec<Element>> = IndexMap::new();
     for element in manifest {
         match annotation_names(&element)?.as_slice() {
-            ["package", "spec"] => {
+            ["package", role] if *role == dependency_role => {
                 let fields = fields(MANIFEST, &element)?;
                 let name = canonical_package(MANIFEST, required_text(MANIFEST, &fields, "name")?)?;
                 let modules = dependencies.entry(name.to_canonical_string()).or_default();
@@ -106,8 +111,8 @@ pub(super) fn read(files: &Tree, version: IrVersion) -> Result<Sequence, Transpo
                     "morphir::ir::ion::unexpected_value",
                     MANIFEST,
                     format!(
-                        "the manifest holds the morphir:: header and package::spec elements, \
-                         found {}",
+                        "the manifest holds the morphir:: header and package::{dependency_role} \
+                         elements, found {}",
                         display_annotations(names)
                     ),
                 ));
@@ -168,20 +173,14 @@ pub(super) fn read(files: &Tree, version: IrVersion) -> Result<Sequence, Transpo
         }
     }
 
-    if version == IrVersion::V3 && !dependencies.is_empty() {
-        return Err(error(
-            "morphir::ir::ion::unsupported_node",
-            "deps",
-            "a v3 Ion tree has no dependencies",
-        ));
-    }
     let mut datagram = Sequence::builder().push(header);
     for (name, modules) in dependencies {
         let mut spec = Struct::builder().with_field("name", name.as_str());
         if !modules.is_empty() {
             spec = spec.with_field("modules", list(modules));
         }
-        datagram = datagram.push(Element::from(spec.build()).with_annotations(["package", "spec"]));
+        datagram = datagram
+            .push(Element::from(spec.build()).with_annotations(["package", dependency_role]));
     }
     for module in modules {
         datagram = datagram.push(module);
@@ -586,6 +585,27 @@ fn mismatch(at: &str, member: &str, stated: &str, expected: &str) -> TransportDi
     )
 }
 
+fn header_kind(header: &Element) -> Result<&str, TransportDiagnostic> {
+    let fields = fields(MANIFEST, header)?;
+    let kind = fields.get("kind").ok_or_else(|| {
+        error(
+            "morphir::ir::ion::missing_member",
+            MANIFEST,
+            "kind is required",
+        )
+    })?;
+    kind.as_symbol()
+        .and_then(|symbol| symbol.text())
+        .or_else(|| kind.as_string())
+        .ok_or_else(|| {
+            error(
+                "morphir::ir::ion::invalid_member",
+                MANIFEST,
+                "kind is a symbol",
+            )
+        })
+}
+
 fn header_package(header: &Element) -> Result<PackageName, TransportDiagnostic> {
     let fields = fields(MANIFEST, header)?;
     canonical_package(MANIFEST, required_text(MANIFEST, &fields, "packageName")?)
@@ -631,12 +651,12 @@ pub(super) fn write(
         let fields = fields(MANIFEST, &element)?;
         match names.as_slice() {
             ["morphir_footer"] => {}
-            ["package", "spec"] => {
+            ["package", role @ ("spec" | "def")] => {
                 let name = required_text(MANIFEST, &fields, "name")?;
                 let dependency = canonical_package(MANIFEST, name)?;
                 manifest.push(
                     Element::from(Struct::builder().with_field("name", name).build())
-                        .with_annotations(["package", "spec"]),
+                        .with_annotations(["package", *role]),
                 );
                 if let Some(list) = fields.get("modules") {
                     for module in list_items(MANIFEST, list, "modules")? {
@@ -644,7 +664,9 @@ pub(super) fn write(
                     }
                 }
             }
-            [.., "module"] => outgoing(&mut modules, Root::Pkg, &package, element)?,
+            [.., "module"] | ["module", "spec"] => {
+                outgoing(&mut modules, Root::Pkg, &package, element)?
+            }
             [.., kind @ ("type" | "value")] => {
                 let owner = required_text(MANIFEST, &fields, "module")?;
                 let key = (Root::Pkg, package.to_canonical_string(), owner.to_owned());

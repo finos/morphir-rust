@@ -12,6 +12,7 @@ use morphir_core::traversal::{IrCursor, SemanticEvent};
 
 use super::semantic;
 
+mod specs;
 mod tree;
 mod type_expr;
 mod v4;
@@ -25,6 +26,7 @@ const ION_CONTRACT: &str = "0.1.0-draft.1";
 
 const HEADER_MEMBERS: &[&str] = &[
     "critical",
+    "dependencies",
     "formatVersion",
     "ionVersion",
     "kind",
@@ -186,12 +188,12 @@ fn emit_values(
     expect_marker(header, "morphir")?;
     let header_fields = struct_fields(header, "morphir")?;
     let library = read_library_header(&header_fields, version)?;
-    let modules = read_library_modules(values, &header_fields, &library.package)?;
+    let (dependencies, modules) = read_library_modules(values, &header_fields, &library.package)?;
     let distribution = classic::Distribution {
         format_version: library.format_version,
         distribution: classic::DistributionBody::Library(
             library.package,
-            Vec::new(),
+            dependencies,
             classic::PackageDefinition { modules },
         ),
     };
@@ -204,7 +206,7 @@ pub(super) fn read_tree(
     version: IrVersion,
     sink: &mut dyn EventSink,
 ) -> Result<(), TransportDiagnostic> {
-    emit_values(&tree::read(files, version)?, version, sink)
+    emit_values(&tree::read(files)?, version, sink)
 }
 
 /// The files of an Ion document tree, keyed by logical path, in write order.
@@ -258,13 +260,6 @@ fn v3_datagram(
     }
     let classic::DistributionBody::Library(package, dependencies, definition) =
         distribution.distribution;
-    if !dependencies.is_empty() {
-        return Err(IonCodec::error(
-            "morphir::ir::ion::unsupported_node",
-            Stage::Encoding,
-            "the Ion writer does not encode dependencies yet",
-        ));
-    }
     let header = Element::from(ion_rs::ion_struct! {
         "ionVersion": ION_CONTRACT,
         "formatVersion": "3.0.0",
@@ -275,6 +270,9 @@ fn v3_datagram(
     let footer =
         Element::from(ion_rs::Struct::builder().build()).with_annotations(["morphir_footer"]);
     let mut sequence = ion_rs::Sequence::builder().push(header);
+    for dependency in &dependencies {
+        sequence = sequence.push(specs::write_package_spec(dependency)?);
+    }
     for module in &definition.modules {
         sequence = sequence.push(module_element(module)?);
         for type_definition in &module.definition.value.types {
@@ -475,11 +473,35 @@ fn read_library_modules(
     values: &ion_rs::Sequence,
     header_fields: &BTreeMap<&str, &Element>,
     package: &classic::Path,
-) -> Result<Vec<ClassicModule>, TransportDiagnostic> {
+) -> Result<(Vec<specs::Dependency>, Vec<ClassicModule>), TransportDiagnostic> {
+    let mut dependencies = Vec::new();
     if values.len() == 1 {
-        return read_inline_modules(header_fields, package);
+        if let Some(list) = header_fields.get("dependencies") {
+            let list = list.as_list().ok_or_else(|| {
+                IonCodec::error(
+                    "morphir::ir::ion::invalid_member",
+                    Stage::Normalization,
+                    "dependencies is a list",
+                )
+            })?;
+            for element in list.iter() {
+                expect_package_spec(element)?;
+                specs::read_package_spec(element, package, &mut dependencies)?;
+            }
+        }
+        return Ok((dependencies, read_inline_modules(header_fields, package)?));
     }
     reject_inline_modules(header_fields)?;
+    if header_fields
+        .get("dependencies")
+        .is_some_and(|list| list.as_list().is_none_or(|items| !items.is_empty()))
+    {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_node",
+            Stage::Normalization,
+            "a datagram writes each dependency as its own package::spec value",
+        ));
+    }
     let last = values.len() - 1;
     let footer = values.get(last).expect("length is at least 2");
     expect_marker(footer, "morphir_footer")?;
@@ -496,6 +518,9 @@ fn read_library_modules(
     for index in 1..last {
         let element = values.get(index).expect("index is in range");
         match annotation_names(element)?.as_slice() {
+            ["package", "spec"] => {
+                specs::read_package_spec(element, package, &mut dependencies)?;
+            }
             ["public", "def", "module"] | ["private", "def", "module"] => {
                 let module = read_def_module(element, package)?;
                 if !seen.insert(module.path.clone()) {
@@ -524,7 +549,22 @@ fn read_library_modules(
             }
         }
     }
-    Ok(modules)
+    Ok((dependencies, modules))
+}
+
+fn expect_package_spec(element: &Element) -> Result<(), TransportDiagnostic> {
+    let names = annotation_names(element)?;
+    if names != ["package", "spec"] {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unexpected_value",
+            Stage::Detection,
+            format!(
+                "a v3 dependency is package::spec, found {}",
+                display_annotations(&names)
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn read_inline_modules(

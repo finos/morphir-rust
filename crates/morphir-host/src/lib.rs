@@ -10,6 +10,7 @@ mod config;
 mod connection;
 mod envelope;
 mod error;
+mod expected;
 mod jsonrpc;
 mod negotiated;
 mod send;
@@ -24,6 +25,10 @@ pub use config::HostConfig;
 pub use connection::{CallError, GuestConnection};
 pub use envelope::{EnvelopeError, validate_envelope};
 pub use error::{ChannelState, HostError};
+pub use expected::{
+    CapabilityExpectation, ExpectedChecks, ExpectedExtension, PersistedExtensionCapabilities,
+    validate_negotiation,
+};
 pub use jsonrpc::JsonRpcConnection;
 pub use negotiated::Negotiated;
 pub use send::MaybeSend;

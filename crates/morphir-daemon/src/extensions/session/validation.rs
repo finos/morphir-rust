@@ -1,7 +1,7 @@
 //! Validation of initialization data and method results.
 
 use super::controller::NegotiatedSession;
-use super::transport::{CapabilityExpectation, ExpectedExtension};
+use super::transport::ExpectedExtension;
 use crate::extensions::protocol::{InitializeResult, methods};
 use crate::{DaemonError, Result};
 use base64::Engine as _;
@@ -10,92 +10,11 @@ use morphir_core::format_version::{
     NormalizedFormatVersion, ReleaseTriplet, ScalarValue, SupportTable,
 };
 use morphir_distribution::RelativeArtifactPath;
-use morphir_extension_sdk::{
-    BackendCapability, CompileRequest, CompileResult, ExtensionType, FrontendCapability,
-    GenerateResult,
-};
+use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateResult};
 use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
 use unicode_normalization::UnicodeNormalization as _;
-
-/// The frontend members that differ, named as they are spelled on the wire.
-///
-/// A missing record on either side is one difference, not five: the host
-/// discovered a frontend the guest does not advertise, or the other way round.
-fn frontend_differences(
-    advertised: Option<&FrontendCapability>,
-    discovered: Option<&FrontendCapability>,
-) -> Vec<&'static str> {
-    match (advertised, discovered) {
-        (Some(advertised), Some(discovered)) => {
-            let mut members = Vec::new();
-            if advertised.languages != discovered.languages {
-                members.push("languages");
-            }
-            if advertised.ir_versions != discovered.ir_versions {
-                members.push("irVersions");
-            }
-            if advertised.compile != discovered.compile {
-                members.push("compile");
-            }
-            if advertised.incremental != discovered.incremental {
-                members.push("incremental");
-            }
-            if advertised.fragments != discovered.fragments {
-                members.push("fragments");
-            }
-            if advertised.multi_document != discovered.multi_document {
-                members.push("multiDocument");
-            }
-            members
-        }
-        (None, Some(_)) => vec!["no frontend capability was advertised"],
-        (Some(_), None) => vec!["no frontend capability was discovered"],
-        (None, None) => Vec::new(),
-    }
-}
-
-/// A persisted frontend record, completed with the members it cannot carry.
-///
-/// An installed record persists the frontend members its release record
-/// declares. `multiDocument` is not one of them, so a persisted record's value
-/// for it is unknown rather than false, and the guest's advertised value
-/// stands. Every member the record does carry must still agree.
-fn persisted_frontend(
-    persisted: &FrontendCapability,
-    advertised: Option<&FrontendCapability>,
-) -> FrontendCapability {
-    FrontendCapability {
-        multi_document: advertised.is_some_and(|advertised| advertised.multi_document),
-        ..persisted.clone()
-    }
-}
-
-/// The backend members that differ, named as they are spelled on the wire.
-fn backend_differences(
-    advertised: Option<&BackendCapability>,
-    discovered: Option<&BackendCapability>,
-) -> Vec<&'static str> {
-    match (advertised, discovered) {
-        (Some(advertised), Some(discovered)) => {
-            let mut members = Vec::new();
-            if advertised.targets != discovered.targets {
-                members.push("targets");
-            }
-            if advertised.ir_versions != discovered.ir_versions {
-                members.push("irVersions");
-            }
-            if advertised.generate != discovered.generate {
-                members.push("generate");
-            }
-            members
-        }
-        (None, Some(_)) => vec!["no backend capability was advertised"],
-        (Some(_), None) => vec!["no backend capability was discovered"],
-        (None, None) => Vec::new(),
-    }
-}
 
 pub(super) fn validate_method_result(
     method: &str,
@@ -376,160 +295,7 @@ pub(in crate::extensions) fn validate_negotiation(
     offered_versions: &[String],
     result: InitializeResult,
 ) -> Result<NegotiatedSession> {
-    let allows_legacy_backend = expected.allows_legacy_backend;
-    if !offered_versions.contains(&result.protocol_version) {
-        return Err(DaemonError::Extension(format!(
-            "Extension selected protocol version '{}' that the host did not offer",
-            result.protocol_version
-        )));
-    }
-    if result.extension.id != expected.id {
-        return Err(DaemonError::Extension(format!(
-            "Extension identity changed during initialization: expected '{}', initialized '{}'",
-            expected.id, result.extension.id
-        )));
-    }
-    let unique: HashSet<_> = result.extension.types.iter().copied().collect();
-    if unique.len() != result.extension.types.len() {
-        return Err(DaemonError::Extension(
-            "Extension initialization repeated a capability kind".into(),
-        ));
-    }
-    // The display name is presentation metadata. A repository record may
-    // spell it differently from the guest (for example "Morphir Openapi"
-    // derived from the identifier against the guest's "Morphir OpenAPI"), so
-    // only the version and the capability kinds are held to discovery.
-    if let Some(discovered) = expected.discovered {
-        if result.extension.version != discovered.version {
-            return Err(DaemonError::Extension(format!(
-                "Extension '{}' initialization metadata disagreed with discovery: version '{}' was discovered as '{}'",
-                expected.id, result.extension.version, discovered.version
-            )));
-        }
-        if unique != discovered.types.iter().copied().collect() {
-            return Err(DaemonError::Extension(format!(
-                "Extension '{}' initialization metadata disagreed with discovery: capability kinds changed",
-                expected.id
-            )));
-        }
-    }
-    if let Some(discovered) = expected.capabilities {
-        // A mismatch here stops the session, so the message names the members
-        // that differ: "frontend capabilities disagreed with discovery" alone
-        // leaves a reader comparing two structures by hand.
-        let mismatch = match discovered {
-            CapabilityExpectation::Exact(discovered) if result.capabilities != discovered => {
-                let backend = backend_differences(
-                    result.capabilities.backend.as_ref(),
-                    discovered.backend.as_ref(),
-                );
-                if backend.is_empty() {
-                    Some((
-                        "capabilities",
-                        frontend_differences(
-                            result.capabilities.frontend.as_ref(),
-                            discovered.frontend.as_ref(),
-                        ),
-                    ))
-                } else {
-                    Some(("backend capabilities", backend))
-                }
-            }
-            CapabilityExpectation::Backend(discovered)
-                if result.capabilities.backend.as_ref() != Some(&discovered) =>
-            {
-                Some((
-                    "backend capabilities",
-                    backend_differences(result.capabilities.backend.as_ref(), Some(&discovered)),
-                ))
-            }
-            CapabilityExpectation::Persisted(discovered)
-                if discovered.frontend().is_some_and(|expected| {
-                    result.capabilities.frontend.as_ref()
-                        != Some(&persisted_frontend(
-                            expected,
-                            result.capabilities.frontend.as_ref(),
-                        ))
-                }) =>
-            {
-                let expected = discovered.frontend().map(|expected| {
-                    persisted_frontend(expected, result.capabilities.frontend.as_ref())
-                });
-                Some((
-                    "frontend capabilities",
-                    frontend_differences(result.capabilities.frontend.as_ref(), expected.as_ref()),
-                ))
-            }
-            CapabilityExpectation::Persisted(discovered)
-                if discovered.backend().is_some_and(|expected| {
-                    result.capabilities.backend.as_ref() != Some(expected)
-                }) =>
-            {
-                Some((
-                    "backend capabilities",
-                    backend_differences(result.capabilities.backend.as_ref(), discovered.backend()),
-                ))
-            }
-            CapabilityExpectation::Exact(_)
-            | CapabilityExpectation::Persisted(_)
-            | CapabilityExpectation::Backend(_) => None,
-        };
-        if let Some((capability_scope, differences)) = mismatch {
-            // An `Exact` expectation also covers members outside the frontend
-            // and backend records, so the list can be empty.
-            let named = if differences.is_empty() {
-                String::new()
-            } else {
-                format!(": {}", differences.join(", "))
-            };
-            return Err(DaemonError::Extension(format!(
-                "Extension '{}' {capability_scope} disagreed with discovery{named}",
-                expected.id
-            )));
-        }
-    }
-    if unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_none() {
-        return Err(DaemonError::Extension(
-            "Extension declared Frontend without frontend capabilities".into(),
-        ));
-    }
-    if !unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_some() {
-        return Err(DaemonError::Extension(
-            "Extension advertised frontend capabilities without declaring Frontend".into(),
-        ));
-    }
-    let legacy_backend = allows_legacy_backend
-        && unique.contains(&ExtensionType::Backend)
-        && result.capabilities.backend.is_none();
-    if unique.contains(&ExtensionType::Backend)
-        && result.capabilities.backend.is_none()
-        && !legacy_backend
-    {
-        return Err(DaemonError::Extension(
-            "Extension declared Backend without backend capabilities".into(),
-        ));
-    }
-    if !unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_some() {
-        return Err(DaemonError::Extension(
-            "Extension advertised backend capabilities without declaring Backend".into(),
-        ));
-    }
-    if unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_none() {
-        return Err(DaemonError::Extension(
-            "Extension declared Workspace without workspace capabilities".into(),
-        ));
-    }
-    if !unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_some() {
-        return Err(DaemonError::Extension(
-            "Extension advertised workspace capabilities without declaring Workspace".into(),
-        ));
-    }
-    Ok(NegotiatedSession::new(
-        result.protocol_version,
-        result.extension,
-        result.capabilities,
-        legacy_backend,
-    ))
+    morphir_host::validate_negotiation(expected, offered_versions, result).map_err(Into::into)
 }
 
 /// The daemon's negotiation rules, run by the portable session core.
@@ -781,38 +547,6 @@ mod tests {
         assert_eq!(order_rx.recv().await, Some("marker"));
         validation.await.unwrap();
         assert_eq!(order_rx.recv().await, Some("validation"));
-    }
-
-    /// An installed record cannot carry `multiDocument`, so a guest that
-    /// advertises it still agrees with its persisted frontend record, while a
-    /// member the record does carry must still match.
-    #[test]
-    fn a_persisted_frontend_leaves_multi_document_to_the_guest() {
-        let persisted = FrontendCapability {
-            ir_versions: vec!["3".into()],
-            compile: true,
-            ..FrontendCapability::default()
-        };
-        let advertised = FrontendCapability {
-            multi_document: true,
-            ..persisted.clone()
-        };
-
-        assert_eq!(
-            persisted_frontend(&persisted, Some(&advertised)),
-            advertised
-        );
-
-        let drifted = FrontendCapability {
-            ir_versions: vec!["4".into()],
-            ..advertised.clone()
-        };
-        let completed = persisted_frontend(&persisted, Some(&drifted));
-        assert_ne!(completed, drifted);
-        assert_eq!(
-            frontend_differences(Some(&drifted), Some(&completed)),
-            vec!["irVersions"]
-        );
     }
 
     #[tokio::test(flavor = "current_thread")]

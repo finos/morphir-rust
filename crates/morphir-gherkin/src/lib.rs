@@ -5,6 +5,7 @@
 //! Extensions read tags, fences and prose into a typed context. This crate does not run scenarios.
 
 pub mod error;
+pub mod markdown;
 pub mod model;
 pub mod path;
 pub mod span;

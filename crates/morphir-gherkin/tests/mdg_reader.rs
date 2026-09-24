@@ -636,9 +636,9 @@ fn a_step_list_before_the_feature_heading_is_refused() {
             3
         )
     );
-    let no_feature = "# Scenario: S\n\n* Given a step\n";
+    let before_feature = "# Scenario: S\n\n* Given a step\n\n# Feature: F\n";
     assert_eq!(
-        refusal(no_feature),
+        refusal(before_feature),
         (
             "a Scenario heading must come after the Feature heading".to_owned(),
             1
@@ -718,5 +718,97 @@ fn a_step_keyword_can_take_a_tab_or_no_text() {
             ("When", StepKind::When, ""),
             ("Then ", StepKind::Then, ""),
         ]
+    );
+}
+
+// Fix round 2: an implicit feature, and a step list after an Examples table.
+
+#[test]
+fn upstream_a_file_without_a_feature_heading_has_an_implicit_feature() {
+    let text = "\
+Markdown document without \"# Feature:\" header
+===========================================
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
+tempor incididunt ut labore et dolore magna aliqua.
+
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+fugiat nulla pariatur.
+
+# Scenario: Something about math
+* Given step one
+* When step two
+* Then step three
+
+# Scenario: Something about gravity
+ - Given step one
+ - When step two
+ - Then step three
+
+# The world is wet
+
+Excepteur sint occaecat cupidatat non proident, sunt in
+culpa qui officia deserunt mollit anim id est laborum.
+";
+    let (doc, source) = read_str("misc.feature.md", text).unwrap();
+    assert_eq!(prose_texts(&source, &doc.preamble).len(), 3);
+    assert!(prose_texts(&source, &doc.preamble)[0].starts_with("Markdown document without"));
+    let feature = doc.feature.unwrap();
+    assert_eq!(feature.keyword, "");
+    assert_eq!(feature.name, "");
+    assert!(feature.tags.is_empty());
+    assert!(feature.description.blocks.is_empty());
+    assert_eq!(feature.position.line, 10);
+    assert!(
+        source
+            .slice(feature.span)
+            .starts_with("# Scenario: Something about math")
+    );
+    assert!(source.slice(feature.span).ends_with("laborum.\n"));
+    let names: Vec<_> = feature.scenarios.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Something about math", "Something about gravity"]);
+    assert_eq!(feature.scenarios[0].steps.len(), 3);
+    assert_eq!(feature.scenarios[0].steps[0].position.line, 11);
+    let last = &feature.scenarios[1].steps[2];
+    assert_eq!(last.text, "step three");
+    let notes = prose_texts(&source, &last.notes);
+    assert_eq!(notes[0], "# The world is wet");
+    assert!(notes[1].starts_with("Excepteur sint occaecat"));
+}
+
+#[test]
+fn an_implicit_feature_starts_at_the_tag_lines_that_lead_its_first_heading() {
+    let text = "Intro.\n\n`@first`\n## Scenario: S\n\n* Given a step\n\n## Rule: R\n\n### Scenario: T\n\n* Given a step\n";
+    let (doc, source) = read_str("i.feature.md", text).unwrap();
+    assert_eq!(prose_texts(&source, &doc.preamble), ["Intro."]);
+    let feature = doc.feature.unwrap();
+    assert_eq!(feature.position.line, 3);
+    assert_eq!(feature.scenarios[0].tags[0].name, "first");
+    assert_eq!(feature.rules[0].scenarios[0].name, "T");
+}
+
+#[test]
+fn a_step_list_after_an_examples_table_is_refused() {
+    let text = "\
+# Feature: F
+
+## Scenario Outline: O
+
+* Given <x>
+
+### Examples:
+
+| x |
+| - |
+| 1 |
+
+* Then a step under the examples
+";
+    assert_eq!(
+        refusal(text),
+        (
+            "a step list must be under a Scenario or Background heading".to_owned(),
+            13
+        )
     );
 }

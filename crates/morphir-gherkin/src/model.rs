@@ -14,8 +14,9 @@ pub enum Format {
 pub struct Document {
     pub path: PathBuf,
     pub format: Format,
-    /// The Markdown before the `Feature` heading of a `.feature.md` file, or all of it when the
-    /// file has no `Feature` heading. A `.feature` file has an empty preamble.
+    /// The Markdown before the `Feature` heading of a `.feature.md` file. Without a `Feature`
+    /// heading, it is the Markdown before the first Gherkin heading, or all of it when the file
+    /// has no Gherkin heading. A `.feature` file has an empty preamble.
     pub preamble: Description,
     pub feature: Option<Feature>,
 }

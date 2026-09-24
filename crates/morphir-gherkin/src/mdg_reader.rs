@@ -25,6 +25,9 @@
 //! - Markdown after a step, up to the next step list or Gherkin heading, is the step's notes.
 //! - Markdown after an examples table is the notes of the examples.
 //! - Markdown before the `Feature` heading is the document's preamble.
+//! - A file with Gherkin headings but no `Feature` heading has an implicit feature with an empty
+//!   keyword and name, as in upstream. Its preamble is the Markdown before the first Gherkin
+//!   heading. A file without any Gherkin heading has no feature.
 //!
 //! The reader refuses Gherkin structure errors with `ReadError::Syntax`, and never drops them:
 //! a list item that is not a step in a step list, a step item with more than one line, a nested
@@ -841,23 +844,32 @@ impl<'a> Builder<'a> {
         tags
     }
 
-    /// Reads the preamble and the feature. The preamble is every block before the `Feature`
-    /// heading and the tag lines that lead it. It cannot hold steps or other Gherkin headings.
+    /// Reads the preamble and the feature. With a `Feature` heading, the preamble is every block
+    /// before that heading and the tag lines that lead it, and it cannot hold steps or other
+    /// Gherkin headings. Without a `Feature` heading, as in upstream Markdown with Gherkin, the
+    /// first Gherkin heading and the tag lines that lead it start an implicit feature with an
+    /// empty keyword and name, and the preamble is every block before them. A file without any
+    /// Gherkin heading has no feature.
     fn document(&mut self) -> Result<(Description, Option<Feature>), ReadError> {
-        let found = self.blocks.iter().enumerate().find_map(|(index, block)| {
+        let explicit = self.blocks.iter().enumerate().find_map(|(index, block)| {
             node_heading(block)
                 .filter(|heading| heading.kind == NodeKind::Feature)
                 .map(|heading| (index, heading))
         });
-        let feature_index = found
-            .as_ref()
-            .map_or(self.blocks.len(), |(index, _)| *index);
-        let first_tag_line = (0..feature_index)
+        let first_heading = match &explicit {
+            Some((index, _)) => Some(*index),
+            None => self
+                .blocks
+                .iter()
+                .position(|block| node_heading(block).is_some()),
+        };
+        let heading_index = first_heading.unwrap_or(self.blocks.len());
+        let first_tag_line = (0..heading_index)
             .rev()
             .take_while(|&i| matches!(self.blocks[i], Block::TagLine { .. }))
             .last()
-            .unwrap_or(feature_index);
-        let preamble_end = if found.is_some() {
+            .unwrap_or(heading_index);
+        let preamble_end = if first_heading.is_some() {
             first_tag_line
         } else {
             self.blocks.len()
@@ -875,20 +887,38 @@ impl<'a> Builder<'a> {
             }
         }
         let preamble = self.description_of(0..preamble_end);
-        let Some((index, heading)) = found else {
-            return Ok((preamble, None));
+        let feature = match explicit {
+            Some((index, heading)) => {
+                let tags = self.tags_in(first_tag_line..index);
+                self.at = index + 1;
+                Some(self.feature(heading, tags)?)
+            }
+            None if first_heading.is_some() => {
+                let start = self.blocks[first_tag_line].span().start;
+                self.at = first_tag_line;
+                let feature = Feature {
+                    keyword: String::new(),
+                    name: String::new(),
+                    tags: Vec::new(),
+                    description: Description::default(),
+                    background: None,
+                    rules: Vec::new(),
+                    scenarios: Vec::new(),
+                    span: Span { start, end: start },
+                    position: self.source.line_col(start),
+                };
+                Some(self.children(feature)?)
+            }
+            None => None,
         };
-        let tags = self.tags_in(first_tag_line..index);
-        self.at = index + 1;
-        let feature = self.feature(heading, tags)?;
-        Ok((preamble, Some(feature)))
+        Ok((preamble, feature))
     }
 
     fn feature(&mut self, heading: NodeHeading, mut tags: Vec<Tag>) -> Result<Feature, ReadError> {
         let (own_tags, description) = self.header(true, false);
         tags.extend(own_tags);
         self.refuse_steps_here()?;
-        let mut feature = Feature {
+        let feature = Feature {
             keyword: heading.keyword.to_owned(),
             name: heading.name,
             tags,
@@ -899,6 +929,12 @@ impl<'a> Builder<'a> {
             span: heading.span,
             position: self.source.line_col(heading.span.start),
         };
+        self.children(feature)
+    }
+
+    /// Reads the backgrounds, rules, scenarios and examples of a feature, up to the end of the
+    /// file.
+    fn children(&mut self, mut feature: Feature) -> Result<Feature, ReadError> {
         loop {
             let leading = self.leading_tags();
             let Some(block) = self.peek() else { break };

@@ -12,16 +12,14 @@ use ion_rs::Element;
 use morphir_core::ir::v4::{self, ValueAttributes};
 use morphir_core::naming::{FQName, Name};
 
+use super::annotations::{read_annotations, refuse_on_definition, with_annotations};
 use super::attributes::{read_value_attributes, value_attributes};
 use super::json::{from_ion, to_ion};
 use super::types::{
     read_hole_reason, read_incompleteness, read_type, write_hole_reason, write_incompleteness,
     write_type,
 };
-use super::{
-    access_of, access_symbol, fq_name, list, local_name, member, optional_doc, refuse_annotations,
-    unwritten,
-};
+use super::{access_of, access_symbol, fq_name, list, local_name, member, optional_doc, unwritten};
 use crate::ir_transport::TransportDiagnostic;
 use crate::ir_transport::ion::{
     annotation_names, optional_string, required_field, required_string, struct_fields,
@@ -622,6 +620,7 @@ pub(super) fn read_value_def(element: &Element) -> Result<(String, ValueDef), Tr
     let names = annotation_names(element)?;
     let access = access_of(&names)?;
     let fields = struct_fields(element, "value")?;
+    refuse_on_definition(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let output_type = fields.get("outputType").map(|e| read_type(e)).transpose()?;
     let partial = || {
@@ -737,13 +736,13 @@ pub(super) fn read_value_spec(
         return Err(member("a value specification is public::spec::value"));
     }
     let fields = struct_fields(element, "value spec")?;
-    refuse_annotations(&fields)?;
+    let annotations = read_annotations(&fields)?;
     Ok((
         required_string(&fields, "name")?.to_owned(),
         v4::Documented::new(
             optional_doc(&fields)?,
             v4::ValueSpecification {
-                annotations: Vec::new(),
+                annotations,
                 inputs: read_inputs(fields.get("inputs").copied())?,
                 output: read_type(required_field(&fields, "output")?)?,
             },
@@ -755,10 +754,10 @@ pub(super) fn write_value_spec(
     name: &str,
     spec: &ValueSpec,
 ) -> Result<Element, TransportDiagnostic> {
-    if !spec.value.annotations.is_empty() {
-        return Err(unwritten("Morphir annotations"));
-    }
-    let mut builder = ion_rs::Struct::builder().with_field("name", name);
+    let mut builder = with_annotations(
+        ion_rs::Struct::builder().with_field("name", name),
+        &spec.value.annotations,
+    )?;
     if !spec.value.inputs.is_empty() {
         builder = builder.with_field("inputs", write_inputs(&spec.value.inputs)?);
     }

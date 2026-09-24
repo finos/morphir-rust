@@ -755,3 +755,58 @@ fn attributes_on_a_value_follow_its_head() {
     assert!(ion.contains("startLine"), "{ion}");
     assert!(ion.contains("variable"), "{ion}");
 }
+
+#[test]
+fn annotations_with_named_and_positional_arguments_round_trip() {
+    let text = format!(
+        "{V4_HEADER}
+package::spec::{{
+  name: \"dep/pkg\",
+  modules: [ module::spec::{{
+    name: \"m\",
+    annotations: [ \"my-org/project:annotations#stable:since 1.0\" ],
+    values: [ public::spec::value::{{
+      name: \"v\",
+      annotations: [ {{
+        name: \"my-org/project:annotations#since\",
+        arguments: [ (string \"1.2.0\"), {{ name: \"reason\", value: (string \"renamed\") }} ],
+      }} ],
+      output: \"morphir/SDK:basics#int\",
+    }} ],
+  }} ],
+}}
+morphir_footer::{{}}"
+    );
+    let events = decode(&IonCodec::new(), &text, &v4_ion()).unwrap();
+
+    let ion = encode(&IonCodec::new(), events.clone(), &v4_ion()).unwrap();
+    assert_eq!(decode(&IonCodec::new(), &ion, &v4_ion()).unwrap(), events, "{ion}");
+    let json = encode(
+        &JsonCodec::new(),
+        events,
+        &CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json()),
+    )
+    .unwrap();
+    assert!(json.contains("since 1.0"), "{json}");
+    assert!(json.contains("reason"), "{json}");
+}
+
+#[test]
+fn a_definition_carries_no_annotations() {
+    let text = v4_module(
+        "public::def::value::{ name: \"v\", annotations: [], outputType: \"morphir/SDK:basics#int\", body: 1 }",
+    );
+
+    assert!(refusal(&text).contains("definition carries no Morphir annotations"));
+}
+
+#[test]
+fn a_package_specification_carries_no_annotations_yet() {
+    let text = format!(
+        "{V4_HEADER}
+package::spec::{{ name: \"dep/pkg\", annotations: [ \"my-org/project:annotations#stable\" ] }}
+morphir_footer::{{}}"
+    );
+
+    assert!(decode(&IonCodec::new(), &text, &v4_ion()).is_err());
+}

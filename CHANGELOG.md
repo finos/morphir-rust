@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Draft Amazon Ion IR codec (`FormatId::ion()`, `ionVersion` `0.1.0-draft.1`) for IR v3 and v4,
   as a single-file datagram and as a document tree whose files hold the same annotated
   elements, with names taken from their paths. It covers v3 libraries with dependency
-  specifications and every v4 distribution kind and node the draft spells. v4 attributes,
-  Morphir annotations and document literals are not encoded yet and are refused rather than
-  dropped (finos/morphir#946).
+  specifications and every v4 distribution kind and node the draft spells, including
+  attributes, Morphir annotations and document literals, whose numbers keep their lexemes
+  (finos/morphir#946).
 - Local APFS Library publication with exact signed proposals, durable role-version
   reservations, staged immutable objects, serialized writers and timestamp commit
   recovery. The first macOS provider supports dependency-free classic V4 registries;

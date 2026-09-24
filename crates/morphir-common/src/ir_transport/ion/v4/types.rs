@@ -10,10 +10,11 @@ use ion_rs::Element;
 use morphir_core::ir::v4::{self, Access, TypeAttributes};
 use morphir_core::naming::Name;
 
+use super::annotations::{read_annotations, refuse_on_definition, with_annotations};
 use super::attributes::{read_type_attributes, with_type_attributes};
 use super::{
     access_of, access_symbol, fq_name, list, local_name, member, name_elements, name_list,
-    optional_doc, refuse_annotations, unwritten,
+    optional_doc,
 };
 use crate::ir_transport::TransportDiagnostic;
 use crate::ir_transport::ion::{annotation_names, required_field, required_string, struct_fields};
@@ -221,6 +222,7 @@ pub(super) fn read_type_def(element: &Element) -> Result<(String, TypeDef), Tran
     let names = annotation_names(element)?;
     let access = access_of(&names)?;
     let fields = struct_fields(element, "type")?;
+    refuse_on_definition(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let type_params = name_list(&fields, "typeParams")?;
     let defined = match names.as_slice() {
@@ -339,21 +341,21 @@ pub(super) fn write_type_def(
 pub(super) fn read_type_spec(element: &Element) -> Result<(String, TypeSpec), TransportDiagnostic> {
     let names = annotation_names(element)?;
     let fields = struct_fields(element, "type spec")?;
-    refuse_annotations(&fields)?;
+    let annotations = read_annotations(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let type_params = name_list(&fields, "typeParams")?;
     let spec = match names.as_slice() {
         ["public", "spec", "opaque", "type"] => v4::TypeSpecification::OpaqueTypeSpecification {
-            annotations: Vec::new(),
+            annotations,
             type_params,
         },
         ["public", "spec", "alias", "type"] => v4::TypeSpecification::TypeAliasSpecification {
-            annotations: Vec::new(),
+            annotations,
             type_params,
             type_expr: read_type(required_field(&fields, "typeExp")?)?,
         },
         ["public", "spec", "custom", "type"] => v4::TypeSpecification::CustomTypeSpecification {
-            annotations: Vec::new(),
+            annotations,
             type_params,
             constructors: read_constructors(fields.get("constructors").copied())?
                 .into_iter()
@@ -367,7 +369,7 @@ pub(super) fn read_type_spec(element: &Element) -> Result<(String, TypeSpec), Tr
                 .collect(),
         },
         ["public", "spec", "derived", "type"] => v4::TypeSpecification::DerivedTypeSpecification {
-            annotations: Vec::new(),
+            annotations,
             type_params,
             base_type: read_type(required_field(&fields, "baseType")?)?,
             from_base_type: fq_name(required_string(&fields, "fromBaseType")?)?,
@@ -439,9 +441,7 @@ pub(super) fn write_type_spec(name: &str, spec: &TypeSpec) -> Result<Element, Tr
             ("derived", annotations)
         }
     };
-    if !annotations.is_empty() {
-        return Err(unwritten("Morphir annotations"));
-    }
+    builder = with_annotations(builder, annotations)?;
     if let Some(doc) = &spec.doc {
         builder = builder.with_field("doc", doc.text());
     }

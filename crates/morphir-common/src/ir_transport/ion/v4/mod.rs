@@ -6,6 +6,7 @@
 //! own modules as `public::def::module`; a `specs` distribution writes them as `module::spec`. An
 //! application carries its `entryPoints` on the header.
 
+mod annotations;
 mod attributes;
 mod json;
 mod types;
@@ -367,7 +368,7 @@ fn read_module_spec(
         return Err(member("expected module::spec"));
     }
     let fields = struct_fields(element, "module::spec")?;
-    refuse_annotations(&fields)?;
+    let annotations = annotations::read_annotations(&fields)?;
     let name = canonical_module(required_string(&fields, "name")?)?;
     let mut types = IndexMap::new();
     for item in list_items(&fields, "types")? {
@@ -382,7 +383,7 @@ fn read_module_spec(
     Ok((
         name,
         v4::ModuleSpecification {
-            annotations: Vec::new(),
+            annotations,
             types,
             values,
             doc: optional_doc(&fields)?,
@@ -391,10 +392,10 @@ fn read_module_spec(
 }
 
 fn module_spec(name: &str, spec: &v4::ModuleSpecification) -> Result<Element, TransportDiagnostic> {
-    if !spec.annotations.is_empty() {
-        return Err(unwritten("Morphir annotations"));
-    }
-    let mut builder = ion_rs::Struct::builder().with_field("name", name);
+    let mut builder = annotations::with_annotations(
+        ion_rs::Struct::builder().with_field("name", name),
+        &spec.annotations,
+    )?;
     if let Some(doc) = &spec.doc {
         builder = builder.with_field("doc", doc.text());
     }
@@ -428,6 +429,7 @@ fn read_def_module(
     }
     let access = access_of(&names)?;
     let fields = struct_fields(element, "module")?;
+    annotations::refuse_on_definition(&fields)?;
     let name = canonical_module(required_string(&fields, "name")?)?;
     let mut types = IndexMap::new();
     for item in list_items(&fields, "types")? {

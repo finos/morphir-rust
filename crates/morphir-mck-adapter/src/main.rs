@@ -19,6 +19,9 @@ fn main() -> Result<()> {
         .as_slice()
     {
         [] | ["--suite", "ir"] => run(io::stdin().lock(), io::stdout())?,
+        ["--suite", "node-address"] => {
+            morphir_mck_adapter::node_address::run(io::stdin().lock(), io::stdout())?
+        }
         ["--suite", "package"] => {
             morphir_mck_adapter::package::run(io::stdin().lock(), io::stdout())?
         }

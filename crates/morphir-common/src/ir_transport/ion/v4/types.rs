@@ -10,6 +10,7 @@ use ion_rs::Element;
 use morphir_core::ir::v4::{self, Access, TypeAttributes};
 use morphir_core::naming::Name;
 
+use super::attributes::{read_type_attributes, with_type_attributes};
 use super::{
     access_of, access_symbol, fq_name, list, local_name, member, name_elements, name_list,
     optional_doc, refuse_annotations, unwritten,
@@ -40,25 +41,30 @@ pub(super) fn read_type(element: &Element) -> Result<v4::Type, TransportDiagnost
             "a type is a canonical name, a list, or an annotated struct",
         ));
     }
+    if names.as_slice() == ["tuple"]
+        && let Some(items) = element.as_list()
+    {
+        return Ok(v4::Type::Tuple(
+            TypeAttributes::default(),
+            read_types(items)?,
+        ));
+    }
+    let fields = struct_fields(element, names.join("::").as_str())?;
+    let attributes = read_type_attributes(&fields)?;
     match names.as_slice() {
-        ["tuple"] => {
-            let items = element
-                .as_list()
-                .ok_or_else(|| member("tuple:: is a list"))?;
-            Ok(v4::Type::Tuple(
-                TypeAttributes::default(),
-                read_types(items)?,
-            ))
-        }
-        ["variable"] => {
-            let fields = struct_fields(element, "variable")?;
-            Ok(v4::Type::Variable(
-                TypeAttributes::default(),
-                local_name(required_string(&fields, "name")?)?,
-            ))
-        }
+        ["tuple"] => Ok(v4::Type::Tuple(
+            attributes,
+            read_types(
+                required_field(&fields, "elements")?
+                    .as_list()
+                    .ok_or_else(|| member("elements is a list"))?,
+            )?,
+        )),
+        ["variable"] => Ok(v4::Type::Variable(
+            attributes,
+            local_name(required_string(&fields, "name")?)?,
+        )),
         ["reference"] => {
-            let fields = struct_fields(element, "reference")?;
             let arguments = match fields.get("arguments") {
                 Some(list) => read_types(
                     list.as_list()
@@ -67,35 +73,26 @@ pub(super) fn read_type(element: &Element) -> Result<v4::Type, TransportDiagnost
                 None => Vec::new(),
             };
             Ok(v4::Type::Reference(
-                TypeAttributes::default(),
+                attributes,
                 fq_name(required_string(&fields, "name")?)?,
                 arguments,
             ))
         }
-        ["record"] => {
-            let fields = struct_fields(element, "record")?;
-            Ok(v4::Type::Record(
-                TypeAttributes::default(),
-                read_record_fields(fields.get("fields").copied())?,
-            ))
-        }
-        ["extensibleRecord"] => {
-            let fields = struct_fields(element, "extensibleRecord")?;
-            Ok(v4::Type::ExtensibleRecord(
-                TypeAttributes::default(),
-                local_name(required_string(&fields, "variable")?)?,
-                read_record_fields(fields.get("fields").copied())?,
-            ))
-        }
-        ["function"] => {
-            let fields = struct_fields(element, "function")?;
-            Ok(v4::Type::Function(
-                TypeAttributes::default(),
-                Box::new(read_type(required_field(&fields, "parameterType")?)?),
-                Box::new(read_type(required_field(&fields, "returnType")?)?),
-            ))
-        }
-        ["unit"] => Ok(v4::Type::Unit(TypeAttributes::default())),
+        ["record"] => Ok(v4::Type::Record(
+            attributes,
+            read_record_fields(fields.get("fields").copied())?,
+        )),
+        ["extensibleRecord"] => Ok(v4::Type::ExtensibleRecord(
+            attributes,
+            local_name(required_string(&fields, "variable")?)?,
+            read_record_fields(fields.get("fields").copied())?,
+        )),
+        ["function"] => Ok(v4::Type::Function(
+            attributes,
+            Box::new(read_type(required_field(&fields, "parameterType")?)?),
+            Box::new(read_type(required_field(&fields, "returnType")?)?),
+        )),
+        ["unit"] => Ok(v4::Type::Unit(attributes)),
         names => Err(member(format!("unknown v4 type {}", names.join("::")))),
     }
 }
@@ -119,49 +116,58 @@ fn read_types(items: &ion_rs::Sequence) -> Result<Vec<v4::Type>, TransportDiagno
     items.iter().map(read_type).collect()
 }
 
+/// A type in its shortest spelling. Attributes force the expanded struct.
 pub(super) fn write_type(ty: &v4::Type) -> Result<Element, TransportDiagnostic> {
-    if *ty.attributes() != TypeAttributes::default() {
-        return Err(unwritten("v4 type attributes"));
-    }
-    Ok(match ty {
-        v4::Type::Variable(_, name) => Element::string(name.to_canonical_string()),
-        v4::Type::Reference(_, name, arguments) if arguments.is_empty() => {
-            Element::string(name.to_canonical_string())
-        }
-        v4::Type::Reference(_, name, arguments) => Element::from(
-            ion_rs::Struct::builder()
-                .with_field("name", name.to_canonical_string())
-                .with_field("arguments", list(write_types(arguments)?))
-                .build(),
+    let attributes = ty.attributes();
+    let plain = *attributes == TypeAttributes::default();
+    let expanded = |annotation: &str, builder: ion_rs::StructBuilder| {
+        Ok::<_, TransportDiagnostic>(
+            Element::from(with_type_attributes(builder, attributes)?.build())
+                .with_annotations([annotation]),
         )
-        .with_annotations(["reference"]),
-        v4::Type::Tuple(_, elements) => {
-            Element::from(list(write_types(elements)?)).with_annotations(["tuple"])
+    };
+    match ty {
+        v4::Type::Variable(_, name) if plain => Ok(Element::string(name.to_canonical_string())),
+        v4::Type::Variable(_, name) => expanded(
+            "variable",
+            ion_rs::Struct::builder().with_field("name", name.to_canonical_string()),
+        ),
+        v4::Type::Reference(_, name, arguments) if plain && arguments.is_empty() => {
+            Ok(Element::string(name.to_canonical_string()))
         }
-        v4::Type::Record(_, fields) => Element::from(
-            ion_rs::Struct::builder()
-                .with_field("fields", list(write_record_fields(fields)?))
-                .build(),
-        )
-        .with_annotations(["record"]),
-        v4::Type::ExtensibleRecord(_, variable, fields) => Element::from(
+        v4::Type::Reference(_, name, arguments) => {
+            let mut builder =
+                ion_rs::Struct::builder().with_field("name", name.to_canonical_string());
+            if !arguments.is_empty() {
+                builder = builder.with_field("arguments", list(write_types(arguments)?));
+            }
+            expanded("reference", builder)
+        }
+        v4::Type::Tuple(_, elements) if plain => {
+            Ok(Element::from(list(write_types(elements)?)).with_annotations(["tuple"]))
+        }
+        v4::Type::Tuple(_, elements) => expanded(
+            "tuple",
+            ion_rs::Struct::builder().with_field("elements", list(write_types(elements)?)),
+        ),
+        v4::Type::Record(_, fields) => expanded(
+            "record",
+            ion_rs::Struct::builder().with_field("fields", list(write_record_fields(fields)?)),
+        ),
+        v4::Type::ExtensibleRecord(_, variable, fields) => expanded(
+            "extensibleRecord",
             ion_rs::Struct::builder()
                 .with_field("variable", variable.to_canonical_string())
-                .with_field("fields", list(write_record_fields(fields)?))
-                .build(),
-        )
-        .with_annotations(["extensibleRecord"]),
-        v4::Type::Function(_, parameter, return_type) => Element::from(
+                .with_field("fields", list(write_record_fields(fields)?)),
+        ),
+        v4::Type::Function(_, parameter, return_type) => expanded(
+            "function",
             ion_rs::Struct::builder()
                 .with_field("parameterType", write_type(parameter)?)
-                .with_field("returnType", write_type(return_type)?)
-                .build(),
-        )
-        .with_annotations(["function"]),
-        v4::Type::Unit(_) => {
-            Element::from(ion_rs::Struct::builder().build()).with_annotations(["unit"])
-        }
-    })
+                .with_field("returnType", write_type(return_type)?),
+        ),
+        v4::Type::Unit(_) => expanded("unit", ion_rs::Struct::builder()),
+    }
 }
 
 fn write_types(types: &[v4::Type]) -> Result<Vec<Element>, TransportDiagnostic> {

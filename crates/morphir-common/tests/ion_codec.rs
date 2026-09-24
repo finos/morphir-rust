@@ -669,3 +669,89 @@ morphir_footer::{}
 
     assert!(decode(&IonCodec::new(), text, &v3(FormatId::ion())).is_err());
 }
+
+/// A v4 library whose one value has `body`, as JSON.
+fn v4_json_value(body: serde_json::Value) -> String {
+    serde_json::json!({
+        "formatVersion": "4.0.0",
+        "distribution": { "Library": {
+            "packageName": "example",
+            "dependencies": {},
+            "def": { "modules": { "m": { "Public": { "types": {}, "values": {
+                "v": { "Public": { "ExpressionBody": {
+                    "inputTypes": {}, "outputType": "morphir/SDK:basics#unit", "body": body
+                } } }
+            } } } } }
+        } }
+    })
+    .to_string()
+}
+
+fn json_ion_json(json: &str) -> (Vec<SemanticEvent>, String, Vec<SemanticEvent>) {
+    let json_options = CodecOptions::new(IrVersion::V4, Layout::SingleFile, FormatId::json());
+    let original = decode(&JsonCodec::new(), json, &json_options).unwrap();
+    let ion = encode(&IonCodec::new(), original.clone(), &v4_ion())
+        .unwrap_or_else(|error| panic!("encode: {error:?}"));
+    let back = decode(&IonCodec::new(), &ion, &v4_ion())
+        .unwrap_or_else(|error| panic!("decode: {error:?}\n{ion}"));
+    (release_string(original), ion, release_string(back))
+}
+
+#[test]
+fn a_document_keeps_every_number_lexeme() {
+    let body = serde_json::from_str::<serde_json::Value>(
+        r#"{ "Literal": { "DocumentLiteral": {
+            "plain": 0.1, "scale": 0.10, "big": 12345678901234567890123456789012345678901234567890,
+            "exponent": 1.5e2, "upper": 1E2, "whole": 7, "list": [1, "a", null, true]
+        } } }"#,
+    )
+    .unwrap();
+    let (original, ion, back) = json_ion_json(&v4_json_value(body));
+
+    assert_eq!(back, original, "{ion}");
+    assert!(ion.contains("document"), "{ion}");
+    assert!(ion.contains("scale: 0.10,"), "{ion}");
+    assert!(ion.contains(r#"exponent: number::"1.5e"#), "{ion}");
+}
+
+#[test]
+fn a_document_refuses_ion_values_json_has_no_place_for() {
+    for payload in [
+        "{ at: 2026-09-24T }",
+        "{ bytes: {{aGk=}} }",
+        "{ s: sym }",
+        "{ f: 1e0 }",
+        "(a b)",
+    ] {
+        let text = v4_value(&format!("(document {payload})"));
+        assert!(
+            decode(&IonCodec::new(), &text, &v4_ion()).is_err(),
+            "{payload} was accepted"
+        );
+    }
+}
+
+#[test]
+fn a_document_is_not_a_pattern() {
+    let text = v4_value("(lambda (document { a: 1 }) 1)");
+
+    assert!(decode(&IonCodec::new(), &text, &v4_ion()).is_err());
+}
+
+#[test]
+fn attributes_on_a_value_follow_its_head() {
+    let body = serde_json::json!({ "Apply": {
+        "attributes": {
+            "source": { "startLine": 1, "startColumn": 2, "endLine": 3, "endColumn": 4 },
+            "inferredType": "morphir/SDK:basics#int",
+            "extensions": { "tool": { "hint": 1.50 } }
+        },
+        "function": { "Variable": { "attributes": { "extensions": { "x": true } }, "name": "f" } },
+        "argument": { "Literal": { "IntegerLiteral": 1 } }
+    } });
+    let (original, ion, back) = json_ion_json(&v4_json_value(body));
+
+    assert_eq!(back, original, "{ion}");
+    assert!(ion.contains("startLine"), "{ion}");
+    assert!(ion.contains("variable"), "{ion}");
+}

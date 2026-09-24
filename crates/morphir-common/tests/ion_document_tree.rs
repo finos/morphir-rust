@@ -700,7 +700,7 @@ fn a_module_file_directly_under_the_package_is_refused() {
 }
 
 #[test]
-fn a_v4_type_with_attributes_is_refused_rather_than_dropped() {
+fn a_v4_type_with_attributes_round_trips_through_an_ion_tree() {
     let mut ir = v4_fixture(COMPLETE_EXAMPLE);
     let Distribution::Library(content) = &mut ir.distribution else {
         panic!("a library");
@@ -722,8 +722,9 @@ fn a_v4_type_with_attributes_is_refused_rather_than_dropped() {
         .extensions
         .insert("hint".to_owned(), serde_json::json!("kept"));
 
-    let error = write_document_tree_with_options(&memory_root(), &ir, &tree_options(IrVersion::V4))
-        .expect_err("the writer refuses attributes it cannot encode");
+    let root = memory_root();
+    write_document_tree_with_options(&root, &ir, &tree_options(IrVersion::V4)).unwrap();
 
-    assert!(format!("{error:?}").contains("attributes"), "{error:?}");
+    let read = read_document_tree_with_options(&root, &tree_options(IrVersion::V4)).unwrap();
+    assert_eq!(release_string(read), release_string(ir));
 }

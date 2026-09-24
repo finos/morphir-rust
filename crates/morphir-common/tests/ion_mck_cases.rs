@@ -24,22 +24,7 @@ use serde_json::{Value, json};
 const CASES: &str = include_str!("fixtures/ion/mck-canonical-cases.json");
 
 /// Cases whose node the Ion writer refuses until the named bead lands.
-const NOT_WRITTEN_YET: &[(&str, &str)] = &[
-    ("values-0022", "morphir-vvgi.6 attributes"),
-    ("types-0010", "morphir-vvgi.6 attributes"),
-    ("patterns-and-literals-0012", "morphir-vvgi.6 attributes"),
-    (
-        "patterns-and-literals-0005",
-        "morphir-vvgi.7 document literal",
-    ),
-    (
-        "patterns-and-literals-0006",
-        "morphir-vvgi.7 document literal",
-    ),
-    ("definitions-0020", "morphir-vvgi.7 annotations"),
-    ("definitions-0021", "morphir-vvgi.7 annotations"),
-    ("definitions-0022", "morphir-vvgi.7 annotations"),
-];
+const NOT_WRITTEN_YET: &[(&str, &str)] = &[];
 
 #[derive(Default)]
 struct Collect(Vec<SemanticEvent>);

@@ -6,6 +6,8 @@
 //! own modules as `public::def::module`; a `specs` distribution writes them as `module::spec`. An
 //! application carries its `entryPoints` on the header.
 
+mod attributes;
+mod json;
 mod types;
 mod values;
 

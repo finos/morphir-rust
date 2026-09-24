@@ -104,6 +104,48 @@ fn draft_one_bundle_loads_unchecked_claims_and_writes_draft_two() {
     assert_eq!(serde_json::to_value(reread).unwrap(), written);
 }
 
+/// Hosts 0.4.0-beta.5 and beta.6 wrote the installed catalog as `schemaVersion` "1.0" even for
+/// entries that carried draft.1 members, so those are the bytes a Morphir home holds today.
+#[test]
+fn released_version_one_catalog_with_draft_one_members_loads() {
+    let mut value = a_draft_one_catalog();
+    value["schemaVersion"] = json!("1.0");
+    value["extensions"][0]["statementSource"] = json!("probed");
+    value["extensions"][0]["probeSource"] = json!("describe");
+    let catalog = read_catalog(value).unwrap();
+    let entry = catalog.entries().next().unwrap();
+    assert_eq!(
+        entry.claim_check(),
+        morphir_distribution::ClaimCheck::Probed
+    );
+    assert_eq!(entry.claims().extension.id, "sample");
+    let written = serde_json::to_value(entry).unwrap();
+    assert_eq!(written["claimCheck"], "probed");
+    assert_eq!(written["probeSource"], "describe");
+    assert!(written.get("statement").is_none());
+    assert!(written.get("statementSource").is_none());
+}
+
+/// A version-1 index record could also carry a draft.1 `statement` under `schemaVersion` "1.0".
+#[test]
+fn released_version_one_index_record_with_draft_one_members_loads() {
+    let mut value = an_old_release();
+    value["schemaVersion"] = json!("1.0");
+    value["artifacts"][0] = a_draft_one_artifact();
+    value["critical"] = json!(["artifacts.statement.capabilities.backend.generate"]);
+    let record: ReleaseRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        record.artifacts()[0].claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
+    );
+    assert_eq!(
+        record.artifacts()[0].claims().unwrap().extension.id,
+        "sample"
+    );
+    let written = serde_json::to_value(record).unwrap();
+    assert_current_record(&written["artifacts"][0]);
+}
+
 #[test]
 fn all_envelopes_refuse_mixed_draft_members() {
     for schema in ["2.0.0-draft.1", "2.0.0-draft.2"] {

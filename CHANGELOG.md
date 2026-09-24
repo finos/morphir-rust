@@ -41,7 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the SDK `claims` module). Readers accept exact draft.1 and draft.2 formats;
   writers emit draft.2 with `claimsVersion`, `claims`, and `claimCheck`.
   Morphir hosts `0.4.0-beta.6` and earlier cannot read draft.2 records or
-  `describe` responses. Version-1 flat formats and MEP `0.1` are unchanged
+  `describe` responses. An installed catalog that holds any entry with claims
+  is written as `2.0.0-draft.2`, so those hosts cannot read that catalog at all,
+  its version-1 entries included; a catalog of version-1 entries only stays
+  `1.0`. Version-1 flat formats and MEP `0.1` are unchanged
   (finos/morphir#921; kb `morphir-extensions`, decision 0007,
   "Extensions make capability claims").
 - **Breaking:** SDK-built extensions now require the `sources` compile envelope

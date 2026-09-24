@@ -315,7 +315,7 @@ fn check_agreement(
                 return Err(invalid_bundle(
                     path,
                     format!(
-                        "described claims disagrees: {error}; differing members: {}",
+                        "described claims disagree: {error}; differing members: {}",
                         claims_differences(stated, reported)?.join(", ")
                     ),
                 ));
@@ -328,7 +328,7 @@ fn check_agreement(
     } else {
         Err(invalid_bundle(
             path,
-            format!("described claims disagrees at {}", differences.join(", ")),
+            format!("described claims disagree at {}", differences.join(", ")),
         ))
     }
 }

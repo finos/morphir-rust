@@ -38,7 +38,9 @@ SemVer exact comparators. A draft.1 read converts `statementVersion`, `statement
 and `statementSource` into the current model. The old `declared` check becomes
 `unchecked`, and record critical paths beginning with `statement.` become
 `claims.`. Paths below `artifacts` or `extensions` are converted in the same way.
-Mixing one draft's members with the other draft's version is an error.
+A record whose `schemaVersion` names one draft but whose members or critical
+paths use the other draft's names is refused. A record without a draft
+`schemaVersion`, such as a `1.0` catalog, is converted by its member names.
 
 Version-1 flat formats and their conversion are unchanged. Converted flat
 metadata is available as unchecked claims in memory without adding a document to

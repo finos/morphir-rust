@@ -13,11 +13,11 @@ pub enum SessionAgreementError {
     /// Rule 1: an identity field changed.
     #[error("session agreement rule 1: extension.{0} differs")]
     Identity(&'static str),
-    /// Rule 2: the negotiated protocol was not stated.
-    #[error("session agreement rule 2: protocolVersion '{0}' was not stated")]
+    /// Rule 2: the negotiated protocol was not claimed.
+    #[error("session agreement rule 2: protocolVersion '{0}' was not claimed")]
     ProtocolVersion(String),
     /// Rule 3: the session reports an unstated capability kind.
-    #[error("session agreement rule 3: capability kind {0:?} was not stated")]
+    #[error("session agreement rule 3: capability kind {0:?} was not claimed")]
     CapabilityKind(ExtensionType),
     /// Rule 4: a reported member is absent or has a different value.
     #[error("session agreement rule 4: {0} is absent or differs")]

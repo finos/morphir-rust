@@ -171,7 +171,7 @@ impl<'de> Deserialize<'de> for CatalogFile {
 }
 
 /// Project only the selected artifact into the existing version-1 lock fields.
-/// Claimss from other platforms never contribute capabilities here.
+/// Claims from other platforms never contribute capabilities here.
 pub(super) struct SelectedMetadata {
     pub capabilities: Vec<Capability>,
     pub mep_versions: Vec<String>,

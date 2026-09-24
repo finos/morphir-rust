@@ -64,7 +64,7 @@ pub fn resolve(
     }
     candidates.sort_by(|left, right| right.version().cmp_precedence(left.version()));
 
-    // A release whose claims needs a newer host is skipped, so a moving
+    // A release whose claims need a newer host is skipped, so a moving
     // channel still resolves the newest release this host can run. The host
     // error is reported only when no candidate fits.
     let mut host_refusal = None;

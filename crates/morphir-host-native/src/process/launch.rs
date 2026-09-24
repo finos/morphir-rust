@@ -291,6 +291,7 @@ impl ProcessLaunch {
     }
 
     /// Return the executable this launch starts.
+    #[doc(hidden)]
     pub fn program(&self) -> &ProcessProgram {
         &self.program
     }

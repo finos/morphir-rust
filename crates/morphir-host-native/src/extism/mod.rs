@@ -9,5 +9,5 @@ mod container;
 mod host_functions;
 
 pub use channel::ExtismChannel;
-pub use container::{ExtensionContainer, ExtensionContainerBuilder, ExtensionInfo, ExtensionType};
+pub use container::{ExtensionContainer, ExtensionContainerBuilder};
 pub use host_functions::{MorphirHostFunctions, MorphirHostState};

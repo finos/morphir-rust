@@ -68,11 +68,18 @@ impl ProcessChannel {
         }
     }
 
+    /// Name the exchange a timeout interrupted.
+    ///
+    /// `receive` is only ever called after `send` writes a request, so the
+    /// method is known by the time a real exchange times out. A `receive`
+    /// with no prior `send` (host misuse, or a test) has no method to name,
+    /// so it reports a plain response timeout instead of an empty method
+    /// name.
     fn request_subject(&self) -> String {
-        format!(
-            "Extension request '{}'",
-            self.method.as_deref().unwrap_or_default()
-        )
+        match &self.method {
+            Some(method) => format!("Extension request '{method}'"),
+            None => "Extension response".to_string(),
+        }
     }
 }
 
@@ -133,5 +140,35 @@ impl Channel for ProcessChannel {
                 message: error.to_string(),
                 state: ChannelState::Indeterminate,
             })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::process::launch::ProcessLaunch;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    /// A guest that never answers, so a `receive` against it always times out.
+    const HANG: &str = "#!/bin/sh\nPATH=/usr/bin:/bin\nwhile true; do sleep 1; done\n";
+
+    fn guest(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let path = dir.path().join("guest.sh");
+        std::fs::write(&path, HANG).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_receive_before_any_send_reports_a_response_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let launch = ProcessLaunch::new("guest", guest(&dir), dir.path())
+            .request_timeout(Duration::from_millis(300));
+        let mut channel = ProcessChannel::spawn(launch).await.unwrap();
+
+        let error = channel.receive().await.unwrap_err();
+
+        assert_eq!(error.message, "Extension response timed out after 300ms");
     }
 }

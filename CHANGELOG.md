@@ -60,9 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `morphir-host` gains `Channel::abort`, which stops a guest after a failure
   without waiting for an orderly exit, the `ExpectedChecks` negotiation rules
   and the `describe` install probe.
-- The daemon's process, Extism and native transports, and its method result
-  checks, now run on `morphir-host-native`. Their public API, wire sequence
-  and error texts are unchanged.
+- The daemon's process transport (`SpawnedProcessSession` and
+  `SpawnedProcessTransport`) now runs on `morphir-host-native`'s
+  `ProcessChild`. The Extism container and host functions moved to
+  `morphir-host-native`; the daemon's `ExtismTransport` stays daemon code, and
+  `NativeMepTransport` is unchanged. The re-exported
+  `morphir_daemon::extensions::ExtensionContainer` methods now return
+  `Result<_, morphir_host::HostError>` instead of `morphir_daemon::Result`,
+  so a caller that calls it directly no longer sees the `Extension error: `
+  prefix.
 - **Breaking:** Rename the extension Rust API from capability statements to
   capability claim sets (`CapabilityClaimSet`, `ClaimsRecord`, `ClaimCheck`, and
   the SDK `claims` module). Readers accept exact draft.1 and draft.2 formats;

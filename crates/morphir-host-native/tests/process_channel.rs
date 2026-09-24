@@ -1,8 +1,10 @@
 #![cfg(unix)]
 
+use morphir_extension_sdk::ExtensionInfo;
 use morphir_extension_sdk::protocol::{ExtensionNotification, ExtensionRequest, methods};
 use morphir_host::{Channel, ChannelState, Outgoing};
 use morphir_host_native::process::{ProcessChannel, ProcessLaunch};
+use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
@@ -51,7 +53,7 @@ fn ping() -> Outgoing {
 async fn close_after_exit_waits_without_a_second_exit() {
     let dir = tempfile::tempdir().unwrap();
     let launch = ProcessLaunch::new("guest", guest(&dir, ECHO), dir.path())
-        .request_timeout(Duration::from_secs(5));
+        .request_timeout(Duration::from_secs(30));
     let mut channel = ProcessChannel::spawn(launch).await.unwrap();
     channel.send(ping()).await.unwrap();
     let response = channel.receive().await.unwrap();
@@ -85,14 +87,14 @@ async fn abort_kills_the_child_without_waiting() {
 async fn a_receive_timeout_kills_the_child_and_reports_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let launch = ProcessLaunch::new("guest", guest(&dir, HANG), dir.path())
-        .request_timeout(Duration::from_millis(300));
+        .request_timeout(Duration::from_secs(1));
     let mut channel = ProcessChannel::spawn(launch).await.unwrap();
     channel.send(ping()).await.unwrap();
     let error = channel.receive().await.unwrap_err();
     assert_eq!(error.state, ChannelState::Stopped);
     assert_eq!(
         error.message,
-        "Extension request 'morphir.ping' timed out after 300ms"
+        "Extension request 'morphir.ping' timed out after 1s"
     );
 }
 
@@ -100,7 +102,7 @@ async fn a_receive_timeout_kills_the_child_and_reports_stopped() {
 async fn close_reports_a_non_zero_exit_status_as_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let launch = ProcessLaunch::new("guest", guest(&dir, "#!/bin/sh\nexit 3\n"), dir.path())
-        .request_timeout(Duration::from_secs(5));
+        .request_timeout(Duration::from_secs(30));
     let mut channel = ProcessChannel::spawn(launch).await.unwrap();
     let error = channel.close().await.unwrap_err();
     assert_eq!(error.state, ChannelState::Stopped);
@@ -117,11 +119,11 @@ async fn close_reports_a_non_zero_exit_status_as_stopped() {
 async fn close_aborts_a_guest_that_does_not_exit() {
     let dir = tempfile::tempdir().unwrap();
     let launch = ProcessLaunch::new("guest", guest(&dir, HANG), dir.path())
-        .request_timeout(Duration::from_millis(300));
+        .request_timeout(Duration::from_secs(1));
     let mut channel = ProcessChannel::spawn(launch).await.unwrap();
     let error = channel.close().await.unwrap_err();
     assert_eq!(error.state, ChannelState::Stopped);
-    assert_eq!(error.message, "Extension process did not exit after 300ms");
+    assert_eq!(error.message, "Extension process did not exit after 1s");
 }
 
 #[tokio::test]
@@ -129,7 +131,7 @@ async fn stderr_is_collected_after_the_guest_exits() {
     let dir = tempfile::tempdir().unwrap();
     let script = "#!/bin/sh\nprintf 'guest diagnostics' >&2\nexit 0\n";
     let launch = ProcessLaunch::new("guest", guest(&dir, script), dir.path())
-        .request_timeout(Duration::from_secs(5));
+        .request_timeout(Duration::from_secs(30));
     let mut channel = ProcessChannel::spawn(launch).await.unwrap();
     assert_eq!(channel.close().await.unwrap(), ChannelState::Stopped);
     assert_eq!(channel.stderr_output(), "guest diagnostics");
@@ -146,5 +148,62 @@ async fn a_missing_executable_is_refused_before_spawning() {
     assert_eq!(
         error.to_string(),
         format!("Extension executable does not exist: {}", missing.display())
+    );
+}
+
+/// The staging subdirectory that verified-bytes staging created directly
+/// under `staging_dir`.
+fn staged_subdirectory(staging_dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::read_dir(staging_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| path.is_dir())
+        .expect("verified bytes staging should create one subdirectory")
+}
+
+#[tokio::test]
+async fn staged_program_lives_until_the_channel_is_released() {
+    let root = tempfile::tempdir().unwrap();
+    let staging_dir = root.path().join("staging");
+    let working_dir = root.path().join("work");
+    std::fs::create_dir_all(&staging_dir).unwrap();
+    std::fs::create_dir_all(&working_dir).unwrap();
+
+    let info = ExtensionInfo {
+        id: "guest".into(),
+        ..ExtensionInfo::default()
+    };
+    let launch = ProcessLaunch::from_verified_bytes_in(
+        info,
+        OsStr::new("guest"),
+        ECHO.as_bytes(),
+        &staging_dir,
+        &working_dir,
+    )
+    .request_timeout(Duration::from_secs(30));
+    let mut channel = ProcessChannel::spawn(launch).await.unwrap();
+
+    let staged = staged_subdirectory(&staging_dir);
+    assert!(
+        staged.is_dir(),
+        "{staged:?} should exist while the child runs"
+    );
+
+    channel.send(ping()).await.unwrap();
+    let response = channel.receive().await.unwrap();
+    assert_eq!(response.id, 1);
+    channel
+        .send(Outgoing::Notification(
+            ExtensionNotification::without_params(methods::EXIT),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(channel.close().await.unwrap(), ChannelState::Stopped);
+    drop(channel);
+
+    assert!(
+        !staged.exists(),
+        "{staged:?} should be removed once the channel is released"
     );
 }

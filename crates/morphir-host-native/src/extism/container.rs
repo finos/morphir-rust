@@ -6,7 +6,7 @@ use crate::extism::host_functions::MorphirHostFunctions;
 use crate::process::MAX_MEP_PAYLOAD_BYTES;
 use extism::{Manifest, Plugin, PluginBuilder, Wasm};
 use morphir_extension_sdk::protocol::{ExtensionRequest, ExtensionResponse};
-pub use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
+use morphir_extension_sdk::{ExtensionInfo, ExtensionType};
 use morphir_host::{EnvelopeError, HostError, validate_envelope};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;

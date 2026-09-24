@@ -115,6 +115,9 @@ impl ProcessChild {
     /// Write one request and read one frame body, under a single timeout.
     ///
     /// The timeout text names the request's method.
+    ///
+    /// Used by the daemon's compatibility session.
+    #[doc(hidden)]
     pub async fn exchange(&mut self, request: &ExtensionRequest) -> Result<Vec<u8>, HostError> {
         let request_timeout = self.request_timeout;
         let exchange = async {
@@ -158,6 +161,9 @@ impl ProcessChild {
     ///
     /// Part of [`Self::wait_for_exit`], for callers that treat a failed wait
     /// and a failed standard error read differently.
+    ///
+    /// Used by the daemon's compatibility session.
+    #[doc(hidden)]
     pub async fn wait_for_status(&mut self) -> Result<ExitStatus, HostError> {
         self.stdin.take();
         let request_timeout = self.request_timeout;
@@ -173,6 +179,9 @@ impl ProcessChild {
     ///
     /// Part of [`Self::wait_for_exit`]. If the reader does not finish within
     /// the timeout, it is cancelled and nothing is kept.
+    ///
+    /// Used by the daemon's compatibility session.
+    #[doc(hidden)]
     pub async fn collect_stderr(&mut self) -> Result<(), HostError> {
         let Some(mut stderr_task) = self.stderr_task.take() else {
             return Ok(());
@@ -206,6 +215,9 @@ impl ProcessChild {
     ///
     /// A conforming guest writes only the frames the host reads, so leftover
     /// bytes after exit are output that was not framed as a response.
+    ///
+    /// Used by the daemon's compatibility session.
+    #[doc(hidden)]
     pub async fn stdout_is_exhausted(&mut self) -> Result<bool, HostError> {
         let request_timeout = self.request_timeout;
         match timeout(request_timeout, self.stdout.fill_buf()).await {

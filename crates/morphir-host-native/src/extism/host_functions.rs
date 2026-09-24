@@ -79,6 +79,7 @@ impl MorphirHostFunctions {
     /// Report the workspace info a guest would see through
     /// `morphir_get_workspace_info`, for callers that verify configuration
     /// without loading a plugin.
+    #[doc(hidden)]
     pub fn workspace_info(&self) -> WorkspaceInfo {
         workspace_info(&self.state)
     }

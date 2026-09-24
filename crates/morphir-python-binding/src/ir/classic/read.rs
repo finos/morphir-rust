@@ -23,7 +23,11 @@ fn distinct<'a>(names: impl Iterator<Item = &'a c::Name>) -> Outcome<()> {
 pub(in crate::ir) fn decode(value: serde_json::Value) -> Outcome<v::IRFile> {
     let classic: c::Distribution =
         serde_json::from_value(value).map_err(|e| error("PY005", e.to_string()))?;
-    let c::DistributionBody::Library(_, dependencies, package) = &classic.distribution;
+    let c::DistributionBody::Library(_, dependencies, package) = &classic.distribution else {
+        return Err(values::unsupported(
+            "a v3 Specs distribution has no definitions to decode",
+        ));
+    };
     if !dependencies.is_empty() {
         return Err(values::unsupported(
             "External dependencies are not supported",

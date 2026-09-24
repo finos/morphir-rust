@@ -259,7 +259,14 @@ fn v3_datagram(
         ));
     }
     let classic::DistributionBody::Library(package, dependencies, definition) =
-        distribution.distribution;
+        distribution.distribution
+    else {
+        return Err(IonCodec::error(
+            "morphir::ir::ion::unsupported_specs_distribution",
+            Stage::Encoding,
+            "the v3 Ion writer received a Specs distribution, which has no definitions to encode",
+        ));
+    };
     let header = Element::from(ion_rs::ion_struct! {
         "ionVersion": ION_CONTRACT,
         "formatVersion": "3.0.0",

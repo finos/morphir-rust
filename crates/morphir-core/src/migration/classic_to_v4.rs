@@ -712,7 +712,14 @@ pub fn migrate_distribution(
     }
 
     let classic::DistributionBody::Library(package_name, dependencies, package) =
-        &distribution.distribution;
+        &distribution.distribution
+    else {
+        return Err(MigrationDiagnostic::error(
+            "unsupported-specs-distribution",
+            context.cursor.clone(),
+            "a v3 Specs distribution has no definitions to migrate",
+        ));
+    };
 
     let dependencies = dependencies
         .iter()

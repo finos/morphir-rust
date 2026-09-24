@@ -16,12 +16,36 @@ use super::package::{PackageDefinition, PackageSpecification};
 use super::types::Type;
 
 /// Distribution of packages
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Distribution {
-    #[serde(deserialize_with = "deserialize_baseline_u32")]
     pub format_version: u32,
     pub distribution: DistributionBody,
+}
+
+impl Distribution {
+    /// The `formatVersion` value this distribution writes, chosen by the
+    /// content of [`DistributionBody`]: a `Library` writes the classic `3`,
+    /// a `Specs` writes `"3.1.0"`, the version that introduced it.
+    pub fn emitted_format_version(&self) -> serde_json::Value {
+        match &self.distribution {
+            DistributionBody::Library(..) => serde_json::Value::from(3u32),
+            DistributionBody::Specs(..) => serde_json::Value::from("3.1.0"),
+        }
+    }
+}
+
+impl Serialize for Distribution {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Distribution", 2)?;
+        state.serialize_field("formatVersion", &self.emitted_format_version())?;
+        state.serialize_field("distribution", &self.distribution)?;
+        state.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for Distribution {
@@ -52,6 +76,13 @@ pub enum DistributionBody {
         Vec<(Path, PackageSpecification<Attrs>)>,
         PackageDefinition<Attrs, Type<Attrs>>,
     ),
+    /// A package's public interface without definitions, introduced in
+    /// format version 3.1.0.
+    Specs(
+        Path,
+        Vec<(Path, PackageSpecification<Attrs>)>,
+        PackageSpecification<Attrs>,
+    ),
 }
 
 impl Serialize for DistributionBody {
@@ -66,6 +97,14 @@ impl Serialize for DistributionBody {
                 tuple.serialize_element(path)?;
                 tuple.serialize_element(deps)?;
                 tuple.serialize_element(package)?;
+                tuple.end()
+            }
+            DistributionBody::Specs(path, deps, spec) => {
+                let mut tuple = serializer.serialize_tuple(4)?;
+                tuple.serialize_element("Specs")?;
+                tuple.serialize_element(path)?;
+                tuple.serialize_element(deps)?;
+                tuple.serialize_element(spec)?;
                 tuple.end()
             }
         }
@@ -83,7 +122,9 @@ impl<'de> Deserialize<'de> for DistributionBody {
             type Value = DistributionBody;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str(r#"a DistributionBody array ["Library", path, deps, package]"#)
+                formatter.write_str(
+                    r#"a DistributionBody array ["Library", path, deps, package] or ["Specs", path, deps, spec]"#,
+                )
             }
 
             fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
@@ -114,7 +155,29 @@ impl<'de> Deserialize<'de> for DistributionBody {
 
                         Ok(DistributionBody::Library(path, deps, package))
                     }
-                    _ => Err(de::Error::unknown_variant(tag.as_ref(), &["Library"])),
+                    "Specs" | "specs" => {
+                        let path = seq
+                            .next_element::<Path>()?
+                            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                        let deps = seq
+                            .next_element::<Vec<(Path, PackageSpecification<Attrs>)>>()?
+                            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                        let spec = seq
+                            .next_element::<PackageSpecification<Attrs>>()?
+                            .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+
+                        if let Some(IgnoredAny) = seq.next_element()? {
+                            return Err(de::Error::custom(
+                                "Expected end of DistributionBody array",
+                            ));
+                        }
+
+                        Ok(DistributionBody::Specs(path, deps, spec))
+                    }
+                    _ => Err(de::Error::unknown_variant(
+                        tag.as_ref(),
+                        &["Library", "Specs"],
+                    )),
                 }
             }
         }

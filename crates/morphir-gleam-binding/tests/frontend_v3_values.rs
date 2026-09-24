@@ -33,7 +33,9 @@ fn v3_compilation_retains_function_bodies_and_types_only_omits_them() {
         assert!(result.success, "{:?}", result.diagnostics);
         let distribution: classic::Distribution =
             serde_json::from_value(result.ir.expect("V3 distribution")).unwrap();
-        let DistributionBody::Library(_, _, package) = distribution.distribution;
+        let DistributionBody::Library(_, _, package) = distribution.distribution else {
+            panic!("a Library")
+        };
         let values = &package.modules[0].definition.value.values;
         if types_only {
             assert!(values.is_empty());

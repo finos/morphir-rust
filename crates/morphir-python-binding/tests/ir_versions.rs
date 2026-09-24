@@ -71,7 +71,10 @@ fn both_versions_preserve_imports_privacy_tuples_and_conditionals() {
         if version.starts_with('3') {
             let decoded: classic::Distribution = serde_json::from_value(ir.clone()).unwrap();
             assert_eq!(decoded.format_version, 3);
-            let classic::DistributionBody::Library(package, _, definition) = decoded.distribution;
+            let classic::DistributionBody::Library(package, _, definition) = decoded.distribution
+            else {
+                panic!("a Library")
+            };
             assert_eq!(
                 serde_json::to_value(package).unwrap(),
                 json!([["acme"], ["example"]])

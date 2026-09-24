@@ -151,6 +151,14 @@ pub(crate) fn emit_classic_v3(
                 ))?;
             }
         }
+        classic::DistributionBody::Specs(..) => {
+            return Err(event_error(
+                "morphir::ir::codec::unsupported_specs_distribution",
+                Stage::Normalization,
+                distribution_cursor,
+                "a v3 Specs distribution has no definitions to emit",
+            ));
+        }
     }
     sink.accept(SemanticEvent::new(
         distribution_cursor,

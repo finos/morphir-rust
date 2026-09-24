@@ -69,6 +69,10 @@ pub enum NormalizeError {
     /// The generation-specific Morphir IR decoder rejected the document.
     #[error("invalid Morphir IR: {0}")]
     Decode(#[from] serde_json::Error),
+    /// A v3 `Specs` distribution was supplied where a projection needs
+    /// definitions; `Specs` carries no bodies to normalize.
+    #[error("a v3 Specs distribution has no definitions to normalize")]
+    UnsupportedSpecsDistribution,
 }
 
 impl NormalizeError {
@@ -84,6 +88,7 @@ impl NormalizeError {
             Self::InvalidEntryPointTarget { .. } => "invalid_entry_point_target",
             Self::DuplicateEntryPointTarget { .. } => "duplicate_entry_point_target",
             Self::Decode(_) => "invalid_ir",
+            Self::UnsupportedSpecsDistribution => "unsupported_specs_distribution",
         }
     }
 }
@@ -108,9 +113,10 @@ impl NormalizeError {
 /// ```
 pub fn normalize(ir: &Value) -> Result<ProjectionPackage, NormalizeError> {
     match recognize_version(ir)? {
-        SupportedVersion::V3 => serde_json::from_value(with_integer_version(ir, 3))
-            .map(v3::normalize)
-            .map_err(Into::into),
+        SupportedVersion::V3 => {
+            let distribution = serde_json::from_value(with_integer_version(ir, 3))?;
+            v3::normalize(distribution)
+        }
         SupportedVersion::V4 => {
             let ir = serde_json::from_value(with_integer_version(ir, 4))?;
             v4::normalize(ir)

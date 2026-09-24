@@ -54,6 +54,9 @@ impl TreeModel for V4 {
     type ValueSpec = Documented<ValueSpecification>;
     type File = IRFile;
     type Version = FormatVersion;
+    /// The `IRFile`'s version is the manifest's; a node file's own is checked for support by its
+    /// decoder and is not compared with the manifest's.
+    const FILES_REPEAT_MANIFEST_VERSION: bool = false;
 
     fn decode_manifest(
         value: &serde_json::Value,

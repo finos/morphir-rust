@@ -69,13 +69,10 @@ pub(crate) enum Role {
 }
 
 /// One parsed tree file, whatever the profile parsed it into. The shared layout asks it only
-/// for its `formatVersion`, to check that every file agrees with the manifest.
+/// for its `formatVersion`, to check that every file agrees with the manifest under a model that
+/// asks for it ([`TreeModel::FILES_REPEAT_MANIFEST_VERSION`]).
 pub(crate) trait Payload {
     /// The `formatVersion` member as canonical JSON text (`3`, `"3.1.0"`), if present.
-    #[expect(
-        dead_code,
-        reason = "the v4 reader does not compare file versions; the v3 model is the first caller"
-    )]
     fn format_version(&self) -> Option<String>;
 }
 
@@ -109,6 +106,13 @@ pub(crate) trait TreeModel {
     /// What every file of a written tree repeats and the manifest alone does not supply to a
     /// module writer: v4's format version, which a caller chooses.
     type Version;
+
+    /// Whether every file of a tree has to say exactly the `formatVersion` its manifest says.
+    ///
+    /// The shared reader holds each file to the manifest when this is set. A v4 tree does not:
+    /// the distribution's version is the manifest's, and a node file may spell its own
+    /// differently. A v3 tree does: every file of it says `"3.1.0"`.
+    const FILES_REPEAT_MANIFEST_VERSION: bool;
 
     /// The root manifest.
     fn decode_manifest(

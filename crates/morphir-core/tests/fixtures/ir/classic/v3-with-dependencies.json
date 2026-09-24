@@ -1,0 +1,88 @@
+{
+  "formatVersion": 3,
+  "distribution": [
+    "Library",
+    [["example"]],
+    [
+      [
+        [["morphir"], ["s", "d", "k"]],
+        {
+          "modules": [
+            [
+              [["basics"]],
+              {
+                "types": [
+                  [["int"], { "doc": "", "value": ["OpaqueTypeSpecification", []] }],
+                  [
+                    ["maybe"],
+                    {
+                      "doc": "An optional value.",
+                      "value": [
+                        "CustomTypeSpecification",
+                        [["a"]],
+                        [
+                          [["just"], [[["value"], ["Variable", {}, ["a"]]]]],
+                          [["nothing"], []]
+                        ]
+                      ]
+                    }
+                  ],
+                  [
+                    ["score"],
+                    {
+                      "doc": "",
+                      "value": [
+                        "TypeAliasSpecification",
+                        [],
+                        ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []]
+                      ]
+                    }
+                  ],
+                  [
+                    ["money"],
+                    {
+                      "doc": "",
+                      "value": [
+                        "DerivedTypeSpecification",
+                        [],
+                        {
+                          "baseType": ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []],
+                          "fromBaseType": [[["morphir"], ["s", "d", "k"]], [["basics"]], ["to", "money"]],
+                          "toBaseType": [[["morphir"], ["s", "d", "k"]], [["basics"]], ["from", "money"]]
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "values": [
+                  [
+                    ["add"],
+                    {
+                      "doc": "Adds two integers.",
+                      "value": {
+                        "inputs": [
+                          [["a"], ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []]],
+                          [["b"], ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []]]
+                        ],
+                        "output": ["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []]
+                      }
+                    }
+                  ]
+                ],
+                "doc": "Basic arithmetic."
+              }
+            ]
+          ]
+        }
+      ]
+    ],
+    {
+      "modules": [
+        [
+          [["eligibility"]],
+          { "access": "Public", "value": { "types": [], "values": [], "doc": "Credit eligibility." } }
+        ]
+      ]
+    }
+  ]
+}

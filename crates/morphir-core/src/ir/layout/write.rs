@@ -297,13 +297,13 @@ pub fn write_tree(file: &IRFile, policy: &TreePolicy) -> Result<Vec<(String, Str
 /// under the position the path first took. Accumulating into a plain list instead would emit the
 /// path twice, and a tree is a map of files.
 #[derive(Default)]
-struct Files {
+pub(crate) struct Files {
     entries: Vec<(String, String)>,
     positions: HashMap<String, usize>,
 }
 
 impl Files {
-    fn set(&mut self, (path, text): (String, String)) {
+    pub(crate) fn set(&mut self, (path, text): (String, String)) {
         match self.positions.get(&path) {
             Some(&at) => self.entries[at].1 = text,
             None => {
@@ -313,7 +313,7 @@ impl Files {
         }
     }
 
-    fn into_vec(self) -> Vec<(String, String)> {
+    pub(crate) fn into_vec(self) -> Vec<(String, String)> {
         self.entries
     }
 }

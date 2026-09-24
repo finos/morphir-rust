@@ -356,3 +356,6 @@ mod compatibility;
 
 #[path = "extension_readers/frontend.rs"]
 mod frontend;
+
+#[path = "extension_readers/locks.rs"]
+mod locks;

@@ -1,6 +1,8 @@
 //! Exact locks, installed catalog state, and offline activation.
 
 mod activation;
+mod locked_claims;
+use locked_claims::LockedIndex;
 mod probe;
 mod readers;
 use crate::extension_format::{ClaimCheck, ClaimsRecord, ExtensionSchemaVersion};
@@ -54,7 +56,7 @@ pub struct ExtensionLock {
     extension_id: ExtensionId,
     name: String,
     version: Version,
-    index: IndexProvenance,
+    index: LockedIndex,
     source: ArtifactSource,
     runtime: ArtifactRuntime,
     platform: Option<Platform>,
@@ -79,7 +81,15 @@ impl ExtensionLock {
             extension_id: artifact.selected.release.extension_id().clone(),
             name: artifact.selected.release.name().to_owned(),
             version: artifact.selected.release.version().clone(),
-            index: artifact.selected.index.clone(),
+            index: LockedIndex {
+                provenance: artifact.selected.index.clone(),
+                claims: artifact
+                    .selected
+                    .artifact
+                    .claims_record()
+                    .supplied_value()
+                    .cloned(),
+            },
             source: artifact.selected.artifact.source().clone(),
             runtime,
             platform: artifact.selected.artifact.platform().cloned(),
@@ -133,7 +143,7 @@ impl ExtensionLock {
 
     /// Return the exact index identity and history revision.
     pub fn index(&self) -> &IndexProvenance {
-        &self.index
+        &self.index.provenance
     }
 
     /// Return the controlled artifact source.
@@ -749,6 +759,7 @@ fn list_installed_with_reacquisition_after_catalog(
 }
 
 fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock) -> Result<()> {
+    lock.index.validate_claims(installed)?;
     if lock.extension_id != installed.extension_id
         || lock.name != installed.name
         || lock.version != installed.version
@@ -758,7 +769,7 @@ fn validate_installed_pair(installed: &InstalledExtension, lock: &ExtensionLock)
         || lock.digest != installed.digest
         || lock.capabilities != installed.capabilities
         || lock.mep_versions != installed.mep_versions
-        || lock.index != installed.index
+        || lock.index.provenance != installed.index
         || lock.frontend != installed.frontend
         || lock.backend != installed.backend
         || lock.executable != installed.executable

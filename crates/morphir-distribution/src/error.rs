@@ -346,6 +346,14 @@ pub enum DistributionError {
         /// Extension whose durable records disagree.
         id: crate::ExtensionId,
     },
+    /// Supplied catalog claims differ from the claim set pinned at installation.
+    #[error("installed catalog and exact lock disagree for extension {id} at {member}")]
+    InstalledClaimsMismatch {
+        /// Extension whose supplied claims changed.
+        id: crate::ExtensionId,
+        /// First differing member in the preserved claim set.
+        member: String,
+    },
     /// One installed record violates its runtime-specific state invariants.
     #[error("invalid installed state for extension {id}: {reason}")]
     InvalidInstalledState {

@@ -12,14 +12,14 @@ use ion_rs::Element;
 use morphir_core::ir::v4::{self, ValueAttributes};
 use morphir_core::naming::{FQName, Name};
 
+use super::annotations::{read_annotations, refuse_on_definition, with_annotations};
+use super::attributes::{read_value_attributes, value_attributes};
+use super::json::{from_ion, to_ion};
 use super::types::{
     read_hole_reason, read_incompleteness, read_type, write_hole_reason, write_incompleteness,
     write_type,
 };
-use super::{
-    access_of, access_symbol, fq_name, list, local_name, member, optional_doc, refuse_annotations,
-    unwritten,
-};
+use super::{access_of, access_symbol, fq_name, list, local_name, member, optional_doc, unwritten};
 use crate::ir_transport::TransportDiagnostic;
 use crate::ir_transport::ion::{
     annotation_names, optional_string, required_field, required_string, struct_fields,
@@ -46,32 +46,32 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
     if let Some(literal) = bare_literal(element)? {
         return Ok(v4::Value::Literal(attrs(), literal));
     }
-    let (head, rest) = sexp_parts(element)?;
+    let (head, a, rest) = sexp_parts(element)?;
     let Some(head) = head else {
-        return Ok(v4::Value::Unit(attrs()));
+        return Ok(v4::Value::Unit(a));
     };
     let arity = |count: usize| expect_arity(head, &rest, count);
     match head {
         "unit" => {
             arity(0)?;
-            Ok(v4::Value::Unit(attrs()))
+            Ok(v4::Value::Unit(a.clone()))
         }
         "variable" => {
             arity(1)?;
-            Ok(v4::Value::Variable(attrs(), name_of(rest[0])?))
+            Ok(v4::Value::Variable(a.clone(), name_of(rest[0])?))
         }
         "ref" => {
             arity(1)?;
-            Ok(v4::Value::Reference(attrs(), fq_of(rest[0])?))
+            Ok(v4::Value::Reference(a.clone(), fq_of(rest[0])?))
         }
         "constructor" => {
             arity(1)?;
-            Ok(v4::Value::Constructor(attrs(), fq_of(rest[0])?))
+            Ok(v4::Value::Constructor(a.clone(), fq_of(rest[0])?))
         }
         "apply" => {
             arity(2)?;
             Ok(v4::Value::Apply(
-                attrs(),
+                a.clone(),
                 Box::new(read_value(rest[0])?),
                 Box::new(read_value(rest[1])?),
             ))
@@ -79,7 +79,7 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
         "lambda" => {
             arity(2)?;
             Ok(v4::Value::Lambda(
-                attrs(),
+                a.clone(),
                 read_lambda_pattern(rest[0])?,
                 Box::new(read_value(rest[1])?),
             ))
@@ -87,7 +87,7 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
         "if" => {
             arity(3)?;
             Ok(v4::Value::IfThenElse(
-                attrs(),
+                a.clone(),
                 Box::new(read_value(rest[0])?),
                 Box::new(read_value(rest[1])?),
                 Box::new(read_value(rest[2])?),
@@ -96,7 +96,7 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
         "let" => {
             arity(3)?;
             Ok(v4::Value::LetDefinition(
-                attrs(),
+                a.clone(),
                 name_of(rest[0])?,
                 Box::new(read_binding(rest[1])?),
                 Box::new(read_value(rest[2])?),
@@ -123,7 +123,7 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
                 read.push(v4::LetBinding(name, read_binding(pair[1])?));
             }
             Ok(v4::Value::LetRecursion(
-                attrs(),
+                a.clone(),
                 read,
                 Box::new(read_value(rest[1])?),
             ))
@@ -141,7 +141,7 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
                 ));
             }
             Ok(v4::Value::PatternMatch(
-                attrs(),
+                a.clone(),
                 Box::new(read_value(rest[0])?),
                 cases,
             ))
@@ -149,7 +149,7 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
         "destructure" => {
             arity(3)?;
             Ok(v4::Value::Destructure(
-                attrs(),
+                a.clone(),
                 read_pattern(rest[0])?,
                 Box::new(read_value(rest[1])?),
                 Box::new(read_value(rest[2])?),
@@ -158,34 +158,34 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
         "field" => {
             arity(2)?;
             Ok(v4::Value::Field(
-                attrs(),
+                a.clone(),
                 Box::new(read_value(rest[0])?),
                 name_of(rest[1])?,
             ))
         }
         "fieldFunction" => {
             arity(1)?;
-            Ok(v4::Value::FieldFunction(attrs(), name_of(rest[0])?))
+            Ok(v4::Value::FieldFunction(a.clone(), name_of(rest[0])?))
         }
-        "record" => Ok(v4::Value::Record(attrs(), read_entries(&rest)?)),
+        "record" => Ok(v4::Value::Record(a.clone(), read_entries(&rest)?)),
         "update" => {
             if rest.is_empty() {
                 return Err(member("update has a record"));
             }
             Ok(v4::Value::UpdateRecord(
-                attrs(),
+                a.clone(),
                 Box::new(read_value(rest[0])?),
                 read_entries(&rest[1..])?,
             ))
         }
-        "tuple" => Ok(v4::Value::Tuple(attrs(), read_values(&rest)?)),
-        "list" => Ok(v4::Value::List(attrs(), read_values(&rest)?)),
+        "tuple" => Ok(v4::Value::Tuple(a.clone(), read_values(&rest)?)),
+        "list" => Ok(v4::Value::List(a.clone(), read_values(&rest)?)),
         "hole" => {
             if rest.is_empty() || rest.len() > 2 {
                 return Err(member("hole has a reason and an optional expected type"));
             }
             Ok(v4::Value::Hole(
-                attrs(),
+                a.clone(),
                 read_hole_reason(rest[0])?,
                 rest.get(1)
                     .map(|ty| read_type(ty).map(Box::new))
@@ -194,21 +194,28 @@ pub(super) fn read_value(element: &Element) -> Result<v4::Value, TransportDiagno
         }
         "int" | "float" | "bool" | "string" | "char" | "decimal" => {
             arity(1)?;
-            Ok(v4::Value::Literal(attrs(), literal(head, rest[0])?))
+            Ok(v4::Value::Literal(a.clone(), literal(head, rest[0])?))
         }
-        "document" => Err(unwritten("the document literal")),
+        "document" => {
+            arity(1)?;
+            Ok(v4::Value::Literal(
+                a.clone(),
+                v4::Literal::Document(from_ion(rest[0])?),
+            ))
+        }
         other => Err(member(format!("unknown v4 value head '{other}'"))),
     }
 }
 
 pub(super) fn write_value(value: &v4::Value) -> Result<Element, TransportDiagnostic> {
-    if *value.attributes() != ValueAttributes::default() {
-        return Err(unwritten("v4 value attributes"));
-    }
+    let extra = value_attributes(value.attributes())?;
+    let head = |name: &str, rest: Vec<Element>| head(name, extra.clone(), rest);
     Ok(match value {
-        v4::Value::Literal(_, literal) => write_literal(literal)?,
-        v4::Value::Unit(_) => sexp(Vec::new()),
-        v4::Value::Variable(_, name) => Element::symbol(name.to_canonical_string()),
+        v4::Value::Literal(_, literal) => write_literal(literal, extra.clone())?,
+        v4::Value::Unit(_) if extra.is_none() => sexp(Vec::new()),
+        v4::Value::Unit(_) => head("unit", Vec::new()),
+        v4::Value::Variable(_, name) if extra.is_none() => name_symbol(name),
+        v4::Value::Variable(_, name) => head("variable", vec![name_symbol(name)]),
         v4::Value::Reference(_, name) => head("ref", vec![fq_symbol(name)]),
         v4::Value::Constructor(_, name) => head("constructor", vec![fq_symbol(name)]),
         v4::Value::Apply(_, function, argument) => head(
@@ -369,31 +376,31 @@ fn read_pattern(element: &Element) -> Result<v4::Pattern, TransportDiagnostic> {
     if let Some(literal) = bare_literal(element)? {
         return Ok(v4::Pattern::LiteralPattern(attrs(), literal));
     }
-    let (head, rest) = sexp_parts(element)?;
+    let (head, a, rest) = sexp_parts(element)?;
     let Some(head) = head else {
-        return Ok(v4::Pattern::UnitPattern(attrs()));
+        return Ok(v4::Pattern::UnitPattern(a));
     };
     let arity = |count: usize| expect_arity(head, &rest, count);
     match head {
         "wildcard" => {
             arity(0)?;
-            Ok(v4::Pattern::WildcardPattern(attrs()))
+            Ok(v4::Pattern::WildcardPattern(a.clone()))
         }
         "as" => {
             arity(2)?;
             Ok(v4::Pattern::AsPattern(
-                attrs(),
+                a.clone(),
                 Box::new(read_pattern(rest[0])?),
                 name_of(rest[1])?,
             ))
         }
-        "tuple" => Ok(v4::Pattern::TuplePattern(attrs(), read_patterns(&rest)?)),
+        "tuple" => Ok(v4::Pattern::TuplePattern(a.clone(), read_patterns(&rest)?)),
         "constructor" => {
             if rest.is_empty() {
                 return Err(member("a constructor pattern names its constructor"));
             }
             Ok(v4::Pattern::ConstructorPattern(
-                attrs(),
+                a.clone(),
                 fq_of(rest[0])?,
                 read_patterns(&rest[1..])?,
             ))
@@ -401,23 +408,23 @@ fn read_pattern(element: &Element) -> Result<v4::Pattern, TransportDiagnostic> {
         "headTail" => {
             arity(2)?;
             Ok(v4::Pattern::HeadTailPattern(
-                attrs(),
+                a.clone(),
                 Box::new(read_pattern(rest[0])?),
                 Box::new(read_pattern(rest[1])?),
             ))
         }
         "emptyList" => {
             arity(0)?;
-            Ok(v4::Pattern::EmptyListPattern(attrs()))
+            Ok(v4::Pattern::EmptyListPattern(a.clone()))
         }
         "unit" => {
             arity(0)?;
-            Ok(v4::Pattern::UnitPattern(attrs()))
+            Ok(v4::Pattern::UnitPattern(a.clone()))
         }
         "int" | "float" | "bool" | "string" | "char" | "decimal" => {
             arity(1)?;
             Ok(v4::Pattern::LiteralPattern(
-                attrs(),
+                a.clone(),
                 literal(head, rest[0])?,
             ))
         }
@@ -427,16 +434,18 @@ fn read_pattern(element: &Element) -> Result<v4::Pattern, TransportDiagnostic> {
 }
 
 fn write_pattern(pattern: &v4::Pattern) -> Result<Element, TransportDiagnostic> {
-    if *pattern_attributes(pattern) != ValueAttributes::default() {
-        return Err(unwritten("v4 pattern attributes"));
-    }
+    let extra = value_attributes(pattern_attributes(pattern))?;
+    let plain = extra.is_none();
+    let head = |name: &str, rest: Vec<Element>| head(name, extra.clone(), rest);
     Ok(match pattern {
-        v4::Pattern::WildcardPattern(_) => Element::symbol("_"),
+        v4::Pattern::WildcardPattern(_) if plain => Element::symbol("_"),
+        v4::Pattern::WildcardPattern(_) => head("wildcard", Vec::new()),
         v4::Pattern::AsPattern(_, inner, name)
-            if matches!(
-                inner.as_ref(),
-                v4::Pattern::WildcardPattern(inner_attrs) if *inner_attrs == ValueAttributes::default()
-            ) =>
+            if plain
+                && matches!(
+                    inner.as_ref(),
+                    v4::Pattern::WildcardPattern(inner_attrs) if *inner_attrs == ValueAttributes::default()
+                ) =>
         {
             name_symbol(name)
         }
@@ -449,7 +458,8 @@ fn write_pattern(pattern: &v4::Pattern) -> Result<Element, TransportDiagnostic> 
             items.extend(write_patterns(args)?);
             head("constructor", items)
         }
-        v4::Pattern::EmptyListPattern(_) => Element::from(list(Vec::new())),
+        v4::Pattern::EmptyListPattern(_) if plain => Element::from(list(Vec::new())),
+        v4::Pattern::EmptyListPattern(_) => head("emptyList", Vec::new()),
         v4::Pattern::HeadTailPattern(_, first, tail) => head(
             "headTail",
             vec![write_pattern(first)?, write_pattern(tail)?],
@@ -458,9 +468,10 @@ fn write_pattern(pattern: &v4::Pattern) -> Result<Element, TransportDiagnostic> 
             if matches!(literal, v4::Literal::Document(_)) {
                 return Err(member("a document literal cannot be a pattern"));
             }
-            write_literal(literal)?
+            write_literal(literal, extra.clone())?
         }
-        v4::Pattern::UnitPattern(_) => sexp(Vec::new()),
+        v4::Pattern::UnitPattern(_) if plain => sexp(Vec::new()),
+        v4::Pattern::UnitPattern(_) => head("unit", Vec::new()),
     })
 }
 
@@ -578,18 +589,26 @@ fn literal(head: &str, payload: &Element) -> Result<v4::Literal, TransportDiagno
     }
 }
 
-fn write_literal(literal: &v4::Literal) -> Result<Element, TransportDiagnostic> {
+/// A literal in its shortest spelling. Attributes force the S-expression form.
+fn write_literal(
+    literal: &v4::Literal,
+    extra: Option<Element>,
+) -> Result<Element, TransportDiagnostic> {
+    let plain = extra.is_none();
+    let head = |name: &str, payload: Element| head(name, extra.clone(), vec![payload]);
     Ok(match literal {
-        v4::Literal::Bool(value) => Element::from(*value),
+        v4::Literal::Bool(value) if plain => Element::from(*value),
+        v4::Literal::Bool(value) => head("bool", Element::from(*value)),
         v4::Literal::Integer(value) => match i128::try_from(value) {
-            Ok(small) => Element::from(ion_rs::Int::from(small)),
-            Err(_) => head("int", vec![Element::string(value.to_string())]),
+            Ok(small) if plain => Element::from(ion_rs::Int::from(small)),
+            Ok(small) => head("int", Element::from(ion_rs::Int::from(small))),
+            Err(_) => head("int", Element::string(value.to_string())),
         },
-        v4::Literal::Float(value) => head("float", vec![Element::string(value.lexeme())]),
-        v4::Literal::String(value) => head("string", vec![Element::string(value.as_str())]),
-        v4::Literal::Char(value) => head("char", vec![Element::string(value.to_string())]),
-        v4::Literal::Decimal(value) => head("decimal", vec![Element::string(value.lexeme())]),
-        v4::Literal::Document(_) => return Err(unwritten("the document literal")),
+        v4::Literal::Float(value) => head("float", Element::string(value.lexeme())),
+        v4::Literal::String(value) => head("string", Element::string(value.as_str())),
+        v4::Literal::Char(value) => head("char", Element::string(value.to_string())),
+        v4::Literal::Decimal(value) => head("decimal", Element::string(value.lexeme())),
+        v4::Literal::Document(payload) => head("document", to_ion(payload)?),
     })
 }
 
@@ -601,6 +620,7 @@ pub(super) fn read_value_def(element: &Element) -> Result<(String, ValueDef), Tr
     let names = annotation_names(element)?;
     let access = access_of(&names)?;
     let fields = struct_fields(element, "value")?;
+    refuse_on_definition(&fields)?;
     let name = required_string(&fields, "name")?.to_owned();
     let output_type = fields.get("outputType").map(|e| read_type(e)).transpose()?;
     let partial = || {
@@ -716,13 +736,13 @@ pub(super) fn read_value_spec(
         return Err(member("a value specification is public::spec::value"));
     }
     let fields = struct_fields(element, "value spec")?;
-    refuse_annotations(&fields)?;
+    let annotations = read_annotations(&fields)?;
     Ok((
         required_string(&fields, "name")?.to_owned(),
         v4::Documented::new(
             optional_doc(&fields)?,
             v4::ValueSpecification {
-                annotations: Vec::new(),
+                annotations,
                 inputs: read_inputs(fields.get("inputs").copied())?,
                 output: read_type(required_field(&fields, "output")?)?,
             },
@@ -734,10 +754,10 @@ pub(super) fn write_value_spec(
     name: &str,
     spec: &ValueSpec,
 ) -> Result<Element, TransportDiagnostic> {
-    if !spec.value.annotations.is_empty() {
-        return Err(unwritten("Morphir annotations"));
-    }
-    let mut builder = ion_rs::Struct::builder().with_field("name", name);
+    let mut builder = with_annotations(
+        ion_rs::Struct::builder().with_field("name", name),
+        &spec.value.annotations,
+    )?;
     if !spec.value.inputs.is_empty() {
         builder = builder.with_field("inputs", write_inputs(&spec.value.inputs)?);
     }
@@ -883,24 +903,32 @@ fn fq_symbol(name: &FQName) -> Element {
 }
 
 /// The head and the arguments of an S-expression; the head is `None` for `()`.
-fn sexp_parts(element: &Element) -> Result<(Option<&str>, Vec<&Element>), TransportDiagnostic> {
+/// The head, the attributes and the arguments of an S-expression; the head is `None` for `()`.
+/// An attribute payload is an unannotated struct right after the head. A hole reason, which is
+/// an annotated struct, is not one.
+fn sexp_parts(
+    element: &Element,
+) -> Result<(Option<&str>, ValueAttributes, Vec<&Element>), TransportDiagnostic> {
     let items = element
         .as_sexp()
         .ok_or_else(|| member("expected an S-expression, a symbol, or a literal"))?;
     let mut items = items.iter();
     let Some(first) = items.next() else {
-        return Ok((None, Vec::new()));
+        return Ok((None, attrs(), Vec::new()));
     };
     let head = symbol(first).ok_or_else(|| member("an S-expression starts with a symbol"))?;
-    let rest: Vec<&Element> = items.collect();
-    // An attribute payload is an unannotated struct; a hole reason is an annotated one.
-    if rest
-        .first()
-        .is_some_and(|first| first.as_struct().is_some() && first.annotations().is_empty())
+    let mut rest: Vec<&Element> = items.collect();
+    let mut attributes = attrs();
+    // A document's payload may itself be a struct, so there the payload comes second.
+    let may_carry = head != "document" || rest.len() == 2;
+    if may_carry
+        && rest
+            .first()
+            .is_some_and(|first| first.as_struct().is_some() && first.annotations().is_empty())
     {
-        return Err(unwritten("v4 attributes after an S-expression head"));
+        attributes = read_value_attributes(rest.remove(0))?;
     }
-    Ok((Some(head), rest))
+    Ok((Some(head), attributes, rest))
 }
 
 fn expect_arity(head: &str, rest: &[&Element], count: usize) -> Result<(), TransportDiagnostic> {
@@ -926,8 +954,9 @@ fn pair<'a>(element: &'a Element, message: &str) -> Result<Vec<&'a Element>, Tra
     Ok(items)
 }
 
-fn head(name: &str, rest: Vec<Element>) -> Element {
+fn head(name: &str, attributes: Option<Element>, rest: Vec<Element>) -> Element {
     let mut items = vec![Element::symbol(name)];
+    items.extend(attributes);
     items.extend(rest);
     sexp(items)
 }

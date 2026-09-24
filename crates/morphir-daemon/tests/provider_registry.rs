@@ -227,6 +227,13 @@ struct InstalledSpec<'a> {
 }
 
 fn installed(spec: InstalledSpec<'_>) -> InstalledExtensionSnapshot {
+    installed_with_record(spec, |_| {})
+}
+
+fn installed_with_record(
+    spec: InstalledSpec<'_>,
+    update: impl FnOnce(&mut serde_json::Value),
+) -> InstalledExtensionSnapshot {
     let root = tempfile::tempdir().unwrap();
     let index = root.path().join("index");
     let filename = match spec.runtime {
@@ -300,6 +307,7 @@ fn installed(spec: InstalledSpec<'_>) -> InstalledExtensionSnapshot {
             }),
         );
     }
+    update(&mut record);
     fs::write(
         index.join("extensions").join(format!("{}.jsonl", spec.id)),
         format!("{record}\n"),
@@ -320,7 +328,23 @@ fn installed(spec: InstalledSpec<'_>) -> InstalledExtensionSnapshot {
     ExtensionInstaller::new(&home)
         .install(selected, &"0.4.0".parse().unwrap())
         .unwrap();
-    list_installed(&home).unwrap().pop().unwrap()
+    let snapshot = list_installed(&home).unwrap().pop().unwrap();
+    let artifact = morphir_distribution::activate_installed_snapshot(&home, &snapshot).unwrap();
+    let supplied = match &artifact {
+        morphir_distribution::VerifiedExtensionArtifact::Process(process) => {
+            process.supplied_claims()
+        }
+        morphir_distribution::VerifiedExtensionArtifact::Wasm(wasm) => wasm.supplied_claims(),
+    };
+    assert_eq!(
+        serde_json::to_value(supplied).unwrap(),
+        serde_json::to_value(snapshot.installed().supplied_claims()).unwrap()
+    );
+    assert_eq!(
+        artifact.extension_capabilities(),
+        snapshot.installed().extension_capabilities()
+    );
+    snapshot
 }
 
 fn process_provider(id: &str, language: &str, target: &str) -> InstalledExtensionSnapshot {
@@ -931,4 +955,54 @@ fn a_resolved_frontend_reports_whether_it_can_synthesize() {
         .resolve_frontend("plain-lang", "4", InvocationPolicy::PreferDirect)
         .unwrap();
     assert!(!plain_installed.supports_workspace_discovery());
+}
+
+#[test]
+fn installed_frontend_claims_resolve_for_multiple_documents() {
+    for runtime in [InstalledRuntime::Process, InstalledRuntime::Wasm] {
+        let snapshot = installed_with_record(
+            InstalledSpec {
+                id: "multi-document",
+                runtime,
+                frontend: Some(("elm", "3", true)),
+                backend: None,
+            },
+            |record| {
+                record["schemaVersion"] = serde_json::json!("2.0.0-draft.2");
+                record.as_object_mut().unwrap().remove("capabilities");
+                record.as_object_mut().unwrap().remove("mepVersions");
+                let mut frontend = record.as_object_mut().unwrap().remove("frontend").unwrap();
+                frontend["multiDocument"] = serde_json::json!(true);
+                frontend["fragments"] = serde_json::json!(true);
+                frontend["incremental"] = serde_json::json!(true);
+                frontend["futureMember"] = serde_json::json!(42);
+                record["artifacts"][0]["claims"] = serde_json::json!({
+                    "claimsVersion": "0.1.0-draft.2", "protocolVersions": ["0.1"],
+                    "extension": {"id": "multi-document", "name": "Installed multi-document",
+                        "version": "2.0.0", "types": ["frontend"]},
+                    "capabilities": {"frontend": frontend}
+                });
+            },
+        );
+        let mut registry = ExtensionRegistry::new();
+        registry.register_installed(snapshot).unwrap();
+        let frontend = registry
+            .resolve_frontend("elm", "3", InvocationPolicy::ProtocolOnly)
+            .unwrap();
+        assert_eq!(frontend.origin(), ProviderOrigin::Installed);
+        assert!(
+            frontend.capability().multi_document,
+            "the resolved provider must permit multiple source documents"
+        );
+        assert!(frontend.capability().fragments);
+        assert!(frontend.capability().incremental);
+        assert!(
+            registry.providers()[0]
+                .capabilities()
+                .frontend
+                .as_ref()
+                .unwrap()
+                .multi_document
+        );
+    }
 }

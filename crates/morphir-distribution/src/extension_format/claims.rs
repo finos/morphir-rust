@@ -112,6 +112,11 @@ impl TryFrom<Value> for ClaimsRecord {
 }
 
 impl ClaimsRecord {
+    /// Complete normalized supplied JSON, including unknown optional members.
+    pub(crate) fn supplied_value(&self) -> Option<&Value> {
+        self.claims.as_ref().map(|claims| &claims.wire)
+    }
+
     pub(crate) fn has_supplied_claims(&self) -> bool {
         self.claims.is_some()
     }

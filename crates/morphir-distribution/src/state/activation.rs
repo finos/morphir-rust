@@ -12,6 +12,7 @@ pub struct VerifiedProcessArtifact {
     args: Vec<String>,
     extension_info: ExtensionInfo,
     capabilities: ExtensionCapabilities,
+    supplied_claims: Option<CapabilityClaimSet>,
     frontend: Option<FrontendRecord>,
     backend: Option<BackendRecord>,
 }
@@ -57,6 +58,11 @@ impl VerifiedProcessArtifact {
         self.backend.as_ref()
     }
 
+    /// Return publisher-supplied claims, excluding converted version-1 metadata.
+    pub fn supplied_claims(&self) -> Option<&CapabilityClaimSet> {
+        self.supplied_claims.as_ref()
+    }
+
     /// Return typed capabilities reconstructed from installed metadata.
     pub fn extension_capabilities(&self) -> ExtensionCapabilities {
         self.capabilities.clone()
@@ -70,6 +76,7 @@ pub struct VerifiedWasmArtifact {
     bytes: Arc<[u8]>,
     extension_info: ExtensionInfo,
     capabilities: ExtensionCapabilities,
+    supplied_claims: Option<CapabilityClaimSet>,
     frontend: Option<FrontendRecord>,
     backend: Option<BackendRecord>,
 }
@@ -103,6 +110,11 @@ impl VerifiedWasmArtifact {
     /// Return stored backend metadata, when declared.
     pub fn backend(&self) -> Option<&BackendRecord> {
         self.backend.as_ref()
+    }
+
+    /// Return publisher-supplied claims, excluding converted version-1 metadata.
+    pub fn supplied_claims(&self) -> Option<&CapabilityClaimSet> {
+        self.supplied_claims.as_ref()
     }
 
     /// Return typed capabilities reconstructed from installed metadata.
@@ -197,6 +209,7 @@ pub fn activate_installed_snapshot(
 
     let extension_info = installed.extension_info();
     let capabilities = installed.extension_capabilities();
+    let supplied_claims = installed.supplied_claims().cloned();
     match installed.runtime {
         ArtifactRuntime::Process => Ok(VerifiedExtensionArtifact::Process(
             VerifiedProcessArtifact {
@@ -207,6 +220,7 @@ pub fn activate_installed_snapshot(
                 args: installed.args,
                 extension_info,
                 capabilities,
+                supplied_claims,
                 frontend: installed.frontend,
                 backend: installed.backend,
             },
@@ -216,6 +230,7 @@ pub fn activate_installed_snapshot(
             bytes: bytes.into(),
             extension_info,
             capabilities,
+            supplied_claims,
             frontend: installed.frontend,
             backend: installed.backend,
         })),

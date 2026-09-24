@@ -78,8 +78,14 @@ pub async fn activate(
     let (channel, expectation): (Box<dyn Channel>, ExpectedExtension) = match artifact {
         VerifiedExtensionArtifact::Process(process) => {
             let capabilities = process.extension_capabilities();
-            let persisted =
-                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend);
+            let persisted = if process.supplied_claims().is_some() {
+                PersistedExtensionCapabilities::from_claims(
+                    capabilities.frontend,
+                    capabilities.backend,
+                )
+            } else {
+                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend)
+            };
             let launch = if !persisted.is_empty() {
                 ProcessLaunch::from_verified_bytes_with_persisted_capabilities_in(
                     process.extension_info().clone(),
@@ -109,8 +115,14 @@ pub async fn activate(
         VerifiedExtensionArtifact::Wasm(wasm) => {
             let info = wasm.extension_info().clone();
             let capabilities = wasm.extension_capabilities();
-            let persisted =
-                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend);
+            let persisted = if wasm.supplied_claims().is_some() {
+                PersistedExtensionCapabilities::from_claims(
+                    capabilities.frontend,
+                    capabilities.backend,
+                )
+            } else {
+                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend)
+            };
             let container = ExtensionContainer::from_bytes_async(
                 info.id.clone(),
                 wasm.into_bytes(),

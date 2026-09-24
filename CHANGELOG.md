@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (finos/morphir#921).
 
 ### Fixed
+- Installed extensions retain frontend `multiDocument` and `fragments` from
+  draft.1 and draft.2 capability claims. Provider resolution exposes those flags,
+  and session negotiation requires them to match the supplied claims. Version-1
+  catalogs keep their existing shape and default both flags to false; legacy
+  session negotiation remains unchanged. A guest whose supplied claims leave
+  `multiDocument` out, or false, but whose session reports `true` is now refused
+  when the session opens; before, the session decided. Claims written by the SDK
+  from `capabilities()` always agree with the session. New installs pin the entire
+  supplied claim set in the exact lock and refuse catalog claim changes, naming
+  the differing member. The pin lives in optional `index.claims` metadata so
+  released beta.5, beta.6 and beta.7 lock readers can ignore it. Existing locks
+  without a pin retain their activation behavior and expose the supplied flags;
+  reinstall to pin them. Version-1 lock bytes remain unchanged.
 - `ClaimsRecord::check_described` checks a `morphir.extension.describe` answer
   against the declaration. A claim set the extension supplied must match its
   answer exactly. A declaration converted from a version-1 record is checked

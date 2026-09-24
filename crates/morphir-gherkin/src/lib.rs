@@ -4,6 +4,7 @@
 //! node has a source span. Descriptions keep their prose and fenced blocks as parsed Markdown.
 //! Extensions read tags, fences and prose into a typed context. This crate does not run scenarios.
 
+pub mod cursor;
 pub mod error;
 pub mod feature_reader;
 pub mod markdown;
@@ -11,9 +12,11 @@ pub mod mdg_reader;
 pub mod model;
 pub mod path;
 pub mod span;
+pub mod visit;
 
 use std::path::{Path, PathBuf};
 
+pub use cursor::Cursor;
 pub use error::ReadError;
 pub use model::*;
 pub use path::{NodePath, NodePathError, Segment};

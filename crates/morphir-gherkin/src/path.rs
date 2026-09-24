@@ -1,5 +1,6 @@
 //! A path to a node of a document: `feature/rule[1]/scenario[2]/step[3]`. Indexes are 0-based and
-//! count nodes of that kind under the same parent.
+//! count nodes of that kind under the same parent. A path can also start at `preamble`, the root
+//! of the Markdown before the `Feature` heading of a `.feature.md` file.
 
 use std::fmt;
 use std::str::FromStr;
@@ -7,6 +8,9 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Segment {
     Feature,
+    /// The root of the document's preamble: the Markdown before the `Feature` heading of a
+    /// `.feature.md` file.
+    Preamble,
     Background,
     Rule(usize),
     Scenario(usize),
@@ -28,11 +32,25 @@ impl NodePath {
         }
     }
 
+    /// The root of the document's preamble.
+    pub fn preamble() -> Self {
+        Self {
+            segments: vec![Segment::Preamble],
+        }
+    }
+
     #[must_use]
     pub fn push(&self, segment: Segment) -> Self {
         let mut segments = self.segments.clone();
         segments.push(segment);
         Self { segments }
+    }
+
+    /// Builds a path from its segments.
+    pub fn from_segments(segments: &[Segment]) -> Self {
+        Self {
+            segments: segments.to_vec(),
+        }
     }
 
     pub fn parent(&self) -> Option<Self> {
@@ -57,6 +75,7 @@ impl fmt::Display for Segment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Segment::Feature => f.write_str("feature"),
+            Segment::Preamble => f.write_str("preamble"),
             Segment::Background => f.write_str("background"),
             Segment::Rule(i) => write!(f, "rule[{i}]"),
             Segment::Scenario(i) => write!(f, "scenario[{i}]"),
@@ -88,6 +107,7 @@ impl FromStr for NodePath {
         for (position, part) in text.split('/').enumerate() {
             let segment = match part {
                 "feature" if position == 0 => Segment::Feature,
+                "preamble" if position == 0 => Segment::Preamble,
                 "background" => Segment::Background,
                 _ => {
                     let (name, rest) = part.split_once('[').ok_or_else(bad)?;
@@ -109,7 +129,10 @@ impl FromStr for NodePath {
             };
             segments.push(segment);
         }
-        if segments.first() != Some(&Segment::Feature) {
+        if !matches!(
+            segments.first(),
+            Some(&Segment::Feature) | Some(&Segment::Preamble)
+        ) {
             return Err(bad());
         }
         Ok(Self { segments })

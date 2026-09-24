@@ -108,3 +108,28 @@ async fn compile_once_reports_a_rejection_after_an_orderly_shutdown() {
         Some(methods::EXIT)
     );
 }
+
+#[tokio::test]
+async fn a_result_that_does_not_decode_ends_the_session_in_order() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(2, json!({"not": "a compile result"})))
+        .respond(ok(3, json!({})));
+    let log = channel.log();
+    let connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+
+    compile_once(connection, &config(), CompileRequest::default())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        log.methods(),
+        [
+            methods::INITIALIZE,
+            methods::COMPILE,
+            methods::SHUTDOWN,
+            methods::EXIT
+        ]
+    );
+    assert_eq!(log.closes(), 1);
+}

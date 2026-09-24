@@ -34,6 +34,10 @@ impl Session {
     }
 
     /// Invoke one non-lifecycle method with typed parameters and result.
+    ///
+    /// A result that does not decode into `R` ends the session: the guest
+    /// answered with a valid envelope, so the session closes it in order
+    /// before reporting the decode failure.
     pub async fn call<P: Serialize, R: DeserializeOwned>(
         &mut self,
         method: &str,
@@ -42,7 +46,18 @@ impl Session {
         let params =
             serde_json::to_value(params).map_err(|error| CallError::Rejected(error.into()))?;
         let value = self.connection.call(method, params).await?;
-        serde_json::from_value(value).map_err(|error| CallError::Failed(error.into()))
+        match serde_json::from_value(value) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                let error = HostError::from(error);
+                match self.connection.close().await {
+                    Ok(()) => Err(CallError::Failed(error)),
+                    Err(close) => Err(CallError::Failed(HostError::Rejected(format!(
+                        "{error}; orderly shutdown also failed: {close}"
+                    )))),
+                }
+            }
+        }
     }
 
     /// Compile sources with a frontend guest.

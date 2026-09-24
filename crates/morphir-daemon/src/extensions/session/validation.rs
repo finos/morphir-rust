@@ -2,9 +2,7 @@
 
 use super::controller::NegotiatedSession;
 use super::transport::{CapabilityExpectation, ExpectedExtension};
-use crate::extensions::protocol::{
-    ExtensionResponse, InitializeResult, JSONRPC_VERSION, RpcError, methods,
-};
+use crate::extensions::protocol::{InitializeResult, methods};
 use crate::{DaemonError, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -20,38 +18,6 @@ use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
 use unicode_normalization::UnicodeNormalization as _;
-
-pub(super) enum ResponseFailure {
-    Rpc(DaemonError),
-    Invalid(DaemonError),
-}
-
-pub(super) fn validate_response(
-    response: ExtensionResponse,
-    expected_id: u64,
-) -> std::result::Result<serde_json::Value, ResponseFailure> {
-    if response.jsonrpc != JSONRPC_VERSION {
-        return Err(ResponseFailure::Invalid(DaemonError::Extension(format!(
-            "Extension response used unsupported JSON-RPC version '{}'",
-            response.jsonrpc
-        ))));
-    }
-    if response.id != expected_id {
-        return Err(ResponseFailure::Invalid(DaemonError::Extension(format!(
-            "Extension response ID {} did not match request ID {expected_id}",
-            response.id
-        ))));
-    }
-    match (response.result, response.error) {
-        (Some(value), None) => Ok(value),
-        (None, Some(RpcError { code, message, .. })) => Err(ResponseFailure::Rpc(
-            DaemonError::Extension(format!("RPC error {code}: {message}")),
-        )),
-        _ => Err(ResponseFailure::Invalid(DaemonError::Extension(
-            "Extension response must contain exactly one of result or error".into(),
-        ))),
-    }
-}
 
 /// The frontend members that differ, named as they are spelled on the wire.
 ///
@@ -564,6 +530,30 @@ pub(in crate::extensions) fn validate_negotiation(
         result.capabilities,
         legacy_backend,
     ))
+}
+
+/// The daemon's negotiation rules, run by the portable session core.
+#[derive(Debug)]
+pub(super) struct DaemonChecks {
+    expected: ExpectedExtension,
+}
+
+impl DaemonChecks {
+    pub(super) fn new(expected: ExpectedExtension) -> Self {
+        Self { expected }
+    }
+}
+
+impl morphir_host::SessionChecks for DaemonChecks {
+    type Error = DaemonError;
+
+    fn negotiate(
+        &mut self,
+        offered: &[String],
+        result: InitializeResult,
+    ) -> Result<NegotiatedSession> {
+        validate_negotiation(self.expected.clone(), offered, result)
+    }
 }
 
 #[cfg(test)]

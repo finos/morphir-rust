@@ -1,13 +1,10 @@
 //! Typestate session controller and validated negotiation data.
 
 use super::transport::{MepTransport, TransportError, TransportState};
-use super::validation::{
-    ResponseFailure, validate_method_result_async, validate_negotiation, validate_response,
-};
+use super::validation::{DaemonChecks, validate_method_result_async};
 use crate::DaemonError;
-use crate::extensions::protocol::{
-    ExtensionRequest, InitializeParams, InitializeResult, error_codes, methods,
-};
+use crate::extensions::protocol::InitializeParams;
+use morphir_host::{Action, Event, SessionCore};
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
@@ -26,8 +23,7 @@ pub use morphir_host::Negotiated as NegotiatedSession;
 /// A MEP session whose legal operations depend on its state parameter.
 pub struct Session<T, S> {
     transport: T,
-    next_request_id: u64,
-    negotiated: Option<NegotiatedSession>,
+    core: Option<SessionCore<DaemonChecks>>,
     marker: PhantomData<S>,
 }
 
@@ -36,8 +32,7 @@ impl<T> Session<T, Loaded> {
     pub fn loaded(transport: T) -> Self {
         Self {
             transport,
-            next_request_id: 1,
-            negotiated: None,
+            core: None,
             marker: PhantomData,
         }
     }
@@ -49,20 +44,17 @@ impl<T: MepTransport> Session<T, Loaded> {
         mut self,
         params: InitializeParams,
     ) -> std::result::Result<Session<T, Ready>, FailedSession<T>> {
-        let offered = params.protocol_versions.clone();
-        let expected = self.transport.expected_extension();
-        let result: InitializeResult = match self.call(methods::INITIALIZE, params).await {
-            CallOutcome::Success(value) => value,
-            CallOutcome::RpcError(error)
-            | CallOutcome::Invalid(error)
-            | CallOutcome::Local(error) => return Err(self.fail_after_abort(error).await),
-            CallOutcome::Transport(error) => return Err(self.failed(error)),
-        };
-        let negotiated = match validate_negotiation(expected, &offered, result) {
-            Ok(value) => value,
-            Err(error) => return Err(self.fail_after_abort(error).await),
-        };
-        Ok(self.transition(Some(negotiated)))
+        self.core = Some(SessionCore::new(DaemonChecks::new(
+            self.transport.expected_extension(),
+        )));
+        match self.step(Event::Open(params)).await {
+            Step::Action(Action::Ready) => Ok(self.transition()),
+            Step::Action(Action::Failed(error) | Action::Rejected(error)) => {
+                Err(self.fail_after_abort(error).await)
+            }
+            Step::Action(other) => Err(self.fail_after_abort(unexpected(&other)).await),
+            Step::Transport(error) => Err(self.failed(error)),
+        }
     }
 }
 
@@ -79,8 +71,9 @@ pub enum InvokeOutcome<T, R> {
 impl<T: MepTransport> Session<T, Ready> {
     /// Return the validated negotiation data.
     pub fn negotiated(&self) -> &NegotiatedSession {
-        self.negotiated
+        self.core
             .as_ref()
+            .and_then(SessionCore::negotiated)
             .expect("ready sessions are negotiated")
     }
 
@@ -97,69 +90,51 @@ impl<T: MepTransport> Session<T, Ready> {
         method: &str,
         params: impl Serialize,
     ) -> InvokeOutcome<T, R> {
-        if matches!(
-            method,
-            methods::INITIALIZE | methods::SHUTDOWN | methods::EXIT
-        ) {
-            return InvokeOutcome::Rejected(
-                self,
-                DaemonError::Extension(format!(
-                    "Protocol lifecycle method '{method}' must use its dedicated session operation"
-                )),
-            );
-        }
-        if !self.negotiated().supports_method(method) {
-            return InvokeOutcome::Rejected(
-                self,
-                DaemonError::Extension(format!(
-                    "RPC error {}: Extension does not support capability '{method}'",
-                    error_codes::CAPABILITY_UNAVAILABLE
-                )),
-            );
-        }
         let params = match serde_json::to_value(params) {
             Ok(params) => params,
             Err(error) => return InvokeOutcome::Rejected(self, error.into()),
         };
-        if !self.negotiated().supports_invocation(method, &params) {
-            return InvokeOutcome::Rejected(
-                self,
-                DaemonError::Extension(format!(
-                    "RPC error {}: Extension does not support capability '{method}' for the requested protocol",
-                    error_codes::CAPABILITY_UNAVAILABLE
-                )),
-            );
-        }
-        match self.call(method, params).await {
-            CallOutcome::Success(value) => InvokeOutcome::Success(self, value),
-            CallOutcome::RpcError(error) | CallOutcome::Local(error) => {
-                InvokeOutcome::Rejected(self, error)
+        let event = Event::Call {
+            method: method.to_owned(),
+            params: params.clone(),
+        };
+        match self.step(event).await {
+            Step::Action(Action::Completed(value)) => {
+                match validate_method_result_async(method, params, value)
+                    .await
+                    .and_then(|value| serde_json::from_value(value).map_err(Into::into))
+                {
+                    Ok(value) => InvokeOutcome::Success(self, value),
+                    Err(error) => InvokeOutcome::Failed(self.fail_after_abort(error).await),
+                }
             }
-            CallOutcome::Invalid(error) => {
+            Step::Action(Action::Rejected(error)) => InvokeOutcome::Rejected(self, error),
+            Step::Action(Action::Failed(error)) => {
                 InvokeOutcome::Failed(self.fail_after_abort(error).await)
             }
-            CallOutcome::Transport(error) => InvokeOutcome::Failed(self.failed(error)),
+            Step::Action(other) => {
+                InvokeOutcome::Failed(self.fail_after_abort(unexpected(&other)).await)
+            }
+            Step::Transport(error) => InvokeOutcome::Failed(self.failed(error)),
         }
     }
 
     /// Complete MEP shutdown and prove the resulting lifecycle state.
     pub async fn shutdown(mut self) -> std::result::Result<Session<T, Stopped>, FailedSession<T>> {
-        match self
-            .call::<_, serde_json::Value>(methods::SHUTDOWN, serde_json::json!({}))
-            .await
-        {
-            CallOutcome::Success(_) => match self.transport.terminate().await {
-                Ok(TransportState::Stopped) => Ok(self.transition(None)),
+        match self.step(Event::Close).await {
+            Step::Action(Action::ShutDown) => match self.transport.terminate().await {
+                Ok(TransportState::Stopped) => Ok(self.transition()),
                 Ok(TransportState::Indeterminate) => Err(FailedSession::Indeterminate(
-                    Box::new(self.transition(None)),
+                    Box::new(self.transition()),
                     DaemonError::Extension("Extension shutdown outcome is indeterminate".into()),
                 )),
                 Err(error) => Err(self.failed(error)),
             },
-            CallOutcome::RpcError(error)
-            | CallOutcome::Invalid(error)
-            | CallOutcome::Local(error) => Err(self.fail_after_abort(error).await),
-            CallOutcome::Transport(error) => Err(self.failed(error)),
+            Step::Action(Action::Failed(error) | Action::Rejected(error)) => {
+                Err(self.fail_after_abort(error).await)
+            }
+            Step::Action(other) => Err(self.fail_after_abort(unexpected(&other)).await),
+            Step::Transport(error) => Err(self.failed(error)),
         }
     }
 }
@@ -173,60 +148,42 @@ impl<T, S> Session<T, S> {
         &mut self.transport
     }
 
-    fn transition<N>(self, negotiated: Option<NegotiatedSession>) -> Session<T, N> {
+    fn transition<N>(self) -> Session<T, N> {
         Session {
             transport: self.transport,
-            next_request_id: self.next_request_id,
-            negotiated,
+            core: self.core,
             marker: PhantomData,
         }
     }
 }
 
 impl<T: MepTransport, S> Session<T, S> {
-    async fn call<P: Serialize, R: DeserializeOwned>(
-        &mut self,
-        method: &str,
-        params: P,
-    ) -> CallOutcome<R> {
-        let id = self.next_request_id;
-        self.next_request_id = match id.checked_add(1) {
-            Some(next) => next,
-            None => {
-                return CallOutcome::Local(DaemonError::Extension(
-                    "Extension request identifier overflowed".into(),
-                ));
+    /// Feed one event to the core, and exchange requests until it needs the caller.
+    async fn step(&mut self, event: Event) -> Step {
+        let core = self
+            .core
+            .as_mut()
+            .expect("the session core exists once initialization starts");
+        let mut action = core.handle(event);
+        while let Action::Send(request) = action {
+            match self.transport.exchange(request).await {
+                Ok(response) => action = core.handle(Event::Received(response)),
+                Err(error) => {
+                    core.handle(Event::TransportFailed);
+                    return Step::Transport(error);
+                }
             }
-        };
-        let request = match ExtensionRequest::new(method, params, id) {
-            Ok(request) => request,
-            Err(error) => return CallOutcome::Local(error.into()),
-        };
-        let request_params = request.params.clone();
-        let response = match self.transport.exchange(request).await {
-            Ok(response) => response,
-            Err(error) => return CallOutcome::Transport(error),
-        };
-        match validate_response(response, id) {
-            Ok(value) => match validate_method_result_async(method, request_params, value)
-                .await
-                .and_then(|value| serde_json::from_value(value).map_err(Into::into))
-            {
-                Ok(value) => CallOutcome::Success(value),
-                Err(error) => CallOutcome::Invalid(error),
-            },
-            Err(ResponseFailure::Rpc(error)) => CallOutcome::RpcError(error),
-            Err(ResponseFailure::Invalid(error)) => CallOutcome::Invalid(error),
         }
+        Step::Action(action)
     }
 
     async fn fail_after_abort(mut self, error: DaemonError) -> FailedSession<T> {
         match self.transport.abort().await {
             Ok(TransportState::Stopped) => {
-                FailedSession::Stopped(Box::new(self.transition(None)), error)
+                FailedSession::Stopped(Box::new(self.transition()), error)
             }
             Ok(TransportState::Indeterminate) => {
-                FailedSession::Indeterminate(Box::new(self.transition(None)), error)
+                FailedSession::Indeterminate(Box::new(self.transition()), error)
             }
             Err(abort) => {
                 let state = abort.state;
@@ -244,10 +201,10 @@ impl<T: MepTransport, S> Session<T, S> {
     fn failed(self, failure: TransportError) -> FailedSession<T> {
         match failure.state {
             TransportState::Stopped => {
-                FailedSession::Stopped(Box::new(self.transition(None)), failure.error)
+                FailedSession::Stopped(Box::new(self.transition()), failure.error)
             }
             TransportState::Indeterminate => {
-                FailedSession::Indeterminate(Box::new(self.transition(None)), failure.error)
+                FailedSession::Indeterminate(Box::new(self.transition()), failure.error)
             }
         }
     }
@@ -280,10 +237,16 @@ impl<T> FailedSession<T> {
     }
 }
 
-enum CallOutcome<R> {
-    Success(R),
-    RpcError(DaemonError),
-    Local(DaemonError),
-    Invalid(DaemonError),
+/// How one step of the session ended.
+enum Step {
+    /// The core produced an action for the caller.
+    Action(Action<DaemonError>),
+    /// The transport failed while the core waited for an answer.
     Transport(TransportError),
+}
+
+fn unexpected(action: &Action<DaemonError>) -> DaemonError {
+    DaemonError::Extension(format!(
+        "Session core returned an unexpected action: {action:?}"
+    ))
 }

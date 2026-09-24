@@ -55,6 +55,16 @@ impl RequestLog {
             .params
             .clone()
     }
+
+    /// The request ids received so far, in order.
+    pub(super) fn ids(&self) -> Vec<u64> {
+        self.0
+            .lock()
+            .expect("the log is never poisoned")
+            .iter()
+            .map(|request| request.id)
+            .collect()
+    }
 }
 
 struct ScriptedTransport {
@@ -1815,4 +1825,52 @@ async fn rejects_a_successful_compile_result_for_another_requested_ir_version() 
         InvokeOutcome::Success(_, _) => panic!("mismatched result version should fail the session"),
         InvokeOutcome::Rejected(_, error) => panic!("mismatch is not an RPC error: {error}"),
     }
+}
+
+#[tokio::test]
+async fn a_session_numbers_requests_in_the_released_order() {
+    let requests = RequestLog::default();
+    let transport = FakeTransport {
+        expected: ExpectedExtension::identified("example"),
+        responses: VecDeque::from([
+            Ok(ExtensionResponse::success(1, backend_initialization(true)).unwrap()),
+            Ok(ExtensionResponse::success(
+                2,
+                GenerateResult {
+                    success: true,
+                    artifacts: Vec::new(),
+                    diagnostics: Vec::new(),
+                },
+            )
+            .unwrap()),
+            Ok(ExtensionResponse::success(3, serde_json::json!({})).unwrap()),
+        ]),
+        termination: TransportState::Stopped,
+        requests: requests.clone(),
+    };
+    let ready = Session::loaded(transport)
+        .initialize(params())
+        .await
+        .unwrap_or_else(|failure| panic!("initialize failed: {}", failure.error()));
+    let InvokeOutcome::Success(ready, _) = ready
+        .invoke::<GenerateResult>(
+            methods::GENERATE,
+            GenerateRequest {
+                ir: serde_json::json!({}),
+                target: "avro".into(),
+                options: Default::default(),
+            },
+        )
+        .await
+    else {
+        panic!("generate should succeed");
+    };
+    if let Err(failure) = ready.shutdown().await {
+        panic!("shutdown failed: {}", failure.error());
+    }
+    assert_eq!(
+        requests.methods(),
+        [methods::INITIALIZE, methods::GENERATE, methods::SHUTDOWN]
+    );
+    assert_eq!(requests.ids(), [1, 2, 3]);
 }

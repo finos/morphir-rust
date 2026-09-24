@@ -136,13 +136,13 @@ pub fn read_tree(req: &ReadTreeRequest) -> DecodeResponse {
 }
 
 fn read_tree_here(req: &ReadTreeRequest) -> DecodeResponse {
-    // Not a statement about the document: this binding's document trees are a version 4 layout
-    // only, so an off-capabilities version answers `protocol_error` the way an off-capabilities
-    // decode request does.
-    if req.version != 4 {
+    // Not a statement about the document: this binding's document trees are version 3 and 4
+    // layouts only, so an off-capabilities version answers `protocol_error` the way an
+    // off-capabilities decode request does.
+    if !matches!(req.version, 3 | 4) {
         return DecodeResponse::Refused {
             diagnostic: ProtocolDiagnostic::new(format!(
-                "this binding reads document trees at IR version 4 only, not {}",
+                "this binding reads document trees at IR versions 3 and 4, not {}",
                 req.version
             )),
         };
@@ -154,6 +154,27 @@ fn read_tree_here(req: &ReadTreeRequest) -> DecodeResponse {
         .iter()
         .map(|file| (file.path.clone(), file.content.clone()))
         .collect();
+
+    // Version 3 is read into the classic model and answered under its own canonical spelling —
+    // the tree layout is the v4 one (every file `formatVersion: "3.1.0"`), but what it assembles
+    // to is a classic `Library` or `Specs`, not an `IRFile`. `req.node` is ignored here too: a
+    // document tree always assembles to one distribution.
+    if req.version == 3 {
+        return match morphir_core::ir::layout::read_tree_v3(&files, profile) {
+            Ok((distribution, warnings)) => {
+                let kind = classic_distribution_kind(&distribution.distribution).to_string();
+                match write_classic_canonical(&distribution, req.profile) {
+                    Ok(text) => DecodeResponse::Ok {
+                        kind,
+                        canonical: BTreeMap::from([(profile_key(req.profile).to_string(), text)]),
+                        warnings,
+                    },
+                    Err(diagnostic) => DecodeResponse::Err { diagnostic },
+                }
+            }
+            Err(diagnostic) => DecodeResponse::Err { diagnostic },
+        };
+    }
 
     match morphir_core::ir::layout::read_tree(&files, profile) {
         Ok((file, warnings)) => {
@@ -193,23 +214,39 @@ pub fn write_tree(req: &WriteTreeRequest) -> WriteTreeResponse {
 }
 
 fn write_tree_here(req: &WriteTreeRequest) -> WriteTreeResponse {
-    if req.version != 4 {
+    if !matches!(req.version, 3 | 4) {
         return WriteTreeResponse::Refused {
             diagnostic: ProtocolDiagnostic::new(format!(
-                "this binding writes document trees at IR version 4 only, not {}",
+                "this binding writes document trees at IR versions 3 and 4, not {}",
                 req.version
             )),
+        };
+    }
+
+    let policy = morphir_core::ir::layout::TreePolicy {
+        profile: layout_profile(req.policy.profile),
+        path_budget: req.policy.path_budget,
+    };
+
+    if req.version == 3 {
+        let distribution = match read_whole_classic_distribution(req.policy.profile, &req.input) {
+            Ok(distribution) => distribution,
+            Err(diagnostic) => return WriteTreeResponse::Err { diagnostic },
+        };
+        return match morphir_core::ir::layout::write_tree_v3(&distribution, &policy) {
+            Ok(files) => WriteTreeResponse::Ok {
+                files: files
+                    .into_iter()
+                    .map(|(path, content)| TreeFile { path, content })
+                    .collect(),
+            },
+            Err(diagnostic) => WriteTreeResponse::Err { diagnostic },
         };
     }
 
     let file = match read_whole_ir_file(req.policy.profile, &req.input) {
         Ok((file, _warnings)) => file,
         Err(diagnostic) => return WriteTreeResponse::Err { diagnostic },
-    };
-
-    let policy = morphir_core::ir::layout::TreePolicy {
-        profile: layout_profile(req.policy.profile),
-        path_budget: req.policy.path_budget,
     };
 
     match morphir_core::ir::layout::write_tree(&file, &policy) {
@@ -220,6 +257,49 @@ fn write_tree_here(req: &WriteTreeRequest) -> WriteTreeResponse {
                 .collect(),
         },
         Err(diagnostic) => WriteTreeResponse::Err { diagnostic },
+    }
+}
+
+/// Reads a whole classic `Library` or `Specs` document (not a tree file) in the given profile,
+/// the way version 3's `writeTree` carries `input`.
+///
+/// Version 3 has one spelling of the classic model — decision 0005's compact/expanded switch and
+/// `TypeEncoding` are a v4 concept only — so this is a plain parse of the profile's own value
+/// tree, the same shape [`read_v3`] reads a single classic node from.
+fn read_whole_classic_distribution(
+    profile: Profile,
+    text: &str,
+) -> Result<classic::Distribution, Diagnostic> {
+    match profile {
+        Profile::Json => serde_json::from_str(text).map_err(|error| recover(&error)),
+        Profile::Yaml => {
+            let value = morphir_core::ir::yaml::read(text)?;
+            serde_json::from_value(value).map_err(|error| recover(&error))
+        }
+    }
+}
+
+/// The canonical spelling of a classic distribution in the given profile, with the one trailing
+/// newline a canonical fence carries — the classic-model counterpart of [`Node::write`].
+fn write_classic_canonical(
+    distribution: &classic::Distribution,
+    profile: Profile,
+) -> Result<String, Diagnostic> {
+    let value = serde_json::to_value(distribution).map_err(|error| {
+        Diagnostic::normalization(DiagnosticCode::InvalidType, "/", error.to_string())
+    })?;
+    Ok(match profile {
+        Profile::Json => format!("{}\n", write_canonical(&value)),
+        Profile::Yaml => morphir_core::ir::yaml::write_canonical(&value),
+    })
+}
+
+/// The `kind` a version 3 `readTree` answers: the classic distribution's own variant name, the
+/// way [`distribution_kind`] answers for a v4 `IRFile`.
+fn classic_distribution_kind(node: &classic::DistributionBody) -> &'static str {
+    match node {
+        classic::DistributionBody::Library(..) => "Library",
+        classic::DistributionBody::Specs(..) => "Specs",
     }
 }
 
@@ -385,7 +465,9 @@ fn read_v3(req: &DecodeRequest) -> Result<Node, Diagnostic> {
         | NodeKind::ModuleSpecification
         | NodeKind::IRFile
         | NodeKind::Distribution
-        // A document tree is a version 4 layout; version 3 has no file of any of these kinds.
+        // `readTree`/`writeTree` answer a version 3 tree's files, but `decode` reads one of
+        // these kinds on its own with no tree around it, and there is no version 3 answer for
+        // that here.
         | NodeKind::DistributionManifestFile
         | NodeKind::ModuleManifestFile
         | NodeKind::TypeDefinitionFile

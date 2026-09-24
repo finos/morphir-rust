@@ -26,8 +26,8 @@ pub use paths::{
 pub use read::read_tree;
 pub use stems::{StemResult, stem_for};
 pub use v3_model::{
-    AnyTree, V3_TREE_FORMAT_VERSION, V3Kind, read_any_tree, read_tree_v3, write_tree_v3,
-    write_v3_definition_module, write_v3_manifest, write_v3_specification_module,
+    AnyTree, V3_TREE_FORMAT_VERSION, V3Kind, read_any_tree, read_tree_v3, read_v3_manifest_file,
+    write_tree_v3, write_v3_definition_module, write_v3_manifest, write_v3_specification_module,
 };
 pub use write::{
     ManifestHeader, TreePolicy, write_definition_module, write_manifest, write_manifest_header,

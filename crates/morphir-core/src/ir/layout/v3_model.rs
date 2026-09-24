@@ -464,6 +464,59 @@ pub fn write_tree_v3(
     Ok(out.into_vec())
 }
 
+/// A v3 distribution manifest read on its own, with no tree around it, and answered as the value
+/// a v3 tree writes for it: every check [`read_tree_v3`] makes of a manifest, then the writer's
+/// spelling. `$meta` is dropped and never written back (decision 0014).
+///
+/// Diagnostics are cursored from the file's root (`/formatVersion`, …), not from `manifest`.
+///
+/// # Examples
+///
+/// ```
+/// use morphir_core::ir::DiagnosticCode;
+/// use morphir_core::ir::layout::read_v3_manifest_file;
+///
+/// let manifest = serde_json::json!({
+///     "formatVersion": "3.1.0",
+///     "distribution": "Library",
+///     "package": "my-org/my-project",
+///     "pathBudget": 4000,
+///     "$meta": { "generator": "example" },
+/// });
+/// match read_v3_manifest_file(&manifest) {
+///     // `$meta` is dropped; everything else is written the way a v3 tree writes it.
+///     Ok(canonical) => {
+///         assert_eq!(canonical["package"], "my-org/my-project");
+///         assert!(canonical.get("$meta").is_none());
+///     }
+///     Err(diagnostic) => panic!("a v3 manifest reads: {diagnostic:?}"),
+/// }
+///
+/// // A v4 manifest is not a v3 one.
+/// let v4 = serde_json::json!({
+///     "formatVersion": 4,
+///     "distribution": "Library",
+///     "package": "my-org/my-project",
+///     "pathBudget": 4000,
+/// });
+/// match read_v3_manifest_file(&v4) {
+///     Ok(_) => panic!("a v4 manifest is refused"),
+///     Err(diagnostic) => {
+///         assert_eq!(diagnostic.code, DiagnosticCode::VersionMismatch);
+///         assert_eq!(diagnostic.cursor, "/formatVersion");
+///     }
+/// }
+/// ```
+pub fn read_v3_manifest_file(value: &JsonValue) -> Result<JsonValue, Diagnostic> {
+    let envelope = V3::decode_manifest(value, "")?;
+    Ok(manifest(
+        envelope.kind,
+        &envelope.package,
+        envelope.path_budget,
+        &envelope.dependencies,
+    ))
+}
+
 /// The root manifest of a v3 document tree. Total: a manifest carries only names, a kind and a
 /// number.
 pub fn write_v3_manifest(

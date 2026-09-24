@@ -371,17 +371,6 @@ fn a_name_stays_a_word_array_at_version_3() {
 /// the document, so it never spends one of the kit's codes.
 #[test]
 fn an_undeclared_profile_or_version_is_refused_as_a_protocol_error() {
-    // Version 3 is read through the classic JSON decoders only; there is no classic YAML
-    // spelling for this binding to answer with.
-    let ancient_yaml = DecodeRequest {
-        version: 3,
-        profile: Profile::Yaml,
-        ..req(NodeKind::Type, "a", PathMode::Current)
-    };
-    match decode(&ancient_yaml) {
-        DecodeResponse::Refused { diagnostic } => assert_eq!(diagnostic.code, "protocol_error"),
-        o => panic!("{o:?}"),
-    }
     let ancient = DecodeRequest {
         version: 2,
         ..req(NodeKind::Type, "\"a\"", PathMode::Current)
@@ -450,7 +439,11 @@ fn a_yaml_request_reports_profile_diagnostics() {
 fn a_node_classic_cannot_express_is_an_unknown_node_at_version_3() {
     let r = DecodeRequest {
         version: 3,
-        ..req(NodeKind::FormatVersion, "3", PathMode::Current)
+        ..req(
+            NodeKind::ModuleManifestFile,
+            r#"{ "formatVersion": "3.1.0", "path": "basics", "types": [], "values": [] }"#,
+            PathMode::Current,
+        )
     };
     match decode(&r) {
         DecodeResponse::Err { diagnostic } => {
@@ -521,4 +514,236 @@ fn a_v3_request_with_invalid_json_answers_invalid_json() {
         }
         o => panic!("{o:?}"),
     }
+}
+
+// =============================================================================
+// Version 3: whole documents, the v3 manifest file, format versions and YAML
+// =============================================================================
+
+fn v3(node: NodeKind, profile: Profile, input: &str) -> DecodeRequest {
+    DecodeRequest {
+        version: 3,
+        profile,
+        ..req(node, input, PathMode::Current)
+    }
+}
+
+fn answered(request: &DecodeRequest) -> (String, String) {
+    match decode(request) {
+        DecodeResponse::Ok {
+            canonical, kind, ..
+        } => {
+            let key = match request.profile {
+                Profile::Json => "json",
+                Profile::Yaml => "yaml",
+            };
+            (kind, canonical[key].clone())
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn refused(request: &DecodeRequest) -> morphir_core::ir::Diagnostic {
+    match decode(request) {
+        DecodeResponse::Err { diagnostic } => diagnostic,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// MCK distributions-0011: a v3 `Specs` distribution round-trips byte for byte.
+const V3_SPECS: &str = r#"{ "formatVersion": "3.1.0", "distribution": ["Specs", [["my"], ["pkg"]], [], { "modules": [[[["basics"]], { "types": [[["int"], { "doc": "", "value": ["OpaqueTypeSpecification", []] }]], "values": [], "doc": "Basics." }]] }] }"#;
+
+/// MCK document-tree-0013's YAML canonical: the same distribution in the YAML profile.
+const V3_SPECS_YAML: &str = "formatVersion: 3.1.0
+distribution:
+  - Specs
+  - [[my], [pkg]]
+  - []
+  - modules:
+      - - [[basics]]
+        - types:
+            - - [int]
+              - doc: \"\"
+                value: [OpaqueTypeSpecification, []]
+          values: []
+          doc: Basics.
+";
+
+#[test]
+fn a_v3_distribution_round_trips_in_json() {
+    let (kind, canonical) = answered(&v3(NodeKind::Distribution, Profile::Json, V3_SPECS));
+    assert_eq!(kind, "Specs");
+    assert_eq!(canonical, format!("{V3_SPECS}\n"));
+}
+
+#[test]
+fn a_v3_distribution_round_trips_in_yaml() {
+    let (kind, canonical) = answered(&v3(NodeKind::Distribution, Profile::Yaml, V3_SPECS_YAML));
+    assert_eq!(kind, "Specs");
+    assert_eq!(canonical, V3_SPECS_YAML);
+}
+
+/// A typed v3 `Library`: `identity x = x` carries `Int` on its argument and its body.
+fn v3_typed_library() -> String {
+    let int = r#"["Reference", {}, [[["morphir"], ["s", "d", "k"]], [["basics"]], ["int"]], []]"#;
+    format!(
+        r#"{{ "formatVersion": 3, "distribution": ["Library", [["my"], ["pkg"]], [], {{ "modules": [[[["basics"]], {{ "access": "Public", "value": {{ "types": [], "values": [[["identity"], {{ "access": "Public", "value": {{ "doc": "", "value": {{ "inputTypes": [[["x"], {int}, {int}]], "outputType": {int}, "body": ["Variable", {int}, ["x"]] }} }} }}]], "doc": null }} }}]] }}] }}"#
+    )
+}
+
+#[test]
+fn a_v3_distribution_strips_its_value_attributes_when_asked() {
+    let (kind, stripped) = answered(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        &v3_typed_library(),
+    ));
+    assert_eq!(kind, "Library");
+    let document: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+    let definition =
+        &document["distribution"][3]["modules"][0][1]["value"]["values"][0][1]["value"]["value"];
+    assert_eq!(definition["body"][1], serde_json::json!({}));
+    assert_eq!(definition["inputTypes"][0][1], serde_json::json!({}));
+
+    let kept = DecodeRequest {
+        strip: false,
+        ..v3(NodeKind::Distribution, Profile::Json, &v3_typed_library())
+    };
+    let (_, kept) = answered(&kept);
+    let expected: serde_json::Value = serde_json::from_str(&v3_typed_library()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&kept).unwrap(),
+        expected
+    );
+}
+
+/// MCK document-tree-0016: a document of another version is refused at its own `formatVersion`.
+#[test]
+fn a_v4_document_is_a_version_mismatch_at_version_3() {
+    let diagnostic = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        r#"{ "formatVersion": "4.0.0", "name": "user", "def": {} }"#,
+    ));
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::VersionMismatch
+    );
+    assert_eq!(diagnostic.cursor, "/formatVersion");
+}
+
+/// The classic reader's own refusal: a `Specs` needs 3.1.0.
+#[test]
+fn a_v3_specs_before_3_1_0_is_refused() {
+    let diagnostic = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        &V3_SPECS.replace(r#""formatVersion": "3.1.0""#, r#""formatVersion": 3"#),
+    ));
+    assert!(diagnostic.message.contains("3.1.0"), "{diagnostic:?}");
+}
+
+/// MCK document-tree-0010: a v3 tree's manifest read on its own answers the spelling a v3 tree
+/// writes.
+#[test]
+fn a_v3_distribution_manifest_file_round_trips() {
+    let manifest = r#"{ "formatVersion": "3.1.0", "distribution": "Library", "package": "my-org/my-project", "pathBudget": 4000 }"#;
+    let (kind, canonical) = answered(&v3(
+        NodeKind::DistributionManifestFile,
+        Profile::Json,
+        manifest,
+    ));
+    assert_eq!(kind, "DistributionManifestFile");
+    assert_eq!(canonical, format!("{manifest}\n"));
+
+    let yaml = "formatVersion: 3.1.0\ndistribution: Library\npackage: my-org/my-project\npathBudget: 4000\n";
+    let (_, canonical) = answered(&v3(NodeKind::DistributionManifestFile, Profile::Yaml, yaml));
+    assert_eq!(canonical, yaml);
+
+    let diagnostic = refused(&v3(
+        NodeKind::DistributionManifestFile,
+        Profile::Json,
+        r#"{ "formatVersion": 4, "distribution": "Library", "package": "my-org/my-project", "pathBudget": 4000 }"#,
+    ));
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::VersionMismatch
+    );
+}
+
+/// MCK versions-0009 and -0010: the v3 releases of the support table, and a later minor.
+#[test]
+fn v3_format_versions_follow_the_support_table() {
+    for version in ["\"3.1.0\"", "3"] {
+        let (kind, canonical) = answered(&v3(NodeKind::FormatVersion, Profile::Json, version));
+        assert_eq!(kind, "FormatVersion");
+        assert_eq!(canonical, format!("{version}\n"));
+    }
+    let diagnostic = refused(&v3(NodeKind::FormatVersion, Profile::Json, "\"3.2.0\""));
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::UnsupportedFormatVersionMinor
+    );
+    let diagnostic = refused(&v3(NodeKind::FormatVersion, Profile::Json, "\"4.0.0\""));
+    assert_eq!(
+        diagnostic.code,
+        morphir_core::ir::DiagnosticCode::VersionMismatch
+    );
+}
+
+/// The node kinds version 3 already read in JSON read in YAML too.
+#[test]
+fn a_v3_node_reads_and_writes_yaml() {
+    let (kind, canonical) = answered(&v3(
+        NodeKind::Value,
+        Profile::Yaml,
+        "[Literal, {}, [WholeNumberLiteral, 42]]\n",
+    ));
+    assert_eq!(kind, "Literal");
+    // The profile's canonical writer: block style at the top, flow style below it.
+    assert_eq!(canonical, "- Literal\n- {}\n- [WholeNumberLiteral, 42]\n");
+}
+
+/// A v3 document's root is checked the way a v4 document's is before the classic reader sees it:
+/// that reader drops a member it does not know and has no code for a missing version.
+#[test]
+fn a_v3_document_root_holds_exactly_its_two_members() {
+    use morphir_core::ir::DiagnosticCode;
+
+    let without_version = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        r#"{ "distribution": ["Specs", [["my"], ["pkg"]], [], { "modules": [] }] }"#,
+    ));
+    assert_eq!(without_version.code, DiagnosticCode::MissingFormatVersion);
+
+    let without_distribution = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        r#"{ "formatVersion": "3.1.0" }"#,
+    ));
+    assert_eq!(without_distribution.code, DiagnosticCode::MissingMember);
+
+    let unknown = refused(&v3(
+        NodeKind::Distribution,
+        Profile::Json,
+        &V3_SPECS.replace(
+            "{ \"formatVersion\"",
+            "{ \"generator\": \"example\", \"formatVersion\"",
+        ),
+    ));
+    assert_eq!(unknown.code, DiagnosticCode::UnknownMember);
+    assert_eq!(unknown.cursor, "/generator");
+
+    // distributions-0009: `$meta` is reserved in tree files only; a single document has none.
+    let meta = refused(&v3(
+        NodeKind::IRFile,
+        Profile::Yaml,
+        &format!("$meta:\n  generator: example\n{V3_SPECS_YAML}"),
+    ));
+    assert_eq!(meta.code, DiagnosticCode::UnknownMember);
+    assert_eq!(meta.cursor, "/$meta");
+
+    let not_an_object = refused(&v3(NodeKind::Distribution, Profile::Json, "[]"));
+    assert_eq!(not_an_object.code, DiagnosticCode::InvalidType);
 }

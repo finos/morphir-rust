@@ -45,3 +45,21 @@ fn malformed_uri_and_absent_revision_are_distinct() {
     assert_eq!(replies[0]["outcome"], "invalid_node_uri");
     assert_eq!(replies[1]["outcome"], "revision_unavailable");
 }
+
+#[test]
+fn v3_specs_public_module_is_addressable() {
+    let specs = json!({
+        "formatVersion": "3.1.0",
+        "distribution": ["Specs", [["acme"]], [], {
+            "modules": [[[["domain"]], {"types": [], "values": [], "doc": null}]]
+        }]
+    });
+    let replies = exchange(&[json!({
+        "id": 1,
+        "op": "resolve",
+        "input": specs.to_string(),
+        "uri": "morphir://ir/pkg/acme?format=3.1.0#/module/domain"
+    })]);
+    assert_eq!(replies[0]["outcome"], "resolved");
+    assert_eq!(replies[0]["kind"], "Module");
+}

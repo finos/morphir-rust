@@ -70,7 +70,9 @@ fn resolve(input: &str, uri: &str) -> Value {
         Some(Value::Number(number)) if number.as_u64() == Some(3) => {
             add_v3(&mut catalog, input, value)
         }
-        Some(Value::String(text)) if text == "3.0.0" => add_v3(&mut catalog, input, value),
+        Some(Value::String(text)) if text == "3.0.0" || text == "3.1.0" => {
+            add_v3(&mut catalog, input, value)
+        }
         Some(Value::Number(number)) if number.as_u64() == Some(4) => add_v4(&mut catalog, input),
         Some(Value::String(text)) if text == "4.0.0" => add_v4(&mut catalog, input),
         _ => return json!({"ok":false,"outcome":"format_version_mismatch"}),
@@ -88,7 +90,10 @@ fn resolve(input: &str, uri: &str) -> Value {
 
 fn add_v3(catalog: &mut NodeCatalog, input: &str, value: Value) -> Result<()> {
     let distribution: classic::Distribution = serde_json::from_value(value)?;
-    let classic::DistributionBody::Library(package, _, _) = &distribution.distribution;
+    let package = match &distribution.distribution {
+        classic::DistributionBody::Library(package, _, _)
+        | classic::DistributionBody::Specs(package, _, _) => package,
+    };
     let package = package
         .segments
         .iter()

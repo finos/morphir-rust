@@ -64,7 +64,7 @@ pub fn resolve(
     }
     candidates.sort_by(|left, right| right.version().cmp_precedence(left.version()));
 
-    // A release whose statement needs a newer host is skipped, so a moving
+    // A release whose claims needs a newer host is skipped, so a moving
     // channel still resolves the newest release this host can run. The host
     // error is reported only when no candidate fits.
     let mut host_refusal = None;
@@ -117,8 +117,8 @@ fn supports_host_mep(release: &ReleaseRecord) -> bool {
 }
 
 fn supports_artifact_mep(artifact: &ArtifactRecord) -> bool {
-    artifact.statement().is_some_and(|statement| {
-        statement
+    artifact.claims().is_some_and(|claims| {
+        claims
             .protocol_versions
             .iter()
             .any(|version| SUPPORTED_MEP_VERSIONS.contains(&version.as_str()))

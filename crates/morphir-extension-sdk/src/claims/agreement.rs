@@ -1,11 +1,11 @@
-use super::CapabilityStatement;
+use super::CapabilityClaimSet;
 use crate::{ExtensionInfo, ExtensionType};
 use serde_json::{Map, Value};
 
-/// The first member that differs between two complete capability statements.
+/// The first member that differs between two complete capability claim sets.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-#[error("statement member {0} differs")]
-pub struct StatementAgreementError(pub String);
+#[error("claims member {0} differs")]
+pub struct ClaimsAgreementError(pub String);
 
 /// The first failed rule of session agreement, in protocol order.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -24,11 +24,11 @@ pub enum SessionAgreementError {
     CapabilityMember(String),
 }
 
-impl CapabilityStatement {
-    /// Compare complete statements, including protocol sets and requirements.
-    /// Unlike session agreement, neither statement may omit a reported member.
-    pub fn check_statement(&self, reported: &Self) -> Result<(), StatementAgreementError> {
-        fn compare(left: &Value, right: &Value, path: &str) -> Result<(), StatementAgreementError> {
+impl CapabilityClaimSet {
+    /// Compare complete claim sets, including protocol sets and requirements.
+    /// Unlike session agreement, neither claim set may omit a reported member.
+    pub fn check_claims(&self, reported: &Self) -> Result<(), ClaimsAgreementError> {
+        fn compare(left: &Value, right: &Value, path: &str) -> Result<(), ClaimsAgreementError> {
             if let (Value::Object(left), Value::Object(right)) = (left, right) {
                 for key in left
                     .keys()
@@ -41,24 +41,24 @@ impl CapabilityStatement {
                     };
                     match (left.get(key), right.get(key)) {
                         (Some(left), Some(right)) => compare(left, right, &path)?,
-                        _ => return Err(StatementAgreementError(path)),
+                        _ => return Err(ClaimsAgreementError(path)),
                     }
                 }
                 Ok(())
             } else if left == right {
                 Ok(())
             } else {
-                Err(StatementAgreementError(path.into()))
+                Err(ClaimsAgreementError(path.into()))
             }
         }
         compare(
-            &serde_json::to_value(self).expect("statement serializes"),
-            &serde_json::to_value(reported).expect("statement serializes"),
+            &serde_json::to_value(self).expect("claim set serializes"),
+            &serde_json::to_value(reported).expect("claim set serializes"),
             "",
         )
     }
 
-    /// Check a session against this statement without I/O or normalization.
+    /// Check a session against this claims without I/O or normalization.
     ///
     /// Pass capability members as received on the wire: typed capability defaults
     /// can add members the session did not report. Objects may omit members;

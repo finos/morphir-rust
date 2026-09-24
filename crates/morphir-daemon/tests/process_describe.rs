@@ -50,8 +50,8 @@ impl DescribeDriver {
 async fn describes_a_guest_before_initialize_and_exits() {
     let result = DescribeDriver::describe("describe").await.unwrap();
     assert_eq!(result.source, DescriptionSource::Describe);
-    assert_eq!(result.statement.extension.id, "mep-native-backend");
-    assert_eq!(result.statement.capabilities["backend"]["generate"], true);
+    assert_eq!(result.claims.extension.id, "mep-native-backend");
+    assert_eq!(result.claims.capabilities["backend"]["generate"], true);
 }
 
 #[tokio::test]
@@ -75,8 +75,8 @@ async fn falls_back_on_a_legacy_pre_initialize_refusal_message() {
 async fn assert_fallback(mode: &str) {
     let result = DescribeDriver::describe(mode).await.unwrap();
     assert_eq!(result.source, DescriptionSource::SessionFallback);
-    assert_eq!(result.statement.protocol_versions, ["0.1"]);
-    let wire = serde_json::to_value(result.statement).unwrap();
+    assert_eq!(result.claims.protocol_versions, ["0.1"]);
+    let wire = serde_json::to_value(result.claims).unwrap();
     assert!(wire.get("requires").is_none());
     assert!(wire.get("critical").is_none());
     assert_eq!(wire["capabilities"]["backend"]["future"], "preserved");
@@ -84,11 +84,11 @@ async fn assert_fallback(mode: &str) {
 
 #[tokio::test]
 #[ignore = "requires the independently built mep-native-backend executable"]
-async fn unrelated_errors_and_invalid_statements_do_not_fall_back() {
+async fn unrelated_errors_and_invalid_claim_sets_do_not_fall_back() {
     for (mode, expected) in [
         ("internal-error", "deliberate failure"),
         ("critical", "capabilities.backend.future"),
-        ("version", "statementVersion"),
+        ("version", "claimsVersion"),
         ("wrong-id", "identity"),
         ("requires-host", "requires.host"),
     ] {

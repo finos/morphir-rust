@@ -3,8 +3,8 @@
 mod activation;
 mod probe;
 mod readers;
-use crate::extension_format::{ExtensionSchemaVersion, StatementProvenance, StatementRecord};
-use morphir_extension_sdk::statement::CapabilityStatement;
+use crate::extension_format::{ClaimCheck, ClaimsRecord, ExtensionSchemaVersion};
+use morphir_extension_sdk::claims::CapabilityClaimSet;
 
 pub use activation::{
     VerifiedExtensionArtifact, VerifiedProcessArtifact, VerifiedWasmArtifact, activate_installed,
@@ -272,7 +272,7 @@ pub struct InstalledExtension {
     backend: Option<BackendRecord>,
     executable: bool,
     #[serde(flatten)]
-    statement: StatementRecord,
+    claims: ClaimsRecord,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     critical: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -280,28 +280,28 @@ pub struct InstalledExtension {
 }
 
 impl InstalledExtension {
-    /// Check release and statement requirements against the caller's host version.
+    /// Check release and claims requirements against the caller's host version.
     pub fn check_host(&self, host: &Version) -> Result<()> {
         crate::extension_format::check_requirements(self.requires.as_ref(), host)?;
-        self.statement().check_host(host)?;
+        self.claims().check_host(host)?;
         Ok(())
     }
 
-    /// Return the installed artifact's supplied or converted capability statement.
-    pub fn statement(&self) -> &CapabilityStatement {
-        self.statement
-            .statement()
-            .expect("installed record has a statement")
+    /// Return the installed artifact's supplied or converted capability claim set.
+    pub fn claims(&self) -> &CapabilityClaimSet {
+        self.claims
+            .claims()
+            .expect("installed record has a claim set")
     }
 
-    /// Return whether the installed statement is declared or probed.
-    pub fn statement_provenance(&self) -> StatementProvenance {
-        self.statement.provenance()
+    /// Return whether the installed claims are unchecked or probed.
+    pub fn claim_check(&self) -> ClaimCheck {
+        self.claims.claim_check()
     }
 
-    /// Return the operation that supplied the installed probe statement.
+    /// Return the operation that supplied the installed probe claims.
     pub fn probe_source(&self) -> Option<crate::ProbeSource> {
-        self.statement.probe_source()
+        self.claims.probe_source()
     }
 
     fn from_verified(artifact: &VerifiedArtifact) -> Result<Self> {
@@ -322,7 +322,7 @@ impl InstalledExtension {
             frontend: metadata.frontend,
             backend: metadata.backend,
             executable: artifact.selected.artifact.executable(),
-            statement: artifact.selected.artifact.statement_record().clone(),
+            claims: artifact.selected.artifact.claims_record().clone(),
             critical: if artifact
                 .selected
                 .release
@@ -482,6 +482,21 @@ struct CatalogFile {
     critical: Vec<String>,
 }
 
+fn catalog_schema_version<'a>(
+    entries: impl Iterator<Item = &'a InstalledExtension>,
+) -> ExtensionSchemaVersion {
+    if entries
+        .into_iter()
+        .any(|entry| entry.claims.has_supplied_claims())
+    {
+        ExtensionSchemaVersion::Semver(
+            Version::parse("2.0.0-draft.2").expect("catalog draft is SemVer"),
+        )
+    } else {
+        ExtensionSchemaVersion::default()
+    }
+}
+
 /// Durable installed extension catalog.
 #[derive(Debug)]
 pub struct InstalledCatalog {
@@ -549,7 +564,7 @@ impl InstalledCatalog {
         let mut next = latest.extensions;
         next.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: ExtensionSchemaVersion::default(),
+            schema_version: catalog_schema_version(next.values()),
             critical: vec![],
             extensions: next.values().cloned().collect(),
         };
@@ -614,7 +629,7 @@ impl<'home> ExtensionInstaller<'home> {
         let mut extensions = catalog.extensions;
         extensions.insert(entry.extension_id.clone(), entry.clone());
         let stored = CatalogFile {
-            schema_version: ExtensionSchemaVersion::default(),
+            schema_version: catalog_schema_version(extensions.values()),
             critical: vec![],
             extensions: extensions.into_values().collect(),
         };
@@ -651,7 +666,7 @@ fn uninstall_with_writer(
         .remove(id)
         .ok_or_else(|| DistributionError::NotInstalled { id: id.clone() })?;
     let stored = CatalogFile {
-        schema_version: ExtensionSchemaVersion::default(),
+        schema_version: catalog_schema_version(extensions.values()),
         critical: vec![],
         extensions: extensions.into_values().collect(),
     };

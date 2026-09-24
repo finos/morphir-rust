@@ -1,8 +1,8 @@
 use morphir_extension_sdk::{
     Extension, ExtensionCapabilities, ExtensionInfo, ExtensionType, NativeExtension,
+    claims::CapabilityClaimSet,
     native::doc_fixtures::DocFrontend,
     protocol::{ExtensionRequest, ExtensionResponse, methods},
-    statement::CapabilityStatement,
 };
 use serde_json::json;
 
@@ -36,7 +36,10 @@ fn describe_request() -> ExtensionRequest {
 fn assert_description_matches_session(handle: impl Fn(ExtensionRequest) -> ExtensionResponse) {
     let described = handle(describe_request());
     assert!(described.error.is_none(), "{:?}", described.error);
-    let statement: CapabilityStatement = serde_json::from_value(described.result.unwrap()).unwrap();
+    let wire = described.result.unwrap();
+    assert_eq!(wire["claimsVersion"], "0.1.0-draft.2");
+    assert!(wire.get("statementVersion").is_none());
+    let claims: CapabilityClaimSet = serde_json::from_value(wire).unwrap();
     let initialized = handle(
         ExtensionRequest::new(
             methods::INITIALIZE,
@@ -52,10 +55,10 @@ fn assert_description_matches_session(handle: impl Fn(ExtensionRequest) -> Exten
     let capabilities = handle(ExtensionRequest::new(methods::CAPABILITIES, json!({}), 3).unwrap())
         .result
         .unwrap();
-    assert_eq!(json!(statement.extension), initialized["extension"]);
-    assert_eq!(json!(statement.capabilities), initialized["capabilities"]);
-    assert_eq!(json!(statement.capabilities), capabilities);
-    assert_eq!(handle(describe_request()).result.unwrap(), json!(statement));
+    assert_eq!(json!(claims.extension), initialized["extension"]);
+    assert_eq!(json!(claims.capabilities), initialized["capabilities"]);
+    assert_eq!(json!(claims.capabilities), capabilities);
+    assert_eq!(handle(describe_request()).result.unwrap(), json!(claims));
 }
 
 #[test]

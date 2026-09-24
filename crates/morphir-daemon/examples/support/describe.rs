@@ -72,7 +72,7 @@ impl DescribeFixture {
         let result = response.result.as_mut().unwrap();
         match self.mode.as_str() {
             "critical" => result["critical"] = json!(["capabilities.backend.future"]),
-            "version" => result["statementVersion"] = json!("0.1.0-draft.2"),
+            "version" => result["claimsVersion"] = json!("0.1.0-draft.3"),
             "wrong-id" => result["extension"]["id"] = json!("different"),
             "requires-host" => {
                 result["requires"] = json!({"host":[">=99.0.0"]});

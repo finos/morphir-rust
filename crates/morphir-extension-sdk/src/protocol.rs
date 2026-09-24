@@ -17,7 +17,7 @@ pub const SUPPORTED_MEP_VERSIONS: &[&str] = &[MEP_VERSION];
 pub mod methods {
     /// Negotiate a Morphir Extension Protocol session.
     pub const INITIALIZE: &str = "morphir.initialize";
-    /// Read the guest capability statement without starting a session.
+    /// Read the guest capability claim set without starting a session.
     pub const DESCRIBE: &str = "morphir.extension.describe";
     /// Acknowledge successful initialization.
     pub const INITIALIZED: &str = "morphir.initialized";
@@ -67,7 +67,7 @@ pub struct PeerInfo {
     pub version: String,
 }
 
-/// Protocol versions understood by a caller requesting a capability statement.
+/// Protocol versions understood by a caller requesting a capability claim set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DescribeParams {

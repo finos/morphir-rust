@@ -7,6 +7,8 @@ nav_order: 7
 
 # Morphir extension development reference
 
+See [Capability claim sets](capability-claims.md) for discovery metadata, draft compatibility, and the Rust API.
+
 Morphir extensions provide frontends, backends, validators, and transforms
 through MEP JSON-RPC. The supported runtime kinds are `process` and `wasm`.
 WASM guests run through Extism and do not use WIT or the WebAssembly Component

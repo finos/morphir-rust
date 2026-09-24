@@ -1,25 +1,25 @@
-//! Guest-authored capability statements, independent of a negotiated session.
+//! Guest-authored capability claim sets, independent of a negotiated session.
 //!
 //! Capability objects retain unknown members when read and written. Only the
-//! exact draft below is supported; critical paths must be understood explicitly.
+//! draft.1 and draft.2 formats are supported; critical paths must be understood explicitly.
 
 mod agreement;
-pub use agreement::{SessionAgreementError, StatementAgreementError};
+mod wire;
+pub use agreement::{ClaimsAgreementError, SessionAgreementError};
 
 use crate::{ExtensionCapabilities, ExtensionInfo};
 use semver::{Comparator, Version, VersionReq};
 use serde::{Deserialize, Serialize, de::Error as _};
 use serde_json::{Map, Value};
 
-/// The statement format written and read by this SDK.
-pub const STATEMENT_VERSION: &str = "0.1.0-draft.1";
+/// The claim set format written by this SDK. Readers also accept draft.1.
+pub const CLAIMS_VERSION: &str = "0.1.0-draft.2";
 
 /// A guest's identity, supported protocols, and complete capability metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityStatement {
-    #[serde(deserialize_with = "read_statement_version")]
-    statement_version: Version,
+#[serde(rename_all = "camelCase", try_from = "Value")]
+pub struct CapabilityClaimSet {
+    claims_version: Version,
     /// Every MEP version the guest speaks.
     pub protocol_versions: Vec<String>,
     /// Guest identity and strictly recognized capability kinds.
@@ -28,7 +28,7 @@ pub struct CapabilityStatement {
     pub capabilities: Map<String, Value>,
     /// Requirements imposed on the host, when declared by the guest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires: Option<StatementRequirements>,
+    pub requires: Option<ClaimsRequirements>,
     /// Member paths whose meaning readers must understand.
     #[serde(
         default,
@@ -38,17 +38,17 @@ pub struct CapabilityStatement {
     pub critical: Vec<String>,
 }
 
-impl CapabilityStatement {
-    /// Build a statement from a guest's existing discovery metadata.
+impl CapabilityClaimSet {
+    /// Build a claim set from a guest's existing discovery metadata.
     ///
     /// ```
     /// use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo};
-    /// use morphir_extension_sdk::statement::CapabilityStatement;
-    /// let statement = CapabilityStatement::from_metadata(
+    /// use morphir_extension_sdk::claims::CapabilityClaimSet;
+    /// let claims = CapabilityClaimSet::from_metadata(
     ///     vec!["0.1".into()], ExtensionInfo::default(),
     ///     &ExtensionCapabilities::default(),
     /// ).unwrap();
-    /// assert_eq!(statement.statement_version().to_string(), "0.1.0-draft.1");
+    /// assert_eq!(claims.claims_version().to_string(), "0.1.0-draft.2");
     /// ```
     pub fn from_metadata(
         protocol_versions: Vec<String>,
@@ -63,7 +63,7 @@ impl CapabilityStatement {
         ))
     }
 
-    /// Build a statement from session metadata without dropping unknown members.
+    /// Build a claim set from session metadata without dropping unknown members.
     /// A fallback caller supplies only the negotiated protocol version. Sessions
     /// do not report requirements or critical paths, so both remain absent.
     pub fn from_session(
@@ -72,8 +72,8 @@ impl CapabilityStatement {
         capabilities: Map<String, Value>,
     ) -> Self {
         Self {
-            statement_version: Version::parse(STATEMENT_VERSION)
-                .expect("statement format constant is SemVer"),
+            claims_version: Version::parse(CLAIMS_VERSION)
+                .expect("claims format constant is SemVer"),
             protocol_versions,
             extension,
             capabilities,
@@ -82,9 +82,9 @@ impl CapabilityStatement {
         }
     }
 
-    /// The validated statement format version.
-    pub fn statement_version(&self) -> &Version {
-        &self.statement_version
+    /// The validated claims format version.
+    pub fn claims_version(&self) -> &Version {
+        &self.claims_version
     }
 
     /// Check all declared host comparators together, including prerelease rules.
@@ -115,7 +115,7 @@ impl CapabilityStatement {
 
 /// Requirements stated by a guest.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StatementRequirements {
+pub struct ClaimsRequirements {
     /// Single SemVer comparators, all of which must hold.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host: Vec<HostComparator>,
@@ -148,20 +148,6 @@ pub struct HostRequirementError {
     range: VersionReq,
 }
 
-fn read_statement_version<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Version, D::Error> {
-    let version = Version::deserialize(deserializer)?;
-    let supported = VersionReq::parse("=0.1.0-draft.1").expect("exact statement draft requirement");
-    if supported.matches(&version) {
-        Ok(version)
-    } else {
-        Err(D::Error::custom(format!(
-            "unsupported statementVersion '{version}'"
-        )))
-    }
-}
-
 fn read_critical<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<String>, D::Error> {
@@ -176,11 +162,11 @@ fn read_critical<'de, D: serde::Deserializer<'de>>(
     Ok(paths)
 }
 
-/// Whether this SDK understands the semantics of a statement member path.
+/// Whether this SDK understands the semantics of a claim set member path.
 pub fn understands_member(path: &str) -> bool {
     matches!(
         path,
-        "statementVersion"
+        "claimsVersion"
             | "protocolVersions"
             | "extension"
             | "extension.id"

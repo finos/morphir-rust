@@ -13,8 +13,8 @@ fn a_release_with_requirements(location: &str, comparators: Option<Value>) -> Va
             "runtime": "wasm", "filename": "sample.wasm",
             "sha256": Sha256Digest::of_bytes(b"wasm"),
             "source": {"kind": "local-file", "path": "artifacts/sample.wasm"},
-            "statement": {
-                "statementVersion": "0.1.0-draft.1", "protocolVersions": ["0.1"],
+            "claims": {
+                "claimsVersion": "0.1.0-draft.2", "protocolVersions": ["0.1"],
                 "extension": {
                     "id": "sample", "name": "Sample", "version": "1.0.0", "types": ["backend"]
                 },
@@ -27,7 +27,7 @@ fn a_release_with_requirements(location: &str, comparators: Option<Value>) -> Va
     if let Some(comparators) = comparators {
         let target = match location {
             "release" => &mut value,
-            "statement" => &mut value["artifacts"][0]["statement"],
+            "claims" => &mut value["artifacts"][0]["claims"],
             _ => unreachable!(),
         };
         target["requires"] = json!({"host": comparators});
@@ -47,7 +47,7 @@ fn an_index(root: &std::path::Path, release: &Value) -> LocalIndex {
 
 #[test]
 fn resolve_install_and_installed_checks_use_the_callers_host() {
-    for location in ["release", "statement"] {
+    for location in ["release", "claims"] {
         for (comparators, host, compatible_host, met) in [
             (Some(json!([">=0.4.0"])), "0.4.0", "0.4.0", true),
             (Some(json!(["<0.3.0"])), "0.4.0", "0.2.0", false),
@@ -119,7 +119,7 @@ fn assert_host_error(error: impl std::fmt::Display, host: &Version, comparators:
 
 #[test]
 fn requirement_readers_reject_invalid_comparators_and_missing_critical() {
-    for location in ["release", "statement"] {
+    for location in ["release", "claims"] {
         for comparators in [
             json!(">=0.4.0"),
             json!([">=0.4.0, <1.0.0"]),
@@ -134,7 +134,7 @@ fn requirement_readers_reject_invalid_comparators_and_missing_critical() {
         let target = if location == "release" {
             &mut value
         } else {
-            &mut value["artifacts"][0]["statement"]
+            &mut value["artifacts"][0]["claims"]
         };
         target.as_object_mut().unwrap().remove("critical");
         let error = serde_json::from_value::<ReleaseRecord>(value).unwrap_err();
@@ -147,13 +147,13 @@ fn requirement_readers_reject_invalid_comparators_and_missing_critical() {
 }
 
 #[test]
-fn resolve_checks_only_the_selected_artifacts_statement() {
-    let mut value = a_release_with_requirements("statement", Some(json!([">=0.4.0"])));
+fn resolve_checks_only_the_selected_artifacts_claims() {
+    let mut value = a_release_with_requirements("claims", Some(json!([">=0.4.0"])));
     let mut other = value["artifacts"][0].clone();
     other["runtime"] = json!("process");
     other["platform"] = json!({"os": "other", "arch": "other"});
     other["executable"] = json!(true);
-    other["statement"]["requires"]["host"] = json!([">=999.0.0"]);
+    other["claims"]["requires"]["host"] = json!([">=999.0.0"]);
     value["artifacts"].as_array_mut().unwrap().push(other);
     let history = ExtensionHistory::parse_jsonl(value.to_string().as_bytes()).unwrap();
     resolve(
@@ -166,10 +166,10 @@ fn resolve_checks_only_the_selected_artifacts_statement() {
 }
 
 #[test]
-fn release_and_statement_requirements_are_both_enforced() {
+fn release_and_claims_requirements_are_both_enforced() {
     let mut value = a_release_with_requirements("release", Some(json!([">=0.4.0"])));
-    value["artifacts"][0]["statement"]["requires"] = json!({"host": ["<0.5.0"]});
-    value["artifacts"][0]["statement"]["critical"] = json!(["requires.host"]);
+    value["artifacts"][0]["claims"]["requires"] = json!({"host": ["<0.5.0"]});
+    value["artifacts"][0]["claims"]["critical"] = json!(["requires.host"]);
     let history = ExtensionHistory::parse_jsonl(value.to_string().as_bytes()).unwrap();
     for (host, met) in [("0.3.0", false), ("0.4.0", true), ("0.5.0", false)] {
         assert_eq!(
@@ -190,10 +190,10 @@ fn release_and_statement_requirements_are_both_enforced() {
 #[test]
 fn a_channel_skips_releases_that_need_a_newer_host() {
     let released = |version: &str, comparators: Option<Value>| {
-        let mut value = a_release_with_requirements("statement", comparators);
+        let mut value = a_release_with_requirements("claims", comparators);
         value["version"] = json!(version);
         value["channels"] = json!(["stable"]);
-        value["artifacts"][0]["statement"]["extension"]["version"] = json!(version);
+        value["artifacts"][0]["claims"]["extension"]["version"] = json!(version);
         value.to_string()
     };
     let host: Version = "0.4.0".parse().unwrap();

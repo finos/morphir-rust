@@ -13,13 +13,13 @@ pub enum DistributionError {
         id: crate::ExtensionId,
     },
 
-    /// The selected artifact could not supply an agreeing capability statement.
+    /// The selected artifact could not supply an agreeing capability claim set.
     #[error("extension probe failed: {0}")]
     Probe(String),
 
     /// The caller's host version does not satisfy the extension requirements.
     #[error(transparent)]
-    HostRequirement(#[from] morphir_extension_sdk::statement::HostRequirementError),
+    HostRequirement(#[from] morphir_extension_sdk::claims::HostRequirementError),
 
     /// A domain value did not satisfy its portable representation.
     #[error("invalid {kind} {value:?}: {reason}")]

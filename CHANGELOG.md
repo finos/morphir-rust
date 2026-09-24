@@ -28,8 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signing adapters. Authoring derives exact content digests and validates the
   complete Library before producing public artifacts; signing does not grant
   publication authority.
+- `morphir-host`, a portable Morphir Extension Protocol host library: host
+  config, a sans-IO session core, a channel trait, a JSON-RPC connection,
+  sessions and one-shot helpers. It compiles for `wasm32-unknown-unknown`
+  (finos/morphir-rust#236).
 
 ### Changed
+- The daemon's typestate MEP session now runs on the `morphir-host` session
+  core. Its public API, wire sequence and error texts are unchanged.
 - **Breaking:** SDK-built extensions now require the `sources` compile envelope
   and Morphir CLI `0.4.0-beta.6` or later. CLI `0.4.0-beta.5` and earlier cannot
   compile with them: the legacy top-level `documents` envelope and options-bag

@@ -491,10 +491,10 @@ jobs:
           cache-on-failure: true
 
       - name: Test workspace discovery consumers
-        run: mise exec -- cargo test -p morphir-config -p morphir-workspace -p morphir-workspace-wasm -p morphir-devkit -p morphir-daemon
+        run: mise exec -- cargo test -p morphir-config -p morphir-workspace -p morphir-workspace-wasm -p morphir-devkit -p morphir-host -p morphir-daemon
 
       - name: Check portable workspace crates for WASM
-        run: mise exec -- cargo check -p morphir-config -p morphir-workspace -p morphir-workspace-wasm --target wasm32-unknown-unknown
+        run: mise exec -- cargo check -p morphir-config -p morphir-workspace -p morphir-workspace-wasm -p morphir-host --target wasm32-unknown-unknown
 
       - name: Export browser workspace package
         run: mise run build:workspace-wasm

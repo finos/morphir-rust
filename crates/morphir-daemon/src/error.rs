@@ -58,3 +58,12 @@ pub enum DaemonError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+impl From<morphir_host::HostError> for DaemonError {
+    fn from(error: morphir_host::HostError) -> Self {
+        match error {
+            morphir_host::HostError::Json(error) => DaemonError::Json(error),
+            other => DaemonError::Extension(other.to_string()),
+        }
+    }
+}

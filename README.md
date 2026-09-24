@@ -33,6 +33,7 @@ This table lists the crates in the Cargo workspace.
 | `morphir-ext-example` | Example TEA counter WebAssembly component extension. |
 | `morphir-extension-sdk` | SDK and MEP contracts for WebAssembly extensions. |
 | `morphir-gleam-binding` | Gleam frontend and backend extension integration. |
+| `morphir-host` | Portable Morphir extension host: MEP handshake, sessions and channels. |
 | `morphir-kb` | Operational layer for OKF knowledge bundles. |
 | `morphir-mck-adapter` | The Morphir Compatibility Kit adapter: `mck-adapter-rust`, a JSON-lines transport for IR and opt-in package operations. |
 | `morphir-okf` | Pure OKF model, parsing, and loading support. |

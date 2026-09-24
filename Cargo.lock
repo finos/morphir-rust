@@ -4505,6 +4505,7 @@ dependencies = [
  "morphir-devkit",
  "morphir-distribution",
  "morphir-extension-sdk",
+ "morphir-host",
  "morphir-projection",
  "morphir-workspace",
  "notify",
@@ -4663,6 +4664,20 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "morphir-host"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "morphir-extension-sdk",
+ "morphir-host",
+ "morphir-workspace",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

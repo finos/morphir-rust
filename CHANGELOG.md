@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `test:cli-release <id>` runs every bundle through Morphir CLI `0.4.0-beta.7`,
+  the first release that reads capability claim sets (`claimsVersion`
+  `0.1.0-draft.2`), so bundles can move to version-2 descriptors
+  (finos/morphir#921).
+
 ### Fixed
 - `ClaimsRecord::check_described` checks a `morphir.extension.describe` answer
   against the declaration. A claim set the extension supplied must match its

@@ -10,9 +10,11 @@ mod envelope;
 mod error;
 mod negotiated;
 mod send;
+mod session_core;
 
 pub use config::HostConfig;
 pub use envelope::{EnvelopeError, validate_envelope};
 pub use error::{ChannelState, HostError};
 pub use negotiated::Negotiated;
 pub use send::MaybeSend;
+pub use session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};

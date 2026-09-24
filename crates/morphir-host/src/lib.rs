@@ -6,9 +6,13 @@
 //! for `wasm32-unknown-unknown`.
 
 mod config;
+mod envelope;
 mod error;
+mod negotiated;
 mod send;
 
 pub use config::HostConfig;
+pub use envelope::{EnvelopeError, validate_envelope};
 pub use error::{ChannelState, HostError};
+pub use negotiated::Negotiated;
 pub use send::MaybeSend;

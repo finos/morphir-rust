@@ -558,12 +558,12 @@ pub(in crate::extensions) fn validate_negotiation(
             "Extension advertised workspace capabilities without declaring Workspace".into(),
         ));
     }
-    Ok(NegotiatedSession {
-        protocol_version: result.protocol_version,
-        extension: result.extension,
-        capabilities: result.capabilities,
+    Ok(NegotiatedSession::new(
+        result.protocol_version,
+        result.extension,
+        result.capabilities,
         legacy_backend,
-    })
+    ))
 }
 
 #[cfg(test)]

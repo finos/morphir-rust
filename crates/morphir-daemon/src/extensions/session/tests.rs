@@ -1143,8 +1143,8 @@ async fn backend_only_lock_accepts_unpersisted_capabilities() {
         ),
     };
 
-    assert!(session.negotiated().capabilities.streaming);
-    assert!(session.negotiated().capabilities.frontend.is_some());
+    assert!(session.negotiated().capabilities().streaming);
+    assert!(session.negotiated().capabilities().frontend.is_some());
 }
 
 #[tokio::test]

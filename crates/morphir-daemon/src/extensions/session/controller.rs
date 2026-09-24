@@ -8,8 +8,6 @@ use crate::DaemonError;
 use crate::extensions::protocol::{
     ExtensionRequest, InitializeParams, InitializeResult, error_codes, methods,
 };
-use morphir_extension_sdk::{ExtensionCapabilities, ExtensionInfo, ExtensionType};
-use morphir_workspace::{DiscoveryRequest, speaks_workspace_discovery_protocol};
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
@@ -23,86 +21,7 @@ pub struct Stopped;
 pub struct Indeterminate;
 
 /// Validated application data produced by MEP negotiation.
-#[derive(Debug, Clone)]
-pub struct NegotiatedSession {
-    pub(super) protocol_version: String,
-    pub(super) extension: ExtensionInfo,
-    pub(super) capabilities: ExtensionCapabilities,
-    pub(super) legacy_backend: bool,
-}
-
-impl NegotiatedSession {
-    /// Selected MEP version.
-    pub fn protocol_version(&self) -> &str {
-        &self.protocol_version
-    }
-
-    /// Validated extension identity and capability kinds.
-    pub fn extension(&self) -> &ExtensionInfo {
-        &self.extension
-    }
-
-    /// Features negotiated for this session.
-    pub fn capabilities(&self) -> &ExtensionCapabilities {
-        &self.capabilities
-    }
-
-    pub(crate) fn supports_method(&self, method: &str) -> bool {
-        match method {
-            methods::COMPILE => {
-                self.extension.types.contains(&ExtensionType::Frontend)
-                    && self
-                        .capabilities
-                        .frontend
-                        .as_ref()
-                        .is_some_and(|frontend| frontend.compile)
-            }
-            methods::GENERATE => {
-                self.extension.types.contains(&ExtensionType::Backend)
-                    && (self.legacy_backend
-                        || self
-                            .capabilities
-                            .backend
-                            .as_ref()
-                            .is_some_and(|backend| backend.generate))
-            }
-            methods::VALIDATE => self.extension.types.contains(&ExtensionType::Validator),
-            methods::TRANSFORM => self.extension.types.contains(&ExtensionType::Transform),
-            methods::WORKSPACE_DISCOVER => {
-                self.extension.types.contains(&ExtensionType::Workspace)
-                    && self
-                        .capabilities
-                        .workspace
-                        .as_ref()
-                        .is_some_and(|workspace| {
-                            workspace.discover
-                                && workspace
-                                    .protocol_versions
-                                    .iter()
-                                    .any(speaks_workspace_discovery_protocol)
-                        })
-            }
-            _ => true,
-        }
-    }
-
-    pub(crate) fn supports_invocation(&self, method: &str, params: &serde_json::Value) -> bool {
-        if method != methods::WORKSPACE_DISCOVER {
-            return true;
-        }
-        let Some(workspace) = self.capabilities.workspace.as_ref() else {
-            return false;
-        };
-        serde_json::from_value::<DiscoveryRequest>(params.clone())
-            .ok()
-            .is_some_and(|request| {
-                speaks_workspace_discovery_protocol(&request.protocol_version)
-                    && workspace
-                        .protocol_versions
-                        .contains(&request.protocol_version)
-            })
-    }
-}
+pub use morphir_host::Negotiated as NegotiatedSession;
 
 /// A MEP session whose legal operations depend on its state parameter.
 pub struct Session<T, S> {

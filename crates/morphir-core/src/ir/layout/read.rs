@@ -1,4 +1,4 @@
-//! Reading a document tree: a map of logical paths to text becomes the `IRFile` the equivalent
+//! Reading a document tree: a map of logical paths to text becomes the distribution the equivalent
 //! single document would have produced.
 //!
 //! Mirrors `IR/src/layout/read-tree.ts` in `ecosystem/morphir-typescript`; see
@@ -6,10 +6,10 @@
 //! distribution taken apart, so reading one is putting it back together: the root manifest says
 //! which kind it is and which packages live under `deps/`, each `…/module` file says what its
 //! directory holds, and each node file is one type or one value. Nothing here parses anything
-//! itself — the profile turns text into the value tree both profiles produce, and the v4 tree-file
-//! decoders turn that into the model. What this module adds is what a single document does not
-//! have: which file a name is in, which package a directory belongs to, and the rule that every
-//! file under `pkg/` and `deps/` is claimed by exactly one module.
+//! itself — the caller's parser turns text into the payload its profile produces, and the tree's
+//! `TreeModel` decodes that and assembles the pieces. What this module adds is what a single
+//! document does not have: which file a name is in, which package a directory belongs to, and the
+//! rule that every file under `pkg/` and `deps/` is claimed by exactly one module.
 //!
 //! A directory carries no order, so modules are assembled in logical-path order: a distribution
 //! whose modules were written in some other order comes back sorted. That is the one thing a tree
@@ -22,11 +22,15 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
-use serde_json::Value as JsonValue;
 
+use super::model::{
+    AssembledModule, Entries, Envelope, ModuleFile, ModuleFileOf, Node, Packages, Role, TreeModel,
+    TypeNode, ValueNode,
+};
 use super::paths::{
     MANIFEST, NodeFileKind, PathKind, Root, VERSION_SLOT, classify, node_file_path,
 };
+use super::v4_model::V4;
 use super::{Profile, Tree};
 // The stack a whole tree read grows onto, and the headroom below which it grows one, are the JSON
 // reader's own figures — borrowed rather than copied. A tree is read on one stack: the growth
@@ -34,31 +38,9 @@ use super::{Profile, Tree};
 // a stack deeper than `RED_ZONE` and grows no further. That only holds while the two agree, so
 // there is one pair of constants rather than two.
 use crate::ir::json::{READ_STACK_BYTES, RED_ZONE};
-use crate::ir::v4::access::AccessControlled;
-use crate::ir::v4::distribution::{
-    ApplicationContent, DefinitionDependencies, Dependencies, Distribution, LibraryContent,
-    SpecsContent,
-};
-use crate::ir::v4::module::{Documented, ModuleDefinition, ModuleSpecification};
-use crate::ir::v4::package::{PackageDefinition, PackageSpecification};
-use crate::ir::v4::tree_files::{
-    DistributionKind, DistributionManifestFile, ExpectedEntries, ModuleEntries, ModuleManifestFile,
-    NodeFileBody, TypeDefinitionFile, ValueDefinitionFile,
-};
-use crate::ir::v4::types::{TypeDefinition, TypeSpecification};
-use crate::ir::v4::value::{ValueDefinition, ValueSpecification};
-use crate::ir::v4::{IRFile, SpellingMode, serde_document, with_spelling_mode};
+use crate::ir::v4::{IRFile, SpellingMode, with_spelling_mode};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage, Warning};
 use crate::naming::{self, Name, PackageName};
-
-/// A type entry of a package definition, as the model holds it.
-type TypeDef = AccessControlled<Documented<TypeDefinition>>;
-/// A value entry of a package definition.
-type ValueDef = AccessControlled<Documented<ValueDefinition>>;
-/// A type entry of a package specification.
-type TypeSpec = Documented<TypeSpecification>;
-/// A value entry of a package specification.
-type ValueSpec = Documented<ValueSpecification>;
 
 /// Reads a document tree into the [`IRFile`] the equivalent single document would have produced,
 /// with the warnings its files produced.
@@ -70,10 +52,21 @@ type ValueSpec = Documented<ValueSpecification>;
 /// manifest itself, then each package's module directories in sorted order, and — last of all —
 /// the first file under `pkg/` or `deps/` that no module claimed.
 pub fn read_tree(files: &Tree, profile: Profile) -> Result<(IRFile, Vec<Warning>), Diagnostic> {
+    read_tree_with::<V4>(files, &|text| profile.read(text))
+}
+
+/// Reads a document tree whose files `M` decodes, each file's text parsed by `parse`.
+///
+/// [`read_tree`] is this with the v4 model and a profile's own parser; the layout rules — the
+/// order of checks, the claims, the stray check and the cursors — are the same for every model.
+pub(crate) fn read_tree_with<M: TreeModel>(
+    files: &Tree,
+    parse: &dyn Fn(&str) -> Result<M::Doc, Diagnostic>,
+) -> Result<(M::File, Vec<Warning>), Diagnostic> {
     stacker::maybe_grow(RED_ZONE, READ_STACK_BYTES, || {
-        Reader {
+        Reader::<M> {
             files,
-            profile,
+            parse,
             consumed: HashSet::new(),
             warnings: Vec::new(),
             module_dirs_by_owner: HashMap::new(),
@@ -83,9 +76,10 @@ pub fn read_tree(files: &Tree, profile: Profile) -> Result<(IRFile, Vec<Warning>
 }
 
 /// One tree read in progress: what it was given, what it has claimed, and what it has to say.
-struct Reader<'a> {
+struct Reader<'a, M: TreeModel> {
     files: &'a Tree,
-    profile: Profile,
+    /// Turns one file's text into the payload `M` decodes.
+    parse: &'a dyn Fn(&str) -> Result<M::Doc, Diagnostic>,
     /// The paths a file was parsed from, recorded before the file is decoded, so a file that
     /// failed to decode is still claimed and the stray check does not blame it twice.
     consumed: HashSet<String>,
@@ -93,7 +87,7 @@ struct Reader<'a> {
     /// not depend on the order the tree was walked in.
     warnings: Vec<(String, Warning)>,
     /// Every module directory, grouped by owning package, computed once the manifest names the
-    /// packages — see [`Packages::module_dirs_by_owner`].
+    /// packages — see [`PackageRoots::module_dirs_by_owner`].
     module_dirs_by_owner: HashMap<(Root, String), Vec<String>>,
 }
 
@@ -133,13 +127,13 @@ struct PackageRoot {
 /// The packages a tree holds: the manifest's own, then its dependencies in the manifest's order.
 ///
 /// A directory tree does not order its dependencies; the manifest does.
-struct Packages {
+struct PackageRoots {
     own: PackageRoot,
     deps: Vec<PackageRoot>,
 }
 
-impl Packages {
-    fn of(manifest: &DistributionManifestFile) -> Self {
+impl PackageRoots {
+    fn of<K, E>(manifest: &Envelope<K, E>) -> Self {
         let own_path = naming::escaped_path(manifest.package.as_path());
         let own_prefix_slash = format!("{own_path}/");
         Self {
@@ -217,8 +211,8 @@ enum Listing<T> {
     Inline(IndexMap<String, T>),
 }
 
-impl Reader<'_> {
-    fn read(mut self) -> Result<(IRFile, Vec<Warning>), Diagnostic> {
+impl<M: TreeModel> Reader<'_, M> {
+    fn read(mut self) -> Result<(M::File, Vec<Warning>), Diagnostic> {
         if !self.files.contains_key(MANIFEST) {
             return Err(Diagnostic::new(
                 DiagnosticCode::MissingMember,
@@ -227,11 +221,11 @@ impl Reader<'_> {
                 "missing member \"manifest\"",
             ));
         }
-        let manifest =
-            self.read_file(MANIFEST, serde_document::decode_distribution_manifest_file)?;
-        let packages = Packages::of(&manifest);
-        self.module_dirs_by_owner = packages.module_dirs_by_owner(self.files);
-        let distribution = self.assemble(&manifest, &packages)?;
+        let envelope = self.read_file(MANIFEST, M::decode_manifest)?;
+        let roots = PackageRoots::of(&envelope);
+        self.module_dirs_by_owner = roots.module_dirs_by_owner(self.files);
+        let packages = self.packages(&envelope, &roots)?;
+        let file = M::assemble(envelope, packages)?;
 
         // Everything under `pkg/` or `deps/` belongs to a module; a file no module manifest
         // claimed is in the wrong package, spelled in a way the grammar does not recognize, or
@@ -239,7 +233,7 @@ impl Reader<'_> {
         // files outside those two roots are ignored — and this runs last, so a tree with both a
         // stray file and a defect inside a module reports the defect.
         if let Some(stray) = self.stray() {
-            return Err(shape(&stray, "/", stray_message(&stray, &packages)));
+            return Err(shape(&stray, "/", stray_message(&stray, &roots)));
         }
 
         self.warnings.sort_by(|left, right| left.0.cmp(&right.0));
@@ -248,166 +242,68 @@ impl Reader<'_> {
             .into_iter()
             .map(|(_, warning)| warning)
             .collect();
-        Ok((
-            IRFile {
-                format_version: manifest.format_version.clone(),
-                distribution,
-            },
-            warnings,
-        ))
+        Ok((file, warnings))
     }
 
-    /// The distribution the manifest's kind calls for.
-    ///
-    /// A `Specs` tree is specifications everywhere. A `Library` holds its own package's
-    /// definitions and its dependencies' public faces. An `Application` links its dependencies
-    /// statically, so `deps/` holds definitions there too (distributions-0010), and the entry
-    /// points come from the manifest rather than from any file under a package root.
-    fn assemble(
+    /// Every module of every package the manifest named: its own package first, then each
+    /// dependency in the manifest's order, each read in the role the model gives its root for
+    /// the manifest's kind.
+    fn packages(
         &mut self,
-        manifest: &DistributionManifestFile,
-        packages: &Packages,
-    ) -> Result<Distribution, Diagnostic> {
-        let package_name = manifest.package.clone();
-        match manifest.distribution {
-            DistributionKind::Specs => {
-                let spec = self.specification_package(&packages.own)?;
-                let dependencies = self.dependency_specifications(packages)?;
-                Ok(Distribution::Specs(SpecsContent {
-                    package_name,
-                    dependencies,
-                    spec,
-                }))
-            }
-            DistributionKind::Library => {
-                let def = self.definition_package(&packages.own)?;
-                let dependencies = self.dependency_specifications(packages)?;
-                Ok(Distribution::Library(LibraryContent {
-                    package_name,
-                    dependencies,
-                    def,
-                }))
-            }
-            DistributionKind::Application => {
-                let def = self.definition_package(&packages.own)?;
-                let dependencies = self.dependency_definitions(packages)?;
-                Ok(Distribution::Application(ApplicationContent {
-                    package_name,
-                    dependencies,
-                    def,
-                    entry_points: manifest.entry_points.clone(),
-                }))
-            }
+        envelope: &Envelope<M::Kind, M::Extra>,
+        roots: &PackageRoots,
+    ) -> Result<Packages<M>, Diagnostic> {
+        let own = self.package(&roots.own, M::role(envelope.kind, Root::Pkg))?;
+        let role = M::role(envelope.kind, Root::Deps);
+        let mut dependencies = Vec::with_capacity(roots.deps.len());
+        for package in &roots.deps {
+            dependencies.push((package.name.clone(), self.package(package, role)?));
         }
-    }
-
-    fn dependency_specifications(
-        &mut self,
-        packages: &Packages,
-    ) -> Result<Dependencies, Diagnostic> {
-        let mut out = Dependencies::new();
-        for package in &packages.deps {
-            let specification = self.specification_package(package)?;
-            out.insert(package.name.to_canonical_string(), specification);
-        }
-        Ok(out)
-    }
-
-    fn dependency_definitions(
-        &mut self,
-        packages: &Packages,
-    ) -> Result<DefinitionDependencies, Diagnostic> {
-        let mut out = DefinitionDependencies::new();
-        for package in &packages.deps {
-            let definition = self.definition_package(package)?;
-            out.insert(package.name.to_canonical_string(), definition);
-        }
-        Ok(out)
+        Ok(Packages { own, dependencies })
     }
 
     // =========================================================================
     // Per package
     // =========================================================================
 
-    fn definition_package(
+    /// One package's modules, in logical-path order, each with its listings resolved.
+    fn package(
         &mut self,
         package: &PackageRoot,
-    ) -> Result<PackageDefinition, Diagnostic> {
-        let mut modules = IndexMap::new();
+        role: Role,
+    ) -> Result<Vec<AssembledModule<M>>, Diagnostic> {
+        let mut modules = Vec::new();
         for dir in self.module_dirs(package) {
             let at = Where::new(package.root, dir);
-            let ModuleManifestFile {
+            let ModuleFile {
                 path,
-                access,
+                public,
                 doc,
                 types,
                 values,
                 file_names,
-                ..
-            } = self.read_module_manifest(&at, package, ExpectedEntries::Definitions)?;
+            } = self.read_module_manifest(&at, package, role)?;
             let types = self.resolve(
                 &at,
                 &file_names,
-                definition_listing(types, &at, "types")?,
-                load_type_definition,
+                listing(types, &at, "types", role)?,
+                |reader, at, name, stem| reader.load_type(at, name, stem, role),
             )?;
             let values = self.resolve(
                 &at,
                 &file_names,
-                definition_listing(values, &at, "values")?,
-                load_value_definition,
+                listing(values, &at, "values", role)?,
+                |reader, at, name, stem| reader.load_value(at, name, stem, role),
             )?;
-            modules.insert(
-                path.to_canonical_string(),
-                AccessControlled {
-                    access,
-                    value: ModuleDefinition { types, values, doc },
-                },
-            );
-        }
-        Ok(PackageDefinition { modules })
-    }
-
-    fn specification_package(
-        &mut self,
-        package: &PackageRoot,
-    ) -> Result<PackageSpecification, Diagnostic> {
-        let mut modules = IndexMap::new();
-        for dir in self.module_dirs(package) {
-            let at = Where::new(package.root, dir);
-            let ModuleManifestFile {
+            modules.push(AssembledModule {
                 path,
+                public,
                 doc,
                 types,
                 values,
-                file_names,
-                ..
-            } = self.read_module_manifest(&at, package, ExpectedEntries::Specifications)?;
-            let types = self.resolve(
-                &at,
-                &file_names,
-                specification_listing(types, &at, "types")?,
-                load_type_specification,
-            )?;
-            let values = self.resolve(
-                &at,
-                &file_names,
-                specification_listing(values, &at, "values")?,
-                load_value_specification,
-            )?;
-            modules.insert(
-                path.to_canonical_string(),
-                ModuleSpecification {
-                    // A tree has nowhere to keep module annotations, so a module read out of one
-                    // has none; the writer refuses one that has any.
-                    annotations: Vec::new(),
-                    types,
-                    values,
-                    doc,
-                },
-            );
+            });
         }
-        Ok(PackageSpecification { modules })
+        Ok(modules)
     }
 
     /// The module directories of one package, in logical-path order.
@@ -434,15 +330,15 @@ impl Reader<'_> {
         &mut self,
         at: &Where,
         package: &PackageRoot,
-        expect: ExpectedEntries,
-    ) -> Result<ModuleManifestFile, Diagnostic> {
+        role: Role,
+    ) -> Result<ModuleFileOf<M>, Diagnostic> {
         let manifest = self.read_file(&at.manifest_path, |value, cursor| {
-            serde_document::decode_module_manifest_file(value, cursor, expect)
+            M::decode_module(value, cursor, role)
         })?;
         // `owner` matched a strict prefix and a separator, so the relative directory is what
         // follows both; the fallback keeps this total rather than trusting the arithmetic.
         let relative = at.dir.get(package.prefix.len() + 1..).unwrap_or_default();
-        let spelled = naming::escaped_path(manifest.path.as_path());
+        let spelled = naming::escaped_path(&manifest.path);
         if spelled != relative {
             return Err(shape(
                 &at.manifest_path,
@@ -478,6 +374,42 @@ impl Reader<'_> {
         }
     }
 
+    /// One listed type's `.type` file, refused when it holds the other role's node.
+    fn load_type(
+        &mut self,
+        at: &Where,
+        name: &Name,
+        stem: &str,
+        role: Role,
+    ) -> Result<TypeNode<M>, Diagnostic> {
+        let (path, node) = self.node_file(
+            at,
+            NodeFileKind::Type,
+            |value, cursor| M::decode_type_file(value, cursor, role),
+            name,
+            stem,
+        )?;
+        body(&path, node, role)
+    }
+
+    /// One listed value's `.value` file, the other half of [`Self::load_type`].
+    fn load_value(
+        &mut self,
+        at: &Where,
+        name: &Name,
+        stem: &str,
+        role: Role,
+    ) -> Result<ValueNode<M>, Diagnostic> {
+        let (path, node) = self.node_file(
+            at,
+            NodeFileKind::Value,
+            |value, cursor| M::decode_value_file(value, cursor, role),
+            name,
+            stem,
+        )?;
+        body(&path, node, role)
+    }
+
     /// The file one listed name lives in, checked against the name that pointed at it.
     ///
     /// A manifest that lists a name with no file, or a file whose own name is not the one that
@@ -486,8 +418,7 @@ impl Reader<'_> {
         &mut self,
         at: &Where,
         kind: NodeFileKind,
-        read: impl FnOnce(&JsonValue, &str) -> Result<T, Diagnostic>,
-        name_of: impl Fn(&T) -> &Name,
+        read: impl FnOnce(&M::Doc, &str) -> Result<(Name, T), Diagnostic>,
         name: &Name,
         stem: &str,
     ) -> Result<(String, T), Diagnostic> {
@@ -504,8 +435,8 @@ impl Reader<'_> {
                 ),
             ));
         }
-        let file = self.read_file(&path, read)?;
-        if name_of(&file) != name {
+        let (found, file) = self.read_file(&path, read)?;
+        if &found != name {
             return Err(shape(
                 &path,
                 "/name",
@@ -513,7 +444,7 @@ impl Reader<'_> {
                     "expected \"{}\", the name {} listed, found \"{}\"",
                     name.to_canonical_string(),
                     at.manifest_path,
-                    name_of(&file).to_canonical_string()
+                    found.to_canonical_string()
                 ),
             ));
         }
@@ -524,7 +455,7 @@ impl Reader<'_> {
     // Per file
     // =========================================================================
 
-    /// One file of the tree, parsed under the profile and decoded as the node it is.
+    /// One file of the tree, parsed by the caller's parser and decoded as the node it is.
     ///
     /// The path is claimed as soon as the text is parsed and before it is decoded, so a file that
     /// fails to decode is never also reported as unclaimed. The file's own diagnostics and
@@ -532,7 +463,7 @@ impl Reader<'_> {
     fn read_file<T>(
         &mut self,
         path: &str,
-        read: impl FnOnce(&JsonValue, &str) -> Result<T, Diagnostic>,
+        read: impl FnOnce(&M::Doc, &str) -> Result<T, Diagnostic>,
     ) -> Result<T, Diagnostic> {
         let Some(text) = self.files.get(path) else {
             return Err(Diagnostic::new(
@@ -542,7 +473,7 @@ impl Reader<'_> {
                 format!("missing file \"{path}\""),
             ));
         };
-        let parsed = self.profile.read(text);
+        let parsed = (self.parse)(text);
         self.consumed.insert(path.to_owned());
         let value = parsed.map_err(|diagnostic| recursor(path, diagnostic))?;
 
@@ -572,90 +503,18 @@ impl Reader<'_> {
 }
 
 // =============================================================================
-// The four loaders
+// Node files
 // =============================================================================
 
-fn load_type_definition(
-    reader: &mut Reader<'_>,
-    at: &Where,
-    name: &Name,
-    stem: &str,
-) -> Result<TypeDef, Diagnostic> {
-    let (path, file) = reader.node_file(
-        at,
-        NodeFileKind::Type,
-        serde_document::decode_type_definition_file,
-        |file: &TypeDefinitionFile| &file.name,
-        name,
-        stem,
-    )?;
-    definition_body(&path, file.body)
-}
-
-fn load_value_definition(
-    reader: &mut Reader<'_>,
-    at: &Where,
-    name: &Name,
-    stem: &str,
-) -> Result<ValueDef, Diagnostic> {
-    let (path, file) = reader.node_file(
-        at,
-        NodeFileKind::Value,
-        serde_document::decode_value_definition_file,
-        |file: &ValueDefinitionFile| &file.name,
-        name,
-        stem,
-    )?;
-    definition_body(&path, file.body)
-}
-
-fn load_type_specification(
-    reader: &mut Reader<'_>,
-    at: &Where,
-    name: &Name,
-    stem: &str,
-) -> Result<TypeSpec, Diagnostic> {
-    let (path, file) = reader.node_file(
-        at,
-        NodeFileKind::Type,
-        serde_document::decode_type_definition_file,
-        |file: &TypeDefinitionFile| &file.name,
-        name,
-        stem,
-    )?;
-    specification_body(&path, file.body)
-}
-
-fn load_value_specification(
-    reader: &mut Reader<'_>,
-    at: &Where,
-    name: &Name,
-    stem: &str,
-) -> Result<ValueSpec, Diagnostic> {
-    let (path, file) = reader.node_file(
-        at,
-        NodeFileKind::Value,
-        serde_document::decode_value_definition_file,
-        |file: &ValueDefinitionFile| &file.name,
-        name,
-        stem,
-    )?;
-    specification_body(&path, file.body)
-}
-
-/// The definition a node file carries, or the refusal a specification there earns.
-fn definition_body<D, S>(path: &str, body: NodeFileBody<D, S>) -> Result<D, Diagnostic> {
-    match body {
-        NodeFileBody::Def(definition) => Ok(definition),
-        NodeFileBody::Spec(_) => Err(shape(path, "/", "expected a definition file")),
-    }
-}
-
-/// The specification a node file carries, or the refusal a definition there earns.
-fn specification_body<D, S>(path: &str, body: NodeFileBody<D, S>) -> Result<S, Diagnostic> {
-    match body {
-        NodeFileBody::Spec(specification) => Ok(specification),
-        NodeFileBody::Def(_) => Err(shape(path, "/", "expected a specification file")),
+/// The node a file carries, or the refusal a node of the other role earns: a definitions module
+/// holds only definition files, and a specifications module only specification files.
+fn body<D, S>(path: &str, node: Node<D, S>, role: Role) -> Result<Node<D, S>, Diagnostic> {
+    match (role, node) {
+        (Role::Definitions, Node::Spec(_)) => Err(shape(path, "/", "expected a definition file")),
+        (Role::Specifications, Node::Def(_)) => {
+            Err(shape(path, "/", "expected a specification file"))
+        }
+        (_, node) => Ok(node),
     }
 }
 
@@ -663,39 +522,39 @@ fn specification_body<D, S>(path: &str, body: NodeFileBody<D, S>) -> Result<S, D
 // Listings
 // =============================================================================
 
-/// A listing read where definitions were expected.
+/// A listing read in the role its module has, each inline entry as the node that role holds.
 ///
-/// A manifest decoded with [`ExpectedEntries::Definitions`] never comes back in the specification
-/// style — which of the two an inline object is read as is decided by that argument, never guessed
-/// from the shape — so the third arm cannot happen. It is still a refusal rather than an empty
-/// listing: silently dropping a module's entries would turn a defect in this reader into a
+/// A module manifest decoded in one role never comes back in the other role's inline style —
+/// which of the two an inline object is read as is decided by the role, never guessed from the
+/// shape — so the two mismatched arms cannot happen. They are still refusals rather than empty
+/// listings: silently dropping a module's entries would turn a defect in this reader into a
 /// distribution missing half of itself.
-fn definition_listing<D, S>(
-    entries: ModuleEntries<D, S>,
+fn listing<D, S>(
+    entries: Entries<D, S>,
     at: &Where,
     member: &str,
-) -> Result<Listing<D>, Diagnostic> {
-    match entries {
-        ModuleEntries::Names(names) => Ok(Listing::Names(names)),
-        ModuleEntries::Definitions(items) => Ok(Listing::Inline(items)),
-        ModuleEntries::Specifications(_) => Err(shape(
+    role: Role,
+) -> Result<Listing<Node<D, S>>, Diagnostic> {
+    match (entries, role) {
+        (Entries::Names(names), _) => Ok(Listing::Names(names)),
+        (Entries::Definitions(items), Role::Definitions) => Ok(Listing::Inline(
+            items
+                .into_iter()
+                .map(|(key, item)| (key, Node::Def(item)))
+                .collect(),
+        )),
+        (Entries::Specifications(items), Role::Specifications) => Ok(Listing::Inline(
+            items
+                .into_iter()
+                .map(|(key, item)| (key, Node::Spec(item)))
+                .collect(),
+        )),
+        (Entries::Specifications(_), Role::Definitions) => Err(shape(
             &at.manifest_path,
             &format!("/{member}"),
             format!("expected definitions in {member}, found specifications"),
         )),
-    }
-}
-
-/// A listing read where specifications were expected, the other half of [`definition_listing`].
-fn specification_listing<D, S>(
-    entries: ModuleEntries<D, S>,
-    at: &Where,
-    member: &str,
-) -> Result<Listing<S>, Diagnostic> {
-    match entries {
-        ModuleEntries::Names(names) => Ok(Listing::Names(names)),
-        ModuleEntries::Specifications(items) => Ok(Listing::Inline(items)),
-        ModuleEntries::Definitions(_) => Err(shape(
+        (Entries::Definitions(_), Role::Specifications) => Err(shape(
             &at.manifest_path,
             &format!("/{member}"),
             format!("expected specifications in {member}, found definitions"),
@@ -762,7 +621,7 @@ fn at(path: &str, cursor: &str) -> String {
 /// A `deps/` directory whose leading segments match a listed dependency is missing or misspelling
 /// the version slot, and the more useful of the three wordings says which; anything else belongs
 /// to no listed package at all, the way any unclaimed file does.
-fn stray_message(path: &str, packages: &Packages) -> String {
+fn stray_message(path: &str, packages: &PackageRoots) -> String {
     const GENERIC: &str = "file belongs to no module";
 
     let (root, dir) = match classify(path) {

@@ -27,33 +27,15 @@ impl MepTransport for SpawnedProcessTransport {
         &mut self,
         request: ExtensionRequest,
     ) -> std::result::Result<ExtensionResponse, TransportError> {
-        let method = request.method.clone();
-        let exchange = async {
-            let stdin = self.session.stdin.as_mut().ok_or_else(|| {
-                DaemonError::Extension("Extension process stdin is closed".to_string())
-            })?;
-            write_frame(stdin, &request).await?;
-            let frame = read_frame(&mut self.session.stdout).await?;
-            serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
-        };
-        let result = match timeout(self.session.request_timeout, exchange).await {
-            Ok(result) => result,
-            Err(_) => Err(DaemonError::Extension(format!(
-                "Extension request '{}' timed out after {:?}",
-                method, self.session.request_timeout
-            ))),
+        let result = match self.session.child.exchange(&request).await {
+            Ok(frame) => {
+                serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
+            }
+            Err(error) => Err(DaemonError::from(error)),
         };
         match result {
             Ok(response) => Ok(response),
-            Err(error) => Err(match self.session.abort_process().await {
-                Ok(()) => TransportError::new(error, TransportState::Stopped),
-                Err(cleanup) => TransportError::new(
-                    DaemonError::Extension(format!(
-                        "{error}; process cleanup also failed: {cleanup}"
-                    )),
-                    TransportState::Indeterminate,
-                ),
-            }),
+            Err(error) => Err(self.stop_after(error).await),
         }
     }
 
@@ -67,41 +49,36 @@ impl MepTransport for SpawnedProcessTransport {
 
     async fn terminate(&mut self) -> std::result::Result<TransportState, TransportError> {
         if let Err(error) = self.session.send_exit_notification().await {
-            return Err(match self.session.abort_process().await {
-                Ok(()) => TransportError::new(error, TransportState::Stopped),
-                Err(cleanup) => TransportError::new(
-                    DaemonError::Extension(format!(
-                        "{error}; process cleanup also failed: {cleanup}"
-                    )),
-                    TransportState::Indeterminate,
-                ),
-            });
+            return Err(self.stop_after(error).await);
         }
-        self.session.stdin.take();
-        let status = match timeout(self.session.request_timeout, self.session.child.wait()).await {
-            Ok(status) => status.map_err(|error| {
-                TransportError::new(error.into(), TransportState::Indeterminate)
-            })?,
-            Err(_) => {
-                let error = DaemonError::Extension(format!(
-                    "Extension process did not exit after {:?}",
-                    self.session.request_timeout
+        self.finish_after_exit().await
+    }
+}
+
+impl SpawnedProcessTransport {
+    /// Wait for the process to exit after `exit` was sent, and collect stderr.
+    ///
+    /// A process that outlives the request timeout is killed.
+    pub(super) async fn finish_after_exit(
+        &mut self,
+    ) -> std::result::Result<TransportState, TransportError> {
+        let status = match self.session.child.wait_for_status().await {
+            Ok(status) => status,
+            Err(error @ HostError::Channel { .. }) => {
+                return Err(self.stop_after(error.into()).await);
+            }
+            Err(error) => {
+                return Err(TransportError::new(
+                    error.into(),
+                    TransportState::Indeterminate,
                 ));
-                return Err(match self.session.abort_process().await {
-                    Ok(()) => TransportError::new(error, TransportState::Stopped),
-                    Err(cleanup) => TransportError::new(
-                        DaemonError::Extension(format!(
-                            "{error}; process cleanup also failed: {cleanup}"
-                        )),
-                        TransportState::Indeterminate,
-                    ),
-                });
             }
         };
         self.session
+            .child
             .collect_stderr()
             .await
-            .map_err(|error| TransportError::new(error, TransportState::Stopped))?;
+            .map_err(|error| TransportError::new(error.into(), TransportState::Stopped))?;
         self.session.state = ProcessSessionData::Stopped;
         if !status.success() {
             return Err(TransportError::new(
@@ -110,6 +87,17 @@ impl MepTransport for SpawnedProcessTransport {
             ));
         }
         Ok(TransportState::Stopped)
+    }
+
+    /// Kill the process after `error`, and report what that proves.
+    pub(super) async fn stop_after(&mut self, error: DaemonError) -> TransportError {
+        match self.session.abort_process().await {
+            Ok(()) => TransportError::new(error, TransportState::Stopped),
+            Err(cleanup) => TransportError::new(
+                DaemonError::Extension(format!("{error}; process cleanup also failed: {cleanup}")),
+                TransportState::Indeterminate,
+            ),
+        }
     }
 }
 
@@ -132,15 +120,11 @@ impl Session<SpawnedProcessTransport, Stopped> {
     /// Remaining bytes therefore identify protocol output that was not framed as a
     /// response.
     pub async fn process_stdout_is_exhausted(&mut self) -> Result<bool> {
-        let request_timeout = self.transport_internal().session.request_timeout;
-        let stdout = &mut self.transport_mut_internal().session.stdout;
-        match timeout(request_timeout, stdout.fill_buf()).await {
-            Ok(result) => result
-                .map(|remaining| remaining.is_empty())
-                .map_err(Into::into),
-            Err(_) => Err(DaemonError::Extension(format!(
-                "Timed out while checking extension stdout after {request_timeout:?}"
-            ))),
-        }
+        self.transport_mut_internal()
+            .session
+            .child
+            .stdout_is_exhausted()
+            .await
+            .map_err(Into::into)
     }
 }

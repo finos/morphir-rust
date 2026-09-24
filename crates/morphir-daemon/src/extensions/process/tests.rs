@@ -2,6 +2,8 @@ use super::*;
 use morphir_extension_sdk::{
     BackendCapability, ExtensionCapabilities, ExtensionInfo, ExtensionType,
 };
+use morphir_host_native::process::read_frame;
+use tokio::io::BufReader;
 
 #[test]
 fn compatibility_initialization_rejects_locked_backend_capability_drift() {
@@ -96,16 +98,8 @@ async fn compatibility_invoke_rejects_unsafe_generated_artifacts() {
     assert!(error.to_string().contains("artifact path"), "{error}");
 }
 
-#[test]
-fn stderr_capture_retains_only_the_bounded_tail() {
-    let mut output = b"old diagnostics".to_vec();
-    append_bounded_tail(&mut output, b"new diagnostics", 16);
-
-    assert_eq!(output, b"snew diagnostics");
-
-    append_bounded_tail(&mut output, b"0123456789abcdefghijkl", 16);
-    assert_eq!(output, b"6789abcdefghijkl");
-}
+// `stderr_capture_retains_only_the_bounded_tail` moved to
+// `morphir_host_native::process` with the stderr reader.
 
 /// A reader whose first poll always fails, to force a real `std::io::Error`
 /// out of `read_frame` without relying on process teardown timing.

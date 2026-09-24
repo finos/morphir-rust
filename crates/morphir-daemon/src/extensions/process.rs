@@ -5,7 +5,6 @@ mod transport;
 
 pub use describe::{DescriptionSource, ProcessDescription};
 pub use morphir_host_native::process::ProcessLaunch;
-use morphir_host_native::process::ProcessProgram;
 pub use transport::SpawnedProcessTransport;
 
 #[cfg(test)]
@@ -22,18 +21,9 @@ use crate::extensions::session::{
 };
 use crate::{DaemonError, Result};
 use async_trait::async_trait;
-use morphir_host_native::process::{prepare_program, read_frame, write_frame};
+use morphir_host::HostError;
+use morphir_host_native::process::ProcessChild;
 use serde::{Serialize, de::DeserializeOwned};
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-
-const MAX_STDERR_BYTES: usize = 256 * 1024;
-const EXECUTABLE_BUSY_RETRIES: usize = 4;
-const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 enum ProcessSessionData {
     Starting,
@@ -59,66 +49,20 @@ struct CompatibilityReady {
 /// ```
 pub struct SpawnedProcessSession {
     expected_extension: ExpectedExtension,
-    child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    stderr_task: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
-    stderr_output: String,
+    child: ProcessChild,
     next_request_id: u64,
-    request_timeout: Duration,
     state: ProcessSessionData,
-    _staged_program: Option<tempfile::TempDir>,
 }
 
 impl SpawnedProcessSession {
     /// Start a native extension and connect its standard streams.
     pub async fn spawn(launch: ProcessLaunch) -> Result<Self> {
-        validate_launch(&launch)?;
-        let expected_extension = launch.expectation();
-
-        let (program, staged_program) = prepare_program(launch.program()).await?;
-        let mut command = Command::new(&program);
-        command
-            .args(launch.args())
-            .current_dir(launch.working_directory())
-            .env_clear()
-            .envs(launch.environment().iter().cloned())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let extension_id = launch.extension_id().to_string();
-        let request_timeout = launch.configured_request_timeout();
-
-        let mut child = spawn_child(&mut command).await.map_err(|error| {
-            DaemonError::Extension(format!(
-                "Failed to start extension '{}': {}",
-                extension_id, error
-            ))
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            DaemonError::Extension("Extension process stdin was not captured".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            DaemonError::Extension("Extension process stdout was not captured".to_string())
-        })?;
-        let mut stderr = child.stderr.take().ok_or_else(|| {
-            DaemonError::Extension("Extension process stderr was not captured".to_string())
-        })?;
-        let stderr_task = tokio::spawn(async move { read_bounded_tail(&mut stderr).await });
-
+        let child = ProcessChild::spawn(&launch).await?;
         Ok(Self {
-            expected_extension,
+            expected_extension: launch.expectation(),
             child,
-            stdin: Some(stdin),
-            stdout: BufReader::new(stdout),
-            stderr_task: Some(stderr_task),
-            stderr_output: String::new(),
             next_request_id: 1,
-            request_timeout,
             state: ProcessSessionData::Starting,
-            _staged_program: staged_program,
         })
     }
 
@@ -133,15 +77,12 @@ impl SpawnedProcessSession {
 
     /// Return captured standard error after the process exits.
     pub fn stderr_output(&self) -> &str {
-        &self.stderr_output
+        self.child.stderr_output()
     }
 
     /// Report whether the child process is still running.
     pub fn is_running(&mut self) -> Result<bool> {
-        self.child
-            .try_wait()
-            .map(|status| status.is_none())
-            .map_err(DaemonError::from)
+        self.child.is_running().map_err(DaemonError::from)
     }
 
     fn ready_session(&self) -> Result<&CompatibilityReady> {
@@ -168,26 +109,15 @@ impl SpawnedProcessSession {
         })?;
         let request = ExtensionRequest::new(method, params, request_id)?;
 
-        let exchange = async {
-            let stdin = self.stdin.as_mut().ok_or_else(|| {
-                DaemonError::Extension("Extension process stdin is closed".to_string())
-            })?;
-            write_frame(stdin, &request).await?;
-            let frame = read_frame(&mut self.stdout).await?;
-            serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
+        let response = match self.child.exchange(&request).await {
+            Ok(frame) => {
+                serde_json::from_slice::<ExtensionResponse>(&frame).map_err(DaemonError::from)
+            }
+            Err(error) => Err(DaemonError::from(error)),
         };
-        let response = match timeout(self.request_timeout, exchange).await {
-            Ok(Ok(response)) => response,
-            Ok(Err(error)) => {
-                return Err(self.abort_with_error(error).await);
-            }
-            Err(_) => {
-                let error = DaemonError::Extension(format!(
-                    "Extension request '{}' timed out after {:?}",
-                    method, self.request_timeout
-                ));
-                return Err(self.abort_with_error(error).await);
-            }
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return Err(self.abort_with_error(error).await),
         };
 
         if let Err(error) = response.validate_envelope(request_id) {
@@ -196,43 +126,15 @@ impl SpawnedProcessSession {
         response.into_result(request_id)
     }
 
-    async fn collect_stderr(&mut self) -> Result<()> {
-        let Some(mut stderr_task) = self.stderr_task.take() else {
-            return Ok(());
-        };
-        match timeout(self.request_timeout, &mut stderr_task).await {
-            Ok(result) => {
-                let output = result.map_err(|error| {
-                    DaemonError::Extension(format!(
-                        "Failed to join extension stderr reader: {error}"
-                    ))
-                })??;
-                self.stderr_output = String::from_utf8_lossy(&output).into_owned();
-            }
-            Err(_) => {
-                stderr_task.abort();
-                let _ = stderr_task.await;
-            }
-        }
-        Ok(())
-    }
-
     async fn send_exit_notification(&mut self) -> Result<()> {
         let notification = ExtensionNotification::without_params(methods::EXIT);
-        let send = async {
-            let stdin = self.stdin.as_mut().ok_or_else(|| {
-                DaemonError::Extension("Extension process stdin is closed".to_string())
-            })?;
-            write_frame(stdin, &notification)
-                .await
-                .map_err(DaemonError::from)
-        };
-        match timeout(self.request_timeout, send).await {
-            Ok(result) => result,
-            Err(_) => Err(DaemonError::Extension(format!(
+        match self.child.write(&notification).await {
+            Ok(()) => Ok(()),
+            Err(HostError::Channel { .. }) => Err(DaemonError::Extension(format!(
                 "Extension exit notification timed out after {:?}",
-                self.request_timeout
+                self.child.request_timeout()
             ))),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -247,36 +149,9 @@ impl SpawnedProcessSession {
     }
 
     async fn abort_process(&mut self) -> Result<()> {
-        self.stdin.take();
-        if self.child.try_wait()?.is_none() {
-            self.child.kill().await?;
-        }
-        let _ = self.child.wait().await?;
-        self.cancel_stderr();
+        self.child.abort().await?;
         self.state = ProcessSessionData::Stopped;
         Ok(())
-    }
-
-    fn cancel_stderr(&mut self) {
-        if let Some(stderr_task) = self.stderr_task.take() {
-            stderr_task.abort();
-        }
-    }
-}
-
-async fn spawn_child(command: &mut Command) -> std::io::Result<Child> {
-    let mut retries = 0;
-    loop {
-        match command.spawn() {
-            Err(error)
-                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
-                    && retries < EXECUTABLE_BUSY_RETRIES =>
-            {
-                retries += 1;
-                tokio::time::sleep(EXECUTABLE_BUSY_RETRY_DELAY).await;
-            }
-            result => return result,
-        }
     }
 }
 
@@ -359,19 +234,14 @@ impl ExtensionSession for SpawnedProcessSession {
         if let Err(error) = self.send_exit_notification().await {
             return Err(self.abort_with_error(error).await);
         }
-        self.stdin.take();
-
-        let status = match timeout(self.request_timeout, self.child.wait()).await {
-            Ok(status) => status?,
-            Err(_) => {
-                let error = DaemonError::Extension(format!(
-                    "Extension process did not exit after {:?}",
-                    self.request_timeout
-                ));
-                return Err(self.abort_with_error(error).await);
+        let status = match self.child.wait_for_status().await {
+            Ok(status) => status,
+            Err(error @ HostError::Channel { .. }) => {
+                return Err(self.abort_with_error(error.into()).await);
             }
+            Err(error) => return Err(error.into()),
         };
-        self.collect_stderr().await?;
+        self.child.collect_stderr().await?;
         self.state = ProcessSessionData::Stopped;
         if !status.success() {
             return Err(DaemonError::Extension(format!(
@@ -397,56 +267,4 @@ async fn validate_compatibility_method_result(
     value: serde_json::Value,
 ) -> Result<serde_json::Value> {
     validate_method_result_async(method, request_params, value).await
-}
-
-async fn read_bounded_tail(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
-    let mut output = Vec::new();
-    let mut chunk = [0; 8 * 1024];
-    loop {
-        let read = reader.read(&mut chunk).await?;
-        if read == 0 {
-            return Ok(output);
-        }
-        append_bounded_tail(&mut output, &chunk[..read], MAX_STDERR_BYTES);
-    }
-}
-
-fn append_bounded_tail(output: &mut Vec<u8>, chunk: &[u8], limit: usize) {
-    if chunk.len() >= limit {
-        output.clear();
-        output.extend_from_slice(&chunk[chunk.len() - limit..]);
-        return;
-    }
-
-    let excess = output
-        .len()
-        .saturating_add(chunk.len())
-        .saturating_sub(limit);
-    if excess > 0 {
-        output.drain(..excess);
-    }
-    output.extend_from_slice(chunk);
-}
-
-fn validate_launch(launch: &ProcessLaunch) -> Result<()> {
-    if launch.extension_id().trim().is_empty() {
-        return Err(DaemonError::Extension(
-            "Extension process identity cannot be empty".to_string(),
-        ));
-    }
-    if let ProcessProgram::Path(program) = launch.program()
-        && !program.is_file()
-    {
-        return Err(DaemonError::Extension(format!(
-            "Extension executable does not exist: {}",
-            program.display()
-        )));
-    }
-    if !launch.working_directory().is_dir() {
-        return Err(DaemonError::Extension(format!(
-            "Extension working directory does not exist: {}",
-            launch.working_directory().display()
-        )));
-    }
-    Ok(())
 }

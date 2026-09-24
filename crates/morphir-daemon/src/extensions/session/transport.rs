@@ -27,6 +27,10 @@ impl TransportError {
         self.error
     }
 
+    pub(crate) fn state(&self) -> TransportState {
+        self.state
+    }
+
     /// Record a transport failure and what is known about the peer afterwards.
     pub fn new(error: DaemonError, state: TransportState) -> Self {
         Self { error, state }

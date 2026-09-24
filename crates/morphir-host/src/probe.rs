@@ -7,7 +7,7 @@ use crate::{ChannelState, HostConfig, HostError};
 use morphir_extension_sdk::claims::CapabilityClaimSet;
 use morphir_extension_sdk::protocol::{
     DescribeParams, ExtensionNotification, ExtensionRequest, ExtensionResponse, InitializeResult,
-    RpcError, error_codes, methods,
+    JSONRPC_VERSION, RpcError, error_codes, methods,
 };
 use morphir_extension_sdk::{ExtensionCapabilities, ExtensionType};
 use serde_json::{Map, Value};
@@ -120,7 +120,13 @@ async fn describe_inner<C: Channel>(
         },
     )
     .await?;
-    if response.id == 1 && response.error.as_ref().is_some_and(permits_fallback) {
+    // Only a sound envelope may refuse. A malformed one fails in `result`
+    // below with its envelope error.
+    let refused = response.jsonrpc == JSONRPC_VERSION
+        && response.id == 1
+        && response.result.is_none()
+        && response.error.as_ref().is_some_and(permits_fallback);
+    if refused {
         return describe_through_session(channel, config, expected_id).await;
     }
     let claims: CapabilityClaimSet = result(response, 1)?;
@@ -368,6 +374,31 @@ mod tests {
         assert_eq!(error.to_string(), "RPC error -32603: boom");
         assert_eq!(log.aborts(), 1);
         assert_eq!(log.methods(), [methods::DESCRIBE]);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_in_a_malformed_envelope_does_not_fall_back() {
+        let mut both = rpc(1, error_codes::METHOD_NOT_FOUND, "no");
+        both.result = Some(json!({}));
+        let mut version = rpc(1, error_codes::METHOD_NOT_FOUND, "no");
+        version.jsonrpc = "1.0".into();
+        for (response, expected) in [
+            (
+                both,
+                "Extension response must contain exactly one of result or error",
+            ),
+            (
+                version,
+                "Extension response used unsupported JSON-RPC version '1.0'",
+            ),
+        ] {
+            let channel = MemoryChannel::new().respond(response);
+            let log = channel.log();
+            let error = describe(channel, &config(), "guest").await.unwrap_err();
+            assert_eq!(error.to_string(), expected);
+            assert_eq!(log.methods(), [methods::DESCRIBE]);
+            assert_eq!(log.aborts(), 1);
+        }
     }
 
     #[tokio::test]

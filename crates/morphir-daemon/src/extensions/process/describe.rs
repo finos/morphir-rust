@@ -2,9 +2,7 @@
 
 use super::*;
 use morphir_extension_sdk::claims::CapabilityClaimSet;
-use morphir_extension_sdk::protocol::DescribeParams;
-use morphir_host::probe::{check_capability_kinds, permits_fallback};
-use serde_json::{Map, Value};
+use morphir_host::{Channel, ChannelError, ChannelState, HostConfig, Outgoing};
 
 /// How a process supplied its capability claim set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +20,20 @@ pub struct ProcessDescription {
     pub claims: CapabilityClaimSet,
     /// Distinguishes direct descriptions from session reconstructions.
     pub source: DescriptionSource,
+}
+
+impl From<morphir_host::Description> for ProcessDescription {
+    fn from(description: morphir_host::Description) -> Self {
+        Self {
+            claims: description.claims,
+            source: match description.source {
+                morphir_host::DescriptionSource::Describe => DescriptionSource::Describe,
+                morphir_host::DescriptionSource::SessionFallback => {
+                    DescriptionSource::SessionFallback
+                }
+            },
+        }
+    }
 }
 
 impl SpawnedProcessTransport {
@@ -46,123 +58,108 @@ impl SpawnedProcessTransport {
     /// # Ok(()) }
     /// ```
     pub async fn describe(mut self, params: InitializeParams) -> Result<ProcessDescription> {
-        let result = self.describe_inner(params).await;
-        match result {
-            Ok(description) => {
-                if let Err(failure) = self.terminate().await {
-                    return Err(self.session.abort_with_error(failure.into_error()).await);
-                }
-                Ok(description)
+        let config = HostConfig::with_versions(params.host, params.protocol_versions);
+        let expected_id = self.expected_extension().id().to_owned();
+        let mut failure = None;
+        let channel = TransportChannel {
+            transport: &mut self,
+            request: None,
+            failure: &mut failure,
+        };
+        match morphir_host::describe(channel, &config, &expected_id).await {
+            Ok(description) => Ok(description.into()),
+            Err(error) => {
+                // A channel failure keeps the daemon error it came from, so its
+                // variant and text are the same as before the probe moved.
+                let error = failure.unwrap_or_else(|| error.into());
+                Err(self.session.abort_with_error(error).await)
             }
-            Err(error) => Err(self.session.abort_with_error(error).await),
         }
-    }
-
-    async fn describe_inner(&mut self, params: InitializeParams) -> Result<ProcessDescription> {
-        let response = self
-            .description_request(
-                1,
-                methods::DESCRIBE,
-                DescribeParams {
-                    protocol_versions: params.protocol_versions.clone(),
-                },
-            )
-            .await?;
-        if response.error.as_ref().is_some_and(permits_fallback) {
-            return self.describe_through_session(params).await;
-        }
-        let claims: CapabilityClaimSet = response.into_result(1)?;
-        if claims.extension.id != self.session.expected_extension().id() {
-            return Err(DaemonError::Extension(
-                "Description extension identity differs from launch identity".into(),
-            ));
-        }
-        check_capability_kinds(&claims)?;
-        if !claims
-            .protocol_versions
-            .iter()
-            .any(|version| params.protocol_versions.contains(version))
-        {
-            return Err(DaemonError::Extension(
-                "Description has no protocol version in common with the host".into(),
-            ));
-        }
-        if claims
-            .requires
-            .as_ref()
-            .is_some_and(|requirements| !requirements.host.is_empty())
-        {
-            let host = params.host.version.parse().map_err(|error| {
-                DaemonError::Extension(format!("Invalid host SemVer for requires.host: {error}"))
-            })?;
-            claims
-                .check_host(&host)
-                .map_err(|error| DaemonError::Extension(error.to_string()))?;
-        }
-        Ok(ProcessDescription {
-            claims,
-            source: DescriptionSource::Describe,
-        })
-    }
-
-    async fn describe_through_session(
-        &mut self,
-        params: InitializeParams,
-    ) -> Result<ProcessDescription> {
-        let initialized: InitializeResult = self
-            .description_request(2, methods::INITIALIZE, &params)
-            .await?
-            .into_result(2)?;
-        validate_negotiation(
-            self.expected_extension(),
-            &params.protocol_versions,
-            initialized.clone(),
-        )?;
-        let notification = ExtensionNotification::without_params(methods::INITIALIZED);
-        let stdin =
-            self.session.stdin.as_mut().ok_or_else(|| {
-                DaemonError::Extension("Extension process stdin is closed".into())
-            })?;
-        timeout(
-            self.session.request_timeout,
-            write_frame(stdin, &notification),
-        )
-        .await
-        .map_err(|_| {
-            DaemonError::Extension("Extension initialized notification timed out".into())
-        })??;
-        let capabilities: Map<String, Value> = self
-            .description_request(3, methods::CAPABILITIES, serde_json::json!({}))
-            .await?
-            .into_result(3)?;
-        let _: Value = self
-            .description_request(4, methods::SHUTDOWN, serde_json::json!({}))
-            .await?
-            .into_result(4)?;
-        Ok(ProcessDescription {
-            claims: CapabilityClaimSet::from_session(
-                vec![initialized.protocol_version],
-                initialized.extension,
-                capabilities,
-            ),
-            source: DescriptionSource::SessionFallback,
-        })
-    }
-
-    async fn description_request(
-        &mut self,
-        id: u64,
-        method: &str,
-        params: impl Serialize,
-    ) -> Result<ExtensionResponse> {
-        let response = self
-            .exchange(ExtensionRequest::new(method, params, id)?)
-            .await
-            .map_err(TransportError::into_error)?;
-        response.validate_envelope(id)?;
-        Ok(response)
     }
 }
 
-// `check_capability_kinds` and `permits_fallback` moved to
-// `morphir_host::probe`. Their unit tests moved with them.
+/// The describe probe's view of a [`SpawnedProcessTransport`].
+///
+/// `send` keeps a request and `receive` exchanges it, so each request is
+/// written and answered under one timeout, as in an ordinary session. `close`
+/// waits for the exit that the probe already sent. Each failure stores its
+/// daemon error in `failure`, because a `ChannelError` keeps only the text.
+struct TransportChannel<'a> {
+    transport: &'a mut SpawnedProcessTransport,
+    request: Option<ExtensionRequest>,
+    failure: &'a mut Option<DaemonError>,
+}
+
+impl TransportChannel<'_> {
+    fn fail(&mut self, error: TransportError) -> ChannelError {
+        let state = match error.state() {
+            TransportState::Stopped => ChannelState::Stopped,
+            TransportState::Indeterminate => ChannelState::Indeterminate,
+        };
+        let error = error.into_error();
+        let failure = ChannelError {
+            message: error.to_string(),
+            state,
+        };
+        *self.failure = Some(error);
+        failure
+    }
+}
+
+#[async_trait]
+impl Channel for TransportChannel<'_> {
+    async fn send(&mut self, message: Outgoing) -> std::result::Result<(), ChannelError> {
+        let notification = match message {
+            Outgoing::Request(request) => {
+                self.request = Some(request);
+                return Ok(());
+            }
+            Outgoing::Notification(notification) => notification,
+        };
+        let child = &mut self.transport.session.child;
+        let error = match child.write(&notification).await {
+            Ok(()) => return Ok(()),
+            Err(HostError::Channel { .. }) if notification.method == methods::EXIT => {
+                DaemonError::Extension(format!(
+                    "Extension exit notification timed out after {:?}",
+                    child.request_timeout()
+                ))
+            }
+            Err(HostError::Channel { .. }) if notification.method == methods::INITIALIZED => {
+                DaemonError::Extension("Extension initialized notification timed out".into())
+            }
+            Err(error) => error.into(),
+        };
+        let error = self.transport.stop_after(error).await;
+        Err(self.fail(error))
+    }
+
+    async fn receive(&mut self) -> std::result::Result<ExtensionResponse, ChannelError> {
+        let Some(request) = self.request.take() else {
+            let error = DaemonError::Extension("Extension channel has no request to answer".into());
+            let error = self.transport.stop_after(error).await;
+            return Err(self.fail(error));
+        };
+        match self.transport.exchange(request).await {
+            Ok(response) => Ok(response),
+            Err(error) => Err(self.fail(error)),
+        }
+    }
+
+    async fn close(&mut self) -> std::result::Result<ChannelState, ChannelError> {
+        match self.transport.finish_after_exit().await {
+            Ok(_) => Ok(ChannelState::Stopped),
+            Err(error) => Err(self.fail(error)),
+        }
+    }
+
+    async fn abort(&mut self) -> std::result::Result<ChannelState, ChannelError> {
+        match MepTransport::abort(self.transport).await {
+            Ok(_) => Ok(ChannelState::Stopped),
+            Err(error) => Err(ChannelError {
+                message: error.into_error().to_string(),
+                state: ChannelState::Indeterminate,
+            }),
+        }
+    }
+}

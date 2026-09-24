@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::fmt;
 
-use crate::format_version::deserialize_baseline_u32;
+use crate::format_version::{DeclaredRelease, ReleaseTriplet, deserialize_declared_release};
 
 use super::Attrs;
 use super::naming::Path;
@@ -48,6 +48,28 @@ impl Serialize for Distribution {
     }
 }
 
+/// The release that introduced the v3 `Specs` distribution.
+pub const SPECS_FIRST_RELEASE: ReleaseTriplet = ReleaseTriplet::new(3, 1, 0);
+
+const SPECS_BEFORE_3_1: &str = "a v3 Specs distribution needs formatVersion 3.1.0 or later";
+
+/// Refuses a v3 `Specs` distribution whose declared release is older than
+/// [`SPECS_FIRST_RELEASE`]: integer `3` and `"3.0.x"` cannot hold a `Specs`.
+///
+/// Every decoder of a v3 `Specs` calls this once the body kind is known, so each one refuses
+/// with the same message. [`is_specs_before_3_1`] recognizes that message.
+pub fn check_specs_release(declared: &DeclaredRelease) -> Result<(), String> {
+    if declared.release < SPECS_FIRST_RELEASE {
+        return Err(format!("{SPECS_BEFORE_3_1}, found {}", declared.declared));
+    }
+    Ok(())
+}
+
+/// Whether `message` starts with the refusal [`check_specs_release`] gives.
+pub fn is_specs_before_3_1(message: &str) -> bool {
+    message.starts_with(SPECS_BEFORE_3_1)
+}
+
 impl<'de> Deserialize<'de> for Distribution {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -56,13 +78,16 @@ impl<'de> Deserialize<'de> for Distribution {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct DistributionFields {
-            #[serde(deserialize_with = "deserialize_baseline_u32")]
-            format_version: u32,
+            #[serde(deserialize_with = "deserialize_declared_release")]
+            format_version: DeclaredRelease,
             distribution: DistributionBody,
         }
         let fields = DistributionFields::deserialize(deserializer)?;
+        if let DistributionBody::Specs(..) = fields.distribution {
+            check_specs_release(&fields.format_version).map_err(de::Error::custom)?;
+        }
         Ok(Self {
-            format_version: fields.format_version,
+            format_version: fields.format_version.release.major(),
             distribution: fields.distribution,
         })
     }

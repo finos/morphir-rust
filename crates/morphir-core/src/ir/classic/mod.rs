@@ -23,7 +23,10 @@ pub mod package;
 // Re-exports for convenience
 pub use access::{Access, AccessControlled};
 pub use attributes::Attrs;
-pub use distribution::{Distribution, DistributionBody, LibraryTag};
+pub use distribution::{
+    Distribution, DistributionBody, LibraryTag, SPECS_FIRST_RELEASE, check_specs_release,
+    is_specs_before_3_1,
+};
 pub use documented::Documented;
 pub use literal::Literal;
 pub use module::{ModuleDefinition, ModuleEntry, ModuleSpecification};

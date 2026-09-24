@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `formatVersion` `"3.1.0"`, and the Ion codec as a `kind: specs` datagram whose own modules are
   top-level `module::spec` values. A definition module in a `Specs` is refused. A v3 `Library`
   still writes format version 3 (`"3.0.0"` in Ion). Readers accept every `3.0.x` and `3.1.x`
-  release (finos/morphir#970).
+  release, but a `Specs` requires 3.1.0 or later: one declared as `3` or `"3.0.x"` is refused
+  (finos/morphir#970).
 - Local APFS Library publication with exact signed proposals, durable role-version
   reservations, staged immutable objects, serialized writers and timestamp commit
   recovery. The first macOS provider supports dependency-free classic V4 registries;

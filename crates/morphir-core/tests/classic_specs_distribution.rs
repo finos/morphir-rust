@@ -67,3 +67,38 @@ fn a_specs_distribution_holding_a_module_definition_is_refused() {
         "{error}"
     );
 }
+
+/// A compact Specs and Library, each with `{VERSION}` where the formatVersion value goes.
+const SPECS_AT: &str =
+    r#"{"formatVersion":{VERSION},"distribution":["Specs",[["my"],["pkg"]],[],{"modules":[]}]}"#;
+const LIBRARY_AT: &str =
+    r#"{"formatVersion":{VERSION},"distribution":["Library",[["my"],["pkg"]],[],{"modules":[]}]}"#;
+
+#[test]
+fn a_specs_distribution_needs_a_declared_release_of_3_1_0_or_later() {
+    for declared in ["3", r#""3.0.0""#, r#""3.0.1""#] {
+        let error = serde_json::from_str::<Distribution>(&SPECS_AT.replace("{VERSION}", declared))
+            .unwrap_err()
+            .to_string();
+        let found = declared.trim_matches('"');
+        assert!(
+            error.starts_with(&format!(
+                "a v3 Specs distribution needs formatVersion 3.1.0 or later, found {found}"
+            )),
+            "{declared}: {error}"
+        );
+    }
+    let file: Distribution =
+        serde_json::from_str(&SPECS_AT.replace("{VERSION}", r#""3.1.0""#)).unwrap();
+    assert!(matches!(file.distribution, DistributionBody::Specs(..)));
+}
+
+#[test]
+fn a_library_distribution_is_read_at_every_supported_3_x_release() {
+    for declared in ["3", r#""3.0.0""#, r#""3.1.0""#] {
+        let file: Distribution =
+            serde_json::from_str(&LIBRARY_AT.replace("{VERSION}", declared)).unwrap();
+        assert_eq!(file.format_version, 3, "{declared}");
+        assert!(matches!(file.distribution, DistributionBody::Library(..)));
+    }
+}

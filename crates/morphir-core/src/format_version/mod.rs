@@ -13,7 +13,10 @@ mod triplet;
 pub use canonical::CanonicalSpelling;
 pub use diagnostic::FormatVersionDiagnostic;
 pub use parse::ScalarValue;
-pub use serde::{FormatVersionBaselineSeed, deserialize_baseline_u32};
+pub use serde::{
+    DeclaredRelease, FormatVersionBaselineSeed, FormatVersionReleaseSeed, deserialize_baseline_u32,
+    deserialize_declared_release,
+};
 pub use support::{
     Compatibility, Interval, REFERENCE_SUPPORT_TABLE, SupportTable, default_support_table,
 };

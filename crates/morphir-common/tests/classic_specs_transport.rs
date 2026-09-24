@@ -293,3 +293,103 @@ fn an_unknown_distribution_tag_names_both_kinds_in_the_streaming_json_decoder() 
         "{diagnostic}"
     );
 }
+
+/// Replaces the value of the first `formatVersion` member in `written` with `declared`, which is
+/// spelled as the format writes a scalar (`3`, `"3.0.0"`).
+fn set_format_version(written: &str, declared: &str) -> String {
+    let after_key = written
+        .find("formatVersion")
+        .expect("a formatVersion member")
+        + "formatVersion".len();
+    // Skip a JSON key's closing quote, the colon and any space.
+    let value = written[after_key..]
+        .trim_start_matches('"')
+        .trim_start_matches(':')
+        .trim_start_matches(' ');
+    let value_start = written.len() - value.len();
+    let value_len = match value.strip_prefix('"') {
+        Some(quoted) => quoted.find('"').unwrap() + 2,
+        None => value.find([',', '\n', '}', ' ']).unwrap(),
+    };
+    format!(
+        "{}{declared}{}",
+        &written[..value_start],
+        &written[value_start + value_len..]
+    )
+}
+
+#[test]
+fn a_specs_distribution_needs_a_declared_release_of_3_1_0_or_later() {
+    let specs = events(&JsonCodec::new(), SPECS, FormatId::json());
+    for (codec, format, prefix, integers) in [
+        (
+            &JsonCodec::new() as &dyn IrCodec,
+            FormatId::json(),
+            "json",
+            true,
+        ),
+        (
+            &YamlCodec::new() as &dyn IrCodec,
+            FormatId::yaml(),
+            "yaml",
+            true,
+        ),
+        // An Ion header spells formatVersion as a string, so an integer never reaches the check.
+        (
+            &IonCodec::new() as &dyn IrCodec,
+            FormatId::ion(),
+            "ion",
+            false,
+        ),
+    ] {
+        let written = text(codec, specs.clone(), format.clone());
+        let refused: &[&str] = if integers {
+            &["3", r#""3.0.0""#]
+        } else {
+            &[r#""3.0.0""#]
+        };
+        for declared in refused {
+            let input = set_format_version(&written, declared);
+            let diagnostic = decode_failure(codec, &input, format.clone());
+            assert_eq!(
+                diagnostic.code(),
+                format!("morphir::ir::{prefix}::specs_before_3_1"),
+                "{format} {declared}: {diagnostic}\n{input}"
+            );
+            assert!(
+                diagnostic.message().contains(&format!(
+                    "a v3 Specs distribution needs formatVersion 3.1.0 or later, found {}",
+                    declared.trim_matches('"')
+                )),
+                "{format} {declared}: {diagnostic}"
+            );
+        }
+        let accepted = set_format_version(&written, r#""3.1.0""#);
+        assert_eq!(events(codec, &accepted, format.clone()), specs, "{format}");
+    }
+}
+
+#[test]
+fn a_library_distribution_is_read_at_every_supported_3_x_release() {
+    let library = events(&JsonCodec::new(), LIBRARY_3_1_0, FormatId::json());
+    for (codec, format, integers) in [
+        (&JsonCodec::new() as &dyn IrCodec, FormatId::json(), true),
+        (&YamlCodec::new() as &dyn IrCodec, FormatId::yaml(), true),
+        (&IonCodec::new() as &dyn IrCodec, FormatId::ion(), false),
+    ] {
+        let written = text(codec, library.clone(), format.clone());
+        let declared: &[&str] = if integers {
+            &["3", r#""3.0.0""#, r#""3.1.0""#]
+        } else {
+            &[r#""3.0.0""#, r#""3.1.0""#]
+        };
+        for declared in declared {
+            let input = set_format_version(&written, declared);
+            assert_eq!(
+                events(codec, &input, format.clone()),
+                library,
+                "{format} {declared}: {input}"
+            );
+        }
+    }
+}

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Write};
 
 use ion_rs::{Element, IonType, Symbol};
-use morphir_core::format_version::{ReleaseTriplet, SupportTable};
+use morphir_core::format_version::{DeclaredRelease, ReleaseTriplet, SupportTable};
 use morphir_core::ir::classic;
 use morphir_core::traversal::{IrCursor, SemanticEvent};
 
@@ -493,7 +493,7 @@ fn read_classic_header(
     reject_critical_unknowns(fields, HEADER_MEMBERS)?;
     accept_ion_version(optional_string(fields, "ionVersion")?)?;
     let format_version = required_string(fields, "formatVersion")?;
-    let major = accept_format_version(format_version, selected)?;
+    let release = accept_format_version(format_version, selected)?;
     if selected != IrVersion::V3 {
         return Err(IonCodec::error(
             "morphir::ir::ion::unsupported_version",
@@ -512,9 +512,23 @@ fn read_classic_header(
             ));
         }
     };
+    if kind == ClassicKind::Specs {
+        classic::check_specs_release(&DeclaredRelease {
+            release,
+            declared: format_version.to_owned(),
+        })
+        .map_err(|message| {
+            IonCodec::error(
+                "morphir::ir::ion::specs_before_3_1",
+                Stage::Normalization,
+                message,
+            )
+            .with_guidance("declare formatVersion \"3.1.0\" or write a library distribution")
+        })?;
+    }
     let package_name = required_string(fields, "packageName")?;
     Ok(ClassicHeader {
-        format_version: major,
+        format_version: release.major(),
         kind,
         package: classic_path(package_name)?,
     })
@@ -1231,7 +1245,11 @@ fn accept_ion_version(text: Option<&str>) -> Result<(), TransportDiagnostic> {
     Ok(())
 }
 
-fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, TransportDiagnostic> {
+/// Checks a canonical Ion `formatVersion` against the selected version and returns its release.
+fn accept_format_version(
+    text: &str,
+    selected: IrVersion,
+) -> Result<ReleaseTriplet, TransportDiagnostic> {
     let version = semver::Version::parse(text).map_err(|error| {
         IonCodec::error(
             "morphir::ir::ion::unsupported_version",
@@ -1250,14 +1268,16 @@ fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, Transpo
         IrVersion::V3 => 3,
         IrVersion::V4 => 4,
     };
+    let release = match (u32::try_from(version.minor), u32::try_from(version.patch)) {
+        (Ok(minor), Ok(patch)) => Some(ReleaseTriplet::new(major, minor, patch)),
+        _ => None,
+    };
     if selected == IrVersion::V3 {
         // A v3 reader takes every 3.x release of the reference support table.
         let table = SupportTable::reference();
-        let release = match (u32::try_from(version.minor), u32::try_from(version.patch)) {
-            (Ok(minor), Ok(patch)) => Some(ReleaseTriplet::new(3, minor, patch)),
-            _ => None,
-        };
-        if version.major != major || !release.is_some_and(|release| table.contains(&release)) {
+        if version.major != u64::from(major)
+            || !release.is_some_and(|release| table.contains(&release))
+        {
             return Err(IonCodec::error(
                 "morphir::ir::ion::version_mismatch",
                 Stage::Detection,
@@ -1268,7 +1288,7 @@ fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, Transpo
                 ),
             ));
         }
-    } else if version.major != major || version.minor != 0 {
+    } else if version.major != u64::from(major) || version.minor != 0 {
         return Err(IonCodec::error(
             "morphir::ir::ion::version_mismatch",
             Stage::Detection,
@@ -1278,7 +1298,9 @@ fn accept_format_version(text: &str, selected: IrVersion) -> Result<u32, Transpo
             ),
         ));
     }
-    Ok(u32::try_from(major).expect("IR major fits in u32"))
+    // A v3 release is always present here: the support-table check above needs it. A v4
+    // selection is refused by the caller, which reads only its major.
+    Ok(release.unwrap_or(ReleaseTriplet::new(major, 0, 0)))
 }
 
 fn reject_critical_unknowns(

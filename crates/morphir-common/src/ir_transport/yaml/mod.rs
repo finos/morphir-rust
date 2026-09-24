@@ -15,7 +15,7 @@ use morphir_core::format_version::{
 use morphir_core::ir::v4::{TypeEncoding, with_type_encoding};
 use morphir_core::ir::yaml as profile;
 use morphir_core::ir::{Diagnostic as CoreDiagnostic, DiagnosticCode, classic, v4 as ir_v4};
-use morphir_core::traversal::{IrCursor, SemanticEvent};
+use morphir_core::traversal::{CursorSegment, IrCursor, SemanticEvent};
 use serde::Serialize;
 use serde_json::Value as Json;
 
@@ -178,6 +178,16 @@ fn guidance_for(code: DiagnosticCode) -> &'static str {
 /// error; the fallback is for the models still read by a derived impl (classic v3, and the
 /// document-tree manifests).
 fn recover(error: &serde_json::Error) -> TransportDiagnostic {
+    let message = error.to_string();
+    if classic::is_specs_before_3_1(&message) {
+        return TransportDiagnostic::error(
+            "morphir::ir::yaml::specs_before_3_1",
+            Stage::Normalization,
+            IrCursor::root().child(CursorSegment::Distribution),
+            message,
+        )
+        .with_guidance("declare formatVersion \"3.1.0\" or write a Library distribution");
+    }
     match CoreDiagnostic::from_serde_error(error) {
         Some(diagnostic) => transport_diagnostic(diagnostic),
         None => TransportDiagnostic::error(

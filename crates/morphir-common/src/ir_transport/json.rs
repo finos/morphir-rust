@@ -3,10 +3,11 @@
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use morphir_core::format_version::SupportTable;
+use morphir_core::format_version::{DeclaredRelease, SupportTable};
 use morphir_core::ir::{classic, v4};
 use morphir_core::traversal::{
-    DependencyEvent, DistributionHeader, IrCursor, ModuleEvent, SemanticEvent, SemanticEventKind,
+    CursorSegment, DependencyEvent, DistributionHeader, IrCursor, ModuleEvent, SemanticEvent,
+    SemanticEventKind,
 };
 
 use super::root_probe::{ProbedJsonReader, probe_json_root};
@@ -94,7 +95,7 @@ impl IrCodec for JsonCodec {
                         decode_v3_with_deserializer(
                             &mut deserializer,
                             sink,
-                            Some(probe.normalized.release.major()),
+                            Some(DeclaredRelease::from_release(probe.normalized.release)),
                         )?;
                         deserializer.end().map_err(Self::decode_error)?;
                     }
@@ -104,7 +105,7 @@ impl IrCodec for JsonCodec {
                         decode_v3_with_deserializer(
                             &mut deserializer,
                             sink,
-                            Some(probe.normalized.release.major()),
+                            Some(DeclaredRelease::from_release(probe.normalized.release)),
                         )?;
                         deserializer.end().map_err(Self::decode_error)?;
                     }
@@ -114,7 +115,7 @@ impl IrCodec for JsonCodec {
                         decode_v3_with_deserializer(
                             &mut deserializer,
                             sink,
-                            Some(probe.normalized.release.major()),
+                            Some(DeclaredRelease::from_release(probe.normalized.release)),
                         )?;
                         deserializer.end().map_err(Self::decode_error)?;
                     }
@@ -697,7 +698,7 @@ impl EventSink for V4JsonEventEncoder<'_> {
 fn decode_v3_with_deserializer<'de, D>(
     deserializer: D,
     sink: &mut dyn EventSink,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 ) -> Result<(), TransportDiagnostic>
 where
     D: serde::de::Deserializer<'de>,
@@ -706,6 +707,16 @@ where
     if let Err(error) = deserialize_classic_v3(deserializer, &mut visitor, prevalidated_version) {
         if let Some(diagnostic) = visitor.take_failure() {
             return Err(diagnostic);
+        }
+        let message = error.to_string();
+        if classic::is_specs_before_3_1(&message) {
+            return Err(TransportDiagnostic::error(
+                "morphir::ir::json::specs_before_3_1",
+                Stage::Normalization,
+                IrCursor::root().child(CursorSegment::Distribution),
+                message,
+            )
+            .with_guidance("declare formatVersion \"3.1.0\" or write a Library distribution"));
         }
         return Err(TransportDiagnostic::error(
             "morphir::ir::json::invalid_syntax",

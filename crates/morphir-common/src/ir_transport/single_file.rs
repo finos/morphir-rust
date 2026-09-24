@@ -2,7 +2,7 @@ use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::{Context, Result, bail};
-use morphir_core::format_version::FormatVersionBaselineSeed;
+use morphir_core::format_version::{DeclaredRelease, FormatVersionReleaseSeed};
 use morphir_core::ir::classic;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
@@ -50,7 +50,7 @@ pub trait ClassicV3ModuleVisitor {
 
 struct DistributionSeed<'visitor, V> {
     visitor: &'visitor mut V,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'_, V> {
@@ -69,7 +69,7 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionSeed<'
 
 struct DistributionVisitor<'visitor, V> {
     visitor: &'visitor mut V,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V> {
@@ -91,17 +91,21 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
                     if format_version.is_some() {
                         return Err(de::Error::duplicate_field("formatVersion"));
                     }
-                    format_version = Some(map.next_value_seed(FormatVersionBaselineSeed)?);
+                    format_version = Some(map.next_value_seed(FormatVersionReleaseSeed)?);
                 }
                 "distribution" => {
                     if saw_distribution {
                         return Err(de::Error::duplicate_field("distribution"));
                     }
-                    match format_version.or(self.prevalidated_version) {
-                        Some(3) => {}
-                        Some(version) => {
+                    let declared = match format_version
+                        .as_ref()
+                        .or(self.prevalidated_version.as_ref())
+                    {
+                        Some(declared) if declared.release.major() == 3 => declared.clone(),
+                        Some(declared) => {
                             return Err(de::Error::custom(format!(
-                                "typed Classic migration requires formatVersion 3, found {version}"
+                                "typed Classic migration requires formatVersion 3, found {}",
+                                declared.release.major()
                             )));
                         }
                         None => {
@@ -109,9 +113,10 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
                                 "formatVersion must precede distribution for streaming decode",
                             ));
                         }
-                    }
+                    };
                     map.next_value_seed(DistributionBodySeed {
                         visitor: self.visitor,
+                        declared,
                     })?;
                     saw_distribution = true;
                 }
@@ -123,8 +128,10 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionVisitor<'_, V>
         if !saw_distribution {
             return Err(de::Error::missing_field("distribution"));
         }
-        let format_version =
-            format_version.ok_or_else(|| de::Error::missing_field("formatVersion"))?;
+        let format_version = format_version
+            .ok_or_else(|| de::Error::missing_field("formatVersion"))?
+            .release
+            .major();
         if format_version != 3 {
             return Err(de::Error::custom(format!(
                 "typed Classic migration requires formatVersion 3, found {format_version}"
@@ -153,7 +160,7 @@ where
 pub(crate) fn deserialize_classic_v3<'de, D, V>(
     deserializer: D,
     visitor: &mut V,
-    prevalidated_version: Option<u32>,
+    prevalidated_version: Option<DeclaredRelease>,
 ) -> std::result::Result<u32, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -168,6 +175,7 @@ where
 
 struct DistributionBodySeed<'visitor, V> {
     visitor: &'visitor mut V,
+    declared: DeclaredRelease,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionBodySeed<'_, V> {
@@ -179,12 +187,15 @@ impl<'de, V: ClassicV3ModuleVisitor> DeserializeSeed<'de> for DistributionBodySe
     {
         deserializer.deserialize_seq(DistributionBodyVisitor {
             visitor: self.visitor,
+            declared: self.declared,
         })
     }
 }
 
 struct DistributionBodyVisitor<'visitor, V> {
     visitor: &'visitor mut V,
+    /// The release the document declared, which decides whether it may hold a `Specs`.
+    declared: DeclaredRelease,
 }
 
 impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionBodyVisitor<'_, V> {
@@ -210,6 +221,9 @@ impl<'de, V: ClassicV3ModuleVisitor> Visitor<'de> for DistributionBodyVisitor<'_
         } else {
             return Err(de::Error::unknown_variant(&tag, &["Library", "Specs"]));
         };
+        if let BodyKind::Specs = kind {
+            classic::check_specs_release(&self.declared).map_err(de::Error::custom)?;
+        }
         let package = sequence
             .next_element::<classic::Path>()?
             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
@@ -402,7 +416,7 @@ where
         );
     }
 
-    let prevalidated = Some(probe.normalized.release.major());
+    let prevalidated = Some(DeclaredRelease::from_release(probe.normalized.release));
     let version = match input {
         ProbedJsonReader::Stream(mut prefixed) => {
             let mut deserializer = serde_json::Deserializer::from_reader(&mut prefixed);

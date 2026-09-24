@@ -2,10 +2,12 @@
 
 use crate::envelope::{EnvelopeError, validate_envelope};
 use crate::{HostError, Negotiated};
+use morphir_extension_sdk::ExtensionType;
 use morphir_extension_sdk::protocol::{
     ExtensionRequest, ExtensionResponse, InitializeParams, InitializeResult, error_codes, methods,
 };
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// Negotiation rules that a client adds to the MEP handshake.
 pub trait SessionChecks {
@@ -54,6 +56,42 @@ impl SessionChecks for BasicChecks {
                 "Extension identity changed during initialization: expected '{}', initialized '{}'",
                 self.expected_id, result.extension.id
             )));
+        }
+        let unique: HashSet<_> = result.extension.types.iter().copied().collect();
+        if unique.len() != result.extension.types.len() {
+            return Err(HostError::Invalid(
+                "Extension initialization repeated a capability kind".into(),
+            ));
+        }
+        if unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_none() {
+            return Err(HostError::Invalid(
+                "Extension declared Frontend without frontend capabilities".into(),
+            ));
+        }
+        if !unique.contains(&ExtensionType::Frontend) && result.capabilities.frontend.is_some() {
+            return Err(HostError::Invalid(
+                "Extension advertised frontend capabilities without declaring Frontend".into(),
+            ));
+        }
+        if unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_none() {
+            return Err(HostError::Invalid(
+                "Extension declared Backend without backend capabilities".into(),
+            ));
+        }
+        if !unique.contains(&ExtensionType::Backend) && result.capabilities.backend.is_some() {
+            return Err(HostError::Invalid(
+                "Extension advertised backend capabilities without declaring Backend".into(),
+            ));
+        }
+        if unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_none() {
+            return Err(HostError::Invalid(
+                "Extension declared Workspace without workspace capabilities".into(),
+            ));
+        }
+        if !unique.contains(&ExtensionType::Workspace) && result.capabilities.workspace.is_some() {
+            return Err(HostError::Invalid(
+                "Extension advertised workspace capabilities without declaring Workspace".into(),
+            ));
         }
         Ok(Negotiated::new(
             result.protocol_version,
@@ -490,6 +528,42 @@ mod tests {
         assert_eq!(
             failed(core.handle(ok(1, frontend_result("0.1")))),
             "Extension identity changed during initialization: expected 'someone-else', initialized 'guest'"
+        );
+    }
+
+    #[test]
+    fn a_declared_frontend_without_capabilities_fails_the_session() {
+        let mut result = frontend_result("0.1");
+        result.capabilities.frontend = None;
+        let mut core = SessionCore::new(BasicChecks::new("guest"));
+        sent(core.handle(Event::Open(params())));
+        assert_eq!(
+            failed(core.handle(ok(1, result))),
+            "Extension declared Frontend without frontend capabilities"
+        );
+    }
+
+    #[test]
+    fn frontend_capabilities_without_the_kind_fail_the_session() {
+        let mut result = frontend_result("0.1");
+        result.extension.types = Vec::new();
+        let mut core = SessionCore::new(BasicChecks::new("guest"));
+        sent(core.handle(Event::Open(params())));
+        assert_eq!(
+            failed(core.handle(ok(1, result))),
+            "Extension advertised frontend capabilities without declaring Frontend"
+        );
+    }
+
+    #[test]
+    fn a_repeated_capability_kind_fails_the_session() {
+        let mut result = frontend_result("0.1");
+        result.extension.types = vec![ExtensionType::Frontend, ExtensionType::Frontend];
+        let mut core = SessionCore::new(BasicChecks::new("guest"));
+        sent(core.handle(Event::Open(params())));
+        assert_eq!(
+            failed(core.handle(ok(1, result))),
+            "Extension initialization repeated a capability kind"
         );
     }
 

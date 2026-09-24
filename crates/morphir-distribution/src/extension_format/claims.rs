@@ -198,9 +198,14 @@ impl ClaimsRecord {
                 .check_claims(described)
                 .map_err(DescribedAgreementError::Claims);
         }
+        // A describe answer lists every version the extension serves, not a negotiated one, so
+        // agreement uses a version both sides list. With none shared, the first answered version
+        // is checked, and the session rule reports the mismatch.
         let protocol_version = described
             .protocol_versions
-            .first()
+            .iter()
+            .find(|version| declared.protocol_versions.contains(version))
+            .or_else(|| described.protocol_versions.first())
             .ok_or(DescribedAgreementError::NoProtocolVersion)?;
         self.check_session(
             protocol_version,
@@ -348,6 +353,18 @@ mod tests {
             record.check_described(&renamed),
             Err(DescribedAgreementError::Session(
                 SessionAgreementError::Identity("name")
+            ))
+        ));
+        // The answer lists every version the extension serves; one shared version is enough.
+        let mut multi = described.clone();
+        multi.protocol_versions = vec!["0.2".into(), MEP_VERSION.into()];
+        assert_eq!(record.check_described(&multi), Ok(()));
+        let mut foreign = described.clone();
+        foreign.protocol_versions = vec!["0.2".into()];
+        assert!(matches!(
+            record.check_described(&foreign),
+            Err(DescribedAgreementError::Session(
+                SessionAgreementError::ProtocolVersion(_)
             ))
         ));
         let mut silent = described.clone();

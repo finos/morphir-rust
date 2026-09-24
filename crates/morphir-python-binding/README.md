@@ -377,7 +377,7 @@ Both directions support IR v3 and v4 through the shared `morphir-core` models.
 The frontend uses one v4 language model and encodes the requested version. The
 backend detects the document version, migrates v3 through the shared core API,
 and applies the same Python subset checks. IR v1 and v2 are unsupported.
-Readers follow the shared compatibility intervals `[3.0.0,3.1.0)` and
+Readers follow the shared compatibility intervals `[3.0.0,3.2.0)` and
 `[4.0.0,4.1.0)`, accepting later patches but rejecting later minor versions.
 Compilation targets the baseline versions 3.0.0 and 4.0.0.
 

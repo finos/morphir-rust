@@ -2,8 +2,9 @@
 
 use morphir_common::home::MorphirHome;
 use morphir_distribution::{
-    Channel, ExtensionId, ExtensionInstaller, LocalIndex, Platform, Selection, Sha256Digest,
-    VerifiedExtensionArtifact, activate_installed,
+    Channel, ExtensionId, ExtensionInstaller, InstalledExtensionSnapshot, LocalIndex, Platform,
+    Selection, Sha256Digest, VerifiedExtensionArtifact, activate_installed_snapshot,
+    list_installed,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -16,6 +17,10 @@ pub struct RuntimeArtifact {
     #[cfg(unix)]
     pub staging_directory: PathBuf,
     pub working_directory: PathBuf,
+    /// The Morphir home the snapshot was installed and activated below.
+    pub home: MorphirHome,
+    /// The atomically validated snapshot the artifact was activated from.
+    pub snapshot: InstalledExtensionSnapshot,
 }
 
 #[derive(Clone, Copy)]
@@ -32,15 +37,18 @@ pub enum InstalledFrontend {
     Legacy,
     ClaimsWithMultiDocument,
     ClaimsWithoutMultiDocument,
+    /// Claims that also carry `fragments`, `incremental`, and an unknown
+    /// `futureMember` the reader must accept without understanding it.
+    ClaimsWithExtras,
 }
 
 impl InstalledFrontend {
     fn metadata(self) -> MetadataShape {
         match self {
             Self::Legacy => MetadataShape::FrontendBackend,
-            Self::ClaimsWithMultiDocument | Self::ClaimsWithoutMultiDocument => {
-                MetadataShape::FrontendClaims(self)
-            }
+            Self::ClaimsWithMultiDocument
+            | Self::ClaimsWithoutMultiDocument
+            | Self::ClaimsWithExtras => MetadataShape::FrontendClaims(self),
         }
     }
 }
@@ -375,8 +383,16 @@ fn install(root: TempDir, spec: ArtifactSpec<'_>) -> RuntimeArtifact {
     }
     if let MetadataShape::FrontendClaims(installed) = spec.metadata {
         let mut frontend = record.as_object_mut().unwrap().remove("frontend").unwrap();
-        if matches!(installed, InstalledFrontend::ClaimsWithMultiDocument) {
+        if matches!(
+            installed,
+            InstalledFrontend::ClaimsWithMultiDocument | InstalledFrontend::ClaimsWithExtras
+        ) {
             frontend["multiDocument"] = serde_json::json!(true);
+        }
+        if matches!(installed, InstalledFrontend::ClaimsWithExtras) {
+            frontend["fragments"] = serde_json::json!(true);
+            frontend["incremental"] = serde_json::json!(true);
+            frontend["futureMember"] = serde_json::json!(42);
         }
         let backend = record.as_object_mut().unwrap().remove("backend").unwrap();
         let types = record
@@ -418,7 +434,12 @@ fn install(root: TempDir, spec: ArtifactSpec<'_>) -> RuntimeArtifact {
     let installed_path = home.root().join(installed.store_path());
     #[cfg(unix)]
     let staging_directory = home.temp_dir().join("extensions");
-    let artifact = activate_installed(&home, &extension_id).unwrap();
+    let snapshot = list_installed(&home)
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.installed().extension_id() == &extension_id)
+        .expect("the extension was just installed");
+    let artifact = activate_installed_snapshot(&home, &snapshot).unwrap();
     let working_directory = root.path().join("workspace");
     fs::create_dir(&working_directory).unwrap();
 
@@ -429,6 +450,8 @@ fn install(root: TempDir, spec: ArtifactSpec<'_>) -> RuntimeArtifact {
         #[cfg(unix)]
         staging_directory,
         working_directory,
+        home,
+        snapshot,
     }
 }
 

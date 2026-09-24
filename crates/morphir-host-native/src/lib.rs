@@ -8,10 +8,12 @@
 
 mod activate;
 pub mod extism;
+mod installed;
 mod native;
 pub mod process;
 mod results;
 
 pub use activate::{ActivatedGuest, activate};
+pub use installed::InstalledSource;
 pub use native::{NativeChannel, NativeSource};
 pub use results::{CheckedConnection, validate_result};

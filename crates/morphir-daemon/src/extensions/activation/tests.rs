@@ -12,6 +12,8 @@ use std::path::Path;
 
 mod multi_document;
 
+// This target only needs a subset of these fixtures.
+#[allow(dead_code)]
 #[path = "../../../../morphir-host-native/tests/support/activation.rs"]
 mod runtime_mother;
 use runtime_mother::RuntimeArtifact;

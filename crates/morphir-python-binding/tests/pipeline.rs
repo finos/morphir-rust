@@ -144,16 +144,8 @@ fn accepts_cli_context_but_rejects_required_parse_stage_output() {
     assert!(!PythonExtension.compile(request).unwrap().success);
 }
 
-/// `sourceRootUri` used to sit in this same "accepted CLI context" bag
-/// alongside `outputDir`/`emitParseStage*`, but it was never merely vendor
-/// noise here: for a Python request it is (or was) the actual root
-/// `source_paths()` resolves against. Now that the legacy key is rejected
-/// rather than ignored, a request carrying it is rejected too - a caller that
-/// wants a root sets `sources.root` (covered in `tests/modules.rs`) instead.
-///
-/// This request is built in Rust, so it is a modern request by construction
-/// and the key is simply wrong in it. The one place the key is still honoured
-/// is the transitional legacy *wire* envelope, exercised below.
+/// A source root belongs in `sources.root`. The old options key is rejected
+/// even when a caller constructs the request directly in Rust.
 #[test]
 fn legacy_source_root_uri_option_is_rejected_not_ignored() {
     let mut request = a_request(include_str!("fixtures/models.py"));
@@ -165,37 +157,31 @@ fn legacy_source_root_uri_option_is_rejected_not_ignored() {
     assert!(!result.success, "{:?}", result.diagnostics);
 }
 
-/// The request a morphir CLI released before `CompileRequest.sources` sends,
-/// verbatim: documents at the top level, the root and the CLI context in the
-/// options bag. CI's `test:cli-release` gate drives a packaged bundle with the
-/// *released* CLI, so a bundle that refused this shape could never be released
-/// - the host that speaks `sources` ships in the release this branch unblocks.
-///
-/// Delete this test with the legacy envelope (see `SourceEnvelope` in the
-/// SDK). It goes through `protocol().handle` rather than `compile` because the
-/// envelope is a wire concern: by the time a frontend sees the request there
-/// is only one shape left.
+/// The modern CLI request carries the root with its documents and preserves
+/// CLI context options through the protocol boundary.
 #[test]
-fn a_release_era_legacy_compile_request_still_compiles() {
+fn a_modern_compile_request_compiles_through_the_protocol() {
     let extension = native::an_initialized_extension();
     let response = extension.protocol().handle(
         ExtensionRequest::new(
             methods::COMPILE,
             json!({
                 "languageId": "python",
-                "documents": [{
-                    "uri": "file:///project/src/models.py",
-                    "languageId": "python",
-                    "version": 1,
-                    "text": include_str!("fixtures/models.py"),
-                }],
-                "package": {"name": "acme/example", "exposedModules": ["Models"]},
+                "sources": {
+                    "root": "file:///project/src",
+                    "documents": [{
+                        "uri": "file:///project/src/domain/models.py",
+                        "languageId": "python",
+                        "version": 1,
+                        "text": include_str!("fixtures/models.py"),
+                    }],
+                },
+                "package": {"name": "acme/example", "exposedModules": ["domain.models"]},
                 "dependencies": [],
                 "options": {
                     "typesOnly": true,
                     "irVersion": "4",
                     "outputDir": "compiled",
-                    "sourceRootUri": "file:///project/src",
                     "emitParseStage": false,
                     "emitParseStageFatal": false,
                 },
@@ -211,7 +197,7 @@ fn a_release_era_legacy_compile_request_still_compiles() {
     // The root was applied, not dropped: dropping it would name the module
     // after the bare file and the document would resolve to the same name for
     // any directory it sat in.
-    assert_eq!(compiled.modules, ["models"]);
+    assert_eq!(compiled.modules, ["domain/models"]);
 }
 
 #[test]

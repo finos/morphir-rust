@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publication authority.
 
 ### Changed
+- **Breaking:** SDK-built extensions now require the `sources` compile envelope
+  and Morphir CLI `0.4.0-beta.6` or later. CLI `0.4.0-beta.5` and earlier cannot
+  compile with them: the legacy top-level `documents` envelope and options-bag
+  source root are no longer accepted (finos/morphir#921).
 - The built-in Elm workspace provider reports an explicit ad-hoc package name
   in its normal form (finos/morphir#917). It splits the name on `/` and `.`,
   splits each piece into words as morphir-elm `Name.fromString` does, and joins

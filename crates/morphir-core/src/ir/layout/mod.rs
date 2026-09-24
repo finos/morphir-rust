@@ -11,6 +11,9 @@ pub mod read;
 pub mod stems;
 pub mod write;
 
+mod model;
+mod v4_model;
+
 pub use paths::{
     MANIFEST, NodeFileKind, PathKind, Root, VERSION_SLOT, classify, from_physical, module_dir,
     module_dir_prefix, module_manifest_path, node_file_path, package_dir, to_physical,

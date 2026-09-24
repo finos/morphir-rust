@@ -183,7 +183,7 @@ fn streaming_migration_of_a_v3_specs_distribution_matches_the_typed_migration() 
     let original: classic::Distribution = serde_json::from_str(SPECS).unwrap();
     let typed = migrate_distribution(&original, MigrationOptions::default()).unwrap();
     let expected = serde_json::to_value(&typed.value).unwrap();
-    assert_eq!(expected["formatVersion"], "4.0.0", "{expected}");
+    assert_eq!(expected["formatVersion"], 4, "{expected}");
 
     let transform = ClassicToV4::new(MigrationOptions::default());
     let report = transform.report_handle();

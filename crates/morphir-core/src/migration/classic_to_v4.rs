@@ -763,7 +763,7 @@ pub fn migrate_distribution(
         classic::DistributionBody::Specs(_, _, specification) => {
             let spec = migrate_package_specification(specification, &mut context)?;
             v4::IRFile {
-                format_version: v4::FormatVersion::String("4.0.0".to_owned()),
+                format_version: v4::FormatVersion::Integer(4),
                 distribution: v4::Distribution::Specs(v4::SpecsContent {
                     package_name: migrate_package_name(&context)?,
                     dependencies,

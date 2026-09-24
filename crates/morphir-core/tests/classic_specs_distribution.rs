@@ -46,10 +46,7 @@ fn a_specs_distribution_migrates_to_a_v4_specs_distribution() {
     let file: Distribution = serde_json::from_str(SPECS).unwrap();
     let migrated = migrate_distribution(&file, MigrationOptions::default()).unwrap();
     assert!(migrated.report.can_publish());
-    assert_eq!(
-        migrated.value.format_version,
-        v4::FormatVersion::String("4.0.0".to_owned())
-    );
+    assert_eq!(migrated.value.format_version, v4::FormatVersion::Integer(4));
     let v4::Distribution::Specs(content) = migrated.value.distribution else {
         panic!("a v4 Specs distribution");
     };

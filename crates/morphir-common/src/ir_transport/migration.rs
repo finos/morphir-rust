@@ -118,7 +118,7 @@ impl EventTransform for ClassicToV4 {
             }
             SemanticEventKind::Begin(DistributionHeader::ClassicV3Specs { package }) => {
                 SemanticEventKind::Begin(DistributionHeader::V4Specs {
-                    format_version: v4::FormatVersion::String("4.0.0".to_owned()),
+                    format_version: v4::FormatVersion::Integer(4),
                     package: PackageName::new(
                         migrate_path(&package, &self.context.cursor)
                             .map_err(TransportDiagnostic::from)?,

@@ -1,15 +1,18 @@
 //! The v4 document tree: the [`TreeModel`] that reads a tree's files with the v4 tree-file
-//! decoders and puts the pieces back together as an [`IRFile`].
+//! decoders and puts the pieces back together as an [`IRFile`], and writes them with the v4
+//! tree-file encoders.
 //!
 //! Every decode here is a thin mapping over [`serde_document`]: the decoders already know the v4
 //! file shapes, spellings and diagnostics, and this model only moves what they return into the
-//! layout's version-neutral types and back out again.
+//! layout's version-neutral types and back out again. Every encode is the same mapping the other
+//! way, over the files' own `Serialize` impls.
 
 use indexmap::IndexMap;
+use serde::Serialize;
 
 use super::model::{
-    AssembledModule, Entries, Envelope, ModuleFile, ModuleFileOf, Node, Packages, Role, TreeModel,
-    TypeNode, ValueNode,
+    AssembledModule, Entries, Envelope, ModuleFile, ModuleFileOf, ModuleHeader, Node, Packages,
+    Role, TreeModel, TypeNode, ValueNode,
 };
 use super::paths::Root;
 use crate::ir::v4::FormatVersion;
@@ -26,7 +29,7 @@ use crate::ir::v4::tree_files::{
 };
 use crate::ir::v4::types::{TypeDefinition, TypeSpecification};
 use crate::ir::v4::value::{ValueDefinition, ValueSpecification};
-use crate::ir::v4::{IRFile, serde_document};
+use crate::ir::v4::{IRFile, TypeEncoding, serde_document, with_type_encoding};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
 use crate::naming::{ModuleName, Name, PackageName};
 
@@ -50,6 +53,7 @@ impl TreeModel for V4 {
     type TypeSpec = Documented<TypeSpecification>;
     type ValueSpec = Documented<ValueSpecification>;
     type File = IRFile;
+    type Version = FormatVersion;
 
     fn decode_manifest(
         value: &serde_json::Value,
@@ -174,6 +178,97 @@ impl TreeModel for V4 {
             format_version,
             distribution,
         })
+    }
+
+    fn encode_manifest(
+        envelope: &Envelope<DistributionKind, V4Extra>,
+    ) -> Result<serde_json::Value, Diagnostic> {
+        encode(&DistributionManifestFile {
+            format_version: envelope.extra.format_version.clone(),
+            distribution: envelope.kind,
+            package: envelope.package.clone(),
+            path_budget: envelope.path_budget,
+            dependencies: envelope.dependencies.clone(),
+            entry_points: envelope.extra.entry_points.clone(),
+        })
+    }
+
+    /// The role decides nothing here: a specification module is handed a public header, and a
+    /// public module's manifest writes no `access` member.
+    fn encode_module(
+        version: &FormatVersion,
+        module: &ModuleHeader,
+        _role: Role,
+        (types, values): (&[Name], &[Name]),
+        file_names: &[(Name, String)],
+    ) -> Result<serde_json::Value, Diagnostic> {
+        encode(&ModuleManifestFile {
+            format_version: version.clone(),
+            path: ModuleName::new(module.path.clone()),
+            access: if module.public {
+                Access::Public
+            } else {
+                Access::Private
+            },
+            doc: module.doc.clone(),
+            types: ModuleEntries::Names(types.to_vec()),
+            values: ModuleEntries::Names(values.to_vec()),
+            file_names: file_names.to_vec(),
+        })
+    }
+
+    fn encode_type_file(
+        version: &FormatVersion,
+        name: &Name,
+        node: &TypeNode<Self>,
+    ) -> Result<serde_json::Value, Diagnostic> {
+        encode(&TypeDefinitionFile {
+            format_version: version.clone(),
+            name: name.clone(),
+            body: body(node),
+        })
+    }
+
+    fn encode_value_file(
+        version: &FormatVersion,
+        name: &Name,
+        node: &ValueNode<Self>,
+    ) -> Result<serde_json::Value, Diagnostic> {
+        encode(&ValueDefinitionFile {
+            format_version: version.clone(),
+            name: name.clone(),
+            body: body(node),
+        })
+    }
+}
+
+// =============================================================================
+// Encoding
+// =============================================================================
+
+/// One file as the JSON value tree a profile writes.
+///
+/// A tree file is a node like any other, so it is written under the same [`TypeEncoding::Compact`]
+/// a whole document is written under: a type reference is the shorthand `pkg:mod#local`, not the
+/// long form. Every tree file is built from model values that serialize, so a failure is a defect
+/// in a node rather than a shape of the tree; it is reported at the file's root, and the writer
+/// says which file.
+fn encode<T: Serialize>(file: &T) -> Result<serde_json::Value, Diagnostic> {
+    with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(file)).map_err(|error| {
+        Diagnostic::new(
+            DiagnosticCode::InvalidDistributionShape,
+            DiagnosticStage::Semantic,
+            "",
+            error.to_string(),
+        )
+    })
+}
+
+/// A node, as a node file's body.
+fn body<D: Clone, S: Clone>(node: &Node<D, S>) -> NodeFileBody<D, S> {
+    match node {
+        Node::Def(definition) => NodeFileBody::Def(definition.clone()),
+        Node::Spec(specification) => NodeFileBody::Spec(specification.clone()),
     }
 }
 

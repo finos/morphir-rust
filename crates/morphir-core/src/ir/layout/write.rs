@@ -20,29 +20,28 @@
 //!
 //! The per-module writers are public and take one module each, so a caller streaming a
 //! distribution can emit a module's files without holding the whole tree.
+//!
+//! What a file says is the version's business: the layout here — the budget, the stems, the order
+//! — hands a [`TreeModel`] the pieces to encode, and the profile renders what the model returns.
 
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
-use serde::Serialize;
 
 use super::Profile;
+use super::model::{Envelope, ModuleHeader, Node, Role, TreeModel, TypeNode, ValueNode};
 use super::paths::{
     MANIFEST, NodeFileKind, Root, module_dir, module_dir_prefix, module_manifest_path,
     node_file_path, package_dir, to_physical,
 };
 use super::stems::stem_for;
+use super::v4_model::{V4, V4Extra};
 use crate::ir::v4::access::{Access, AccessControlled};
 use crate::ir::v4::distribution::{Distribution, EntryPoints};
-use crate::ir::v4::module::{Documentation, Documented, ModuleDefinition, ModuleSpecification};
+use crate::ir::v4::module::{ModuleDefinition, ModuleSpecification};
 use crate::ir::v4::package::{PackageDefinition, PackageSpecification};
-use crate::ir::v4::tree_files::{
-    DistributionKind, DistributionManifestFile, ModuleEntries, ModuleManifestFile, NodeFileBody,
-    TypeDefinitionFile, ValueDefinitionFile,
-};
-use crate::ir::v4::types::{TypeDefinition, TypeSpecification};
-use crate::ir::v4::value::{ValueDefinition, ValueSpecification};
-use crate::ir::v4::{FormatVersion, IRFile, TypeEncoding, with_type_encoding};
+use crate::ir::v4::tree_files::DistributionKind;
+use crate::ir::v4::{FormatVersion, IRFile};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage};
 use crate::naming::{ModuleName, Name, PackageName};
 
@@ -57,14 +56,6 @@ pub struct TreePolicy {
     pub profile: Profile,
     pub path_budget: u32,
 }
-
-/// What a type's node file holds, whichever of the two a distribution kind calls for.
-type TypeFileBody =
-    NodeFileBody<AccessControlled<Documented<TypeDefinition>>, Documented<TypeSpecification>>;
-
-/// What a value's node file holds.
-type ValueFileBody =
-    NodeFileBody<AccessControlled<Documented<ValueDefinition>>, Documented<ValueSpecification>>;
 
 /// One entry of a module, paired with the file stem the budget gave it.
 struct Stem<'a, T> {
@@ -98,16 +89,17 @@ pub struct ManifestHeader {
 /// Total, because a manifest carries only names, a kind, a number and its entry points, none of
 /// which can fail to serialize; the fallback below is unreachable rather than a case to handle.
 pub fn write_manifest_header(header: &ManifestHeader, policy: &TreePolicy) -> (String, String) {
-    let manifest = DistributionManifestFile {
-        format_version: header.format_version.clone(),
-        distribution: header.distribution,
+    let envelope = Envelope {
+        kind: header.distribution,
         package: header.package.clone(),
         path_budget: policy.path_budget,
         dependencies: header.dependencies.clone(),
-        entry_points: header.entry_points.clone(),
+        extra: V4Extra {
+            format_version: header.format_version.clone(),
+            entry_points: header.entry_points.clone(),
+        },
     };
-    let value = with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(&manifest))
-        .unwrap_or(serde_json::Value::Null);
+    let value = V4::encode_manifest(&envelope).unwrap_or(serde_json::Value::Null);
     (MANIFEST.to_owned(), policy.profile.write(&value))
 }
 
@@ -140,20 +132,22 @@ pub fn write_definition_module(
     policy: &TreePolicy,
 ) -> Result<Vec<(String, String)>, Diagnostic> {
     let path = module_path(root, package, module_name)?;
-    let dir = module_dir(root, package, path.as_path());
     let definition = &module.value;
-    write_module(
+    let header = ModuleHeader {
+        path: path.into_path(),
+        public: module.access != Access::Private,
+        doc: definition.doc.clone(),
+    };
+    write_module_with::<V4>(
         root,
-        &dir,
-        path,
-        module.access,
-        definition.doc.clone(),
-        &definition.types,
-        &definition.values,
-        |value| NodeFileBody::Def(value.clone()),
-        |value| NodeFileBody::Def(value.clone()),
-        format_version,
+        package,
+        &header,
+        Role::Definitions,
+        &nodes(&definition.types, Node::Def),
+        &nodes(&definition.values, Node::Def),
         policy,
+        format_version,
+        &|doc| policy.profile.write(doc),
     )
 }
 
@@ -183,19 +177,30 @@ pub fn write_specification_module(
         ));
     }
 
-    write_module(
+    let header = ModuleHeader {
+        path: path.into_path(),
+        public: true,
+        doc: module.doc.clone(),
+    };
+    write_module_with::<V4>(
         root,
-        &dir,
-        path,
-        Access::Public,
-        module.doc.clone(),
-        &module.types,
-        &module.values,
-        |value| NodeFileBody::Spec(value.clone()),
-        |value| NodeFileBody::Spec(value.clone()),
-        format_version,
+        package,
+        &header,
+        Role::Specifications,
+        &nodes(&module.types, Node::Spec),
+        &nodes(&module.values, Node::Spec),
         policy,
+        format_version,
+        &|doc| policy.profile.write(doc),
     )
+}
+
+/// A module's entries of one kind as the nodes a model encodes, in listing order.
+fn nodes<T: Clone, N>(entries: &IndexMap<String, T>, node: fn(T) -> N) -> IndexMap<String, N> {
+    entries
+        .iter()
+        .map(|(key, value)| (key.clone(), node(value.clone())))
+        .collect()
 }
 
 /// Lays a whole distribution out as a document tree under `policy`.
@@ -353,64 +358,60 @@ fn write_specification_modules(
 // Per module
 // =============================================================================
 
-/// The body both per-module writers share: the module directory has to fit, then every stem, then
-/// the manifest — which is written last of the three because `fileNames` is exactly the list of
-/// names the budget had to cut — and then one file per entry.
+/// The body every per-module writer shares, whichever model `M` spells the files: the module
+/// directory has to fit, then every stem, then the manifest — which is written last of the three
+/// because `fileNames` is exactly the list of names the budget had to cut — and then one file per
+/// entry. `render` turns what the model encodes into the profile's text.
+///
+/// The files come back in the reference's emission order: the module manifest first, then the
+/// types and then the values, each in the order the module lists them.
 #[allow(clippy::too_many_arguments)]
-fn write_module<T, V>(
+pub(crate) fn write_module_with<M: TreeModel>(
     root: Root,
-    dir: &str,
-    path: ModuleName,
-    access: Access,
-    doc: Option<Documentation>,
-    types: &IndexMap<String, T>,
-    values: &IndexMap<String, V>,
-    type_body: impl Fn(&T) -> TypeFileBody,
-    value_body: impl Fn(&V) -> ValueFileBody,
-    format_version: &FormatVersion,
+    package: &PackageName,
+    header: &ModuleHeader,
+    role: Role,
+    types: &IndexMap<String, TypeNode<M>>,
+    values: &IndexMap<String, ValueNode<M>>,
     policy: &TreePolicy,
+    version: &M::Version,
+    render: &dyn Fn(&M::Doc) -> String,
 ) -> Result<Vec<(String, String)>, Diagnostic> {
-    fits(root, dir, policy)?;
-    let type_stems = stems_for(types, root, dir, NodeFileKind::Type, policy)?;
-    let value_stems = stems_for(values, root, dir, NodeFileKind::Value, policy)?;
+    let dir = module_dir(root, package, &header.path);
+    fits(root, &dir, policy)?;
+    let type_stems = stems_for(types, root, &dir, NodeFileKind::Type, policy)?;
+    let value_stems = stems_for(values, root, &dir, NodeFileKind::Value, policy)?;
 
-    let manifest = ModuleManifestFile {
-        format_version: format_version.clone(),
-        path,
-        access,
-        doc,
-        types: ModuleEntries::Names(type_stems.iter().map(|s| s.name.clone()).collect()),
-        values: ModuleEntries::Names(value_stems.iter().map(|s| s.name.clone()).collect()),
-        file_names: truncated(&type_stems)
-            .chain(truncated(&value_stems))
-            .collect(),
-    };
+    let type_names: Vec<Name> = type_stems.iter().map(|s| s.name.clone()).collect();
+    let value_names: Vec<Name> = value_stems.iter().map(|s| s.name.clone()).collect();
+    let file_names: Vec<(Name, String)> = truncated(&type_stems)
+        .chain(truncated(&value_stems))
+        .collect();
 
     let mut out = Vec::with_capacity(1 + type_stems.len() + value_stems.len());
-    let manifest_path = module_manifest_path(root, dir);
-    let text = encode(policy.profile, &manifest, &manifest_path)?;
-    out.push((manifest_path, text));
+    let manifest_path = module_manifest_path(root, &dir);
+    let manifest = M::encode_module(
+        version,
+        header,
+        role,
+        (&type_names, &value_names),
+        &file_names,
+    )
+    .map_err(|diagnostic| in_file(&manifest_path, diagnostic))?;
+    out.push((manifest_path, render(&manifest)));
 
     for stem in &type_stems {
-        let path = node_file_path(root, dir, &stem.stem, NodeFileKind::Type);
-        let file = TypeDefinitionFile {
-            format_version: format_version.clone(),
-            name: stem.name.clone(),
-            body: type_body(stem.value),
-        };
-        let text = encode(policy.profile, &file, &path)?;
-        out.push((path, text));
+        let path = node_file_path(root, &dir, &stem.stem, NodeFileKind::Type);
+        let file = M::encode_type_file(version, &stem.name, stem.value)
+            .map_err(|diagnostic| in_file(&path, diagnostic))?;
+        out.push((path, render(&file)));
     }
 
     for stem in &value_stems {
-        let path = node_file_path(root, dir, &stem.stem, NodeFileKind::Value);
-        let file = ValueDefinitionFile {
-            format_version: format_version.clone(),
-            name: stem.name.clone(),
-            body: value_body(stem.value),
-        };
-        let text = encode(policy.profile, &file, &path)?;
-        out.push((path, text));
+        let path = node_file_path(root, &dir, &stem.stem, NodeFileKind::Value);
+        let file = M::encode_value_file(version, &stem.name, stem.value)
+            .map_err(|diagnostic| in_file(&path, diagnostic))?;
+        out.push((path, render(&file)));
     }
 
     Ok(out)
@@ -571,25 +572,19 @@ fn entry_points_of(distribution: &Distribution) -> EntryPoints {
 }
 
 // =============================================================================
-// The profile boundary
+// The model boundary
 // =============================================================================
 
-/// One file's canonical text under `profile`.
-///
-/// A tree file is a node like any other, so it is written under the same [`TypeEncoding::Compact`]
-/// a whole document is written under: a type reference is the shorthand `pkg:mod#local`, not the
-/// long form. Every tree file is built here from model values that serialize, so a failure is a
-/// defect in a node rather than a shape of the tree; reporting it against the file's own logical
-/// path says which one, instead of panicking on a caller's data.
-fn encode<T: Serialize>(profile: Profile, file: &T, cursor: &str) -> Result<String, Diagnostic> {
-    with_type_encoding(TypeEncoding::Compact, || serde_json::to_value(file))
-        .map(|value| profile.write(&value))
-        .map_err(|error| {
-            Diagnostic::new(
-                DiagnosticCode::InvalidDistributionShape,
-                DiagnosticStage::Semantic,
-                cursor,
-                error.to_string(),
-            )
-        })
+/// A model's diagnostic about one file, cursored onto the file's logical path: the path alone for
+/// a failure at the file's root, the path and the pointer otherwise.
+fn in_file(path: &str, diagnostic: Diagnostic) -> Diagnostic {
+    let cursor = if diagnostic.cursor.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}#{}", diagnostic.cursor)
+    };
+    Diagnostic {
+        cursor,
+        ..diagnostic
+    }
 }

@@ -8,7 +8,9 @@
 //!
 //! The types here are what the two halves hand each other: an [`Envelope`] for the root manifest,
 //! a [`ModuleFile`] for a module manifest, a [`Node`] for a node file, and [`Packages`] for every
-//! module the reader found, ready to be assembled.
+//! module the reader found, ready to be assembled. Writing goes the other way through the same
+//! trait: [`super::write`] owns the budget, the stems and the file order, and hands the model an
+//! [`Envelope`], a [`ModuleHeader`] or a [`Node`] to encode.
 
 use indexmap::IndexMap;
 
@@ -40,6 +42,15 @@ pub(crate) struct ModuleFile<TD, VD, TS, VS> {
     /// The names whose file stem was truncated for the path budget, each with the stem its file is
     /// under.
     pub file_names: Vec<(Name, String)>,
+}
+
+/// What a module manifest says about the module itself, for the writer to hand a model: its
+/// listings and `fileNames` come from the budget, so the writer passes them apart.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ModuleHeader {
+    pub path: Path,
+    pub public: bool,
+    pub doc: Option<Documentation>,
 }
 
 /// A module manifest's `types` or `values` member: the names whose files hold the entries, or the
@@ -95,6 +106,9 @@ pub(crate) trait TreeModel {
     type ValueSpec;
     /// The whole distribution a tree reads into.
     type File;
+    /// What every file of a written tree repeats and the manifest alone does not supply to a
+    /// module writer: v4's format version, which a caller chooses.
+    type Version;
 
     /// The root manifest.
     fn decode_manifest(
@@ -134,6 +148,38 @@ pub(crate) trait TreeModel {
     ) -> Result<Self::File, Diagnostic>
     where
         Self: Sized;
+
+    /// The root manifest a tree is written with.
+    ///
+    /// An encoder reports a failure against the file's root (an empty cursor); the writer
+    /// re-cursors it onto the file's logical path.
+    fn encode_manifest(
+        envelope: &Envelope<Self::Kind, Self::Extra>,
+    ) -> Result<Self::Doc, Diagnostic>;
+
+    /// A module manifest that lists its entries by name: `names` holds the type names and then
+    /// the value names, in listing order, and `file_names` the names whose stem the budget cut.
+    fn encode_module(
+        version: &Self::Version,
+        module: &ModuleHeader,
+        role: Role,
+        names: (&[Name], &[Name]),
+        file_names: &[(Name, String)],
+    ) -> Result<Self::Doc, Diagnostic>;
+
+    /// A `.type` node file.
+    fn encode_type_file(
+        version: &Self::Version,
+        name: &Name,
+        node: &TypeNode<Self>,
+    ) -> Result<Self::Doc, Diagnostic>;
+
+    /// A `.value` node file.
+    fn encode_value_file(
+        version: &Self::Version,
+        name: &Name,
+        node: &ValueNode<Self>,
+    ) -> Result<Self::Doc, Diagnostic>;
 }
 
 /// One entry of a module: a definition, or the public face of one.

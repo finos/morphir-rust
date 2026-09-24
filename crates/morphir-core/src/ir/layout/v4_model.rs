@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use super::model::{
     AssembledModule, Entries, Envelope, ModuleFile, ModuleFileOf, ModuleHeader, Node, Packages,
-    Role, TreeModel, TypeNode, ValueNode,
+    Role, TreeModel, TypeNode, TypeNodeRef, ValueNode, ValueNodeRef,
 };
 use super::paths::Root;
 use crate::ir::v4::FormatVersion;
@@ -220,7 +220,7 @@ impl TreeModel for V4 {
     fn encode_type_file(
         version: &FormatVersion,
         name: &Name,
-        node: &TypeNode<Self>,
+        node: &TypeNodeRef<'_, Self>,
     ) -> Result<serde_json::Value, Diagnostic> {
         encode(&TypeDefinitionFile {
             format_version: version.clone(),
@@ -232,7 +232,7 @@ impl TreeModel for V4 {
     fn encode_value_file(
         version: &FormatVersion,
         name: &Name,
-        node: &ValueNode<Self>,
+        node: &ValueNodeRef<'_, Self>,
     ) -> Result<serde_json::Value, Diagnostic> {
         encode(&ValueDefinitionFile {
             format_version: version.clone(),
@@ -264,11 +264,12 @@ fn encode<T: Serialize>(file: &T) -> Result<serde_json::Value, Diagnostic> {
     })
 }
 
-/// A node, as a node file's body.
-fn body<D: Clone, S: Clone>(node: &Node<D, S>) -> NodeFileBody<D, S> {
+/// A borrowed node, as a node file's body: the one copy of an entry the writer makes, taken only
+/// while that entry's file is encoded.
+fn body<D: Clone, S: Clone>(node: &Node<&D, &S>) -> NodeFileBody<D, S> {
     match node {
-        Node::Def(definition) => NodeFileBody::Def(definition.clone()),
-        Node::Spec(specification) => NodeFileBody::Spec(specification.clone()),
+        Node::Def(definition) => NodeFileBody::Def((*definition).clone()),
+        Node::Spec(specification) => NodeFileBody::Spec((*specification).clone()),
     }
 }
 

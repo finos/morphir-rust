@@ -167,18 +167,19 @@ pub(crate) trait TreeModel {
         file_names: &[(Name, String)],
     ) -> Result<Self::Doc, Diagnostic>;
 
-    /// A `.type` node file.
+    /// A `.type` node file. The node is borrowed from the module being written, so a model
+    /// copies at most the one entry it encodes.
     fn encode_type_file(
         version: &Self::Version,
         name: &Name,
-        node: &TypeNode<Self>,
+        node: &TypeNodeRef<'_, Self>,
     ) -> Result<Self::Doc, Diagnostic>;
 
-    /// A `.value` node file.
+    /// A `.value` node file, borrowed the same way.
     fn encode_value_file(
         version: &Self::Version,
         name: &Name,
-        node: &ValueNode<Self>,
+        node: &ValueNodeRef<'_, Self>,
     ) -> Result<Self::Doc, Diagnostic>;
 }
 
@@ -199,6 +200,12 @@ pub(crate) type ModuleFileOf<M> = ModuleFile<
 pub(crate) type TypeNode<M> = Node<<M as TreeModel>::TypeDef, <M as TreeModel>::TypeSpec>;
 /// A value entry of the model `M`, whichever role its module was read in.
 pub(crate) type ValueNode<M> = Node<<M as TreeModel>::ValueDef, <M as TreeModel>::ValueSpec>;
+/// A type entry of the model `M`, borrowed from a module the writer is laying out.
+pub(crate) type TypeNodeRef<'a, M> =
+    Node<&'a <M as TreeModel>::TypeDef, &'a <M as TreeModel>::TypeSpec>;
+/// A value entry of the model `M`, borrowed from a module the writer is laying out.
+pub(crate) type ValueNodeRef<'a, M> =
+    Node<&'a <M as TreeModel>::ValueDef, &'a <M as TreeModel>::ValueSpec>;
 
 /// Every module the tree held, grouped by package: the distribution's own first, then each
 /// dependency in manifest order.

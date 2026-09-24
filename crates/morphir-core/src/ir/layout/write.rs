@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use indexmap::IndexMap;
 
 use super::Profile;
-use super::model::{Envelope, ModuleHeader, Node, Role, TreeModel, TypeNode, ValueNode};
+use super::model::{Envelope, ModuleHeader, Node, Role, TreeModel, TypeNodeRef, ValueNodeRef};
 use super::paths::{
     MANIFEST, NodeFileKind, Root, module_dir, module_dir_prefix, module_manifest_path,
     node_file_path, package_dir, to_physical,
@@ -195,11 +195,12 @@ pub fn write_specification_module(
     )
 }
 
-/// A module's entries of one kind as the nodes a model encodes, in listing order.
-fn nodes<T: Clone, N>(entries: &IndexMap<String, T>, node: fn(T) -> N) -> IndexMap<String, N> {
+/// A module's entries of one kind as the nodes a model encodes, in listing order. The nodes
+/// borrow the entries: only the model's encoder copies one, for the file it is writing.
+fn nodes<'a, T, N>(entries: &'a IndexMap<String, T>, node: fn(&'a T) -> N) -> IndexMap<String, N> {
     entries
         .iter()
-        .map(|(key, value)| (key.clone(), node(value.clone())))
+        .map(|(key, value)| (key.clone(), node(value)))
         .collect()
 }
 
@@ -371,8 +372,8 @@ pub(crate) fn write_module_with<M: TreeModel>(
     package: &PackageName,
     header: &ModuleHeader,
     role: Role,
-    types: &IndexMap<String, TypeNode<M>>,
-    values: &IndexMap<String, ValueNode<M>>,
+    types: &IndexMap<String, TypeNodeRef<'_, M>>,
+    values: &IndexMap<String, ValueNodeRef<'_, M>>,
     policy: &TreePolicy,
     version: &M::Version,
     render: &dyn Fn(&M::Doc) -> String,

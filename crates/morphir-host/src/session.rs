@@ -1,0 +1,114 @@
+//! Typed MEP operations over a negotiated connection.
+
+use crate::connection::{CallError, GuestConnection};
+use crate::{HostConfig, HostError, Negotiated};
+use morphir_extension_sdk::protocol::methods;
+use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateRequest, GenerateResult};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+/// One live guest after the handshake.
+///
+/// The client owns the session and closes it. A client may hold many sessions.
+pub struct Session {
+    connection: Box<dyn GuestConnection>,
+    negotiated: Negotiated,
+}
+
+impl Session {
+    /// Run the handshake on `connection` as the host that `config` describes.
+    pub async fn open<G: GuestConnection + 'static>(
+        mut connection: G,
+        config: &HostConfig,
+    ) -> Result<Self, HostError> {
+        let negotiated = connection.open(config.initialize_params()).await?;
+        Ok(Self {
+            connection: Box::new(connection),
+            negotiated,
+        })
+    }
+
+    /// What the guest agreed to in the handshake.
+    pub fn negotiated(&self) -> &Negotiated {
+        &self.negotiated
+    }
+
+    /// Invoke one non-lifecycle method with typed parameters and result.
+    pub async fn call<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: P,
+    ) -> Result<R, CallError> {
+        let params =
+            serde_json::to_value(params).map_err(|error| CallError::Rejected(error.into()))?;
+        let value = self.connection.call(method, params).await?;
+        serde_json::from_value(value).map_err(|error| CallError::Failed(error.into()))
+    }
+
+    /// Compile sources with a frontend guest.
+    pub async fn compile(&mut self, request: CompileRequest) -> Result<CompileResult, CallError> {
+        self.call(methods::COMPILE, request).await
+    }
+
+    /// Generate code with a backend guest.
+    pub async fn generate(
+        &mut self,
+        request: GenerateRequest,
+    ) -> Result<GenerateResult, CallError> {
+        self.call(methods::GENERATE, request).await
+    }
+
+    /// Complete MEP shutdown and release the guest.
+    pub async fn close(mut self) -> Result<(), HostError> {
+        self.connection.close().await
+    }
+}
+
+/// Open a session, make one call, and close the session.
+///
+/// A rejected call still shuts the guest down in order. If that shutdown also
+/// fails, the error names both failures.
+pub async fn call_once<G, P, R>(
+    connection: G,
+    config: &HostConfig,
+    method: &str,
+    params: P,
+) -> Result<R, HostError>
+where
+    G: GuestConnection + 'static,
+    P: Serialize,
+    R: DeserializeOwned,
+{
+    let mut session = Session::open(connection, config).await?;
+    match session.call(method, params).await {
+        Ok(result) => {
+            session.close().await?;
+            Ok(result)
+        }
+        Err(CallError::Rejected(error)) => match session.close().await {
+            Ok(()) => Err(error),
+            Err(close) => Err(HostError::Rejected(format!(
+                "{error}; orderly shutdown also failed: {close}"
+            ))),
+        },
+        Err(CallError::Failed(error)) => Err(error),
+    }
+}
+
+/// Compile once with a fresh guest.
+pub async fn compile_once<G: GuestConnection + 'static>(
+    connection: G,
+    config: &HostConfig,
+    request: CompileRequest,
+) -> Result<CompileResult, HostError> {
+    call_once(connection, config, methods::COMPILE, request).await
+}
+
+/// Generate once with a fresh guest.
+pub async fn generate_once<G: GuestConnection + 'static>(
+    connection: G,
+    config: &HostConfig,
+    request: GenerateRequest,
+) -> Result<GenerateResult, HostError> {
+    call_once(connection, config, methods::GENERATE, request).await
+}

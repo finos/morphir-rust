@@ -13,6 +13,7 @@ mod error;
 mod jsonrpc;
 mod negotiated;
 mod send;
+mod session;
 mod session_core;
 pub mod testing;
 
@@ -24,4 +25,5 @@ pub use error::{ChannelState, HostError};
 pub use jsonrpc::JsonRpcConnection;
 pub use negotiated::Negotiated;
 pub use send::MaybeSend;
+pub use session::{Session, call_once, compile_once, generate_once};
 pub use session_core::{Action, BasicChecks, Event, SessionChecks, SessionCore};

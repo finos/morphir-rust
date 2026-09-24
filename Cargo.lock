@@ -4632,6 +4632,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "morphir-gherkin"
+version = "0.2.0"
+dependencies = [
+ "gherkin",
+ "pulldown-cmark",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "morphir-gleam-binding"
 version = "0.3.0"
 dependencies = [

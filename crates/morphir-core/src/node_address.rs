@@ -5,6 +5,7 @@
 //! the file that happened to contain it.
 
 pub use crate::format_version::ReleaseTriplet as IrFormatVersion;
+use crate::ir::v4::{TypeEncoding, with_type_encoding};
 use crate::naming::{Name, PackageName, Path};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -216,7 +217,7 @@ impl NodeFingerprintBuilder {
                 ));
             }
         };
-        let mut value = serde_json::to_value(child)
+        let mut value = semantic_json(child)
             .map_err(|error| NodeUriError::InvalidFingerprint(error.to_string()))?;
         strip_nonsemantic_attributes(&mut value);
         let mut canonical = Vec::new();
@@ -242,6 +243,14 @@ impl NodeFingerprintBuilder {
     }
 }
 
+/// Choose one V4 type spelling even when a caller is serializing a document
+/// under a different thread-local profile at the same time.
+pub(crate) fn semantic_json<T: Serialize>(
+    node: &T,
+) -> Result<serde_json::Value, serde_json::Error> {
+    with_type_encoding(TypeEncoding::Expanded, || serde_json::to_value(node))
+}
+
 // Source coordinates and tool extensions locate or annotate a semantic node;
 // they cannot change the identity of a selected ordered child. Keep the
 // remaining attributes, including constraints and inferred types.
@@ -253,6 +262,11 @@ fn strip_nonsemantic_attributes(value: &mut serde_json::Value) {
             }
         }
         serde_json::Value::Object(members) => {
+            // A document literal contains arbitrary user JSON. Its own
+            // `attributes` keys are data, not Morphir node metadata.
+            if members.contains_key("DocumentLiteral") {
+                return;
+            }
             for member in members.values_mut() {
                 strip_nonsemantic_attributes(member);
             }

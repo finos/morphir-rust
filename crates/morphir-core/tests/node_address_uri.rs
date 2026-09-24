@@ -170,3 +170,32 @@ fn fingerprint_tracks_only_selected_ordered_lineage() {
         .unwrap();
     assert_ne!(changed.finish().to_string(), digest);
 }
+
+#[test]
+fn document_literal_payload_is_not_treated_as_ir_attributes() {
+    use morphir_core::ir::v4::{Literal, Value, ValueAttributes};
+    let fingerprint = |payload| {
+        let child = Value::Literal(ValueAttributes::default(), Literal::Document(payload));
+        let mut builder = NodeFingerprintBuilder::new();
+        builder.push(&NodeStep::ListElement(0), &child).unwrap();
+        builder.finish()
+    };
+    let first = fingerprint(serde_json::json!({"attributes":{"source":"first"}}));
+    let second = fingerprint(serde_json::json!({"attributes":{"source":"second"}}));
+    assert_ne!(first, second);
+}
+
+#[test]
+fn fingerprint_ignores_ambient_v4_type_serialization_mode() {
+    use morphir_core::ir::v4::{TypeEncoding, with_type_encoding};
+    let child = Type::variable(TypeAttributes::default(), Name::from("item"));
+    let fingerprint = || {
+        let mut builder = NodeFingerprintBuilder::new();
+        builder.push(&NodeStep::TupleElement(0), &child).unwrap();
+        builder.finish()
+    };
+    assert_eq!(
+        fingerprint(),
+        with_type_encoding(TypeEncoding::Compact, fingerprint)
+    );
+}

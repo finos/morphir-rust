@@ -2,7 +2,7 @@
 
 use super::{
     ArtifactRevision, ArtifactSelector, IrFormatVersion, NodeFingerprintBuilder, NodeOwner,
-    NodeRoot, NodeStep, NodeUri, Sha256Digest,
+    NodeRoot, NodeStep, NodeUri, Sha256Digest, semantic_json,
 };
 use crate::ir::{classic, v4};
 use crate::naming::{Name, PackageName, Path};
@@ -396,7 +396,7 @@ impl NodeIndex {
         )
         .map_err(|error| NodeResolutionError::InvalidName(error.to_string()))?;
         let key = (context.root.clone(), context.steps.clone());
-        let semantic_value = serde_json::to_value(semantic_node)
+        let semantic_value = semantic_json(semantic_node)
             .map_err(|error| NodeResolutionError::InvalidFingerprint(error.to_string()))?;
         if self
             .nodes

@@ -3,7 +3,7 @@
 use crate::channel::{Channel, Outgoing};
 use crate::envelope::{EnvelopeError, validate_envelope};
 use crate::session_core::{BasicChecks, SessionChecks};
-use crate::{ChannelState, HostConfig, HostError};
+use crate::{ChannelCause, ChannelState, HostConfig, HostError};
 use morphir_extension_sdk::claims::CapabilityClaimSet;
 use morphir_extension_sdk::protocol::{
     DescribeParams, ExtensionNotification, ExtensionRequest, ExtensionResponse, InitializeResult,
@@ -71,16 +71,21 @@ where
                 ChannelState::Indeterminate => Err(HostError::Channel {
                     message: "Extension shutdown outcome is indeterminate".into(),
                     state: ChannelState::Indeterminate,
+                    cause: ChannelCause::Transport,
                 }),
             }
         }
         Err(Failure::Channel(error)) => Err(error),
         Err(Failure::Protocol(error)) => match channel.abort().await {
             Ok(_) => Err(error),
-            Err(abort) => Err(HostError::Channel {
-                message: format!("{error}; transport abort also failed: {}", abort.message),
-                state: abort.state,
-            }),
+            Err(abort) => {
+                let cause = ChannelCause::of(&error);
+                Err(HostError::Channel {
+                    message: format!("{error}; transport abort also failed: {}", abort.message),
+                    state: abort.state,
+                    cause,
+                })
+            }
         },
     }
 }

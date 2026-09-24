@@ -2,7 +2,9 @@
 
 use super::*;
 use morphir_extension_sdk::claims::CapabilityClaimSet;
-use morphir_host::{Channel, ChannelError, ChannelState, ExpectedChecks, HostConfig, Outgoing};
+use morphir_host::{
+    Channel, ChannelCause, ChannelError, ChannelState, ExpectedChecks, HostConfig, Outgoing,
+};
 
 /// How a process supplied its capability claim set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +106,7 @@ impl TransportChannel<'_> {
         let failure = ChannelError {
             message: error.to_string(),
             state,
+            cause: ChannelCause::Transport,
         };
         *self.failure = Some(error);
         failure
@@ -163,6 +166,7 @@ impl Channel for TransportChannel<'_> {
             Err(error) => Err(ChannelError {
                 message: error.into_error().to_string(),
                 state: ChannelState::Indeterminate,
+                cause: ChannelCause::Transport,
             }),
         }
     }

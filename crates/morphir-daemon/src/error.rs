@@ -64,7 +64,60 @@ impl From<morphir_host::HostError> for DaemonError {
         match error {
             morphir_host::HostError::Json(error) => DaemonError::Json(error),
             morphir_host::HostError::Io(error) => DaemonError::Io(error),
+            morphir_host::HostError::Channel {
+                message,
+                cause: morphir_host::ChannelCause::Io | morphir_host::ChannelCause::Json,
+                ..
+            } => DaemonError::Other(anyhow::anyhow!(message)),
             other => DaemonError::Extension(other.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morphir_host::{ChannelCause, ChannelState, HostError};
+
+    #[test]
+    fn a_channel_error_with_an_io_cause_prints_unchanged() {
+        let error = HostError::Channel {
+            message: "IO error: broken pipe".into(),
+            state: ChannelState::Stopped,
+            cause: ChannelCause::Io,
+        };
+
+        assert_eq!(
+            DaemonError::from(error).to_string(),
+            "IO error: broken pipe"
+        );
+    }
+
+    #[test]
+    fn a_channel_error_with_a_json_cause_prints_unchanged() {
+        let error = HostError::Channel {
+            message: "JSON error: unexpected end of input".into(),
+            state: ChannelState::Stopped,
+            cause: ChannelCause::Json,
+        };
+
+        assert_eq!(
+            DaemonError::from(error).to_string(),
+            "JSON error: unexpected end of input"
+        );
+    }
+
+    #[test]
+    fn a_channel_error_with_a_transport_cause_keeps_the_extension_prefix() {
+        let error = HostError::Channel {
+            message: "IO error: broken pipe".into(),
+            state: ChannelState::Stopped,
+            cause: ChannelCause::Transport,
+        };
+
+        assert_eq!(
+            DaemonError::from(error).to_string(),
+            "Extension error: IO error: broken pipe"
+        );
     }
 }

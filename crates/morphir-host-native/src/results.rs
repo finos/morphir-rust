@@ -12,7 +12,7 @@ use morphir_core::format_version::{
 use morphir_distribution::RelativeArtifactPath;
 use morphir_extension_sdk::protocol::{InitializeParams, methods};
 use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateResult};
-use morphir_host::{CallError, GuestConnection, HostError, Negotiated};
+use morphir_host::{CallError, ChannelCause, GuestConnection, HostError, Negotiated};
 use morphir_workspace::{DiscoveryRequest, DiscoveryResponse};
 use std::collections::HashSet;
 use unicode_casefold::UnicodeCaseFold as _;
@@ -63,9 +63,14 @@ impl<G: GuestConnection> GuestConnection for CheckedConnection<G> {
 
 /// Name both failures, and keep what the shutdown failure proves.
 fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
+    let cause = ChannelCause::of(&error);
     let message = format!("{error}; orderly shutdown also failed: {close}");
     match close {
-        HostError::Channel { state, .. } => HostError::Channel { message, state },
+        HostError::Channel { state, .. } => HostError::Channel {
+            message,
+            state,
+            cause,
+        },
         _ => HostError::Invalid(message),
     }
 }

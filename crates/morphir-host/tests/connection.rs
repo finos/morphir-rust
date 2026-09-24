@@ -3,7 +3,8 @@ use morphir_extension_sdk::protocol::{
 };
 use morphir_host::testing::{MemoryChannel, frontend_initialize_result};
 use morphir_host::{
-    BasicChecks, CallError, ChannelError, ChannelState, GuestConnection, JsonRpcConnection,
+    BasicChecks, CallError, ChannelCause, ChannelError, ChannelState, GuestConnection,
+    JsonRpcConnection,
 };
 use serde_json::json;
 
@@ -104,19 +105,40 @@ async fn a_transport_failure_does_not_close_the_channel_again() {
         .fail(ChannelError {
             message: "pipe closed".into(),
             state: ChannelState::Indeterminate,
+            cause: ChannelCause::Transport,
         });
     let log = channel.log();
     let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
     connection.open(params()).await.unwrap();
 
     match connection.call(methods::COMPILE, json!({})).await {
-        Err(CallError::Failed(morphir_host::HostError::Channel { message, state })) => {
+        Err(CallError::Failed(morphir_host::HostError::Channel { message, state, .. })) => {
             assert_eq!(message, "pipe closed");
             assert_eq!(state, ChannelState::Indeterminate);
         }
         other => panic!("expected a channel failure, got {other:?}"),
     }
     assert_eq!(log.closes(), 0);
+}
+
+#[tokio::test]
+async fn a_transport_failure_keeps_what_it_began_as() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .fail(ChannelError {
+            message: "IO error: broken pipe".into(),
+            state: ChannelState::Stopped,
+            cause: ChannelCause::Io,
+        });
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    connection.open(params()).await.unwrap();
+
+    match connection.call(methods::COMPILE, json!({})).await {
+        Err(CallError::Failed(morphir_host::HostError::Channel { cause, .. })) => {
+            assert_eq!(cause, ChannelCause::Io);
+        }
+        other => panic!("expected a channel failure, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -176,6 +198,7 @@ async fn close_after_a_transport_failure_does_not_touch_the_channel() {
         .fail(ChannelError {
             message: "pipe closed".into(),
             state: ChannelState::Indeterminate,
+            cause: ChannelCause::Transport,
         });
     let log = channel.log();
     let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));

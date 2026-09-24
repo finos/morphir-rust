@@ -4,7 +4,9 @@ use crate::process::child::ProcessChild;
 use crate::process::launch::ProcessLaunch;
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::ExtensionResponse;
-use morphir_host::{Channel, ChannelError, ChannelState, ExpectedExtension, HostError, Outgoing};
+use morphir_host::{
+    Channel, ChannelCause, ChannelError, ChannelState, ExpectedExtension, HostError, Outgoing,
+};
 use std::time::Instant;
 
 /// A guest that runs as a child process and speaks MEP over stdio.
@@ -56,14 +58,17 @@ impl ProcessChannel {
     /// Kill the child after `error`, and report what that proves.
     async fn fail(&mut self, error: HostError) -> ChannelError {
         self.deadline = None;
+        let cause = ChannelCause::of(&error);
         match self.child.abort().await {
             Ok(()) => ChannelError {
                 message: error.to_string(),
                 state: ChannelState::Stopped,
+                cause,
             },
             Err(cleanup) => ChannelError {
                 message: format!("{error}; process cleanup also failed: {cleanup}"),
                 state: ChannelState::Indeterminate,
+                cause,
             },
         }
     }
@@ -71,13 +76,14 @@ impl ProcessChannel {
     /// Give a timeout the text of the request or notification it hit.
     fn name_timeout(&self, error: HostError, subject: impl FnOnce() -> String) -> HostError {
         match error {
-            HostError::Channel { state, .. } => HostError::Channel {
+            HostError::Channel { state, cause, .. } => HostError::Channel {
                 message: format!(
                     "{} timed out after {:?}",
                     subject(),
                     self.child.request_timeout()
                 ),
                 state,
+                cause,
             },
             other => other,
         }
@@ -151,6 +157,7 @@ impl Channel for ProcessChannel {
             Ok(status) => Err(ChannelError {
                 message: format!("Extension process exited with status {status}"),
                 state: ChannelState::Stopped,
+                cause: ChannelCause::Transport,
             }),
             Err(error) => Err(self.fail(error).await),
         }
@@ -161,9 +168,13 @@ impl Channel for ProcessChannel {
             .abort()
             .await
             .map(|()| ChannelState::Stopped)
-            .map_err(|error| ChannelError {
-                message: error.to_string(),
-                state: ChannelState::Indeterminate,
+            .map_err(|error| {
+                let cause = ChannelCause::of(&error);
+                ChannelError {
+                    message: error.to_string(),
+                    state: ChannelState::Indeterminate,
+                    cause,
+                }
             })
     }
 }
@@ -211,6 +222,46 @@ done
 
     fn ping() -> Outgoing {
         Outgoing::Request(ExtensionRequest::new(methods::PING, serde_json::json!({}), 1).unwrap())
+    }
+
+    /// A guest that exits at once, before it reads or writes anything.
+    const EXITS_AT_ONCE: &str = "#!/bin/sh\nexit 0\n";
+
+    /// A guest that exits before the host is done talking to it can be
+    /// caught two ways, depending on timing: the write can hit a pipe the
+    /// guest already closed (an I/O error), or the write can land in the
+    /// pipe's buffer before the guest closes it, so only the `receive` that
+    /// follows sees the closed stdout. Either way the error must carry the
+    /// cause that matches its own message.
+    #[tokio::test]
+    async fn a_guest_that_exits_at_once_fails_with_the_cause_its_message_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let launch = ProcessLaunch::new("guest", guest(&dir, EXITS_AT_ONCE), dir.path())
+            .request_timeout(Duration::from_millis(500));
+        let mut channel = ProcessChannel::spawn(launch).await.unwrap();
+        // Give the guest a chance to exit before the host writes to it.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let error = match channel.send(ping()).await {
+            Err(error) => error,
+            Ok(()) => channel.receive().await.unwrap_err(),
+        };
+
+        match error.cause {
+            ChannelCause::Io => assert!(
+                error.message.starts_with("IO error: "),
+                "an IO cause should carry an IO error message: {}",
+                error.message
+            ),
+            ChannelCause::Transport => assert!(
+                error
+                    .message
+                    .contains("closed stdout before a response frame"),
+                "a transport cause here should be the closed-stdout race: {}",
+                error.message
+            ),
+            ChannelCause::Json => panic!("unexpected JSON cause: {}", error.message),
+        }
     }
 
     #[tokio::test]

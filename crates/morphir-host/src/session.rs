@@ -1,7 +1,7 @@
 //! Typed MEP operations over a negotiated connection.
 
 use crate::connection::{CallError, GuestConnection};
-use crate::{HostConfig, HostError, Negotiated};
+use crate::{ChannelCause, HostConfig, HostError, Negotiated};
 use morphir_extension_sdk::protocol::methods;
 use morphir_extension_sdk::{CompileRequest, CompileResult, GenerateRequest, GenerateResult};
 use serde::Serialize;
@@ -12,9 +12,14 @@ use serde::de::DeserializeOwned;
 /// The combined error keeps the channel state of the shutdown failure, since
 /// that is the failure that describes the transport now.
 fn also_failed_to_shut_down(error: HostError, close: HostError) -> HostError {
+    let cause = ChannelCause::of(&error);
     let message = format!("{error}; orderly shutdown also failed: {close}");
     match close {
-        HostError::Channel { state, .. } => HostError::Channel { message, state },
+        HostError::Channel { state, .. } => HostError::Channel {
+            message,
+            state,
+            cause,
+        },
         _ => HostError::Invalid(message),
     }
 }

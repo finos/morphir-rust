@@ -4,7 +4,7 @@ use crate::process::frame::{read_frame, write_frame};
 use crate::process::launch::{ProcessLaunch, ProcessProgram};
 use crate::process::stage::prepare_program;
 use morphir_extension_sdk::protocol::ExtensionRequest;
-use morphir_host::{ChannelState, HostError};
+use morphir_host::{ChannelCause, ChannelState, HostError};
 use serde::Serialize;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -283,6 +283,7 @@ fn timed_out(message: String) -> HostError {
     HostError::Channel {
         message,
         state: ChannelState::Indeterminate,
+        cause: ChannelCause::Transport,
     }
 }
 

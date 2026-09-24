@@ -26,7 +26,7 @@ pub use channel::{Channel, ChannelError, Outgoing};
 pub use config::HostConfig;
 pub use connection::{CallError, GuestConnection};
 pub use envelope::{EnvelopeError, validate_envelope};
-pub use error::{ChannelState, HostError};
+pub use error::{ChannelCause, ChannelState, HostError};
 pub use expected::{
     CapabilityExpectation, ExpectedChecks, ExpectedExtension, PersistedExtensionCapabilities,
     validate_negotiation,

@@ -1,7 +1,7 @@
 //! Test doubles for clients of the host library.
 
-use crate::ChannelState;
 use crate::channel::{Channel, ChannelError, Outgoing};
+use crate::{ChannelCause, ChannelState};
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::{
     ExtensionResponse, InitializeResult, SUPPORTED_MEP_VERSIONS,
@@ -106,6 +106,7 @@ impl Channel for MemoryChannel {
             Err(ChannelError {
                 message: "MemoryChannel has no scripted answer".into(),
                 state: ChannelState::Stopped,
+                cause: ChannelCause::Transport,
             })
         })
     }

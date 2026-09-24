@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use morphir_extension_sdk::protocol::{ExtensionRequest, ExtensionResponse};
 use morphir_extension_sdk::{NativeExtension, NativeProtocol};
-use morphir_host::{Channel, ChannelError, ChannelState, ExpectedExtension, Outgoing};
+use morphir_host::{
+    Channel, ChannelCause, ChannelError, ChannelState, ExpectedExtension, Outgoing,
+};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
@@ -47,6 +49,7 @@ impl NativeChannel {
         ChannelError {
             message: "Native extension transport is stopped".into(),
             state: ChannelState::Stopped,
+            cause: ChannelCause::Transport,
         }
     }
 }
@@ -76,11 +79,13 @@ impl Channel for NativeChannel {
             return Err(ChannelError {
                 message: "Native extension channel has no request pending".into(),
                 state: ChannelState::Indeterminate,
+                cause: ChannelCause::Transport,
             });
         };
         handle.await.map_err(|error| ChannelError {
             message: format!("Native extension protocol worker failed: {error}"),
             state: ChannelState::Indeterminate,
+            cause: ChannelCause::Transport,
         })
     }
 

@@ -193,7 +193,11 @@ fn sorted_v3(events: Vec<SemanticEvent>) -> serde_json::Value {
     let mut value: serde_json::Value = serde_json::from_slice(&json).unwrap();
     let modules = value["distribution"][3]["modules"].as_array_mut().unwrap();
     for module in modules {
-        let definition = &mut module[1]["value"];
+        // A Library module is access controlled; a Specs module is the specification itself.
+        let definition = match module[1].get("value") {
+            Some(_) => &mut module[1]["value"],
+            None => &mut module[1],
+        };
         for members in ["types", "values"] {
             if let Some(list) = definition[members].as_array_mut() {
                 list.sort_by_key(|entry| entry[0].to_string());
@@ -229,6 +233,38 @@ fn v3_dependency_specifications_round_trip_through_an_ion_tree() {
     let files = every_file(&root);
     assert!(
         files.contains(&"deps/morphir/_sdk/@/basics/money.type.ion".to_owned()),
+        "{files:#?}"
+    );
+    let read =
+        read_events(&root, IrVersion::V3).unwrap_or_else(|error| panic!("{error:?}\n{files:#?}"));
+    assert_eq!(sorted_v3(read), sorted_v3(original));
+}
+
+/// A v3 Specs distribution: a dependency and one own module specification.
+const SPECS: &str = r#"{"formatVersion":"3.1.0","distribution":["Specs",[["my"],["pkg"]],[[[["morphir"],["s","d","k"]],{"modules":[]}]],{"modules":[[[["basics"]],{"types":[[["int"],{"doc":"","value":["OpaqueTypeSpecification",[]]}]],"values":[],"doc":"Basics."}]]}]}"#;
+
+#[test]
+fn a_v3_specs_distribution_round_trips_through_an_ion_tree() {
+    let original = decode(
+        &JsonCodec::new(),
+        SPECS,
+        &single_options(IrVersion::V3, FormatId::json()),
+    )
+    .unwrap();
+    let root = memory_root();
+
+    write_events(&root, IrVersion::V3, original.clone());
+
+    let files = every_file(&root);
+    let manifest = read_file(&root, "manifest.ion");
+    assert!(
+        manifest.contains("kind: specs") && manifest.contains(r#"formatVersion: "3.1.0""#),
+        "{manifest}"
+    );
+    let module = read_file(&root, "pkg/my/pkg/basics/module.ion");
+    assert!(module.contains("module::spec::"), "{module}");
+    assert!(
+        files.contains(&"pkg/my/pkg/basics/int.type.ion".to_owned()),
         "{files:#?}"
     );
     let read =

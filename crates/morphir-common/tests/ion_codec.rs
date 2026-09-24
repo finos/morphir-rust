@@ -814,3 +814,100 @@ morphir_footer::{{}}"
 
     assert!(decode(&IonCodec::new(), &text, &v4_ion()).is_err());
 }
+
+#[test]
+fn a_v3_specs_datagram_writes_module_specs_and_3_1_0() {
+    let text = r#"
+morphir::{ formatVersion: "3.1.0", kind: specs, packageName: "my/pkg" }
+module::spec::{ name: "basics", types: [ public::spec::opaque::type::{ name: "int" } ] }
+morphir_footer::{}
+"#;
+    let events = decode(&IonCodec::new(), text, &v3(FormatId::ion())).unwrap();
+    let ion = encode(&IonCodec::new(), events.clone(), &v3(FormatId::ion())).unwrap();
+    assert!(
+        ion.contains("kind: specs") && ion.contains(r#"formatVersion: "3.1.0""#),
+        "{ion}"
+    );
+    assert_eq!(
+        decode(&IonCodec::new(), &ion, &v3(FormatId::ion())).unwrap(),
+        events
+    );
+}
+
+#[test]
+fn a_v3_library_datagram_still_writes_3_0_0() {
+    let original = decode(&JsonCodec::new(), V3_MODULE_JSON, &v3(FormatId::json())).unwrap();
+    let ion = encode(&IonCodec::new(), original, &v3(FormatId::ion())).unwrap();
+    assert!(ion.contains(r#"formatVersion: "3.0.0""#), "{ion}");
+    assert!(ion.contains("kind: library"), "{ion}");
+}
+
+#[test]
+fn a_v3_library_datagram_keeps_its_bytes() {
+    let original = decode(&IonCodec::new(), V3_MODULE_ION, &v3(FormatId::ion())).unwrap();
+    let ion = encode(&IonCodec::new(), original, &v3(FormatId::ion())).unwrap();
+    assert_eq!(
+        ion,
+        "morphir::{\n  ionVersion: \"0.1.0-draft.1\",\n  formatVersion: \"3.0.0\",\n  kind: library,\n  packageName: \"example\",\n}\npublic::def::module::{\n  name: \"eligibility\",\n  doc: \"Credit eligibility.\",\n}\nmorphir_footer::{\n}\n"
+    );
+}
+
+#[test]
+fn a_v3_specs_datagram_refuses_a_module_definition() {
+    for definition in [
+        r#"public::def::module::{ name: "basics" }"#,
+        r#"private::def::module::{ name: "basics" }"#,
+        r#"public::def::value::{ module: "basics", name: "v" }"#,
+    ] {
+        let text = format!(
+            "morphir::{{ formatVersion: \"3.1.0\", kind: specs, packageName: \"my/pkg\" }}\n\
+             {definition}\n\
+             morphir_footer::{{}}"
+        );
+        let error = decode(&IonCodec::new(), &text, &v3(FormatId::ion())).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "morphir::ir::ion::definition_in_specs",
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("module::spec"),
+            "{definition}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn a_v3_library_datagram_refuses_an_own_module_specification() {
+    let text = r#"
+morphir::{ formatVersion: "3.0.0", kind: library, packageName: "my/pkg" }
+module::spec::{ name: "basics" }
+morphir_footer::{}
+"#;
+    let error = decode(&IonCodec::new(), text, &v3(FormatId::ion())).unwrap_err();
+    assert!(error.message().contains("module::spec"), "{error:?}");
+}
+
+#[test]
+fn a_v3_library_read_as_3_1_0_is_written_back_as_3_0_0() {
+    let text = V3_MODULE_ION.replace(r#""3.0.0""#, r#""3.1.0""#);
+    let events = decode(&IonCodec::new(), &text, &v3(FormatId::ion())).unwrap();
+    let ion = encode(&IonCodec::new(), events, &v3(FormatId::ion())).unwrap();
+    let baseline = decode(&IonCodec::new(), V3_MODULE_ION, &v3(FormatId::ion())).unwrap();
+    assert_eq!(
+        ion,
+        encode(&IonCodec::new(), baseline, &v3(FormatId::ion())).unwrap()
+    );
+}
+
+#[test]
+fn a_v3_format_version_outside_the_support_table_is_refused() {
+    let text = V3_MODULE_ION.replace(r#""3.0.0""#, r#""3.2.0""#);
+    let error = decode(&IonCodec::new(), &text, &v3(FormatId::ion())).unwrap_err();
+    assert_eq!(
+        error.code(),
+        "morphir::ir::ion::version_mismatch",
+        "{error:?}"
+    );
+    assert!(error.message().contains("[3.0.0,3.2.0)"), "{error:?}");
+}

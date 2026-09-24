@@ -24,6 +24,7 @@ use crate::ir_transport::{Stage, TransportDiagnostic};
 
 type Spec = classic::PackageSpecification<classic::Attrs>;
 pub(super) type Dependency = (classic::Path, Spec);
+pub(super) type OwnModule = classic::package::ModuleSpecEntry<classic::Attrs>;
 
 /// Adds one `package::spec` to the dependencies. A repeated package merges its modules, and a
 /// repeated module is refused.
@@ -38,7 +39,7 @@ pub(super) fn read_package_spec(
         return Err(IonCodec::error(
             "morphir::ir::ion::unexpected_member",
             Stage::Normalization,
-            "a v3 package::spec cannot name the distribution package, whose modules are def nodes",
+            "a v3 package::spec cannot name the distribution package, whose modules are top-level values",
         ));
     }
     let index = match dependencies.iter().position(|(name, _)| *name == package) {
@@ -82,9 +83,7 @@ pub(super) fn write_package_spec(
     Ok(Element::from(builder.build()).with_annotations(["package", "spec"]))
 }
 
-fn read_module_spec(
-    element: &Element,
-) -> Result<classic::package::ModuleSpecEntry<classic::Attrs>, TransportDiagnostic> {
+pub(super) fn read_module_spec(element: &Element) -> Result<OwnModule, TransportDiagnostic> {
     let names = annotation_names(element)?;
     if names != ["module", "spec"] {
         return Err(member(format!(
@@ -119,9 +118,7 @@ fn read_module_spec(
     })
 }
 
-fn write_module_spec(
-    entry: &classic::package::ModuleSpecEntry<classic::Attrs>,
-) -> Result<Element, TransportDiagnostic> {
+pub(super) fn write_module_spec(entry: &OwnModule) -> Result<Element, TransportDiagnostic> {
     let spec = &entry.specification;
     let mut builder = ion_rs::Struct::builder().with_field("name", canonical_package(&entry.path));
     if let Some(doc) = spec.doc.as_deref() {

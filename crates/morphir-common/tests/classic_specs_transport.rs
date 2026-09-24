@@ -3,8 +3,8 @@ use std::io::Cursor;
 use std::collections::VecDeque;
 
 use morphir_common::ir_transport::{
-    ClassicToV4, CodecOptions, EventSink, EventSource, FormatId, IrCodec, IrVersion, JsonCodec,
-    Layout, Pipeline, TransportDiagnostic, YamlCodec,
+    ClassicToV4, CodecOptions, EventSink, EventSource, FormatId, IonCodec, IrCodec, IrVersion,
+    JsonCodec, Layout, Pipeline, TransportDiagnostic, YamlCodec,
 };
 use morphir_core::ir::classic;
 use morphir_core::migration::{MigrationOptions, migrate_distribution};
@@ -130,7 +130,7 @@ fn splice(header_from: &[SemanticEvent], modules_from: &[SemanticEvent]) -> Vec<
 }
 
 #[test]
-fn a_v3_specs_distribution_round_trips_through_json_and_yaml() {
+fn a_v3_specs_distribution_round_trips_through_json_yaml_and_ion() {
     let original = events(&JsonCodec::new(), SPECS, FormatId::json());
     assert!(
         original.iter().any(|event| matches!(
@@ -142,6 +142,7 @@ fn a_v3_specs_distribution_round_trips_through_json_and_yaml() {
     for (codec, format) in [
         (&JsonCodec::new() as &dyn IrCodec, FormatId::json()),
         (&YamlCodec::new() as &dyn IrCodec, FormatId::yaml()),
+        (&IonCodec::new() as &dyn IrCodec, FormatId::ion()),
     ] {
         let written = text(codec, original.clone(), format.clone());
         assert_eq!(

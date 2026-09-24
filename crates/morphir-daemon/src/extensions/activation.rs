@@ -21,8 +21,14 @@ pub async fn activate_transport(
     let transport: BoxedMepTransport = match artifact {
         VerifiedExtensionArtifact::Process(process) => {
             let capabilities = process.extension_capabilities();
-            let persisted_capabilities =
-                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend);
+            let persisted_capabilities = if process.supplied_claims().is_some() {
+                PersistedExtensionCapabilities::from_claims(
+                    capabilities.frontend,
+                    capabilities.backend,
+                )
+            } else {
+                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend)
+            };
             let launch = if !persisted_capabilities.is_empty() {
                 ProcessLaunch::from_verified_bytes_with_persisted_capabilities_in(
                     process.extension_info().clone(),
@@ -50,8 +56,14 @@ pub async fn activate_transport(
         VerifiedExtensionArtifact::Wasm(wasm) => {
             let extension_info = wasm.extension_info().clone();
             let capabilities = wasm.extension_capabilities();
-            let persisted_capabilities =
-                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend);
+            let persisted_capabilities = if wasm.supplied_claims().is_some() {
+                PersistedExtensionCapabilities::from_claims(
+                    capabilities.frontend,
+                    capabilities.backend,
+                )
+            } else {
+                PersistedExtensionCapabilities::new(capabilities.frontend, capabilities.backend)
+            };
             let container = ExtensionContainer::from_bytes_async(
                 extension_info.id.clone(),
                 wasm.into_bytes(),

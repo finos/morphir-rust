@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "extensions": [
+    {
+      "extensionId": "sample",
+      "name": "Sample",
+      "version": "1.0.0",
+      "runtime": "wasm",
+      "platform": null,
+      "args": [],
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "storePath": "extensions/sample.wasm",
+      "capabilities": [
+        "frontend"
+      ],
+      "mepVersions": [
+        "0.1"
+      ],
+      "index": {
+        "kind": "local-directory",
+        "identity": "/tmp/index",
+        "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "frontend": {
+        "languages": [
+          {
+            "id": "elm",
+            "fileExtensions": [
+              ".elm"
+            ]
+          }
+        ],
+        "irVersions": [
+          "3"
+        ],
+        "compile": true
+      },
+      "executable": false
+    }
+  ]
+}

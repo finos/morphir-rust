@@ -4688,6 +4688,7 @@ dependencies = [
  "base64 0.23.1",
  "extism",
  "morphir-avro-extension",
+ "morphir-common",
  "morphir-core",
  "morphir-distribution",
  "morphir-extension-sdk",

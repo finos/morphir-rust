@@ -24,12 +24,53 @@ use std::collections::HashSet;
 pub struct PersistedExtensionCapabilities {
     frontend: Option<FrontendCapability>,
     backend: Option<BackendCapability>,
+    frontend_scope: FrontendMetadataScope,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FrontendMetadataScope {
+    #[default]
+    Legacy,
+    Claims,
 }
 
 impl PersistedExtensionCapabilities {
-    /// Create a persisted capability expectation from its stored members.
+    /// Create a legacy flat-record expectation, leaving `multiDocument` negotiable.
     pub fn new(frontend: Option<FrontendCapability>, backend: Option<BackendCapability>) -> Self {
-        Self { frontend, backend }
+        Self {
+            frontend,
+            backend,
+            frontend_scope: FrontendMetadataScope::Legacy,
+        }
+    }
+
+    /// Lock all frontend members projected from a supplied capability claim set.
+    pub fn from_claims(
+        frontend: Option<FrontendCapability>,
+        backend: Option<BackendCapability>,
+    ) -> Self {
+        Self {
+            frontend,
+            backend,
+            frontend_scope: FrontendMetadataScope::Claims,
+        }
+    }
+
+    // Only legacy flat records cannot carry multiDocument. Supplied claims lock
+    // its value, including the false default when the member is absent.
+    fn negotiated_frontend(
+        &self,
+        advertised: Option<&FrontendCapability>,
+    ) -> Option<FrontendCapability> {
+        self.frontend
+            .as_ref()
+            .map(|persisted| match self.frontend_scope {
+                FrontendMetadataScope::Claims => persisted.clone(),
+                FrontendMetadataScope::Legacy => FrontendCapability {
+                    multi_document: advertised.is_some_and(|frontend| frontend.multi_document),
+                    ..persisted.clone()
+                },
+            })
     }
 
     /// Return the persisted frontend member, when present.
@@ -258,22 +299,6 @@ fn frontend_differences(
     }
 }
 
-/// A persisted frontend record, completed with the members it cannot carry.
-///
-/// An installed record persists the frontend members its release record
-/// declares. `multiDocument` is not one of them, so a persisted record's value
-/// for it is unknown rather than false, and the guest's advertised value
-/// stands. Every member the record does carry must still agree.
-fn persisted_frontend(
-    persisted: &FrontendCapability,
-    advertised: Option<&FrontendCapability>,
-) -> FrontendCapability {
-    FrontendCapability {
-        multi_document: advertised.is_some_and(|advertised| advertised.multi_document),
-        ..persisted.clone()
-    }
-}
-
 /// The backend members that differ, named as they are spelled on the wire.
 fn backend_differences(
     advertised: Option<&BackendCapability>,
@@ -373,17 +398,15 @@ pub fn validate_negotiation(
                 ))
             }
             CapabilityExpectation::Persisted(discovered)
-                if discovered.frontend().is_some_and(|expected| {
+                if discovered.frontend().is_some_and(|_| {
                     result.capabilities.frontend.as_ref()
-                        != Some(&persisted_frontend(
-                            expected,
-                            result.capabilities.frontend.as_ref(),
-                        ))
+                        != discovered
+                            .negotiated_frontend(result.capabilities.frontend.as_ref())
+                            .as_ref()
                 }) =>
             {
-                let expected = discovered.frontend().map(|expected| {
-                    persisted_frontend(expected, result.capabilities.frontend.as_ref())
-                });
+                let expected =
+                    discovered.negotiated_frontend(result.capabilities.frontend.as_ref());
                 Some((
                     "frontend capabilities",
                     frontend_differences(result.capabilities.frontend.as_ref(), expected.as_ref()),
@@ -544,6 +567,52 @@ mod tests {
     }
 
     #[test]
+    fn a_persisted_frontend_leaves_multi_document_to_the_guest() {
+        let frontend = FrontendCapability {
+            compile: true,
+            ..FrontendCapability::default()
+        };
+        let persisted = PersistedExtensionCapabilities::new(Some(frontend.clone()), None);
+        for multi_document in [false, true] {
+            let advertised = FrontendCapability {
+                multi_document,
+                ..frontend.clone()
+            };
+            assert_eq!(
+                persisted.negotiated_frontend(Some(&advertised)),
+                Some(advertised.clone())
+            );
+            let mut checks =
+                ExpectedChecks::new(ExpectedExtension::discovered_with_persisted_capabilities(
+                    info(vec![ExtensionType::Frontend]),
+                    persisted.clone(),
+                ));
+            let negotiated = checks
+                .negotiate(
+                    &offered(),
+                    result(
+                        info(vec![ExtensionType::Frontend]),
+                        ExtensionCapabilities {
+                            frontend: Some(advertised),
+                            ..ExtensionCapabilities::default()
+                        },
+                    ),
+                )
+                .unwrap();
+            assert_eq!(
+                negotiated
+                    .capabilities()
+                    .frontend
+                    .as_ref()
+                    .unwrap()
+                    .multi_document,
+                multi_document
+            );
+        }
+        assert_eq!(persisted.negotiated_frontend(None), Some(frontend));
+    }
+
+    #[test]
     fn a_legacy_backend_may_omit_its_capability() {
         let mut checks = ExpectedChecks::new(ExpectedExtension::legacy_discovered(info(vec![
             ExtensionType::Backend,
@@ -558,38 +627,6 @@ mod tests {
             )
             .unwrap();
         assert!(negotiated.supports_method(morphir_extension_sdk::protocol::methods::GENERATE));
-    }
-
-    /// An installed record cannot carry `multiDocument`, so a guest that
-    /// advertises it still agrees with its persisted frontend record, while a
-    /// member the record does carry must still match.
-    #[test]
-    fn a_persisted_frontend_leaves_multi_document_to_the_guest() {
-        let persisted = FrontendCapability {
-            ir_versions: vec!["3".into()],
-            compile: true,
-            ..FrontendCapability::default()
-        };
-        let advertised = FrontendCapability {
-            multi_document: true,
-            ..persisted.clone()
-        };
-
-        assert_eq!(
-            persisted_frontend(&persisted, Some(&advertised)),
-            advertised
-        );
-
-        let drifted = FrontendCapability {
-            ir_versions: vec!["4".into()],
-            ..advertised.clone()
-        };
-        let completed = persisted_frontend(&persisted, Some(&drifted));
-        assert_ne!(completed, drifted);
-        assert_eq!(
-            frontend_differences(Some(&drifted), Some(&completed)),
-            vec!["irVersions"]
-        );
     }
 
     #[test]

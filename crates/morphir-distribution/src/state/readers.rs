@@ -210,3 +210,21 @@ impl SelectedMetadata {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_one_frontend_catalog_bytes_are_unchanged() {
+        let bytes = include_bytes!("../../tests/fixtures/frontend-catalog-v1.json");
+        let catalog: CatalogFile = serde_json::from_slice(bytes).unwrap();
+        let frontend = catalog.extensions[0]
+            .extension_capabilities()
+            .frontend
+            .unwrap();
+        assert!(!frontend.multi_document);
+        assert!(!frontend.fragments);
+        assert_eq!(encode_json(&catalog).unwrap(), bytes);
+    }
+}

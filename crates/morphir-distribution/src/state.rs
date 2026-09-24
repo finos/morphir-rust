@@ -294,6 +294,11 @@ impl InstalledExtension {
             .expect("installed record has a claim set")
     }
 
+    /// Return publisher-supplied claims, excluding converted version-1 metadata.
+    pub fn supplied_claims(&self) -> Option<&CapabilityClaimSet> {
+        self.claims.has_supplied_claims().then(|| self.claims())
+    }
+
     /// Return whether the installed claims are unchecked or probed.
     pub fn claim_check(&self) -> ClaimCheck {
         self.claims.claim_check()
@@ -428,6 +433,16 @@ impl InstalledExtension {
 
     /// Convert installed frontend and backend metadata to shared MEP capabilities.
     pub fn extension_capabilities(&self) -> ExtensionCapabilities {
+        // Supplied claims retain members the version-1 flat record cannot express.
+        // Converted legacy claims contain neither flag, so both default to false.
+        let frontend_flag = |member: &str| {
+            self.claims()
+                .capabilities
+                .get("frontend")
+                .and_then(|frontend| frontend.get(member))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
         ExtensionCapabilities {
             frontend: self.frontend.as_ref().map(|record| FrontendCapability {
                 languages: record
@@ -441,8 +456,8 @@ impl InstalledExtension {
                 ir_versions: record.ir_versions().to_vec(),
                 compile: record.compile(),
                 incremental: record.incremental(),
-                fragments: false,
-                multi_document: false,
+                fragments: frontend_flag("fragments"),
+                multi_document: frontend_flag("multiDocument"),
             }),
             backend: self.backend.as_ref().map(|backend| BackendCapability {
                 targets: backend.targets().to_vec(),

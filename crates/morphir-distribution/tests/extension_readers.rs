@@ -353,3 +353,6 @@ fn critical_claims_paths_must_belong_to_the_current_format() {
 
 #[path = "extension_readers/compatibility.rs"]
 mod compatibility;
+
+#[path = "extension_readers/frontend.rs"]
+mod frontend;

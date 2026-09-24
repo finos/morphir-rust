@@ -80,10 +80,9 @@ Unsupported major/minor versions fail. CLI context options `outputDir`,
 unavailable: a request warns or fails when marked fatal. Unknown options fail.
 The Rust frontend compiles exactly one document and never reads `sources.root`,
 so `sourceRootUri` and `sourceRoot` in the options bag are rejected like any
-other unknown option, not silently accepted. A request in the transitional
-legacy envelope — top-level `documents` rather than `sources` — never reaches
-that check carrying one: the SDK moves the legacy root key into `sources.root`
-while deserializing.
+other unknown option. Compile requests must carry documents in `sources`;
+top-level `documents` cannot substitute for it. Extensions built with this SDK
+require Morphir CLI `0.4.0-beta.6` or later.
 
 ## Conditional functions in IR v3 and v4
 

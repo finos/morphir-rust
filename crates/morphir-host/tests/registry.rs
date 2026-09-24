@@ -274,7 +274,10 @@ fn matching_installed_provider_overrides_builtin_for_each_typed_capability() {
 
     assert_eq!(frontend.info().id, "installed-choice");
     assert_eq!(frontend.origin(), ProviderOrigin::Installed);
-    assert!(frontend.native().is_none());
+    assert_eq!(
+        frontend.capability_metadata_scope(),
+        CapabilityMetadataScope::PersistedFrontendBackend
+    );
     assert_eq!(frontend.invocation_mode(), InvocationMode::ProcessMep);
     assert_eq!(backend.info().id, "installed-choice");
     assert_eq!(backend.origin(), ProviderOrigin::Installed);
@@ -712,4 +715,30 @@ async fn a_resolved_provider_connects_through_its_source() {
         .unwrap();
     assert_eq!(session.negotiated().extension().id, "guest");
     session.close().await.unwrap();
+}
+
+#[test]
+fn registration_rejects_an_installed_source_that_claims_complete_scope() {
+    let source = process_provider("installed-claims-complete", "gleam", "json")
+        .as_ref()
+        .clone()
+        .with_scope(CapabilityMetadataScope::Complete);
+    let mut registry = Registry::new();
+    let error = registry.register(Arc::new(source)).unwrap_err().to_string();
+    assert!(error.contains("installed-claims-complete"), "{error}");
+    assert!(error.contains("Complete"), "{error}");
+    assert!(error.contains("Installed"), "{error}");
+}
+
+#[test]
+fn registration_rejects_a_builtin_source_that_claims_a_process_mode() {
+    let source = builtin_alpha()
+        .as_ref()
+        .clone()
+        .with_mode(InvocationMode::ProcessMep);
+    let mut registry = Registry::new();
+    let error = registry.register(Arc::new(source)).unwrap_err().to_string();
+    assert!(error.contains("builtin-alpha"), "{error}");
+    assert!(error.contains("ProcessMep"), "{error}");
+    assert!(error.contains("Builtin"), "{error}");
 }

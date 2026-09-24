@@ -73,6 +73,7 @@ impl Registry {
     /// registered, or when a frontend or backend capability advertises no IR
     /// version or one that does not normalize to a supported release.
     pub fn register(&mut self, source: Arc<dyn GuestSource>) -> Result<(), HostError> {
+        validate_origin_scope_and_modes(source.as_ref())?;
         let info = source.info();
         let origin = source.origin();
         let key = (origin, info.id.clone());
@@ -220,6 +221,43 @@ impl Registry {
             })
         });
         join_candidates(candidates)
+    }
+}
+
+/// Reject a source whose origin disagrees with the capability metadata scope
+/// or invocation modes the daemon's mapping expects of that origin.
+///
+/// A `Builtin` source must report `Complete` scope, `NativeDirect` under
+/// `PreferDirect`, and `NativeMep` under `ProtocolOnly`. An `Installed`
+/// source must report `PersistedFrontendBackend` scope and either
+/// `ProcessMep` or `WasmMep`, the same mode under both policies.
+fn validate_origin_scope_and_modes(source: &dyn GuestSource) -> Result<(), HostError> {
+    let origin = source.origin();
+    let scope = source.capability_metadata_scope();
+    let prefer_direct = source.invocation_mode(InvocationPolicy::PreferDirect);
+    let protocol_only = source.invocation_mode(InvocationPolicy::ProtocolOnly);
+    let agrees = match origin {
+        ProviderOrigin::Builtin => {
+            scope == CapabilityMetadataScope::Complete
+                && prefer_direct == InvocationMode::NativeDirect
+                && protocol_only == InvocationMode::NativeMep
+        }
+        ProviderOrigin::Installed => {
+            scope == CapabilityMetadataScope::PersistedFrontendBackend
+                && prefer_direct == protocol_only
+                && matches!(
+                    prefer_direct,
+                    InvocationMode::ProcessMep | InvocationMode::WasmMep
+                )
+        }
+    };
+    if agrees {
+        Ok(())
+    } else {
+        Err(HostError::Invalid(format!(
+            "provider '{}' reports {scope:?} and {prefer_direct:?}, which do not match its {origin:?} origin",
+            source.info().id
+        )))
     }
 }
 

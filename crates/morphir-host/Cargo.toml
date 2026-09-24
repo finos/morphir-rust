@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Portable Morphir extension host: MEP handshake, sessions and channels"
 
 [dependencies]
+morphir-core = { path = "../morphir-core" }
 morphir-extension-sdk = { path = "../morphir-extension-sdk" }
 morphir-workspace = { path = "../morphir-workspace" }
 async-trait = "0.1"

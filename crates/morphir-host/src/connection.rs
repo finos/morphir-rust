@@ -32,3 +32,23 @@ pub trait GuestConnection: MaybeSend {
     /// Complete MEP shutdown and release the guest.
     async fn close(&mut self) -> Result<(), HostError>;
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+impl<G: GuestConnection + ?Sized> GuestConnection for Box<G> {
+    async fn open(&mut self, params: InitializeParams) -> Result<Negotiated, HostError> {
+        (**self).open(params).await
+    }
+
+    async fn call(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, CallError> {
+        (**self).call(method, params).await
+    }
+
+    async fn close(&mut self) -> Result<(), HostError> {
+        (**self).close().await
+    }
+}

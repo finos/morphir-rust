@@ -6,7 +6,7 @@ set -eu
 
 ID="${usage_id:-${1:-}}"
 case "$ID" in
-    ''|*[!a-z0-9-]*|-*)
+    '' | *[!a-z0-9-]* | -*)
         echo "Usage: mise run extension:claims <id> (a lowercase extension short ID)" >&2
         exit 1
         ;;

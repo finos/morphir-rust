@@ -36,6 +36,24 @@ fn a_description_keeps_its_fence_byte_for_byte_and_its_prose_parsed() {
 }
 
 #[test]
+fn a_block_s_span_never_starts_before_the_range() {
+    const TEXT: &str = "Feature: Name  Some description text here.\nMore description.\n";
+    let source = SourceText::new(TEXT);
+    let start = TEXT.find("Some").expect("the fixture contains \"Some\"");
+    let range = Span {
+        start,
+        end: TEXT.len(),
+    };
+
+    let description = parse_blocks(&source, range, 0);
+
+    let prose: Vec<_> = description.prose().collect();
+    assert_eq!(prose.len(), 1);
+    assert_eq!(prose[0].span.start, range.start);
+    assert!(prose[0].markdown.starts_with("Some"));
+}
+
+#[test]
 fn an_empty_range_gives_an_empty_description() {
     let source = SourceText::new("");
     assert!(

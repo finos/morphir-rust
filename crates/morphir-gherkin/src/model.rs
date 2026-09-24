@@ -61,8 +61,8 @@ impl Description {
 }
 
 /// One Markdown block that is not a fence: a paragraph, a list, a quote, a heading below the Gherkin
-/// levels, a table or a thematic break. `markdown` is the block's source text; `inlines` holds its
-/// parsed inline content.
+/// levels, a table or a thematic break. `markdown` is the block's source text, including its
+/// indent; `inlines` holds its parsed inline content.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProseBlock {
     pub kind: ProseKind,

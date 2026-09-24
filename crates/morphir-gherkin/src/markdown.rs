@@ -53,10 +53,11 @@ fn dedent(source: &SourceText, range: Span, indent: usize) -> Dedented {
 }
 
 /// Parses the lines in `range` as Markdown after removing up to `indent` leading spaces from each
-/// line, and returns the description with every block's span pointing into the original file.
+/// line, and returns the description with every block's span pointing into the original file. A
+/// block's span starts at the start of its source line, but never before `range.start`.
 pub fn parse_blocks(source: &SourceText, range: Span, indent: usize) -> Description {
     let dedented = dedent(source, range, indent);
-    let mut builder = Builder::new(source, &dedented);
+    let mut builder = Builder::new(source, range, &dedented);
     for (event, local) in Parser::new_ext(&dedented.text, Options::ENABLE_TABLES).into_offset_iter()
     {
         builder.handle(event, local);
@@ -110,6 +111,7 @@ impl InlineOpen {
 /// of that block's inline content, not a free fence.
 struct Builder<'s> {
     source: &'s SourceText,
+    range: Span,
     dedented: &'s Dedented,
     blocks: Vec<DescriptionBlock>,
     depth: usize,
@@ -119,9 +121,10 @@ struct Builder<'s> {
 }
 
 impl<'s> Builder<'s> {
-    fn new(source: &'s SourceText, dedented: &'s Dedented) -> Self {
+    fn new(source: &'s SourceText, range: Span, dedented: &'s Dedented) -> Self {
         Self {
             source,
+            range,
             dedented,
             blocks: Vec::new(),
             depth: 0,
@@ -132,11 +135,17 @@ impl<'s> Builder<'s> {
     }
 
     /// The span of a local range in the dedented text, mapped back to the original file. The span
-    /// always starts at the beginning of the original source line, so it keeps that line's indent.
+    /// starts at the beginning of its original source line, so it keeps that line's indent, but
+    /// never starts before `self.range.start`: a block whose first source line starts before
+    /// `range` (because `range` itself begins mid-line) keeps its span, and `markdown`, inside
+    /// `range`.
     fn span(&self, local: Range<usize>) -> Span {
         let start = self.dedented.origin[local.start];
         let end = self.dedented.origin[local.end.min(self.dedented.origin.len() - 1)];
-        let start = self.source.line_start(self.source.line_col(start).line);
+        let start = self
+            .source
+            .line_start(self.source.line_col(start).line)
+            .max(self.range.start);
         Span { start, end }
     }
 

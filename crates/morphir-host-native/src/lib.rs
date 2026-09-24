@@ -4,4 +4,8 @@
 //! holds the parts that need a native runtime: child processes, Extism, and
 //! in-process Rust guests, each behind `morphir_host::Channel`.
 
+pub mod extism;
+mod native;
 pub mod process;
+
+pub use native::NativeChannel;

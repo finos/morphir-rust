@@ -16,14 +16,14 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
             "morphir-gleam-binding-0.2.0.wasm", "0" * 64, RELEASE_COMMIT,
         ))
         self.assertEqual("morphir-gleam", descriptor["extensionId"])
-        self.assertEqual(["gleam"], descriptor["targets"])
-        self.assertEqual([{"id": "gleam", "fileExtensions": [".gleam"]}], descriptor["languages"])
-        self.assertEqual(["3", "4"], descriptor["irVersions"])
-        self.assertTrue(descriptor["incremental"])
-        self.assertTrue(descriptor["workspaceDiscovery"])
+        self.assertEqual(["gleam"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
+        self.assertEqual([{"id": "gleam", "fileExtensions": [".gleam"]}], descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["languages"])
+        self.assertEqual(["3", "4"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["irVersions"])
+        self.assertTrue(descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["incremental"])
+        self.assertTrue(descriptor["artifacts"][0]["claims"]["capabilities"]["workspace"]["discover"])
 
     def test_discovery_providers_package_and_verify_the_same_descriptor(self) -> None:
-        """The packager and the release asset check derive descriptors separately.
+        """The packager and release asset check agree on the exact descriptor.
 
         Asset selection compares the downloaded descriptor against its own
         registry-derived expectation key for key and rejects any field it did
@@ -51,9 +51,10 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
                 ))
                 verified = select_extension_assets.expected_descriptor(
                     short_id, extension, version, artifact_name, "0" * 64, RELEASE_COMMIT,
+                    packaged["artifacts"][0]["claims"],
                 )
 
-                self.assertTrue(packaged["workspaceDiscovery"])
+                self.assertTrue(packaged["artifacts"][0]["claims"]["capabilities"]["workspace"]["discover"])
                 self.assertEqual(verified, packaged)
 
     def test_a_backend_only_entry_cannot_claim_workspace_discovery(self) -> None:
@@ -70,7 +71,7 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(
             select_extension_assets.AssetError, "workspace_discovery"
         ):
-            select_extension_assets.expected_descriptor(*arguments, RELEASE_COMMIT)
+            select_extension_assets.expected_descriptor(*arguments, RELEASE_COMMIT, {})
 
     def test_rust_tag_preserves_frontend_backend_and_both_ir_versions(self) -> None:
         from package_extension_test_support import descriptor_bytes
@@ -85,10 +86,10 @@ class ExtensionReleaseRoutingTests(unittest.TestCase):
             "morphir-rust-binding-0.1.0.wasm", "0" * 64, RELEASE_COMMIT,
         ))
         self.assertEqual("morphir-rust", descriptor["extensionId"])
-        self.assertEqual("Morphir Rust", descriptor["name"])
-        self.assertEqual(["rust"], descriptor["targets"])
-        self.assertEqual([{"id": "rust", "fileExtensions": [".rs"]}], descriptor["languages"])
-        self.assertEqual(["3", "4"], descriptor["irVersions"])
+        self.assertEqual("Morphir Rust", descriptor["artifacts"][0]["claims"]["extension"]["name"])
+        self.assertEqual(["rust"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
+        self.assertEqual([{"id": "rust", "fileExtensions": [".rs"]}], descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["languages"])
+        self.assertEqual(["3", "4"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["irVersions"])
 
     def test_dedicated_tag_selects_one_extension(self) -> None:
         release = extension_release.resolve_release(

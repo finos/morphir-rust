@@ -20,14 +20,16 @@ class PythonExtensionReleaseTests(unittest.TestCase):
             with registry.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write('languages = [{ id = "python", file_extensions = [".py"] }]\n')
             descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
-            descriptor["languages"] = [{"id": "python", "fileExtensions": [".py"]}]
+            descriptor["artifacts"][0]["claims"] = claims_for_extension(
+                tomllib.loads(registry.read_text())["extensions"]["python"], "0.1.0"
+            )
             before = (json.dumps(descriptor, indent=2) + "\n").encode("utf-8")
             descriptor_path.write_bytes(before)
             fixture.bundles = descriptor_path.parent
             selection = fixture.select("extension/python/v0.1.0")
             uploaded = next(asset for asset in selection.uploads if asset.name.endswith(".release.json"))
             self.assertEqual(before, uploaded.source.read_bytes())
-            del descriptor["languages"]
+            del descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["languages"]
             descriptor_path.write_bytes(json.dumps(descriptor).encode("utf-8"))
             with self.assertRaisesRegex(select_extension_assets.AssetError, "languages"):
                 fixture.select("extension/python/v0.1.0")
@@ -43,17 +45,17 @@ class PythonExtensionReleaseTests(unittest.TestCase):
         descriptor = json.loads(descriptor_bytes(
             "python", extension, "0.1.0", "morphir-python-binding-0.1.0.wasm", "0" * 64, "a" * 40,
         ))
-        self.assertEqual("Morphir Python", descriptor["name"])
-        self.assertEqual(["python"], descriptor["targets"])
-        self.assertEqual([{"id": "python", "fileExtensions": [".py"]}], descriptor["languages"])
-        self.assertEqual(["3", "4"], descriptor["irVersions"])
+        self.assertEqual("Morphir Python", descriptor["artifacts"][0]["claims"]["extension"]["name"])
+        self.assertEqual(["python"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"])
+        self.assertEqual([{"id": "python", "fileExtensions": [".py"]}], descriptor["artifacts"][0]["claims"]["capabilities"]["frontend"]["languages"])
+        self.assertEqual(["3", "4"], descriptor["artifacts"][0]["claims"]["capabilities"]["backend"]["irVersions"])
 
     def test_packaging_accepts_frontend_only_and_rejects_invalid_languages(self) -> None:
         registry = tomllib.loads(AVRO_REGISTRY)["extensions"]["avro"]
         registry["targets"] = []
         registry["languages"] = [{"id": "python", "file_extensions": [".py"]}]
         descriptor = json.loads(descriptor_bytes("python", registry, "0.1.0", "guest.wasm", "0" * 64, None))
-        self.assertEqual([], descriptor["targets"])
+        self.assertNotIn("backend", descriptor["artifacts"][0]["claims"]["capabilities"])
         for languages in [[], [{"id": "python", "file_extensions": ["py"]}],
                           [{"id": "python", "file_extensions": [".py", ".py"]}],
                           [{"id": "python", "file_extensions": [".py"]}] * 2]:

@@ -77,7 +77,7 @@ class ExtensionAssetSelectionTests(unittest.TestCase):
             )
             self.assertEqual(before, uploaded.source.read_bytes())
             self.assertEqual(
-                ["openapi", "json-schema"], json.loads(before)["targets"]
+                ["openapi", "json-schema"], json.loads(before)["artifacts"][0]["claims"]["capabilities"]["backend"]["targets"]
             )
 
     def test_rejects_cross_bundle_collision_after_publication_name_mapping(self) -> None:

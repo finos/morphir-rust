@@ -75,6 +75,12 @@ morphir extension repository verify python-local
 morphir extension install --repository python-local morphir-python
 ```
 
+Newly built bundles use version-2 descriptors containing the WASM guest's own
+capability claims. Publishing requires Morphir CLI `0.4.0-beta.7` or later;
+older CLIs cannot read them. The release asset filename is unchanged, so the
+`Rename-Item` command above also applies to version-2 bundles. WASM installs
+retain `claims` with `claimCheck: "unchecked"` and display `Claims: unchecked`.
+
 Keep the same `MORPHIR_HOME` for compilation and generation. Installation verifies
 the artifact digest and records both capabilities. Once installed, compilation
 and generation work offline without access to the original repository.

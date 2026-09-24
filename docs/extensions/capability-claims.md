@@ -54,3 +54,73 @@ Distribution callers use `ClaimsRecord`, `ClaimCheck::{Unchecked, Probed}`,
 
 This terminology follows finos/morphir#921 and kb `morphir-extensions` decision
 0007, "Extensions make capability claims".
+
+## Packaging WASM extensions
+
+All six `mise run extension:artifact:<id>` tasks write a version-2 `release.json`
+with `schemaVersion: "2.0.0-draft.2"`. Publishing these bundles requires Morphir
+CLI **0.4.0-beta.7 or later**. Older CLIs cannot read these descriptors.
+
+The packager reads the built WASM once, writes those bytes to a private temporary
+file, and runs:
+
+```console
+cargo run --quiet --locked -p morphir-host-native --bin extension-claims -- <temporary-guest.wasm>
+```
+
+The descriptor embeds the guest's complete `morphir.extension.describe` answer
+under `artifacts[0].claims`, including optional members. Packaging fails before
+writing a bundle if the tool fails or its claims disagree with the registry's
+extension ID, name when declared, MEP versions, capability kinds, languages and
+file extensions, targets, IR versions, incremental flag, or workspace discovery.
+The claimed extension version must match the registered crate's `Cargo.toml`.
+`.github/extensions.toml` remains the declared source of release capabilities;
+packaging never replaces a guest claim with a registry value.
+
+A bundle descriptor has this structure. The digest below is illustrative:
+
+```json
+{
+  "schemaVersion": "2.0.0-draft.2",
+  "shortId": "avro",
+  "extensionId": "morphir-avro",
+  "version": "0.1.0",
+  "artifacts": [{
+    "runtime": "wasm",
+    "filename": "morphir-avro-extension-0.1.0.wasm",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "claims": {
+      "claimsVersion": "0.1.0-draft.2",
+      "protocolVersions": ["0.1"],
+      "extension": {
+        "id": "morphir-avro", "name": "Morphir Avro",
+        "version": "0.1.0", "types": ["backend"]
+      },
+      "capabilities": {
+        "backend": {"targets": ["avro"], "irVersions": ["3", "4"], "generate": true}
+      }
+    }
+  }]
+}
+```
+
+WASM artifacts must omit `platform`, including a null value. A single artifact
+needs no `platformDifferences` policy. The descriptor retains optional
+`gitCommit` for a clean HEAD snapshot; a dirty worktree omits it. The legacy
+`package` member remains in the registry rather than the descriptor. Name,
+protocol versions, and capability metadata now live in the guest's claims.
+
+The staged directory still contains exactly the versioned `.wasm`, its
+`.wasm.sha256` checksum, and `release.json`. Release publication names the
+last file `<artifact-base>-<version>.release.json`, preserving the existing
+fetch contract. Rename that downloaded file to `release.json` before running
+`morphir extension repository publish`. Asset selection checks the exact
+version-2 envelope, registry agreement, commit, and both checksum locations;
+it uploads the original bytes.
+
+The CLI does not probe WASM artifacts at publication or installation. The
+installed catalog retains `claims` with `claimCheck: "unchecked"`, and
+`morphir extension list` prints `Claims: unchecked`. Packaging-time validation
+does not mark the host's claim check as probed. Run
+`mise run test:cli-release <id>` to verify publication, installation, and use
+through the pinned CLI.

@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import tomllib
 import unittest
+from extension_claims_test_support import claims_for_extension
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -127,20 +128,10 @@ class AssetFixture:
         )
         self.descriptor.write_text(
             json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "shortId": "avro",
-                    "extensionId": "morphir-avro",
-                    "package": "morphir-avro-extension",
-                    "version": "0.1.0",
-                    "mepVersions": ["0.1"],
-                    "runtime": "wasm",
-                    "targets": ["avro"],
-                    "irVersions": ["3", "4"],
-                    "artifact": self.artifact_name,
-                    "sha256": digest,
-                    "gitCommit": RELEASE_COMMIT,
-                },
+                a_bundle_descriptor("avro", {
+                    "extension_id": "morphir-avro", "mep_versions": ["0.1"],
+                    "targets": ["avro"], "ir_versions": ["3", "4"],
+                }, "0.1.0", self.artifact_name, digest),
                 indent=2,
             )
             + "\n",
@@ -198,21 +189,11 @@ class AssetFixture:
         checksum.write_text(f"{digest}  {artifact_name}\n", encoding="utf-8")
         descriptor_path.write_text(
             json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "shortId": short_id,
-                    "extensionId": extension_id,
-                    "package": package,
-                    "version": version,
-                    "mepVersions": ["0.1"],
-                    "runtime": "wasm",
-                    "targets": targets,
-                    "irVersions": ["4"],
-                    "artifact": artifact_name,
-                    "sha256": digest,
+                a_bundle_descriptor(short_id, {
+                    "extension_id": extension_id, "mep_versions": ["0.1"],
+                    "targets": targets, "ir_versions": ["4"],
                     **({} if name is None else {"name": name}),
-                    "gitCommit": RELEASE_COMMIT,
-                },
+                }, version, artifact_name, digest),
                 indent=2,
             )
             + "\n",
@@ -241,3 +222,13 @@ class AssetFixture:
         self.descriptor.write_text(
             json.dumps(descriptor, indent=2) + "\n", encoding="utf-8"
         )
+
+
+def a_bundle_descriptor(short_id, extension, version, filename, digest):
+    return {
+        "schemaVersion": "2.0.0-draft.2", "shortId": short_id,
+        "extensionId": extension["extension_id"], "version": version,
+        "artifacts": [{"runtime": "wasm", "filename": filename, "sha256": digest,
+                       "claims": claims_for_extension(extension, version)}],
+        "gitCommit": RELEASE_COMMIT,
+    }

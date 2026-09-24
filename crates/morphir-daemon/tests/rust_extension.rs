@@ -38,8 +38,14 @@ async fn packaged_rust_installs_and_executes_offline_in_both_ir_versions() {
     let publication = repository.publish(bundle).unwrap();
     assert_eq!(publication.release().name(), "Morphir Rust");
     let published_version = publication.release().version().to_string();
-    assert!(publication.release().frontend().is_some());
-    assert!(publication.release().backend().is_some());
+    let artifact = &publication.release().artifacts()[0];
+    let claims = artifact.claims().expect("version-2 artifact claims");
+    assert!(claims.capabilities.contains_key("frontend"));
+    assert!(claims.capabilities.contains_key("backend"));
+    assert_eq!(
+        artifact.claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
+    );
 
     let id = ExtensionId::parse("morphir-rust").unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
@@ -52,9 +58,17 @@ async fn packaged_rust_installs_and_executes_offline_in_both_ir_versions() {
             &"0.4.0".parse().unwrap(),
         )
         .unwrap();
-    ExtensionInstaller::new(&home)
+    let installed = ExtensionInstaller::new(&home)
         .install(selected, &"0.4.0".parse().unwrap())
         .unwrap();
+    assert_eq!(
+        serde_json::to_value(installed.claims()).unwrap(),
+        serde_json::to_value(claims).unwrap()
+    );
+    assert_eq!(
+        installed.claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
+    );
     // Activation must use the installed artifact after the repository is gone.
     std::fs::remove_dir_all(repository.root()).unwrap();
     let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())

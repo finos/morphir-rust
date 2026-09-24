@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 from typing import Any, Mapping
 
 from .model import (
@@ -78,48 +79,12 @@ def read_descriptor(path: Path) -> dict[str, Any]:
     return value
 
 
-def frontend_incremental(
-    short_id: str, extension: Mapping[str, Any], has_frontend: bool
-) -> bool:
-    """Read the registry's incremental flag, for every entry that has one.
-
-    Reading it outside the frontend branch is what keeps a backend-only entry
-    from carrying a flag nothing can honour, and a non-boolean from passing
-    through unexamined.
-    """
-    value = extension.get("incremental", False)
-    if not isinstance(value, bool):
-        raise AssetError(
-            f"extension {short_id} registry field incremental must be a boolean"
-        )
-    if value and not has_frontend:
-        raise AssetError(
-            f"extension {short_id} declares incremental without frontend languages"
-        )
-    return value
-
-
-def workspace_discovery(
-    short_id: str, extension: Mapping[str, Any], has_frontend: bool
-) -> bool:
-    """Read the registry's workspace discovery flag, for every entry that has one.
-
-    Reading it outside the frontend branch is what keeps an entry that cannot
-    synthesize module identity from carrying a capability nothing can honour,
-    and a non-boolean from passing through unexamined. This is the registry's
-    `workspace_discovery`, not `release_with_workspace`, which only says the
-    extension releases alongside the Cargo workspace.
-    """
-    value = extension.get("workspace_discovery", False)
-    if not isinstance(value, bool):
-        raise AssetError(
-            f"extension {short_id} registry field workspace_discovery must be a boolean"
-        )
-    if value and not has_frontend:
-        raise AssetError(
-            f"extension {short_id} declares workspace_discovery without frontend languages"
-        )
-    return value
+# The packager owns the bundle wire format and registry agreement rules.
+_PACKAGING_SCRIPTS = str(Path(__file__).resolve().parents[3] / "scripts")
+if _PACKAGING_SCRIPTS not in sys.path:
+    sys.path.insert(0, _PACKAGING_SCRIPTS)
+from extension_packaging.errors import PackageError
+from extension_packaging.model import descriptor_bytes, wasm_artifact
 
 
 def expected_descriptor(
@@ -129,40 +94,15 @@ def expected_descriptor(
     artifact_name: str,
     digest: str,
     expected_commit: str,
+    claims: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the tag- and registry-derived descriptor fields."""
-    incremental = frontend_incremental(short_id, extension, "languages" in extension)
-    workspace = workspace_discovery(short_id, extension, "languages" in extension)
-    expected: dict[str, Any] = {
-        "schemaVersion": 1,
-        "shortId": short_id,
-        "extensionId": extension.get("extension_id"),
-        "package": extension.get("package"),
-        "version": version,
-        "mepVersions": extension.get("mep_versions"),
-        "runtime": "wasm",
-        "targets": extension.get("targets", []),
-        "irVersions": extension.get("ir_versions"),
-        "artifact": artifact_name,
-        "sha256": digest,
-    }
-    if "languages" in extension:
-        expected["languages"] = [
-            {"id": language["id"], "fileExtensions": language["file_extensions"]}
-            for language in extension["languages"]
-        ]
-        # Written only when true, so a frontend that is not incremental keeps
-        # the descriptor fields it always had.
-        if incremental:
-            expected["incremental"] = True
-    # Written only when true, for the same reason: an extension that does not
-    # serve discovery keeps the descriptor fields it always had.
-    if workspace:
-        expected["workspaceDiscovery"] = True
-    if "name" in extension:
-        expected["name"] = extension.get("name")
-    expected["gitCommit"] = expected_commit
-    return expected
+    """Rebuild the exact envelope after checking guest claims against the registry."""
+    try:
+        return json.loads(descriptor_bytes(
+            short_id, extension, version, artifact_name, digest, expected_commit, claims,
+        ))
+    except PackageError as error:
+        raise AssetError(str(error)) from error
 
 
 def validate_bundle(
@@ -208,7 +148,11 @@ def validate_bundle(
     except OSError as error:
         raise AssetError(f"cannot read extension artifact {artifact_path}: {error}") from error
     digest = hashlib.sha256(artifact_bytes).hexdigest()
-    descriptor_digest = descriptor.get("sha256")
+    try:
+        artifact = wasm_artifact(descriptor)
+    except PackageError as error:
+        raise AssetError(str(error)) from error
+    descriptor_digest = artifact["sha256"]
     if not isinstance(descriptor_digest, str) or not SHA256_PATTERN.fullmatch(
         descriptor_digest
     ):
@@ -224,7 +168,7 @@ def validate_bundle(
         raise AssetError(f"checksum file does not match artifact for {short_id}")
 
     expected = expected_descriptor(
-        short_id, extension, version, artifact_name, digest, expected_commit
+        short_id, extension, version, artifact_name, digest, expected_commit, artifact["claims"]
     )
     allowed_keys = set(expected)
     unexpected = set(descriptor) - allowed_keys

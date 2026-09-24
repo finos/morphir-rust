@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- WASM extension bundles now carry version-2 (`2.0.0-draft.2`) release
+  descriptors with capability claims read from the shipped guest and checked
+  against `.github/extensions.toml`. Publishing requires Morphir CLI
+  `0.4.0-beta.7` or later; older CLIs cannot read these descriptors. Release
+  asset names and the three-file bundle layout are unchanged.
 - `test:cli-release <id>` runs every bundle through Morphir CLI `0.4.0-beta.7`,
   the first release that reads capability claim sets (`claimsVersion`
   `0.1.0-draft.2`), so bundles can move to version-2 descriptors

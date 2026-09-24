@@ -119,34 +119,23 @@ def descriptor_bytes(
     artifact_name: str,
     digest: str,
     git_commit: str | None,
+    claims: dict[str, Any],
 ) -> bytes:
-    languages = frontend_languages(extension) if "languages" in extension else None
-    incremental = frontend_incremental(short_id, extension, languages is not None)
-    workspace = workspace_discovery(short_id, extension, languages is not None)
-    targets = extension.get("targets", [])
-    if targets != [] or languages is None:
-        targets = require_string_list(extension, "targets")
+    from .claims import check_claims
+
+    check_claims(short_id, extension, version, claims)
     descriptor = {
-        "schemaVersion": 1,
+        "schemaVersion": "2.0.0-draft.2",
         "shortId": short_id,
         "extensionId": require_string(extension, "extension_id"),
-        "package": require_string(extension, "package"),
         "version": version,
-        "mepVersions": require_string_list(extension, "mep_versions"),
-        "runtime": "wasm",
-        "targets": targets,
-        "irVersions": require_string_list(extension, "ir_versions"),
-        "artifact": artifact_name,
-        "sha256": digest,
+        "artifacts": [{
+            "runtime": "wasm",
+            "filename": artifact_name,
+            "sha256": digest,
+            "claims": claims,
+        }],
     }
-    if languages is not None:
-        descriptor["languages"] = languages
-        if incremental:
-            descriptor["incremental"] = True
-    if workspace:
-        descriptor["workspaceDiscovery"] = True
-    if "name" in extension:
-        descriptor["name"] = require_string(extension, "name")
     if git_commit is not None:
         descriptor["gitCommit"] = git_commit
     return (json.dumps(descriptor, indent=2) + "\n").encode("utf-8")
@@ -159,8 +148,7 @@ def frontend_incremental(
 
     A host reads this from the installed record before it starts the guest, so
     it has to agree with what the guest advertises at initialization. It is
-    written only when true, so a frontend that is not incremental keeps the
-    descriptor it always had.
+    checked against the frontend claim.
 
     This is read for every entry, not only the ones that declare a frontend, so
     that a registry entry cannot carry the flag where nothing can honour it.
@@ -185,8 +173,7 @@ def workspace_discovery(
     A host reads the capability kinds from the installed record before it
     starts the guest and refuses the session when the guest then reports a
     different set, so an extension that answers discovery has to say so here
-    too. It is written only when true, so an extension that does not serve
-    discovery keeps the descriptor it always had.
+    too. Packaging checks that the guest reports the same capability kinds.
 
     Discovery synthesis is a language policy layered on portable discovery —
     it turns a source path into a module identity — so it needs the frontend
@@ -236,6 +223,7 @@ def expected_bundle(
     version: str,
     wasm_bytes: bytes,
     git_commit: str | None,
+    claims: dict[str, Any],
 ) -> dict[str, bytes]:
     artifact_base = require_identifier(extension.get("artifact"), "artifact")
     artifact_name = f"{artifact_base}-{version}.wasm"
@@ -250,5 +238,46 @@ def expected_bundle(
             artifact_name,
             digest,
             git_commit,
+            claims,
         ),
     }
+
+
+def wasm_artifact(descriptor: dict[str, Any]) -> dict[str, Any]:
+    """Validate the exact packaging envelope; claims retain guest-owned members."""
+    required = {"schemaVersion", "shortId", "extensionId", "version", "artifacts"}
+    if set(descriptor) - {"gitCommit"} != required:
+        raise PackageError(
+            f"descriptor fields are invalid; missing={sorted(required - set(descriptor))} "
+            f"unexpected={sorted(set(descriptor) - required - {'gitCommit'})}"
+        )
+    if descriptor["schemaVersion"] != "2.0.0-draft.2":
+        raise PackageError("descriptor schemaVersion must be 2.0.0-draft.2")
+    require_identifier(descriptor["shortId"], "short ID")
+    require_string(descriptor, "extensionId")
+    validate_semver(require_string(descriptor, "version"))
+    if "gitCommit" in descriptor:
+        require_string(descriptor, "gitCommit")
+    artifacts = descriptor["artifacts"]
+    if not isinstance(artifacts, list) or len(artifacts) != 1:
+        raise PackageError("descriptor artifacts must contain exactly one WASM artifact")
+    artifact = artifacts[0]
+    if not isinstance(artifact, dict) or set(artifact) != {"runtime", "filename", "sha256", "claims"}:
+        raise PackageError("descriptor artifact fields are invalid")
+    if artifact["runtime"] != "wasm":
+        raise PackageError("descriptor artifact runtime must be wasm")
+    claims = artifact["claims"]
+    if not isinstance(claims, dict) or claims.get("claimsVersion") != "0.1.0-draft.2":
+        raise PackageError("descriptor artifact requires draft.2 claims")
+    identity = claims.get("extension")
+    if not isinstance(identity, dict) or identity.get("id") != descriptor["extensionId"] or identity.get("version") != descriptor["version"]:
+        raise PackageError("descriptor extensionId or version disagrees with claims")
+    require_string_list(claims, "protocolVersions")
+    require_string(identity, "name")
+    require_string_list(identity, "types")
+    if not isinstance(claims.get("capabilities"), dict):
+        raise PackageError("descriptor claims capabilities must be an object")
+    from .claims import validate_capabilities
+
+    validate_capabilities(claims["capabilities"])
+    return artifact

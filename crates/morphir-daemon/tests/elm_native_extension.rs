@@ -18,26 +18,26 @@ const INVALID: &str = include_str!("fixtures/morphir-elm-extension/Invalid.elm")
 async fn packaged_elm_native_installs_and_compiles_offline() {
     use morphir_common::home::MorphirHome;
     use morphir_distribution::{
-        Capability, Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex,
-        Platform, Selection, activate_installed,
+        Channel, ExtensionId, ExtensionInstaller, LocalExtensionRepository, LocalIndex, Platform,
+        Selection, activate_installed,
     };
     let bundle = std::env::var_os("MORPHIR_ELM_NATIVE_BUNDLE")
         .expect("build the Elm native release bundle first");
     let root = tempfile::tempdir().unwrap();
     let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
     let publication = repository.publish(bundle).unwrap();
-    assert!(publication.release().frontend().is_some());
-    assert!(publication.release().backend().is_some());
-    // The guest reports Workspace among its capability kinds at
-    // initialization. Discovery has no record of its own, so the bundle
-    // manifest's capability list is the only place the kind can come from; if
-    // it were missing, negotiation below would stop on "capability kinds
-    // changed" rather than anything the compile assertions would catch.
-    assert!(
-        publication
-            .release()
-            .capabilities()
-            .contains(&Capability::Workspace)
+    // A version-2 bundle carries the guest's own claims. The guest reports
+    // Workspace among its capability kinds at initialization, so the claims must
+    // too, or negotiation below would stop on "capability kinds changed".
+    let artifact = &publication.release().artifacts()[0];
+    let claims = artifact.claims().expect("version-2 artifact claims");
+    assert!(claims.capabilities.contains_key("frontend"));
+    assert!(claims.capabilities.contains_key("backend"));
+    assert!(claims.capabilities.contains_key("workspace"));
+    assert!(claims.extension.types.contains(&ExtensionType::Workspace));
+    assert_eq!(
+        artifact.claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
     );
     let id = ExtensionId::parse("morphir-elm-native").unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
@@ -50,9 +50,17 @@ async fn packaged_elm_native_installs_and_compiles_offline() {
             &"0.4.0".parse().unwrap(),
         )
         .unwrap();
-    ExtensionInstaller::new(&home)
+    let installed = ExtensionInstaller::new(&home)
         .install(selected, &"0.4.0".parse().unwrap())
         .unwrap();
+    assert_eq!(
+        serde_json::to_value(installed.claims()).unwrap(),
+        serde_json::to_value(claims).unwrap()
+    );
+    assert_eq!(
+        installed.claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
+    );
     // Removing this fixture's repository proves activation uses the installed copy.
     std::fs::remove_dir_all(repository.root()).unwrap();
     let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())

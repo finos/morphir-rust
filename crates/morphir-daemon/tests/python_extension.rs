@@ -37,8 +37,14 @@ async fn packaged_roundtrip(version: &str) {
     let root = tempfile::tempdir().unwrap();
     let repository = LocalExtensionRepository::init(root.path().join("repository")).unwrap();
     let publication = repository.publish(bundle).unwrap();
-    assert!(publication.release().frontend().is_some());
-    assert!(publication.release().backend().is_some());
+    let artifact = &publication.release().artifacts()[0];
+    let claims = artifact.claims().expect("version-2 artifact claims");
+    assert!(claims.capabilities.contains_key("frontend"));
+    assert!(claims.capabilities.contains_key("backend"));
+    assert_eq!(
+        artifact.claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
+    );
     let id = ExtensionId::parse("morphir-python").unwrap();
     let home = MorphirHome::resolve_from(Some(root.path().join("home").as_os_str()), None).unwrap();
     let selected = LocalIndex::open(repository.root())
@@ -50,9 +56,17 @@ async fn packaged_roundtrip(version: &str) {
             &"0.4.0".parse().unwrap(),
         )
         .unwrap();
-    ExtensionInstaller::new(&home)
+    let installed = ExtensionInstaller::new(&home)
         .install(selected, &"0.4.0".parse().unwrap())
         .unwrap();
+    assert_eq!(
+        serde_json::to_value(installed.claims()).unwrap(),
+        serde_json::to_value(claims).unwrap()
+    );
+    assert_eq!(
+        installed.claim_check(),
+        morphir_distribution::ClaimCheck::Unchecked
+    );
     // Removing this fixture's repository proves activation uses the installed copy.
     std::fs::remove_dir_all(repository.root()).unwrap();
     let loaded = activate_transport(activate_installed(&home, &id).unwrap(), root.path())

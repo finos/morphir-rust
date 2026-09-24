@@ -4,6 +4,7 @@ use super::{
     ArtifactRevision, ArtifactSelector, IrFormatVersion, NodeFingerprintBuilder, NodeOwner,
     NodeRoot, NodeStep, NodeUri, Sha256Digest, semantic_json,
 };
+use crate::format_version::{NormalizedFormatVersion, ScalarValue, SupportTable};
 use crate::ir::{classic, v4};
 use crate::naming::{Name, PackageName, Path};
 use serde::Serialize;
@@ -114,14 +115,7 @@ impl NodeCatalog {
         expected: Option<&Sha256Digest>,
     ) -> Result<Sha256Digest, NodeResolutionError> {
         let digest = verify_snapshot_digest(bytes, expected)?;
-        let distribution: classic::Distribution = serde_json::from_slice(bytes)
-            .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
-        let package = match &distribution.distribution {
-            classic::DistributionBody::Library(package, _, _)
-            | classic::DistributionBody::Specs(package, _, _) => package,
-        };
-        let selector = ArtifactSelector::Package(PackageName::new(classic_path(package)?));
-        let index = NodeIndex::v3(&distribution, selector)?;
+        let index = NodeIndex::v3_json(bytes)?;
         self.snapshots.push((digest.clone(), index));
         Ok(digest)
     }
@@ -341,13 +335,53 @@ impl NodeIndex {
         distribution: &classic::Distribution,
         artifact: ArtifactSelector,
     ) -> Result<Self, NodeResolutionError> {
-        if distribution.format_version != 3 {
-            return Err(NodeResolutionError::FormatVersionMismatch);
-        }
         let format = match &distribution.distribution {
             classic::DistributionBody::Library(..) => IrFormatVersion::new(3, 0, 0),
             classic::DistributionBody::Specs(..) => IrFormatVersion::new(3, 1, 0),
         };
+        Self::v3_with_format(distribution, artifact, format)
+    }
+
+    /// Index exact Classic V3 JSON, preserving its declared release.
+    pub fn v3_json(bytes: &[u8]) -> Result<Self, NodeResolutionError> {
+        let value: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
+        let declared = value
+            .get("formatVersion")
+            .ok_or_else(|| NodeResolutionError::InvalidSnapshot("missing formatVersion".into()))?;
+        let scalar = ScalarValue::from_json(declared)
+            .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
+        let normalized = NormalizedFormatVersion::from_scalar(&scalar, &SupportTable::reference())
+            .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
+        if !normalized.is_supported() {
+            return Err(NodeResolutionError::FormatVersionMismatch);
+        }
+        let distribution: classic::Distribution = serde_json::from_value(value)
+            .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
+        let package = match &distribution.distribution {
+            classic::DistributionBody::Library(package, _, _)
+            | classic::DistributionBody::Specs(package, _, _) => package,
+        };
+        let selector = ArtifactSelector::Package(PackageName::new(classic_path(package)?));
+        Self::v3_with_format(&distribution, selector, normalized.release)
+    }
+
+    fn v3_with_format(
+        distribution: &classic::Distribution,
+        artifact: ArtifactSelector,
+        format: IrFormatVersion,
+    ) -> Result<Self, NodeResolutionError> {
+        if distribution.format_version != 3 {
+            return Err(NodeResolutionError::FormatVersionMismatch);
+        }
+        if format.major() != 3
+            || matches!(
+                distribution.distribution,
+                classic::DistributionBody::Specs(..)
+            ) && format < IrFormatVersion::new(3, 1, 0)
+        {
+            return Err(NodeResolutionError::FormatVersionMismatch);
+        }
         let mut index = Self::new(artifact, format);
         index.add(
             &WalkContext::root(NodeRoot::Distribution),

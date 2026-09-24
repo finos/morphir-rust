@@ -62,4 +62,13 @@ fn v3_specs_public_module_is_addressable() {
     })]);
     assert_eq!(replies[0]["outcome"], "resolved");
     assert_eq!(replies[0]["kind"], "Module");
+
+    let patch_release = specs.to_string().replace("3.1.0", "3.1.1");
+    let patched = exchange(&[json!({
+        "id": 2,
+        "op": "resolve",
+        "input": patch_release,
+        "uri": "morphir://ir/pkg/acme?format=3.1.1#/module/domain"
+    })]);
+    assert_eq!(patched[0]["outcome"], "resolved");
 }

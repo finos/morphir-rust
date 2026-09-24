@@ -75,6 +75,19 @@ fn v3_specs_distribution_indexes_its_public_interface() {
     let mut catalog = NodeCatalog::new();
     catalog.add_v3_json_snapshot(&bytes, None).unwrap();
     assert!(convert_v3_node_id(&distribution, &index, "Acme:Domain").is_err());
+
+    let patch_release = String::from_utf8(bytes)
+        .unwrap()
+        .replace("\"3.1.0\"", "\"3.1.1\"");
+    let mut patch_catalog = NodeCatalog::new();
+    let digest = patch_catalog
+        .add_v3_json_snapshot(patch_release.as_bytes(), None)
+        .unwrap();
+    let patched = NodeUri::parse(&format!(
+        "morphir://ir/pkg/acme?format=3.1.1&rev={digest}#/module/domain"
+    ))
+    .unwrap();
+    assert!(patch_catalog.resolve(&patched).is_ok());
 }
 
 fn order_type(distribution: &mut v4::Distribution) -> &mut v4::Type {

@@ -780,7 +780,11 @@ morphir_footer::{{}}"
     let events = decode(&IonCodec::new(), &text, &v4_ion()).unwrap();
 
     let ion = encode(&IonCodec::new(), events.clone(), &v4_ion()).unwrap();
-    assert_eq!(decode(&IonCodec::new(), &ion, &v4_ion()).unwrap(), events, "{ion}");
+    assert_eq!(
+        decode(&IonCodec::new(), &ion, &v4_ion()).unwrap(),
+        events,
+        "{ion}"
+    );
     let json = encode(
         &JsonCodec::new(),
         events,

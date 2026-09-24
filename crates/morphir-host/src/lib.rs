@@ -14,7 +14,7 @@ mod expected;
 mod jsonrpc;
 mod negotiated;
 /// The install probe: describe a guest before trusting its claims.
-pub mod probe;
+mod probe;
 mod send;
 mod session;
 mod session_core;

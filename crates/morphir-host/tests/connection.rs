@@ -131,7 +131,7 @@ async fn a_failed_handshake_aborts_the_channel() {
 }
 
 #[tokio::test]
-async fn a_protocol_failure_aborts_rather_than_closes() {
+async fn an_orderly_close_closes_rather_than_aborts() {
     let channel = MemoryChannel::new()
         .respond(ok(1, frontend_initialize_result("guest")))
         .respond(ok(2, json!({})))
@@ -155,6 +155,18 @@ async fn a_boxed_channel_is_a_channel() {
     let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
     connection.open(params()).await.unwrap();
     connection.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_boxed_channel_forwards_abort() {
+    let inner = MemoryChannel::new().respond(ok(1, frontend_initialize_result("impostor")));
+    let log = inner.log();
+    let channel: Box<dyn morphir_host::Channel> = Box::new(inner);
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+
+    connection.open(params()).await.unwrap_err();
+    assert_eq!(log.aborts(), 1);
+    assert_eq!(log.closes(), 0);
 }
 
 #[tokio::test]

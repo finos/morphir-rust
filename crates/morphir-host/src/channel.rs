@@ -43,7 +43,7 @@ pub trait Channel: MaybeSend {
     /// Wait for the answer to the last request.
     async fn receive(&mut self) -> Result<ExtensionResponse, ChannelError>;
 
-    /// Release the guest after shutdown, or abort it after a failure.
+    /// Release the guest after an orderly shutdown.
     async fn close(&mut self) -> Result<ChannelState, ChannelError>;
 
     /// Stop the guest after a failure, without waiting for an orderly exit.

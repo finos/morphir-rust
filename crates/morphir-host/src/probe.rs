@@ -223,8 +223,7 @@ async fn describe_through_session<C: Channel, K: SessionChecks<Error = HostError
 /// capability object has its declared kind, and each object has its wire
 /// shape. A fallback claim set comes from a validated session, so only the
 /// direct path needs this.
-#[doc(hidden)]
-pub fn check_capability_kinds(claims: &CapabilityClaimSet) -> Result<(), HostError> {
+fn check_capability_kinds(claims: &CapabilityClaimSet) -> Result<(), HostError> {
     let types = &claims.extension.types;
     let unique: std::collections::HashSet<_> = types.iter().copied().collect();
     if unique.len() != types.len() {
@@ -266,8 +265,7 @@ pub fn check_capability_kinds(claims: &CapabilityClaimSet) -> Result<(), HostErr
     Ok(())
 }
 
-#[doc(hidden)]
-pub fn permits_fallback(error: &RpcError) -> bool {
+fn permits_fallback(error: &RpcError) -> bool {
     if error.code == error_codes::METHOD_NOT_FOUND || error.code == error_codes::NOT_INITIALIZED {
         return true;
     }

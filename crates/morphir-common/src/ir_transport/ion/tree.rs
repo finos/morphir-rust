@@ -26,7 +26,7 @@ use morphir_core::ir::layout::{
 use morphir_core::naming::{self, Name, PackageName, Path};
 
 use super::{IonCodec, annotation_names, display_annotations, ion_text, symbol_text};
-use crate::ir_transport::{IrVersion, Stage, TransportDiagnostic};
+use crate::ir_transport::{Stage, TransportDiagnostic};
 
 /// The extension every Ion tree file carries.
 pub(crate) const EXTENSION: &str = ".ion";
@@ -53,7 +53,7 @@ struct Scope {
 }
 
 /// The datagram a tree reads as.
-pub(super) fn read(files: &Tree, version: IrVersion) -> Result<Sequence, TransportDiagnostic> {
+pub(super) fn read(files: &Tree) -> Result<Sequence, TransportDiagnostic> {
     let manifest = files.get(MANIFEST).ok_or_else(|| {
         error(
             "morphir::ir::ion::missing_member",
@@ -173,13 +173,6 @@ pub(super) fn read(files: &Tree, version: IrVersion) -> Result<Sequence, Transpo
         }
     }
 
-    if version == IrVersion::V3 && !dependencies.is_empty() {
-        return Err(error(
-            "morphir::ir::ion::unsupported_node",
-            "deps",
-            "a v3 Ion tree has no dependencies",
-        ));
-    }
     let mut datagram = Sequence::builder().push(header);
     for (name, modules) in dependencies {
         let mut spec = Struct::builder().with_field("name", name.as_str());

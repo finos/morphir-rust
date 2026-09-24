@@ -542,3 +542,43 @@ morphir_footer::{{}}"
     assert!(json.contains("Integer addition."), "{json}");
     assert_eq!(decode(&IonCodec::new(), &ion, &v4_ion()).unwrap(), events);
 }
+
+const V3_WITH_DEPENDENCIES: &str = include_str!("fixtures/ion/v3-with-dependencies.json");
+
+fn v3(format: FormatId) -> CodecOptions {
+    CodecOptions::new(IrVersion::V3, Layout::SingleFile, format)
+}
+
+#[test]
+fn v3_dependency_specifications_round_trip_through_ion() {
+    let original = decode(
+        &JsonCodec::new(),
+        V3_WITH_DEPENDENCIES,
+        &v3(FormatId::json()),
+    )
+    .unwrap();
+
+    let ion = encode(&IonCodec::new(), original.clone(), &v3(FormatId::ion()))
+        .unwrap_or_else(|error| panic!("encode: {error:?}"));
+    let from_ion = decode(&IonCodec::new(), &ion, &v3(FormatId::ion()))
+        .unwrap_or_else(|error| panic!("decode: {error:?}\n{ion}"));
+
+    assert_eq!(from_ion, original, "{ion}");
+    assert!(ion.contains("package::spec::"), "{ion}");
+    assert!(ion.contains("public::spec::derived::type::"), "{ion}");
+}
+
+#[test]
+fn a_v3_dependency_named_like_the_distribution_is_refused() {
+    let text = r#"
+morphir::{ formatVersion: "3.0.0", kind: library, packageName: "example" }
+package::spec::{ name: "example" }
+morphir_footer::{}
+"#;
+
+    let error = decode(&IonCodec::new(), text, &v3(FormatId::ion())).unwrap_err();
+    assert!(
+        format!("{error:?}").contains("distribution package"),
+        "{error:?}"
+    );
+}

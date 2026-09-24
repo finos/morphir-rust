@@ -272,7 +272,7 @@ pub(super) fn local_name(text: &str) -> Result<classic::Name, TransportDiagnosti
     Ok(path.segments[0].clone())
 }
 
-fn canonical_fq_name(text: &str) -> Result<classic::FQName, TransportDiagnostic> {
+pub(super) fn canonical_fq_name(text: &str) -> Result<classic::FQName, TransportDiagnostic> {
     let name = morphir_core::naming::FQName::from_canonical_string(text).map_err(|error| {
         IonCodec::error(
             "morphir::ir::ion::invalid_name",

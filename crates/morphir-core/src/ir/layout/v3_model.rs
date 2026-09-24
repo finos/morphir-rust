@@ -24,7 +24,9 @@ use crate::ir::classic::package::ModuleSpecEntry;
 use crate::ir::classic::{self, Attrs};
 use crate::ir::v4::IRFile;
 use crate::ir::v4::module::Documentation;
-use crate::ir::v4::serde_document::{decode_file_names_member, decode_path_budget};
+use crate::ir::v4::serde_document::{
+    decode_file_names_member, decode_path_budget, root_without_meta,
+};
 use crate::ir::{Diagnostic, DiagnosticCode, DiagnosticStage, Warning};
 use crate::migration::migrate_name;
 use crate::naming::{ModuleName, Name, PackageName, Path};
@@ -91,7 +93,10 @@ impl TreeModel for V3 {
         value: &JsonValue,
         cursor: &str,
     ) -> Result<Envelope<V3Kind, ()>, Diagnostic> {
-        let members = members_of(value, cursor, "a distribution manifest")?;
+        // `$meta` is reserved at the top of every tree file and ignored (decision 0014), the
+        // way the v4 decoders ignore it.
+        let root = root_without_meta(value, cursor, "a distribution manifest")?;
+        let members = &*root;
         check_version(members, cursor)?;
         if members.contains_key("entryPoints") {
             return Err(Diagnostic::normalization(
@@ -157,7 +162,10 @@ impl TreeModel for V3 {
         cursor: &str,
         role: Role,
     ) -> Result<ModuleFileOf<Self>, Diagnostic> {
-        let members = members_of(value, cursor, "a module manifest")?;
+        // `$meta` is reserved at the top of every tree file and ignored (decision 0014), the
+        // way the v4 decoders ignore it.
+        let root = root_without_meta(value, cursor, "a module manifest")?;
+        let members = &*root;
         check_version(members, cursor)?;
         check_members(
             members,
@@ -837,7 +845,10 @@ fn node_file<D, S>(
     definition: fn(&JsonValue, &str) -> Result<D, Diagnostic>,
     specification: fn(&JsonValue, &str) -> Result<S, Diagnostic>,
 ) -> Result<(Name, Node<D, S>), Diagnostic> {
-    let members = members_of(value, cursor, "a node file")?;
+    // `$meta` is reserved at the top of every tree file and ignored (decision 0014), the
+    // way the v4 decoders ignore it.
+    let root = root_without_meta(value, cursor, "a node file")?;
+    let members = &*root;
     check_version(members, cursor)?;
     check_members(members, cursor, &["formatVersion", "name", "def", "spec"])?;
     let name = decode_name(

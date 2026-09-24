@@ -401,3 +401,41 @@ fn a_duplicate_dependency_is_refused_the_same_way_on_write_and_on_read() {
         assert_eq!(error.cursor, "manifest#/dependencies/1", "{error:?}");
     }
 }
+
+/// Decision 0014 (`document-tree-0005`): `$meta` at the top of any tree file is reserved and
+/// ignored.
+#[test]
+fn a_meta_member_at_the_top_of_every_v3_tree_file_is_ignored() {
+    let original = fixture("deps");
+    let mut files = tree(write_tree_v3(&original, &policy(Profile::Json, 4000)).unwrap());
+    let paths: Vec<String> = files.keys().cloned().collect();
+    for path in &paths {
+        let mut document = parsed(Profile::Json, &files[path]);
+        document["$meta"] = serde_json::json!({ "created": "2026-09-24", "by": "a tool" });
+        files.insert(path.clone(), Profile::Json.write(&document));
+    }
+    // One of each: the manifest, a module manifest and a node file.
+    assert!(paths.iter().any(|path| path == "manifest"));
+    assert!(paths.iter().any(|path| path.ends_with("/module")));
+    assert!(paths.iter().any(|path| path.ends_with(".type")));
+    let (read, warnings) = read_tree_v3(&files, Profile::Json).unwrap();
+    assert!(warnings.is_empty());
+    assert_eq!(sorted(read), sorted(original));
+}
+
+#[test]
+fn a_member_other_than_meta_is_still_refused_in_every_v3_tree_file() {
+    let specs: Distribution = serde_json::from_str(SPECS).unwrap();
+    for path in ["manifest", "pkg/my/pkg/basics/module", SPECS_TYPE] {
+        let error = refusal(&edited(&specs, path, |document| {
+            document["$meta"] = serde_json::json!({});
+            document["meta"] = serde_json::json!({});
+        }));
+        assert_eq!(
+            error.code,
+            DiagnosticCode::UnknownMember,
+            "{path}: {error:?}"
+        );
+        assert_eq!(error.cursor, format!("{path}#/meta"), "{error:?}");
+    }
+}

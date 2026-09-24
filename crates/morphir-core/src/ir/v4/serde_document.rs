@@ -1332,7 +1332,7 @@ fn format_version_diagnostic(
 /// check that never sees it can never report it, and a model that never holds it can never write
 /// it back (decision 0014). Only the *top-level* member is reserved; a nested one is an unknown
 /// member wherever it sits.
-fn root_without_meta<'a>(
+pub(crate) fn root_without_meta<'a>(
     value: &'a JsonValue,
     cursor: &str,
     what: &str,

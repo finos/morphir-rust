@@ -106,3 +106,33 @@ fn stderr_capture_retains_only_the_bounded_tail() {
     append_bounded_tail(&mut output, b"0123456789abcdefghijkl", 16);
     assert_eq!(output, b"6789abcdefghijkl");
 }
+
+/// A reader whose first poll always fails, to force a real `std::io::Error`
+/// out of `read_frame` without relying on process teardown timing.
+struct FailingReader;
+
+impl tokio::io::AsyncRead for FailingReader {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Err(std::io::Error::other("stdout pipe broke")))
+    }
+}
+
+#[tokio::test]
+async fn an_io_failure_from_read_frame_keeps_the_daemons_io_error_text() {
+    let mut reader = BufReader::new(FailingReader);
+    let error = read_frame(&mut reader)
+        .await
+        .expect_err("a broken pipe must surface as an error, not hang or panic");
+
+    let daemon_error = DaemonError::from(error);
+
+    assert!(matches!(daemon_error, DaemonError::Io(_)), "{daemon_error}");
+    assert!(
+        daemon_error.to_string().starts_with("IO error: "),
+        "{daemon_error}"
+    );
+}

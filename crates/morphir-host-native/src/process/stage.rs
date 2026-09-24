@@ -45,26 +45,18 @@ fn stage_verified_program(
     builder.prefix("morphir-extension-");
     let directory = match staging_directory {
         Some(staging_directory) => {
-            fs::create_dir_all(&staging_directory)
-                .map_err(|error| HostError::Invalid(error.to_string()))?;
-            builder
-                .tempdir_in(staging_directory)
-                .map_err(|error| HostError::Invalid(error.to_string()))?
+            fs::create_dir_all(&staging_directory)?;
+            builder.tempdir_in(staging_directory)?
         }
-        None => builder
-            .tempdir()
-            .map_err(|error| HostError::Invalid(error.to_string()))?,
+        None => builder.tempdir()?,
     };
     let path = directory.path().join(filename);
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&path)
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
-    std::io::Write::write_all(&mut file, &bytes)
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
-    file.sync_all()
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
+        .open(&path)?;
+    std::io::Write::write_all(&mut file, &bytes)?;
+    file.sync_all()?;
     make_owner_executable(&path)?;
     Ok((path, Some(directory)))
 }
@@ -86,11 +78,9 @@ fn validate_verified_program_filename(filename: &OsStr) -> Result<(), HostError>
 fn make_owner_executable(path: &Path) -> Result<(), HostError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = fs::metadata(path)
-        .map_err(|error| HostError::Invalid(error.to_string()))?
-        .permissions();
+    let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(0o700);
-    fs::set_permissions(path, permissions).map_err(|error| HostError::Invalid(error.to_string()))
+    fs::set_permissions(path, permissions).map_err(Into::into)
 }
 
 #[cfg(not(unix))]

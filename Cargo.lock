@@ -4686,7 +4686,6 @@ dependencies = [
 name = "morphir-host-native"
 version = "0.2.0"
 dependencies = [
- "async-trait",
  "morphir-extension-sdk",
  "morphir-host",
  "serde",
@@ -4694,7 +4693,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tracing",
 ]
 
 [[package]]

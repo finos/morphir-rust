@@ -16,16 +16,9 @@ where
     let body = serde_json::to_vec(value)?;
     writer
         .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
-        .await
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
-    writer
-        .write_all(&body)
-        .await
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
-    writer
-        .flush()
-        .await
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
+        .await?;
+    writer.write_all(&body).await?;
+    writer.flush().await?;
     Ok(())
 }
 
@@ -37,12 +30,7 @@ where
     let mut content_length = None;
     loop {
         let mut header = String::new();
-        if reader
-            .read_line(&mut header)
-            .await
-            .map_err(|error| HostError::Invalid(error.to_string()))?
-            == 0
-        {
+        if reader.read_line(&mut header).await? == 0 {
             return Err(HostError::Invalid(
                 "Extension process closed stdout before a response frame".to_string(),
             ));
@@ -79,10 +67,7 @@ where
     let content_length = content_length
         .ok_or_else(|| HostError::Invalid("Extension frame omitted Content-Length".to_string()))?;
     let mut body = vec![0; content_length];
-    reader
-        .read_exact(&mut body)
-        .await
-        .map_err(|error| HostError::Invalid(error.to_string()))?;
+    reader.read_exact(&mut body).await?;
     Ok(body)
 }
 

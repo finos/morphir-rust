@@ -57,8 +57,8 @@ The Python extension is released independently as `extension/python/v0.4.0` in
 It contains a WASM guest, SHA-256 checksum and release descriptor. It is a Morphir
 extension, not a PyPI package or a CPython import module.
 
-Use Rust Morphir CLI `0.4.0-beta.1` or later with this bundle. The earlier `extension/python/v0.1.0`
-bundle does not compile with that CLI. CLI `0.4.0-alpha.6` and earlier cannot publish this descriptor. The npm `morphir-elm`
+Use Rust Morphir CLI `0.4.0-beta.7` or later with this bundle: its version-2 descriptor carries
+capability claims, which earlier CLIs cannot read, so they cannot publish it. The npm `morphir-elm`
 executable does not provide these installation commands.
 
 Download and install with PowerShell:

@@ -82,7 +82,9 @@ The Rust frontend compiles exactly one document and never reads `sources.root`,
 so `sourceRootUri` and `sourceRoot` in the options bag are rejected like any
 other unknown option. Compile requests must carry documents in `sources`;
 top-level `documents` cannot substitute for it. Extensions built with this SDK
-require Morphir CLI `0.4.0-beta.6` or later.
+require Morphir CLI `0.4.0-beta.6` or later, and the released bundle, whose
+version-2 descriptor carries capability claims, needs `0.4.0-beta.7` or later to
+publish.
 
 ## Conditional functions in IR v3 and v4
 

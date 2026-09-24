@@ -45,4 +45,32 @@ pub trait Channel: MaybeSend {
 
     /// Release the guest after shutdown, or abort it after a failure.
     async fn close(&mut self) -> Result<ChannelState, ChannelError>;
+
+    /// Stop the guest after a failure, without waiting for an orderly exit.
+    ///
+    /// The default calls [`Channel::close`]. A channel whose `close` waits for
+    /// the guest to exit must override this to stop the guest at once.
+    async fn abort(&mut self) -> Result<ChannelState, ChannelError> {
+        self.close().await
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+impl<C: Channel + ?Sized> Channel for Box<C> {
+    async fn send(&mut self, message: Outgoing) -> Result<(), ChannelError> {
+        (**self).send(message).await
+    }
+
+    async fn receive(&mut self) -> Result<ExtensionResponse, ChannelError> {
+        (**self).receive().await
+    }
+
+    async fn close(&mut self) -> Result<ChannelState, ChannelError> {
+        (**self).close().await
+    }
+
+    async fn abort(&mut self) -> Result<ChannelState, ChannelError> {
+        (**self).abort().await
+    }
 }

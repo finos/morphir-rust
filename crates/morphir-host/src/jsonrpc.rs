@@ -54,7 +54,7 @@ impl<C: Channel, K: SessionChecks<Error = HostError> + MaybeSend> JsonRpcConnect
 
     /// Abort the channel after a protocol failure, and keep the first error.
     async fn abort(&mut self, error: HostError) -> HostError {
-        let result = self.channel.close().await;
+        let result = self.channel.abort().await;
         self.finished = true;
         match result {
             Ok(_) => error,

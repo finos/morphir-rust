@@ -78,7 +78,7 @@ async fn a_rejected_call_keeps_the_connection_usable() {
 }
 
 #[tokio::test]
-async fn an_invalid_response_closes_the_channel_and_fails() {
+async fn an_invalid_response_aborts_the_channel_and_fails() {
     let channel = MemoryChannel::new()
         .respond(ok(1, frontend_initialize_result("guest")))
         .respond(ok(42, json!({})));
@@ -93,7 +93,8 @@ async fn an_invalid_response_closes_the_channel_and_fails() {
         ),
         other => panic!("expected a failure, got {other:?}"),
     }
-    assert_eq!(log.closes(), 1);
+    assert_eq!(log.aborts(), 1);
+    assert_eq!(log.closes(), 0);
 }
 
 #[tokio::test]
@@ -119,17 +120,41 @@ async fn a_transport_failure_does_not_close_the_channel_again() {
 }
 
 #[tokio::test]
-async fn a_failed_handshake_closes_the_channel() {
+async fn a_failed_handshake_aborts_the_channel() {
     let channel = MemoryChannel::new().respond(ok(1, frontend_initialize_result("impostor")));
     let log = channel.log();
     let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
 
-    let error = connection.open(params()).await.unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "Extension identity changed during initialization: expected 'guest', initialized 'impostor'"
-    );
+    connection.open(params()).await.unwrap_err();
+    assert_eq!(log.aborts(), 1);
+    assert_eq!(log.closes(), 0);
+}
+
+#[tokio::test]
+async fn a_protocol_failure_aborts_rather_than_closes() {
+    let channel = MemoryChannel::new()
+        .respond(ok(1, frontend_initialize_result("guest")))
+        .respond(ok(2, json!({})))
+        .respond(ok(3, json!({})));
+    let log = channel.log();
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    connection.open(params()).await.unwrap();
+    connection.call(methods::COMPILE, json!({})).await.unwrap();
+    connection.close().await.unwrap();
     assert_eq!(log.closes(), 1);
+    assert_eq!(log.aborts(), 0);
+}
+
+#[tokio::test]
+async fn a_boxed_channel_is_a_channel() {
+    let channel: Box<dyn morphir_host::Channel> = Box::new(
+        MemoryChannel::new()
+            .respond(ok(1, frontend_initialize_result("guest")))
+            .respond(ok(2, json!({}))),
+    );
+    let mut connection = JsonRpcConnection::new(channel, BasicChecks::new("guest"));
+    connection.open(params()).await.unwrap();
+    connection.close().await.unwrap();
 }
 
 #[tokio::test]

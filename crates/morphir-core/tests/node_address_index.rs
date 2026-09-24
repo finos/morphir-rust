@@ -565,9 +565,7 @@ fn a_v3_specs_snapshot_is_refused_as_having_no_definitions_to_address() {
     let mut catalog = NodeCatalog::new();
     let error = catalog.add_v3_json_snapshot(bytes, None).unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("Specs distribution has no definitions"),
+        matches!(error, NodeResolutionError::UnsupportedDistribution),
         "{error}"
     );
 }

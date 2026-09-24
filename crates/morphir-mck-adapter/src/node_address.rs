@@ -125,6 +125,7 @@ fn outcome(error: &NodeResolutionError) -> &'static str {
         NodeResolutionError::AmbiguousTarget => "ambiguous_target",
         NodeResolutionError::InvalidName(_)
         | NodeResolutionError::InvalidFingerprint(_)
-        | NodeResolutionError::InvalidSnapshot(_) => "invalid_artifact",
+        | NodeResolutionError::InvalidSnapshot(_)
+        | NodeResolutionError::UnsupportedDistribution => "invalid_artifact",
     }
 }

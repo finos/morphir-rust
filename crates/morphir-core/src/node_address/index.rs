@@ -47,14 +47,9 @@ pub enum NodeResolutionError {
     InvalidFingerprint(String),
     #[error("cannot decode immutable snapshot: {0}")]
     InvalidSnapshot(String),
-}
-
-/// V3 node addresses cover a `Library`'s definitions; a v3 `Specs` distribution (IR 3.1.0) holds
-/// none to address yet.
-fn specs_not_addressable() -> NodeResolutionError {
-    NodeResolutionError::InvalidSnapshot(
-        "a v3 Specs distribution has no definitions to address".to_owned(),
-    )
+    /// A v3 `Specs` distribution (IR 3.1.0) holds no definitions, so it has no nodes to address.
+    #[error("a v3 Specs distribution has no definitions to address")]
+    UnsupportedDistribution,
 }
 
 /// A resolved occurrence in the normalized semantic model. Equal subtrees can
@@ -125,7 +120,7 @@ impl NodeCatalog {
         let distribution: classic::Distribution = serde_json::from_slice(bytes)
             .map_err(|error| NodeResolutionError::InvalidSnapshot(error.to_string()))?;
         let classic::DistributionBody::Library(package, _, _) = &distribution.distribution else {
-            return Err(specs_not_addressable());
+            return Err(NodeResolutionError::UnsupportedDistribution);
         };
         let selector = ArtifactSelector::Package(PackageName::new(classic_path(package)?));
         let index = NodeIndex::v3(&distribution, selector)?;
@@ -360,7 +355,7 @@ impl NodeIndex {
         let classic::DistributionBody::Library(package_path, dependencies, package) =
             &distribution.distribution
         else {
-            return Err(specs_not_addressable());
+            return Err(NodeResolutionError::UnsupportedDistribution);
         };
         index.add(
             &WalkContext::root(NodeRoot::Package),

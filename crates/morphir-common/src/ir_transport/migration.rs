@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use morphir_core::ir::v4;
 use morphir_core::migration::{
     MigrationContext, MigrationOptions, MigrationReport, migrate_access, migrate_module_definition,
-    migrate_package_specification, migrate_path,
+    migrate_module_specification, migrate_package_specification, migrate_path,
 };
 use morphir_core::naming::PackageName;
 use morphir_core::traversal::{
@@ -116,6 +116,15 @@ impl EventTransform for ClassicToV4 {
                     ),
                 })
             }
+            SemanticEventKind::Begin(DistributionHeader::ClassicV3Specs { package }) => {
+                SemanticEventKind::Begin(DistributionHeader::V4Specs {
+                    format_version: v4::FormatVersion::String("4.0.0".to_owned()),
+                    package: PackageName::new(
+                        migrate_path(&package, &self.context.cursor)
+                            .map_err(TransportDiagnostic::from)?,
+                    ),
+                })
+            }
             SemanticEventKind::Dependency(DependencyEvent::ClassicV3 {
                 package,
                 specification,
@@ -140,6 +149,16 @@ impl EventTransform for ClassicToV4 {
                     module: migrated,
                 })
             }
+            SemanticEventKind::Module(ModuleEvent::ClassicV3Specification {
+                path,
+                specification,
+            }) => SemanticEventKind::Module(ModuleEvent::V4Specification {
+                path: migrate_path(&path, &self.context.cursor)
+                    .map_err(TransportDiagnostic::from)?
+                    .to_canonical_string(),
+                module: migrate_module_specification(&specification, &mut self.context)
+                    .map_err(TransportDiagnostic::from)?,
+            }),
             SemanticEventKind::End => SemanticEventKind::End,
             unexpected => {
                 return Err(Self::unexpected(&SemanticEvent::new(cursor, unexpected)));

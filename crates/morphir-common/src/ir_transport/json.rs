@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use morphir_core::format_version::SupportTable;
-use morphir_core::ir::v4;
+use morphir_core::ir::{classic, v4};
 use morphir_core::traversal::{
     DependencyEvent, DistributionHeader, IrCursor, ModuleEvent, SemanticEvent, SemanticEventKind,
 };
@@ -181,9 +181,16 @@ impl IrCodec for JsonCodec {
     }
 }
 
+/// Which Classic v3 distribution a [`V3JsonEventEncoder`] is writing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum V3JsonDistribution {
+    Library,
+    Specs,
+}
+
 struct V3JsonEventEncoder<'writer> {
     writer: &'writer mut dyn Write,
-    began: bool,
+    distribution: Option<V3JsonDistribution>,
     first_dependency: bool,
     modules_started: bool,
     first_module: bool,
@@ -194,7 +201,7 @@ impl<'writer> V3JsonEventEncoder<'writer> {
     fn new(writer: &'writer mut dyn Write) -> Self {
         Self {
             writer,
-            began: false,
+            distribution: None,
             first_dependency: true,
             modules_started: false,
             first_module: true,
@@ -216,7 +223,7 @@ impl<'writer> V3JsonEventEncoder<'writer> {
     }
 
     fn start_modules(&mut self, cursor: &IrCursor) -> Result<(), TransportDiagnostic> {
-        if !self.began {
+        if self.distribution.is_none() {
             return Err(json_stream_error(
                 "missing_begin",
                 cursor,
@@ -227,6 +234,57 @@ impl<'writer> V3JsonEventEncoder<'writer> {
             self.write(b"],{\"modules\":[")?;
             self.modules_started = true;
         }
+        Ok(())
+    }
+
+    fn begin(
+        &mut self,
+        distribution: V3JsonDistribution,
+        package: &classic::Path,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        if self.distribution.is_some() {
+            return Err(json_stream_error(
+                "duplicate_begin",
+                cursor,
+                "the JSON encoder received more than one distribution header",
+            ));
+        }
+        // Each kind writes the lowest formatVersion that holds it: a Library is the classic 3,
+        // a Specs needs 3.1.0, the version that introduced it.
+        self.write(match distribution {
+            V3JsonDistribution::Library => {
+                &b"{\"formatVersion\":3,\"distribution\":[\"Library\","[..]
+            }
+            V3JsonDistribution::Specs => {
+                &b"{\"formatVersion\":\"3.1.0\",\"distribution\":[\"Specs\","[..]
+            }
+        })?;
+        self.write_json(package)?;
+        self.write(b",[")?;
+        self.distribution = Some(distribution);
+        Ok(())
+    }
+
+    fn module(
+        &mut self,
+        kind: V3JsonDistribution,
+        module: &impl serde::Serialize,
+        cursor: &IrCursor,
+    ) -> Result<(), TransportDiagnostic> {
+        self.start_modules(cursor)?;
+        if self.distribution != Some(kind) {
+            return Err(json_stream_error(
+                "module_kind_mismatch",
+                cursor,
+                "the module event does not match the v3 distribution kind",
+            ));
+        }
+        if !self.first_module {
+            self.write(b",")?;
+        }
+        self.write_json(module)?;
+        self.first_module = false;
         Ok(())
     }
 }
@@ -243,18 +301,10 @@ impl EventSink for V3JsonEventEncoder<'_> {
         let (cursor, kind) = event.into_parts();
         match kind {
             SemanticEventKind::Begin(DistributionHeader::ClassicV3Library { package }) => {
-                if self.began {
-                    return Err(json_stream_error(
-                        "duplicate_begin",
-                        &cursor,
-                        "the JSON encoder received more than one distribution header",
-                    ));
-                }
-                self.write(b"{\"formatVersion\":3,\"distribution\":[\"Library\",")?;
-                self.write_json(&package)?;
-                self.write(b",[")?;
-                self.began = true;
-                Ok(())
+                self.begin(V3JsonDistribution::Library, &package, &cursor)
+            }
+            SemanticEventKind::Begin(DistributionHeader::ClassicV3Specs { package }) => {
+                self.begin(V3JsonDistribution::Specs, &package, &cursor)
             }
             SemanticEventKind::Begin(_) => Err(json_stream_error(
                 "version_mismatch",
@@ -265,7 +315,7 @@ impl EventSink for V3JsonEventEncoder<'_> {
                 package,
                 specification,
             }) => {
-                if !self.began || self.modules_started {
+                if self.distribution.is_none() || self.modules_started {
                     return Err(json_stream_error(
                         "dependency_out_of_order",
                         &cursor,
@@ -285,14 +335,12 @@ impl EventSink for V3JsonEventEncoder<'_> {
                 "the v3 JSON encoder received a v4 dependency",
             )),
             SemanticEventKind::Module(ModuleEvent::ClassicV3(module)) => {
-                self.start_modules(&cursor)?;
-                if !self.first_module {
-                    self.write(b",")?;
-                }
-                self.write_json(&module)?;
-                self.first_module = false;
-                Ok(())
+                self.module(V3JsonDistribution::Library, &module, &cursor)
             }
+            SemanticEventKind::Module(ModuleEvent::ClassicV3Specification {
+                path,
+                specification,
+            }) => self.module(V3JsonDistribution::Specs, &(path, specification), &cursor),
             SemanticEventKind::Module(_) => Err(json_stream_error(
                 "version_mismatch",
                 &cursor,
@@ -539,7 +587,7 @@ impl<'writer> V4JsonEventEncoder<'writer> {
         let (path, value, specification) = match module {
             ModuleEvent::V4Definition { path, module } => (path, Some(module), None),
             ModuleEvent::V4Specification { path, module } => (path, None, Some(module)),
-            ModuleEvent::ClassicV3(_) => {
+            ModuleEvent::ClassicV3(_) | ModuleEvent::ClassicV3Specification { .. } => {
                 return Err(json_stream_error(
                     "version_mismatch",
                     cursor,

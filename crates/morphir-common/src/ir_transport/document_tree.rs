@@ -858,7 +858,7 @@ impl KitSink {
             ModuleEvent::V4Definition { path, .. } | ModuleEvent::V4Specification { path, .. } => {
                 path
             }
-            ModuleEvent::ClassicV3(_) => {
+            ModuleEvent::ClassicV3(_) | ModuleEvent::ClassicV3Specification { .. } => {
                 return Err(event_error(
                     "version_mismatch",
                     cursor,

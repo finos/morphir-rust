@@ -37,3 +37,24 @@ fn an_unknown_distribution_tag_names_both_kinds() {
         "{error}"
     );
 }
+
+#[test]
+fn a_specs_distribution_migrates_to_a_v4_specs_distribution() {
+    use morphir_core::ir::v4;
+    use morphir_core::migration::{MigrationOptions, migrate_distribution};
+
+    let file: Distribution = serde_json::from_str(SPECS).unwrap();
+    let migrated = migrate_distribution(&file, MigrationOptions::default()).unwrap();
+    assert!(migrated.report.can_publish());
+    assert_eq!(
+        migrated.value.format_version,
+        v4::FormatVersion::String("4.0.0".to_owned())
+    );
+    let v4::Distribution::Specs(content) = migrated.value.distribution else {
+        panic!("a v4 Specs distribution");
+    };
+    assert_eq!(content.package_name.to_string(), "my/pkg");
+    assert!(content.dependencies.is_empty());
+    let basics = &content.spec.modules["basics"];
+    assert!(basics.types.contains_key("int"), "{basics:?}");
+}

@@ -14,6 +14,9 @@ pub enum Format {
 pub struct Document {
     pub path: PathBuf,
     pub format: Format,
+    /// The Markdown before the `Feature` heading of a `.feature.md` file, or all of it when the
+    /// file has no `Feature` heading. A `.feature` file has an empty preamble.
+    pub preamble: Description,
     pub feature: Option<Feature>,
 }
 
@@ -186,6 +189,9 @@ pub struct Examples {
     pub tags: Vec<Tag>,
     pub description: Description,
     pub table: Option<Table>,
+    /// The Markdown after the examples table in a `.feature.md` file, up to the next Gherkin
+    /// heading. A `.feature` file gives empty notes.
+    pub notes: Description,
     pub span: Span,
     pub position: LineCol,
 }
@@ -205,6 +211,9 @@ pub struct Step {
     pub kind: StepKind,
     pub text: String,
     pub argument: Option<StepArgument>,
+    /// The Markdown after the step in a `.feature.md` file, up to the next step or Gherkin
+    /// heading. A `.feature` step has no notes.
+    pub notes: Description,
     pub span: Span,
     pub position: LineCol,
 }

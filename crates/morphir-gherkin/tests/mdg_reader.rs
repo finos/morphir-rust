@@ -1,4 +1,6 @@
-use morphir_gherkin::{Format, StepArgument, StepKind, read_str};
+use morphir_gherkin::{
+    DescriptionBlock, Format, ProseKind, ReadError, SourceText, StepArgument, StepKind, read_str,
+};
 
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(format!(
@@ -336,7 +338,7 @@ fn upstream_steps_take_star_and_dash_lists_with_any_marker_spacing() {
 
 Excepteur sint occaecat cupidatat non proident.
 ";
-    let (doc, _) = read_str("minimal.feature.md", text).unwrap();
+    let (doc, source) = read_str("minimal.feature.md", text).unwrap();
     let scenarios = doc.feature.unwrap().scenarios;
     assert_eq!(scenarios[0].steps[0].text, "the minimalism");
     let texts: Vec<_> = scenarios[1]
@@ -346,4 +348,375 @@ Excepteur sint occaecat cupidatat non proident.
         .collect();
     assert_eq!(texts, ["step one", "step two", "step three"]);
     assert_eq!(scenarios[1].steps[2].kind, StepKind::Then);
+    let notes = &scenarios[1].steps[2].notes;
+    let texts: Vec<_> = notes
+        .prose()
+        .map(|prose| source.slice(prose.span).trim())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "# The world is wet",
+            "Excepteur sint occaecat cupidatat non proident."
+        ]
+    );
+    assert_eq!(notes.prose().next().unwrap().kind, ProseKind::Heading(1));
+    assert!(scenarios[0].steps[0].notes.blocks.is_empty());
+}
+
+// Fix round 1: kept prose, refused structure errors, cells and step keywords.
+
+/// The message and 1-based line of a refused file.
+fn refusal(text: &str) -> (String, usize) {
+    match read_str("r.feature.md", text) {
+        Err(ReadError::Syntax {
+            message, position, ..
+        }) => (message, position.line),
+        other => panic!("expected a syntax error, got {other:?}"),
+    }
+}
+
+fn prose_texts<'s>(
+    source: &'s SourceText,
+    description: &morphir_gherkin::Description,
+) -> Vec<&'s str> {
+    description
+        .blocks
+        .iter()
+        .map(|block| match block {
+            DescriptionBlock::Prose(prose) => source.slice(prose.span).trim(),
+            DescriptionBlock::Fence(fence) => source.slice(fence.span).trim(),
+        })
+        .collect()
+}
+
+#[test]
+fn markdown_after_a_step_is_its_notes_up_to_the_next_step_list() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+A note paragraph.
+
+### A note heading
+
+- a note list
+
+```yaml
+note: fence
+```
+
+| after | prose |
+| ----- | ----- |
+| 1     | 2     |
+
+`@stray`
+
+* When the next step
+
+Last note.
+
+`@leading`
+## Scenario: T
+
+* Given a step
+";
+    let (doc, source) = read_str("n.feature.md", text).unwrap();
+    let feature = doc.feature.unwrap();
+    let steps = &feature.scenarios[0].steps;
+    assert_eq!(steps.len(), 2);
+    assert!(steps[0].argument.is_none());
+    assert_eq!(
+        prose_texts(&source, &steps[0].notes),
+        [
+            "A note paragraph.",
+            "### A note heading",
+            "- a note list",
+            "```yaml\nnote: fence\n```",
+            "| after | prose |\n| ----- | ----- |\n| 1     | 2     |",
+            "`@stray`",
+        ]
+    );
+    assert_eq!(
+        steps[0].notes.fences().next().unwrap().body,
+        "note: fence\n"
+    );
+    assert_eq!(steps[0].notes.prose().next().unwrap().position.line, 7);
+    assert_eq!(prose_texts(&source, &steps[1].notes), ["Last note."]);
+    assert_eq!(feature.scenarios[1].tags[0].name, "leading");
+}
+
+#[test]
+fn markdown_after_an_examples_table_is_its_notes() {
+    let text = "\
+# Feature: F
+
+## Scenario Outline: O
+
+* Given <x>
+
+### Examples:
+
+| x |
+| - |
+| 1 |
+
+Why these rows.
+
+```text
+more
+```
+
+## Scenario: Next
+
+* Given a step
+";
+    let (doc, source) = read_str("e.feature.md", text).unwrap();
+    let feature = doc.feature.unwrap();
+    let examples = &feature.scenarios[0].examples[0];
+    assert_eq!(
+        prose_texts(&source, &examples.notes),
+        ["Why these rows.", "```text\nmore\n```"]
+    );
+    assert_eq!(feature.scenarios.len(), 2);
+}
+
+#[test]
+fn markdown_before_the_feature_heading_is_the_preamble() {
+    let text = "\
+# A title
+
+Some intro.
+
+```yaml
+key: value
+```
+
+`@feature-tag`
+## Feature: F
+
+## Scenario: S
+
+* Given a step
+";
+    let (doc, source) = read_str("p.feature.md", text).unwrap();
+    assert_eq!(
+        prose_texts(&source, &doc.preamble),
+        ["# A title", "Some intro.", "```yaml\nkey: value\n```"]
+    );
+    let feature = doc.feature.unwrap();
+    assert_eq!(feature.tags[0].name, "feature-tag");
+
+    let (doc, source) = read_str("x.feature.md", "# Just a document\n\nText.\n").unwrap();
+    assert!(doc.feature.is_none());
+    assert_eq!(
+        prose_texts(&source, &doc.preamble),
+        ["# Just a document", "Text."]
+    );
+}
+
+#[test]
+fn the_feature_reader_gives_empty_notes_and_preamble() {
+    let text = "Feature: F\n  Scenario Outline: S\n    Given <x>\n    Examples:\n      | x |\n      | 1 |\n";
+    let (doc, _) = read_str("f.feature", text).unwrap();
+    assert!(doc.preamble.blocks.is_empty());
+    let scenario = &doc.feature.unwrap().scenarios[0];
+    assert!(scenario.steps[0].notes.blocks.is_empty());
+    assert!(scenario.examples[0].notes.blocks.is_empty());
+}
+
+#[test]
+fn a_list_item_that_is_not_a_step_in_a_step_list_is_refused() {
+    let text = "# Feature: F\n\n## Scenario: S\n\n* Given a step\n* a note\n";
+    assert_eq!(
+        refusal(text),
+        (
+            "this list item is not a step; write it as prose outside the step list".to_owned(),
+            6
+        )
+    );
+}
+
+#[test]
+fn a_continuation_line_in_a_step_is_refused() {
+    let text = "# Feature: F\n\n## Scenario: S\n\n* Given a step\n  that goes on\n";
+    assert_eq!(refusal(text), ("a step is one line".to_owned(), 6));
+    let loose = "# Feature: F\n\n## Scenario: S\n\n* Given a step\n\n  A second paragraph.\n";
+    assert_eq!(refusal(loose), ("a step is one line".to_owned(), 7));
+}
+
+#[test]
+fn a_second_argument_in_a_step_is_refused() {
+    let text = "\
+# Feature: F
+
+## Scenario: S
+
+* Given a step
+
+  | a |
+  | - |
+
+  ```ion
+  x
+  ```
+";
+    assert_eq!(
+        refusal(text),
+        (
+            "a step can have only one doc string or table".to_owned(),
+            10
+        )
+    );
+}
+
+#[test]
+fn a_nested_list_in_a_step_is_refused() {
+    let text = "# Feature: F\n\n## Scenario: S\n\n* Given a step\n  - a nested item\n";
+    assert_eq!(
+        refusal(text),
+        ("a step cannot hold a nested list".to_owned(), 6)
+    );
+    let star = "# Feature: F\n\n## Scenario: S\n\n* * a step\n  * another\n";
+    assert_eq!(
+        refusal(star),
+        ("a step cannot hold a nested list".to_owned(), 6)
+    );
+}
+
+#[test]
+fn indented_code_in_a_step_is_refused() {
+    let text = "# Feature: F\n\n## Scenario: S\n\n* Given a step\n\n      indented code\n";
+    assert_eq!(
+        refusal(text),
+        (
+            "a step cannot hold indented code; write its doc string as a fenced block".to_owned(),
+            7
+        )
+    );
+}
+
+#[test]
+fn a_second_examples_table_is_refused() {
+    let text = "\
+# Feature: F
+
+## Scenario Outline: O
+
+* Given <x>
+
+### Examples:
+
+| x |
+| - |
+| 1 |
+
+Some prose.
+
+| x |
+| - |
+| 2 |
+";
+    assert_eq!(
+        refusal(text),
+        ("an Examples heading can have only one table".to_owned(), 15)
+    );
+}
+
+#[test]
+fn a_step_list_before_the_feature_heading_is_refused() {
+    let text = "Intro.\n\n* Given a step\n\n# Feature: F\n";
+    assert_eq!(
+        refusal(text),
+        (
+            "a step list must come after the Feature heading".to_owned(),
+            3
+        )
+    );
+    let no_feature = "# Scenario: S\n\n* Given a step\n";
+    assert_eq!(
+        refusal(no_feature),
+        (
+            "a Scenario heading must come after the Feature heading".to_owned(),
+            1
+        )
+    );
+}
+
+#[test]
+fn a_step_list_right_under_a_feature_or_rule_is_refused() {
+    let message = "a step list must be under a Scenario or Background heading".to_owned();
+    let feature = "# Feature: F\n\nProse.\n\n* Given a step\n";
+    assert_eq!(refusal(feature), (message.clone(), 5));
+    let rule = "# Feature: F\n\n## Rule: R\n\n* Given a step\n";
+    assert_eq!(refusal(rule), (message, 5));
+}
+
+#[test]
+fn tags_on_a_background_are_refused() {
+    let message = "a Background heading cannot have tags".to_owned();
+    let leading = "# Feature: F\n\n`@tag`\n## Background: B\n\n* Given a step\n";
+    assert_eq!(refusal(leading), (message.clone(), 3));
+    let own = "# Feature: F\n\n## Background: B\n\n`@tag`\n\n* Given a step\n";
+    assert_eq!(refusal(own), (message, 5));
+}
+
+#[test]
+fn a_second_or_late_background_is_refused() {
+    let second = "# Feature: F\n\n## Background: A\n\n* Given a\n\n## Background: B\n\n* Given b\n";
+    assert_eq!(
+        refusal(second),
+        (
+            "a Feature can have only one Background heading".to_owned(),
+            7
+        )
+    );
+    let late = "# Feature: F\n\n## Rule: R\n\n### Scenario: S\n\n* Given a\n\n### Background: B\n\n* Given b\n";
+    assert_eq!(
+        refusal(late),
+        (
+            "a Background heading must come before the scenarios of its Rule".to_owned(),
+            9
+        )
+    );
+}
+
+#[test]
+fn table_cells_unescape_like_gherkin_cells() {
+    let md = "# Feature: F\n\n## Scenario: S\n\n* Given cells\n\n  | a\\|b | c\\\\d | e\\nf | g\\xh |\n  | - | - | - | - |\n";
+    let (doc, _) = read_str("c.feature.md", md).unwrap();
+    let step = &doc.feature.unwrap().scenarios[0].steps[0];
+    let Some(StepArgument::Table(table)) = &step.argument else {
+        panic!("a table: {step:?}")
+    };
+    assert_eq!(table.rows, vec![vec!["a|b", "c\\d", "e\nf", "g\\xh"]]);
+    let feature = "Feature: F\n  Scenario: S\n    Given cells\n      | a\\|b | c\\\\d | e\\nf |\n";
+    let (doc, _) = read_str("c.feature", feature).unwrap();
+    let Some(StepArgument::Table(gherkin)) = &doc.feature.unwrap().scenarios[0].steps[0].argument
+    else {
+        panic!("a table")
+    };
+    assert_eq!(gherkin.rows[0], table.rows[0][..3]);
+}
+
+#[test]
+fn a_step_keyword_can_take_a_tab_or_no_text() {
+    let text = "# Feature: F\n\n## Scenario: S\n\n* Given\ta tab\n* When\n- Then \n";
+    let (doc, _) = read_str("k.feature.md", text).unwrap();
+    let steps = &doc.feature.unwrap().scenarios[0].steps;
+    let parts: Vec<_> = steps
+        .iter()
+        .map(|step| (step.keyword.as_str(), step.kind, step.text.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("Given\t", StepKind::Given, "a tab"),
+            ("When", StepKind::When, ""),
+            ("Then ", StepKind::Then, ""),
+        ]
+    );
 }

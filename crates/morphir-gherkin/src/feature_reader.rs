@@ -29,6 +29,7 @@ pub fn read(path: &Path, source: &SourceText) -> Result<Document, ReadError> {
     Ok(Document {
         path: path.to_owned(),
         format: Format::Feature,
+        preamble: Description::default(),
         feature,
     })
 }
@@ -287,6 +288,7 @@ impl Reader<'_> {
             tags: self.tags(header.line),
             description: self.description(header.line, first_child, span.end),
             table: e.table.as_ref().map(|t| self.table(t)),
+            notes: Description::default(),
             span,
             position: header,
         }
@@ -315,6 +317,7 @@ impl Reader<'_> {
             kind,
             text: s.value.clone(),
             argument,
+            notes: Description::default(),
             span,
             position,
         }

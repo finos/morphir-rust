@@ -8,20 +8,33 @@
 //!
 //! - A heading whose text starts with a Gherkin keyword and `:` opens that node. The heading level
 //!   does not matter.
-//! - A bullet list item (`*` or `-`) whose first line starts with a step keyword is a step.
+//! - A bullet list item (`*` or `-`) whose line starts with a step keyword is a step. A space, a
+//!   tab or the end of the line follows the keyword.
 //! - A table or a fenced block inside a step's list item is the step's argument. A table or a fence
 //!   right after a step list is the argument of the last step, if that step has none.
 //! - A table right after an `Examples` heading is the examples table.
 //! - A paragraph that holds only inline code spans that start with `@` is a tag line. A `#`
-//!   comment can follow the tags on a line. A tag line that is the first block after a heading
-//!   belongs to that heading. There is one exception: a tag line on the line right above a
-//!   Gherkin heading, with no blank line between them, leads that heading. Other tag lines right
-//!   before a Gherkin heading lead that heading too.
-//! - Any other Markdown between a heading and its first child is the node's description.
+//!   comment can follow the tags on a line.
+//! - A tag line directly above a Gherkin heading, with no blank line between them, leads that
+//!   heading. Otherwise, the first block after a heading is that heading's own tag line.
+//!   Otherwise, a run of tag lines right before a Gherkin heading leads that heading.
+//!
+//! The file is documentation first, so the reader keeps all other Markdown, with spans:
+//!
+//! - Markdown between a heading and its first child is the node's description.
+//! - Markdown after a step, up to the next step list or Gherkin heading, is the step's notes.
+//! - Markdown after an examples table is the notes of the examples.
+//! - Markdown before the `Feature` heading is the document's preamble.
+//!
+//! The reader refuses Gherkin structure errors with `ReadError::Syntax`, and never drops them:
+//! a list item that is not a step in a step list, a step item with more than one line, a nested
+//! list, indented code, or a second doc string or table, a second examples table, steps outside a
+//! `Scenario` or `Background`, tags on a `Background`, and a second or late `Background`.
 //!
 //! Keywords, names, step text and table cells come from the source text, so `<x>` placeholders
 //! stay as written.
 
+use std::ops::Range;
 use std::path::Path;
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag as MdTag, TagEnd};
@@ -44,10 +57,11 @@ pub fn read(path: &Path, source: &SourceText) -> Result<Document, ReadError> {
         blocks: &blocks,
         at: 0,
     };
-    let feature = builder.feature()?;
+    let (preamble, feature) = builder.document()?;
     Ok(Document {
         path: path.to_owned(),
         format: Format::Markdown,
+        preamble,
         feature,
     })
 }
@@ -95,18 +109,20 @@ impl Block {
     }
 }
 
-/// A list item: the step on its first line, if any, and the first table or fence in it.
+/// A list item: the step on its first line, if any, the table or fence in it, and the first thing
+/// in it that a step cannot hold.
 #[derive(Debug)]
 struct Item {
     span: Span,
     step: Option<StepLine>,
     argument: Option<RawArgument>,
+    problem: Option<(Span, &'static str)>,
 }
 
 /// The parts of a step line.
 #[derive(Debug)]
 struct StepLine {
-    keyword: &'static str,
+    keyword: String,
     /// `None` for `And`, `But` and `*`, which take the kind of the step before.
     kind: Option<StepKind>,
     text: String,
@@ -213,13 +229,63 @@ struct TableFrame {
     span: Span,
 }
 
+/// A list item being read.
+struct ItemFrame {
+    item: Item,
+    /// The level of the blocks directly inside the item. It is 2. It is 4 when the item's first
+    /// line starts with the `*` step keyword, which Markdown reads as a nested list.
+    content_level: usize,
+    /// The end of the item's first line.
+    first_line_end: usize,
+    paragraphs: usize,
+    nested_items: usize,
+}
+
+impl ItemFrame {
+    fn new(source: &SourceText, span: Span) -> Self {
+        let rest = &source.text()[span.start..];
+        let first_line_end = span.start + rest.find('\n').unwrap_or(rest.len());
+        Self {
+            item: Item {
+                span,
+                step: step_line(source, span),
+                argument: None,
+                problem: None,
+            },
+            content_level: 2,
+            first_line_end,
+            paragraphs: 0,
+            nested_items: 0,
+        }
+    }
+
+    /// Notes the first thing in the item that a step cannot hold.
+    fn problem(&mut self, span: Span, message: &'static str) {
+        self.item.problem.get_or_insert((span, message));
+    }
+
+    fn has_star_keyword(&self) -> bool {
+        self.item
+            .step
+            .as_ref()
+            .is_some_and(|step| step.keyword.starts_with('*'))
+    }
+}
+
+const ONE_LINE: &str = "a step is one line";
+const SECOND_ARGUMENT: &str = "a step can have only one doc string or table";
+const NESTED_LIST: &str = "a step cannot hold a nested list";
+const INDENTED_CODE: &str =
+    "a step cannot hold indented code; write its doc string as a fenced block";
+const OTHER_BLOCK: &str = "a step holds one line and at most one doc string or table";
+
 /// Walks the Markdown events and collects the top-level blocks.
 struct Scanner<'s> {
     source: &'s SourceText,
     blocks: Vec<Block>,
     depth: usize,
     open: Option<Open>,
-    item: Option<Item>,
+    item: Option<ItemFrame>,
     table: Option<TableFrame>,
     fence: Option<RawFence>,
 }
@@ -288,27 +354,11 @@ impl<'s> Scanner<'s> {
         }
         if level == 1 && matches!(tag, MdTag::Item) && matches!(self.open, Some(Open::List { .. }))
         {
-            self.item = Some(Item {
-                span,
-                step: step_line(self.source, span),
-                argument: None,
-            });
+            self.item = Some(ItemFrame::new(self.source, span));
             return;
         }
-        let free_item = self
-            .item
-            .as_ref()
-            .is_some_and(|item| item.argument.is_none())
-            && self.table.is_none()
-            && self.fence.is_none();
-        if level == 2 && free_item {
-            match tag {
-                MdTag::Table(_) => self.table = Some(TableFrame::new(span)),
-                MdTag::CodeBlock(CodeBlockKind::Fenced(info)) => {
-                    self.fence = Some(RawFence::new(info, span));
-                }
-                _ => {}
-            }
+        if self.item.is_some() && self.table.is_none() && self.fence.is_none() {
+            self.item_block(tag, span, level);
         }
         match tag {
             MdTag::TableHead | MdTag::TableRow => {
@@ -325,6 +375,55 @@ impl<'s> Scanner<'s> {
         }
     }
 
+    /// Handles the start of an element inside a list item, outside its table or fence. It opens
+    /// the item's table or fence, and notes what a step cannot hold.
+    fn item_block(&mut self, tag: &MdTag<'_>, span: Span, level: usize) {
+        let Some(frame) = self.item.as_mut() else {
+            return;
+        };
+        if is_inline(tag) {
+            return;
+        }
+        if level == 3 && frame.content_level == 4 && matches!(tag, MdTag::Item) {
+            frame.nested_items += 1;
+            if frame.nested_items > 1 {
+                frame.problem(span, NESTED_LIST);
+            }
+            return;
+        }
+        if level != 2 && level != frame.content_level {
+            return;
+        }
+        match tag {
+            MdTag::List(_)
+                if level == 2
+                    && frame.content_level == 2
+                    && frame.has_star_keyword()
+                    && span.start < frame.first_line_end =>
+            {
+                frame.content_level = 4;
+            }
+            MdTag::List(_) => frame.problem(span, NESTED_LIST),
+            MdTag::Paragraph => {
+                frame.paragraphs += 1;
+                if frame.paragraphs > 1 {
+                    frame.problem(span, ONE_LINE);
+                }
+            }
+            MdTag::Table(_) | MdTag::CodeBlock(CodeBlockKind::Fenced(_))
+                if frame.item.argument.is_some() =>
+            {
+                frame.problem(span, SECOND_ARGUMENT);
+            }
+            MdTag::Table(_) => self.table = Some(TableFrame::new(span)),
+            MdTag::CodeBlock(CodeBlockKind::Fenced(info)) => {
+                self.fence = Some(RawFence::new(info, span));
+            }
+            MdTag::CodeBlock(CodeBlockKind::Indented) => frame.problem(span, INDENTED_CODE),
+            _ => frame.problem(span, OTHER_BLOCK),
+        }
+    }
+
     /// Handles the end of an element at level `self.depth`.
     fn end(&mut self, end: TagEnd, span: Span) {
         let level = self.depth;
@@ -335,21 +434,21 @@ impl<'s> Scanner<'s> {
                     table.rows.push(row);
                 }
             }
-            TagEnd::Table if level == 2 => {
-                if let (Some(table), Some(item)) = (self.table.take(), self.item.as_mut()) {
-                    item.argument = Some(RawArgument::Table(table.finish()));
+            TagEnd::Table if level > 0 => {
+                if let (Some(table), Some(frame)) = (self.table.take(), self.item.as_mut()) {
+                    frame.item.argument = Some(RawArgument::Table(table.finish()));
                 }
             }
-            TagEnd::CodeBlock if level == 2 => {
-                if let (Some(fence), Some(item)) = (self.fence.take(), self.item.as_mut()) {
-                    item.argument = Some(RawArgument::Fence(fence));
+            TagEnd::CodeBlock if level > 0 => {
+                if let (Some(fence), Some(frame)) = (self.fence.take(), self.item.as_mut()) {
+                    frame.item.argument = Some(RawArgument::Fence(fence));
                 }
             }
             TagEnd::Item if level == 1 => {
-                if let (Some(item), Some(Open::List { items, .. })) =
+                if let (Some(frame), Some(Open::List { items, .. })) =
                     (self.item.take(), self.open.as_mut())
                 {
-                    items.push(item);
+                    items.push(frame.item);
                 }
             }
             _ if level == 0 => self.finish(),
@@ -396,6 +495,23 @@ impl<'s> Scanner<'s> {
             }
             return;
         }
+        if let Some(frame) = self.item.as_mut()
+            && self.table.is_none()
+            && self.fence.is_none()
+        {
+            match event {
+                // The problem points at the line after the break.
+                Event::SoftBreak | Event::HardBreak => frame.problem(
+                    Span {
+                        start: span.end,
+                        end: span.end,
+                    },
+                    ONE_LINE,
+                ),
+                Event::Rule | Event::Html(_) => frame.problem(span, OTHER_BLOCK),
+                _ => {}
+            }
+        }
         let direct = self.depth == 1;
         if let (true, Some(Open::Paragraph { scan, .. })) = (direct, self.open.as_mut()) {
             match event {
@@ -428,6 +544,20 @@ impl<'s> Scanner<'s> {
     }
 }
 
+/// Whether a Markdown element is inline content rather than a block.
+fn is_inline(tag: &MdTag<'_>) -> bool {
+    matches!(
+        tag,
+        MdTag::Emphasis
+            | MdTag::Strong
+            | MdTag::Strikethrough
+            | MdTag::Superscript
+            | MdTag::Subscript
+            | MdTag::Link { .. }
+            | MdTag::Image { .. }
+    )
+}
+
 impl TableFrame {
     fn new(span: Span) -> Self {
         Self {
@@ -455,9 +585,28 @@ impl RawFence {
     }
 }
 
-/// A table cell as written, without its padding. `\|` stands for `|`.
+/// A table cell as written, without its padding. As in Gherkin table cells, `\|` stands for `|`,
+/// `\\` for a backslash and `\n` for a line break. A backslash before any other character stays.
 fn cell_text(raw: &str) -> String {
-    raw.trim().replace("\\|", "|")
+    let mut cell = String::new();
+    let mut chars = raw.trim().chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            cell.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('|') => cell.push('|'),
+            Some('\\') => cell.push('\\'),
+            Some('n') => cell.push('\n'),
+            Some(other) => {
+                cell.push('\\');
+                cell.push(other);
+            }
+            None => cell.push('\\'),
+        }
+    }
+    cell
 }
 
 /// A heading's text: its source content with each line trimmed and the lines joined by a space.
@@ -472,16 +621,17 @@ fn heading_text(source: &SourceText, content: Span) -> String {
 }
 
 const STEP_KEYWORDS: [(&str, Option<StepKind>); 6] = [
-    ("Given ", Some(StepKind::Given)),
-    ("When ", Some(StepKind::When)),
-    ("Then ", Some(StepKind::Then)),
-    ("And ", None),
-    ("But ", None),
-    ("* ", None),
+    ("Given", Some(StepKind::Given)),
+    ("When", Some(StepKind::When)),
+    ("Then", Some(StepKind::Then)),
+    ("And", None),
+    ("But", None),
+    ("*", None),
 ];
 
 /// The step on the first line of a list item, if the item has a `*` or `-` marker and its text
-/// starts with a step keyword. The item's span starts at its marker.
+/// starts with a step keyword. A space or a tab follows the keyword, or the line ends after it.
+/// The keyword keeps that space or tab, as written. The item's span starts at its marker.
 fn step_line(source: &SourceText, item: Span) -> Option<StepLine> {
     let line = source.text()[item.start..].lines().next()?;
     let rest = line.trim_start().strip_prefix(['*', '-'])?;
@@ -489,8 +639,14 @@ fn step_line(source: &SourceText, item: Span) -> Option<StepLine> {
         return None;
     }
     let rest = rest.trim_start();
-    STEP_KEYWORDS.iter().find_map(|&(keyword, kind)| {
-        rest.strip_prefix(keyword).map(|text| StepLine {
+    STEP_KEYWORDS.iter().find_map(|&(word, kind)| {
+        let after = rest.strip_prefix(word)?;
+        let (keyword, text) = match after.chars().next() {
+            None => (word.to_owned(), ""),
+            Some(space @ (' ' | '\t')) => (format!("{word}{space}"), &after[1..]),
+            Some(_) => return None,
+        };
+        Some(StepLine {
             keyword,
             kind,
             text: text.trim().to_owned(),
@@ -549,6 +705,17 @@ fn node_heading(block: &Block) -> Option<NodeHeading> {
     })
 }
 
+const NOT_A_STEP: &str = "this list item is not a step; write it as prose outside the step list";
+const STEPS_BEFORE_FEATURE: &str = "a step list must come after the Feature heading";
+const STEPS_OUTSIDE_SCENARIO: &str = "a step list must be under a Scenario or Background heading";
+const SECOND_EXAMPLES_TABLE: &str = "an Examples heading can have only one table";
+const BACKGROUND_TAGS: &str = "a Background heading cannot have tags";
+const OUTSIDE_NODES: &str = "this block is outside every Gherkin heading";
+
+fn is_step_list(block: &Block) -> bool {
+    matches!(block, Block::List { items, .. } if items.iter().any(|item| item.step.is_some()))
+}
+
 struct Builder<'a> {
     path: &'a Path,
     source: &'a SourceText,
@@ -586,7 +753,7 @@ impl<'a> Builder<'a> {
     }
 
     /// The tags of the tag lines in `blocks[range]`.
-    fn tags_in(&self, range: std::ops::Range<usize>) -> Vec<Tag> {
+    fn tags_in(&self, range: Range<usize>) -> Vec<Tag> {
         self.blocks[range]
             .iter()
             .filter_map(|block| match block {
@@ -596,6 +763,30 @@ impl<'a> Builder<'a> {
             .flatten()
             .map(|(name, span)| self.tag(name, *span))
             .collect()
+    }
+
+    /// The Markdown of `blocks[range]` as a description. The range of text starts at the start of
+    /// the first block's line.
+    fn description_of(&self, range: Range<usize>) -> Description {
+        if range.is_empty() {
+            return Description::default();
+        }
+        let (Some(first), Some(last)) =
+            (self.blocks.get(range.start), self.blocks.get(range.end - 1))
+        else {
+            return Description::default();
+        };
+        let start = self
+            .source
+            .line_start(self.source.line_col(first.span().start).line);
+        parse_blocks(
+            self.source,
+            Span {
+                start,
+                end: last.span().end,
+            },
+            0,
+        )
     }
 
     /// The index after the run of tag lines that starts at `index`.
@@ -613,6 +804,12 @@ impl<'a> Builder<'a> {
         after > index && self.blocks.get(after).and_then(node_heading).is_some()
     }
 
+    /// Whether the block at `index` ends a node: a Gherkin heading, or the tag lines that lead
+    /// one.
+    fn is_boundary(&self, index: usize) -> bool {
+        self.blocks.get(index).and_then(node_heading).is_some() || self.leads_heading(index)
+    }
+
     /// Whether the block at `index` ends on the line right above a Gherkin heading, with no blank
     /// line between them. Upstream Markdown with Gherkin writes tags this way.
     fn sits_right_above_heading(&self, index: usize) -> bool {
@@ -627,6 +824,12 @@ impl<'a> Builder<'a> {
         self.source.line_col(next.span().start).line == last_line + 1
     }
 
+    /// Whether the block at the reading position is the tag line of the heading just read.
+    fn at_own_tag_line(&self) -> bool {
+        matches!(self.peek(), Some(Block::TagLine { .. }))
+            && !self.sits_right_above_heading(self.at)
+    }
+
     /// The tags of a run of tag lines at the reading position that leads a Gherkin heading.
     fn leading_tags(&mut self) -> Vec<Tag> {
         if !self.leads_heading(self.at) {
@@ -638,23 +841,53 @@ impl<'a> Builder<'a> {
         tags
     }
 
-    fn feature(&mut self) -> Result<Option<Feature>, ReadError> {
-        let Some((index, heading)) = self.blocks.iter().enumerate().find_map(|(index, block)| {
+    /// Reads the preamble and the feature. The preamble is every block before the `Feature`
+    /// heading and the tag lines that lead it. It cannot hold steps or other Gherkin headings.
+    fn document(&mut self) -> Result<(Description, Option<Feature>), ReadError> {
+        let found = self.blocks.iter().enumerate().find_map(|(index, block)| {
             node_heading(block)
                 .filter(|heading| heading.kind == NodeKind::Feature)
                 .map(|heading| (index, heading))
-        }) else {
-            return Ok(None);
-        };
-        let first_tag_line = (0..index)
+        });
+        let feature_index = found
+            .as_ref()
+            .map_or(self.blocks.len(), |(index, _)| *index);
+        let first_tag_line = (0..feature_index)
             .rev()
             .take_while(|&i| matches!(self.blocks[i], Block::TagLine { .. }))
             .last()
-            .unwrap_or(index);
-        let mut tags = self.tags_in(first_tag_line..index);
+            .unwrap_or(feature_index);
+        let preamble_end = if found.is_some() {
+            first_tag_line
+        } else {
+            self.blocks.len()
+        };
+        for block in &self.blocks[..preamble_end] {
+            if let Some(heading) = node_heading(block) {
+                let message = format!(
+                    "a {} heading must come after the Feature heading",
+                    heading.keyword
+                );
+                return Err(self.syntax_error(heading.span, &message));
+            }
+            if is_step_list(block) {
+                return Err(self.syntax_error(block.span(), STEPS_BEFORE_FEATURE));
+            }
+        }
+        let preamble = self.description_of(0..preamble_end);
+        let Some((index, heading)) = found else {
+            return Ok((preamble, None));
+        };
+        let tags = self.tags_in(first_tag_line..index);
         self.at = index + 1;
+        let feature = self.feature(heading, tags)?;
+        Ok((preamble, Some(feature)))
+    }
+
+    fn feature(&mut self, heading: NodeHeading, mut tags: Vec<Tag>) -> Result<Feature, ReadError> {
         let (own_tags, description) = self.header(true, false);
         tags.extend(own_tags);
+        self.refuse_steps_here()?;
         let mut feature = Feature {
             keyword: heading.keyword.to_owned(),
             name: heading.name,
@@ -669,10 +902,10 @@ impl<'a> Builder<'a> {
         loop {
             let leading = self.leading_tags();
             let Some(block) = self.peek() else { break };
-            self.at += 1;
             let Some(heading) = node_heading(block) else {
-                continue;
+                return Err(self.syntax_error(block.span(), OUTSIDE_NODES));
             };
+            self.at += 1;
             match heading.kind {
                 NodeKind::Feature => {
                     return Err(self.syntax_error(
@@ -681,25 +914,38 @@ impl<'a> Builder<'a> {
                     ));
                 }
                 NodeKind::Background => {
-                    let background = self.background(heading);
-                    match feature.rules.last_mut() {
-                        Some(rule) => rule.background = Some(background),
-                        None => feature.background = Some(background),
+                    if let Some(tag) = leading.first() {
+                        return Err(self.syntax_error(tag.span, BACKGROUND_TAGS));
                     }
+                    let (scope, slot, scenarios) = match feature.rules.last_mut() {
+                        Some(rule) => ("Rule", &mut rule.background, &rule.scenarios),
+                        None => ("Feature", &mut feature.background, &feature.scenarios),
+                    };
+                    if slot.is_some() {
+                        let message = format!("a {scope} can have only one Background heading");
+                        return Err(self.syntax_error(heading.span, &message));
+                    }
+                    if !scenarios.is_empty() {
+                        let message = format!(
+                            "a Background heading must come before the scenarios of its {scope}"
+                        );
+                        return Err(self.syntax_error(heading.span, &message));
+                    }
+                    *slot = Some(self.background(heading)?);
                 }
                 NodeKind::Rule => {
-                    let rule = self.rule(heading, leading);
+                    let rule = self.rule(heading, leading)?;
                     feature.rules.push(rule);
                 }
                 NodeKind::Scenario => {
-                    let scenario = self.scenario(heading, leading);
+                    let scenario = self.scenario(heading, leading)?;
                     match feature.rules.last_mut() {
                         Some(rule) => rule.scenarios.push(scenario),
                         None => feature.scenarios.push(scenario),
                     }
                 }
                 NodeKind::Examples => {
-                    let examples = self.examples(heading, leading);
+                    let examples = self.examples(heading, leading)?;
                     let scenarios = match feature.rules.last_mut() {
                         Some(rule) => &mut rule.scenarios,
                         None => &mut feature.scenarios,
@@ -719,7 +965,7 @@ impl<'a> Builder<'a> {
             }
         }
         feature.span.end = self.read_end();
-        Ok(Some(feature))
+        Ok(feature)
     }
 
     /// Reads what follows a heading up to its first child: the heading's own tag line when
@@ -728,48 +974,38 @@ impl<'a> Builder<'a> {
     /// true.
     fn header(&mut self, own_tags: bool, stop_at_table: bool) -> (Vec<Tag>, Description) {
         let mut tags = Vec::new();
-        if own_tags
-            && matches!(self.peek(), Some(Block::TagLine { .. }))
-            && !self.sits_right_above_heading(self.at)
-        {
+        if own_tags && self.at_own_tag_line() {
             tags = self.tags_in(self.at..self.at + 1);
             self.at += 1;
         }
         let first = self.at;
         while let Some(block) = self.peek() {
-            let ends = match block {
-                Block::Heading { .. } => node_heading(block).is_some(),
-                Block::List { items, .. } => items.iter().any(|item| item.step.is_some()),
-                Block::Table(_) => stop_at_table,
-                Block::TagLine { .. } => self.leads_heading(self.at),
-                Block::Fence(_) | Block::Other { .. } => false,
-            };
+            let ends = self.is_boundary(self.at)
+                || is_step_list(block)
+                || (stop_at_table && matches!(block, Block::Table(_)));
             if ends {
                 break;
             }
             self.at += 1;
         }
-        let description = if self.at > first {
-            let start = self.blocks[first].span().start;
-            let start = self.source.line_start(self.source.line_col(start).line);
-            parse_blocks(
-                self.source,
-                Span {
-                    start,
-                    end: self.read_end(),
-                },
-                0,
-            )
-        } else {
-            Description::default()
-        };
-        (tags, description)
+        (tags, self.description_of(first..self.at))
     }
 
-    fn rule(&mut self, heading: NodeHeading, mut tags: Vec<Tag>) -> Rule {
+    /// Refuses a step list at the reading position, right under a heading that cannot hold steps.
+    fn refuse_steps_here(&self) -> Result<(), ReadError> {
+        match self.peek() {
+            Some(block) if is_step_list(block) => {
+                Err(self.syntax_error(block.span(), STEPS_OUTSIDE_SCENARIO))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn rule(&mut self, heading: NodeHeading, mut tags: Vec<Tag>) -> Result<Rule, ReadError> {
         let (own_tags, description) = self.header(true, false);
         tags.extend(own_tags);
-        Rule {
+        self.refuse_steps_here()?;
+        Ok(Rule {
             keyword: heading.keyword.to_owned(),
             name: heading.name,
             tags,
@@ -781,14 +1017,19 @@ impl<'a> Builder<'a> {
                 end: self.read_end(),
             },
             position: self.source.line_col(heading.span.start),
-        }
+        })
     }
 
-    /// A background has no tags, so a tag line after its heading stays in its description.
-    fn background(&mut self, heading: NodeHeading) -> Background {
+    /// A background has no tags, so a tag line right after its heading is refused.
+    fn background(&mut self, heading: NodeHeading) -> Result<Background, ReadError> {
+        if self.at_own_tag_line()
+            && let Some(block) = self.peek()
+        {
+            return Err(self.syntax_error(block.span(), BACKGROUND_TAGS));
+        }
         let (_, description) = self.header(false, false);
-        let steps = self.steps();
-        Background {
+        let steps = self.steps()?;
+        Ok(Background {
             keyword: heading.keyword.to_owned(),
             name: heading.name,
             description,
@@ -798,14 +1039,18 @@ impl<'a> Builder<'a> {
                 end: self.read_end(),
             },
             position: self.source.line_col(heading.span.start),
-        }
+        })
     }
 
-    fn scenario(&mut self, heading: NodeHeading, mut tags: Vec<Tag>) -> Scenario {
+    fn scenario(
+        &mut self,
+        heading: NodeHeading,
+        mut tags: Vec<Tag>,
+    ) -> Result<Scenario, ReadError> {
         let (own_tags, description) = self.header(true, false);
         tags.extend(own_tags);
-        let steps = self.steps();
-        Scenario {
+        let steps = self.steps()?;
+        Ok(Scenario {
             keyword: heading.keyword.to_owned(),
             name: heading.name,
             tags,
@@ -817,10 +1062,16 @@ impl<'a> Builder<'a> {
                 end: self.read_end(),
             },
             position: self.source.line_col(heading.span.start),
-        }
+        })
     }
 
-    fn examples(&mut self, heading: NodeHeading, mut tags: Vec<Tag>) -> Examples {
+    /// An Examples node: its description, its table, and the notes after the table. The notes
+    /// cannot hold a second table or a step list.
+    fn examples(
+        &mut self,
+        heading: NodeHeading,
+        mut tags: Vec<Tag>,
+    ) -> Result<Examples, ReadError> {
         let (own_tags, description) = self.header(true, true);
         tags.extend(own_tags);
         let table = match self.peek() {
@@ -830,65 +1081,99 @@ impl<'a> Builder<'a> {
             }
             _ => None,
         };
-        Examples {
+        let first = self.at;
+        while let Some(block) = self.peek() {
+            if self.is_boundary(self.at) {
+                break;
+            }
+            if let Block::Table(table) = block {
+                return Err(self.syntax_error(table.span, SECOND_EXAMPLES_TABLE));
+            }
+            if is_step_list(block) {
+                return Err(self.syntax_error(block.span(), STEPS_OUTSIDE_SCENARIO));
+            }
+            self.at += 1;
+        }
+        let notes = self.description_of(first..self.at);
+        Ok(Examples {
             keyword: heading.keyword.to_owned(),
             name: (!heading.name.is_empty()).then_some(heading.name),
             tags,
             description,
             table,
+            notes,
             span: Span {
                 start: heading.span.start,
                 end: self.read_end(),
             },
             position: self.source.line_col(heading.span.start),
-        }
+        })
     }
 
     /// The steps of the step lists up to the next Gherkin heading or the tag lines that lead it.
-    /// Other blocks between the lists are skipped. A table or fence right after a step list is
-    /// the last step's argument, if that step has none.
-    fn steps(&mut self) -> Vec<Step> {
+    /// A table or fence right after a step list is the last step's argument, if that step has
+    /// none. Every other block is part of the notes of the step before it.
+    fn steps(&mut self) -> Result<Vec<Step>, ReadError> {
         let mut steps: Vec<Step> = Vec::new();
         let mut previous = StepKind::Given;
-        let mut after_steps = false;
+        let mut after_list = false;
+        let mut notes_from = None;
         while let Some(block) = self.peek() {
+            if self.is_boundary(self.at) {
+                break;
+            }
             let argument = match block {
-                Block::Heading { .. } if node_heading(block).is_some() => break,
-                Block::TagLine { .. } if self.leads_heading(self.at) => break,
-                Block::List { items, .. } => {
-                    let count = steps.len();
+                Block::List { items, .. } if is_step_list(block) => {
+                    self.add_notes(&mut steps, notes_from.take());
                     for item in items {
-                        let Some(line) = &item.step else { continue };
+                        let Some(line) = &item.step else {
+                            return Err(self.syntax_error(item.span, NOT_A_STEP));
+                        };
+                        if let Some((span, message)) = item.problem {
+                            return Err(self.syntax_error(span, message));
+                        }
                         let kind = line.kind.unwrap_or(previous);
                         previous = kind;
                         steps.push(Step {
-                            keyword: line.keyword.to_owned(),
+                            keyword: line.keyword.clone(),
                             kind,
                             text: line.text.clone(),
                             argument: item.argument.as_ref().map(|raw| self.argument(raw)),
+                            notes: Description::default(),
                             span: item.span,
                             position: self.source.line_col(item.span.start),
                         });
                     }
                     self.at += 1;
-                    after_steps = steps.len() > count;
+                    after_list = true;
                     continue;
                 }
-                Block::Table(table) if after_steps => Some(StepArgument::Table(self.table(table))),
-                Block::Fence(fence) if after_steps => {
+                Block::Table(table) if after_list => Some(StepArgument::Table(self.table(table))),
+                Block::Fence(fence) if after_list => {
                     Some(StepArgument::DocString(self.doc_string(fence)))
                 }
                 _ => None,
             };
-            if let (Some(argument), Some(step)) = (argument, steps.last_mut())
-                && step.argument.is_none()
-            {
-                step.argument = Some(argument);
+            match (argument, steps.last_mut()) {
+                (Some(argument), Some(step)) if step.argument.is_none() => {
+                    step.argument = Some(argument);
+                }
+                _ => {
+                    notes_from.get_or_insert(self.at);
+                }
             }
-            after_steps = false;
+            after_list = false;
             self.at += 1;
         }
-        steps
+        self.add_notes(&mut steps, notes_from);
+        Ok(steps)
+    }
+
+    /// Gives the blocks from `from` up to the reading position to the last step as its notes.
+    fn add_notes(&self, steps: &mut [Step], from: Option<usize>) {
+        if let (Some(from), Some(step)) = (from, steps.last_mut()) {
+            step.notes = self.description_of(from..self.at);
+        }
     }
 
     fn argument(&self, raw: &RawArgument) -> StepArgument {

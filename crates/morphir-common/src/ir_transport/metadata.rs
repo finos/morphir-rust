@@ -39,7 +39,7 @@ struct Loader<'a> {
     limits: ContextResourceLimits,
     resources: ContextResources,
     cache: BTreeMap<ResourceIdentity, CachedResource>,
-    loaded_paths: BTreeSet<String>,
+    loaded_paths: BTreeMap<String, ResourceIdentity>,
     total_bytes: usize,
 }
 
@@ -153,6 +153,9 @@ pub enum ContextResourceError {
     /// A named path is not a regular file.
     #[error("context resource is not a file: {0}")]
     NotFile(String),
+    /// A path changed its resolved resource during this load.
+    #[error("context resource changed during loading: {0}")]
+    ResourceChanged(String),
     /// Reading a resource failed.
     #[error("cannot read context resource {0}: {1}")]
     Read(String, #[source] std::io::Error),
@@ -211,7 +214,7 @@ pub fn load_context_resources(
         limits,
         resources: ContextResources::new("."),
         cache: BTreeMap::new(),
-        loaded_paths: BTreeSet::new(),
+        loaded_paths: BTreeMap::new(),
         total_bytes: 0,
     };
     for request in requests {
@@ -289,7 +292,14 @@ impl Loader<'_> {
             return Err(ContextError::DuplicateImport(identity).into());
         }
         active.insert(canonical.clone());
-        let new_path = !self.loaded_paths.contains(&identity);
+        if self
+            .loaded_paths
+            .get(&identity)
+            .is_some_and(|previous| previous != &canonical)
+        {
+            return Err(ContextResourceError::ResourceChanged(identity));
+        }
+        let new_path = !self.loaded_paths.contains_key(&identity);
         if new_path && self.loaded_paths.len() >= self.limits.resource_count {
             return Err(ContextResourceError::ResourceCountExceeded);
         }
@@ -318,7 +328,8 @@ impl Loader<'_> {
                 &mut self.total_bytes,
                 self.limits,
             )?;
-            self.loaded_paths.insert(identity.clone());
+            self.loaded_paths
+                .insert(identity.clone(), canonical.clone());
         }
         if is_digest {
             self.resources

@@ -209,6 +209,64 @@ fn separate_alias_requests_still_count_each_loaded_path() {
 
 #[cfg(unix)]
 #[test]
+fn same_authored_path_cannot_change_target_between_requests() {
+    use std::os::unix::fs::symlink;
+    use std::path::PathBuf;
+
+    struct SwappingResolver {
+        reference: String,
+        bytes: Vec<u8>,
+        alias: PathBuf,
+    }
+    impl ContextDigestResolver for SwappingResolver {
+        fn resolve(
+            &self,
+            reference: &str,
+            _max_bytes: usize,
+        ) -> Result<Option<ResolvedContextResource>, String> {
+            assert_eq!(reference, self.reference);
+            std::fs::remove_file(&self.alias).unwrap();
+            symlink("large.jsonld", &self.alias).unwrap();
+            Ok(Some(ResolvedContextResource::trusted(self.bytes.clone())))
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let small = context(json!({}));
+    let large = context(json!({"alias": ALIAS}));
+    let digest_bytes = context(json!({}));
+    std::fs::write(root.path().join("small.jsonld"), &small).unwrap();
+    std::fs::write(root.path().join("large.jsonld"), &large).unwrap();
+    let alias_path = root.path().join("alias.jsonld");
+    symlink("small.jsonld", &alias_path).unwrap();
+    let reference = digest_reference(&digest_bytes);
+    let resolver = SwappingResolver {
+        reference: reference.clone(),
+        bytes: digest_bytes.clone(),
+        alias: alias_path,
+    };
+    let authored_alias = json!("alias.jsonld");
+    let authored_digest = json!(reference);
+    let requests = [
+        ContextRequest::at_root(&authored_alias),
+        ContextRequest::at_root(&authored_digest),
+        ContextRequest::at_root(&authored_alias),
+    ];
+    let error = load_context_resources(
+        root.path(),
+        &requests,
+        Some(&resolver),
+        ContextResourceLimits::new(1024, small.len() + digest_bytes.len(), 3, 8),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ContextResourceError::ResourceChanged(path) if path == "alias.jsonld"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn local_symlink_directory_alias_counts_as_an_import_cycle() {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir().unwrap();
